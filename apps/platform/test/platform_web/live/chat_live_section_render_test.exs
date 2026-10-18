@@ -688,7 +688,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
   describe "pills follow the drawer order (mobile channel search Stage 3)" do
     # The pills strip renders Sidebar.flatten_sections(@sidebar_sections) —
     # the user's curated (hidden-filtered) drawer arrangement — instead of
-    # the raw @channels list. Marlowe's decision 2026-07-05.
+    # the raw @channels list. Robin's decision 2026-07-05.
 
     test "pill order tracks a section reorder made in the drawer", %{conn: conn} do
       conn = authenticated_conn(conn)

@@ -41,7 +41,7 @@ defmodule PlatformWeb.DrawerWidthParityTest do
   fourth element on the same width recipe, still capped at `md:max-w-lg` =
   512px. It was left alone on purpose: the plan named three sites, and
   widening a `z-40` overlay was never approved. It is an open decision for
-  Marlowe, not an oversight. It does not appear here, and it would fail
+  Robin, not an oversight. It does not appear here, and it would fail
   assertion 2 by design if it were added. It is also out of reach of the
   recipe selector below, which requires the unprefixed `fixed` and `right-0`
   that the overlay (`absolute inset-0 ... md:right-0 ... shadow-2xl`) does

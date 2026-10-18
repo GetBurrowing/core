@@ -110,7 +110,7 @@ defmodule Platform.Meetings.CountdownTest do
 
   describe "Countdown.countdown_seconds/0" do
     test "is 30, globally, and the arithmetic uses it" do
-      # Harper, 2026-08-27: 30 seconds, GLOBAL. Pinned as a literal so a
+      # Sam, 2026-08-27: 30 seconds, GLOBAL. Pinned as a literal so a
       # silent change to the module attribute reddens here rather than
       # only in the behaviour of a sweeper nobody is watching.
       assert Countdown.countdown_seconds() == 30
@@ -126,7 +126,7 @@ defmodule Platform.Meetings.CountdownTest do
       # is inside what the HTTP client permits and outside what the
       # countdown tolerates, and the sweeper ticks every second.
       #
-      # NEITHER NUMBER MOVES — 30s is Harper's review window, 60s is what
+      # NEITHER NUMBER MOVES — 30s is Sam's review window, 60s is what
       # a real model call needs. What must not happen is the relationship
       # being re-created implicitly, so this reads both ends.
       for provider <- [
@@ -654,7 +654,7 @@ defmodule Platform.Meetings.CountdownTest do
     test "disarms, closes :dismissed, and NAMES the human", %{card: card} do
       participant_id = Ecto.UUID.generate()
 
-      assert {:ok, stopped} = Candidates.stop(card, participant_id, actor_name: "Harper Parker")
+      assert {:ok, stopped} = Candidates.stop(card, participant_id, actor_name: "Sam Moreno")
 
       row = reload!(stopped)
 
@@ -663,7 +663,7 @@ defmodule Platform.Meetings.CountdownTest do
       assert row.closed_reason == :dismissed
       # The attribution is a REFERENCE, not a sentence somebody typed.
       assert row.closed_by_participant_id == participant_id
-      assert row.closed_note =~ "Harper Parker"
+      assert row.closed_note =~ "Sam Moreno"
     end
 
     test "a machine close leaves closed_by_participant_id nil, so non-nil means a person",
@@ -677,7 +677,7 @@ defmodule Platform.Meetings.CountdownTest do
     end
 
     test "is idempotent: a second stop does not relabel the first", %{card: card} do
-      {:ok, first} = Candidates.stop(card, Ecto.UUID.generate(), actor_name: "Harper")
+      {:ok, first} = Candidates.stop(card, Ecto.UUID.generate(), actor_name: "Sam")
       first = reload!(first)
 
       assert {:ok, _} = Candidates.stop(card, Ecto.UUID.generate(), actor_name: "Somebody Else")

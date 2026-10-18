@@ -62,7 +62,7 @@ defmodule Platform.Chat.AttentionRouterTest do
     default = %{
       participant_type: "user",
       participant_id: Ecto.UUID.generate(),
-      display_name: "Rowan",
+      display_name: "Avery",
       joined_at: DateTime.utc_now()
     }
 
@@ -564,9 +564,9 @@ defmodule Platform.Chat.AttentionRouterTest do
       # `@[Name]` tokens quoted inside the embedded activity don't get
       # tokenised as live mentions and fan out to every quoted agent.
       #
-      # Repro of the 2026-07-10 bug that prompted the flag: Rowan noticed
+      # Repro of the 2026-07-10 bug that prompted the flag: Avery noticed
       # Dalton was receiving Historian dispatches meant for Higgins. Cause
-      # was the Historian post embedding a 24h digest full of real Rowan→
+      # was the Historian post embedding a 24h digest full of real Avery→
       # Dalton `@[Dalton]` mentions from other spaces; AttentionRouter's
       # regex tokenised each one and produced a `:multi_mention` decision.
       space = create_space(%{kind: "group"})
@@ -1126,15 +1126,15 @@ defmodule Platform.Chat.AttentionRouterTest do
     test "routes on exact bracketed match with multi-word display name" do
       space = create_space(%{kind: "channel"})
       user = create_participant(space.id)
-      agent = create_agent(%{name: "Rowan Ellis"})
+      agent = create_agent(%{name: "Avery Rivera"})
 
       {:ok, agent_participant} =
-        Chat.add_agent_participant(space.id, agent, display_name: "Rowan Ellis")
+        Chat.add_agent_participant(space.id, agent, display_name: "Avery Rivera")
 
       Chat.add_space_agent(space.id, agent.id, role: "member")
 
       message =
-        create_message(space.id, user.id, %{content: "hey @[Rowan Ellis] can you look"})
+        create_message(space.id, user.id, %{content: "hey @[Avery Rivera] can you look"})
 
       agent_participant_id = agent_participant.id
 
@@ -1144,28 +1144,28 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
 
-    test "bracketed @[Rowan] does not leak to @[Rowan Ellis] (no prefix ambiguity)" do
+    test "bracketed @[Avery] does not leak to @[Avery Rivera] (no prefix ambiguity)" do
       space = create_space(%{kind: "channel"})
       user = create_participant(space.id)
 
-      rowan_agent = create_agent(%{name: "Rowan"})
-      rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
+      avery_agent = create_agent(%{name: "Avery"})
+      avery_m_agent = create_agent(%{name: "Avery Rivera"})
 
-      {:ok, rowan_participant} =
-        Chat.add_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+      {:ok, avery_participant} =
+        Chat.add_agent_participant(space.id, avery_agent, display_name: "Avery")
 
-      {:ok, _rowan_m_participant} =
-        Chat.add_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+      {:ok, _avery_m_participant} =
+        Chat.add_agent_participant(space.id, avery_m_agent, display_name: "Avery Rivera")
 
-      Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
-      Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")
+      Chat.add_space_agent(space.id, avery_agent.id, role: "member")
+      Chat.add_space_agent(space.id, avery_m_agent.id, role: "member")
 
-      message = create_message(space.id, user.id, %{content: "hey @[Rowan] look here"})
+      message = create_message(space.id, user.id, %{content: "hey @[Avery] look here"})
 
-      rowan_participant_id = rowan_participant.id
+      avery_participant_id = avery_participant.id
 
-      # Only Rowan is routed — Rowan Ellis's participant must not appear.
-      assert {:ok, [%{participant_id: ^rowan_participant_id, reason: :mention}]} =
+      # Only Avery is routed — Avery Rivera's participant must not appear.
+      assert {:ok, [%{participant_id: ^avery_participant_id, reason: :mention}]} =
                AttentionRouter.route(message)
 
       drain()
@@ -1216,29 +1216,29 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
 
-    test "@[Rowan Ellis] does not route to a legacy Rowan substring-match" do
-      # Regression guard: ensure `@Rowan` substring inside `@[Rowan Ellis]`
+    test "@[Avery Rivera] does not route to a legacy Avery substring-match" do
+      # Regression guard: ensure `@Avery` substring inside `@[Avery Rivera]`
       # does not leak into the legacy zone. Without stripping brackets first,
-      # a plain-Rowan participant would be falsely routed.
+      # a plain-Avery participant would be falsely routed.
       space = create_space(%{kind: "channel"})
       user = create_participant(space.id)
 
-      rowan_agent = create_agent(%{name: "Rowan"})
-      rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
+      avery_agent = create_agent(%{name: "Avery"})
+      avery_m_agent = create_agent(%{name: "Avery Rivera"})
 
-      {:ok, _rowan_p} = Chat.add_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+      {:ok, _avery_p} = Chat.add_agent_participant(space.id, avery_agent, display_name: "Avery")
 
-      {:ok, rowan_m_p} =
-        Chat.add_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+      {:ok, avery_m_p} =
+        Chat.add_agent_participant(space.id, avery_m_agent, display_name: "Avery Rivera")
 
-      Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
-      Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")
+      Chat.add_space_agent(space.id, avery_agent.id, role: "member")
+      Chat.add_space_agent(space.id, avery_m_agent.id, role: "member")
 
-      message = create_message(space.id, user.id, %{content: "hello @[Rowan Ellis]"})
+      message = create_message(space.id, user.id, %{content: "hello @[Avery Rivera]"})
 
-      rowan_m_p_id = rowan_m_p.id
+      avery_m_p_id = avery_m_p.id
 
-      assert {:ok, [%{participant_id: ^rowan_m_p_id, reason: :mention}]} =
+      assert {:ok, [%{participant_id: ^avery_m_p_id, reason: :mention}]} =
                AttentionRouter.route(message)
 
       drain()
@@ -1278,10 +1278,10 @@ defmodule Platform.Chat.AttentionRouterTest do
 
     test "distinguishes @[here] from an adjacent @[Name] mention" do
       tokens =
-        AttentionRouter.extract_mention_tokens("ping @[Rowan Ellis] also @[here] please")
+        AttentionRouter.extract_mention_tokens("ping @[Avery Rivera] also @[here] please")
 
       assert tokens == [
-               %{kind: :name, value: "Rowan Ellis"},
+               %{kind: :name, value: "Avery Rivera"},
                %{kind: :broadcast, target: :here}
              ]
     end
@@ -1531,9 +1531,9 @@ defmodule Platform.Chat.AttentionRouterTest do
     test "mixed @[here] + @[Name] produces :here per human plus a :mention for the named recipient" do
       space = create_space(%{kind: "channel"})
 
-      rowan =
+      avery =
         create_participant(space.id, %{
-          display_name: "Rowan",
+          display_name: "Avery",
           attention_mode: "mention"
         })
 
@@ -1551,9 +1551,9 @@ defmodule Platform.Chat.AttentionRouterTest do
           attention_mode: "mention"
         })
 
-      harper =
+      blake =
         create_participant(space.id, %{
-          display_name: "Harper",
+          display_name: "Blake",
           participant_id: Ecto.UUID.generate(),
           attention_mode: "mention"
         })
@@ -1575,7 +1575,7 @@ defmodule Platform.Chat.AttentionRouterTest do
         Chat.add_agent_participant(space.id, geordi_agent, display_name: "Geordi")
 
       message =
-        create_message(space.id, rowan.id, %{
+        create_message(space.id, avery.id, %{
           content:
             "@[here] kickoff in 10! Reminder: @[here], grab coffee. Also @[Alex] sync after. @[here]"
         })
@@ -1585,7 +1585,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       here_decisions = Enum.filter(decisions, &(&1.reason == :here))
       mention_decisions = Enum.filter(decisions, &(&1.reason == :mention))
 
-      # 4 :here decisions — one per non-sender human (alex, sam, harper, taylor),
+      # 4 :here decisions — one per non-sender human (alex, sam, blake, taylor),
       # despite the message containing three `@[here]` tokens.
       assert length(here_decisions) == 4,
              "expected 4 :here decisions (one per non-sender human), got #{inspect(decisions)}"
@@ -1593,10 +1593,10 @@ defmodule Platform.Chat.AttentionRouterTest do
       here_pids = here_decisions |> Enum.map(& &1.participant_id) |> Enum.sort()
 
       expected_here_pids =
-        [alex.id, sam.id, harper.id, taylor.id] |> Enum.sort()
+        [alex.id, sam.id, blake.id, taylor.id] |> Enum.sort()
 
       assert here_pids == expected_here_pids,
-             "here_pids should be alex/sam/harper/taylor, got #{inspect(here_pids)}"
+             "here_pids should be alex/sam/blake/taylor, got #{inspect(here_pids)}"
 
       # 1 :mention decision — for Alex only (the only named human).
       assert length(mention_decisions) == 1,
@@ -1614,9 +1614,9 @@ defmodule Platform.Chat.AttentionRouterTest do
       assert Enum.any?(alex_decisions, &(&1.reason == :here))
       assert Enum.any?(alex_decisions, &(&1.reason == :mention))
 
-      # Sender (rowan) is never in any decision.
-      refute Enum.any?(decisions, &(&1.participant_id == rowan.id)),
-             "sender rowan must not appear in decisions"
+      # Sender (avery) is never in any decision.
+      refute Enum.any?(decisions, &(&1.participant_id == avery.id)),
+             "sender avery must not appear in decisions"
 
       # Agents receive zero :here (broadcast is humans-only).
       higgins_participant = Chat.get_agent_participant(space.id, higgins_agent.id)
@@ -1653,22 +1653,22 @@ defmodule Platform.Chat.AttentionRouterTest do
     # The no-space title names the install (Platform.Branding.app_name/0,
     # "Burrow" on a migrated DB; task 01a120c5 stage 3), never a compiled name.
     test "for :here, surfaces the @here broadcast context in the title" do
-      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Burrow"
+      assert AttentionRouter.notification_title("Avery", :here) == "Avery @here in Burrow"
     end
 
     test "for :mention, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Burrow"
+      assert AttentionRouter.notification_title("Avery", :mention) == "Avery in Burrow"
     end
 
     test "for :all, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Burrow"
+      assert AttentionRouter.notification_title("Avery", :all) == "Avery in Burrow"
     end
 
     test "for any other reason atom, uses the default sender-only title" do
       # Defensive: future reasons (e.g. :directed, :watch, :active_agent)
       # should fall through to the default rather than crash.
       for reason <- [:directed, :watch, :active_agent, :active, :multi_mention] do
-        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Burrow",
+        assert AttentionRouter.notification_title("Avery", reason) == "Avery in Burrow",
                "expected default title for reason #{inspect(reason)}"
       end
     end
@@ -1723,12 +1723,12 @@ defmodule Platform.Chat.AttentionRouterTest do
       space = create_space(%{kind: "group"})
 
       # Sender (an active user with a real user row).
-      sender_user = insert_test_user(name: "Rowan Sender")
+      sender_user = insert_test_user(name: "Avery Sender")
 
       sender =
         create_participant(space.id, %{
           participant_id: sender_user.id,
-          display_name: "Rowan Sender",
+          display_name: "Avery Sender",
           attention_mode: "all"
         })
 
@@ -1845,9 +1845,9 @@ defmodule Platform.Chat.AttentionRouterTest do
       # through, an agent literally named "here" could be mistakenly
       # resurrected on every broadcast.
       {tokens, _legacy_zone} =
-        AttentionRouter.extract_bracketed_tokens("@[here] please @[Rowan Ellis]")
+        AttentionRouter.extract_bracketed_tokens("@[here] please @[Avery Rivera]")
 
-      assert tokens == ["Rowan Ellis"]
+      assert tokens == ["Avery Rivera"]
     end
 
     test "still strips the @[here] form from the legacy_zone" do
@@ -1954,7 +1954,7 @@ defmodule Platform.Chat.AttentionRouterTest do
         space = %Platform.Chat.Space{id: Ecto.UUID.generate(), kind: kind, name: "S", slug: nil}
         message = %Message{id: Ecto.UUID.generate(), content: "hi"}
 
-        assert AttentionRouter.push_notification("Harper", message, :all, space, []).space_kind ==
+        assert AttentionRouter.push_notification("Blake", message, :all, space, []).space_kind ==
                  kind
       end
     end

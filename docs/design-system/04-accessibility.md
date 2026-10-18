@@ -290,7 +290,7 @@ Light theme `--color-neutral` paired with `--color-neutral-content` (white-on-#8
 
 ### 6.3 Verification
 
-Phase 4 IMPLEMENTATION.md task: re-run lighthouse + axe-core (now unblocked, Marlowe installed) against each in-scope surface to surface any contrast failures static computation missed. The single-token fix in §6.2 may not be the only finding.
+Phase 4 IMPLEMENTATION.md task: re-run lighthouse + axe-core (now unblocked, the design lead installed) against each in-scope surface to surface any contrast failures static computation missed. The single-token fix in §6.2 may not be the only finding.
 
 ---
 
@@ -321,7 +321,7 @@ Use semantic HTML over ARIA roles:
 ## 8. What this doc does NOT cover
 
 - **Specific axe-core / lighthouse scan results** — re-run after install lands. Findings slot into `02-audit.md` amendments + Phase 4's IMPLEMENTATION.md.
-- **Voice-control compatibility** (e.g. Voice Access on Android, Voice Control on iOS) — out of scope for Phase 2; Phase 4 may re-audit per surface if Marlowe raises.
+- **Voice-control compatibility** (e.g. Voice Access on Android, Voice Control on iOS) — out of scope for Phase 2; Phase 4 may re-audit per surface if the design lead raises.
 - **High-contrast / forced-colors mode** — not in audit scope; Phase 4 follow-up.
 
 ---

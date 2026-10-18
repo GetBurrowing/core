@@ -2,10 +2,10 @@
 
 **Status:** Proposed
 **Date:** 2026-10-14
-**Owners:** Rowan, Dalton
+**Owners:** the product owner, Dalton
 **Task:** `01a1386d-a18f-7001-9faa-04316dc0198c` (stack `rbac-roles`, `01a1386d-6d34-7001-9f93-b1428a6b0604`, position 1)
-**Design source:** Rowan's settlement on 2026-10-14 in space `019f4882-c8d1-724e-a89e-ecb17d2681c8` (#RBAC System), and prototype canvas `01a1384a-3317-7001-ace5-45c7ef34f08e` ("Access — agent-first prototype").
-**Amends (in part, not superseded):** the *authorization* role of capability bundles in `0034-mcp-endpoint-and-capability-bundles.md § Capability bundles` (bundles stop being the thing that grants a tool; see § Agents below). Everything else in it stands. The Historian-only page-write rule in `0041-org-memory-v2-wiki-system.md § Historian as sole page writer` is **not** amended: Rowan dropped agent page writes through a subtree `memory.write` grant on 2026-10-14 (§ Memory grants).
+**Design source:** the product owner's settlement on 2026-10-14 in space `019f4882-c8d1-724e-a89e-ecb17d2681c8` (#RBAC System), and prototype canvas `01a1384a-3317-7001-ace5-45c7ef34f08e` ("Access — agent-first prototype").
+**Amends (in part, not superseded):** the *authorization* role of capability bundles in `0034-mcp-endpoint-and-capability-bundles.md § Capability bundles` (bundles stop being the thing that grants a tool; see § Agents below). Everything else in it stands. The Historian-only page-write rule in `0041-org-memory-v2-wiki-system.md § Historian as sole page writer` is **not** amended: the product owner dropped agent page writes through a subtree `memory.write` grant on 2026-10-14 (§ Memory grants).
 **Related:** `0042-org-project-topology-and-context-inheritance.md § 3. Context inheritance rules` (the org → project → space tree that grants inherit along), `0040-federated-agent-owner-identity.md § D2. What scope does ownership confer?` (the owner question this ADR answers for authorization), `0057-prototypes-on-suite.md` (prototype grants, one of the bypass surfaces). Runbook for the v1 model: `docs/runbooks/external_users.md`.
 
 The Context section records the falsifier check, the measured premises, the mapping from today's
@@ -336,8 +336,8 @@ gets one ruling. None of them gains a second gate:
 | `ExternalScope.authorized_space?/2` (`external_scope.ex:164`) | Unchanged. It is the admission branch that carries the per-org DM allowlist. | 2 |
 | `ToolAuthorization.authorize/2` and `effective_tools/1` (`tool_authorization.ex:106`, `:75`) | Kept as the one entry point every transport calls. Both delegate to `Platform.Access.Tools`. | 5 |
 | `CanvasAccess.fetch_for_viewer/3` (`canvas_access.ex:234`) | Consults `Access.can?/3` when `:access_scope` is given, so a denied canvas answers like a missing one. `fetch_for_writer/2` (`:273`) is unchanged in this stack. | 3 |
-| `Chat.SpaceAccess.authorize_writer/2` (`space_access.ex:132`) | **Stays as it is.** It stays participation-based, and `chat.write` on a space is decided there. A `chat.write` deny that blocks posts was **dropped by Rowan on 2026-10-14, with no follow-up** (Open question 4). | none |
-| `Wiki.Routing.gate_write/3` (`routing.ex:294`) | **Stays as it is: Historian-only.** Agent page writes through a subtree `memory.write` grant were **dropped by Rowan on 2026-10-14, with no follow-up** (§ Memory grants, Open question 3). | none |
+| `Chat.SpaceAccess.authorize_writer/2` (`space_access.ex:132`) | **Stays as it is.** It stays participation-based, and `chat.write` on a space is decided there. A `chat.write` deny that blocks posts was **dropped by the product owner on 2026-10-14, with no follow-up** (Open question 4). | none |
+| `Wiki.Routing.gate_write/3` (`routing.ex:294`) | **Stays as it is: Historian-only.** Agent page writes through a subtree `memory.write` grant were **dropped by the product owner on 2026-10-14, with no follow-up** (§ Memory grants, Open question 3). | none |
 | `LiveAuth.on_mount(:ensure_admin)` (`live_auth.ex:47`) | Replaced by `PlatformWeb.ModuleGate`. | 4 |
 | `Tenancy.root_admin?/1` re-checks inside contexts (`branding.ex:362`, `prototypes/settings.ex:64`, `tenancy/lifecycle.ex:1173`, `vault/shared.ex:365`, `sign_in_admin.ex:433`) | Replaced by `Access.authorize_install/1`. | 4 |
 
@@ -469,7 +469,7 @@ member 8's plan does not do that, and member 8's choice is the decision. Built-i
 assigned through an assignment row, because the base role comes from the membership. A guest may
 hold a custom role's key, but the role's permissions do not widen a guest.
 
-**Deleting a custom role that still restricts a space is refused** (Rowan's ruling, 2026-10-14).
+**Deleting a custom role that still restricts a space is refused** (the product owner's ruling, 2026-10-14).
 A role restriction is a deny on every non-holder, so cascading it away with the role would open
 the space: deletion must never fail open. The delete returns an error naming the restricted
 spaces, and the role can be deleted once no `access_space_restrictions` row names it. **This
@@ -589,7 +589,7 @@ role does not, for example a guest holding an allow on X.
 page `org/page/eng/secret/plan.md`. Then `org/page/eng/` is renamed to `org/page/engineering/`.**
 
 This example shows what `can?/3` answers and how anchoring behaves. It does not mean an agent can
-write pages through such a grant: Rowan dropped agent page writes through a subtree `memory.write`
+write pages through such a grant: the product owner dropped agent page writes through a subtree `memory.write`
 grant on 2026-10-14, so `Wiki.Routing.gate_write/3` stays Historian-only and does not consult this
 answer (§ Memory grants). The same anchoring governs a human's `memory.write` deny and every
 `memory.read` grant.
@@ -670,7 +670,7 @@ narrows a human's editing below the role default.
 
 **Agents: the Historian-only rule stays.** An earlier draft of this section had a subtree
 `memory.write` grant let an agent write pages directly, replacing the Historian-only rule
-(`0041-org-memory-v2-wiki-system.md § Historian as sole page writer`). **Rowan dropped that on
+(`0041-org-memory-v2-wiki-system.md § Historian as sole page writer`). **The product owner dropped that on
 2026-10-14, with no follow-up.** The decision is:
 - `Wiki.Routing.gate_write/3` (`routing.ex:294`, which is agent-only; `page_write_gate/3` at
   `:326` checks `historian?/1`) stays as it is on main. No member rewrites it and no follow-up is
@@ -769,7 +769,7 @@ order.
 
 **Day-one translation: every existing runtime's tool list stays byte-identical, order included.**
 - `ToolSurface.list_tools/1` (`tool_surface.ex:217`) walks `allowed_bundles` in row order.
-- Member 5 measured 34 of 37 fabrikam lists and 1 of 1 ellis list out of catalogue order, and found
+- Member 5 measured 34 of 37 lists on one install and 1 of 1 on another out of catalogue order, and found
   same-set rows that hash differently.
 - So the migration copies `allowed_bundles` verbatim into `tool_profile`, and sets
   `restricted_permissions` to the union of `bundle_permissions/1` over that array.
@@ -783,7 +783,7 @@ The named exceptions, all member 5's:
 3. A runtime whose owner holds no membership gets no tools. Prod has none.
 4. The "not in allowed bundles" refusal text is reworded.
 
-**The `jack-mobile-claude` runtime is settled by Rowan's ruling,** recorded on member 5 on
+**The `jack-mobile-claude` runtime is settled by the product owner's ruling,** recorded on member 5 on
 2026-10-14: *"jack can be an admin for now. its fine."* That runtime lists the whole catalogue and
 is owned by a plain root-org member. Its `prompt_template_update` maps to `prompts.manage`, which
 no built-in role carries. Experiment human writes are install-level, but its experiment tools map
@@ -868,7 +868,7 @@ The ledger covers `access_grants` only. Member 8's rows are written outside `Cha
   without live apply.
 - The cascade that deletes a custom role's `access_grants` rows also bypasses the ledger.
 - Deleting a custom role that still restricts a space is refused, never cascaded (§ Built-in
-  roles, Rowan's ruling of 2026-10-14), so a role deletion can never silently remove a restriction.
+  roles, the product owner's ruling of 2026-10-14), so a role deletion can never silently remove a restriction.
 
 Member 9's proposals use this ledger for grant mutations and reset explicit grants only.
 Role restrictions, assignments and IdP mappings remain outside change cards and undo.
@@ -1035,10 +1035,10 @@ oracle.
 roles, no restrictions and no IdP rows, every actor sees exactly what it sees today. Every member
 proves this with member 2's equivalence test, unmodified.
 
-Rowan, in the settlement: *"This can't be too Byzantine. It should be powerful and help enforce,
+The product owner, in the settlement: *"This can't be too Byzantine. It should be powerful and help enforce,
 but out of the box tremendously restricting agent capability will confuse users."*
 
-Rowan, in the settlement: *"this permissions system will ALMOST always be driven by the admins
+The product owner, in the settlement: *"this permissions system will ALMOST always be driven by the admins
 agent. We can have a UI, but it's almost for emergencies."*
 
 What follows from that:
@@ -1057,10 +1057,10 @@ falsifier.
 | 2 | `01a1386d-cb5c` | Permission registry, Scope and built-in roles mapped from today's model, with no visible change | § Permission model, § Built-in roles, and the stage-1 mapping table | "If an equivalence test cannot be written because today's access isn't derivable from role + external + participants + root admin, stop." Answered: the mapping table derives every actor class from those four inputs plus root-org membership. The two non-data rules (root-org widening, root admin) are named in § Built-in roles. **The equivalence test must include an internal user who is NOT a participant of a given DM, and assert that the DM is not visible to them** (not listed, not openable, no `chat.read`, attachment download refused). That is the case `chat.read :all` would have got wrong; the built-in chat rule is `implicit_or_participant`, with `chat_live.ex:4334-4352` as the oracle. **It must also include the presence org fence:** a sub-org member (no root-org row) who is a participant of a channel whose `org_id` is another org, and of one whose `org_id` is NULL, and assert that `Presence.list_online_for_viewer/1` omits both spaces (no one online there is listed), while a participant channel in the member's own org is listed. That is the case a Scope check replacing `Tenancy.visibility/1` would have got wrong (§ Bypass surfaces, Presence row). |
 | 3 | `01a1386d-e528` | Resource-scoped grants with inheritance and deny: projects, spaces, org-memory subtrees | § Levels and inheritance, § Precedence, § Memory grants | "If org-memory pages have no stable node id, stop and settle the anchoring." Answered: settled in § Memory grants (node entity, path history, lazy nodes, rename moves the node, delete keeps it, overwrite merges fail-closed). Note: this ADR adds the direct space-to-canvas edge to member 3's edge list. |
 | 4 | `01a1386d-fb6e` | Module gating: rail, live_session and context checks; admin views return to their modules | The rail rule in § Permission model, § Root-admin carve-outs, § Denials explain why and who can grant | "If the shell rail is not built from a single filterable list, stop." Not an ADR question; member 4 measured that it is (`icon_rail.ex:671`). Its classification falsifier ("every `:admin` route classified") is answered by the route table in § Root-admin carve-outs. Member 4 closes the guest live-redirect path into the unscoped Tasks board (`ModuleGate`) and re-checks Tasks writes. It does **not** narrow an internal user's default `tasks.read :all`, which is today's behaviour by design. |
-| 5 | `01a1386e-1710` | Agents on the rail: users own their agents, agent scope capped at its owner, MCP tools gated by permission instead of bundles | § Agents, and the rail rule in § Permission model (the Agents module's rail permission is `agents.manage_own`) | "If `owner_user_id` is not reliably set, backfill first." Measured NOT NULL with 0 dangling on both installs. Its owner-cap falsifier for `jack-mobile-claude` is settled by Rowan's ruling (§ Agents); none of that runtime's tools is `install.admin`. |
+| 5 | `01a1386e-1710` | Agents on the rail: users own their agents, agent scope capped at its owner, MCP tools gated by permission instead of bundles | § Agents, and the rail rule in § Permission model (the Agents module's rail permission is `agents.manage_own`) | "If `owner_user_id` is not reliably set, backfill first." Measured NOT NULL with 0 dangling on both installs. Its owner-cap falsifier for `jack-mobile-claude` is settled by the product owner's ruling (§ Agents); none of that runtime's tools is `install.admin`. |
 | 6 | `01a1386e-30bd` | Delegation, view-as, audit log and live apply for access changes | § Delegation and audit, including § Ledger coverage | "If permissions are not cached per socket, decide the caching first." Answered: the cache is member 2's `:access_scope` assign carrying member 3's grant snapshot, rebuilt over PubSub after commit. Member 6's "not capped at owner (pos 5)" view-as label goes stale once member 5's cap lands (member 9 fixes it). |
 | 7 | `01a1386e-45a5` | Close the bypass surfaces: files-service, task-router dispatch, notifications, search and mentions | The stage-1 "Bypass surfaces" table, including its **Digests** row (`ActivityDigest`: each corpus filtered by the recipient's capped scope before aggregation) | "If files-service already authorizes against core's Scope, drop that part." Answered: files-service has no user read surface (`GET /health` and token-gated `POST /extract` only, at `42b43055e1b9`), so enforcement is on core's controllers and member 7 drops the files-service part. **Member 7 runs its checks in conjunction with each surface's existing check, rather than replacing it** (the stage-1 table's files row says "replaces"; member 7's choice stands). Because a grant-less scope short-circuits to `:ok`, a grant-less install keeps today's two gaps: `CanvasHooks.find/2` still resolves any canvas id for an internal user, and FilesLive `load_project/2` still has no check. Member 7 narrows them only for resources under a grant or deny, and records the FilesLive gap as pre-existing. **This stack does not close either gap**; security task `01a13b84` does, after the rollup ships (Consequences). |
-| 8 | `01a1386e-59d1` | Custom roles, role-restricted channels and mapping IdP groups to roles | § Built-in roles (custom roles), § Precedence step 5, § IdP groups → roles | "If OIDC claims no longer carry `groups`, stop." Measured on main: they do (`oidc.ex:2`, `:92`). The base role stays derived (member 8's choice, which differs from member 2's forecast). **Deleting a custom role that still restricts a space is refused** (Rowan's ruling, 2026-10-14, § Built-in roles); this overrides member 8's plan, which cascaded the restriction away. |
+| 8 | `01a1386e-59d1` | Custom roles, role-restricted channels and mapping IdP groups to roles | § Built-in roles (custom roles), § Precedence step 5, § IdP groups → roles | "If OIDC claims no longer carry `groups`, stop." Measured on main: they do (`oidc.ex:2`, `:92`). The base role stays derived (member 8's choice, which differs from member 2's forecast). **Deleting a custom role that still restricts a space is refused** (the product owner's ruling, 2026-10-14, § Built-in roles); this overrides member 8's plan, which cascaded the restriction away. |
 | 9 | `01a1386e-72e1` | Agent-first access UX: change-card MCP tools and the break-glass Access panel | § UX, § Denials explain why and who can grant | "If the delegation/audit member did not ship an undo-able change log, stop." Answered: member 6's `Changes.commit/4` / `undo/3` ledger. Member 9 also maps `AccessViewAsLive` in `ModuleGate`, which member 6 left unmapped. |
 
 ## Open questions
@@ -1072,10 +1072,10 @@ falsifier.
    runtime, because `for_runtime/1` takes an `AgentRuntime`. Until a member does, ownerless
    agents stay outside Access, exactly as today: they use `ToolRunner` and never reach
    `ToolAuthorization`.
-3. **Agent page writes through a subtree `memory.write` grant: dropped by Rowan on 2026-10-14,
+3. **Agent page writes through a subtree `memory.write` grant: dropped by the product owner on 2026-10-14,
    with no follow-up.** `Wiki.Routing.gate_write/3` stays Historian-only (§ Memory grants). This
    is closed, not open.
-4. **A `chat.write` deny that blocks posts: dropped by Rowan on 2026-10-14, with no follow-up.**
+4. **A `chat.write` deny that blocks posts: dropped by the product owner on 2026-10-14, with no follow-up.**
    `Chat.SpaceAccess.authorize_writer/2` stays as it is: `chat.write` on a space is decided by
    participation there, and no member routes it through Access. A `chat.write` deny does not stop
    a participant from posting, and no task is planned to make it. This is closed, not open.
@@ -1083,7 +1083,7 @@ falsifier.
    - Member 7 and member 8: the grant-less short-circuit in `Access.check/3` skips role
      restrictions. Decided in § Precedence (also check for a restriction row); the code is
      unbuilt.
-   - Member 8: deleting a custom role that still restricts a space. **Decided by Rowan on
+   - Member 8: deleting a custom role that still restricts a space. **Decided by the product owner on
      2026-10-14: the delete is refused and never fails open** (§ Built-in roles). This overrides
      member 8's plan, which cascaded the restriction away and pinned that with a test.
    - Member 8's assignment, restriction and IdP rows are outside the ledger (§ Ledger coverage).
@@ -1133,9 +1133,9 @@ is (mapping row 9).
 - **Kept as they are today, on purpose:**
   - the unscoped Tasks board for internal users;
   - participation-based chat writes (`Chat.SpaceAccess.authorize_writer/2`). A `chat.write` deny
-    that blocks posts was dropped by Rowan on 2026-10-14, with no follow-up;
+    that blocks posts was dropped by the product owner on 2026-10-14, with no follow-up;
   - Historian-only agent page writes (`Wiki.Routing.gate_write/3`). Agent page writes through a
-    subtree `memory.write` grant were dropped by Rowan on 2026-10-14, with no follow-up.
+    subtree `memory.write` grant were dropped by the product owner on 2026-10-14, with no follow-up.
 - **Not closed by this stack:** the canvas-by-id gap (`CanvasHooks.find/2`,
   `canvas_hooks.ex:337`, resolves any canvas id through `Chat.get_canvas/1`) and the
   `/files/:project_id` gap (`router.ex:835`, FilesLive `load_project/2` at `files_live.ex:842`
@@ -1143,4 +1143,4 @@ is (mapping row 9).
   security task, `01a13b84`, closes both after the rbac-roles rollup ships. Where § Bypass
   surfaces states a v2 rule for `CanvasHooks.find/2`, that task delivers it.
 - **Custom-role deletion fails closed:** deleting a custom role that still restricts a space is
-  refused (Rowan's ruling, 2026-10-14), overriding member 8's plan.
+  refused (the product owner's ruling, 2026-10-14), overriding member 8's plan.

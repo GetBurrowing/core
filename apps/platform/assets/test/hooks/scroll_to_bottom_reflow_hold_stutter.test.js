@@ -4,7 +4,7 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
 /**
  * THE SCROLL STUTTER, MEASURED (task 01a0419a stage 2).
  *
- * Rowan, on the shipped build: "as we scroll up there is some noticeable ui
+ * Alex, on the shipped build: "as we scroll up there is some noticeable ui
  * thrashing as we cross what I presume are the near and far thresholds. it
  * makes scrolling through history stutter and feel strange."
  *

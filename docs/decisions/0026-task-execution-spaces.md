@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Date:** 2026-03-23  
 **Related:** ADR 0008 (Chat Backend), ADR 0013 (Attention Routing), ADR 0014 (Agent Federation), ADR 0018 (Tasks — Plan Engine), ADR 0025 (Task Router)  
-**Deciders:** Rowan Ellis
+**Deciders:** the product owner
 
 ---
 

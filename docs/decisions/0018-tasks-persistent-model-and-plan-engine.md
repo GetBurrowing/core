@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-03-20  
 **Related:** ADR 0002 (Domain Boundaries), ADR 0011 (Execution Runners), ADR 0006 (Vault)  
-**Deciders:** Rowan Ellis  
+**Deciders:** the product owner  
 
 ## Context
 
@@ -225,7 +225,7 @@ Deploy targets are project-level config, not LLM-generated:
       "name" => "production",
       "type" => "docker_compose",
       "config" => %{
-        "host" => "dev@192.0.2.234",
+        "host" => "deploy@192.0.2.12",
         "stack_path" => "~/docker/stacks/my-app",
         "image_registry" => "ghcr.io/org/repo",
         "watchtower" => true

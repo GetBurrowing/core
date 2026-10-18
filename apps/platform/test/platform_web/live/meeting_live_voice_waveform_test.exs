@@ -147,7 +147,7 @@ defmodule PlatformWeb.MeetingLiveVoiceWaveformTest do
   describe "Burrow joined by voice (agent:<uuid>)" do
     setup %{conn: conn} do
       {meeting, space, room} = meeting!()
-      _host = human!(room, "Rowan")
+      _host = human!(room, "Alex")
       burrow = burrow!()
       invite = invite_row!(room, burrow)
 
@@ -230,7 +230,7 @@ defmodule PlatformWeb.MeetingLiveVoiceWaveformTest do
   describe "Burrow invited but not joined" do
     setup %{conn: conn} do
       {meeting, space, room} = meeting!()
-      _host = human!(room, "Rowan")
+      _host = human!(room, "Alex")
       burrow = burrow!()
       _invite = invite_row!(room, burrow)
 

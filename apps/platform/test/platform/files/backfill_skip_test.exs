@@ -32,7 +32,7 @@ defmodule Platform.Files.BackfillSkipTest do
              """
              Stage 6 migration is no longer a no-op. If you're adding a real
              backfill of chat_attachments → platform_files, route it through
-             a new plan stage with explicit review — Rowan rejected the v3
+             a new plan stage with explicit review — Alex rejected the v3
              auto-backfill on 2026-06-19 because project_id derivation is
              unsound for org-level chat spaces.
              """

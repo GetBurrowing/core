@@ -119,7 +119,7 @@ defmodule Platform.Meetings.AgentActivity do
   ### The trap this is one signal away from becoming
 
   `:listening` was removed from this rail (canvas `01a05b11-54ff`,
-  ratified by Harper 2026-09-03) because every agent in a call is always
+  ratified by the product lead 2026-09-03) because every agent in a call is always
   listening, so a badge that is on for everyone all the time takes a row
   from a state that actually turns over. `:heard` is legitimate ONLY
   because it turns over: it is true for about two seconds after a

@@ -3,7 +3,7 @@
 Run: PYTHONPATH=deployment/installer python3 -m unittest discover -s deployment/installer/tests -v
 
 Design:
-- Every test class validates the good moon-equivalent fixture FIRST, so a
+- Every test class validates the good single-host fixture FIRST, so a
   validator that rejects everything fails loudly instead of passing every
   negative case.
 - One fixture per error code, each the good fixture with exactly ONE field
@@ -27,7 +27,7 @@ INSTALLER = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(INSTALLER))
 FIXTURES = os.path.join(HERE, "fixtures")
 GOOD = os.path.join(FIXTURES, "good.toml")
-EXAMPLE = os.path.join(REPO, "deployment", "examples", "moon-equivalent.install.toml")
+EXAMPLE = os.path.join(REPO, "deployment", "examples", "single-host.install.toml")
 
 sys.path.insert(0, INSTALLER)
 
@@ -207,6 +207,32 @@ class NamedCaseTest(PositiveControlMixin, unittest.TestCase):
 
     def test_gpu_required_path(self):
         self.assert_single("gpu_required.toml", "gpu_required", "voice.accelerator")
+
+    def test_image_namespace_is_required(self):
+        # Task 01a14b9e: no default namespace. Absent is missing_required.
+        raw = load(GOOD)
+        del raw["images"]["image_namespace"]
+        errors, _ = validate(raw)
+        self.assertEqual(
+            [(e.code, e.path) for e in errors], [("missing_required", "images.image_namespace")]
+        )
+        self.assertIn("image_namespace is required and has no default", errors[0].message)
+
+    def test_image_namespace_must_be_a_docker_hub_namespace(self):
+        for bad in ("Acme", "acme/images", "", "-acme", "acme..x"):
+            with self.subTest(value=bad):
+                raw = load(GOOD)
+                raw["images"]["image_namespace"] = bad
+                errors, _ = validate(raw)
+                self.assertEqual(
+                    [(e.code, e.path) for e in errors],
+                    [("invalid_value", "images.image_namespace")],
+                )
+        for good in ("acme", "acme-images", "acme.io", "a1_b2"):
+            with self.subTest(value=good):
+                raw = load(GOOD)
+                raw["images"]["image_namespace"] = good
+                self.assertEqual(validate(raw)[0], [])
 
     def test_unknown_key_at_depth(self):
         raw = load(GOOD)
@@ -417,6 +443,7 @@ class RuleTest(PositiveControlMixin, unittest.TestCase):
         raw = tomllib.loads(
             'schema_version = 1\n[install]\nname = "x"\n'
             '[domain]\nprimary = "x.example.com"\ntls = "internal"\n'
+            '[images]\nimage_namespace = "example"\n'
         )
         errors, normalized = validate(raw)
         self.assertEqual(errors, [])

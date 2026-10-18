@@ -41,7 +41,7 @@ class AppShareClientTest {
     fun `a non-2xx, a bad space id, or no bearer is an ApiException and nothing leaks`() {
         val client = AppShareClient(AppApiClient(tokens, RecordingTransport())) { _, _, _ -> HttpResponse(413, "{}") }
         val form = MultipartForm(listOf("text" to "hi"), null)
-        for ((h, id) in listOf(host to "0192-s1", host to "../session", "suite.milv.life" to "0192-s1")) {
+        for ((h, id) in listOf(host to "0192-s1", host to "../session", "suite.example.org" to "0192-s1")) {
             try {
                 client.send(h, id, form)
                 fail("expected a failure for $h $id")
@@ -57,8 +57,8 @@ class AppShareClientTest {
             """
             {"spaces": [
               {"id": "s1", "name": "Ops", "path_segment": "ops", "kind": "channel",
-               "org": {"id": "o1", "name": "Fabrikam"}, "agents": []},
-              {"id": "s2", "name": "Harper", "path_segment": "s2", "kind": "dm"},
+               "org": {"id": "o1", "name": "Legacy"}, "agents": []},
+              {"id": "s2", "name": "Sam", "path_segment": "s2", "kind": "dm"},
               {"id": "s3", "name": "Old server"}
             ]}
             """.trimIndent()

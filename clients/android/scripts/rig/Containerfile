@@ -1,4 +1,4 @@
-# Burrow Android build + emulator rig (task 01a10d8e). Runs on moon (Linux,
+# Burrow Android build + emulator rig (task 01a10d8e). Runs on the rig host (Linux,
 # KVM) under podman; see clients/android/README.md, "Rig".
 #
 # The image holds the JDK, node and the Android cmdline-tools only. The SDK

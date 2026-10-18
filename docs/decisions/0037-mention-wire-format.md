@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-17
-**Deciders:** Rowan
+**Deciders:** Alex
 **Related:** ADR 0020 (Chat Rich Content Rendering), ADR 0027 (Active Agent Mutex), ADR 0035 (ChatLive Modularization)
 
 ---
@@ -13,9 +13,9 @@
 
 Three bugs follow from this:
 
-1. **Highlight drops after the first word.** `@Rowan Ellis` renders with only `@Rowan` highlighted because `\w+` stops at whitespace. Participants with multi-word display names (most humans) get visually truncated mentions.
-2. **Autocomplete drops after the first word.** The composer's detection regex `/@(\w*)$/` stops at whitespace, so typing `@Rowan Mil` only ever queries `"Rowan"` — the user cannot narrow by continuing to type a surname.
-3. **Prefix-match ambiguity in routing.** `String.contains?(content, "@rowan")` matches both `@Rowan` and `@Rowan Ellis`. In a space with both a "Rowan" and a "Rowan Ellis", a message mentioning one routes to both.
+1. **Highlight drops after the first word.** `@Alex Rivera` renders with only `@Alex` highlighted because `\w+` stops at whitespace. Participants with multi-word display names (most humans) get visually truncated mentions.
+2. **Autocomplete drops after the first word.** The composer's detection regex `/@(\w*)$/` stops at whitespace, so typing `@Alex Riv` only ever queries `"Alex"` — the user cannot narrow by continuing to type a surname.
+3. **Prefix-match ambiguity in routing.** `String.contains?(content, "@alex")` matches both `@Alex` and `@Alex Rivera`. In a space with both a "Alex" and a "Alex Rivera", a message mentioning one routes to both.
 
 These are fixable individually, but the underlying cause is shared: the wire format has no delimiter to tell a mention from its surrounding text. Any point fix (greedy regex, capitalized-token heuristic, roster-threaded renderer) papers over the same gap.
 
@@ -23,7 +23,7 @@ These are fixable individually, but the underlying cause is shared: the wire for
 
 **Change the mention wire format to `@[Display Name]`** — bracketed, human-readable, no embedded ID.
 
-Example raw text: `hey @[Rowan Ellis] and @[higgins], can you look at this?`
+Example raw text: `hey @[Alex Rivera] and @[higgins], can you look at this?`
 
 The composer emits the bracketed form on mention accept. The renderer matches `@[…]` as its primary pattern and keeps `@\w+` as a legacy fallback so pre-migration messages stay highlighted until the backfill runs. The attention router resolves recipients with an exact bracketed-match check first, legacy substring-match second.
 
@@ -31,9 +31,9 @@ The composer emits the bracketed form on mention accept. The renderer matches `@
 
 ### 1. Greedy "capitalized tokens" regex
 
-`~r/@([A-Z]\w*(?:\s+[A-Z]\w*)*)/`. One-line change. Handles `@Rowan Ellis` and `@Sloane Scott`.
+`~r/@([A-Z]\w*(?:\s+[A-Z]\w*)*)/`. One-line change. Handles `@Alex Rivera` and `@Sloane Scott`.
 
-**Rejected** because it breaks for lowercase handles (every agent: `higgins`, `mycroft`, `geordi`) and over-matches on capitalized follow-on words: `@Rowan Have you seen this` would highlight "Rowan Have". No improvement to the routing ambiguity.
+**Rejected** because it breaks for lowercase handles (every agent: `higgins`, `mycroft`, `geordi`) and over-matches on capitalized follow-on words: `@Alex Have you seen this` would highlight "Alex Have". No improvement to the routing ambiguity.
 
 ### 2. Thread the roster into the renderer
 

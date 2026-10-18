@@ -17,19 +17,19 @@ defmodule Platform.Chat.MentionBackfillTest do
     end
 
     test "rewrites multi-word legacy mention with space in display name" do
-      r = roster([{"Rowan Ellis", "usr-1"}])
+      r = roster([{"Alex Rivera", "usr-1"}])
 
-      assert MentionBackfill.rewrite_content("hi @Rowan Ellis!", r) ==
-               "hi @[Rowan Ellis]!"
+      assert MentionBackfill.rewrite_content("hi @Alex Rivera!", r) ==
+               "hi @[Alex Rivera]!"
     end
 
     test "prefers longest match when shorter name is a prefix" do
-      r = roster([{"Rowan", "usr-1"}, {"Rowan Ellis", "usr-2"}])
+      r = roster([{"Alex", "usr-1"}, {"Alex Rivera", "usr-2"}])
 
-      assert MentionBackfill.rewrite_content("@Rowan Ellis hi", r) ==
-               "@[Rowan Ellis] hi"
+      assert MentionBackfill.rewrite_content("@Alex Rivera hi", r) ==
+               "@[Alex Rivera] hi"
 
-      assert MentionBackfill.rewrite_content("@Rowan hey", r) == "@[Rowan] hey"
+      assert MentionBackfill.rewrite_content("@Alex hey", r) == "@[Alex] hey"
     end
 
     test "canonicalizes casing from the roster display name" do
@@ -52,13 +52,13 @@ defmodule Platform.Chat.MentionBackfillTest do
     end
 
     test "preserves trailing non-word characters like punctuation" do
-      r = roster([{"Rowan", "usr-1"}])
-      assert MentionBackfill.rewrite_content("sup @Rowan?", r) == "sup @[Rowan]?"
-      assert MentionBackfill.rewrite_content("@Rowan, hi", r) == "@[Rowan], hi"
+      r = roster([{"Alex", "usr-1"}])
+      assert MentionBackfill.rewrite_content("sup @Alex?", r) == "sup @[Alex]?"
+      assert MentionBackfill.rewrite_content("@Alex, hi", r) == "@[Alex], hi"
     end
 
-    test "respects word boundary: @Ryans does not match Rowan" do
-      r = roster([{"Rowan", "usr-1"}])
+    test "respects word boundary: @Ryans does not match Alex" do
+      r = roster([{"Alex", "usr-1"}])
 
       assert MentionBackfill.rewrite_content("happy @Ryans party", r) ==
                "happy @Ryans party"
@@ -72,8 +72,8 @@ defmodule Platform.Chat.MentionBackfillTest do
     end
 
     test "matches by participant_id when display_name is absent from content" do
-      r = [%{display_name: "Rowan", participant_id: "rowan-slug"}]
-      assert MentionBackfill.rewrite_content("@rowan-slug hi", r) == "@[Rowan] hi"
+      r = [%{display_name: "Alex", participant_id: "alex-slug"}]
+      assert MentionBackfill.rewrite_content("@alex-slug hi", r) == "@[Alex] hi"
     end
 
     test "handles empty roster gracefully" do

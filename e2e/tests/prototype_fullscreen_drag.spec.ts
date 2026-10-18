@@ -2,7 +2,7 @@
  * Prototype fullscreen under a DRAG: Burrow iOS and the installed PWA
  * (task 01a1389f, plan v2).
  *
- * THE REPORT (Rowan, 2026-10-14). On an iPad, in the installed Burrow iOS app
+ * THE REPORT (Alex, 2026-10-14). On an iPad, in the installed Burrow iOS app
  * (Capacitor wrapping a WKWebView), a fast drag inside a fullscreen prototype
  * drops it out of fullscreen. He also sees a prominent X in the upper-left
  * corner. The web app renders no top-left X: the bar's close button is on the right.

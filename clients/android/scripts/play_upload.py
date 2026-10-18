@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Upload a Burrow AAB to a Google Play track with the Play Developer API v3.
 
-Task 01a10d8e stage 5. Called by scripts/release.sh --upload ON MOON, with the
+Task 01a10d8e stage 5. Called by scripts/release.sh --upload ON THE RIG HOST, with the
 service-account key in a trap-cleaned mktemp dir:
 
     play_upload.py --key <service-account.json> --package com.koboai.burrow \\
@@ -22,7 +22,7 @@ Secrets: the private key, the signed JWT and the access token are never
 printed, logged or put in argv. Error output carries the HTTP status and
 Google's error message only.
 
-Needs `cryptography` (present on moon) for RS256.
+Needs `cryptography` (present on the rig host) for RS256.
 """
 
 import argparse

@@ -36,7 +36,9 @@ defmodule Platform.Repo.Migrations.SeedKnownDelegationExclusions do
      "Moore holds architect responsibilities, and reviewing a design while also executing against it collapses the two roles the review exists to keep apart; this exclusion is about the role, and it lapses if and when the role does."}
   ]
 
-  @decided_by "rowan"
+  # The deciding operator (a neutral label since task 01a14b9e stage 5; on a
+  # fresh database no agent row matches, so nothing is written).
+  @decided_by "operator"
 
   def up do
     now = DateTime.utc_now()

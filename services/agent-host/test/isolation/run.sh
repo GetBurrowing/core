@@ -1,7 +1,7 @@
 #!/bin/bash
-# Run the agent host's tests on moon: typecheck and unit tests in a plain bun
+# Run the agent host's tests on test-host: typecheck and unit tests in a plain bun
 # container, then the isolation test inside a throwaway systemd container.
-# Usage (on moon): run.sh <checkout of services/agent-host>
+# Usage (on test-host): run.sh <checkout of services/agent-host>
 # Every container and image name carries the task id; all are removed on exit.
 set -euo pipefail
 SRC="$(cd "$1" && pwd)"

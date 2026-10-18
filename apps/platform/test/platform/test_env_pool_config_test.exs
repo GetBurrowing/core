@@ -3,7 +3,7 @@ defmodule Platform.TestEnvPoolConfigTest do
   Regression guard for the test-env sandbox pool sizing (task 01a0d265,
   stage 1 amendment; idea adopted from the displaced commit `bd2c0701`).
 
-  On 2026-09-24 a seed-A `mix test` run on the moon rig produced 19 failures,
+  On 2026-09-24 a seed-A `mix test` run on the test-host rig produced 19 failures,
   of which 14 were setup `Sandbox.start_owner!/2` MatchErrors
   (`:queue_timeout`, "dropped from queue") and 5 were in-test linked-preload
   crashes on an owner's single connection. Root cause was arithmetic, not
@@ -12,7 +12,7 @@ defmodule Platform.TestEnvPoolConfigTest do
   ExUnit's default `max_cases` is `System.schedulers_online() * 2`
   (elixir `lib/ex_unit/lib/ex_unit.ex:348` docs; `defp put_max_cases/1`
   fallback) and this repo does not override it (`test/test_helper.exs`), so
-  the moon rig (16 schedulers) runs 32 tests in parallel while EVERY test
+  the test-host rig (16 schedulers) runs 32 tests in parallel while EVERY test
   holds one real pool connection for its whole lifetime
   (`Sandbox.start_owner!` in test/support/data_case.ex:42 and
   test/support/conn_case.ex:61). `config/test.exs` therefore sizes the pool

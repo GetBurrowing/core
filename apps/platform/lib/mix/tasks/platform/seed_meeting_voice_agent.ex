@@ -60,7 +60,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   ## `tool_profile`
 
   Scoped to what a single-purpose meeting assistant actually calls, per
-  Dalton's live moon runs: `messaging` (for the `post_to_meeting_chat`
+  a live test run: `messaging` (for the `post_to_meeting_chat`
   hand-off's `send_media`, plus `react`) and `context_read` (for
   `space_get_context`, the "tool call" e2e case, plus `space_get_messages`/
   `space_search_messages`/`canvas_get`/`canvas_list`/`principal_search` —
@@ -128,7 +128,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
   # Informational only (moduledoc note in Platform.Agents.Voice) — actual
   # synthesis happens in services/meeting-voice-agent's TTS client, pointed
-  # at moon's speaches Kokoro-82M. "openai" is the closest of the two
+  # at the install's speaches Kokoro-82M. "openai" is the closest of the two
   # `Platform.Agents.Voice.known_providers/0` entries: speaches serves an
   # OpenAI-compatible TTS API, and this deployment has no ElevenLabs key.
   # `voice_id`/`model` mirror services/meeting-voice-agent's own
@@ -154,7 +154,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   meeting-voice-agent livekit-agents runtime \
   (services/meeting-voice-agent/), separate from a general agent's usual \
   text-dispatch brain. You join meetings, listen continuously, and answer \
-  by voice using moon's local STT/TTS and the wave LLM endpoint.
+  by voice using the install's local STT/TTS and the wave LLM endpoint.
 
   What you are not: a general-purpose assistant. You don't manage tasks, \
   epics, plans, or reviews — those tools are not in your surface. If \

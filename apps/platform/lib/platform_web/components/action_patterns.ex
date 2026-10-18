@@ -18,7 +18,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
   Sticky list-screen header: title + count badge, optional search /
   filters / primary-action slots.
 
-  Console-style two-row layout (Marlowe 2026-07-12): a compact title row,
+  Console-style two-row layout (design review 2026-07-12): a compact title row,
   then ONE toolbar row holding the search (caller sets a fixed width —
   never full-bleed), inline pre-filters, and the right-aligned primary
   action, all on the same level. Below `md` the search takes its own

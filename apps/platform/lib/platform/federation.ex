@@ -576,7 +576,7 @@ defmodule Platform.Federation do
   Returns `{nil, nil}` if no runtime exists, `{nil, %AgentRuntime{}}` if the
   runtime exists but isn't linked to an agent, or `{%Agent{}, %AgentRuntime{}}`
   for fully-linked entries. Used by orchestration to resolve a dispatch
-  assignee map (`%{type: :federated, id: "rowan-claude-agent-1"}`) into the
+  assignee map (`%{type: :federated, id: "agent-runtime-1"}`) into the
   agent + runtime structs needed for provider-aware behavior.
   """
   @spec lookup_assignment(String.t() | nil) :: {Agent.t() | nil, AgentRuntime.t() | nil}

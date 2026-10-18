@@ -79,7 +79,7 @@ defmodule Platform.GameStreamTest do
     {:ok, project} =
       Tasks.create_project(%{
         name: "Voltron #{unique()}",
-        repo_url: "https://github.com/rowanellis/voltron"
+        repo_url: "https://github.com/example/voltron"
       })
 
     %{user: user, project: project}
@@ -159,7 +159,7 @@ defmodule Platform.GameStreamTest do
     test "an in_review task starts at its branch tip sha", ctx do
       runtime = host!(ctx.user)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       assert {:ok, status} = start!(task)
       assert status.review_sha == @sha
@@ -170,7 +170,7 @@ defmodule Platform.GameStreamTest do
       assert_receive %Broadcast{event: "play_session_start", payload: payload}
       assert payload.sha == @sha
       assert payload.branch == branch(task)
-      assert payload.repo_url == "https://github.com/rowanellis/voltron"
+      assert payload.repo_url == "https://github.com/example/voltron"
       assert payload.session_id == status.session_id
       assert payload.task_id == task.id
       assert payload.encoder == Platform.Experiments.Surfaces.GameStreamEncoder.control()
@@ -183,7 +183,7 @@ defmodule Platform.GameStreamTest do
 
       for status <- ~w(backlog in_progress done) do
         task = task!(ctx.project, status)
-        heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+        heads!(%{{"example/voltron", branch(task)} => @sha})
         assert {:error, :not_in_review} = start!(task)
       end
 
@@ -196,7 +196,7 @@ defmodule Platform.GameStreamTest do
       host!(ctx.user)
       task = task!(ctx.project, "in_review")
       # main exists and has a tip; a fallback would find it.
-      heads!(%{{"rowanellis/voltron", "main"} => @sha2})
+      heads!(%{{"example/voltron", "main"} => @sha2})
 
       assert {:error, :no_review_branch} = start!(task)
 
@@ -212,8 +212,8 @@ defmodule Platform.GameStreamTest do
       task = task!(ctx.project, "in_review")
 
       heads!(%{
-        {"rowanellis/voltron", branch(task)} => {:error, :gh_unavailable},
-        {"rowanellis/voltron", "main"} => @sha2
+        {"example/voltron", branch(task)} => {:error, :gh_unavailable},
+        {"example/voltron", "main"} => @sha2
       })
 
       assert {:error, {:review_branch_unresolved, :gh_unavailable}} = start!(task)
@@ -223,7 +223,7 @@ defmodule Platform.GameStreamTest do
     test "the branch is StackDeployer.member_branch_for/1, the full task uuid", ctx do
       host!(ctx.user)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       assert {:ok, status} = start!(task)
       assert status.branch == Platform.Tasks.StackDeployer.member_branch_for(task)
@@ -241,7 +241,7 @@ defmodule Platform.GameStreamTest do
   describe "hosts" do
     test "no present host is no_play_host", ctx do
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       refute GameStream.host_available?()
       assert {:error, :no_play_host} = start!(task)
@@ -250,7 +250,7 @@ defmodule Platform.GameStreamTest do
     test "a present runtime that does not declare the feature is not a host", ctx do
       host!(ctx.user, ["meeting_voice"])
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       assert {:error, :no_play_host} = start!(task)
     end
@@ -259,7 +259,7 @@ defmodule Platform.GameStreamTest do
       runtime = host!(ctx.user)
       RuntimePresence.untrack(runtime.runtime_id)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       assert {:error, :no_play_host} = start!(task)
     end
@@ -270,8 +270,8 @@ defmodule Platform.GameStreamTest do
       b = task!(ctx.project, "in_review")
 
       heads!(%{
-        {"rowanellis/voltron", branch(a)} => @sha,
-        {"rowanellis/voltron", branch(b)} => @sha2
+        {"example/voltron", branch(a)} => @sha,
+        {"example/voltron", branch(b)} => @sha2
       })
 
       assert GameStream.host_available?()
@@ -285,7 +285,7 @@ defmodule Platform.GameStreamTest do
     setup ctx do
       runtime = host!(ctx.user)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
       {:ok, status} = start!(task)
       :ok = Phoenix.PubSub.subscribe(Platform.PubSub, GameStream.topic(status.session_id))
       %{runtime: runtime, task: task, session_id: status.session_id}
@@ -363,7 +363,7 @@ defmodule Platform.GameStreamTest do
 
       # The host is free again immediately, before the ended session lingers out.
       other = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(other)} => @sha2})
+      heads!(%{{"example/voltron", branch(other)} => @sha2})
       assert {:ok, _} = start!(other)
     end
 
@@ -371,7 +371,7 @@ defmodule Platform.GameStreamTest do
          ctx do
       GameStream.stop_session(ctx.session_id)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
       {:ok, %{session_id: id}} = start!(task, idle_timeout_s: 60)
       :ok = Phoenix.PubSub.subscribe(Platform.PubSub, GameStream.topic(id))
       rid = ctx.runtime.runtime_id
@@ -573,7 +573,7 @@ defmodule Platform.GameStreamTest do
     setup ctx do
       runtime = host!(ctx.user)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
       {:ok, status} = start!(task)
       :ok = Phoenix.PubSub.subscribe(Platform.PubSub, GameStream.topic(status.session_id))
       %{runtime: runtime, session_id: status.session_id}
@@ -715,7 +715,7 @@ defmodule Platform.GameStreamTest do
     test "Start again's window holds the new session from the start as P1", ctx do
       GameStream.stop_session(ctx.session_id)
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
 
       {:ok, %{session_id: id}} =
         start!(task, viewer: self(), viewer_info: %{user_id: ctx.user.id, name: "GS User"})
@@ -746,7 +746,7 @@ defmodule Platform.GameStreamTest do
     setup ctx do
       runtime = host!(ctx.user, ["game_stream_host", "game_stream_multi"])
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
       %{runtime: runtime, task: task}
     end
 
@@ -1149,7 +1149,7 @@ defmodule Platform.GameStreamTest do
   describe "the game_stream_touch capability gate (01a0fe45)" do
     setup ctx do
       task = task!(ctx.project, "in_review")
-      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      heads!(%{{"example/voltron", branch(task)} => @sha})
       %{task: task}
     end
 
@@ -1184,7 +1184,7 @@ defmodule Platform.GameStreamTest do
          ctx do
       for features <- [["game_stream_host"], ["game_stream_host", "game_stream_multi"]] do
         task = task!(ctx.project, "in_review")
-        heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+        heads!(%{{"example/voltron", branch(task)} => @sha})
         runtime = host!(ctx.user, features)
         {:ok, status} = start!(task)
         assert status.host_runtime_id == runtime.runtime_id

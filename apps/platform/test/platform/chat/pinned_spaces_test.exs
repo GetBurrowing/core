@@ -75,7 +75,7 @@ defmodule Platform.Chat.PinnedSpacesTest do
       # implementation that filters on kind passes every channel-only test
       # above and empties the Pinned block of people.
       channel = space("gen-migration", "channel")
-      dm = space("rowan", "dm")
+      dm = space("alex", "dm")
       group = space("crew", "group")
 
       assert PinnedSpaces.partition([channel, dm, group], [dm.id]) ==

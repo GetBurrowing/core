@@ -52,7 +52,7 @@ Example:
   "segment_id": "01a06700-1234-7001-b000-0eac1b8cf949",
   "text": "Can one of you pick up the deploy?",
   "participant_identity": "user:019d1357-cb08-7023-b165-fd19e9462316",
-  "speaker_name": "Rowan",
+  "speaker_name": "the product owner",
   "speaker_kind": "human",
   "spoken_at": "2026-09-03T10:31:07.412Z"
 }

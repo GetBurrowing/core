@@ -73,8 +73,8 @@ defmodule Platform.Push.NotificationTest do
   defp every_kind do
     [
       Notification.from_map(%{title: "Legacy", body: "legacy body", url: "/meetings/x"}),
-      AttentionRouter.push_notification("Harper", message("hi @[Marlowe]"), :mention, space(), []),
-      AttentionRouter.push_notification("Harper", message("ambient"), :all, space(), []),
+      AttentionRouter.push_notification("Sam", message("hi @[Robin]"), :mention, space(), []),
+      AttentionRouter.push_notification("Sam", message("ambient"), :all, space(), []),
       Notification.from_inbox_item(inbox_item("task_plan_review")),
       Notification.from_inbox_item(
         inbox_item("review_request_pending", %{source_type: "task_review"})
@@ -226,7 +226,7 @@ defmodule Platform.Push.NotificationTest do
   describe "categories and grouping" do
     test "a mention gets SUITE_MENTION and is grouped by its space" do
       s = space()
-      n = AttentionRouter.push_notification("Harper", message("x"), :mention, s, [])
+      n = AttentionRouter.push_notification("Sam", message("x"), :mention, s, [])
 
       assert n.category == "SUITE_MENTION"
       assert n.thread_id == s.id
@@ -239,7 +239,7 @@ defmodule Platform.Push.NotificationTest do
     test "a mention in a slug-less DM links to that DM and its message, never bare /chat" do
       dm = %Space{id: Ecto.UUID.generate(), name: nil, kind: "dm", slug: nil}
       msg = message("ping")
-      n = AttentionRouter.push_notification("Harper", msg, :mention, dm, [])
+      n = AttentionRouter.push_notification("Sam", msg, :mention, dm, [])
 
       assert n.url == "/chat/#{dm.id}?message=#{msg.id}"
       assert Notification.to_apns_payload(n)["url"] == n.url
@@ -248,7 +248,7 @@ defmodule Platform.Push.NotificationTest do
     test "an org-scoped space links by id, matching the web app's space_path_segment" do
       s = %Space{space() | org_id: Ecto.UUID.generate()}
       msg = message("x")
-      n = AttentionRouter.push_notification("Harper", msg, :mention, s, [])
+      n = AttentionRouter.push_notification("Sam", msg, :mention, s, [])
 
       assert n.url == "/chat/#{Platform.Chat.space_path_segment(s)}?message=#{msg.id}"
       assert n.url == "/chat/#{s.id}?message=#{msg.id}"
@@ -284,8 +284,8 @@ defmodule Platform.Push.NotificationTest do
 
   describe "copy (canvas 01a10887 rev 23)" do
     test "mention title is {Author} in {Space}" do
-      n = AttentionRouter.push_notification("Harper", message("x"), :mention, space(), [])
-      assert n.title == "Harper in Internal Acme SXI"
+      n = AttentionRouter.push_notification("Sam", message("x"), :mention, space(), [])
+      assert n.title == "Sam in Internal Acme SXI"
     end
 
     test "plan and review titles are fixed and the body is the task title" do
@@ -314,9 +314,9 @@ defmodule Platform.Push.NotificationTest do
 
     test "body strips formatting and turns @[Name] into @Name" do
       assert Notification.body_text(
-               "**Heads up** @[Marlowe Smith], see [the doc](https://x.test/a)"
+               "**Heads up** @[Robin Smith], see [the doc](https://x.test/a)"
              ) ==
-               "Heads up @Marlowe Smith, see the doc"
+               "Heads up @Robin Smith, see the doc"
 
       assert Notification.body_text("# Title\n\n> quoted `code` and _emph_") ==
                "Title quoted code and emph"
@@ -347,11 +347,11 @@ defmodule Platform.Push.NotificationTest do
 
   describe "FCM payload (task 01a10d8e stage 1)" do
     test "a chat notification carries the author and the space separately" do
-      n = AttentionRouter.push_notification("Harper", message("hi"), :mention, space(), [])
+      n = AttentionRouter.push_notification("Sam", message("hi"), :mention, space(), [])
 
-      assert n.author_name == "Harper"
+      assert n.author_name == "Sam"
       assert n.space_name == "Internal Acme SXI"
-      assert n.title == "Harper in Internal Acme SXI", "the title is unchanged"
+      assert n.title == "Sam in Internal Acme SXI", "the title is unchanged"
     end
 
     test "to_fcm_payload is data-only, high priority, with string values only" do
@@ -386,7 +386,7 @@ defmodule Platform.Push.NotificationTest do
         assert data[Atom.to_string(key)] == web[key], "#{key} differs"
       end
 
-      assert data["author_name"] == "Harper"
+      assert data["author_name"] == "Sam"
       assert data["space_name"] == "Internal Acme SXI"
       refute Map.has_key?(data, "task_id")
     end
@@ -409,7 +409,7 @@ defmodule Platform.Push.NotificationTest do
     test "redaction clears author_name and space_name on every transport" do
       user = external_user()
       [_, mention | _] = every_kind()
-      assert mention.author_name == "Harper"
+      assert mention.author_name == "Sam"
 
       redacted = Push.preview_for_user(user.id, mention)
 
@@ -420,7 +420,7 @@ defmodule Platform.Push.NotificationTest do
       refute Map.has_key?(data, "author_name")
       refute Map.has_key?(data, "space_name")
       refute Map.has_key?(data, "space_id")
-      refute Jason.encode!(data) =~ "Harper"
+      refute Jason.encode!(data) =~ "Sam"
       refute Jason.encode!(data) =~ "Internal Acme SXI"
       assert data["title"] == "New message"
     end
@@ -510,7 +510,7 @@ defmodule Platform.Push.NotificationTest do
     end
 
     test "a bare sender name carries no author identity" do
-      n = AttentionRouter.push_notification("Harper", message("hi"), :all, space(), [])
+      n = AttentionRouter.push_notification("Sam", message("hi"), :all, space(), [])
       assert n.author_id == nil
       refute Map.has_key?(Notification.to_apns_payload(n), "author_id")
     end
@@ -558,7 +558,7 @@ defmodule Platform.Push.NotificationTest do
   describe "space_kind (task 01a116c4)" do
     test "to_fcm_payload carries space_kind; web and APNs payloads do not" do
       dm = %Space{id: Ecto.UUID.generate(), kind: "dm", name: nil, slug: nil}
-      n = AttentionRouter.push_notification("Harper", message("hi"), :all, dm, [])
+      n = AttentionRouter.push_notification("Sam", message("hi"), :all, dm, [])
       assert n.space_kind == "dm"
 
       assert Notification.to_fcm_payload(n)["data"]["space_kind"] == "dm"
@@ -569,7 +569,7 @@ defmodule Platform.Push.NotificationTest do
     end
 
     test "redact/2 clears space_kind" do
-      n = AttentionRouter.push_notification("Harper", message("x"), :mention, space(), [])
+      n = AttentionRouter.push_notification("Sam", message("x"), :mention, space(), [])
       assert n.space_kind == "channel"
 
       redacted = Notification.redact(n, %{title: "New message", body: "", url: "/"})
@@ -764,7 +764,7 @@ defmodule Platform.Push.NotificationTest do
     end
 
     test "a bare sender name carries neither field" do
-      n = push_from("Harper")
+      n = push_from("Sam")
       assert n.author_avatar_url == nil
       assert n.author_avatar_tone == nil
     end
@@ -849,7 +849,7 @@ defmodule Platform.Push.NotificationTest do
 
     test "the APNs thread id is prefixed with install_host; web and FCM keep the bare id" do
       s = space()
-      n = AttentionRouter.push_notification("Harper", message("x"), :mention, s, [])
+      n = AttentionRouter.push_notification("Sam", message("x"), :mention, s, [])
       n = %Notification{n | install_host: "suite-b.localhost"}
 
       assert Notification.to_apns_payload(n)["aps"]["thread-id"] == "suite-b.localhost:" <> s.id
@@ -867,7 +867,7 @@ defmodule Platform.Push.NotificationTest do
 
     test "two installs' threads for the same space id never collide on APNs" do
       s = space()
-      n = AttentionRouter.push_notification("Harper", message("x"), :mention, s, [])
+      n = AttentionRouter.push_notification("Sam", message("x"), :mention, s, [])
 
       a = Notification.to_apns_payload(%Notification{n | install_host: "suite-a.localhost"})
       b = Notification.to_apns_payload(%Notification{n | install_host: "suite-b.localhost"})

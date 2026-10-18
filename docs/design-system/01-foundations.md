@@ -41,7 +41,7 @@ DaisyUI 5's semantic vocabulary is preserved verbatim. Every component reads fro
 
 **Anchored:** `1B-A11Y-5`.
 
-> **2026-05-09 update:** brand-pivot direction (Gemini-suggested deep indigo + tactile micro-depth) was evaluated via `system-preview-v2.html` and **rejected by Marlowe** — V1 (original cyan, flat) is the canonical brand. Pivot artifact preserved at `audit/2026-05-08-ui-ux/mocks/_preview/system-preview-v2.html` for record-keeping.
+> **2026-05-09 update:** brand-pivot direction (Gemini-suggested deep indigo + tactile micro-depth) was evaluated via `system-preview-v2.html` and **rejected by the design lead** — V1 (original cyan, flat) is the canonical brand. Pivot artifact preserved at `audit/2026-05-08-ui-ux/mocks/_preview/system-preview-v2.html` for record-keeping.
 
 The single token-value change in this entire system: bump `--color-neutral` (light theme) so neutral-content (white) on it meets WCAG 1.4.3 AA contrast.
 
@@ -96,7 +96,6 @@ existing dark lightness).
 
 | Scope | Light `oklch` | Dark `oklch` | Light ratio¹ | Dark ratio² |
 |---------|----------------|----------------|--------|--------|
-| fabrikam     | `55% 0.16 50`  | `72% 0.16 50`  | 4.61 ✓ | 5.51 ✓ |
 | soylent | `55% 0.20 295` | `67% 0.20 295` | 4.66 ✓ | 4.56 ✓ |
 | wayne_tech | `52% 0.15 240` | `68% 0.15 240` | 4.66 ✓ | 5.11 ✓ |
 | sxi      | `51% 0.15 162` | `70% 0.15 162` | 4.56 ✓ | 5.71 ✓ |
@@ -330,7 +329,7 @@ renders (`apps/platform/lib/platform_web/components/icon_rail.ex`):
   expanded.
 - **Mobile** (`bottom_rail/1`, `< lg`): a fixed-bottom **5-tile** bar —
   Chat / Tasks / Inbox / Activity / **More**. The long tail (Skills, Org Memory,
-  Meetings, and Fabrikam-only Admin/Prompts) lives in the `MoreSheet` bottom sheet
+  Meetings, and root-org-only Admin/Prompts) lives in the `MoreSheet` bottom sheet
   behind the More tile.
 
 This settles the task's open "9 icons vs 5 + More at 375px" question: **5 + More**.

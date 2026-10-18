@@ -210,7 +210,7 @@ of this ticket. That is the case for naming, independent of any per-test fix.
 Stated plainly rather than left for a reader to notice:
 
 * **The new retry path has never run in GitHub Actions.** A workflow edit cannot be
-  executed locally. It was exercised against a stub `mix` on rock in three scenarios —
+  executed locally. It was exercised against a stub `mix` on mac-host in three scenarios —
   first pass green (exit 0, no warning, no summary), first pass red + retry green
   (exit 0, warning and summary both naming the tests with `file:line`), first pass red +
   retry red (exit 1, no summary) — under `bash -e` to match the runner's default shell.
@@ -267,6 +267,6 @@ added the job carries its own pair: a throwaway commit with a test that fails on
 file) and passes on the serial retry — `first-run-green` red on that run — then the
 revert — `first-run-green` green. Both run ids are in the PR body.
 
-**Rowan's click.** Settings → Branches → protection rule for `main` → required status
+**The product owner's click.** Settings → Branches → protection rule for `main` → required status
 checks: keep `Test`, add `first-run-green`. From that moment a retry-green PR cannot merge
 until it is re-run first-run-green (or its flake is fixed), which is the point.

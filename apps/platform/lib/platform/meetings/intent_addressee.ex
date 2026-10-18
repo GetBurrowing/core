@@ -9,11 +9,11 @@ defmodule Platform.Meetings.IntentAddressee do
   The e2e reviewer measured, at `temperature: 0` and stable 3/3 on the
   deployed dev environment:
 
-      "Harper, can you write that up?"
+      "Sam, can you write that up?"
         -> action_items, target_role "meeting_scribe",
            assigned_agent_slug "dalton", evidence_quote "write that up"
 
-  Harper is **not on the roster**. The severity is not the mis-binning —
+  Sam is **not on the roster**. The severity is not the mis-binning —
   it is that an off-roster ask RESOLVED ONTO A REAL AGENT and would have
   dispatched work to Dalton.
 
@@ -21,7 +21,7 @@ defmodule Platform.Meetings.IntentAddressee do
 
   The rendered prompt already carries the rule verbatim, three times
   (roster-grounded addressing rule at line 15, the `"Nah, I'm gonna get
-  Harper in here."` exemplar at line 18, and the contrast restated with
+  <name> in here."` exemplar at line 18, and the contrast restated with
   a second off-roster ask at lines 27–33). The roster IS rendered and IS
   being ignored as a discriminator. A fourth restatement is not a fix,
   and prior stages measured that adding exemplars moved
@@ -63,13 +63,13 @@ defmodule Platform.Meetings.IntentAddressee do
   vocatives that carry a delegation are overwhelmingly clause-initial),
   plus a trailing-comma form:
 
-    * **comma vocative** — `Harper, can you write that up?`,
+    * **comma vocative** — `Sam, can you write that up?`,
       `Agent Voice, can you hear me?` (up to three capitalised words);
     * **bare vocative + imperative** — `Octavius file a ticket for the
       purse-based meeting problem.` (its positive twin, `Dalton file a
       ticket ...`, is byte-identical but for the name, so a rule that
       cannot see this shape cannot separate the pair at all);
-    * **bare vocative + modal** — `Harper can you write that up?`;
+    * **bare vocative + modal** — `Sam can you write that up?`;
     * **trailing vocative** — `... would you, Sam?`
 
   ### Stopwords are load bearing
@@ -91,7 +91,7 @@ defmodule Platform.Meetings.IntentAddressee do
 
   ## What the gate does to a hit
 
-  It does NOT demote (ruling: task `01a08fde`, 2026-09-11, Rowan: gate)
+  It does NOT demote (ruling: task `01a08fde`, 2026-09-11, the operator: gate)
   — for an addressee who is in the room. An addressee who is not in the
   room at all is reported speech and does demote; see "Reported speech"
   below.
@@ -154,7 +154,7 @@ defmodule Platform.Meetings.IntentAddressee do
 
   ## What this does not reach
 
-  A vocative buried mid-utterance with no comma (`"so then Harper file a
+  A vocative buried mid-utterance with no comma (`"so then Sam file a
   ticket"`) is not detected. That is the conservative direction: a
   missed detection leaves today's behaviour, a false detection strips a
   legitimate ask of its addressee. This module is not a named-entity recogniser and

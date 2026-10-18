@@ -16,7 +16,7 @@ agent's ability to speak in meetings are untouched.
 Stage 2 (Elixir, `apps/platform/lib/mix/tasks/platform/seed_meeting_voice_agent.ex`)
 registers a "Meeting Assistant" persona and its voice runtime using only
 already-shipped Core mechanisms. Stage 3 (this stage) wires THIS service to
-the real, live moon/wave endpoints and to Core's real MCP tool surface using
+the real, live test-host/wave endpoints and to Core's real MCP tool surface using
 that registration — see "MCP tool surface" below.
 
 ## Runtime shape
@@ -31,7 +31,7 @@ that registration — see "MCP tool surface" below.
   `min_interruption_duration` set to a short, bounded window (default
   `0.3s`) — once VAD sees that much overlapping speech, the SDK stops TTS
   playback. **AEC warmup note** (task 01a0d4a0 stage 4 round 2, confirmed on
-  Dalton's live moon run): the `livekit-agents` SDK's acoustic echo
+  Dalton's live test-host run): the `livekit-agents` SDK's acoustic echo
   cancellation disables interruption handling for roughly the first 3
   seconds of every agent turn while AEC warms up on the newly-started
   playback — this is expected SDK behavior, not a misconfiguration of
@@ -67,11 +67,11 @@ that registration — see "MCP tool surface" below.
 Every backend is an OpenAI-compatible client (`livekit-plugins-openai`)
 pointed at a `base_url` + `model` from `AgentConfig` (`src/meeting_voice_agent/config.py`):
 
-| Backend | Default `base_url` | Default model | Env prefix |
+| Backend | `base_url` | Default model | Env prefix |
 |---|---|---|---|
-| STT | `http://build-host.local:8081/v1` (moon's speaches) | `faster-distil-whisper-small.en` | `MVA_STT_*` |
-| TTS | `http://build-host.local:8081/v1` (moon's speaches) | `kokoro` (Kokoro-82M), voice `af_heart` | `MVA_TTS_*` |
-| LLM | `http://192.0.2.107:8090/v1` (Dalton's wave endpoint) | `qwen3.5-9b` (thinking off), fallback `granite4.1-8b` | `MVA_LLM_*` |
+| STT | `MVA_STT_BASE_URL`, required (no default) | `faster-distil-whisper-small.en` | `MVA_STT_*` |
+| TTS | `MVA_TTS_BASE_URL`, required (no default) | `kokoro` (Kokoro-82M), voice `af_heart` | `MVA_TTS_*` |
+| LLM | `MVA_LLM_BASE_URL`, required (no default) | `qwen3.5-9b` (thinking off), fallback `granite4.1-8b` | `MVA_LLM_*` |
 
 The LLM model name is the declared experiment surface, alongside the VAD and
 turn-detector thresholds — none of them are hard-coded outside `config.py`.
@@ -84,10 +84,10 @@ delays, interruption window, turn-detector model/threshold, agent name and
 instructions). Every one has a documented default and every one is
 overridable.
 
-**Note on the STT/TTS default (`build-host.local:8081`) and the LLM default
-(`192.0.2.107:8090`, Dalton's wave box)**: both are addresses on Dalton's
-LAN, not reachable from every environment this service might run or be
-tested from — see "Live integration tests" below for how that's handled.
+**The backend URLs have no default (task 01a14b9e).** `MVA_STT_BASE_URL`,
+`MVA_TTS_BASE_URL` and `MVA_LLM_BASE_URL` name one deployment's hosts, so,
+like `MVA_MCP_BASE_URL`, an unset or empty value fails config loading with a
+`ConfigError` naming the variable.
 
 ## MCP tool surface (task 01a0d4a0 stage 3)
 
@@ -103,7 +103,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   own copy of that list; it just connects and calls whatever Core's
   `MCPToolset.setup()` lists, which is provably the same set `authorize/2`
   would allow.
-  **Round 2 fix (task 01a0d4a0 stage 4):** Dalton's live moon run found this
+  **Round 2 fix (task 01a0d4a0 stage 4):** Dalton's live test-host run found this
   persona could still call `mail_draft_create` — a prod write tool —
   because `mail_draft_create`/`mail_draft_update` used to live INSIDE the
   `messaging` bundle, so any runtime holding `messaging` (this one included)
@@ -115,7 +115,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   `apps/platform/test/platform/federation/seed_meeting_voice_agent_test.exs`'s
   `"does NOT allow mail_draft_create even with the Mail module enabled"`
   regression test.
-  **Round 3 fix (task 01a0d4a0 stage 5 item 5):** Dalton's third live moon
+  **Round 3 fix (task 01a0d4a0 stage 5 item 5):** Dalton's third live test-host
   run found the seed still granting `memory` and `space` — every memory
   write tool, plus `space_create`/`space_leave`/`dm_create` — none of which
   this single-purpose voice persona has any business calling.
@@ -129,7 +129,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   one particular Burrow install, so an unset or empty value fails config
   loading with an error naming the variable. Set it to your deployment's
   public MCP URL (e.g. `https://suite.example.com/mcp`), not an in-cluster
-  `:4000` URL — Dalton's moon run found the service pointed at the latter,
+  `:4000` URL — Dalton's test-host run found the service pointed at the latter,
   which Core redirects, and the MCP client correctly refuses to follow a
   redirect rather than silently re-POSTing.
 - **`build_tool_surface(config, room_name)`** (in `agent.py`) is what
@@ -154,7 +154,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   the attachment.
   **Round 3 fix (task 01a0d4a0 stage 5 item 1):** this used to write
   `content` to a temp file INSIDE this worker's own container and pass that
-  local path to Core's `send_media` in `file_path`. Dalton's third live moon
+  local path to Core's `send_media` in `file_path`. Dalton's third live test-host
   run found that `:enoent`s in real deployment — the worker and Core run on
   different hosts, so a path only this process can read means nothing to
   Core's process; it only ever worked in stage 3's own dev setup because
@@ -162,7 +162,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   now also accepts `file_base64` (`Platform.Chat.AttachmentStorage.persist_binary_upload/3`,
   no temp file on Core's side either), which is cross-host safe by
   construction — bytes travel in the tool call itself, never a path.
-  **Round 2 fix:** Dalton's live moon run found the model flailing across
+  **Round 2 fix:** Dalton's live test-host run found the model flailing across
   THREE tools for one out-of-scope question (`post_to_meeting_chat`, then a
   prod-write `mail_draft_create` attempt, then `space_list`), each with a
   long spoken turn. `AgentConfig`'s default `instructions` (`config.py`) now
@@ -208,7 +208,7 @@ modules on purpose:
   synthetic human participant, publishes a short WAV fixture as the "human
   speaks one short simple question" action, subscribes to the target agent's
   published audio track, and times the first frame received after the
-  question finishes playing. Run it directly once LiveKit/wave/moon are
+  question finishes playing. Run it directly once LiveKit/wave/test-host are
   reachable:
 
   ```bash
@@ -228,7 +228,7 @@ modules on purpose:
   (`sample_with_tool_call`) live in the pure `latency_harness.py` instead,
   specifically so they ARE unit-tested.
 
-  **Round 2 fixes (task 01a0d4a0 stage 4), from Dalton's live moon run:**
+  **Round 2 fixes (task 01a0d4a0 stage 4), from Dalton's live test-host run:**
 
   1. **Energy gate.** The old harness reported a ~7ms median because it
      counted the agent's silent keepalive frames (sent every ~20ms
@@ -268,15 +268,15 @@ so none of the three fixes above could be re-run live from this sandbox. All
 three are unit-tested at the seam (`tests/test_latency_harness.py`'s energy-
 gate/tool-call tests, `tests/test_tool_telemetry.py`'s publish/parse tests)
 and the full suite + lint are clean, but the actual live e2e behavior each
-fixes — a real moon room, a real agent, real audio — is UNVERIFIED LIVE as of
-this round. Dalton (who already has the harness environment set up on moon)
+fixes — a real test-host room, a real agent, real audio — is UNVERIFIED LIVE as of
+this round. Dalton (who already has the harness environment set up on test-host)
 needs to re-run the same harness command against the new commit to confirm
 these for real; see the task's execution space
 (`01a0d4d2-22d5-7001-b66a-04e3b16d7470`) for the exact ask.
 
 ## Known gap: Core cannot invite this service into a real meeting (dual-agent case)
 
-Dalton's live moon run found the dual-agent regression e2e case could not be
+Dalton's live test-host run found the dual-agent regression e2e case could not be
 run at all: "Core never dispatches to your service (it has no runtime socket
 or `meeting_join` handling), so it can't be invited into a real meeting."
 Investigated for this round — **this is a real, structural integration gap,
@@ -331,7 +331,7 @@ network gap), and picking between the two options above is a call for
 whoever owns `Platform.Meetings`' invite path next, not something to guess at
 under a bug-fix pass. **Dalton: this needs a decision between the two
 options above before the dual-agent regression case can ever be run for
-real** — it is not something a future re-run on moon can shake loose on its
+real** — it is not something a future re-run on test-host can shake loose on its
 own; the code path to make either option "online" simply does not exist yet.
 
 **Decision made and implemented (task 01a0d4a0, Option 2).** Core's invite
@@ -375,9 +375,9 @@ call round-trips through Core's actual `ToolAuthorization` + `ToolSurface`,
 and that `post_to_meeting_chat` really posts into the derived space (read
 back via a real `space_get_context`).
 
-`tests/live/test_wave_llm_live.py` and `tests/live/test_moon_speech_live.py`
-target `192.0.2.107:8090` and `build-host.local:8081` — LAN addresses on
-Dalton's/moon's physical network. They were run (not skipped by assumption)
+`tests/live/test_wave_llm_live.py` and `tests/live/test_rig_speech_live.py`
+target `192.0.2.11:8090` and `test-host:8081` — LAN addresses on
+Dalton's/test-host's physical network. They were run (not skipped by assumption)
 while building this stage and every attempt timed out at the TCP level, so
 they're not reachable from wherever this happened to run; each test
 `pytest.skip()`s with the exact URL/error rather than failing when that's
@@ -392,7 +392,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Point at your own moon/wave deployment, or leave the defaults.
+# Point at your own test-host/wave deployment, or leave the defaults.
 export LIVEKIT_URL=wss://your-livekit-host
 export LIVEKIT_API_KEY=...
 export LIVEKIT_API_SECRET=...
@@ -418,7 +418,7 @@ python -m meeting_voice_agent.agent start
   worker/entrypoint wiring (`test_agent.py`), and the MCP tool surface +
   chat hand-off wrapper seams (`test_mcp_tools.py`). See "Live integration
   tests" above for the real, network-backed confirmation of this same
-  wiring against wave/moon/Core.
+  wiring against wave/test-host/Core.
 
 - **Lint**: [ruff](https://docs.astral.sh/ruff/), configured in
   `pyproject.toml`.
@@ -455,10 +455,10 @@ services/meeting-voice-agent/
     ├── test_mcp_tools.py      # MCP + hand-off seam tests, no network
     ├── test_tool_telemetry.py # publish/parse seam tests, no network (stage 4 round 2)
     ├── test_latency_harness.py # fixture-driven, no network (stage 4)
-    └── live/                  # live_infra: real wave/moon/Core round trips
+    └── live/                  # live_infra: real wave/test-host/Core round trips
         ├── README.md
         ├── conftest.py
         ├── test_wave_llm_live.py
-        ├── test_moon_speech_live.py
+        ├── test_rig_speech_live.py
         └── test_mcp_live.py
 ```

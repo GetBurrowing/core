@@ -396,7 +396,7 @@ defmodule PlatformWeb.Components.ChatMessage do
 
               <%!-- 3-dot overflow menu (task 019e0f29 Stage 3). Replaces the
                  Stage-2 placeholder DaisyUI dropdown that didn't open on
-                 touch (Marlowe bug report). Now fires `open_message_actions`
+                 touch (design-review bug report). Now fires `open_message_actions`
                  which sets a single LV-level `:open_message_actions_id`
                  assign; chat_live.html.heex renders one Sheet at the page
                  bottom that surfaces the actions for the open message. --%>

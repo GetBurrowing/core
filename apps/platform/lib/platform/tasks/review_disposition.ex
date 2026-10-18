@@ -35,7 +35,7 @@ defmodule Platform.Tasks.ReviewDisposition do
 
   `could_not_evaluate` means the run was IMPOSSIBLE — dev server will not
   boot, a fixture cannot be built, a known flake — not "the feature looks
-  wrong". Rowan's rule, and the reason it is load-bearing: a broken
+  wrong". The operator's rule, and the reason it is load-bearing: a broken
   environment must not burn three rounds and re-plan a feature that was
   never wrong.
 

@@ -56,12 +56,12 @@ defmodule Platform.Push.FCMTest do
   defp notification do
     Notification.new(%{
       kind: "chat_mention",
-      title: "Harper in Design",
-      body: "hi @Marlowe",
+      title: "Sam in Design",
+      body: "hi @Robin",
       url: "/chat/design",
       space_id: "01a10d8e-0000-7000-8000-00000000000a",
       message_id: "01a10d8e-0000-7000-8000-00000000000b",
-      author_name: "Harper",
+      author_name: "Sam",
       space_name: "Design",
       collapse_id: String.duplicate("c", 80)
     })
@@ -109,7 +109,7 @@ defmodule Platform.Push.FCMTest do
       assert message["android"]["priority"] == "high"
       assert message["android"]["collapse_key"] == String.duplicate("c", 64)
       assert Enum.all?(message["data"], fn {_k, v} -> is_binary(v) end)
-      assert message["data"]["author_name"] == "Harper"
+      assert message["data"]["author_name"] == "Sam"
       assert message["data"]["space_name"] == "Design"
 
       assert device_exists?(device)

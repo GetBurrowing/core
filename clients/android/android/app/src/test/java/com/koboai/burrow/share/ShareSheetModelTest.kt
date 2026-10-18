@@ -12,7 +12,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 
 class ShareSheetModelTest {
-    private val host = "suite.example.com"
+    private val host = "suite.example.net"
     private val space = ShareSpace("0192-s1", "Ops", "ops", listOf(ShareSpace.Agent("a1", "Higgins")))
 
     /** Records every call; never touches a network. */
@@ -217,8 +217,8 @@ class ShareSheetModelTest {
     @Test
     fun `a direct-share target opens its own signed-in host with its space preselected`() {
         val (h, space) =
-            ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == "suite.milv.life" }
-        assertEquals("suite.milv.life", h)
+            ShareSheetModel.target("suite.example.test|0192-s2", host) { it == "suite.example.test" }
+        assertEquals("suite.example.test", h)
         assertEquals("0192-s2", space)
 
         val m = ShareSheetModel(h, FakeClient(spaces = listOf(this.space, other)), emptyList(), "x", space)
@@ -228,7 +228,7 @@ class ShareSheetModelTest {
 
     @Test
     fun `a target whose host is not signed in, or no target, falls back to the selected install`() {
-        assertEquals(host to null, ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == host })
+        assertEquals(host to null, ShareSheetModel.target("suite.example.test|0192-s2", host) { it == host })
         assertEquals(host to null, ShareSheetModel.target(null, host) { true })
         assertEquals(host to null, ShareSheetModel.target("switch_install", host) { true })
     }

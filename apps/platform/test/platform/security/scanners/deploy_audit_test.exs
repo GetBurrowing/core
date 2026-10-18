@@ -182,7 +182,7 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
       [Container]
       Image=ghcr.io/example/core:latest
       AutoUpdate=registry
-      EnvironmentFile=/srv/dev/core-ops/absolutely-not-here.env
+      EnvironmentFile=/home/deploy/core-ops/absolutely-not-here.env
       """)
 
       capture_log(fn ->
@@ -223,13 +223,13 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
 
   describe "run_scan/2 — env-var diff probe" do
     test "flags an env var declared in .env.example but missing from secrets", %{roots: r} do
-      write!(r.core_ops, "targets/moon-production/env/platform.shared.env.example", """
+      write!(r.core_ops, "targets/test-host-production/env/platform.shared.env.example", """
       # Required at boot
       REQUIRED_KEY=
       MEETING_GUEST_SIGNING_KEY=
       """)
 
-      write!(r.core_ops, "secrets/moon-production/platform.secrets.env", """
+      write!(r.core_ops, "secrets/test-host-production/platform.secrets.env", """
       REQUIRED_KEY=abc
       """)
 
@@ -243,23 +243,23 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
       hit =
         Enum.find(tasks, fn t ->
           t.metadata["security_fingerprint"] ==
-            "deploy_audit:missing_env_var:moon-production:MEETING_GUEST_SIGNING_KEY"
+            "deploy_audit:missing_env_var:test-host-production:MEETING_GUEST_SIGNING_KEY"
         end)
 
       assert hit
       assert hit.priority == "high"
-      assert hit.metadata["target"] == "moon-production"
+      assert hit.metadata["target"] == "test-host-production"
       assert hit.metadata["env_var"] == "MEETING_GUEST_SIGNING_KEY"
       assert hit.title =~ "MEETING_GUEST_SIGNING_KEY"
       assert hit.description =~ "MEETING_GUEST_SIGNING_KEY"
     end
 
     test "does NOT flag when env keys match", %{roots: r} do
-      write!(r.core_ops, "targets/moon-production/env/platform.shared.env.example", """
+      write!(r.core_ops, "targets/test-host-production/env/platform.shared.env.example", """
       REQUIRED_KEY=
       """)
 
-      write!(r.core_ops, "secrets/moon-production/platform.secrets.env", """
+      write!(r.core_ops, "secrets/test-host-production/platform.secrets.env", """
       REQUIRED_KEY=abc
       """)
 
@@ -271,16 +271,16 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
     end
 
     test "aggregates keys across multiple secrets files for the same target", %{roots: r} do
-      write!(r.core_ops, "targets/moon-production/env/platform.shared.env.example", """
+      write!(r.core_ops, "targets/test-host-production/env/platform.shared.env.example", """
       SHARED_KEY=
       GUEST_KEY=
       """)
 
-      write!(r.core_ops, "secrets/moon-production/platform.shared.env", """
+      write!(r.core_ops, "secrets/test-host-production/platform.shared.env", """
       SHARED_KEY=one
       """)
 
-      write!(r.core_ops, "secrets/moon-production/platform.secrets.env", """
+      write!(r.core_ops, "secrets/test-host-production/platform.secrets.env", """
       GUEST_KEY=two
       """)
 
@@ -293,6 +293,70 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
   end
 
   # ── TLS probe ────────────────────────────────────────────────────────
+
+  # Task 01a14b9e stage 2: the core-ops root has no code default. These pin
+  # the three states the probe can be in, and that the first two file nothing.
+  describe "env_var_probe/0 — core-ops root configuration" do
+    test "unset root is a named not_configured result and files nothing", %{roots: r} do
+      write!(r.core_ops, "targets/acme-production/env/platform.shared.env.example", """
+      REQUIRED_KEY=
+      """)
+
+      current = Application.get_env(:platform, Platform.Security, [])
+
+      Application.put_env(
+        :platform,
+        Platform.Security,
+        Keyword.put(current, :deploy_audit_core_ops_root, nil)
+      )
+
+      assert DeployAudit.env_var_probe() == {:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}
+      assert DeployAudit.env_var_findings() == []
+
+      Application.put_env(
+        :platform,
+        Platform.Security,
+        Keyword.put(current, :deploy_audit_core_ops_root, "")
+      )
+
+      assert DeployAudit.env_var_probe() == {:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}
+
+      Application.put_env(
+        :platform,
+        Platform.Security,
+        Keyword.delete(current, :deploy_audit_core_ops_root)
+      )
+
+      assert DeployAudit.env_var_probe() == {:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}
+
+      capture_log(fn -> assert {:ok, 0} = DeployAudit.run_scan(%{}, %{}) end)
+      assert list_deploy_tasks() == []
+    end
+
+    test "a configured root that does not exist is {:ok, []}" do
+      current = Application.get_env(:platform, Platform.Security, [])
+      absent = "/tmp/nope_core_ops_#{u()}"
+
+      Application.put_env(
+        :platform,
+        Platform.Security,
+        Keyword.put(current, :deploy_audit_core_ops_root, absent)
+      )
+
+      assert DeployAudit.env_var_probe() == {:ok, []}
+    end
+
+    test "a configured root that exists is scanned", %{roots: r} do
+      write!(r.core_ops, "targets/acme-production/env/platform.shared.env.example", """
+      REQUIRED_KEY=
+      """)
+
+      write!(r.core_ops, "secrets/acme-production/platform.secrets.env", "")
+
+      assert {:ok, [finding]} = DeployAudit.env_var_probe()
+      assert finding.fingerprint == "deploy_audit:missing_env_var:acme-production:REQUIRED_KEY"
+    end
+  end
 
   describe "run_scan/2 — TLS probe" do
     test "returns {:ok, 0} + no crash when tls_root does not exist" do
@@ -399,11 +463,11 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
 
   describe "run_scan/2 — dedup" do
     test "a second scan against the same fixture files 0 additional tasks", %{roots: r} do
-      write!(r.core_ops, "targets/moon-production/env/platform.shared.env.example", """
+      write!(r.core_ops, "targets/test-host-production/env/platform.shared.env.example", """
       MEETING_GUEST_SIGNING_KEY=
       """)
 
-      write!(r.core_ops, "secrets/moon-production/platform.secrets.env", "")
+      write!(r.core_ops, "secrets/test-host-production/platform.secrets.env", "")
 
       capture_log(fn ->
         assert {:ok, 1} = DeployAudit.run_scan(%{}, %{})

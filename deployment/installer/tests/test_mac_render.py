@@ -31,13 +31,15 @@ REPO = os.path.dirname(os.path.dirname(INSTALLER))
 EXAMPLES = os.path.join(REPO, "deployment", "examples")
 MAC = os.path.join(EXAMPLES, "mac.install.toml")
 MAC_LITE = os.path.join(EXAMPLES, "mac-lite.install.toml")
-SINGLE_HOST = os.path.join(EXAMPLES, "moon-equivalent.install.toml")
+SINGLE_HOST = os.path.join(EXAMPLES, "single-host.install.toml")
 RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
 CUSTOMER = os.path.join(RENDER_FIXTURES, "mac-customer.env")
 REGISTRY_AUTH = os.path.join(RENDER_FIXTURES, "mac-registry-auth.json")
 GOLDEN = os.path.join(HERE, "golden")
 
 sys.path.insert(0, INSTALLER)
+
+from identity_terms import identity_hits
 
 from suite_install import envcompat, registry
 from suite_install.__main__ import main
@@ -49,7 +51,10 @@ from suite_install.validate import validate
 DOC_IP = "192.0.2.10"  # RFC 5737 TEST-NET-1
 GOLDEN_CASES = {"mac": MAC, "mac-lite": MAC_LITE}
 CUSTOMER_VALUES = parse_env_file(CUSTOMER)
-FORBIDDEN = ("ellis", "fabrikam", "192.168.", "lightning", "OPENCLAW_")
+# Install and personal identity is checked by identity_hits, on the same
+# digest rule as core's Elixir guard, so this file does not spell it (task
+# 01a14b9e stage 5). The LAN prefix and harness settings stay literal.
+FORBIDDEN = ("192.168.", "lightning", "OPENCLAW_")
 
 
 def manifest_from(path):
@@ -675,6 +680,7 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
                 text = text.replace(image, "<image>")
             with self.subTest(example=os.path.basename(path)):
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
+                self.assertEqual(identity_hits(text), [])
 
     def test_compose_parses_as_yaml(self):
         try:

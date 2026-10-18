@@ -8,7 +8,7 @@ Tasks currently have `assignee_type` + `assignee_id` — the entity that DOES th
 
 Today the engine's answer is implicit — the project owner, the epic owner, the person who filed the task. None of those are recorded on the task row itself. Notification routing falls back to `@mentions` in the execution space. That works for most work, but two concrete pain points motivate this ADR:
 
-1. **Approver-of-record.** Plans reach `pending_review` and sit until "someone" from the team approves. On busy days it isn't clear who owns the approve. Rowan often does it because he's the terminal owner, but that isn't scalable.
+1. **Approver-of-record.** Plans reach `pending_review` and sit until "someone" from the team approves. On busy days it isn't clear who owns the approve. The product owner often does it because he's the terminal owner, but that isn't scalable.
 
 2. **Output review.** Agents ship code, canvases, memory pages, meetings. When one goes wrong, who's the human authority to revoke or roll back? For code the answer is `git revert`, but for canvases / memory / meeting outputs there's no obvious "the human owner said so."
 

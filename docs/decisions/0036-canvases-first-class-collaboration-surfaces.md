@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-04-18
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0008 (Chat Backend Architecture), ADR 0012 (Agent-Driven Live Canvas Architecture — superseded by this ADR), ADR 0020 (Chat Rich Content Rendering), ADR 0030 (Meetings — LiveKit Voice/Video), ADR 0033 (Org-Level Context Management), ADR 0035 (ChatLive Modularization)
 
 ---

@@ -13,7 +13,7 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
        stopped at the 64 MB memory limit";
     3. disable fuel in `Runtime` -> "a finite CPU loop of a few seconds is
        stopped by fuel". That loop is FINITE (1.5e8 iterations, about 3.5 s
-       on moon with fuel off), so the mutated run completes and fails
+       on test-host with fuel off), so the mutated run completes and fails
        instead of spinning.
   """
 

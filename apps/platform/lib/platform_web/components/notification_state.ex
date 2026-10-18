@@ -1,7 +1,7 @@
 defmodule PlatformWeb.Components.NotificationState do
   @moduledoc """
   The durable home for the browser's notification-permission state (task
-  019ffb7b stage 4, revised after Marlowe's review).
+  019ffb7b stage 4, revised after design review).
 
   One row, rendered at the top of `/inbox`. It answers "will this computer
   interrupt me?" on a surface every authenticated user can reach, internal and
@@ -9,7 +9,7 @@ defmodule PlatformWeb.Components.NotificationState do
 
   ## Why `/inbox` and not the rail or a settings page
 
-  The first cut of this stage put a bell in the desktop icon rail. Marlowe
+  The first cut of this stage put a bell in the desktop icon rail. The designer
   rejected it on review: a rail row whose only behaviour was opening a panel
   collided with the Inbox tile beside it, which holds the actual activity
   notifications, and a rail row that navigates nowhere is not a rail row.
@@ -119,7 +119,7 @@ defmodule PlatformWeb.Components.NotificationState do
 
   ## Why the failure carries a reason and not a boolean
 
-  This shipped as one variant behind a boolean and Marlowe rejected it on review:
+  This shipped as one variant behind a boolean and the designer rejected it on review:
 
   > What does "suite cannot finish setting up" mean? If we are going to tell
   > the user something is broken, we need to tell them how to fix (whether they
@@ -159,7 +159,7 @@ defmodule PlatformWeb.Components.NotificationState do
   participant row the user holds, so reaching this row means holding none.
 
   "Nothing to do. They start working as soon as someone adds you to one" was
-  wrong for the opposite reason, and Marlowe caught it: everyone who can see this
+  wrong for the opposite reason, and the designer caught it: everyone who can see this
   row can start a conversation themselves. `/inbox` lives in the
   `:authenticated` live_session behind `:require_app_surface`, while the
   `:external_chat` session on the `chat.` host exposes only `/chat` and
@@ -195,7 +195,7 @@ defmodule PlatformWeb.Components.NotificationState do
 
   ## Why there is no "open browser settings" link
 
-  Marlowe asked on review whether the row could send the user to their browser's
+  The designer asked on review whether the row could send the user to their browser's
   settings. It cannot, on any browser. `chrome://settings/content/notifications`,
   `edge://settings/...`, `about:preferences#privacy` and Safari's preference
   panes are all privileged URLs: a web page may not navigate to them, link to

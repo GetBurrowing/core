@@ -1037,8 +1037,8 @@ defmodule Platform.Chat do
   What comes out is therefore always a space in which the calling agent is
   already a party — either one it opened itself, or the one the human opened
   with it. `existing_agent_dm/2` pins BOTH halves of the roster (`agent_id`
-  AND `user_id`) precisely so that "Harper's DM with Rowan" cannot satisfy the
-  lookup on the strength of Harper alone.
+  AND `user_id`) precisely so that "the product lead's DM with the operator" cannot satisfy the
+  lookup on the strength of the product lead alone.
 
   This does NOT touch, and must not be read as touching:
 

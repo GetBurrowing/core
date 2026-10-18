@@ -13,7 +13,7 @@ defmodule Platform.Repo.Migrations.SeedAndForceUpdateIntentAttentionTemplate do
       that later needs a body revision serving the first version forever.
     * `20260708123000_force_update_architect_review_plan_template.exs` is
       force-update-with-`:skip`-when-absent only. On its own that would
-      no-op on prod (`suite.example.com`), which has already run
+      no-op on prod (`app.example.com`), which has already run
       the earlier seed migrations and therefore never re-runs
       `PromptTemplates.seed_defaults/0` — the row for this NEW slug would
       simply never exist there.

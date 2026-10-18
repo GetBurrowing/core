@@ -136,7 +136,7 @@ class ArgumentGuardTest(unittest.TestCase):
         ok = run("vm-down.sh", "--name", NAME, "--workdir", WORKDIR, "--dry-run")
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertIn(f"rm -rf -- {WORKDIR}", ok.stdout)
-        bad = run("vm-down.sh", "--name", NAME, "--workdir", "/srv/dev", "--dry-run")
+        bad = run("vm-down.sh", "--name", NAME, "--workdir", "/home/deploy", "--dry-run")
         self.assertEqual(bad.returncode, 2)
         self.assertNotIn("rm -rf", bad.stdout)
 

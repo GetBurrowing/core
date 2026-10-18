@@ -7,7 +7,7 @@ defmodule PlatformWeb.MeetingLiveTopBarLgTest do
   STRUCTURE ONLY. LiveViewTest renders HTML; it has no layout engine, so
   nothing here measures a pixel, and a green run says nothing about whether
   anything overlaps. The widths live in the header's comment in
-  `meeting_live.html.heex`, measured on dev-on-moon with CDP
+  `meeting_live.html.heex`, measured on dev-on-test-host with CDP
   `getBoundingClientRect`. What this file pins is the set of structural
   facts those measurements rest on, so that the next pill added to this bar
   (or a class tidy-up) cannot quietly undo them:

@@ -4,7 +4,7 @@
 **Superseded in part by:** ADR 0051 (TaskRouter Dispatch as a Debounced Reconcile, and Ack Durability Outside the Lease) — dispatch-trigger and ack-liveness sections  
 **Date:** 2026-03-22  
 **Related:** ADR 0002 (Domain Boundaries), ADR 0011 (Execution Runners), ADR 0013 (Attention Routing), ADR 0014 (Runtime Channel), ADR 0018 (Tasks Persistent Model and Plan Engine)  
-**Deciders:** Rowan Ellis
+**Deciders:** the product owner
 
 ---
 

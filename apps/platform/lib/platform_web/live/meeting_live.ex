@@ -75,7 +75,7 @@ defmodule PlatformWeb.MeetingLive do
             }) %>
 
   The `data-intent-panel-host="true"` marker survives on the wrapping
-  `<div>` around the `live_render` so future-Rowan can still grep for
+  `<div>` around the `live_render` so future maintainers can still grep for
   the migration site when the real intent panel ships.
 
   ## Layout
@@ -1241,7 +1241,7 @@ defmodule PlatformWeb.MeetingLive do
         if connected?(socket), do: MeetingHooks.schedule_agent_activity_tick()
 
         # Pre-join LOBBY for signed-in members on the chrome-less meeting
-        # surface (task 01a09415). This is Harper's #4 divergence from the
+        # surface (task 01a09415). This is the product lead's #4 divergence from the
         # prototype: "member lobby — guests get the camera-preview prejoin,
         # but signed-in members skip straight into the call with no preview."
         #
@@ -2575,7 +2575,7 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  # "52 min · hosted by Rowan · 5 attended · Suite / Control Center". A
+  # "52 min · hosted by the operator · 5 attended · Suite / Control Center". A
   # cancelled meeting has no duration (it never ran), and saying so is the
   # first thing the subtitle owes the reader.
   defp archive_row_subtitle(entry, artifacts) do
@@ -2605,7 +2605,7 @@ defmodule PlatformWeb.MeetingLive do
     parts |> Enum.reject(&(&1 in [nil, ""])) |> Enum.join(" · ")
   end
 
-  # "Cancelled by Rowan · attendees notified" — the design's third row.
+  # "Cancelled by the operator · attendees notified" — the design's third row.
   #
   # THE MISSING NUMBER IS DELIBERATE. The mock reads "4 notified in chat", and
   # nothing on this branch can answer that 4 as a FACT about this

@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-04-18
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0019 (Space-Agent Roster, superseded), ADR 0027 (Active Agent Mutex), ADR 0037 (@-Mention Wire Format)
 
 ---

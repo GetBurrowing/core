@@ -13,7 +13,7 @@ defmodule Platform.Responsibilities.PromptTemplateCoverageTest do
   an absence that was real but was about the wrong identifier.
 
   Measured at `origin/main` sha `f8e0d6392e7d9874a2040dc3f574654518d90add`
-  via the Suite `prompt_template_list` tool against the milv install: 41
+  via the Suite `prompt_template_list` tool against the beta install: 41
   slugs returned, `memory.daily_summary.v1` absent. Positive control in the
   same listing: `memory.dreaming.v1`, `memory.propose_long_term.v1`,
   `historian.scheduled` and `historian.dreaming` all present, so the absence
@@ -26,7 +26,7 @@ defmodule Platform.Responsibilities.PromptTemplateCoverageTest do
   one entry. It holds two. `meetings.summarize.v1`, declared by
   `Handlers.MeetingSummarize.register/0`, has no descriptor in
   `PromptTemplates.do_default_templates/0`, no seeding migration, and is
-  absent from the live milv install's `prompt_template_list` (which DOES
+  absent from the live beta install's `prompt_template_list` (which DOES
   return its eight `meetings.*` siblings, so that absence is about the slug
   and not about the listing). It is a second, independent instance of the
   same defect, found by the sweep rather than by the ticket.

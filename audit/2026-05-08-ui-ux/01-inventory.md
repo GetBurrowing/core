@@ -1,6 +1,6 @@
 # Phase 1A — Inventory
 
-**Generated:** 2026-05-08 by saru-claude-clode for Marlowe's UI/UX audit.
+**Generated:** 2026-05-08 by saru-claude-clode for the design lead's UI/UX audit.
 **Scope (strict):** mobile-first surfaces — `chat`, `tasks`, `activity`, `shell`. Excludes `admin_*`, `changelog`, `usage`, `meeting_bar`.
 **Recon source:** see `~/projects/core/audit/2026-05-08-ui-ux/01-inventory.md` (this file). Phase 1B audit references findings here by section ID (e.g. `1A-IA-DRIFT-1`).
 
@@ -63,13 +63,13 @@ Architect agent diagnosis (read-only, no recommendations). Severity tags: **bloc
 |---------------------|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------|---------------|
 | **1A-IA-DRIFT-1** ✅ resolved | space ↔ channel ↔ conversation ↔ DM ↔ group   | Data model says `space`. UI says all five: list_user_conversations (`chat_live.ex:51`), :spaces and :dm_conversations assigns (`:58, :60`), "Channels" header (`chat_live.html.heex:21,120`), `space.kind == "channel"` / `"group"` / `"dm"` branches (`:217, :241`), "Convert to Channel" (`:262`), `new_conversation_open` (`:411`). Two creation components: `new_channel_component.ex` and `new_conversation_component.ex` — same domain, two names. URL segment `/chat/:space_slug`. | **blocker** → resolved |
 
-> **Pinned 2026-05-08 by Marlowe:** canonical term is **`space`**. "Channels" and "Direct Messages" become *kinds of space* in copy (sidebar sections / filters can keep those labels, the underlying noun is `space`). Phase 2 voice section locks to this. Slack-vocabulary users get a beat of translation; mitigation = keep "Channels" sidebar header.
+> **Pinned 2026-05-08 by the design lead:** canonical term is **`space`**. "Channels" and "Direct Messages" become *kinds of space* in copy (sidebar sections / filters can keep those labels, the underlying noun is `space`). Phase 2 voice section locks to this. Slack-vocabulary users get a beat of translation; mitigation = keep "Channels" sidebar header.
 | 1A-IA-DRIFT-2       | participant ↔ member ↔ user ↔ attendee        | "members" count (`chat_live.html.heex:244`); `data-participant-id` (`:600`); presence_list filtered by `participant_type == "user"` rendered under "Participants" (`shell.html.heex:256`); icon `title="Online participants"` (`:247`). | annoying      |
 | 1A-IA-DRIFT-3       | task ↔ plan ↔ review ↔ column                 | Tasks grouped into "columns", gated by "plan" status, surfacing "review" counts at peer level (`tasks_live.ex:43, :61, :63, :64`). Three orthogonal lifecycles named at peer level with no hierarchy. | annoying      |
 | 1A-IA-DRIFT-4       | agent ↔ principal ↔ workspace ↔ runtime       | `Agent`, `AgentServer`, `WorkspaceBootstrap` aliases (`shell_live.ex:9`); `default_agent_status` reads `WorkspaceBootstrap.status` (`:185`); UI label "principal" (`shell.html.heex:204`); button labelled "Agents" (`:183`). Mixes domain/role/boot-context/status-source without disambiguation. | annoying      |
 | 1A-IA-DRIFT-5       | drawer ↔ sidebar ↔ nav ↔ menu                 | One element with two flags: `drawer_open` and `sidebar_collapsed` (`shell_live.ex:58-59`). DOM `id="shell-sidebar"`, hook `phx-hook="SwipeDrawer"`, `aria-label="Close menu"` / `"Open menu"` (`shell.html.heex:13, 14, 29, 158`). | cosmetic      |
 
-> **`1A-IA-DRIFT-1` is the highest-leverage finding in the audit.** Phase 2's voice section cannot write button verbs, navigation labels, or empty-state copy until one canonical term wins. Recommend Marlowe settle the term explicitly before Gate 2.
+> **`1A-IA-DRIFT-1` is the highest-leverage finding in the audit.** Phase 2's voice section cannot write button verbs, navigation labels, or empty-state copy until one canonical term wins. Recommend the design lead settle the term explicitly before Gate 2.
 
 ---
 
@@ -156,7 +156,7 @@ That's it. **No** dedicated chat-message component, **no** task-card component, 
 
 > "Always manually write your own tailwind-based components instead of using daisyUI for a unique, world-class design"
 
-But the app **is** built on DaisyUI 5 — the daisyui-theme plugin is invoked twice in `app.css` (light + dark themes), DaisyUI utilities are referenced throughout HEEx, and Marlowe's audit prompt confirms "DaisyUI 5 + Tailwind v4 themes" as the active system to refine.
+But the app **is** built on DaisyUI 5 — the daisyui-theme plugin is invoked twice in `app.css` (light + dark themes), DaisyUI utilities are referenced throughout HEEx, and the design lead's audit prompt confirms "DaisyUI 5 + Tailwind v4 themes" as the active system to refine.
 
 **Anchor finding `1A-COMP-DOCDRIFT-1`:** the AGENTS.md design directive contradicts the active codebase. Phase 4 should propose a one-line correction to AGENTS.md (e.g., "Build on top of DaisyUI 5; only fall back to bare Tailwind when DaisyUI lacks an equivalent"). Not a code-quality issue, but it does mean any new contributor reading AGENTS.md will get conflicting guidance.
 
@@ -193,7 +193,7 @@ Programmatic state inspection (hover, focus-visible, active, disabled, loading, 
 
 ---
 
-## 6. Outstanding questions for Marlowe (before Phase 1B)
+## 6. Outstanding questions for the design lead (before Phase 1B)
 
 These questions affect Phase 1B's anchoring and Phase 2's voice work:
 

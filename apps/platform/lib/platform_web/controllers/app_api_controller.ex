@@ -412,7 +412,7 @@ defmodule PlatformWeb.AppApiController do
   # message posts top-level in the same space; answering a message that is
   # itself inside a thread posts into that thread. The Lock Screen Reply sends
   # the notified message's id, and opening a new thread under it hid the
-  # answer from the conversation timeline (Rowan's DM, 2026-10-05).
+  # answer from the conversation timeline (the operator's DM, 2026-10-05).
   defp resolve_thread(_space_id, reply_to) when reply_to in [nil, ""], do: {:ok, nil}
 
   defp resolve_thread(space_id, reply_to) when is_binary(reply_to) do

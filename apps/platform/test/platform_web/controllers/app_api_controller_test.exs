@@ -185,7 +185,7 @@ defmodule PlatformWeb.AppApiControllerTest do
           "code" => code,
           "code_verifier" => verifier,
           "app_install_id" => "install-9",
-          "device_name" => "Rowan's iPhone"
+          "device_name" => "Alex's iPhone"
         })
 
       assert %{"token" => token, "handoff_url" => handoff_url} = json_response(conn, 200)
@@ -193,7 +193,7 @@ defmodule PlatformWeb.AppApiControllerTest do
       assert {:ok, %{id: id}, session} = Mobile.verify_bearer(token)
       assert id == user.id
       assert session.app_install_id == "install-9"
-      assert session.device_name == "Rowan's iPhone"
+      assert session.device_name == "Alex's iPhone"
     end
 
     test "a wrong verifier, a reused code and an expired code are refused", %{conn: conn} do

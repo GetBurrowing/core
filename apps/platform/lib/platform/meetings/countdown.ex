@@ -3,7 +3,7 @@ defmodule Platform.Meetings.Countdown do
   The one number, and the arithmetic that arms a candidate (task
   01a03fba).
 
-  Harper pinned the countdown at **30 seconds, GLOBAL** on 2026-08-27 —
+  The product lead pinned the countdown at **30 seconds, GLOBAL** on 2026-08-27 —
   not per card type, no per-type override to build, store or expose. So
   it is one module attribute and one public reader, and every caller
   that needs it (`Platform.Meetings.Candidates`, the sweeper, and the
@@ -70,7 +70,7 @@ defmodule Platform.Meetings.Countdown do
        coherent (nothing is lost or double-acted) but it is lossy, and
        it is lossy because two numbers were chosen independently. Making
        them agree means moving one of them, and both belong to someone
-       else: 30s is Harper's, 60s is the threading ticket's.
+       else: 30s is the product lead's, 60s is the threading ticket's.
 
   ## The THIRD clock, and the one that minted small talk
 
@@ -80,7 +80,7 @@ defmodule Platform.Meetings.Countdown do
   `Platform.Meetings.Candidates.claim_due/2`.
   """
 
-  # 30 seconds, GLOBAL (Harper, 2026-08-27). One number, no per-type
+  # 30 seconds, GLOBAL (product decision, 2026-08-27). One number, no per-type
   # override.
   @countdown_seconds 30
 
@@ -123,7 +123,7 @@ defmodule Platform.Meetings.Countdown do
   # second, so the window is wide rather than a sliver.
   #
   # Neither number is wrong and NEITHER MOVES. 30 seconds is a human
-  # review window Harper pinned; 60 seconds is what a real model call
+  # review window the product lead pinned; 60 seconds is what a real model call
   # needs. What the inversion means is that "the classifier has answered"
   # cannot be assumed by anything downstream of the deadline — which is
   # why `Platform.Meetings.Candidates.claim_due/2` refuses to claim a

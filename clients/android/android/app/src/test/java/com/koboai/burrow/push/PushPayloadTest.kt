@@ -11,30 +11,30 @@ class PushPayloadTest {
     private val mention =
         mapOf(
             "kind" to "chat_mention",
-            "title" to "Harper in Internal Fabrikam SXI",
-            "body" to "@Marlowe can you check the banner copy",
-            "url" to "/chat/internal-fabrikam-sxi?message=0192-m",
+            "title" to "Sam in Internal Legacy SXI",
+            "body" to "@Robin can you check the banner copy",
+            "url" to "/chat/internal-legacy-sxi?message=0192-m",
             "category" to "SUITE_MENTION",
             "thread_id" to "0192-s",
             "space_id" to "0192-s",
             "message_id" to "0192-m",
             "install_host" to "suite.example.com",
-            "author_name" to "Harper",
-            "space_name" to "Internal Fabrikam SXI",
+            "author_name" to "Sam",
+            "space_name" to "Internal Legacy SXI",
         )
 
     @Test
     fun `parses every field from FCM string values`() {
         val p = PushPayload.from(mention)
         assertEquals("chat_mention", p.kind)
-        assertEquals("Harper in Internal Fabrikam SXI", p.title)
-        assertEquals("@Marlowe can you check the banner copy", p.body)
-        assertEquals("/chat/internal-fabrikam-sxi?message=0192-m", p.url)
+        assertEquals("Sam in Internal Legacy SXI", p.title)
+        assertEquals("@Robin can you check the banner copy", p.body)
+        assertEquals("/chat/internal-legacy-sxi?message=0192-m", p.url)
         assertEquals("0192-s", p.spaceId)
         assertEquals("0192-m", p.messageId)
         assertEquals("suite.example.com", p.installHost)
-        assertEquals("Harper", p.authorName)
-        assertEquals("Internal Fabrikam SXI", p.spaceName)
+        assertEquals("Sam", p.authorName)
+        assertEquals("Internal Legacy SXI", p.spaceName)
         assertTrue(p.isMention)
         assertTrue(p.canReply)
     }
@@ -79,7 +79,7 @@ class PushPayloadTest {
 
     @Test
     fun `the install host is normalised and a non-host is dropped`() {
-        assertEquals("suite.example.com", PushPayload.from(mention + ("install_host" to "Suite.example.com")).installHost)
+        assertEquals("suite.example.com", PushPayload.from(mention + ("install_host" to "Suite.Example.Com")).installHost)
         assertNull(PushPayload.from(mention + ("install_host" to "not a host")).installHost)
     }
 
@@ -90,7 +90,7 @@ class PushPayloadTest {
         val plan = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "suite.example.com", "task_id" to "t2"))
         assertEquals("approvals:suite.example.com", review.groupKey)
         assertEquals(review.groupKey, plan.groupKey)
-        val other = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "suite.milv.life"))
+        val other = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "suite.example.org"))
         assertNotEquals(review.groupKey, other.groupKey)
         assertNull(PushPayload.from(mapOf("kind" to "chat_message", "install_host" to "suite.example.com")).groupKey)
     }
@@ -99,13 +99,13 @@ class PushPayloadTest {
     fun `summary text`() {
         val review = PushPayload.from(mapOf("kind" to "review_request_pending"))
         assertEquals("3 approvals", PushPayload.summaryText(review, 3))
-        assertEquals("4 new in Internal Fabrikam SXI", PushPayload.summaryText(PushPayload.from(mention), 4))
+        assertEquals("4 new in Internal Legacy SXI", PushPayload.summaryText(PushPayload.from(mention), 4))
     }
 
     @Test
     fun `the Open guard keeps a local path and sends anything else to the root`() {
         assertEquals("/chat/0192-s?message=m", PushPayload.safePath("/chat/0192-s?message=m"))
-        assertEquals("/chat/internal-fabrikam-sxi?message=0192-m", PushPayload.from(mention).openPath)
+        assertEquals("/chat/internal-legacy-sxi?message=0192-m", PushPayload.from(mention).openPath)
         assertEquals("/", PushPayload.safePath("https://evil.example/chat"))
         assertEquals("/", PushPayload.safePath("//evil.example/chat"))
         assertEquals("/", PushPayload.safePath("/\\evil.example"))
@@ -129,7 +129,7 @@ class PushPayloadTest {
     fun `toString names keys, never content`() {
         val text = PushPayload.from(mention).toString()
         assertFalse(text.contains("banner copy"))
-        assertFalse(text.contains("Harper"))
+        assertFalse(text.contains("Sam"))
     }
 
     // Task 01a116c4.

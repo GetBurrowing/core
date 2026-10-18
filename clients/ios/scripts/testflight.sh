@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Archive the Burrow iOS app (com.kobo-ai.burrow) and upload it to App Store Connect (TestFlight).
 #
-# Rock only. Adapted from cloudplay's apple-tv/scripts/archive_for_testflight.sh
+# The Mac build host only. Adapted from cloudplay's apple-tv/scripts/archive_for_testflight.sh
 # and upload_to_testflight.sh: same keychain unlock, same file-backed build
 # counter, same xcodegen regenerate, same automatic signing for team
 # XJ2GLJ9ST2. Two differences:
@@ -9,7 +9,7 @@
 #     "upload", so `xcodebuild -exportArchive` uploads the build itself (no
 #     separate altool step);
 #   - archive and export authenticate with the ASC API key
-#     (-authenticationKey*), because rock has no Apple Distribution
+#     (-authenticationKey*), because the build host has no Apple Distribution
 #     certificate. Distribution signing is cloud-managed, and
 #     -allowProvisioningUpdates registers the App, share and widgets bundle
 #     IDs with Push Notifications and App Groups from their entitlements.

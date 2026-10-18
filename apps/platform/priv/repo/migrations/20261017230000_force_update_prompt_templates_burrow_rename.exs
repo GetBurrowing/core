@@ -38,11 +38,11 @@ defmodule Platform.Repo.Migrations.ForceUpdatePromptTemplatesBurrowRename do
   Slugs with no row are skipped: `seed_defaults/0` owns first boot.
 
   Measured read-only (SELECT under `default_transaction_read_only`) on
-  2026-10-17 22:30Z on all four installs on moon. Production installs run
+  2026-10-17 22:30Z on all four installs on the production host. Production installs run
   image revision 95040921; each pre-change md5 below equals md5 of the
   descriptor on origin/main 95040921, computed from the source:
 
-  | slug                    | pre-change md5                     | core-platform (core_platform) | core-platform-milv (milv_platform) | core-platform-milvlife (milvlife_platform) | core-platform-exp (core_platform_exp) |
+  | slug                    | pre-change md5                     | core-platform (core_platform) | core-platform-b (installb_platform) | core-platform-c (installc_platform) | core-platform-exp (core_platform_exp) |
   | ----------------------- | ---------------------------------- | ----------------------------- | ---------------------------------- | ------------------------------------------ | ------------------------------------- |
   | `federation.preamble`   | `cd5c8e47b27fc6419cad360e956056b2` | match                         | match                              | match                                      | match                                 |
   | `dispatch.review_e2e`   | `0ec878e34edf00088bac0d4594ca45af` | match                         | match                              | match                                      | `e75607564b0fcfbb16a925d210a8002a`    |

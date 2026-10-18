@@ -294,7 +294,7 @@ defmodule Platform.Tenancy.ProjectWriteFreezeTest do
   # ── cascade_preview: what the confirm dialog promises ──────────────────
 
   describe "cascade_preview/1" do
-    # Marlowe kept the bulk cascade (2026-07-16) but asked the dialog to say what
+    # Robin kept the bulk cascade (2026-07-16) but asked the dialog to say what
     # it takes rather than "and everything under it". A preview is only worth
     # having if it matches the cascade EXACTLY — a dialog that misstates what
     # it's about to hide is worse than the vague one. Hence it reuses the

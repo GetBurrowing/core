@@ -116,7 +116,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   # The LATE shape no longer sleeps a fixed interval. It used to
   # (`@late_delay_ms 500`), and task 01a08d5d measured that the interval is not
   # under this test's control: in an otherwise-empty BEAM on both GitHub CI
-  # (run 34542464395) and moon, the owner was still alive 500 ms after the body
+  # (run 34542464395) and test-host, the owner was still alive 500 ms after the body
   # returned, so LATE's write was PARKED behind the blocker like the queued
   # orphan and arrived as the same `{:exit, "owner ... exited"}` — 3 tests,
   # 1 failure on both rigs, 2 detaches instead of 1. The positive control for
@@ -126,7 +126,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   # which is the event "strictly after the owner's exit" by definition.
   # Task 01a08d5d then measured that the OWNER's `:DOWN` is not enough either:
   # gated on it, LATE still read `{:exit, "owner ... exited"}` on both rigs.
-  # Timeline (moon): owner-exited disconnect logged at .368, both handler
+  # Timeline (test-host): owner-exited disconnect logged at .368, both handler
   # failures at .882 — about 500 ms in which the owner is dead but the
   # `DBConnection.Ownership` proxy still resolves and still holds the blocker's
   # connection, so a write started in that gap parks and dies with the QUEUED
@@ -299,7 +299,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
     # proxy enqueues a checkout only when another client holds the connection
     # (db_connection 2.9.0 `lib/db_connection/ownership/proxy.ex:122-133`), so
     # (b) cannot hold for a write that was simply served; the sibling file's
-    # control-3 comment carries the full argument. Readings here (moon, task
+    # control-3 comment carries the full argument. Readings here (test-host, task
     # 01a08d52-4b42 stage 1), blocker made to hold no connection: RED at
     # `await_holding/1` on the lookup guard; with a proxy supplied anyway, RED
     # on this assertion (`:dead`); with that and `parked?/3` forced `true`,
@@ -569,7 +569,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainTest do
   # process holds. Must be called from inside a checkout (here, the blocker's
   # `Platform.Repo.transaction/1`). A private copy of the sibling file's
   # function of the same name, which carries the derivation and the reading
-  # logged on moon (task 01a08d52-4b42 stage 1): the `%DBConnection{}` ecto_sql
+  # logged on test-host (task 01a08d52-4b42 stage 1): the `%DBConnection{}` ecto_sql
   # keeps under `{Ecto.Adapters.SQL, adapter_meta.pid}`, whose `pool_ref`
   # record's `:pool` is the proxy.
   #
@@ -788,7 +788,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanBeyondDrainObservationTest do
     # refuted the delay in the other direction: in an otherwise-empty BEAM (the
     # isolated partition) the owner was still alive at 500 ms, LATE's write was
     # parked behind the blocker, and `class` read the QUEUED shape's
-    # `{:exit, "owner ... exited"}` on both GitHub CI and moon (3 tests,
+    # `{:exit, "owner ... exited"}` on both GitHub CI and test-host (3 tests,
     # 1 failure, 2 detaches). Positive control: at 3_500 ms the same file read
     # 3 tests, 0 failures, 1 detach — because 3_500 outlasts `@blocker_hold_ms`.
     # Gating on the OWNER's `:DOWN` failed the same way (owner dead at .368,

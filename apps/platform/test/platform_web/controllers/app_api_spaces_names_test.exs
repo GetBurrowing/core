@@ -39,7 +39,7 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
 
   test "DMs and unnamed groups get non-null names; a named channel keeps its name",
        %{conn: conn} do
-    me = create_user!(%{name: "Rowan Self"})
+    me = create_user!(%{name: "Alex Self"})
     other = create_user!(%{name: "Dana Other"})
     agent = agent!("Higgins")
 
@@ -71,7 +71,7 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
     assert spaces[user_dm.id]["name"] == "Dana Other"
     assert spaces[agent_dm.id]["name"] == agent.name
     assert spaces[group.id]["name"] =~ "Dana Other"
-    refute spaces[group.id]["name"] =~ "Rowan Self"
+    refute spaces[group.id]["name"] =~ "Alex Self"
 
     # DMs have no slug, so the app routes by `path_segment`.
     for {_id, space} <- spaces do
@@ -87,13 +87,13 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
   test "each space carries its own org; DMs and org-less spaces carry null", %{conn: conn} do
     me = create_user!(%{name: "Two Orgs"})
     other = create_user!()
-    fabrikam = Platform.Tenancy.get_org_by_slug!("sxi")
+    legacy = Platform.Tenancy.get_org_by_slug!("sxi")
     red_star = Platform.Tenancy.get_org_by_slug!("soylent")
-    plain_member!(me, fabrikam)
+    plain_member!(me, legacy)
     plain_member!(me, red_star)
 
     n = System.unique_integer([:positive])
-    general_a = channel!(%{name: "general", slug: "general-a-#{n}", org_id: fabrikam.id})
+    general_a = channel!(%{name: "general", slug: "general-a-#{n}", org_id: legacy.id})
     general_b = channel!(%{name: "general", slug: "general-b-#{n}", org_id: red_star.id})
     orgless = channel!(%{name: "No Org #{n}"})
     for space <- [general_a, general_b, orgless], do: add_user!(space.id, me.id)
@@ -101,7 +101,7 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
 
     spaces = list_spaces(conn, bearer_token!(me))
 
-    assert spaces[general_a.id]["org"] == %{"id" => fabrikam.id, "name" => fabrikam.name}
+    assert spaces[general_a.id]["org"] == %{"id" => legacy.id, "name" => legacy.name}
     assert spaces[general_b.id]["org"] == %{"id" => red_star.id, "name" => red_star.name}
     assert spaces[general_a.id]["org"]["name"] != spaces[general_b.id]["org"]["name"]
     assert spaces[orgless.id]["org"] == nil

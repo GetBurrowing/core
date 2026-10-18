@@ -7,7 +7,7 @@ defmodule PlatformWeb.AdminLive do
   Federation, Usage/Cost Metering, Prompts) so power users can reach any of
   them without typing URLs.
 
-  Lightweight first-pass per Marlowe 2026-05-17 — fill out per sub-surface as
+  Lightweight first-pass per design review 2026-05-17 — fill out per sub-surface as
   they get scoped. The root-admin-only gate is inherited from the `:admin`
   live_session's `PlatformWeb.LiveAuth.ensure_admin` hook.
   """

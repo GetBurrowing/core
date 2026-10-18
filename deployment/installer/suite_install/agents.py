@@ -266,7 +266,7 @@ def systemd_init_compose():
     host cgroup namespace with the tree mounted read-write. That is the cost of
     running the agent host's systemd under DOCKER: it is network and filesystem
     containment (no Postgres, no host files, no docker socket), and NOT a
-    privilege boundary. Rootless podman (moon's quadlet, core-ops) is the
+    privilege boundary. Rootless podman (the reference install's quadlet, core-ops) is the
     measured contained profile, where container root is not host root.
     """
     return {

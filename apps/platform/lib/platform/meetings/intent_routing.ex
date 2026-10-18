@@ -56,7 +56,7 @@ defmodule Platform.Meetings.IntentRouting do
   Note that the responsibility key is namespaced `meetings.*` while the
   role that owns it is frequently NOT a meetings role — `visual_adjust`
   is a `meetings.` key held by the **designer**. That is deliberate per
-  Rowan (2026-07-31): the namespace records where the work originates,
+  The operator (2026-07-31): the namespace records where the work originates,
   the bundle records who does it.
   """
 

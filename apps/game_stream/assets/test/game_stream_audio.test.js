@@ -124,7 +124,7 @@ describe("AudioPlayback autoplay and truthful state", () => {
   // Every forwarded touch (and every tap on the well) calls gesture(). While
   // audio is already playing, that must not re-enter "waiting": the label
   // flipped to "Waiting for audio" and back on every tap, and its width
-  // change slid the Mute button (Rowan's playtest, 2026-10-02).
+  // change slid the Mute button (Alex's playtest, 2026-10-02).
   it("a gesture while already playing renders nothing new and does not replay", async () => {
     const element = { srcObject: null, muted: false, paused: true, pause: vi.fn() }
     element.play = vi.fn(() => {

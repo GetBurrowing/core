@@ -635,7 +635,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   @planning_ci_evidence_section """
   ## CI evidence: what actually triggers a run (verified 2026-09-11)
 
-  `.github/workflows/ci.yml` on Startup-Suite/core triggers on `push` to `main`, `feat/**` and `stack/**`, and on `pull_request`. A push to `task/<uuid>` never starts a CI run. So a stage whose evidence is "a concluded CI run id on the task branch" cannot be satisfied until a pull request exists from that branch; the deploy stage opens the real PR, so if an implementation stage needs CI runs before deploy, say in the stage description that the executor opens a DRAFT PR from the task branch (not marked ready, auto-merge not armed) to obtain them. Local test evidence comes from the executor's own rig, not from CI: for Rowan-owned agents that is moon per the `moon-test-rig-for-suite-core` skill (from hive `~/cron/moon-mix-test.sh <branch> -- <paths>`; from any other Rowan-owned box `ssh dev@build-host.local /srv/dev/bin/core-test.sh <branch> -- <paths>`, since the hive wrapper does not exist elsewhere); for other runtimes their own rig; never hive. Name the rig by runtime in stage text, not by one script path. Also: consecutive pushes within a minute supersede each other's runs (each run concludes `cancelled`), so controls that need concluded runs must be pushed one at a time and watched to conclusion.
+  `.github/workflows/ci.yml` on Startup-Suite/core triggers on `push` to `main`, `feat/**` and `stack/**`, and on `pull_request`. A push to `task/<uuid>` never starts a CI run. So a stage whose evidence is "a concluded CI run id on the task branch" cannot be satisfied until a pull request exists from that branch; the deploy stage opens the real PR, so if an implementation stage needs CI runs before deploy, say in the stage description that the executor opens a DRAFT PR from the task branch (not marked ready, auto-merge not armed) to obtain them. Local test evidence comes from the executor's own rig, not from CI: the rig your org's test-rig skill names (`skill_list` query: test rig); never a person's workstation. Name the rig by runtime in stage text, not by one script path. Also: consecutive pushes within a minute supersede each other's runs (each run concludes `cancelled`), so controls that need concluded runs must be pushed one at a time and watched to conclusion.
   """
 
   @doc """
@@ -861,9 +861,9 @@ defmodule Platform.Orchestration.PromptTemplates do
   3. Named the single smallest action that would unblock you and who can perform it.
   A blocker missing any of the three is not a blocker. It is unfinished work.
 
-  Local infrastructure problems are NOT blockers. That covers the test rig, containers, ports, the dev server, moon or hive, docker or podman, credentials for local tooling, and missing tools. When you hit one: post the exact error and the exact command you ran with `suite_reply` in the execution space, with an @-mention of Dalton (type the at-mention yourself; it is not written out here so this template does not itself page him), then keep working on every part of the stage that does not depend on it. Only escalate to a blocker if Dalton has not answered in 60 minutes, and say in the blocker when you pinged and what you kept working on meanwhile.
+  Local infrastructure problems are NOT blockers. That covers the test rig, containers, ports, the dev server, the test or build hosts, docker or podman, credentials for local tooling, and missing tools. When you hit one: post the exact error and the exact command you ran with `suite_reply` in the execution space, with an @-mention of Dalton (type the at-mention yourself; it is not written out here so this template does not itself page him), then keep working on every part of the stage that does not depend on it. Only escalate to a blocker if Dalton has not answered in 60 minutes, and say in the blocker when you pinged and what you kept working on meanwhile.
 
-  Never run the Burrow core test suite on hive (Rowan's workstation). Agents owned by Rowan (they are the only ones with moon access) run it on moon via the org skill `moon-test-rig-for-suite-core` (`skill_list` query "moon", then `skill_get`). Every other agent runs it on its own runtime's rig. A broken or unreachable rig is an infra problem: route it to Dalton as above, do not run the suite on hive, and do not file a blocker for it.
+  Never run the core test suite on a person's workstation; run it where your org's test-rig skill says (skill_list query: test rig). A broken or unreachable rig is an infra problem: route it to Dalton as above, do not run the suite on a workstation, and do not file a blocker for it.
 
   Do not file tickets about the tooling, the router, the board, or the process while you are executing a stage. Write the observation as one journal line (`memory_create` to `org/journal/<today>.md`) and continue. A ticket about the process never satisfies a stage.
 
@@ -1661,7 +1661,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ## How to review
 
-        1. Start a worktree dev server for this task — reference the `suite-dev-server` skill from the bundled skills payload. The skill explains hive-only constraints and DB seeding.
+        1. Start a worktree dev server for this task — reference the `suite-dev-server` skill from the bundled skills payload. The skill explains the dev host's constraints and DB seeding.
         2. For each pending validation in the list above:
            a. Perform the `setup` steps from its payload (creating fixtures via Burrow MCP tools or DB seeds, depending on what the script asks for).
            b. Perform the `actions` against the running feature.
@@ -1683,7 +1683,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         title of the tab you measured, and put both in the evidence map (`final_url`, `page_title`). A final
         URL on the identity provider, or a title such as "Sign in", means you measured the login screen and
         not the feature: that case is `could_not_evaluate` with the reason "no authenticated session", never a
-        pass and never a plain fail. Neither agent-reachable headless Chrome (rock, hive) holds a production
+        pass and never a plain fail. No agent-reachable headless Chrome holds a production
         session, and production runs `main` rather than this branch in any case, so an authenticated browser
         case is measured only against the worktree dev server after you log in there (ticket 01a0918b-dc68).
 
@@ -1892,9 +1892,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         - Meeting name (`{{meeting_name}}`), date, wall-clock duration.
         - Participant list (resolved `user:*` identities where possible). If any identity is ambiguous
-          — e.g. the transcriber heard "Harper" but the participant roster has both `user:harper` and
+          — e.g. the transcriber heard "Sam" but the participant roster has both `user:sam` and
           `user:saru` on the invite (as on the SXI 2026-07-13 meeting) — flag it inline: "attributed
-          to Harper/Saru — transcriber cannot disambiguate".
+          to Sam/Saru — transcriber cannot disambiguate".
         - Transcript stats: rough turn count, total words (from the transcript summary if available).
         - Mishearing corrections applied — call out every proper-noun or hostname you corrected from the raw transcript.
 
@@ -1912,7 +1912,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Use a `checklist` node whose children are `checklist_item` nodes. For each action item:
 
         - `label` — human-readable: `<owner>: <action verb + object> <due-hint>`
-          Example: `"Rowan: draft the SXI Q3 pricing memo by Friday"`.
+          Example: `"Alex: draft the SXI Q3 pricing memo by Friday"`.
         - `note` — **structured JSON** (a stringified JSON object, not prose) with the exact keys
           below. All keys required; use `null` for any field you cannot determine from the transcript.
 
@@ -1920,7 +1920,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ```json
         {
-          "owner": "user:rowan",
+          "owner": "user:alex",
           "project_hint": "sxi-orion",
           "priority": "high",
           "due_hint": "Fri 2026-07-24",
@@ -2098,7 +2098,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         For this dispatch `intent_id` is `{{intent_id}}`.
 
-        **Where `subagent_id` comes from depends on your runtime — this is the only place runtime types differ.** Claude Code runtimes pass the Agent-tool `agentId` returned by the spawn call (e.g. `afd767f1e0cc81633`); openclaw runtimes pass the runtime slug of the spawned worker (e.g. `higgins.moon`). Same field, same requirement, different provenance. Every other clause in this template is identical for every runtime.
+        **Where `subagent_id` comes from depends on your runtime — this is the only place runtime types differ.** Claude Code runtimes pass the Agent-tool `agentId` returned by the spawn call (e.g. `afd767f1e0cc81633`); openclaw runtimes pass the runtime slug of the spawned worker (e.g. `agent-1.host-a`). Same field, same requirement, different provenance. Every other clause in this template is identical for every runtime.
 
         The id must identify the ACTUAL subagent doing the work. A cancellation is addressed to it BY NAME (see the Cancellation section below), so a placeholder, a stale handle, or your own runtime id sends the stop signal to the wrong process.
 
@@ -2245,7 +2245,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Current task_id: `{{task_id}}`
         Current stage_id: `{{stage_id}}`
         - Pending validation IDs: {{pending_validation_ids}} — ack, push validation_pass, or report_blocker with task_id={{task_id}} stage_id={{stage_id}}
-        - If you are blocked on local infra (test rig, containers, ports, moon, credentials, missing tools), you should already have pinged Dalton (with an @-mention) in the execution space; if not, do it now instead of filing a blocker.{{feedback_guidance}}\
+        - If you are blocked on local infra (test rig, containers, ports, test hosts, credentials, missing tools), you should already have pinged Dalton (with an @-mention) in the execution space; if not, do it now instead of filing a blocker.{{feedback_guidance}}\
         """
       },
       %{
@@ -2489,7 +2489,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         surface on their own.
 
         You are **additive, not a blocker** — every follow-up you file lands in the
-        `backlog` column with `metadata.filed_by = "architect_cron_sweep"`. Rowan decides
+        `backlog` column with `metadata.filed_by = "architect_cron_sweep"`. The install's operator decides
         whether to prioritise or close each one. Overfiling is worse than underfiling; if
         nothing warrants a follow-up, file zero.
 
@@ -2573,7 +2573,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         You are the Architect. A stage just transitioned to `passed`. Your job is to audit what
         shipped against what the plan asked for and post any drift you notice as annotations to
         the task's execution space. You are **additive, not a blocker** — the reviewer's
-        dispatch fires no matter what you find. Rowan reads your annotations and decides
+        dispatch fires no matter what you find. A human reviewer reads your annotations and decides
         whether the drift matters.
 
         ## What to check for
@@ -2605,7 +2605,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         If none of the four concerns apply, still make the call below with a `summary`
         confirming the shipped stage looks clean — "no drift, no new deps, no
-        memory-pattern reintroduction" — so Rowan sees the architect ran and had nothing to
+        memory-pattern reintroduction" — so a human reviewer sees the architect ran and had nothing to
         flag. Silence is ambiguous; explicit "clean" is not.
 
         ## Planned shape (what the stage description asked for)
@@ -2637,7 +2637,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         `stage_id` is the id printed above — pass it verbatim. `summary` is REQUIRED and
         must be non-blank **including when the stage is clean**: write
-        "no drift, no new deps, no memory-pattern reintroduction" so Rowan sees the
+        "no drift, no new deps, no memory-pattern reintroduction" so a human reviewer sees the
         architect ran and had nothing to flag. Silence is ambiguous; an explicit clean
         result is not. `findings` is OPTIONAL — omit it entirely on a clean stage. Each
         finding's `constraint` must be one of
@@ -2661,7 +2661,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Do NOT rewrite the stage. Do NOT call `task_update`. Do NOT create a
         `review_request`. Your only side effect is the `stage_architecture_audit` call. The
         reviewer's dispatch fires regardless of what you flag — your annotations exist so
-        Rowan sees drift before it compounds.\
+        a human reviewer sees drift before it compounds.\
         """
       },
       %{

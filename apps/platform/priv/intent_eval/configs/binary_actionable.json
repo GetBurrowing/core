@@ -1,0 +1,11 @@
+{
+  "description": "The pre-reframe binary arm: 'is this actionable?' with no addressee question. Reference point for the off_topic reframe.",
+  "prompt_source": {"inline_file": "priv/intent_eval/prompts/binary_actionable.txt"},
+  "prompt_provenance": "RECONSTRUCTED, not recovered. The binary prompt used in the 2026-08-26 measurement runs was never committed (that runner was deliberately throwaway and out-of-repo at ~/sources/tmp/01a03f57-measure.py), so its exact text is unrecoverable. This body re-states the binary framing described in the run notes. The numbers this config produces are therefore NOT expected to match the 90/102 and 3/60 reference figures, and the discrepancy is reported as a finding rather than resolved by adjusting either side.",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

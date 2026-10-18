@@ -9,7 +9,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgent do
   created this row directly against prod as a manual/ad hoc test ("say
   hello only, no real behavior"), outside any committed seed or migration —
   so `git grep` never finds it, and it has to be retired the same way it
-  was created, by a write that targets prod directly. Harper invited it by
+  was created, by a write that targets prod directly. The product lead invited it by
   mistake the night of 2026-09-25 and got silence; it was confirmed retired
   the next day. It is a SEPARATE agent from the correctly-named
   "Meeting Assistant" (slug `meeting-assistant`, seeded by
@@ -88,7 +88,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgent do
       "retired_by" => "migration RetireMeetingVoicePlaceholderAgent (task 01a0e47c stage 1)",
       "retired_reason" =>
         "stale ad-hoc test placeholder created by Dalton 2026-09-25 (\"say hello only, " <>
-          "no real behavior\"); Harper invited it by mistake the same night and got " <>
+          "no real behavior\"); a user invited it by mistake the same night and got " <>
           "silence; confirmed retired 2026-09-26 (org journal). Superseded by the " <>
           "dedicated \"Meeting Assistant\" agent (task 01a0d4a0)."
     }

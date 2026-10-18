@@ -311,7 +311,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # cases should differ by a value that is visible in both of them.
   #
   # What this case detects is the drain CALL being present, not this deadline
-  # being long. Measured on moon (task 01a08d52-4b42 stage 1), on both this
+  # being long. Measured on test-host (task 01a08d52-4b42 stage 1), on both this
   # branch and the origin/main it was cut from: with this constant set to 50
   # the file stays GREEN (branch 3 of 3, main 2 of 2), because the blocker
   # releases within milliseconds of the orphans parking and the writes finish
@@ -411,7 +411,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
     # why it is a conjunction and (a) only rules out a stale queue entry.
     #
     # The mutation this control used to survive, and the readings on the
-    # narrowed predicate (task 01a08d52-4b42 stage 1, moon): make the blocker
+    # narrowed predicate (task 01a08d52-4b42 stage 1, test-host): make the blocker
     # hold NO connection (swap its `Platform.Repo.transaction/1` for a plain
     # call).
     #
@@ -692,7 +692,7 @@ defmodule PlatformWeb.ConnCaseSupervisedOrphanTest do
   # process holds. Must be called from inside a checkout (here, the blocker's
   # `Platform.Repo.transaction/1`).
   #
-  # Derivation, logged once on moon before this was relied on (task
+  # Derivation, logged once on test-host before this was relied on (task
   # 01a08d52-4b42 stage 1): ecto_sql 3.13.5 keeps the checked-out
   # `%DBConnection{}` in the process dictionary under `{Ecto.Adapters.SQL,
   # adapter_meta.pid}` (`put_conn/2`, `lib/ecto/adapters/sql.ex:1499-1501`), and

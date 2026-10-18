@@ -3,7 +3,7 @@
 # (task 01a0773e-cea9-7001-98f5-be6c37607e91 / FE-20 stage 1).
 #
 # WHY A SECOND SEED SCRIPT. `seed-meeting-layout-fixture.sh` is the sibling
-# gate's fixture and it talks to moon over ssh (`ssh dev@build-host.local podman
+# gate's fixture and it talks to test-host over ssh (`ssh deploy@test-host.local podman
 # exec dev-postgres psql ...`). This probe runs against a LOCAL dev server, so
 # it needs a LOCAL psql. Sharing one script would have meant a transport flag
 # threaded through every statement; the two fixtures also want different rows
@@ -48,7 +48,7 @@ psql_q() { psql -U "$PGUSER_ARG" -d "$DB" -v ON_ERROR_STOP=1 -tA; }
 
 space_id="$(echo "select id from chat_spaces where slug='$SPACE_SLUG' limit 1;" | psql_q)"
 if [ -z "$space_id" ]; then
-  echo "seed: no '$SPACE_SLUG' chat space in $DB — open /dev/login?as=marlowe once first." >&2
+  echo "seed: no '$SPACE_SLUG' chat space in $DB — open /dev/login?as=robin once first." >&2
   echo "      That route creates the space and adds the user; this script will not invent one," >&2
   echo "      because a fabricated space would render a control row nobody can reach in the app." >&2
   exit 2
@@ -57,7 +57,7 @@ fi
 org_id="$(echo "select id from orgs order by inserted_at limit 1;" | psql_q)"
 host_id="$(echo "select id from chat_participants where space_id='$space_id' and participant_type='user' limit 1;" | psql_q)"
 if [ -z "$org_id" ] || [ -z "$host_id" ]; then
-  echo "seed: no org or no user participant in $DB — log in at /dev/login?as=marlowe first." >&2
+  echo "seed: no org or no user participant in $DB — log in at /dev/login?as=robin first." >&2
   exit 2
 fi
 

@@ -19,11 +19,11 @@ defmodule Platform.Responsibilities.JanitorCronDrainTest do
   detector. It is paired, over the same fixture builder, with the assigned
   positive control directly above it, which must dispatch and write.
 
-  Measured on moon, this file run on 2d0afc41: 19 of its 21 tests fail.
+  Measured on test-host, this file run on 2d0afc41: 19 of its 21 tests fail.
   The two that pass are the unassigned no-op (above) and the reachability
   test, whose provider stage 1 already shipped.
 
-  ## Mutation probes (measured on moon; this file plus
+  ## Mutation probes (measured on test-host; this file plus
   ## janitor_registration_test, janitor_policy_test, provider_coverage_test)
 
     * `auto_approve_plan: false` dropped from the hand-back write: 10

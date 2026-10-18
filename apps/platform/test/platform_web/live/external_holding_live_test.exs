@@ -64,7 +64,7 @@ defmodule PlatformWeb.ExternalHoldingLiveTest do
       chip = view |> element("[data-role=brand-chip]") |> render()
       assert chip =~ ~s(alt="#{app_name}")
       assert chip =~ ">#{app_name}</span>"
-      refute chip =~ ~r/fabrikam/i
+      assert Platform.Regression.InstallIdentityScanner.hits(chip) == []
 
       # No shell / icon rail / bottom nav — the discovery leak the separate
       # live_session + chrome-less layout exist to prevent.

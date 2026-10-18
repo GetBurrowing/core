@@ -142,7 +142,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
   defp long_dialogue_segments do
     [
       %{
-        "speaker_name" => "Harper",
+        "speaker_name" => "Blake",
         "text" =>
           "Let's kick off the roadmap review for Q3. We need to lock the mobile focus this week " <>
             "so the design partners have a stable target. I'd like to walk through the pilot " <>
@@ -276,7 +276,7 @@ defmodule Platform.Review.MeetingSummarizeE2EReviewTest do
 
       # Real transcript text:
       assert user_msg["content"] =~ "Please summarize the following meeting transcript:"
-      assert user_msg["content"] =~ "Harper"
+      assert user_msg["content"] =~ "Blake"
       assert user_msg["content"] =~ "roadmap review for Q3"
       assert user_msg["content"] =~ "Priya"
       refute user_msg["content"] =~ "meetings.summarize.v1"

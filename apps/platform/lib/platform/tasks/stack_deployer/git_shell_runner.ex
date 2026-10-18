@@ -66,7 +66,7 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   # runtime by `default_repo_root/0` off `System.tmp_dir!/0` — this
   # avoids the historical hardcoded `"tmp/stack_deployer"` that
   # `Path.expand/1` resolved to `<CWD>/tmp/stack_deployer` (i.e. under
-  # the release's `/app` in the moon container, which is owned by
+  # the release's `/app` in the production container, which is owned by
   # `root:root` while the beam runs as UID 1000 — a `File.mkdir_p!/1`
   # crash there stalled the meeting-to-tasks pipeline rollup on
   # 2026-07-17). Override via `config :platform, :stack_deployer,

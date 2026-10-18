@@ -165,7 +165,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   defp attr(node, name), do: node |> Floki.attribute(name) |> List.first()
 
-  # The Agents section's stylesheet (a verbatim port of Harper's Ask mockup).
+  # The Agents section's stylesheet (a verbatim port of Sam's Ask mockup).
   defp ask_css, do: File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
 
   # One agent per state in ONE rail, which is also the shape the
@@ -180,7 +180,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   defp four_state_rail do
     rail(
       [
-        human("Harper", "u-1"),
+        human("Sam", "u-1"),
         agent("Thinker", "a-think"),
         agent("Writer", "a-write"),
         agent("Failer", "a-fail"),
@@ -199,7 +199,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   describe "the humans section heading" do
     test "renders the words 'In this call'" do
-      html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+      html = rail([human("Sam", "u-1"), agent("Saru", "a-1")])
 
       assert html =~ "In this call",
              "the humans section rendered with no heading — this is the exact defect " <>
@@ -207,7 +207,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "the heading sits inside data-section=\"humans\", not somewhere else on the page" do
-      html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+      html = rail([human("Sam", "u-1"), agent("Saru", "a-1")])
 
       humans_section =
         case Regex.run(~r/<section data-section="humans".*?<\/section>/s, html) do
@@ -222,7 +222,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     # type; the Agents heading is the mockup's `.sec` (12px uppercase from
     # `meeting_ask.css`), so the two are no longer one class string.
     test "both sections carry a heading: humans in utility type, agents as the mockup's .sec" do
-      html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+      html = rail([human("Sam", "u-1"), agent("Saru", "a-1")])
       doc = Floki.parse_fragment!(html)
 
       assert length(Regex.scan(~r/#{Regex.escape(@heading_type)}/, html)) == 1
@@ -232,7 +232,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "uses a people glyph, not the agents' cpu-chip" do
-      html = rail([human("Harper", "u-1")])
+      html = rail([human("Sam", "u-1")])
 
       assert html =~ "hero-users"
       refute html =~ "hero-cpu-chip"
@@ -272,7 +272,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   describe "the agent row's three signals" do
     # The defect this closed: line 2 under the name was the role chip
     # rendering the literal string "agent", and `:idle` rendered nothing
-    # but a bare dot. The verbatim port of Harper's Ask mockup (shared in
+    # but a bare dot. The verbatim port of Sam's Ask mockup (shared in
     # Suite's Meeting System space, not checked in) keeps the three
     # signals as: the `.av` initial circle (carrying `data-activity-state`
     # and the `.avs` reachability badge), the name, and the state word in
@@ -290,7 +290,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "the avatar is the mockup's initial circle, carrying the state as data, with no ring or glyph" do
       html =
         rail(
-          [human("Harper", "u-1")] ++
+          [human("Sam", "u-1")] ++
             for(
               {name, id} <- [
                 {"Thinker", "a-think"},
@@ -800,7 +800,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "only the identity in the muted set reads muted" do
       html =
         media_rail(
-          [human("Mariah", "u-1"), human("Harper", "u-2")],
+          [human("Mariah", "u-1"), human("Sam", "u-2")],
           muted: ["user:u-2"]
         )
 
@@ -811,7 +811,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "only the identity in the camera-off set reads camera off" do
       html =
         media_rail(
-          [human("Mariah", "u-1"), human("Harper", "u-2")],
+          [human("Mariah", "u-1"), human("Sam", "u-2")],
           camera_off: ["user:u-1"]
         )
 
@@ -833,7 +833,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "both slots are present on every human row in every state; agent rows keep the mic" do
       html =
         media_rail(
-          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          [human("Mariah", "u-1"), human("Sam", "u-2"), agent("Saru", "a-1")],
           muted: ["user:u-2"],
           camera_off: ["user:u-2"]
         )
@@ -925,7 +925,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "every row carries an sr-only line naming the participant and both states" do
       html =
         media_rail(
-          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          [human("Mariah", "u-1"), human("Sam", "u-2"), agent("Saru", "a-1")],
           muted: ["user:u-2"],
           camera_off: ["user:u-2"]
         )
@@ -933,7 +933,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       # The icons are the entire payload of this feature: a screen reader
       # that only gets the name gets nothing.
       assert row_for(html, "user:u-1") =~ "Mariah, unmuted, camera on"
-      assert row_for(html, "user:u-2") =~ "Harper, muted, camera off"
+      assert row_for(html, "user:u-2") =~ "Sam, muted, camera off"
       assert row_for(html, "agent:a-1") =~ "Saru, unmuted, no camera"
 
       summaries =
@@ -949,7 +949,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "the slots use the error/base tokens and neither warning nor success" do
       html =
         media_rail(
-          [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
+          [human("Mariah", "u-1"), human("Sam", "u-2"), agent("Saru", "a-1")],
           muted: ["user:u-2"],
           camera_off: ["user:u-2"]
         )
@@ -1181,7 +1181,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.find(who, ~s(.st[data-role="agent-activity-word"] > span.l)) != []
     end
 
-    # Task 01a0d3cd stage 1 — Harper's "I still don't see the ASK button"
+    # Task 01a0d3cd stage 1 — Sam's "I still don't see the ASK button"
     # report. The gate used to be `@hold_to_talk? and is_binary(aid)`, so an
     # agent row `agent_id_of/1` could not resolve dropped the control with
     # ZERO trace: no disabled button, no DOM node, nothing a viewer or a
@@ -1429,7 +1429,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   # (canvas 01a0e47d-3005) is RETIRED as a heard-text holder: it grew
   # with every transcript word, and because it sat inside the CENTRED
   # veil card, that growth visibly reflowed the whole stage — the exact
-  # defect Harper's round-3 report named. The live text now lives in its
+  # defect Sam's round-3 report named. The live text now lives in its
   # own fixed-size, absolutely-positioned overlay, never a sibling in the
   # veil card's layout flow.
   describe "the ask-veil's card, post round-3" do
@@ -1515,8 +1515,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   defp remove_roster do
     [
-      human("Marlowe", "u-1"),
-      human("Rowan", "u-2"),
+      human("Robin", "u-1"),
+      human("Alex", "u-2"),
       agent("Burrow", "ma-1"),
       agent("Saru", "saru-1")
     ]
@@ -1922,7 +1922,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "renders for the host with exactly one active agent" do
       html =
         remove_rail(
-          [human("Marlowe", "u-1"), agent("Burrow", "ma-1")],
+          [human("Robin", "u-1"), agent("Burrow", "ma-1")],
           can_remove_agents?: true
         )
 
@@ -1953,7 +1953,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "is absent for a non-host, even with exactly one active agent" do
-      html = remove_rail([human("Marlowe", "u-1"), agent("Burrow", "ma-1")], [])
+      html = remove_rail([human("Robin", "u-1"), agent("Burrow", "ma-1")], [])
       doc = Floki.parse_fragment!(html)
 
       assert leave_control(doc) == []
@@ -1962,7 +1962,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "is absent with zero active agents" do
-      html = remove_rail([human("Marlowe", "u-1")], can_remove_agents?: true)
+      html = remove_rail([human("Robin", "u-1")], can_remove_agents?: true)
       doc = Floki.parse_fragment!(html)
 
       assert leave_control(doc) == []
@@ -1971,7 +1971,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "is absent with two-or-more active agents, and the per-row icons remain" do
       html =
         remove_rail(
-          [human("Marlowe", "u-1"), agent("Burrow", "ma-1"), agent("Saru", "saru-1")],
+          [human("Robin", "u-1"), agent("Burrow", "ma-1"), agent("Saru", "saru-1")],
           can_remove_agents?: true
         )
 
@@ -1984,7 +1984,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "disables while the single agent's removal is in flight" do
       html =
         remove_rail(
-          [human("Marlowe", "u-1"), agent("Burrow", "ma-1")],
+          [human("Robin", "u-1"), agent("Burrow", "ma-1")],
           can_remove_agents?: true,
           removing_ids: MapSet.new(["p-ma-1"])
         )
@@ -2009,7 +2009,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     # scope for this stage (other callers — the "N people · M agents" bar
     # text — depend on that order).
     test "the Agents section's DOM node precedes the Humans section's DOM node" do
-      html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+      html = rail([human("Sam", "u-1"), agent("Saru", "a-1")])
 
       agents_index =
         case :binary.match(html, ~s(data-section="agents")) do
@@ -2031,7 +2031,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "still holds when many humans and many agents are present" do
       html =
         rail([
-          human("Harper", "u-1"),
+          human("Sam", "u-1"),
           human("Priya", "u-2"),
           agent("Saru", "a-1"),
           agent("Burrow", "a-2")
@@ -2051,7 +2051,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     test "Burrow's name renders, a nameless agent falls back to 'Agent', and both sit above Humans" do
       html =
         rail([
-          human("Harper", "u-1"),
+          human("Sam", "u-1"),
           agent("Burrow", "a-1"),
           agent(nil, "a-2")
         ])
@@ -2083,7 +2083,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   # `.meeting-ask` scope and the pseudo-state -> data-attribute mapping
   # changed. These hold the values a "tidy-up" would most likely drift.
   #
-  # Every literal below is a value ported from Harper's Ask mockup (shared
+  # Every literal below is a value ported from Sam's Ask mockup (shared
   # in the Meeting System space), not checked in per repo policy. They are
   # written out here on purpose: if one changes in the stylesheet, the
   # change has to be made here too, against the mockup, by someone looking
@@ -2211,7 +2211,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     defp pending_agent(name, id), do: %{agent(name, id) | identity: nil}
 
     test "a voice-present agent (agent:<id> identity) renders a 4-bar rail glyph and no initials" do
-      html = rail([human("Harper", "u-1"), agent("Burrow", "a-burrow")])
+      html = rail([human("Sam", "u-1"), agent("Burrow", "a-burrow")])
       av = html |> agent_row("a-burrow") |> avatar_node()
 
       assert attr(av, "data-voice") == "true"

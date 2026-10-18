@@ -1,7 +1,7 @@
 defmodule Platform.Meetings.CallInvites do
   @moduledoc """
   Who a call started from the native app rings (task 01a111bb): "start a
-  meeting with Harper" or "call the all-hands group".
+  meeting with Sam" or "call the all-hands group".
 
   Two steps, deliberately apart, so a refused request creates nothing:
 

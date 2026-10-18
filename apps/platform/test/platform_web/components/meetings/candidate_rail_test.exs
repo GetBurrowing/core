@@ -246,7 +246,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     test "the byline names WHO SPOKE, and the assignment is a separate segment" do
       spoken =
         candidate(%{
-          speaker: "Harper Parker",
+          speaker: "Sam Moreno",
           assigned_agent_slug: "octavius",
           last_utterance_at: DateTime.add(@now, -120, :second)
         })
@@ -254,7 +254,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       html = rail([spoken])
       card = node(html, spoken)
 
-      assert text_of(card, "[data-role='meeting-candidate-byline']") == "Harper Parker · 2m ago"
+      assert text_of(card, "[data-role='meeting-candidate-byline']") == "Sam Moreno · 2m ago"
 
       # The assignee is NOT in the byline. This is the defect: reading
       # the assigned agent as the author of a verbatim quote.
@@ -277,7 +277,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
 
       # ...and the control: the element is not simply missing from the
       # component. A card WITH a speaker still has one.
-      spoken = candidate(%{speaker: "Harper Parker"})
+      spoken = candidate(%{speaker: "Sam Moreno"})
 
       assert present?(
                node(rail([spoken]), spoken),
@@ -356,7 +356,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     test "the assignment is the last WRITTEN line — below the quote, not above it" do
       card =
         candidate(%{
-          speaker: "Harper Parker",
+          speaker: "Sam Moreno",
           assigned_agent_slug: "octavius",
           last_utterance_at: DateTime.add(@now, -120, :second)
         })
@@ -446,7 +446,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
       # was leading a still-shimmering, nothing-to-show-yet card with a
       # bare ordinal instead of the actor sentence below — that stays
       # fixed, asserted here on the skeleton/forming pair exactly as
-      # before. What changed is Harper's later, more specific complaint
+      # before. What changed is Sam's later, more specific complaint
       # ("the connection to the cards") and his own mockup: a `:full`
       # card, which already carries a title/quote/byline and is not
       # what the original removal was about, now carries its rung
@@ -580,15 +580,15 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
          candidate(%{
            state: :heard,
            classified_intent: "action_item",
-           speaker: "Harper Parker",
+           speaker: "Sam Moreno",
            assigned_agent_slug: "octavius"
          })},
         {"full — the populated card",
-         candidate(%{state: :shaping, speaker: "Harper Parker", assigned_agent_slug: "octavius"})},
+         candidate(%{state: :shaping, speaker: "Sam Moreno", assigned_agent_slug: "octavius"})},
         {"acting — armed and counting down",
          candidate(%{
            state: :acting,
-           speaker: "Harper Parker",
+           speaker: "Sam Moreno",
            assigned_agent_slug: "octavius",
            acts_at: DateTime.add(@now, 30, :second)
          })},
@@ -603,7 +603,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
         {"unassigned — the sentinel row",
          candidate(%{
            state: :shaping,
-           speaker: "Harper Parker",
+           speaker: "Sam Moreno",
            assigned_agent_slug: nil,
            target_role: "null"
          })}
@@ -645,7 +645,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
     # the case list — a state quietly dropped from an ordering test is
     # indistinguishable from a state the test forgot.
     test "the skeleton card carries the quote and no assignment — and still cannot invert" do
-      skeleton = candidate(%{state: :heard, classified_intent: nil, speaker: "Harper Parker"})
+      skeleton = candidate(%{state: :heard, classified_intent: nil, speaker: "Sam Moreno"})
 
       assert CandidateRail.presentation(skeleton) == :skeleton
 

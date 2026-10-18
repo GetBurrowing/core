@@ -1106,9 +1106,9 @@ defmodule Platform.Chat.AttentionRouter do
   #   2. Strip bracketed tokens from the content; the remainder is the "legacy
   #      zone" where `@name` substring matching applies (covers pre-backfill
   #      messages and LLM-emitted mentions that skip brackets).
-  # A single message may mix both forms (e.g. autocompleted `@[Rowan]` plus a
-  # manually-typed `@alice`) — both route correctly, and `@Rowan` substring
-  # inside `@[Rowan]` does not leak into the legacy check.
+  # A single message may mix both forms (e.g. autocompleted `@[Alex]` plus a
+  # manually-typed `@alice`) — both route correctly, and `@Alex` substring
+  # inside `@[Alex]` does not leak into the legacy check.
   @doc """
   True iff `participant` is @-mentioned in `message`'s content per ADR 0037.
 
@@ -1208,7 +1208,7 @@ defmodule Platform.Chat.AttentionRouter do
   a historical reference rather than a live mention. Historian posts
   routinely embed 20+ real `@[Name]` tokens from the last 24h of chat;
   every one of those turned into a `:multi_mention` notification for
-  the named agent (surfaced 2026-07-10 when Rowan noticed Dalton was
+  the named agent (surfaced 2026-07-10 when the operator noticed Dalton was
   receiving Historian dispatches meant for Higgins).
   """
   @spec mention_scan_enabled?(Message.t()) :: boolean()
@@ -1284,7 +1284,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   Returns a list of typed maps preserving source order. Each token is one of:
 
-    * `%{kind: :name, value: "Rowan Ellis"}` — an individual user/agent
+    * `%{kind: :name, value: "Alex Morgan"}` — an individual user/agent
       mention, captured as the raw bracketed string.
     * `%{kind: :broadcast, target: :here}` — the `@[here]` channel-wide
       sentinel.

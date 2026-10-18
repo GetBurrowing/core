@@ -302,7 +302,7 @@ defmodule Platform.Meetings.LivekitAgentDispatchTest do
              ) != []
     end
 
-    # Task 01a0d4a0 stage 5 item 2: Dalton's dual-agent moon run found a
+    # Task 01a0d4a0 stage 5 item 2: Dalton's dual-agent test-host run found a
     # worker's `AgentSession` linking to the OTHER invited agent's own room
     # participant instead of the human, when two agents were invited within
     # milliseconds of each other. The dispatch's job metadata now carries

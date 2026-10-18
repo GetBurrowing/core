@@ -65,7 +65,7 @@ class CountsRepositoryTest {
             }
             // No bearer: no request at all.
             val none = RecordingTransport()
-            assertNull(CountsRepository(AppApiClient(tokens, none), store).refresh("suite.milv.life"))
+            assertNull(CountsRepository(AppApiClient(tokens, none), store).refresh("suite.example.org"))
             assertTrue(none.requests.isEmpty())
         }
 

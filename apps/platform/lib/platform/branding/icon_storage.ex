@@ -19,9 +19,9 @@ defmodule Platform.Branding.IconStorage do
   The local-disk adapter writes under `:chat_attachments_root`, which
   `config/runtime.exs` resolves to `/data/platform/chat_uploads`. On the
   production host that path is a HOST BIND MOUNT
-  (`/srv/dev/containers/core-platform/chat_uploads`), not an
+  (`<host volume>/chat_uploads`), not an
   anonymous volume, so an uploaded icon survives `podman rm` and a redeploy
-  — verified on moon, not assumed from the `VOLUME` line in the Dockerfile,
+  — verified on a production host, not assumed from the `VOLUME` line in the Dockerfile,
   which on its own would give an anonymous volume that does NOT survive.
 
   The database holds only the storage KEY and the derived-key map. A 512px

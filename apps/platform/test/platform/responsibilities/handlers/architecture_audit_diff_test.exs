@@ -135,7 +135,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiffTest do
       keys = Enum.map(flags, & &1.key) |> MapSet.new()
 
       # These four are shipped as of stage 4 — regressing any of them
-      # silently weakens the audit's usefulness. If Rowan retires one or
+      # silently weakens the audit's usefulness. If Alex retires one or
       # adds another, update this assertion together with the handler.
       assert MapSet.member?(keys, "ETS for ephemeral state")
       assert MapSet.member?(keys, "Suite ToolSurface smell")

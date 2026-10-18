@@ -108,7 +108,7 @@ const SECOND_SLUG = process.env.FIXTURE_SECOND_SLUG ?? "protofs-b"
  *   no-css-fallback  delete app.css's `.message-row-inner:has(...)` rule
  *                    after load: only the top layer stands between the row's
  *                    scale and the overlay.
- * MEASURED (stage 2, moon, Linux WebKit): no-css-fallback passes all six
+ * MEASURED (stage 2, test-host, Linux WebKit): no-css-fallback passes all six
  * tests, so the top layer alone escapes the row's scale. no-popover fails
  * only the `:popover-open` assertions and the parent-element probe (0/5
  * inside, rect 237.5/73.5/389x652); its row probes, held presses, close tap

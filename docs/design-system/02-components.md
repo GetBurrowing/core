@@ -74,7 +74,7 @@ DaisyUI's `.btn` is the base. This spec defines the wrapper + state coverage on 
 | Focus-visible    | 2px ring in `--color-focus-ring` (theme-split; light resolves to `--color-interactive`, dark to `--color-primary`), 2px offset from button edge. Per `04-accessibility.md` §1.2.1. **Apply via `focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2`** — NOT plain `focus:`, and NEVER with an alpha modifier: `ring-focus-ring/60` measures 2.3994:1 in light and fails SC 1.4.11. |
 | Active           | DaisyUI default active.                                                                       |
 | Disabled         | `aria-disabled="true"` + `pointer-events-none opacity-50`. Click handlers no-op.              |
-| **Loading**      | **NEW.** When ancestor has `.phx-click-loading` OR `loading={true}` prop set, replace icon (or prepend if label-only) with `<.icon name="hero-arrow-path" class="animate-spin">`, dim label by `opacity-70`, set `aria-busy="true"`. Click handlers no-op. **Delay-before-show: ~100ms** (Marlowe pin 2026-05-09) — most messages send near-instantly; the spinner should only render once the action exceeds 100ms so fast paths don't flash. Implement via a `setTimeout(showSpinner, 100)` cleared on completion (Phase 4 wires this in the JS hook). |
+| **Loading**      | **NEW.** When ancestor has `.phx-click-loading` OR `loading={true}` prop set, replace icon (or prepend if label-only) with `<.icon name="hero-arrow-path" class="animate-spin">`, dim label by `opacity-70`, set `aria-busy="true"`. Click handlers no-op. **Delay-before-show: ~100ms** (the design lead pin 2026-05-09) — most messages send near-instantly; the spinner should only render once the action exceeds 100ms so fast paths don't flash. Implement via a `setTimeout(showSpinner, 100)` cleared on completion (Phase 4 wires this in the JS hook). |
 
 #### Icon-only buttons
 
@@ -306,7 +306,7 @@ LiveView streams are the data contract. No visual component change needed — vi
 
 ### 2.13 Empty state — **New**
 
-**Anchored:** `1B-USE-3` (empty states lack agent-native context). Marlowe's direction (2026-05-08): brand-new Burrow users' first action is to connect an agent + add them to a channel (or create a channel + add an agent).
+**Anchored:** `1B-USE-3` (empty states lack agent-native context). The design lead's direction (2026-05-08): brand-new Burrow users' first action is to connect an agent + add them to a channel (or create a channel + add an agent).
 
 #### Slot contract
 

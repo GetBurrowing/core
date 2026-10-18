@@ -91,7 +91,7 @@ def every_hostname(manifest):
 
     `hostnames` drops the livekit host while meetings are off, so a record
     created while they were on would outlive the flip (and teardown) unless
-    cleanup looks at this wider set. Measured on rock, 2026-10-05: after the
+    cleanup looks at this wider set. Measured on the Mac build host, 2026-10-05: after the
     meetings-off flip and `setup teardown`, livekit-<tag>.<zone> was still a
     CNAME to the deleted tunnel.
     """

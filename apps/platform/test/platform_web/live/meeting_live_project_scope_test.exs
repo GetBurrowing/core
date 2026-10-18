@@ -74,7 +74,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
 
   describe "start-meeting project picker scoping" do
     # The plain member is seeded into a TENANT org, not the root org. Per
-    # Rowan's 2026-08-05 sub-orgs ruling, sub-orgs are filtering mechanisms
+    # Alex's 2026-08-05 sub-orgs ruling, sub-orgs are filtering mechanisms
     # rather than walls, so `Tenancy.visibility/1` returns `:root_all` for a
     # root member at ANY role — a root-org viewer would see every tenant's
     # project and make this absence assertion unsatisfiable by design. Only a

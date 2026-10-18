@@ -30,21 +30,21 @@ defmodule PlatformWeb.TranscriptControllerTest do
     # Append segments via the context function
     segments = [
       %{
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" => "Hello everyone, let's get started",
         "start_time" => 0,
         "end_time" => 3000,
         "final" => true
       },
       %{
-        "speaker_name" => "Rowan",
+        "speaker_name" => "Alex",
         "text" => "Sounds good, what's on the agenda?",
         "start_time" => 3500,
         "end_time" => 6000,
         "final" => true
       },
       %{
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" => "We need to review the transcript feature",
         "start_time" => 7000,
         "end_time" => 10000,
@@ -72,9 +72,9 @@ defmodule PlatformWeb.TranscriptControllerTest do
       assert get_resp_header(conn, "content-disposition") |> List.first() =~ ".txt"
 
       body = response(conn, 200)
-      assert body =~ "[00:00:00] Harper: Hello everyone"
-      assert body =~ "[00:00:03] Rowan: Sounds good"
-      assert body =~ "[00:00:07] Harper: We need to review"
+      assert body =~ "[00:00:00] Sam: Hello everyone"
+      assert body =~ "[00:00:03] Alex: Sounds good"
+      assert body =~ "[00:00:07] Sam: We need to review"
     end
 
     test "includes date and transcript ID in filename", %{conn: conn} do

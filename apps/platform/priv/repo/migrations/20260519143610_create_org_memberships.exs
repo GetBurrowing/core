@@ -8,7 +8,7 @@ defmodule Platform.Repo.Migrations.CreateOrgMemberships do
 
   Application-side enum, DB-enforced via CHECK constraint:
 
-    * `"admin"` — full admin rights within the org. Fabrikam admins are the
+    * `"admin"` — full admin rights within the org. Acme admins are the
       product-team operators. Tenant admins are tenant-internal operators.
     * `"member"` — default. Read/write within the org, no admin operations.
 

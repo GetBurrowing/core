@@ -311,7 +311,7 @@ defmodule Platform.Tasks do
       unidentified caller is never authorized. Mirrors
       `Platform.Meetings.fetch_meeting_for_user/2`.
     * A member of the **root** org at ANY role sees every project
-      (`:root_all`), not just root admins. Rowan's 2026-08-05 ruling:
+      (`:root_all`), not just root admins. The operator's 2026-08-05 ruling:
       sub-orgs are filtering mechanisms, so a root member sees every
       tenant's content. This is deliberately wider than the previous
       `root_admin?/1`-only bypass. Membership is read from the preloaded
@@ -6695,7 +6695,7 @@ defmodule Platform.Tasks do
   #
   # Key ordering matches the visual column order.
   #
-  # Status-to-bucket mapping (Marlowe's call 2026-05-19):
+  # Status-to-bucket mapping (the design call 2026-05-19):
   #   - `:blocked` gets its own bucket so a human or AI agent can see and
   #     act on stuck work — keeping it visible is the whole point.
   #   - `:cancelled` folds into the `:done` bucket. Cancelled and done share
@@ -6744,7 +6744,7 @@ defmodule Platform.Tasks do
       `list_all_tasks/1`).
     * `:epic_id`    — narrow to a single epic.
 
-  Status routing (per Marlowe 2026-05-19):
+  Status routing (per design review 2026-05-19):
 
     * `:blocked` lands in its own `:blocked` bucket — visible so a human
       or AI agent can take action to unblock.

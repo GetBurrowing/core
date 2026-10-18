@@ -53,13 +53,13 @@ defmodule PlatformWeb.GameStreamHooksTest do
 
     org = Tenancy.get_org_by_slug!("sxi")
     space = channel!(%{org_id: org.id, name: "Review builds"})
-    user = create_user!(%{name: "Rowan"})
+    user = create_user!(%{name: "Alex"})
     add_user!(space.id, user.id)
 
     {:ok, project} =
       Tasks.create_project(%{
         name: "Voltron #{System.unique_integer([:positive])}",
-        repo_url: "https://github.com/rowanellis/voltron"
+        repo_url: "https://github.com/example/voltron"
       })
 
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Dash tuning"})
@@ -280,7 +280,7 @@ defmodule PlatformWeb.GameStreamHooksTest do
       # window is told who took it, and (a v1 host has one peer) moved.
       render_hook(view2, "game_stream_take_over", Map.put(ids(canvas, s.session_id), "slot", 0))
       assert_reply(view2, %{ok: true, viewer: true, slots: %{0 => 0}, peer_id: ^peer2})
-      assert_push_event(view, "game_stream", %{type: "displaced", slot: 0, by: "Rowan"})
+      assert_push_event(view, "game_stream", %{type: "displaced", slot: 0, by: "Alex"})
       assert_push_event(view, "game_stream", %{type: "moved"})
       render_hook(view2, "game_stream_attach", ids(canvas, s.session_id))
       assert_reply(view2, %{ok: true, viewer: true})
@@ -338,8 +338,8 @@ defmodule PlatformWeb.GameStreamHooksTest do
       assert_reply(view, %{ok: true})
 
       render_hook(view, "game_stream_end", %{"session_id" => s.session_id})
-      assert_reply(view, %{ok: true, status: %{state: "ended", ended_reason: "Ended by Rowan"}})
-      assert_receive %Broadcast{event: "play_session_stop", payload: %{reason: "Ended by Rowan"}}
+      assert_reply(view, %{ok: true, status: %{state: "ended", ended_reason: "Ended by Alex"}})
+      assert_receive %Broadcast{event: "play_session_stop", payload: %{reason: "Ended by Alex"}}
 
       row = Repo.get!(Platform.GameStream.SessionRecord, s.session_id)
       assert row.rtt_p50_ms == 39.0
@@ -525,7 +525,7 @@ defmodule PlatformWeb.GameStreamHooksTest do
 
       assert_push_event(b, "game_stream", %{
         type: "roster",
-        roster: %{slots: %{0 => %{name: "Rowan"}}}
+        roster: %{slots: %{0 => %{name: "Alex"}}}
       })
 
       render_hook(b, "game_stream_take_over", Map.merge(ids, %{"slot" => 0, "src" => 0}))

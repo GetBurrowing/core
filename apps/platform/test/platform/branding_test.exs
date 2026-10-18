@@ -342,6 +342,80 @@ defmodule Platform.BrandingTest do
     end
   end
 
+  describe "reset_source/1 (task 01a14b9e stage 6)" do
+    test "clears the upload, so every variant is the repo's Burrow icon again" do
+      uploaded = upload!(solid_png([200, 30, 40]))
+      keys = all_keys(uploaded)
+      assert Enum.all?(keys, &stored?/1)
+      assert Branding.icon_url(:icon_192) == "/branding/#{uploaded.version}/icon_192"
+
+      assert {:ok, %InstallBranding{source_storage_key: nil, derived: %{}, version: nil}} =
+               Branding.reset_source(admin!())
+
+      assert %InstallBranding{source_storage_key: nil, derived: %{}, version: nil} =
+               Branding.get()
+
+      assert Branding.icon_url(:icon_192) == "/images/icon-192.png"
+      assert Branding.icon_url(:icon_512) == "/images/icon-512.png"
+      assert Branding.icon_url(:icon_512_maskable) == "/images/icon-512-maskable.png"
+      assert Branding.icon_url(:apple_touch) == "/images/apple-touch-icon.png"
+      assert Branding.icon_url(:favicon_32) == "/images/favicon-32.png"
+      assert Branding.icon_url(:favicon_16) == "/images/favicon-16.png"
+      assert Branding.icon_url(:favicon_ico) == "/images/favicon.ico"
+    end
+
+    test "deletes every blob the row pointed at, source and all seven variants" do
+      uploaded = upload!(solid_png([200, 30, 40]))
+      keys = all_keys(uploaded)
+      assert length(keys) == 8
+
+      assert {:ok, _} = Branding.reset_source(admin!())
+
+      for key <- keys, do: refute(stored?(key), "#{key} survived the reset")
+    end
+
+    test "leaves the name and colours alone" do
+      admin = admin!()
+      {:ok, _} = Branding.update_identity(admin, %{app_name: "SENTINEL-XYZ"})
+      upload!(solid_png([200, 30, 40]))
+
+      assert {:ok, reset} = Branding.reset_source(admin)
+      assert reset.app_name == "SENTINEL-XYZ"
+      assert reset.background_color == "#191b20"
+    end
+
+    test "with no upload it is a no-op answering ok" do
+      before = Branding.get()
+      assert {:ok, %InstallBranding{} = same} = Branding.reset_source(admin!())
+      assert same.updated_at == before.updated_at
+      assert Branding.icon_url(:icon_192) == "/images/icon-192.png"
+    end
+
+    test "broadcasts on the install_branding topic" do
+      upload!(solid_png([200, 30, 40]))
+      Phoenix.PubSub.subscribe(Platform.PubSub, Branding.pubsub_topic())
+
+      assert {:ok, _} = Branding.reset_source(admin!())
+      assert_receive {:install_branding_updated, %InstallBranding{version: nil}}
+    end
+
+    test "a non-admin is refused and the upload still serves" do
+      uploaded = upload!(solid_png([200, 30, 40]))
+      on_exit(fn -> Enum.each(all_keys(uploaded), &IconStorage.delete/1) end)
+
+      assert {:error, :unauthorized} = Branding.reset_source(non_admin!())
+
+      reread = Branding.get()
+      assert reread.version == uploaded.version
+      assert reread.source_storage_key == uploaded.source_storage_key
+      assert Enum.all?(all_keys(uploaded), &stored?/1)
+    end
+
+    test "nil actor is refused" do
+      assert {:error, :unauthorized} = Branding.reset_source(nil)
+    end
+  end
+
   describe "put_source/3 authorization" do
     test "a non-admin is refused and no blob is written" do
       before = Branding.get()

@@ -107,6 +107,15 @@ defmodule PlatformWeb.GithubWebhookDeploySkipNoticeTest do
       assert msg.content =~ "concluded failure"
       assert msg.content =~ "def4567"
       assert msg.content =~ "https://github.com/#{@repo}/actions/runs/424242"
+
+      # Task 01a14b9e stage 2: the remediation names no host.
+      assert String.ends_with?(
+               msg.content,
+               ". this install's deploy hook deploys only on conclusion=success; " <>
+                 "a re-run that ends in success deploys. " <>
+                 "Otherwise update the install's image by hand."
+             )
+
       refute msg.content =~ "@["
       assert msg.content_type == "text"
       refute msg.log_only

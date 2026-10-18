@@ -11,7 +11,7 @@ defmodule Platform.Tasks.DeployTargetTest do
         "name" => "production",
         "type" => "docker_compose",
         "config" => %{
-          "host" => "dev@192.0.2.234",
+          "host" => "queen@192.0.2.234",
           "stack_path" => "~/docker/stacks/my-app",
           "image_registry" => "ghcr.io/org/repo",
           "watchtower" => true
@@ -21,7 +21,7 @@ defmodule Platform.Tasks.DeployTargetTest do
       assert {:ok, validated} = DeployTarget.validate(target)
       assert validated["name"] == "production"
       assert validated["type"] == "docker_compose"
-      assert validated["config"]["host"] == "dev@192.0.2.234"
+      assert validated["config"]["host"] == "queen@192.0.2.234"
     end
 
     test "rejects docker_compose missing host" do

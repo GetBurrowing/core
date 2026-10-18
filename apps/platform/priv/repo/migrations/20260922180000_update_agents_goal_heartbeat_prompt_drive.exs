@@ -23,8 +23,8 @@ defmodule Platform.Repo.Migrations.UpdateAgentsGoalHeartbeatPromptDrive do
   migrated install. The seed file also stays the slug's owner for the
   closed-roster coverage sweep.
 
-  Before this was written, the live row was read on both moon installs
-  (fabrikam `core_platform`, milv `milv_platform`): both were byte-identical to
+  Before this was written, the live row was read on both production installs
+  (install A `core_platform`, install B `installb_platform`): both were byte-identical to
   the 20260918160000 body (md5 `7b598efb0aad2e09087350f8391683ad`), so the
   overwrite discards no human edit.
 

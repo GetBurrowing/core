@@ -125,7 +125,7 @@ defmodule Platform.Repo.Migrations.UpdateActionItemsPromptForLiveMeetingTest do
       assert content =~ "Read the excerpt, not the label"
       assert content =~ "ground truth"
 
-      # Rowan's constraint, unchanged across both bodies: item identity
+      # Alex's constraint, unchanged across both bodies: item identity
       # must never hang off the classifier's dedupe key. It is the
       # reason the classifier is allowed to stay cheap.
       refute content =~ "dedupe_key",

@@ -22,7 +22,7 @@ defmodule Platform.Tasks.DeliverySweep.MatcherTest do
     end
 
     test "a UUID inside a URL path" do
-      text = "See https://suite.example.com/tasks/#{@uuid}/plan for context"
+      text = "See https://suite.example.net/tasks/#{@uuid}/plan for context"
       assert Matcher.id_references(text).full == [@uuid]
     end
 

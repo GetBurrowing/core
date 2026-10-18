@@ -1531,7 +1531,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           </div>
 
           <%!-- Assignee — no top-level display row. Per ADR 0044 (as amended
-                 by Rowan on 2026-07-08 stage-3 rejection), the per-phase
+                 by the operator on 2026-07-08 stage-3 rejection), the per-phase
                  "Assignees" section below is the SINGLE affordance for both
                  reading and writing the assignee: it shows the breakdown by
                  phase (contextually useful — the current phase is highlighted

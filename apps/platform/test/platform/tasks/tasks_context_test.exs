@@ -1426,7 +1426,7 @@ defmodule Platform.Tasks.TasksContextTest do
     end
 
     test "blocked tasks land under the :blocked key (own bucket)", %{project: project} do
-      # Marlowe's call 2026-05-19: blocked tasks get their own visible bucket
+      # Robin's call 2026-05-19: blocked tasks get their own visible bucket
       # so a human or AI agent can take action to unblock. Without this
       # bucket they would be invisible on the board.
       {:ok, blocked} =
@@ -1446,7 +1446,7 @@ defmodule Platform.Tasks.TasksContextTest do
     end
 
     test "cancelled tasks fold into the :done bucket", %{project: project} do
-      # Marlowe's call 2026-05-19: cancelled and done share the same
+      # Robin's call 2026-05-19: cancelled and done share the same
       # "no further action required" semantic for the board, so they
       # collapse into a single visual column rather than giving cancel
       # its own. There is no :cancelled key in the returned shape.
@@ -1472,7 +1472,7 @@ defmodule Platform.Tasks.TasksContextTest do
 
     test "tasks with :stack_pending are excluded from the rendered shape", %{project: project} do
       # `:stack_pending` represents pre-backlog stack queueing rather than
-      # active board state, so it gets no rendered column. Marlowe didn't
+      # active board state, so it gets no rendered column. Robin didn't
       # speak to it in the 2026-05-19 revision; keeping the existing
       # exclusion. Blocked and cancelled used to share this exclusion but
       # are now bucketed (covered by the two tests above).

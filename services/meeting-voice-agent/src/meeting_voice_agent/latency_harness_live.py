@@ -11,12 +11,12 @@ and is unit-tested there against fixture data (no network). This module is
 intentionally thin glue on top of that: connect, play, listen, hand the two
 timestamps to `compute_latency_ms`. It has no unit tests of its own for the
 same reason `tests/live/test_wave_llm_live.py` and
-`tests/live/test_moon_speech_live.py` don't -- it cannot be exercised without
+`tests/live/test_rig_speech_live.py` don't -- it cannot be exercised without
 a real LiveKit server, real STT/LLM/TTS backends, and real audio, and faking
 those would defeat the point of a *live* validation. Run it directly (see
-README.md's "Latency harness" section) once LiveKit/wave/moon are reachable.
+README.md's "Latency harness" section) once LiveKit/wave/the test host are reachable.
 
-## Round 2 (task 01a0d4a0 stage 4): two bugs Dalton's moon run found
+## Round 2 (task 01a0d4a0 stage 4): two bugs a live test run found
 
 1. **Energy gate.** "First audio frame" used to fire on the agent's very
    first published frame, silent or not -- the agent's LiveKit audio track
@@ -73,7 +73,7 @@ logger = logging.getLogger("meeting_voice_agent.latency_harness")
 #: its OWN identity for a dispatched job's participant, shaped
 #: `"agent-<job-id-derived-string>"` (e.g. `agent-AJ_...`), completely
 #: independent of `agent_name`/`worker_agent_name`. Against Dalton's real
-#: moon deployment this prefix therefore matched NOTHING, so
+#: the test host deployment this prefix therefore matched NOTHING, so
 #: `_wait_for_first_agent_audio_frame` never subscribed to the worker's
 #: track and the harness's first run always timed out, aborting the whole
 #: batch. `"agent-"` is the correct, deployment-independent prefix: it is

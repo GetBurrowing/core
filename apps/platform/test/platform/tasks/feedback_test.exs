@@ -29,7 +29,7 @@ defmodule Platform.Tasks.FeedbackTest do
       assert {:ok, version} =
                Feedback.push(run.id, %{
                  source: :chat,
-                 author: "user:rowan",
+                 author: "user:alex",
                  content: "Use postgres instead of sqlite",
                  timestamp: DateTime.utc_now()
                })
@@ -42,7 +42,7 @@ defmodule Platform.Tasks.FeedbackTest do
 
       [fb] = feedback
       assert fb["source"] == "chat"
-      assert fb["author"] == "user:rowan"
+      assert fb["author"] == "user:alex"
       assert fb["content"] == "Use postgres instead of sqlite"
     end
 

@@ -371,7 +371,7 @@ defmodule PlatformWeb.ChatLive.JumpToLatestHooksTest do
       # `deep` is load-bearing here and is not interchangeable with `away`.
       # Shallow-with-nothing-new is the one band that renders NOTHING, so
       # asserting a badgeless chip from `away` alone would assert the exact
-      # behaviour Rowan rejected. See the five-band describe block below.
+      # behaviour Alex rejected. See the five-band describe block below.
       assert has_element?(view, "button.chat-jump-chip")
 
       refute has_element?(view, ".chat-jump-chip-count"),
@@ -468,7 +468,7 @@ defmodule PlatformWeb.ChatLive.JumpToLatestHooksTest do
     #   deep         pill, no badge    pill WITH badge
     #
     # PROVENANCE: proposed, WITHDRAWN by Saru in canvas revision 3, then
-    # REINSTATED BY ROWAN DIRECTLY — the deep case is not the same as reading a
+    # REINSTATED BY ALEX DIRECTLY — the deep case is not the same as reading a
     # few messages up. Collapsing `deep` back into `away` is a one-line change
     # that restores rejected behaviour, and these tests are what stops it.
     #
@@ -525,7 +525,7 @@ defmodule PlatformWeb.ChatLive.JumpToLatestHooksTest do
 
     test "BAND shallow, nothing new: NOTHING — the band this whole change exists for",
          %{conn: conn} do
-      # Rowan's complaint in his own words: scrolling up to re-read a few
+      # Alex's complaint in his own words: scrolling up to re-read a few
       # messages must not raise a control. Before this stage `away` alone put
       # the pill on screen, so this exact state is what shipped wrong.
       %{view: view} = band_view(conn, "shallow-quiet")
@@ -542,7 +542,7 @@ defmodule PlatformWeb.ChatLive.JumpToLatestHooksTest do
 
       refute chip?(view),
              "scrolled up a little with nothing new, the control must LEAVE THE DOM — " <>
-               "this is the state Rowan filed the ticket about"
+               "this is the state Alex filed the ticket about"
 
       refute has_element?(view, "div.chat-jump-anchor"),
              "the overlay wrappers go with it; an empty anchor is a transparent box " <>

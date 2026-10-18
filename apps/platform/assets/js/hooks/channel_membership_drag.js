@@ -72,7 +72,7 @@
 // because the block shows two pin models at once — a task pin is a row in
 // `task_chat_pins`, a conversation pin is a position in the user's
 // `chat_pinned_spaces` preference — so no single write could reorder both, and
-// Marlowe's 2026-08-12 call was to keep them apart rather than define a
+// the designer's 2026-08-12 call was to keep them apart rather than define a
 // cross-table order: "it's essentially two separate lists so makes me think to
 // not commingle the interactions too much."
 //
@@ -197,7 +197,7 @@ const ChannelMembershipDrag = {
 
       // Pinned scope (task 019fe987): the drop is a reorder of the user's own
       // pin list and nothing else. No target section, and no admin branch —
-      // there is no global default for "what Marlowe pinned".
+      // there is no global default for "what the designer pinned".
       if (section.dataset.rowScope === PINNED_SCOPE) {
         const overRow = e.target.closest(ROW_SELECTOR);
 

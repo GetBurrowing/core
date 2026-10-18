@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-19
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0008 (Chat Backend), ADR 0034 (MCP Endpoint & Capability Bundles), ADR 0036 (Canvases as First-Class Surfaces)
 
 ---
@@ -23,7 +23,7 @@ The user's framing is explicit: **be generous.** People will want to hand their 
 
 ### What scales
 
-Disk-backed storage works for single-host deploys (hive prod, dev). It does not scale to multi-node without a shared volume, and it does not lend itself to CDN fronting. We should not rewrite storage in this ADR, but the abstraction must not paint us into a corner: a pluggable adapter that starts local-disk and can swap to S3/R2 later is the correct boundary.
+Disk-backed storage works for single-host deploys (single-host prod, dev). It does not scale to multi-node without a shared volume, and it does not lend itself to CDN fronting. We should not rewrite storage in this ADR, but the abstraction must not paint us into a corner: a pluggable adapter that starts local-disk and can swap to S3/R2 later is the correct boundary.
 
 ## Decision
 

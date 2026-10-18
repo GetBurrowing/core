@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Tests for scripts/release.sh (task 01a10d8e stage 5). Runs ON MOON, from the
-# rig's copy (rig.sh push first):
+# Tests for scripts/release.sh (task 01a10d8e stage 5). Runs ON THE RIG HOST,
+# from the rig's copy (rig.sh push first):
 #
-#   /srv/dev/android-rig/01a10d8e/clients/android/scripts/test_release.sh
+#   RIG_HOST=<user@rig-host> RIG_ROOT=<rig work root> \
+#     <rig work root>/01a10d8e/clients/android/scripts/test_release.sh
 #
+# RIG_HOST and RIG_ROOT are required (no default), as for release.sh.
 # Uses only THROWAWAY keys made here with openssl, in a mktemp dir removed on
 # exit. It never reads the real upload key, and it uses its own versionCode
 # counter so the real one never moves.
@@ -11,7 +13,9 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 android_dir="$(cd "${here}/.." && pwd)"
-RIG_ROOT="${RIG_ROOT:-/srv/dev/android-rig}"
+for v in RIG_HOST RIG_ROOT; do
+  [ -n "${!v:-}" ] || { echo "test_release: ${v} is required (no default)" >&2; exit 2; }
+done
 T="$(mktemp -d -p "${RIG_ROOT}" release-test.XXXXXXXX)"
 trap 'rm -rf "${T}"' EXIT
 export BURROW_VERSIONCODE_FILE="${T}/versioncode"

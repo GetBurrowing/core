@@ -5,7 +5,7 @@ defmodule Mix.Tasks.Platform.IntentEval.Adjudicate do
 
       mix platform.intent_eval.adjudicate --emit
       # ... a human fills the human_label column ...
-      mix platform.intent_eval.adjudicate --ingest priv/intent_eval/adjudication/open.csv --by rowan
+      mix platform.intent_eval.adjudicate --ingest priv/intent_eval/adjudication/open.csv --by alex
 
   `--emit` writes `priv/intent_eval/adjudication/open.csv` with the columns
   `id,text,prior_context,model_label,model_rationale,human_label,note`, holding

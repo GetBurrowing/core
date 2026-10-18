@@ -32,7 +32,7 @@
 #   PSQL                    psql invocation (default: `psql`)
 #
 # Precondition: log in once at /dev/login?as=alice so the `general` chat
-# space and the Fabrikam org exist. This script does not create them.
+# space and the Legacy org exist. This script does not create them.
 set -euo pipefail
 
 DB="${PLATFORM_DEV_DATABASE:-platform_dev}"

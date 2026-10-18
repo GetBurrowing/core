@@ -120,7 +120,7 @@ class TunnelIdempotenceTest(CloudflareBase):
 
 
 class LivekitRecordLifecycleTest(CloudflareBase):
-    """rock, 2026-10-05: the livekit CNAME outlived the meetings-off flip and teardown."""
+    """lab-host, 2026-10-05: the livekit CNAME outlived the meetings-off flip and teardown."""
 
     HOSTS = frozenset(
         {

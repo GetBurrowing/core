@@ -164,7 +164,7 @@ def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) 
 
     ## The attach-time banner (task 01a0fa7e stage 3)
 
-    Harper reported Burrow answering ordinary room conversation with nobody
+    The product lead reported Burrow answering ordinary room conversation with nobody
     holding Ask -- the EXACT symptom this module's own moduledoc describes
     as the bug it fixes ("the worker's own `AgentSession` kept listening
     and replying to EVERYTHING it heard, continuously, regardless of
@@ -179,11 +179,11 @@ def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) 
     What no in-repo check can rule out: `services/meeting-voice-agent` has
     no Dockerfile and no CI workflow (confirmed: nothing under
     `.github/workflows/` names it), unlike the Elixir platform image that
-    `moon` re-pulls hourly. Whatever process is actually answering voice in
+    the production host re-pulls hourly. Whatever process is actually answering voice in
     a live meeting is started and restarted by hand, and nothing before
     this line made it observable from the worker's OWN logs whether that
     process is running code that includes this gate at all -- a worker
-    process started before this file existed would reproduce Harper's
+    process started before this file existed would reproduce the product lead's
     symptom exactly, by construction, and no code review of THIS branch
     could ever detect that from here.
 

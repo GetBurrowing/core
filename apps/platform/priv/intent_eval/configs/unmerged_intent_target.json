@@ -1,0 +1,13 @@
+{
+  "description": "The stage-3 prompt of task 01a06575: INTENT and TARGET asked as two separate questions, so an unaddressed ask KEEPS its intent and carries target_role: null instead of being erased to off_topic. Read straight out of its migration heredoc, so the arm is reproducible on any checkout with or without a database.",
+  "not_measurable_yet": "No cassette, and none can be recorded — the classifier endpoint is unreachable. This config exists so 'the prompt we just shipped' is a NAMED arm with a recorded fingerprint rather than an implicit one, and so the moment an endpoint comes back the recording command is obvious: `mix platform.intent_eval.run --config unmerged_intent_target --record`. Do NOT replay off_topic_default's cassette against it: that cassette holds the model's answers to the OLD prompt body.",
+  "prompt_source": {"migration": "priv/repo/migrations/20260902140000_force_update_intent_classify_prompt_unmerge_intent_and_target.exs"},
+  "prompt_attribute": "new_content",
+  "correction_exemplars": {"sentinel": true},
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

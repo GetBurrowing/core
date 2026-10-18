@@ -152,7 +152,7 @@ class TestJsonlRoundTrip:
 
 
 class TestSamplesDbfs:
-    """Task 01a0d4a0 stage 4 round 2: the energy gate. Dalton's moon run found
+    """Task 01a0d4a0 stage 4 round 2: the energy gate. Dalton's test-host run found
     the harness measured ~7ms median because it counted the agent's silent
     keepalive frames (sent every ~20ms regardless of speech) as "first audio".
     """

@@ -6,7 +6,7 @@ defmodule Platform.SignInAdmin.PocketId do
   Every request goes to `Platform.SignInAdmin.Config.url/0` and carries the
   install's static API key in `X-API-Key`. On pocket-id v2.18.0 that key maps
   to a synthetic admin user, and every `/api/users*` route accepts it
-  (verified live against `ghcr.io/pocket-id/pocket-id:v2.18.0` on moon:
+  (verified live against `ghcr.io/pocket-id/pocket-id:v2.18.0` on the test rig:
   200 with the key, 401 with a wrong one).
 
   `config :platform, :pocket_id_req_options` is merged into every request;

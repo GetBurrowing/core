@@ -460,7 +460,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       <%!-- pt-3 + .mobile-drawer-footer-safe (NOT py-3 + .safe-area-bottom):
            the safe-area utility REPLACES padding-bottom with the device
            inset, which is 0 on desktop — in a desktop PWA the window's
-           rounded corners then clip the label (Marlowe, 2026-07-05). The
+           rounded corners then clip the label (design review, 2026-07-05). The
            footer class adds the inset ON TOP of the normal padding. --%>
       <button
         phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
@@ -699,7 +699,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
            slot to the reorder chrome because edit mode is a mode and
            counts are browse chrome.
 
-           TASK ROWS STAY, and stay unarranged (Marlowe, 2026-08-12: "it's
+           TASK ROWS STAY, and stay unarranged (design review, 2026-08-12: "it's
            essentially two separate lists so makes me think to not
            commingle the interactions too much"). They render in the same
            list with the same glyph column and NO ▲▼ pair, so edit mode
@@ -1174,7 +1174,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
              would navigate + close the drawer, ejecting the user from
              the mode. Every row shows its ▲▼ pair persistently, the
              same convention as the section headers directly above them
-             (Marlowe a11y request 2026-07-09, reversing the July 6
+             (design a11y request 2026-07-09, reversing the July 6
              select-to-reveal decision: controls that hide until touched
              read as broken, and were reported as a bug twice in one
              review). The unread badge yields its right-edge slot to the

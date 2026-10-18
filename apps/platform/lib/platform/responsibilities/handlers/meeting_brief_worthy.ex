@@ -50,7 +50,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
     * the recipient decides what to create or change, and does it with
       its own tools.
 
-  Per Rowan's ruling on the classifier (task `019fb90f-36e3`): the
+  Per the operator's ruling on the classifier (task `019fb90f-36e3`): the
   classifier is a cheap model and is *"not to be trusted"* to pick the
   operation. Its only job is to notice that an utterance might be worth
   remembering. Nothing in this handler's output contract asks it to do
@@ -60,7 +60,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
 
   The key is `meetings.*` and the bundle is the **meeting scribe's**.
   They happen to agree here, unlike `meetings.visual_adjust` where the
-  designer owns a `meetings.*` key. Per Rowan (2026-07-31): the namespace
+  designer owns a `meetings.*` key. Per a product decision (2026-07-31): the namespace
   records where the work originates, the bundle records who does it.
   `Platform.Meetings.IntentRouting` carries both explicitly even when
   they coincide, so the pairing test checks ownership against

@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-29  
-**Author:** Harper Parker / Sage
+**Author:** a team member / Sage
 
 ---
 
@@ -15,7 +15,7 @@ Pixel (design agent) and Beacon (intake agent) need a structured handoff workflo
 ## Phase 2 — Design Ready Action Card
 
 ### Problem
-Pixel's handoff is a text message. Harper has to read it, reply with approval text, and Beacon has to parse that reply. There's no structured "Approve" action.
+Pixel's handoff is a text message. A team member has to read it, reply with approval text, and Beacon has to parse that reply. There's no structured "Approve" action.
 
 ### Proposed Solution
 Add a new message renderer in the chat UI for `action_card` message type. When a message contains a structured payload with `type: "action_card"`, the UI renders it with buttons.
@@ -40,7 +40,7 @@ Add a new message renderer in the chat UI for `action_card` message type. When a
 - `chat_live.ex` — parse message content for `action_card` type, render as card component
 - New `action_card_component.ex` — renders the card with buttons
 - `handle_event("design_approved", ...)` — broadcasts to Beacon's runtime with approval payload
-- `handle_event("design_changes_requested", ...)` — prompts Harper for notes, sends to Pixel
+- `handle_event("design_changes_requested", ...)` — prompts a team member for notes, sends to Pixel
 
 **Agent-side changes:**
 - Pixel uses a new tool `suite_post_action_card` to post structured cards
@@ -48,8 +48,8 @@ Add a new message renderer in the chat UI for `action_card` message type. When a
 
 ### Acceptance Criteria
 - [ ] Pixel can post a design card with Approve/Request Changes buttons
-- [ ] Clicking Approve notifies Beacon and confirms to Harper
-- [ ] Clicking Request Changes prompts Harper for notes and sends to Pixel
+- [ ] Clicking Approve notifies Beacon and confirms to a team member
+- [ ] Clicking Request Changes prompts a team member for notes and sends to Pixel
 - [ ] Card shows portal URL as a clickable link
 - [ ] Card status updates (DRAFT → APPROVED) after approval
 
@@ -58,10 +58,10 @@ Add a new message renderer in the chat UI for `action_card` message type. When a
 ## Phase 3 — Agent-to-Agent DM Channel
 
 ### Problem
-After approval, Pixel and Beacon need to have a back-and-forth conversation to clarify implementation details. This should happen out of the main channel to reduce noise. Harper should be able to observe but not be interrupted.
+After approval, Pixel and Beacon need to have a back-and-forth conversation to clarify implementation details. This should happen out of the main channel to reduce noise. A team member should be able to observe but not be interrupted.
 
 ### Proposed Solution
-When `design_approved` fires, Burrow automatically creates or reuses a DM space between the Pixel runtime and Beacon runtime. Their conversation happens there. Harper is added as a silent observer (presence without notification).
+When `design_approved` fires, Burrow automatically creates or reuses a DM space between the Pixel runtime and Beacon runtime. Their conversation happens there. A team member is added as a silent observer (presence without notification).
 
 **Burrow changes needed:**
 - `create_group_conversation/3` — extend to support agent-to-agent DMs (currently user-only)
@@ -76,7 +76,7 @@ When `design_approved` fires, Burrow automatically creates or reuses a DM space 
 
 ### Acceptance Criteria
 - [ ] Approval creates a DM space between Pixel and Beacon
-- [ ] Harper can view the DM space in Burrow but doesn't get notified for each message
+- [ ] a team member can view the DM space in Burrow but doesn't get notified for each message
 - [ ] Beacon creates a fully-specced task when the DM conversation resolves
 - [ ] Task link is posted back in the original channel
 - [ ] DM space is reused for the same agent pair (not a new one per design)

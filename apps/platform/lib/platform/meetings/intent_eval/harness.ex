@@ -82,6 +82,27 @@ defmodule Platform.Meetings.IntentEval.Harness do
   @doc "The outcome classes that are errors, not intents."
   def error_classes, do: @error_classes
 
+  @base_url_env "INTENT_EVAL_BASE_URL"
+
+  @doc """
+  The classifier endpoint a run contacts: the explicit override (`--base-url`)
+  first, then `INTENT_EVAL_BASE_URL` when it is set and not blank, then the
+  config's own `base_url`.
+  """
+  @spec resolve_base_url(String.t() | nil, String.t() | nil) :: String.t() | nil
+  def resolve_base_url(explicit, config_url) do
+    explicit || env_base_url() || config_url
+  end
+
+  @doc "`INTENT_EVAL_BASE_URL`, trimmed, or nil when unset or blank."
+  @spec env_base_url() :: String.t() | nil
+  def env_base_url do
+    case String.trim(System.get_env(@base_url_env) || "") do
+      "" -> nil
+      url -> url
+    end
+  end
+
   @doc "Directory holding the committed configs."
   def configs_dir(root), do: Path.join(root, "configs")
   def config_path(root, name), do: Path.join(configs_dir(root), "#{name}.json")
@@ -696,15 +717,16 @@ defmodule Platform.Meetings.IntentEval.Harness do
         opts_override: opts_override(config)
       })
 
-      # `--base-url` moves the NETWORK TARGET only; the config, the prompt and
-      # the cassette keys are untouched, so a recording made through an
-      # override replays byte-identically for everyone. It exists because the
-      # classifier is served on moon's host network and the dev container
-      # reaches the same llama-server as `host.containers.internal:8085`
-      # rather than as the LAN address the config names. The manifest records
-      # the host actually contacted AND the fact of the override, so a run is
-      # never quietly attributed to an endpoint it did not call.
-      base_url = Keyword.get(opts, :base_url) || config["base_url"]
+      # `--base-url` (then INTENT_EVAL_BASE_URL) moves the NETWORK TARGET
+      # only; the config, the prompt and the cassette keys are untouched, so a
+      # recording made through an override replays byte-identically for
+      # everyone. The configs ship `http://localhost:8085/v1`; where the
+      # classifier lives is the operator's, so it is given at run time (e.g.
+      # a dev container reaching the host's llama-server as
+      # `host.containers.internal:8085`). The manifest records the host
+      # actually contacted AND the fact of the override, so a run is never
+      # quietly attributed to an endpoint it did not call.
+      base_url = resolve_base_url(Keyword.get(opts, :base_url), config["base_url"])
 
       agent = %{
         base_url: base_url,

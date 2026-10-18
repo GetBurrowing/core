@@ -3,7 +3,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   The regression gate for moving the six shipped orgs onto the runtime
   colour path (task 01a09333-d374 stage 5).
 
-  Marlowe's ruling, 2026-09-13: "You can move the existing 6 org pills. Ensure
+  Robin's ruling, 2026-09-13: "You can move the existing 6 org pills. Ensure
   the move does not cause regressions for the existing systems, especially
   tasks in flight for projects like SXI." This file is what makes the move
   checkable. Everything here is asserted on the CSS the emitter actually
@@ -45,7 +45,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
 
   # Row slug -> the kebab fragment the painted fixture was measured under.
   @fixture_slug %{
-    "fabrikam" => "fabrikam",
+    "legacy" => "legacy",
     "soylent" => "soylent",
     "wayne_tech" => "wayne-tech",
     "sxi" => "sxi",
@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
 
   # The shipped fills and active-pill text, pasted from app.css at 98eb79ab.
   @shipped %{
-    "fabrikam" => %{fill: "oklch(72% 0.16 50)", active: "oklch(15% 0 0)"},
+    "legacy" => %{fill: "oklch(72% 0.16 50)", active: "oklch(15% 0 0)"},
     "soylent" => %{fill: "oklch(65% 0.20 295)", active: "oklch(98% 0 0)"},
     "wayne_tech" => %{fill: "oklch(68% 0.15 240)", active: "oklch(98% 0 0)"},
     "sxi" => %{fill: "oklch(70% 0.15 162)", active: "oklch(15% 0 0)"},
@@ -68,7 +68,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # The single label each org wore on BOTH surfaces before the move, as
   # app.css declared it at 98eb79ab: {light L, dark L}.
   @shipped_label_l %{
-    "fabrikam" => {55.0, 72.0},
+    "legacy" => {55.0, 72.0},
     "soylent" => {55.0, 67.0},
     "wayne_tech" => {52.0, 68.0},
     "sxi" => {51.0, 70.0},
@@ -81,7 +81,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # fill's in every slot (asserted below), so L is the whole of the change.
   #
   # Against the shipped single label:
-  #   * light base-100: fabrikam, paragon, cyberdyne unchanged; sxi one 0.5%
+  #   * light base-100: legacy, paragon, cyberdyne unchanged; sxi one 0.5%
   #     step DARKER (51 -> 50.5, it had no margin); soylent and wayne-tech one
   #     step LIGHTER (55 -> 55.5, 52 -> 52.5), because the solver walks down
   #     from the fill and stops at the first L that holds its margin.
@@ -90,7 +90,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   #   * dark base-200 (the rail): soylent 67 -> 65 and cyberdyne
   #     67.5 -> 66, both walking back to their fill; the rest unchanged.
   @label_l %{
-    "fabrikam" => {55.0, 52.5, 72.0, 72.0},
+    "legacy" => {55.0, 52.5, 72.0, 72.0},
     "soylent" => {55.5, 53.0, 67.0, 65.0},
     "wayne_tech" => {52.5, 49.5, 68.0, 68.0},
     "sxi" => {50.5, 48.0, 70.0, 70.0},
@@ -115,7 +115,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # All four still clear 4.5:1 against their own tint, so AA is what binds
   # and byte identity is not; the clause was written before the measurement
   # and is stale. sxi, the slug the constraint exists to protect, is the one
-  # cell that GAINS margin. Rowan Ellis approved the move with it
+  # cell that GAINS margin. Alex Rivera approved the move with it
   # disclosed in these words on 2026-09-23, review request
   # 01a0c74f-ab00-7001-9666-7ff46eb41f6a, item "What changes, your choices,
   # and one question":
@@ -167,7 +167,8 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # ── the emitted CSS, parsed ───────────────────────────────────────────
 
   defp entries do
-    for {slug, hue, chroma, lightness} <- migration().shipped(),
+    for {slug, hue, chroma, lightness} <-
+          Platform.Tenancy.HistoricalRootSlug.relabel(migration().shipped()),
         slug in @six do
       %{slug: slug, label: slug, hue: hue, chroma: chroma, lightness: lightness}
     end
@@ -199,7 +200,12 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   defp painted_hex(color), do: ScopeColor.composite_painted(color, 1.0, "#000000").hex
 
   defp hue_and_chroma(slug) do
-    {_, hue, chroma, _} = Enum.find(migration().shipped(), &(elem(&1, 0) == slug))
+    {_, hue, chroma, _} =
+      Enum.find(
+        Platform.Tenancy.HistoricalRootSlug.relabel(migration().shipped()),
+        &(elem(&1, 0) == slug)
+      )
+
     {hue, chroma}
   end
 
@@ -265,23 +271,29 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
         end)
       end
 
-      # An exact cell (fabrikam on base-100) moved one byte on red.
+      # An exact cell (legacy on base-100) moved one byte on red.
       assert {:red, _} =
-               gate(bump.(emitted, "fabrikam", "--scope-tint-100", fn {r, g, b} -> {r + 1, g, b} end))
+               gate(
+                 bump.(emitted, "legacy", "--scope-tint-100", fn {r, g, b} -> {r + 1, g, b} end)
+               )
 
-      # A named cell whose delta CLOSES (fabrikam on base-200 back to the painted
+      # A named cell whose delta CLOSES (legacy on base-200 back to the painted
       # red) and one whose delta GROWS (a second byte on blue): both red, so
       # the five deltas are pinned as values, not as "somewhere near".
       assert {:red, _} =
-               gate(bump.(emitted, "fabrikam", "--scope-tint-200", fn {r, g, b} -> {r - 1, g, b} end))
+               gate(
+                 bump.(emitted, "legacy", "--scope-tint-200", fn {r, g, b} -> {r - 1, g, b} end)
+               )
 
       assert {:red, _} =
-               gate(bump.(emitted, "fabrikam", "--scope-tint-200", fn {r, g, b} -> {r, g, b + 1} end))
+               gate(
+                 bump.(emitted, "legacy", "--scope-tint-200", fn {r, g, b} -> {r, g, b + 1} end)
+               )
 
       # A dark tint is outside the painted fixture, so it is NOT what this
       # gate watches; it is pinned below instead.
       assert gate(
-               update_in(emitted, [{"fabrikam", :dark}, "--scope-tint-100"], fn _ -> "#000000" end)
+               update_in(emitted, [{"legacy", :dark}, "--scope-tint-100"], fn _ -> "#000000" end)
              ) ==
                :ok
     end
@@ -384,7 +396,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
                  {"soylent", "light-100", 55.0, 55.5},
                  {"wayne_tech", "light-100", 52.0, 52.5},
                  # the rail, light: all six darker.
-                 {"fabrikam", "light-200", 55.0, 52.5},
+                 {"legacy", "light-200", 55.0, 52.5},
                  {"soylent", "light-200", 55.0, 53.0},
                  {"wayne_tech", "light-200", 52.0, 49.5},
                  {"sxi", "light-200", 51.0, 48.0},
@@ -596,7 +608,12 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   defp migration, do: Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs)
 
   defp lightness(slug) do
-    {_, _, _, lightness} = Enum.find(migration().shipped(), &(elem(&1, 0) == slug))
+    {_, _, _, lightness} =
+      Enum.find(
+        Platform.Tenancy.HistoricalRootSlug.relabel(migration().shipped()),
+        &(elem(&1, 0) == slug)
+      )
+
     lightness
   end
 

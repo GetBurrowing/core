@@ -122,8 +122,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateDispatchTemplatesDesignFidelityTes
              Enum.sort(@edited_slugs)
   end
 
-  # Measured read-only on both installs (fabrikam core-platform, ellis
-  # core-platform-milv), image revision 18c1f549, 2026-10-14.
+  # Measured read-only on both installs (legacy core-platform, rivera
+  # core-platform-beta), image revision 18c1f549, 2026-10-14.
   for {slug, measured} <- [
         {"dispatch.planning", "907e72e9a10990cfaaacad81025be5cd"},
         {"dispatch.in_progress", "9239973ef0a842177565e1b4eb40c491"},

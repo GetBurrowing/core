@@ -6,7 +6,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
 
   ## What each block is for
 
-    * **the twin** — `"Harper, can you write that up?"` (the e2e
+    * **the twin** — `"Blake, can you write that up?"` (the e2e
       reviewer's measured escape, which resolved onto Dalton) and
       `"Octavius file a ticket ..."` / `"Dalton file a ticket ..."`, a
       pair byte-identical but for the name. The pair is the whole point:
@@ -91,9 +91,9 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     test "the reviewer's measured escape is rejected" do
       # The exact row from e2e 01a05a10 at sha 6819cc15: classified
       # action_items / meeting_scribe / dalton at 0.9, stable 3/3.
-      assert {:off_roster, "Harper"} =
+      assert {:off_roster, "Blake"} =
                IntentAddressee.verdict(
-                 "Harper, can you write that up?",
+                 "Blake, can you write that up?",
                  "write that up",
                  @roster
                )
@@ -136,10 +136,10 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # The gate reads BOTH the utterance and the quote's leading
       # vocative. A quote that carries the address while the merged
       # chunk buries it must still be caught.
-      assert {:off_roster, "Harper"} =
+      assert {:off_roster, "Blake"} =
                IntentAddressee.verdict(
-                 "so anyway we should probably do that. Harper, can you write that up?",
-                 "Harper, can you write that up",
+                 "so anyway we should probably do that. Blake, can you write that up?",
+                 "Blake, can you write that up",
                  @roster
                )
     end
@@ -151,7 +151,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # suppressing them is the failure mode this gate is most likely
       # to have.
       for text <- [
-            "Capture that as an action item: Rowan sends the SXI contract by Friday.",
+            "Capture that as an action item: Alex sends the SXI contract by Friday.",
             "Log an action item for Chris to stand up the podcast control center.",
             "Put that in the brief — Orion is SXI's brand strategy platform.",
             "Record the decision: we're shipping Tuesday.",
@@ -170,7 +170,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
 
     test "a non-vocative person name inside the ask survives" do
-      # "Chris" and "Rowan" are people and are NOT on the roster, but
+      # "Chris" and "Alex" are people and are NOT on the roster, but
       # they are the SUBJECT of the action item, not its addressee. A
       # gate that fired on any off-roster name anywhere would kill
       # both, and both are labelled positives.
@@ -187,7 +187,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # name appearing in the block is addressable — see M2.
       for text <- [
             "Designer, make that primary button teal instead of the blue.",
-            "Scribe, take an action item: Rowan to send the SXI contract by Friday.",
+            "Scribe, take an action item: Alex to send the SXI contract by Friday.",
             "Historian, record the decision: we're shipping Tuesday.",
             "Triage, open question for someone: what happens to saved prompts?"
           ] do
@@ -228,7 +228,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # An UNKNOWN roster is not an empty one. Gating on nil would
       # suppress every addressed utterance in the system on the strength
       # of a missing argument.
-      assert :ok = IntentAddressee.verdict("Harper, can you write that up?", "", nil)
+      assert :ok = IntentAddressee.verdict("Blake, can you write that up?", "", nil)
     end
 
     test "an empty roster rejects every addressed ask" do
@@ -245,7 +245,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
   defmodule OffRosterProvider do
     @moduledoc false
     # The verbatim answer the deployed classifier gave for
-    # "Harper, can you write that up?" — action_items, meeting_scribe,
+    # "Blake, can you write that up?" — action_items, meeting_scribe,
     # 0.9, with a real verbatim citation. It passes the citation gate.
     def chat(_credentials, _messages, _opts) do
       {:ok,
@@ -351,7 +351,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
   end
 
   describe "decide/1 wiring" do
-    # RULING (task 01a08fde, 2026-09-11, Rowan: gate). Migration
+    # RULING (task 01a08fde, 2026-09-11, Alex: gate). Migration
     # 20260902140000 says an ask aimed at a person KEEPS its intent and
     # takes `target_role: null`; the gate now applies that rule instead
     # of demoting to off_topic. Every test in this block pins one half
@@ -361,7 +361,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # NOT a raise, NOT an {:error, _}: the classifier's failure
       # contract is a closed skeleton, and a new crash path here would
       # take the transcript subscription down.
-      assert {:ok, decision} = decide("Harper, can you write that up?", @roster)
+      assert {:ok, decision} = decide("Blake, can you write that up?", @roster)
 
       # The model's own answer survives ...
       assert decision.intent == "action_items"
@@ -380,7 +380,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # build_dedupe_key/3. A real nil here forks every historical
       # dedupe key. Commit d432067 pins it; this asserts the gate's
       # null path honours the same pin.
-      assert {:ok, %{target_role: "null"}} = decide("Harper, can you write that up?", @roster)
+      assert {:ok, %{target_role: "null"}} = decide("Blake, can you write that up?", @roster)
     end
 
     test "a gate-nulled row is distinguishable from the model's own null" do
@@ -389,7 +389,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # recording it, and the strongest claim this stage makes: the
       # gate's output differs from the model-null answer by exactly
       # that key.
-      {:ok, gated} = decide("Harper, can you write that up?", @roster)
+      {:ok, gated} = decide("Blake, can you write that up?", @roster)
       {:ok, model_null} = decide("Can somebody write that up?", @roster, ModelNullProvider)
 
       assert gated.intent == "action_items"
@@ -434,7 +434,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
                  provider_module: OffRosterProvider,
                  agent: %{base_url: "http://stub", model: "classifier", vault_key: nil},
                  prompt: "unused",
-                 chunk_text: "Harper, can you write that up?",
+                 chunk_text: "Blake, can you write that up?",
                  room_id: "addressee-test"
                })
     end
@@ -445,7 +445,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # the event names the role the gate threw away.
       attach_off_roster_telemetry!()
 
-      assert {:ok, _} = decide("Harper, can you write that up?", @roster)
+      assert {:ok, _} = decide("Blake, can you write that up?", @roster)
 
       assert_receive {:off_roster_addressee, %{count: 1}, meta}
       assert meta.intent == "action_items"
@@ -458,7 +458,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
 
     test "the on-roster twin fires no off_roster_addressee event" do
       # Anti-vacuity partner: a gate that nulled every addressed ask
-      # would pass the Harper case and fail here.
+      # would pass the Blake case and fail here.
       attach_off_roster_telemetry!()
 
       assert {:ok, %{target_role: "meeting_scribe"}} =
@@ -468,14 +468,14 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
 
     test "the demotion path no longer fires for an off-roster addressee" do
-      assert {:ok, decision} = decide("Harper, can you write that up?", @roster)
+      assert {:ok, decision} = decide("Blake, can you write that up?", @roster)
       assert is_nil(decision.demoted_from)
       assert is_nil(decision.demotion_reason)
 
       # Anti-vacuity: an uncited positive on the SAME call path still
       # comes back demoted, so this cannot pass because demotion is
       # broken globally.
-      assert {:ok, demoted} = decide("Harper, can you write that up?", @roster, UncitedProvider)
+      assert {:ok, demoted} = decide("Blake, can you write that up?", @roster, UncitedProvider)
       assert demoted.intent == "off_topic"
       assert demoted.demoted_from == "action_items"
       assert demoted.demotion_reason == :blank
@@ -485,13 +485,13 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     # Task 01a0919d. An off-roster ask whose model answer ALREADY routes to
     # nobody has nothing for the gate to rewrite: no marker, no event. The
     # OffRosterProvider tests above are the anti-vacuity partner — the
-    # same Harper chunk with a real role still gets both.
+    # same Blake chunk with a real role still gets both.
 
     test "an off-roster ask the model already routed to nobody (JSON null) is not marked or counted" do
       attach_off_roster_telemetry!()
 
       assert {:ok, decision} =
-               decide("Harper, can you write that up?", @roster, ModelNullProvider)
+               decide("Blake, can you write that up?", @roster, ModelNullProvider)
 
       assert decision.intent == "action_items"
       assert decision.target_role == "null"
@@ -507,7 +507,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       attach_off_roster_telemetry!()
 
       assert {:ok, decision} =
-               decide("Harper, can you write that up?", @roster, ModelNullStringProvider)
+               decide("Blake, can you write that up?", @roster, ModelNullStringProvider)
 
       assert decision.intent == "action_items"
       assert decision.target_role == "null"
@@ -520,7 +520,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
     end
 
     test "a model-null answer to an off-roster ask equals the model-null answer to an unaddressed ask" do
-      {:ok, off_roster} = decide("Harper, can you write that up?", @roster, ModelNullProvider)
+      {:ok, off_roster} = decide("Blake, can you write that up?", @roster, ModelNullProvider)
       {:ok, unaddressed} = decide("Can somebody write that up?", @roster, ModelNullProvider)
 
       assert off_roster == unaddressed

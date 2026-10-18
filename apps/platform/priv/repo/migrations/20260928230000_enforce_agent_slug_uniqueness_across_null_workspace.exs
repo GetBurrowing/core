@@ -11,12 +11,12 @@ defmodule Platform.Repo.Migrations.EnforceAgentSlugUniquenessAcrossNullWorkspace
 
   with no `nulls_distinct:` option, so Postgres built it `NULLS DISTINCT` (the
   default): the conflict check is skipped for any row whose `workspace_id` is
-  NULL. Measured read-only on 2026-09-28 against the four Suite installs on moon
-  (`core_platform` = prod, `milv_platform`, `milvlife_platform`,
+  NULL. Measured read-only on 2026-09-28 against the four Suite installs on the production host
+  (`core_platform` = prod, `installb_platform`, `installc_platform`,
   `core_platform_exp`; server 16.15):
 
-    * every agent row has `workspace_id IS NULL` (prod 22 of 22, milv 1 of 1,
-      milvlife 1 of 1, exp has no rows);
+    * every agent row has `workspace_id IS NULL` (prod 22 of 22, install B 1 of 1,
+      install C 1 of 1, exp has no rows);
     * `pg_indexes` shows the plain `(workspace_id, slug)` unique index;
     * the NULL-aware `SELECT slug, count(*) FROM agents GROUP BY slug
       HAVING count(*) > 1` returned zero rows on all four.

@@ -830,7 +830,7 @@ defmodule PlatformWeb.RuntimeChannel do
   # an otherwise-valid record: null the offending field, keep the event.
   #
   # Observed live: `space_id: "higgins"` (a slug) from runtime
-  # `rowan-home-openclaw`. Before this, that payload raised inside
+  # `home-openclaw`. Before this, that payload raised inside
   # `Repo.insert` and killed the channel process.
   #
   # The Logger.warning is load-bearing. Nulling a value the client supplied

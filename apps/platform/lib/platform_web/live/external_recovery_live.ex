@@ -4,7 +4,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   awaiting setup, with a one-click Grant that live-applies to the waiting
   session (rbac-external-users M3 stage 4, task 019f8837).
 
-  This is the ADMIN half of Rowan's live-recovery centerpiece: an external
+  This is the ADMIN half of the operator's live-recovery centerpiece: an external
   user who logged in without a pre-staged grant sits on the M3 holding
   landing (`/welcome`); here an admin grants them (target org + channel(s) +
   per-org DM allowlist) and `Platform.Accounts.ExternalAdmission.recover/3`

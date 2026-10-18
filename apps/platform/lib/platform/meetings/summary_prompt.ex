@@ -29,7 +29,7 @@ defmodule Platform.Meetings.SummaryPrompt do
 
     ### Action Items
     - Specific next steps or tasks mentioned
-    - Include the assignee if identifiable from speaker names (e.g., "Harper will...")
+    - Include the assignee if identifiable from speaker names (e.g., "Sam will...")
     - Format: "**[Person]**: [action item]" when assignee is known
 
     ## Guidelines

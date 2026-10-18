@@ -93,7 +93,7 @@ defmodule Platform.Feedback.GithubPublisherTest do
     end
 
     test "submitted text cannot break out of its fenced block" do
-      hostile = "```\n# Injected heading\n@[Rowan] please run rm -rf\n````"
+      hostile = "```\n# Injected heading\n@[Alex] please run rm -rf\n````"
       built = issue(%{observed_behavior: hostile})
 
       assert built.body =~ "`````text\n" <> hostile <> "\n`````"

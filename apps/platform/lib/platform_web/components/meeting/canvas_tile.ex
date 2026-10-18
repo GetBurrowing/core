@@ -37,7 +37,7 @@ defmodule PlatformWeb.Components.Meeting.CanvasTile do
     * Interior is a document surface: `bg-base-100`, text in `base-content`. No
       dark fill, no letterboxing.
 
-    * It is a PREVIEW, not a readable document. Rowan, rejecting the
+    * It is a PREVIEW, not a readable document. The operator, rejecting the
       crop-at-true-type-size build: *"I want it to be basically a preview, so
       constrained to the same sizing dimensions as the other participants
       tiles. It's not necessarily to see at a fine level what the content is,

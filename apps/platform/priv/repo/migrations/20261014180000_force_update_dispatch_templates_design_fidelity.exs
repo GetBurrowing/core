@@ -35,7 +35,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateDispatchTemplatesDesignFidelity do
   Slugs with no row are skipped: `seed_defaults/0` owns first boot.
 
   Measured read-only on 2026-10-14 against image revision 18c1f549, on both
-  installs (fabrikam `core-platform`, ellis `core-platform-milv`):
+  installs (install A `core-platform`, install B `core-platform-b`):
 
   - `dispatch.planning`: `907e72e9a10990cfaaacad81025be5cd` on both, equal to
     the descriptor on main 18c1f549. No experiment targets the slug on either

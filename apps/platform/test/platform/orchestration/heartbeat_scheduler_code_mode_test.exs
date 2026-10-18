@@ -9,7 +9,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
 
   `@pre_change` holds the sha256 and byte size of each render of the
   fixture task below, measured at bbc9a4d32 (the commit BEFORE this stage)
-  by a throwaway probe on the moon rig. They are NOT re-rendered here: a
+  by a throwaway probe on the test-host rig. They are NOT re-rendered here: a
   non-cohort agent's render under a running code_mode experiment must equal
   what the code produced before the surface existed.
   """
@@ -43,7 +43,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # rename of the federation preamble: "Suite" -> "Burrow" twice): +2 bytes,
     # exactly the descriptor's 13_506 -> 13_508. Every phase renders the
     # preamble once, so in_progress and in_review move by the same +2.
-    planning: {"beec859da98f613c93f9df2b26fb536d40611c0c501c2ed9f5d8558c2952a379", 29_568},
+    #
+    # Repinned by task 01a14b9e-c802 stage 3 (install-neutral copy), over
+    # A2's pin: -381 bytes, exactly the CI-evidence section's rig sentence
+    # (-239) plus the federation preamble's infra and test-rig sentences
+    # (-142 against A2's preamble), computed from the source before the run.
+    # Measured on the test rig at fb3332ff.
+    planning: {"c9383577d00e4311684faf89f94c7d0cd48afd4f4fb810f24ae6f29249c31c52", 29_187},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.
@@ -54,10 +60,16 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     #
     # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
     # preamble): +2 bytes, as for planning.
-    in_progress: {"b2c2bf0dba6439c7011c7a2f834c99f66f0c023ba74128871a4baa1a19982460", 17_264},
+    #
+    # Repinned by task 01a14b9e-c802 stage 3: -142 bytes, the preamble's two
+    # neutral sentences, as for planning (predicted, then measured at 42e6c6ee).
+    in_progress: {"9789faf4015fcea775eea45039746aec6f0e441c5521b5fe25cecf6d538ab942", 17_122},
     # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
     # preamble): +2 bytes, as for planning.
-    in_review: {"ac0cd2b4dc9319f22dbc7a02a13cc4080768a131d608db541624f658b531a933", 19_142}
+    #
+    # Repinned by task 01a14b9e-c802 stage 3: -142 bytes, the preamble's two
+    # neutral sentences, as for planning (predicted, then measured at the wip tip).
+    in_review: {"82c7b2bb69de50fcbefa02e05cbce681d0ce1f48f52ceb1055000abeb9a2923a", 19_000}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>

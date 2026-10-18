@@ -76,22 +76,22 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
   describe "page_edit" do
     test "Apply edit rewrites the cited page", %{member: member} do
-      {key, page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
       assert insight.tier == "reversible"
 
       assert {:ok, %Insight{state: "done"} = acted} = Insights.act(insight, scope(member))
 
       written = Wiki.get_page(key)
-      refute written.content =~ "go to hive"
-      assert written.content == "Deploys go to moon every night."
+      refute written.content =~ "go to host-a"
+      assert written.content == "Deploys go to host-b every night."
       assert written.version == page.version + 1
       assert written.updated_by == member.id
 
       assert acted.acted_by == member.id
       assert acted.artefact_ref == "page:#{key}@v#{written.version}"
 
-      assert %{"content" => "Deploys go to hive every night.", "version" => v} =
+      assert %{"content" => "Deploys go to host-a every night.", "version" => v} =
                Repo.get!(Insight, insight.id).pre_image
 
       assert v == page.version
@@ -102,11 +102,11 @@ defmodule Platform.Memory.Insights.ActionsTest do
     end
 
     test "a stale hunk refuses and leaves the page untouched", %{member: member} do
-      {key, _page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, _page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
 
       # Someone edits the page after the insight was written.
-      {:ok, _} = Wiki.upsert_page(key, %{content: "Deploys go to rock every night."})
+      {:ok, _} = Wiki.upsert_page(key, %{content: "Deploys go to host-c every night."})
       before = page_state(key)
 
       assert {:error, :stale} = Insights.act(insight, scope(member))
@@ -114,16 +114,16 @@ defmodule Platform.Memory.Insights.ActionsTest do
       assert %Insight{state: "open", pre_image: nil} = Repo.get!(Insight, insight.id)
 
       # An ambiguous hunk (the old text occurs twice) is stale too.
-      {key2, _} = page!("hive, then hive again", member)
-      twice = ingest!(edit_block(key2, "hive", "moon"))
+      {key2, _} = page!("host-a, then host-a again", member)
+      twice = ingest!(edit_block(key2, "host-a", "host-b"))
       before2 = page_state(key2)
       assert {:error, :stale} = Insights.act(twice, scope(member))
       assert page_state(key2) == before2
     end
 
     test "a user without memory.write on the key is refused", %{org: org, member: member} do
-      {key, _page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, _page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
 
       denied = member!(org)
 
@@ -137,20 +137,20 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
       # Control: a member without the deny applies the same insight.
       assert {:ok, %Insight{state: "done"}} = Insights.act(insight, scope(member))
-      assert Wiki.get_page(key).content == "Deploys go to moon every night."
+      assert Wiki.get_page(key).content == "Deploys go to host-b every night."
     end
 
     test "revert restores the pre-image while the insight lives", %{member: member} do
-      {key, page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
       {:ok, acted} = Insights.act(insight, scope(member))
-      assert Wiki.get_page(key).content == "Deploys go to moon every night."
+      assert Wiki.get_page(key).content == "Deploys go to host-b every night."
 
       assert {:ok, %Insight{state: "open", pre_image: nil, artefact_ref: nil}} =
                Insights.revert(acted, scope(member))
 
       restored = Wiki.get_page(key)
-      assert restored.content == "Deploys go to hive every night."
+      assert restored.content == "Deploys go to host-a every night."
       # A revert is a new version, not a rewind: there is no revision table.
       assert restored.version == page.version + 2
 
@@ -163,10 +163,10 @@ defmodule Platform.Memory.Insights.ActionsTest do
     end
 
     test "revert refuses when the page moved on after the act", %{member: member} do
-      {key, _page} = page!("Deploys go to hive every night.", member)
+      {key, _page} = page!("Deploys go to host-a every night.", member)
 
       {:ok, acted} =
-        Insights.act(ingest!(edit_block(key, "go to hive", "go to moon")), scope(member))
+        Insights.act(ingest!(edit_block(key, "go to host-a", "go to host-b")), scope(member))
 
       {:ok, _} = Wiki.upsert_page(key, %{content: "rewritten by hand"})
       before = page_state(key)
@@ -339,12 +339,12 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
   describe "edit" do
     test "edit replaces the hunks and re-runs the tier", %{member: member} do
-      {key, _page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, _page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
 
       {:ok, edited} =
         Insights.edit(insight, scope(member), %{
-          "hunks" => [%{"old" => "Deploys go to hive every night.", "new" => ""}]
+          "hunks" => [%{"old" => "Deploys go to host-a every night.", "new" => ""}]
         })
 
       assert edited.tier == "needs_call"
@@ -352,12 +352,12 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
       {:ok, edited} =
         Insights.edit(edited, scope(root_admin!()), %{
-          "hunks" => [%{"old" => "go to hive", "new" => "go to rock"}]
+          "hunks" => [%{"old" => "go to host-a", "new" => "go to host-c"}]
         })
 
       assert edited.tier == "reversible"
       assert {:ok, _} = Insights.act(edited, scope(member))
-      assert Wiki.get_page(key).content == "Deploys go to rock every night."
+      assert Wiki.get_page(key).content == "Deploys go to host-c every night."
     end
   end
 
@@ -385,8 +385,8 @@ defmodule Platform.Memory.Insights.ActionsTest do
     end
 
     test "a page_edit act broadcasts :acted after its transaction commits", %{member: member} do
-      {key, _page} = page!("Deploys go to hive every night.", member)
-      insight = ingest!(edit_block(key, "go to hive", "go to moon"))
+      {key, _page} = page!("Deploys go to host-a every night.", member)
+      insight = ingest!(edit_block(key, "go to host-a", "go to host-b"))
       capture_broadcasts!(insight.id)
 
       assert {:ok, %Insight{state: "done"}} = Insights.act(insight, scope(member))

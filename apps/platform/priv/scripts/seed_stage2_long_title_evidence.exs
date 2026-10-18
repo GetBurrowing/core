@@ -29,7 +29,7 @@ slug = "stage2-evidence-#{System.unique_integer([:positive])}"
     stack_id: stack.id,
     stack_position: 1,
     title:
-      "Reconcile the federated dead-letter buffer replay path with the presence-subscribe confidentiality fence before the next moon deploy window",
+      "Reconcile the federated dead-letter buffer replay path with the presence-subscribe confidentiality fence before the next prod deploy window",
     status: "in_review",
     priority: "medium"
   })

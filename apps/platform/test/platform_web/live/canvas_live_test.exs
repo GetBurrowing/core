@@ -275,7 +275,7 @@ defmodule PlatformWeb.CanvasLiveTest do
 
   # ── The way out ───────────────────────────────────────────────────────────
   #
-  # Added after stage 4 on Marlowe's call: the design direction specified the
+  # Added after stage 4 on Robin's call: the design direction specified the
   # bar's contents and omitted an exit, so a pasted link opened in a fresh tab
   # had no back history and nowhere to go.
 
@@ -567,7 +567,7 @@ defmodule PlatformWeb.CanvasLiveTest do
       # The denial page must not be walkable as a directory of spaces.
       place = element_html(view, "canvas-forbidden-place")
       assert place =~ "a private space"
-      refute place =~ ~r/fabrikam/i
+      assert Platform.Regression.InstallIdentityScanner.hits(place) == []
       refute place =~ space.name
       refute place =~ org.name
     end

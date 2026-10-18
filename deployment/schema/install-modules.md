@@ -17,7 +17,7 @@ CI publishes one image per supported module set (`.github/workflows/ci.yml`,
 | `play` | `apps/suite_release/Dockerfile` | `play` | `play-<sha>`, `play-<short_sha>` |
 
 `latest`, `<sha>` and `<short_sha>` are the **with-Play** image. They stay on
-that image only so that the three hand-maintained moon installs keep their
+that image only so that the three hand-maintained test-host installs keep their
 behaviour until they are repointed (below). Do not point a new install at
 `latest`: it names a flavour by accident of history, not by choice.
 
@@ -55,18 +55,18 @@ tag listed there.
    the module gets the module's migrations then, even though their versions are
    older than core's newest (ADR 0055 § 6). No manual SQL, no flag and no
    second step. `scripts/module-enable-later-rig.sh enable-later` proves this
-   on moon against the real images.
+   on test-host against the real images.
 
 **Removing a module** is the same edit in reverse (`modules = []`, which
 renders `suite-core:core`). Its tables and its `play` bundle grants stay in the
 database untouched (ADR 0055 § 6, § 7), so enabling it again later loses
 nothing.
 
-## The hand-maintained moon installs
+## The hand-maintained test-host installs
 
-Fabrikam (`core-platform`), Milhouse (`core-platform-milv`) and Red Star
-(`core-platform-milvlife`) are not rendered from a manifest. Each one's
-quadlet in core-ops (`~/.config/containers/systemd/<name>.container` on moon)
+Install A (`core-platform`), Install B (`core-platform-b`) and Install C
+(`core-platform-c`) are not rendered from a manifest. Each one's
+quadlet in core-ops (`~/.config/containers/systemd/<name>.container` on test-host)
 has an `Image=` line, and that line is the module selection:
 
 ```ini
@@ -79,10 +79,10 @@ Change it, then `systemctl --user daemon-reload` and restart the unit. With
 quadlet before changing it: an install's current behaviour on `latest`
 depends on whether it sets `GAME_STREAM_ENABLED`.
 
-Measured 2026-10-02 (read-only): all three pull `suite-core:latest`. Fabrikam sets
-`GAME_STREAM_ENABLED=true`, while Milhouse and Red Star leave it unset. ADR 0055
-§ 9 records the repoint that keeps each one's behaviour: Fabrikam to `play`, and
-Milhouse and Red Star to `core`.
+Measured 2026-10-02 (read-only): all three pull `suite-core:latest`. Install A sets
+`GAME_STREAM_ENABLED=true`, while Install B and Install C leave it unset. ADR 0055
+§ 9 records the repoint that keeps each one's behaviour: Install A to `play`, and
+Install B and Install C to `core`.
 
 ## The transitional gate
 

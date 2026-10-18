@@ -127,6 +127,10 @@ SCHEMA = {
         "secret_key_ref": _str(),
     },
     "images": {
+        # REQUIRED, no default (task 01a14b9e): the Docker Hub namespace the
+        # suite-* images are pulled from (docker.io/<image_namespace>/...).
+        # A default would name one publisher.
+        "image_namespace": _str(),
         "source": _enum(IMAGE_SOURCES, "registry"),
         "refs": {container: _str() for container in registry.ALL_CONTAINERS},
     },

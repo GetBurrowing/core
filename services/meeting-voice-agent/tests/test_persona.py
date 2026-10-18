@@ -1,7 +1,7 @@
 """Unit tests for MeetingVoiceAgent's space_id instruction wiring
 (task 01a0d4a0 stage 5 item 3).
 
-Dalton's live moon run found the model taking three tool-call attempts and
+Dalton's live test-host run found the model taking three tool-call attempts and
 9.1s to successfully call `space_get_context`, because nothing told it its
 own space_id and every space-scoped tool requires that parameter. These
 tests pin that `space_id`, when given, is stated directly in the agent's

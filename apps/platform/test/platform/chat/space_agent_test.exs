@@ -310,7 +310,7 @@ defmodule Platform.Chat.SpaceAgentTest do
                "the dot is hardcoded"
     end
 
-    # The regression Rowan reported: never-linked agents used to be :error, and
+    # The regression Alex reported: never-linked agents used to be :error, and
     # :error absorbed the fold, so the meter was permanently red.
     test "absent agents are counted in the denominator and are NOT an error" do
       result = SpaceAgentPresence.composite([:active, :absent, :absent])

@@ -23,7 +23,7 @@ config :platform, Platform.Repo,
   # (elixir `lib/ex_unit/lib/ex_unit.ex:348` docs — "defaults to
   # `System.schedulers_online * 2`" — and the `defp put_max_cases/1`
   # fallback) and this repo does not override it (test/test_helper.exs), so
-  # the moon rig (16 schedulers) runs 32 tests in parallel. EVERY test holds
+  # the test rig (16 schedulers) runs 32 tests in parallel. EVERY test holds
   # ONE pool connection for its whole lifetime (`Sandbox.start_owner!` in
   # test/support/data_case.ex:42 and test/support/conn_case.ex:61), so a
   # pool below max_cases starves the surplus owners and DBConnection's

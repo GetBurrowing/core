@@ -152,6 +152,25 @@ class InitAndStatusTest(Base):
         self.assertEqual(doc["changed"], ["services.meetings"])
         self.assertFalse(load(os.path.join(self.dir, "install.toml"))["services"]["meetings"])
 
+    def test_init_image_namespace_flag_sets_the_required_input(self):
+        # Task 01a14b9e: images.image_namespace has no default; init sets it.
+        self.init(MAC)
+        doc = self.init(MAC, "--image-namespace", "acme-images")
+        self.assertEqual(doc["changed"], ["images.image_namespace"])
+        m = load(os.path.join(self.dir, "install.toml"))
+        self.assertEqual(m["images"]["image_namespace"], "acme-images")
+
+    def test_init_refuses_a_manifest_without_an_image_namespace(self):
+        raw = load(MAC_LITE)
+        del raw["images"]["image_namespace"]
+        source = os.path.join(self.tmp, "no-ns.toml")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write(dumps_toml(raw))
+        code, doc, _ = run_cli(self.env, "init", "--from", source, "--dir", self.dir)
+        self.assertEqual((code, doc["error_code"]), (2, "manifest_invalid"), doc)
+        self.assertIn("missing_required at images.image_namespace", doc["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "install.toml")))
+
     def test_install_dir_inside_git_tree_is_refused(self):
         repo = os.path.join(self.tmp, "repo")
         os.makedirs(os.path.join(repo, ".git"))
@@ -260,7 +279,7 @@ class RenderIdempotenceTest(Base):
 class InstallDockerConfigTest(RenderIdempotenceTest):
     """The install's DOCKER_CONFIG keeps the credential AND the compose plugin.
 
-    rock, 2026-10-05: OrbStack puts docker-compose only in
+    lab-host, 2026-10-05: OrbStack puts docker-compose only in
     ~/.docker/cli-plugins, so a DOCKER_CONFIG holding just the credential
     lost `docker compose` and `up` failed ("unknown flag: --project-directory").
     """

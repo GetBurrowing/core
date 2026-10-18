@@ -13,7 +13,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
     * Every assertion is scoped to ONE element via a CSS selector and
       `render/1` on that element. A whole-page `=~` is not a presence check —
       the conversation's name appears in the row, in the desktop rail, and in
-      the page title, so `html =~ "Rowan Ellis"` is green before this
+      the page title, so `html =~ "Alex Rivera"` is green before this
       feature exists.
     * The two load-bearing tests read PERSISTED state back
       (`Sidebar.list_pinned_space_ids/1`, `Accounts.get_hidden_channel_ids/1`)
@@ -177,7 +177,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
     test "renders on a channel row and on a DM row in normal mode", %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       view = open_drawer(conn)
 
@@ -186,7 +186,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       assert has_element?(view, "#mobile-channel-browser", "Gen-migration"),
              "the channel never rendered in the drawer; every row assertion below would be vacuous"
 
-      assert has_element?(view, "#mobile-channel-browser", "Rowan Ellis"),
+      assert has_element?(view, "#mobile-channel-browser", "Alex Rivera"),
              "the DM never rendered in the drawer; every row assertion below would be vacuous"
 
       assert has_element?(view, control_selector(channel.id)),
@@ -252,12 +252,12 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       # already shipped twice on these surfaces.
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       view = open_drawer(conn)
       label = view |> markup(control_selector(dm.id)) |> attr("aria-label")
 
-      assert label == "More actions for Rowan Ellis",
+      assert label == "More actions for Alex Rivera",
              "accessible name #{inspect(label)} does not name the conversation; twenty identical More controls are indistinguishable"
     end
 
@@ -281,12 +281,12 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       # in the header there is a menu on screen naming nothing.
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       view = conn |> open_drawer() |> open_sheet(dm.id)
       title = view |> markup(@sheet_title) |> visible_text()
 
-      assert title == "Rowan Ellis",
+      assert title == "Alex Rivera",
              "sheet header reads #{inspect(title)}; a DM has no name field and this is where it renders empty"
     end
 
@@ -377,7 +377,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
     test "persists a DM pin too", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       view = conn |> open_drawer() |> open_sheet(dm.id)
       view |> element(@sheet_pin) |> render_click()
@@ -416,7 +416,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
 
   # ── 5b. The DRAWER's unpin path (task 019fe987) ─────────────────────────
   #
-  # Marlowe, 2026-08-12, reviewing the desktop rail: "remember to add a way for
+  # Robin, 2026-08-12, reviewing the desktop rail: "remember to add a way for
   # user to unpin just like how pinned tasks have an \'x\' to unpin". The rail
   # answered by forking the row control's GLYPH on state: a pinned row wears
   # `hero-x-mark` instead of the `hero-map-pin` that pointed the wrong way.
@@ -441,11 +441,11 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       #
       # The aria-label EXTENDS the visible "Unpin conversation" rather than
       # replacing it: WCAG 2.5.3 requires the accessible name to contain the
-      # visible label, so a bare "Unpin Rowan Ellis" would break speech
+      # visible label, so a bare "Unpin Alex Rivera" would break speech
       # input on a control that reads "Unpin conversation".
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       assert Sidebar.list_pinned_space_ids(user.id) == [dm.id],
@@ -455,7 +455,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       pin = view |> markup(@sheet_pin)
 
       assert visible_text(pin) == "Unpin conversation"
-      assert attr(pin, "aria-label") == "Unpin conversation Rowan Ellis"
+      assert attr(pin, "aria-label") == "Unpin conversation Alex Rivera"
     end
 
     test "names the target on an unpinned row too", %{conn: conn} do
@@ -476,7 +476,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
       # nothing re-renders a perfectly good drawer.
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       view = conn |> open_drawer()
@@ -560,7 +560,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
 
   describe "breakpoint" do
     test "the sheet root is gated to below lg", %{conn: conn} do
-      # Marlowe reported the bottom-sheet component rendering on desktop at all
+      # Robin reported the bottom-sheet component rendering on desktop at all
       # widths on 2026-07-12; the design system scopes sheets to mobile. This
       # is the DOM-observable half of that rule — the rendered geometry is
       # covered by the screenshot evidence, not by this test.

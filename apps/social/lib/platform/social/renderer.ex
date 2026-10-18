@@ -5,7 +5,7 @@ defmodule Platform.Social.Renderer do
 
   The implementation is chosen ONLY by `config :social, :renderer` (default
   `Platform.Social.Renderer.Ffmpeg`; tests use `Platform.Social.Renderer.Fake`),
-  read on every call. Harper has not chosen between self-hosted OpenShorts
+  read on every call. The product lead has not chosen between self-hosted OpenShorts
   and hosted Vizard; either drops in later as another module implementing
   this behaviour, with no change to the queue that calls it.
 

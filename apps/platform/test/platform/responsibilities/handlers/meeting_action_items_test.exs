@@ -65,7 +65,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
           space_id: unique_id(),
           segments: [
             %{
-              "speaker_name" => "Harper",
+              "speaker_name" => "Sam",
               "text" => "Hello",
               "start_time" => 0,
               "end_time" => 1000,
@@ -759,7 +759,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
           canvases: [%{id: "c-1", title: "Action Items", kind: "checklist"}],
           missing?: false
         },
-        org_identity: %{content: "Ellis ships Startup Suite", missing?: false}
+        org_identity: %{content: "Rivera ships Startup Suite", missing?: false}
       }
 
       {result, log} = with_log(fn -> MeetingActionItems.build_prompt(ctx) end)
@@ -782,7 +782,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
       assert system =~ "Ship the adapter fix"
       assert system =~ "we still owe the audit"
       assert system =~ "Action Items"
-      assert system =~ "Ellis ships Startup Suite"
+      assert system =~ "Rivera ships Startup Suite"
     end
 
     test "the fallback asks for judgement, not for a JSON schema" do

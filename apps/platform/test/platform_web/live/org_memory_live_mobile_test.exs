@@ -260,7 +260,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
 
     test "the mobile reject form is id-prefixed and needs a reason", %{conn: conn} do
       seed_pages!()
-      insight = Platform.InsightFixtures.insight!(body: "Deploys moved to moon.")
+      insight = Platform.InsightFixtures.insight!(body: "Deploys moved to host-b.")
 
       {:ok, view, _html} = live(authed(conn), "/memory/insights")
 

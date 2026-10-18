@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08-18
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Supersedes:** ADR 0025 (Task Router and Execution Orchestration) — dispatch-trigger and ack-liveness sections only
 **Related:** ADR 0025, ADR 0011 (Execution Runners), ADR 0018 (Tasks Persistent Model and Plan Engine)
 

@@ -314,7 +314,7 @@ defmodule Platform.Responsibilities.PromptTemplateAuditTest do
       assert :binary.match(report, "a.key") < :binary.match(report, "b.key")
 
       # Every trigger value is separated from the slug beside it. Measured
-      # on moon at 3ab3b019 before this was pinned: a 12-wide TRIGGER column
+      # on test-host at 3ab3b019 before this was pinned: a 12-wide TRIGGER column
       # rendered `chat_patterndesign.brand_check.v1`, because `chat_pattern`
       # is exactly 12 characters. The widest real trigger value is the one
       # that breaks a column sized to fit it.

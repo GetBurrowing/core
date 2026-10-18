@@ -48,7 +48,7 @@ final class MessagingTests: XCTestCase {
     private func generalInTwoOrgs(host: String) -> Data {
         json(
             #"{"spaces":["#
-                + #"{"id":"g1","name":"general","kind":"channel","path_segment":"g1","agents":[],"org":{"id":"o1","name":"Fabrikam"}},"#
+                + #"{"id":"g1","name":"general","kind":"channel","path_segment":"g1","agents":[],"org":{"id":"o1","name":"Legacy"}},"#
                 + #"{"id":"g2","name":"general","kind":"channel","path_segment":"g2","agents":[],"org":{"id":"o2","name":"Red Star"}},"#
                 + #"{"id":"d1","name":"Dalton","kind":"dm","path_segment":"d1","agents":[],"org":null}]}"#)
     }
@@ -58,7 +58,7 @@ final class MessagingTests: XCTestCase {
     func testSpacesDecodeOrgAndToleratesAnOlderServerWithout() throws {
         struct Body: Decodable { let spaces: [SuiteSpace] }
         let new = try JSONDecoder().decode(Body.self, from: generalInTwoOrgs(host: a)).spaces
-        XCTAssertEqual(new.map { $0.org?.name }, ["Fabrikam", "Red Star", nil])
+        XCTAssertEqual(new.map { $0.org?.name }, ["Legacy", "Red Star", nil])
 
         let old = try JSONDecoder().decode(Body.self, from: json(#"{"spaces":[{"id":"s","name":"general","agents":[]}]}"#)).spaces
         XCTAssertNil(old[0].org)
@@ -72,10 +72,10 @@ final class MessagingTests: XCTestCase {
         StubURLProtocol.respond = { request in
             switch (request.httpMethod ?? "", request.url?.path ?? "") {
             case ("GET", "/api/app/people"):
-                return (200, self.json(#"{"people":[{"id":"p","kind":"user","name":"Priya","org_names":["Fabrikam"],"dm_space_id":null}]}"#))
+                return (200, self.json(#"{"people":[{"id":"p","kind":"user","name":"Priya","org_names":["Legacy"],"dm_space_id":null}]}"#))
             case ("POST", "/api/app/people/p/dm"): return (200, self.json(#"{"space_id":"d","path_segment":"d"}"#))
             case ("GET", "/api/app/projects"):
-                return (200, self.json(#"{"projects":[{"id":"pr","name":"Burrow","org":{"id":"o","name":"Fabrikam"}}],"last_meeting_project_id":null}"#))
+                return (200, self.json(#"{"projects":[{"id":"pr","name":"Burrow","org":{"id":"o","name":"Legacy"}}],"last_meeting_project_id":null}"#))
             case ("PATCH", _): return (409, self.json(#"{"error":"frozen","by":"Dalton"}"#))
             case ("DELETE", _): return (204, Data())
             case ("POST", "/api/app/spaces/s/read"): return (422, self.json(#"{"error":"not_supported"}"#))
@@ -84,13 +84,13 @@ final class MessagingTests: XCTestCase {
             }
         }
         let people = try await client.people(host: a, query: "Pri ya")
-        XCTAssertEqual(people, [SuitePerson(id: "p", kind: "user", name: "Priya", orgNames: ["Fabrikam"])])
+        XCTAssertEqual(people, [SuitePerson(id: "p", kind: "user", name: "Priya", orgNames: ["Legacy"])])
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.query, "q=Pri%20ya")
         let dm = try await client.personDM(host: a, userID: "p")
         XCTAssertEqual(dm.spaceID, "d")
         let projects = try await client.projects(host: a)
         XCTAssertNil(projects.lastMeetingProjectID)
-        XCTAssertEqual(projects.projects.first?.org?.name, "Fabrikam")
+        XCTAssertEqual(projects.projects.first?.org?.name, "Legacy")
         let edit = try await client.editMessage(host: a, messageID: "m", text: "x")
         XCTAssertEqual(edit, .frozen(by: "Dalton"))
         try await client.unsendMessage(host: a, messageID: "m")
@@ -112,7 +112,7 @@ final class MessagingTests: XCTestCase {
         await assertThrowsAsync(
             try await actions.send(to: .person(id: "\(self.a)|\(self.agentID)", name: "Helper", isAgent: true), text: "Hi", confirm: decline))
         await assertThrowsAsync(
-            try await actions.send(to: .conversation(id: "\(self.a)|\(self.spaceID)", name: "general · Fabrikam"), text: "Lunch", confirm: decline))
+            try await actions.send(to: .conversation(id: "\(self.a)|\(self.spaceID)", name: "general · Legacy"), text: "Lunch", confirm: decline))
 
         XCTAssertEqual(StubURLProtocol.requests.count, 0, "a declined send makes no request, not even the DM lookup")
     }
@@ -217,9 +217,9 @@ final class MessagingTests: XCTestCase {
         StubURLProtocol.respond = { _ in (200, self.generalInTwoOrgs(host: self.a)) }
 
         let conversations = try await ConversationQuery().entities(matching: "general")
-        XCTAssertEqual(conversations.map(\.displayName), ["general · Fabrikam", "general · Red Star"])
+        XCTAssertEqual(conversations.map(\.displayName), ["general · Legacy", "general · Red Star"])
         XCTAssertNotEqual(conversations[0].displayRepresentation.title, conversations[1].displayRepresentation.title)
-        XCTAssertEqual(conversations.map(\.subtitle), ["Space, Fabrikam", "Space, Red Star"])
+        XCTAssertEqual(conversations.map(\.subtitle), ["Space, Legacy", "Space, Red Star"])
     }
 
     func testAPersonOutsideTheSuggestionsIsFoundByTheServerSearch() async throws {

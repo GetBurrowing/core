@@ -675,7 +675,7 @@ describe("RouteResume resume TTL", () => {
   })
 
   it("uses a 3-hour resume TTL", () => {
-    // Named-constant documentation guard: keep the value Rowan approved.
+    // Named-constant documentation guard: keep the value Alex approved.
     expect(RESUME_TTL_MS).toBe(3 * 60 * 60 * 1000)
   })
 

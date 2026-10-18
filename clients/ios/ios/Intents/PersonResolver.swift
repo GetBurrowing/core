@@ -144,9 +144,9 @@ enum PersonResolver {
 
     // MARK: Same name on another install (round 8)
     //
-    // Measured on Rowan's iPad (iOS 27.0.1, 2026-10-14), signed in to prod
-    // and suite-exp: "Message Harper" went to suite-exp's Harper, not prod's
-    // Harper Parker. Siri searched the index, took the FIRST of two indexed
+    // Measured on a test iPad (iOS 27.0.1, 2026-10-14), signed in to prod
+    // and suite-exp: "Message Sam" went to suite-exp's Sam, not prod's
+    // Sam Taylor. Siri searched the index, took the FIRST of two indexed
     // Jordans and handed Burrow that one entity (`.messagePerson`), which was
     // used as is, so the "which one?" prompt never ran. Now a person found
     // ANY way is checked against the other signed-in installs before it is
@@ -157,9 +157,9 @@ enum PersonResolver {
     // The name checked is what the person was called: the spoken name when
     // Burrow has it; for an entity Siri resolved itself it is not passed on,
     // so the entity's GIVEN name for a human (the index lists it as an
-    // alternate name, and it is how Siri matched "Harper" to both) and the
-    // full name for an agent. So "Harper" collides with "Harper Parker".
-    // "Harper Parker" spoken does not collide with "Harper Smith".
+    // alternate name, and it is how Siri matched "Sam" to both) and the
+    // full name for an agent. So "Sam" collides with "Sam Taylor".
+    // "Sam Taylor" spoken does not collide with "Sam Smith".
 
     /// The name `person` was most likely called by, when Burrow was not told.
     static func calledName(_ person: MessagePersonEntity) -> String {

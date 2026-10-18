@@ -1415,7 +1415,7 @@ defmodule Platform.Tasks.StacksTest do
 
       {:ok, rr} = pending_review_request_for(task, "Approve me")
       [item] = rr.items
-      {:ok, _} = ReviewRequests.approve_item(item.id, "rowan")
+      {:ok, _} = ReviewRequests.approve_item(item.id, "alex")
 
       # Sanity: the request itself should no longer be pending.
       assert ReviewRequests.list_pending_for_task(task.id) == []

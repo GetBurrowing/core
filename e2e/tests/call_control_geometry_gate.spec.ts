@@ -56,7 +56,7 @@ import { visibleRect, type Rect } from "./support/geometry"
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:4000"
 const MEETING_SLUG = process.env.SWING_MEETING_SLUG ?? "label-swing"
-const LOGIN_AS = process.env.SWING_LOGIN_AS ?? "marlowe"
+const LOGIN_AS = process.env.SWING_LOGIN_AS ?? "robin"
 
 /** FE-19's viewport, kept so this gate's numbers sit beside stage 1's
  *  baseline without a rounding argument. */

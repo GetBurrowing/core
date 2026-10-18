@@ -1,6 +1,6 @@
 # Burrow: the Suite iOS app (Capacitor shell)
 
-Burrow ("Burrow by Fabrikam" in App Store Connect) is a native shell around the
+Burrow (listed under its publisher's name in App Store Connect) is a native shell around the
 Suite web UI (task 01a10882). The web UI runs in a
 WKWebView pointed at the install the person picked; native code exists only
 where the web cannot reach: sign-in, push, the install picker and the Home
@@ -36,7 +36,7 @@ JS name `SuiteNative`). A v2 meetings plugin registers beside it in
 | `scripts/generate_assets.py` | Regenerates colour sets and the launch mark (from the committed icons) |
 | `scripts/testflight.sh`, `scripts/set_testflight_notes.py`, `ExportOptions.plist`, `WHATSNEW.md` | TestFlight build, see TestFlight below |
 
-## Build and test (rock only)
+## Build and test (mac-host only)
 
 ```bash
 cd clients/ios
@@ -59,7 +59,7 @@ create or edit with `xcrun swift-format lint --strict <file>` from
 `clients/ios` (config: `.swift-format`, 4-space indent, 160 columns); do not
 reformat files you did not touch.
 
-## TestFlight (rock only)
+## TestFlight (mac-host only)
 
 ```bash
 clients/ios/scripts/testflight.sh                 # archive, upload, What to Test, group
@@ -75,7 +75,7 @@ version stays at project.yml's `1.0`), archives to
 IS the upload). Archive and export authenticate with the ASC API key in
 `~/.config/suite-ios-build/asc.env` (mode 600, names only:
 `ASC_API_KEY_ID`, `ASC_API_ISSUER`; the key is
-`~/private_keys/AuthKey_<id>.p8`). rock has no Apple Distribution certificate,
+`~/private_keys/AuthKey_<id>.p8`). mac-host has no Apple Distribution certificate,
 so distribution signing is cloud-managed and `-allowProvisioningUpdates`
 registers the App, share and widgets bundle IDs with Push Notifications and App
 Groups. That needs an Admin-role key and an in-effect Program License
@@ -88,9 +88,9 @@ missing). It needs `/usr/bin/python3` (pyjwt); Homebrew's python3 lacks it.
 `--check <version>` validates WHATSNEW.md offline; the build runs it before
 spending a build number.
 
-**Measured 2026-10-05 on rock:** archive fails on every target with
+**Measured 2026-10-05 on mac-host:** archive fails on every target with
 `PLA Update available: You currently don't have access to this membership
-resource. To resolve this issue, your team's Account Holder, Rowan Ellis,
+resource. To resolve this issue, your team's Account Holder, the product owner,
 must agree to the latest Program License Agreement.`, followed by
 `Provisioning profile "iOS Team Provisioning Profile: *" doesn't include the
 App Groups capability` (and Push Notifications on App). The ASC API returns 403
@@ -137,12 +137,12 @@ those icons by `generate_assets.py` (no cyan). Type is Public Sans (OFL, bundled
 WKWebView inside a third-party app cannot complete WebAuthn for a relying party
 the app has no associated domain for.
 
-**Measured 2026-10-04** on rock, iPhone 17 simulator (iOS 26.3), Debug build
-with `-SuiteLoginProbe suite.example.com` (loads `/auth/login` with no
+**Measured 2026-10-04** on mac-host, iPhone 17 simulator (iOS 26.3), Debug build
+with `-SuiteLoginProbe burrow.example.com` (loads `/auth/login` with no
 navigation policy), driven by `EvidenceUITests.test2LoginProbe`:
 
 1. `/auth/login` redirected to pocket-id, and its "Sign in to Suite" page
-   rendered in the WKWebView ("Do you want to sign in to Suite with your Fabrikam
+   rendered in the WKWebView ("Do you want to sign in to Suite with your <install>
    account?", Sign in / Cancel / Sign in with login code).
 2. Tapping **Sign in** produced no passkey sheet. Within 8 s pocket-id showed
    **"The operation was not allowed or timed out."** with a Try again button,
@@ -195,8 +195,8 @@ xcrun simctl push <device> com.kobo-ai.burrow payload.apns
 
 ## Install picker
 
-Defaults: `suite.example.com` (selected), `suite.example.com`,
-`suite.milv.life`. Add probes `/health` and `/manifest.json`; swipe to remove.
+No built-in installs: add yours by URL (a list made only of the old
+built-in hosts is cleared once). Add probes `/health` and `/manifest.json`; swipe to remove.
 Switch install is the long-press Home Screen quick action (canvas Q7).
 
 ## Shared Keychain
@@ -265,10 +265,8 @@ numeral, no bundled font in the widget.
 
 ## History: the Burrow rename
 
-Before stage 6 (task 01a10882) the app shipped under bundle ID
-`technology.ellis.suite` (extensions `.share`, `.widgets`), App Group
-`group.technology.ellis.suite`, Keychain group
-`$(AppIdentifierPrefix)technology.ellis.suite.shared` and URL scheme
-`suiteapp://`. All of them became `com.kobo-ai.burrow` / `burrow://`, on the
+Before stage 6 (task 01a10882) the app shipped under an earlier
+reverse-domain bundle ID (with `.share` and `.widgets` extensions), a matching
+App Group and Keychain group, and URL scheme `suiteapp://`. All of them became `com.kobo-ai.burrow` / `burrow://`, on the
 server too (AuthController's hard-coded app callback). Nothing migrates
 Keychain items or App Group data from the old IDs: sign in again.

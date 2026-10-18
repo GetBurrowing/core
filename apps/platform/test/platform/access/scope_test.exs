@@ -309,7 +309,7 @@ defmodule Platform.Access.ScopeTest do
 
     test "nil and the legacy display-name string fail closed" do
       assert Scope.for_user(nil) == %Scope{}
-      assert Scope.for_user("Marlowe Quill") == %Scope{}
+      assert Scope.for_user("Robin Park") == %Scope{}
       refute Access.can?(Scope.for_user(nil), "chat.read")
       assert Access.permitted_ids(Scope.for_user(nil), "tasks.read") == []
     end

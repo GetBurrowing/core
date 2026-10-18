@@ -48,7 +48,7 @@ defmodule Platform.Tasks.PlanEngineDirectEvidenceWriteTest do
         items: [%{label: "Desktop view"}]
       })
 
-    {:ok, _item} = ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
+    {:ok, _item} = ReviewRequests.reject_item(hd(request.items).id, "alex", "Needs work")
     assert {:ok, _} = PlanEngine.reopen_manual_approval(ctx.validation.id)
 
     # Precondition: the archive really is on the row before the write under test,

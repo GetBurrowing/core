@@ -10,7 +10,7 @@ defmodule Platform.Repo.Migrations.CreateFederationDeadLetters do
   every BEAM restart. On 2026-07-27 there were 39 responsibility drops sharing
   that 50-entry buffer with every chat-path drop, so the day's own evidence was
   already partially self-erased by the time the audit read it — and
-  podman-auto-update on moon erases the remainder on each deploy.
+  podman-auto-update on the production host erases the remainder on each deploy.
 
   Worse for replay: the recorded map was
   `%{runtime_id, agent_id, agent_slug, space_id, reason, timestamp}`. No

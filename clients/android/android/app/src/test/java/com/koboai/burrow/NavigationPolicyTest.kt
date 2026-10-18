@@ -9,7 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NavigationPolicyTest {
-    private val policy = NavigationPolicy("suite.example.com")
+    private val policy = NavigationPolicy("suite.example.net")
 
     private fun main(url: String?) = policy.decide(url, isMainFrame = true)
 
@@ -17,20 +17,20 @@ class NavigationPolicyTest {
 
     @Test
     fun `the install host stays in the view`() {
-        assertEquals(ALLOW, main("https://suite.example.com/chat/general"))
-        assertEquals(ALLOW, main("https://SUITE.example.com/"))
+        assertEquals(ALLOW, main("https://suite.example.net/chat/general"))
+        assertEquals(ALLOW, main("https://SUITE.example.net/"))
         assertEquals(ALLOW, main(null))
         assertEquals(ALLOW, main("about:blank"))
-        assertEquals(ALLOW, main("blob:https://suite.example.com/1234"))
+        assertEquals(ALLOW, main("blob:https://suite.example.net/1234"))
     }
 
     @Test
     fun `every other host opens in the browser`() {
         assertEquals(OPEN_EXTERNALLY, main("https://github.com/Startup-Suite/core"))
-        assertEquals(OPEN_EXTERNALLY, main("https://suite.milv.life/"))
+        assertEquals(OPEN_EXTERNALLY, main("https://suite.example.test/"))
         // A look-alike host is another host.
-        assertEquals(OPEN_EXTERNALLY, main("https://suite.example.com.evil.example/"))
-        assertEquals(OPEN_EXTERNALLY, main("https://evil.example/?next=https://suite.example.com/"))
+        assertEquals(OPEN_EXTERNALLY, main("https://suite.example.net.evil.example/"))
+        assertEquals(OPEN_EXTERNALLY, main("https://evil.example/?next=https://suite.example.net/"))
         assertEquals(OPEN_EXTERNALLY, main("mailto:someone@example.com"))
         assertEquals(OPEN_EXTERNALLY, main("tel:+15555550100"))
     }
@@ -38,22 +38,22 @@ class NavigationPolicyTest {
     @Test
     fun `sub-frames load whatever their host`() {
         assertEquals(ALLOW, frame("https://www.youtube.com/embed/x"))
-        assertEquals(ALLOW, frame("https://suite.example.com/auth/logout"))
+        assertEquals(ALLOW, frame("https://suite.example.net/auth/logout"))
     }
 
     @Test
     fun `the install's own login goes native unless it is the native flow's URL`() {
-        assertEquals(START_NATIVE_LOGIN, main("https://suite.example.com/auth/login"))
-        assertEquals(START_NATIVE_LOGIN, main("https://suite.example.com/auth/login?return_to=/chat"))
-        assertEquals(ALLOW, main("https://suite.example.com/auth/login?app_challenge=abc"))
+        assertEquals(START_NATIVE_LOGIN, main("https://suite.example.net/auth/login"))
+        assertEquals(START_NATIVE_LOGIN, main("https://suite.example.net/auth/login?return_to=/chat"))
+        assertEquals(ALLOW, main("https://suite.example.net/auth/login?app_challenge=abc"))
         // Another host's /auth/login is just another host.
-        assertEquals(OPEN_EXTERNALLY, main("https://suite.milv.life/auth/login"))
+        assertEquals(OPEN_EXTERNALLY, main("https://suite.example.test/auth/login"))
     }
 
     @Test
     fun `the install's own logout signs out natively`() {
-        assertEquals(SIGN_OUT, main("https://suite.example.com/auth/logout"))
-        assertEquals(OPEN_EXTERNALLY, main("https://suite.milv.life/auth/logout"))
+        assertEquals(SIGN_OUT, main("https://suite.example.net/auth/logout"))
+        assertEquals(OPEN_EXTERNALLY, main("https://suite.example.test/auth/logout"))
     }
 
     @Test

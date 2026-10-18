@@ -200,7 +200,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     editor =
       project
       |> meeting!("Experiment editor v2")
-      |> host!("Rowan")
+      |> host!("Alex")
       |> ran!(at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
 
     editor |> canvas!("Bucket policy canvas") |> version!(14, at("2026-07-29T14:41:00Z"))
@@ -219,7 +219,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     workshop =
       project
       |> meeting!("Pricing workshop")
-      |> host!("Rowan")
+      |> host!("Alex")
       |> cancelled!(at("2026-07-22T10:00:00Z"))
 
     filler =
@@ -273,9 +273,9 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
   #     POSITIVE CONTROL for "the cancelled row has no chips": without a row
   #     that does have chips in the same render, "no chips" is satisfied by a
   #     page where chips never render at all.
-  #   * `workshop` — cancelled by Rowan, notified, and it produced nothing.
+  #   * `workshop` — cancelled by Alex, notified, and it produced nothing.
   #
-  # Rowan is a plain participant rather than the host, so the subtitle under
+  # Alex is a plain participant rather than the host, so the subtitle under
   # test carries the cancellation clause and the attendee count and no
   # "hosted by" — one fewer moving part in a string asserted with `==`.
   defp cancellation_world! do
@@ -290,15 +290,15 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     retro |> canvas!("Retro board") |> version!(7, at("2026-07-28T15:30:00Z"))
 
     workshop = meeting!(project, "Pricing workshop")
-    rowan = participant!(workshop, "Rowan")
-    workshop = cancelled_by!(workshop, rowan, at("2026-07-22T10:00:00Z"), true)
+    alex = participant!(workshop, "Alex")
+    workshop = cancelled_by!(workshop, alex, at("2026-07-22T10:00:00Z"), true)
 
     %{
       viewer: viewer,
       project: project,
       retro: retro,
       workshop: workshop,
-      rowan: rowan,
+      alex: alex,
       org_name: Tenancy.get_org_by_slug!("acme").name
     }
   end
@@ -582,7 +582,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
                "[data-role='archive-row'][data-meeting-id='#{world.workshop.id}']"
              )
 
-      # `==`, not `=~`. "Cancelled by Rowan" is a proper substring of every
+      # `==`, not `=~`. "Cancelled by Alex" is a proper substring of every
       # wrong-but-longer value this expression can produce — a count nobody
       # can source, a second attribution, a duration for a meeting that never
       # ran — and `=~` is green against all of them.
@@ -590,7 +590,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
                view,
                "[data-meeting-id='#{world.workshop.id}'] [data-role='archive-row-subtitle']"
              ) ==
-               "Cancelled by Rowan · attendees notified · 1 attended · " <>
+               "Cancelled by Alex · attendees notified · 1 attended · " <>
                  "#{world.org_name} / Control Center"
 
       assert element_text(
@@ -617,8 +617,8 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       project = project!()
 
       quiet = meeting!(project, "Quiet cancellation")
-      quiet_rowan = participant!(quiet, "Rowan")
-      quiet = cancelled_by!(quiet, quiet_rowan, at("2026-07-21T10:00:00Z"), false)
+      quiet_alex = participant!(quiet, "Alex")
+      quiet = cancelled_by!(quiet, quiet_alex, at("2026-07-21T10:00:00Z"), false)
 
       loud = meeting!(project, "Announced cancellation")
       loud_dalton = participant!(loud, "Dalton")
@@ -635,7 +635,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       assert element_text(
                view,
                "[data-meeting-id='#{quiet.id}'] [data-role='archive-row-subtitle']"
-             ) == "Cancelled by Rowan · 1 attended · #{org_name} / Control Center"
+             ) == "Cancelled by Alex · 1 attended · #{org_name} / Control Center"
 
       assert element_text(
                view,

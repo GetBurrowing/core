@@ -555,7 +555,7 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
     # The desktop kanban iterates `@kanban_columns` in render order. The
-    # contract from Marlowe's Stage 1 feedback is: Backlog / Planning / In
+    # contract from Robin's Stage 1 feedback is: Backlog / Planning / In
     # Progress / Blocked / In Review / Deploying / Done. Find each
     # column-id in the rendered HTML and assert the byte-positions are
     # ordered — that's a robust ordering check that doesn't rely on
@@ -1157,7 +1157,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # ── Stage 4 of task 019f487e (ADR-0042 Decision 8) ─────────────────
     # Stack cards now surface a sponsor avatar (parity with task cards).
     # Absent sponsor renders nothing. Stage-4 rework: no own-sponsorship
-    # ring affordance — Rowan rejected the aquamarine ring as always wrong.
+    # ring affordance — Alex rejected the aquamarine ring as always wrong.
     test "stack card renders sponsor avatar when sponsor is set", %{conn: conn} do
       project = create_project()
       {conn, user} = authenticated_conn_with_user(conn)
@@ -5997,8 +5997,9 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s|data-role="deploy-target-select"|
       assert html =~ ~s|data-selected-value="production"|
 
+      # The label is humanised from the target name (task 01a14b9e).
       assert Regex.match?(
-               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*production\s*<\/option>/,
+               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*Production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*Production\s*<\/option>/,
                html
              )
     end
@@ -6023,8 +6024,9 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert html =~ ~s|data-selected-value="production"|
 
+      # The label is humanised from the target name (task 01a14b9e).
       assert Regex.match?(
-               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*production\s*<\/option>/,
+               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*Production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*Production\s*<\/option>/,
                html
              )
 
@@ -6077,7 +6079,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
   describe "assignee consolidation (stage 3 — ADR 0044)" do
     # The flat "Assignee (task-level)" dropdown was removed in favor of a
-    # single writer: the per-phase "Assignees" Configure modal. Rowan's
+    # single writer: the per-phase "Assignees" Configure modal. Alex's
     # 2026-07-08 stage-3 rejection also removed the readonly "Current
     # assignee" badge — the per-phase Assignees breakdown (with the
     # current phase highlighted) is the single reader/writer surface in
@@ -6450,7 +6452,7 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html_b0 =~ ~s|data-role="sponsor-readonly"|
 
       # Session A: engage edit mode and set the sponsor via the inline
-      # picker — same event Session B would fire if Rowan clicked the
+      # picker — same event Session B would fire if Alex clicked the
       # dropdown himself.
       render_click(detail(view_a), "detail_toggle_edit_mode")
 
@@ -6530,7 +6532,7 @@ defmodule PlatformWeb.TasksLiveTest do
   # all — the absence is the signal, not a placeholder.
   #
   # Stage 4 rework of task 019f487e: the own-sponsorship `ring-primary/40`
-  # affordance is gone everywhere — Rowan rejected it as always wrong. Sponsor
+  # affordance is gone everywhere — Alex rejected it as always wrong. Sponsor
   # avatar is a plain circular avatar with no ring, regardless of viewer.
   describe "sponsor chip on task cards (visibility stage 1)" do
     test "desktop card renders sponsor chip when sponsor_user_id is set", %{conn: conn} do
@@ -6557,7 +6559,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
     test "sponsor chip never carries the ring-primary affordance (stage-4 rework)",
          %{conn: conn} do
-      # Stage 4 of task 019f487e rework: Rowan rejected the aquamarine
+      # Stage 4 of task 019f487e rework: Alex rejected the aquamarine
       # `ring-primary/40` ring around own-sponsored avatars as always wrong.
       # Sponsor avatars are now plain circular avatars with no ring, regardless
       # of whether the viewer is the sponsor.
@@ -6720,7 +6722,7 @@ defmodule PlatformWeb.TasksLiveTest do
         String.duplicate("A long paragraph of continuous prose that has to wrap. ", 8) <>
           "\n\n| Stage | Status | Owner | Updated |\n" <>
           "| --- | --- | --- | --- |\n" <>
-          "| One | passed | marlowe | today |\n"
+          "| One | passed | robin | today |\n"
 
       project = create_project()
       task = create_task(project, %{title: "Wide Content", description: description})
@@ -7601,7 +7603,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert html =~ ~s|data-role="deploy-target-value"|
       assert html =~ ~s|data-state="explicit"|
-      assert html =~ "production"
+      # The label is humanised from the target name (task 01a14b9e).
+      assert html =~ "Production"
       refute html =~ "Inherited from project"
       refute html =~ ~s|data-role="configure-deploy-target-button"|
     end
@@ -7625,7 +7628,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert html =~ ~s|data-role="deploy-target-value"|
       assert html =~ ~s|data-state="inherited"|
-      assert html =~ "staging"
+      # The label is humanised from the target name (task 01a14b9e).
+      assert html =~ "Staging"
       assert html =~ "Inherited from project"
       refute html =~ ~s|data-role="configure-deploy-target-button"|
       refute html =~ "No target set"
@@ -8819,7 +8823,7 @@ defmodule PlatformWeb.TasksLiveTest do
       html = open_panel(conn, stack)
       svg = panel_svg_block(html)
 
-      # Per Rowan's T8 stage-5 feedback ("dashed lines, no hard point"),
+      # Per Alex's T8 stage-5 feedback ("dashed lines, no hard point"),
       # the arrowhead marker is removed entirely — direction is
       # implicit from the topological-row layout.
       refute svg =~ ~s(<marker id="stack-dag-arrow"),
@@ -9041,7 +9045,7 @@ defmodule PlatformWeb.TasksLiveTest do
   end
 
   describe "stack-detail dep-graph — no v1 resize chrome" do
-    # Stack v2 (task 019f487e) stage 2 tripwires. Rowan's rejection of the
+    # Stack v2 (task 019f487e) stage 2 tripwires. Alex's rejection of the
     # v1 drag/resize implementation was explicit: "The dragging
     # implementation in its current form is not good and needs to be
     # removed entirely." These four tests are the guard rail — if anyone
@@ -9143,7 +9147,7 @@ defmodule PlatformWeb.TasksLiveTest do
   end
 
   describe "stack detail panel — dep-graph fullscreen modal (task 019f487e stage 3)" do
-    # Rowan's v2 direction after rejecting the drag/resize v1: an
+    # Alex's v2 direction after rejecting the drag/resize v1: an
     # expand-to-modal affordance in the top-right of the dep-graph
     # container that "blows up" the graph into a fullscreen modal for
     # legible inspection. The modal is transient socket state — no
@@ -9339,7 +9343,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # Stage 4 lock-in: cement the stage-3 modal shape so a future refactor
     # (mobile-utility trim, safe-area strip, hex-color creep, silent
     # re-introduction of the v1 drag chrome) trips a red test rather than
-    # a Rowan-facing UI regression. Purely test-only stage — no template
+    # a Alex-facing UI regression. Purely test-only stage — no template
     # or LiveView code edits.
 
     setup %{conn: conn} do
@@ -9610,7 +9614,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert button_tag =~ "text-base-content/60",
              "expected expand button to use text-base-content/60 semantic token; got: #{button_tag}"
 
-      # No hard-coded hex color literal (matches Rowan's directive that
+      # No hard-coded hex color literal (matches Alex's directive that
       # the button chrome stays purely semantic — the only surviving hex
       # in the wider dep-graph is the `#7b5cff` edge stroke, and it must
       # not leak onto the button).
@@ -10612,7 +10616,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Action badge for `plan_pending_review` is suppressed on mobile —
       # the status badge already says "Plan Ready" and rendering both
-      # produced a doubled chip Rowan rejected on Apr 2026 review.
+      # produced a doubled chip Alex rejected on Apr 2026 review.
       refute html =~ ~s(data-role="mobile-task-action")
       refute html =~ ~s(data-action-reason="plan_pending_review")
     end
@@ -10688,7 +10692,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
     # ── Task 01a00578 stage 1 REWORK: the "Needs review" pill ─────────────
     #
-    # Rowan's rejection, verbatim: "We have a pill on the card that says
+    # Alex's rejection, verbatim: "We have a pill on the card that says
     # 'needs review'. That is supposed to indicate to a human that something
     # is waiting on them. We need to conditionally show it when they have
     # actionable review items and clear it when there are none. All items in
@@ -10859,7 +10863,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # `task_display_status/2` chip already surfaces "Plan Ready"
       # (warning badge) for `status="planning"` + pending-review plan.
       # Stage 4's action chip rendered "Plan ready" for the same case
-      # — two chips on the same row Rowan rejected. The mobile-only
+      # — two chips on the same row Alex rejected. The mobile-only
       # `mobile_stack_member_action_label/1` returns `{nil, nil}` for
       # `:plan_pending_review` so the action chip's `:if` collapses.
       member = seed_mobile_member(stack, "planning")
@@ -12537,7 +12541,7 @@ defmodule PlatformWeb.TasksLiveTest do
   # flash copy and the persisted task status — across the full 2x2
   # matrix (sponsor-only vs agent-assigned vs mixed, plus the button
   # surface vs drag surface). If the predicate stops matching (or
-  # matches too eagerly), one of these four turns red and Rowan finds
+  # matches too eagerly), one of these four turns red and Alex finds
   # out at test time rather than in production.
   #
   # Starting-status choice: all four tests seed the task at `backlog`

@@ -167,7 +167,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsDispatchTest do
       %{
         "speaker_name" => "Alex",
         "text" =>
-          "I'll email Rowan the deploy audit once the adapter fix lands. That unblocks the " <>
+          "I'll email Avery the deploy audit once the adapter fix lands. That unblocks the " <>
             "compliance sign-off we owe the design partners.",
         "start_time" => 14_500,
         "end_time" => 28_000,

@@ -25,7 +25,7 @@ defmodule Platform.Chat.ContextSummaryTest do
   alias Platform.Experiments.Variant
   alias Platform.Test.ChatContextSummaryStub, as: Stub
 
-  @reply "Rowan asked which tasks need approval.\nThe agent answers that six are waiting."
+  @reply "Alex asked which tasks need approval.\nThe agent answers that six are waiting."
 
   defp unique, do: System.unique_integer([:positive])
 

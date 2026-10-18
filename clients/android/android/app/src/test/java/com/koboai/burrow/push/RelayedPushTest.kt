@@ -93,7 +93,7 @@ class RelayedPushTest {
         assertEquals(direct, relayed)
         // Not vacuous: both are the real conversation, not two fallbacks.
         assertEquals("launch", relayed[6])
-        val message = listOf("@Marlowe can you check the deck before 3?", "Dana", "$b|user:01a1261e-0000-7000-8000-00000000000c")
+        val message = listOf("@Robin can you check the deck before 3?", "Dana", "$b|user:01a1261e-0000-7000-8000-00000000000c")
         assertEquals(listOf(message), relayed[8])
     }
 
@@ -103,7 +103,7 @@ class RelayedPushTest {
         val text = PushTestSupport.text(posted(app, tag))
         assertFalse(text.contains(SealFixture.sealed.take(16)))
         assertFalse(text.contains("New notification"))
-        assertTrue(text.contains("@Marlowe can you check the deck before 3?"))
+        assertTrue(text.contains("@Robin can you check the deck before 3?"))
     }
 
     @Test

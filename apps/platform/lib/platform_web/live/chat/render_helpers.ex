@@ -63,7 +63,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   end
 
   # The label a rail row shows, which is also what its pin control must name
-  # ("Pin Gen-migration", "Pin Rowan Ellis"). A channel is its `name`; a DM
+  # ("Pin Gen-migration", "Pin Alex Morgan"). A channel is its `name`; a DM
   # or group has none and resolves through its participants.
   #
   # Channels short-circuit rather than falling through to
@@ -134,7 +134,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # The DESKTOP menu's subject (task 019ff8ba stage 1, amended 2026-08-13).
   #
   # Everything `row_actions_target/5` resolves, plus the pinned TASK rows.
-  # Marlowe's rule is that every rail row carries a three-dot menu and nothing
+  # The design rule is that every rail row carries a three-dot menu and nothing
   # else, so a task row has a trigger now, and a task-exec space is in neither
   # `@channels` nor `@dm_conversations` — the sheet's resolver returns nil for
   # it, which is what left the task rows without a menu until now.
@@ -156,7 +156,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     end
   end
 
-  # A pinned task row's menu holds one item, Unpin, and Marlowe stated the reason
+  # A pinned task row's menu holds one item, Unpin, and the designer stated the reason
   # it is the only one: the pin is made on the Tasks page, not here. `hideable`
   # and `movable` are false rather than absent so both shapes answer the same
   # questions and the dialog needs no `Map.get/3`.

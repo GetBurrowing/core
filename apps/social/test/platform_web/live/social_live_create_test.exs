@@ -124,7 +124,7 @@ defmodule PlatformWeb.SocialLiveCreateTest do
   end
 
   describe "A2: + New profile after HTC has rows" do
-    test "creating Fabrikam selects it and leaves no HTC queue or account row in the DOM",
+    test "creating Legacy selects it and leaves no HTC queue or account row in the DOM",
          %{conn: conn} do
       org = org_id!()
       human = member!(user!(), org)
@@ -147,14 +147,14 @@ defmodule PlatformWeb.SocialLiveCreateTest do
       assert has_element?(child, "#social-accounts [data-role='social-account-row']")
 
       open_new_profile(child)
-      submit_create(child, "Fabrikam")
+      submit_create(child, "Legacy")
 
       assert [_, _] = profiles = profiles_in(org)
-      fabrikam = Enum.find(profiles, &(&1.name == "Fabrikam"))
-      assert fabrikam.approver_user_ids == [human.id]
+      legacy = Enum.find(profiles, &(&1.name == "Legacy"))
+      assert legacy.approver_user_ids == [human.id]
 
-      assert Enum.sort(option_names(child)) == ["HTC", "Fabrikam"]
-      assert has_element?(child, selected_option(fabrikam.id))
+      assert Enum.sort(option_names(child)) == ["HTC", "Legacy"]
+      assert has_element?(child, selected_option(legacy.id))
       refute has_element?(child, selected_option(htc.id))
 
       refute has_element?(child, "#queue-#{post.id}")
@@ -165,7 +165,7 @@ defmodule PlatformWeb.SocialLiveCreateTest do
       assert has_element?(
                child,
                "[data-pane='queue'] [data-role='social-empty']",
-               "Nothing waiting for approval on Fabrikam. Connect an account to start."
+               "Nothing waiting for approval on Legacy. Connect an account to start."
              )
     end
   end

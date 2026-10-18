@@ -272,8 +272,7 @@ final class AddInstallFlowModelTests: XCTestCase {
         XCTAssertEqual(AddInstallCopy.placeholder, "yourteam.example.com")
         XCTAssertTrue(ShippedHostScanTests.allowedHosts.contains(AddInstallCopy.placeholder))
         let placeholder = AddInstallCopy.placeholder
-        XCTAssertNil(
-            ShippedHostScanTests.personalHost.firstMatch(in: placeholder, range: NSRange(placeholder.startIndex..., in: placeholder)))
+        XCTAssertFalse(ShippedHostScanTests.namesPersonalHost(placeholder))
     }
 }
 

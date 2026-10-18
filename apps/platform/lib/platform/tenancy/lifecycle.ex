@@ -585,7 +585,7 @@ defmodule Platform.Tenancy.Lifecycle do
   What archiving/scheduling this org would actually hide, right now:
   `%{projects: [name], channels: [name]}`.
 
-  Powers the confirm dialog's "here's what goes with it" list — Marlowe's call
+  Powers the confirm dialog's "here's what goes with it" list — the design call
   (2026-07-16): keep the bulk cascade, because bulk archive/delete is useful,
   but say what it takes instead of "and everything under it".
 
@@ -654,7 +654,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   This one reuses `cascade_children_query/2` — the exact query the RESTORE
   runs — so the Recovery row lists precisely what its Restore button will
-  bring back. Marlowe's ask (2026-07-16), and the same instinct behind the
+  bring back. The design ask (2026-07-16), and the same instinct behind the
   confirm dialog's list: don't make someone restore a group without showing
   what's in it.
 

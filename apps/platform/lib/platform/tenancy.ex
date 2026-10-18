@@ -513,7 +513,7 @@ defmodule Platform.Tenancy do
   Resolve a viewer to a `t:visibility/0` — the single answer to "which
   orgs may this viewer see".
 
-    * A member of the **root** org at ANY role → `:root_all`. Rowan's
+    * A member of the **root** org at ANY role → `:root_all`. The operator's
       2026-08-05 ruling: sub-orgs are filtering mechanisms, so a root
       member sees the root's *and* every tenant's content. This is deliberately wide.
     * Otherwise, the viewer's memberships → `{:orgs, ids}`, sorted and

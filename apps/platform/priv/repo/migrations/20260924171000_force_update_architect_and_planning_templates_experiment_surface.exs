@@ -16,8 +16,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateArchitectAndPlanningTemplatesExper
   idempotent, and keeping all three here makes this the last force-update for
   every row the task touches, so a later reader has one migration to check.
 
-  Live rows were read on both installs (fabrikam `core_platform`, milv
-  `milv_platform`) on 2026-09-24 before this was written, and diffed against
+  Live rows were read on both installs (install A `core_platform`, install B
+  `installb_platform`) on 2026-09-24 before this was written, and diffed against
   the origin/main descriptors (df64ae47):
 
   - `architecture.review_plan.v1` (md5 dddc47d314abd5c811e90084c7c73318) and

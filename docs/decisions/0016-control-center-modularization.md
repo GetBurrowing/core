@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-03-20  
 **Related:** ADR 0010 (Mobile Navigation and Agent Resources), ADR 0015 (Agent Onboarding and Role Templates)  
-**Deciders:** Rowan Ellis  
+**Deciders:** the product owner  
 
 ## Context
 

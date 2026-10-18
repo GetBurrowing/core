@@ -505,7 +505,7 @@ defmodule Platform.Architecture.StageAudit do
 
   Summary first, then one line per finding. The findings are repeated in
   prose rather than left to the row because the execution space is the
-  surface Rowan and the reviewer subagent already read, and a note that
+  surface the operator and the reviewer subagent already read, and a note that
   says "3 findings, see the database" is not a note.
   """
   @spec annotation_body(map()) :: String.t()

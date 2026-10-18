@@ -7,8 +7,8 @@
  *
  * Expected DOM structure on the hook element:
  *   <button phx-hook="ThemeToggle" ...>
- *     <span data-icon="sun"  ...></span>   <!-- shown in dark mode -->
- *     <span data-icon="moon" ...></span>   <!-- shown in light mode -->
+ *     <span data-icon="light" ...></span>  <!-- shown in dark mode -->
+ *     <svg data-icon="dark" ...></svg>     <!-- shown in light mode -->
  *   </button>
  */
 const ThemeToggle = {
@@ -40,12 +40,12 @@ const ThemeToggle = {
 
   updateIcon() {
     const theme = this.currentTheme();
-    const sunEl = this.el.querySelector("[data-icon='sun']");
-    const moonEl = this.el.querySelector("[data-icon='moon']");
-    if (sunEl && moonEl) {
-      // Dark mode → show sun (click to go light); Light mode → show moon (click to go dark)
-      sunEl.classList.toggle("hidden", theme !== "dark");
-      moonEl.classList.toggle("hidden", theme === "dark");
+    const lightEl = this.el.querySelector("[data-icon='light']");
+    const darkEl = this.el.querySelector("[data-icon='dark']");
+    if (lightEl && darkEl) {
+      // Dark mode → show the light glyph (click to go light); light mode → show the dark glyph (click to go dark)
+      lightEl.classList.toggle("hidden", theme !== "dark");
+      darkEl.classList.toggle("hidden", theme === "dark");
     }
     this.el.setAttribute(
       "aria-label",

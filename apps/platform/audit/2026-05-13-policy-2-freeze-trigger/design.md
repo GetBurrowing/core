@@ -201,7 +201,7 @@ contract; that's what Stage 4's test does.
 | 3 | `Tasks.transition_task` wraps in `Repo.transaction`; freezes messages of the task's execution space on `:in_progress`; emits `{:messages_frozen, ...}` on the space topic; chat LiveView hook handles it. | test_pass, lint_pass, **manual_approval** (UI affordance state) |
 | 4 | New `Platform.Chat.AdHocFreezeListener` GenServer/PubSub subscriber, added to `Platform.Application` children. Consumes `{:agent_first_state_op, ...}` from the `chat:agent_runtime` topic, calls Stage 2's query, freezes the result in a `Repo.transaction`. | test_pass, lint_pass |
 | 5 | Un-skip `edit_permissions_test.exs` Case 6 (planning-time signal does NOT freeze); update audit docs `03-stage3-permission-coverage.md` and `99-final-report.md` Section (e)/(f). | test_pass, lint_pass |
-| 6 | Synthetic task-level review gate (5 `e2e_behavior` cases). | e2e_behavior (Marlowe) |
+| 6 | Synthetic task-level review gate (5 `e2e_behavior` cases). | e2e_behavior (the design lead) |
 
 ---
 
@@ -212,8 +212,8 @@ contract; that's what Stage 4's test does.
   semantics with no schema migration. If the editable-messages contract
   canvas explicitly required `chat_messages.task_id` for reasons other than
   "linkage" (e.g. messages outside execution spaces that nevertheless want
-  task scoping), this redesign drops that use case. Flagged to Marlowe via
-  #marlowe-playspace; default assumption is that execution-space binding is
+  task scoping), this redesign drops that use case. Flagged to the design lead via
+  #design-playspace; default assumption is that execution-space binding is
   sufficient.
 - **`(edited)` affordance tooltip refresh** on the broadcast. The chat
   LiveView `messages_hooks.ex` currently has a `{:message_edited, _}` handler

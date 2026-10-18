@@ -15,7 +15,7 @@ def test_defaults_are_config_not_hardcoded_elsewhere():
 
     assert config.llm.model == "qwen3.5-9b"
     assert config.llm.fallback_model == "granite4.1-8b"
-    assert config.llm.base_url == "http://192.0.2.107:8090/v1"
+    assert config.llm.base_url == "http://llm.example.test:8090/v1"
     assert config.stt.model == "faster-distil-whisper-small.en"
     assert config.tts.model == "kokoro"
     assert config.preemptive_generation is True
@@ -36,6 +36,32 @@ def test_mcp_base_url_is_required_and_names_the_var(monkeypatch, value):
         AgentConfig.from_env()
 
 
+@pytest.mark.parametrize("name", ["MVA_LLM_BASE_URL", "MVA_STT_BASE_URL", "MVA_TTS_BASE_URL"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_backend_base_urls_are_required_and_name_the_var(monkeypatch, name, value):
+    """Task 01a14b9e: the LLM, STT and TTS endpoints have no default, because
+    any default would name one install's hosts. Unset, empty and blank all
+    raise a config error that names the variable."""
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+
+    with pytest.raises(ConfigError, match=f"^{name} is required and has no default"):
+        AgentConfig.from_env()
+
+
+def test_backend_base_urls_come_from_the_env(monkeypatch):
+    monkeypatch.setenv("MVA_STT_BASE_URL", "http://192.0.2.1:8081/v1")
+    monkeypatch.setenv("MVA_TTS_BASE_URL", "http://192.0.2.2:8081/v1")
+
+    config = AgentConfig.from_env()
+
+    assert config.llm.base_url == "http://llm.example.test:8090/v1"
+    assert config.stt.base_url == "http://192.0.2.1:8081/v1"
+    assert config.tts.base_url == "http://192.0.2.2:8081/v1"
+
+
 def test_mcp_base_url_env_override_wins(monkeypatch):
     monkeypatch.setenv("MVA_MCP_BASE_URL", "http://core.example/mcp")
 
@@ -45,7 +71,7 @@ def test_mcp_base_url_env_override_wins(monkeypatch):
 
 
 def test_default_instructions_commit_to_one_handoff_tool_deterministically():
-    """Task 01a0d4a0 stage 4 round 2: Dalton's moon run found the agent
+    """Task 01a0d4a0 stage 4 round 2: Dalton's test-host run found the agent
     trying post_to_meeting_chat, then a prod mail_draft_create write, then
     space_list, across three long spoken turns for one out-of-scope
     question. The default prompt must name the one hand-off tool, require
@@ -59,7 +85,7 @@ def test_default_instructions_commit_to_one_handoff_tool_deterministically():
 
 
 def test_default_instructions_do_not_hand_off_simple_questions():
-    """Task 01a0d4a0 stage 5 item 4: Dalton's live moon run found '2 plus 2'
+    """Task 01a0d4a0 stage 5 item 4: Dalton's live test-host run found '2 plus 2'
     handed off to chat in 3 of 7 asks. The default prompt must give the
     model a concrete anchor for what NOT to hand off."""
     config = AgentConfig.from_env()
@@ -69,7 +95,7 @@ def test_default_instructions_do_not_hand_off_simple_questions():
 
 
 def test_default_instructions_name_the_complete_granted_toolset():
-    """Task 01a0d4a0 stage 5 item 4: Dalton's live moon run found the model
+    """Task 01a0d4a0 stage 5 item 4: Dalton's live test-host run found the model
     hallucinating calls to meeting_say and space_search_messages. The
     default prompt must name the actual granted tools and say plainly that
     no other tool exists, so the model has no reason to invent one."""
@@ -100,7 +126,7 @@ def test_default_instructions_forbid_any_retry_unambiguously():
 
 
 def test_default_instructions_call_space_get_context_for_space_context_questions():
-    """Task 01a0e8c1-c1c1 stage 3: Dalton's live moon run found the tool-call
+    """Task 01a0e8c1-c1c1 stage 3: Dalton's live test-host run found the tool-call
     e2e case's own example prompt ("what's the context of this space?")
     triggered no tool call at all. The default prompt names space_get_context
     as an available tool but, before this fix, never told the model WHEN to
@@ -115,7 +141,7 @@ def test_default_instructions_call_space_get_context_for_space_context_questions
 
 
 def test_default_instructions_delegate_canvas_and_task_requests():
-    """Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item 4),
+    """Task 01a0f842 stage 4 (round 2 of Sam's Burrow ticket, item 4),
     and independently task 01a0f8f5 stage 2 (neither had the other's commit
     merged to main yet when its stage ran -- see config.py's reconciliation
     note for the 01a0f8f5 deploy merge that combined these two tests, since

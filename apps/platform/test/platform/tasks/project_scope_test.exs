@@ -110,7 +110,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
       assert b.id in ids
     end
 
-    # Rowan's 2026-08-05 sub-orgs ruling: sub-orgs are filtering mechanisms,
+    # Alex's 2026-08-05 sub-orgs ruling: sub-orgs are filtering mechanisms,
     # not walls — a root-org member sees every tenant's content regardless
     # of role. `Tenancy.visibility/1` therefore returns `:root_all` for ANY
     # root member, which is deliberately wider than the previous

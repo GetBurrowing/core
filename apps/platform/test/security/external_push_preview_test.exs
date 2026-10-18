@@ -39,7 +39,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
   alias Platform.TenancyFixtures
 
   @chat_payload %{
-    title: "Rowan Ellis in Suite",
+    title: "Avery Rivera in Suite",
     body: "internal roadmap: shipping the Acme deal Friday",
     url: "/chat"
   }
@@ -145,7 +145,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
       resolved_ext = Push.preview_for_recipient(ext.id, @chat_payload)
 
       assert resolved_ext == %{title: "New message", body: "You have a new message", url: "/chat"}
-      refute_leak(resolved_ext, ["Rowan Ellis", "internal roadmap", "Acme"])
+      refute_leak(resolved_ext, ["Avery Rivera", "internal roadmap", "Acme"])
 
       assert_receive {:safe_preview, %{count: 1}, %{participant_id: pid}}
       assert pid == ext.id
@@ -227,7 +227,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
       {_p, _} = user_participant(space.id, user)
 
       payload = %{
-        title: "Rowan Ellis in #{channel_name}",
+        title: "Avery Rivera in #{channel_name}",
         body: "internal roadmap: shipping the Acme deal Friday",
         url: "/chat"
       }
@@ -237,7 +237,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
       resolved = Push.preview_for_user(user.id, payload)
 
       assert resolved == %{title: "New message", body: "You have a new message", url: "/chat"}
-      refute_leak(resolved, ["Rowan Ellis", "internal roadmap", "Acme", channel_name])
+      refute_leak(resolved, ["Avery Rivera", "internal roadmap", "Acme", channel_name])
 
       assert_receive {:safe_preview, %{count: 1}, %{user_id: uid}}
       assert uid == user.id

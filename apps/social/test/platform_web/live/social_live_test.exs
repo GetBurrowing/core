@@ -44,15 +44,15 @@ defmodule PlatformWeb.SocialLiveTest do
     org_b = org_id!()
     j = member!(user!(), org_a)
     {htc, htc_account} = profile!(org_a, "HTC")
-    {fabrikam, fabrikam_account} = profile!(org_a, "Fabrikam")
+    {legacy, legacy_account} = profile!(org_a, "Legacy")
     {bravo, bravo_account} = profile!(org_b, "Bravo")
     needs_approval!(org_a, htc_account, 2)
-    needs_approval!(org_a, fabrikam_account, 1)
+    needs_approval!(org_a, legacy_account, 1)
     needs_approval!(org_b, bravo_account, 4)
     # A post in another status counts for nothing.
     {:ok, _} = Social.create_post(org_a, htc_account, %{body: "draft"})
 
-    %{org_a: org_a, org_b: org_b, j: j, htc: htc, fabrikam: fabrikam, bravo: bravo}
+    %{org_a: org_a, org_b: org_b, j: j, htc: htc, legacy: legacy, bravo: bravo}
   end
 
   describe "the rail item" do
@@ -118,7 +118,7 @@ defmodule PlatformWeb.SocialLiveTest do
 
   describe "the profile switcher" do
     test "lists both profiles by name, each with its needs-approval count",
-         %{conn: conn, j: j, htc: htc, fabrikam: fabrikam} do
+         %{conn: conn, j: j, htc: htc, legacy: legacy} do
       {_view, child, _html} = open(conn, j)
 
       assert has_element?(
@@ -129,8 +129,8 @@ defmodule PlatformWeb.SocialLiveTest do
 
       assert has_element?(
                child,
-               "[data-role='social-profile-option'][value='#{fabrikam.id}'][data-count='1']",
-               "Fabrikam 1"
+               "[data-role='social-profile-option'][value='#{legacy.id}'][data-count='1']",
+               "Legacy 1"
              )
 
       assert has_element?(child, "[data-role='social-needs-approval']", "2 need approval")
@@ -146,19 +146,19 @@ defmodule PlatformWeb.SocialLiveTest do
     end
 
     test "switching changes the header and the copy, and keeps the current tab",
-         %{conn: conn, j: j, fabrikam: fabrikam} do
+         %{conn: conn, j: j, legacy: legacy} do
       {_view, child, _html} = open(conn, j)
 
       child |> element("[data-role='social-tab-button'][data-tab='calendar']") |> render_click()
       assert has_element?(child, "[data-role='social-tab-body']", "Nothing scheduled for HTC")
 
-      child |> form("#social-profile-switcher", %{profile_id: fabrikam.id}) |> render_change()
+      child |> form("#social-profile-switcher", %{profile_id: legacy.id}) |> render_change()
 
-      assert has_element?(child, "#social-profile-select option[selected][value='#{fabrikam.id}']")
+      assert has_element?(child, "#social-profile-select option[selected][value='#{legacy.id}']")
       assert has_element?(child, "[data-role='social-needs-approval']", "1 need approval")
       assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (1)")
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='calendar']")
-      assert has_element?(child, "[data-role='social-tab-body']", "Nothing scheduled for Fabrikam")
+      assert has_element?(child, "[data-role='social-tab-body']", "Nothing scheduled for Legacy")
       refute has_element?(child, "[data-role='social-tab-body']", "HTC")
       assert has_element?(child, ".tab-active[data-tab='calendar']")
     end
@@ -177,13 +177,13 @@ defmodule PlatformWeb.SocialLiveTest do
     end
 
     test "list_profiles_for_user/1 and needs_approval_counts/1 (the switcher's reads)",
-         %{j: j, htc: htc, fabrikam: fabrikam, bravo: bravo} do
-      assert Enum.map(Social.list_profiles_for_user(j), & &1.id) == [htc.id, fabrikam.id]
+         %{j: j, htc: htc, legacy: legacy, bravo: bravo} do
+      assert Enum.map(Social.list_profiles_for_user(j), & &1.id) == [htc.id, legacy.id]
       assert Social.list_profiles_for_user(nil) == []
       assert Social.list_profiles_for_user(user!()) == []
 
-      assert Social.needs_approval_counts([htc.id, fabrikam.id, bravo.id]) ==
-               %{htc.id => 2, fabrikam.id => 1, bravo.id => 4}
+      assert Social.needs_approval_counts([htc.id, legacy.id, bravo.id]) ==
+               %{htc.id => 2, legacy.id => 1, bravo.id => 4}
 
       assert Social.needs_approval_counts([]) == %{}
     end

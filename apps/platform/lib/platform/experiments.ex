@@ -55,7 +55,7 @@ defmodule Platform.Experiments do
       `draft`, and returns `{:ok, :pending_human_approval}`. It never returns
       `running` on that path.
 
-  Launch approval is OPT-IN (Rowan, 2026-09-24): under the built-in default an
+  Launch approval is OPT-IN (product decision, 2026-09-24): under the built-in default an
   agent's start launches. `approve_launch/2` takes a `%User{}` — there is no
   agent-callable form and no MCP tool for it — and launches a pending
   experiment through the same locks and the same `max_live` / `surface_busy`

@@ -230,7 +230,7 @@ defmodule Platform.Security.SweeperTest do
       # No tasks were filed.
       assert count_tasks() == pre_count
 
-      # Log lines Rowan grep for in prod.
+      # Log lines Alex grep for in prod.
       for key <- @all_keys do
         assert log =~ "[SecuritySweeper] unfilled responsibility=#{key}"
       end

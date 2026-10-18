@@ -1,7 +1,7 @@
 defmodule Platform.Responsibilities.Handlers.MeetingIntentSpacePromptTest do
   @moduledoc """
   All six `meetings.*` mid-meeting intent prompts NAME the chat space
-  their recipient writes into (2026-08-01, Rowan's DM — no task behind it).
+  their recipient writes into (2026-08-01, Alex's DM — no task behind it).
 
   ## What was wrong
 

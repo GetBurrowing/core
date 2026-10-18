@@ -27,7 +27,7 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
 
   defp participants_map do
     %{
-      "p1" => participant("p1", "Rowan"),
+      "p1" => participant("p1", "Alex"),
       "p2" => participant("p2", "Hera"),
       "p3" => participant("p3", "Helga"),
       "p4" => participant("p4", "Claude", "agent")
@@ -106,23 +106,23 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
   end
 
   describe "build_suggestions/2 — archived-user filter (task 019f671f validation 1(c))" do
-    # Regression: reviewer flagged that typing `@Rowan Kl` in `#general`
-    # autocompleted the archived user "Rowan Member". The participants_map
+    # Regression: reviewer flagged that typing `@Alex Kl` in `#general`
+    # autocompleted the archived user "Alex Member". The participants_map
     # still carries archived users (deliberately, so historical author
     # attribution renders) but the autocomplete must reject them.
     test "archived user matching the prefix is filtered out" do
       map = %{
-        "active" => participant("active", "Rowan"),
-        "archived" => participant("archived", "Rowan Member", "user", archived: true)
+        "active" => participant("active", "Alex"),
+        "archived" => participant("archived", "Alex Member", "user", archived: true)
       }
 
-      results = MentionsHooks.build_suggestions("Rowan", map)
+      results = MentionsHooks.build_suggestions("Alex", map)
       names = Enum.map(results, & &1.name)
 
-      assert "Rowan" in names,
+      assert "Alex" in names,
              "active user with matching prefix must still surface"
 
-      refute "Rowan Member" in names,
+      refute "Alex Member" in names,
              "archived user must NOT appear in mention autocomplete " <>
                "(validation 1(c) — soft-archive continues to render historical " <>
                "attribution but suppresses future addressability)"
@@ -162,10 +162,10 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
       # falls through to the display-name matcher, so such entries still
       # surface. This guards against a partial-rollout regression where old
       # in-flight LV processes' maps predate the flag.
-      map = %{"p" => Map.delete(participant("p", "Rowan"), :archived)}
+      map = %{"p" => Map.delete(participant("p", "Alex"), :archived)}
 
-      results = MentionsHooks.build_suggestions("Ry", map)
-      assert Enum.any?(results, &(&1.name == "Rowan"))
+      results = MentionsHooks.build_suggestions("Al", map)
+      assert Enum.any?(results, &(&1.name == "Alex"))
     end
   end
 end

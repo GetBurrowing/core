@@ -19,7 +19,7 @@ defmodule Platform.Repo.Migrations.MakeChannelSectionNameNullable do
 
   Rows whose name DIFFERS from the org are left alone on purpose. A
   deliberate custom label and a stale copy of a former org name (for
-  example a section still reading 'Fabrikam' after its org was renamed) are
+  example a section still reading 'Acme' after its org was renamed) are
   indistinguishable in the data, so no migration can tell which to clear.
   An admin clears a stale one with 'Use organisation name' in the rail's
   admin-edit mode (stage 2), which writes NULL.

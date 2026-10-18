@@ -8,8 +8,8 @@ defmodule Platform.Repo.Migrations.SeedDesignerPromptTemplates do
     * `design.spec_writer.v1`
     * `design.brand_check.v1`
 
-  Content is intentionally short + single-responsibility-focused — Rowan
-  and Marlowe iterate the wording live via `prompt_template_update` MCP
+  Content is intentionally short + single-responsibility-focused — the operator
+  and the designer iterate the wording live via `prompt_template_update` MCP
   after the seed lands. This migration only needs to guarantee the
   slugs resolve so the first dispatch call succeeds.
 

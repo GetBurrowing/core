@@ -332,7 +332,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           </p>
           <%!-- Screen-share name masking (task 01a00c66). PERMANENTLY VISIBLE
                in the header row, a sibling of the kebab — never an item inside
-               the kebab popover or any other dropdown. Harper's request offered
+               the kebab popover or any other dropdown. The product request offered
                "an eye symbol or some other dropdown"; the eye wins because a
                dropdown costs two clicks and a decision at the exact moment
                someone is fumbling with a share dialog.
@@ -581,7 +581,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
            rail.
 
            It was two adjacent blocks ("Pinned Channels" and "Pinned Tasks")
-           until 2026-08-10. Marlowe pinned a task from the Tasks page, went to
+           until 2026-08-10. The designer pinned a task from the Tasks page, went to
            Chat and found its execution log in her rail: pinning a task is the
            same act as pinning a channel, so it is one need and one block. The
            heading is the bare word "Pinned" because the block now holds
@@ -689,7 +689,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                      sides, which the brand page's truncation rule forbids
                      because the name is the protected fragment.
 
-                     CONVERSATION ROWS ONLY (Marlowe, 2026-08-12: "it's essentially
+                     CONVERSATION ROWS ONLY (design review, 2026-08-12: "it's essentially
                      two separate lists so makes me think to not commingle the
                      interactions too much"). A task row is in the block but is
                      not hand-orderable, and the absence of a handle is what says
@@ -748,9 +748,9 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
                        The person slot stays EMPTY rather than taking an avatar:
                        `initials/1` takes the first two words of the label, so a
-                       group DM named "Rowan Ellis, Alexandra ..." rendered
+                       group DM named "Alex Morgan, Alexandra ..." rendered
                        "RM" and was indistinguishable from a private DM with
-                       Rowan. It is not the reserved gutter plan v3 rules out —
+                       the operator. It is not the reserved gutter plan v3 rules out —
                        that was space held for a colour marker that is never
                        arriving, whereas a blank beside rows visibly carrying a
                        `#` reads as "no hash here". --%>
@@ -834,7 +834,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 </button>
               </span>
               <%!-- ONE trailing control on every row of the block, whatever
-                     the row holds. Marlowe, 2026-08-13: "for pinned items, it's a
+                     the row holds. Design review, 2026-08-13: "for pinned items, it's a
                      little weird to see an 'x' with 3-dots menu, so we should
                      keep the interaction more consistent and just have a 3-dot
                      menu where one of the actions for a pinned item is to unpin
@@ -850,7 +850,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                      participant-scoped self-unpin) — and the menu keeps them
                      apart. What is gone is the second control on the row.
 
-                     Marlowe's 2026-08-12 ask for a visible way out of the block is
+                     The designer's 2026-08-12 ask for a visible way out of the block is
                      reversed here, by her, with a reason: a row wearing two ways
                      to act on it reads as two different objects. The way out is
                      the menu's first item on every pinned row, task rows
@@ -881,7 +881,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   """
   def dm_section(assigns) do
     ~H"""
-    <%!-- DMs section — always rendered, even when empty (Marlowe: empty
+    <%!-- DMs section — always rendered, even when empty (the designer: empty
            sections keep their header so the rail's structure is visible).
            Section key: "dms". NOT reorderable (Stage 3) — locked under Pinned. --%>
     <section
@@ -1484,7 +1484,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 <%!-- The row's only trailing control (task 019ff8ba stage 1,
                    Option C). Pin, "Move to organisation…" and the eye-slash
                    hide button all stood here at rest, on every row of the
-                   rail, all the time. Marlowe, 2026-08-13: the pin leaves the
+                   rail, all the time. Design review, 2026-08-13: the pin leaves the
                    row in EVERY mode, not only while arranging.
 
                    Available in NORMAL mode, for the reason the pin was:
@@ -1636,7 +1636,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
     ~H"""
     <%!-- Undo toast — ephemeral 4-second affordance shown after a hide
-         (Stage 3 v3 follow-up per Marlowe's 2026-05-29 review). Lives as
+         (Stage 3 v3 follow-up per the 2026-05-29 design review). Lives as
          an IN-FLOW `flex-shrink-0` sibling between the scrolling `<nav>`
          (`flex-1`) above and the pinned "+ New channel" button below.
          When the toast appears, the `flex-1` scroll nav absorbs its
@@ -1659,7 +1659,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
          HIDE ONLY. Task 019ffc5f stage 2 gave this toast a second variant
          for the DM Close action, and stage 3 gave that variant a second
-         line teaching the rule that brings the row back. Marlowe rejected it
+         line teaching the rule that brings the row back. The designer rejected it
          at the stage-3 gate: "We don't need a acknowledgement / affirmation
          for a close action on a DM. A User can simply search for a person
          or agent to DM again if they want to bring back the window." So a
@@ -1695,7 +1695,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
          The hide toast's component, its position, and its 4s dismissal, with
          the copy and the handler changed and no action button. Undo is out of
          scope for this stage: the move already carries a two-step confirmation
-         and the row's own menu moves the channel back in one click. Marlowe's
+         and the row's own menu moves the channel back in one click. The designer's
          separate decision to offer an Undo here is task
          01a01052-3155-7c15-8c48-9ff8955b9b70.
 
@@ -1732,7 +1732,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
     </div>
 
     <%!-- "+ New channel" — pinned rail chrome (Stage 3 v3 follow-up per
-         Marlowe's review). Lives as an UNCONDITIONAL `flex-shrink-0` sibling
+         design review). Lives as an UNCONDITIONAL `flex-shrink-0` sibling
          of `<nav>` and the conditional bottom-region wrapper, so its
          visual position never drifts based on channel count OR on whether
          the undo toast / hidden drawer happens to be showing. The wrapper
@@ -1771,7 +1771,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
       :if={hidden_count > 0}
       class="flex-shrink-0 border-t border-base-content/10 px-2 py-2"
     >
-      <%!-- Global "N hidden channels" drawer (Option B per Marlowe's v3
+      <%!-- Global "N hidden channels" drawer (Option B per the designer's v3
            review). One quiet row at the rail's foot — silent at N=0 —
            expanding upward into a scrollable grouped list. The panel
            ALWAYS renders so the max-height CSS transition animates in

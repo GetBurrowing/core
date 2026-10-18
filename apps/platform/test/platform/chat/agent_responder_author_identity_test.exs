@@ -78,7 +78,7 @@ defmodule Platform.Chat.AgentResponderAuthorIdentityTest do
       Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: Ecto.UUID.generate(),
-        display_name: "Marlowe",
+        display_name: "Robin",
         joined_at: DateTime.utc_now()
       })
 
@@ -175,7 +175,7 @@ defmodule Platform.Chat.AgentResponderAuthorIdentityTest do
       message = post!(space, author, "please do the thing")
       payload = broadcast_for(topic, message)
 
-      assert payload.message.author == "Marlowe"
+      assert payload.message.author == "Robin"
       assert payload.message.author_type == "user"
       assert payload.message.author_user_id == author.participant_id
       assert is_binary(author.participant_id)
@@ -216,12 +216,12 @@ defmodule Platform.Chat.AgentResponderAuthorIdentityTest do
       participant = %Chat.Participant{
         participant_type: "agent",
         participant_id: agent_id,
-        display_name: "Marlowe"
+        display_name: "Robin"
       }
 
       msg = AgentResponder.external_message(%{user_message: "hi", attachments: []}, participant)
 
-      assert msg.author == "Marlowe"
+      assert msg.author == "Robin"
       assert msg.author_type == "agent"
       assert msg.author_user_id == nil
       assert msg.author_agent_id == agent_id
@@ -231,7 +231,7 @@ defmodule Platform.Chat.AgentResponderAuthorIdentityTest do
       participant = %Chat.Participant{
         participant_type: "system",
         participant_id: Ecto.UUID.generate(),
-        display_name: "Marlowe (via peer)"
+        display_name: "Robin (via peer)"
       }
 
       msg = AgentResponder.external_message(%{user_message: "hi", attachments: []}, participant)

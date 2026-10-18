@@ -293,7 +293,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
         BoardData.stack_matches_search?(stack, board_data, q)
       end)
 
-    # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
+    # Design review 2026-07-12 ("narrow everything"): while a query is active every
     # on-screen count — columns, scope-rail chips, header total — describes
     # the filtered board. Chips mirror Tasks.count_by_scope/0's current stub
     # semantics (everything under the root org's slug); when that becomes a

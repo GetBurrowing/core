@@ -50,11 +50,11 @@ ships it.
   boot a setup unit copies `/opt/suite/agent-host` out of this image and runs
   `install-tools.sh`. Agents reach core at the install's public URL through
   Caddy, like a federated agent.
-- **contained** (shared hosts such as fabrikam on moon): this directory's
+- **contained** (shared hosts such as the root install on test-host): this directory's
   `Dockerfile`, a systemd-init image (systemd is PID 1; podman's systemd mode).
   Agents use the same `sudo systemctl`, `systemctl --user` and `crontab` as on
   full_machine. The container joins ONLY the agents network, created with
-  `isolate=strict`; core-platform joins both. Measured on moon
+  `isolate=strict`; core-platform joins both. Measured on test-host
   (`test/contained/reachability.sh`): the agent host reaches core-platform:4000
   and the internet, and not Postgres, by name or by address. With
   `isolate=true` or no isolation it DOES reach Postgres by address, because
@@ -77,7 +77,7 @@ on an `AutoUpdate=registry` host.
 
 ## Tests
 
-These run on moon, never on hive:
+These run on test-host, never on build-host:
 
     bash test/isolation/run.sh <path to this directory>
     bash test/contained/reachability.sh <agent-host image> [strict|true|none]

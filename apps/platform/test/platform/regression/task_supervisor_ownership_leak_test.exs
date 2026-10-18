@@ -182,7 +182,7 @@ defmodule Platform.Regression.TaskSupervisorOwnershipLeakTest do
           status: "processing",
           segments: [
             %{
-              "speaker_name" => "Rowan",
+              "speaker_name" => "Alex",
               "text" => "Kicking off the retro. Sprint felt good but demo slid to Wednesday.",
               "start_time" => 0,
               "end_time" => 6_000,

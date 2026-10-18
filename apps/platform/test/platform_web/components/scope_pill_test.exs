@@ -245,7 +245,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
     test "the six shipped orgs take the same classes as a new org (task 01a09333-d374 stage 5)" do
       # This test used to read "the six shipped orgs are NOT moved onto the
-      # var path". Marlowe ruled on 2026-09-13 that they move; the byte gate in
+      # var path". Robin ruled on 2026-09-13 that they move; the byte gate in
       # `ScopeColorStylesShippedSixTest` is what makes that safe. Here: the
       # six render byte-identical class lists to an org with no history at
       # all, so no slug-specific branch survives in the component.
@@ -440,7 +440,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
       tokens = chip_classes(render_pill(%{scope: :acme, active: true}))
       assert "scope-active" in tokens
       refute Enum.any?(tokens, &String.starts_with?(&1, "scope-tint"))
-      refute "bg-fabrikam-active" in tokens
+      refute "bg-legacy-active" in tokens
     end
 
     test "active utility carries the soft outer ring via box-shadow" do
@@ -644,7 +644,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
         assert "scope-edge-200" in chip
       end
 
-      refute "bg-fabrikam" in target
+      refute "bg-legacy" in target
     end
   end
 
@@ -1003,7 +1003,9 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
       pinned =
         Map.new(
-          Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs).shipped(),
+          Platform.Tenancy.HistoricalRootSlug.relabel(
+            Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs).shipped()
+          ),
           fn {slug, h, c, l} ->
             {String.replace(slug, "_", "-"), ScopeColor.derive(h, c, l).fill}
           end
@@ -1028,7 +1030,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
          %{rules: rules} do
       # The shipped root slug's three hand-authored rules are deleted; its dot
       # and swatch read `--scope-fill` through `data-scope` instead.
-      for selector <- [".text-fabrikam", ".bg-fabrikam-dot", ".channel-section-swatch--fabrikam"] do
+      for selector <- [".text-legacy", ".bg-legacy-dot", ".channel-section-swatch--legacy"] do
         refute Enum.any?(rules, &(&1.selector == selector)), "#{selector} is still in app.css"
       end
 

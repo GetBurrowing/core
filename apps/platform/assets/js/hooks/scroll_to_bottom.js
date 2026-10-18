@@ -62,11 +62,11 @@
 //
 // PROVENANCE — do not "simplify" this back to one threshold.
 // The two-threshold rule was PROPOSED, then WITHDRAWN by Saru in revision 3 of
-// the design canvas, and then REINSTATED BY ROWAN DIRECTLY when he said the
+// the design canvas, and then REINSTATED BY THE OPERATOR DIRECTLY when he said the
 // deep case is not the same as reading a few messages up. That is the
 // decision-maker overruling a withdrawal, not a withdrawn proposal drifting
 // back in through a side door. Collapsing the two constants into one is a
-// one-line change that restores behaviour Rowan explicitly rejected, and it
+// one-line change that restores behaviour the operator explicitly rejected, and it
 // looks like tidying. It is not.
 //
 // `NEAR_BOTTOM_PX` is the FOLLOW boundary: at or under it, an arriving message
@@ -95,7 +95,7 @@ const NEAR_BOTTOM_PX = 150;
 // back to the live edge is a deliberate flick-flick-flick rather than a
 // glance. At 900px it is one and a half screens and eleven messages, which is
 // still recognisably "I scrolled up to re-read something" — exactly the state
-// Rowan said must NOT raise the pill on its own. 2400px was rejected the other
+// the operator said must NOT raise the pill on its own. 2400px was rejected the other
 // way: by four screens the reader is deep enough that the pill has stopped
 // being an offer and started being late.
 //

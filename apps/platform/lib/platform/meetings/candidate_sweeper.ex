@@ -4,7 +4,7 @@ defmodule Platform.Meetings.CandidateSweeper do
   has passed, graduate it (task 01a03fba stage 3).
 
   This exists because the countdown cannot live in the browser. The
-  acceptance criterion is Harper's: *a closed tab must not stop the card
+  acceptance criterion is the product lead's: *a closed tab must not stop the card
   firing with nobody watching*. A `setInterval` in a LiveView hook, or
   even a `Process.send_after/3` in the LiveView process, both die with
   the last connected participant — so the meeting whose members all

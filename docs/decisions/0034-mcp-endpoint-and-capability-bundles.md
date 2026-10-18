@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-04-14
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0007 (Agent Runtime), ADR 0013 (Attention Routing), ADR 0014 (Agent Federation)
 
 ---

@@ -52,7 +52,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
   what is in the space is one cheap query and the alternative is a
   recipient guessing at what it cannot see.
 
-  Per Rowan's ruling on the classifier (task `019fb90f-36e3`): the
+  Per the operator's ruling on the classifier (task `019fb90f-36e3`): the
   classifier is a cheap model and is *"not to be trusted"* to decide
   what happened. Its only job is to notice that an utterance sounds like
   a decision. Whether one was actually made is the recipient's call, and
@@ -63,7 +63,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingDecisionRecorded do
   ## Namespace vs. owner
 
   The key is `meetings.*` and the bundle is the **historian's**. Per
-  Rowan (2026-07-31): the namespace records where the work originates,
+  The operator (2026-07-31): the namespace records where the work originates,
   the bundle records who does it. `Platform.Meetings.IntentRouting`
   carries both so they cannot drift apart silently.
 

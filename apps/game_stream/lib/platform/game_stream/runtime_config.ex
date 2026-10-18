@@ -18,7 +18,7 @@ defmodule Platform.GameStream.RuntimeConfig do
 
   ## TURN (task 01a0db5f stage 5)
 
-  Reuses hive's coturn (the meetings one); no second coturn.
+  Reuses the install's coturn (the meetings one); no second coturn.
   `GAME_STREAM_TURN_URLS` is a comma list (`turn:host:3479?transport=udp,...`),
   `GAME_STREAM_TURN_USERNAME` a static lt-cred-mech user, and the credential
   comes ONLY from the file named by `GAME_STREAM_TURN_CREDENTIAL_FILE`, read

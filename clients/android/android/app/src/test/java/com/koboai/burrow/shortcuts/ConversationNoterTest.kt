@@ -15,7 +15,7 @@ import org.robolectric.RuntimeEnvironment
 class ConversationNoterTest {
     private val host = "suite.example.com"
     private val design = ShareSpace("0192-s", "Design", "design", emptyList(), kind = "group")
-    private val dm = ShareSpace("0192-d", "Harper", "0192-d", emptyList(), kind = "dm")
+    private val dm = ShareSpace("0192-d", "Sam", "0192-d", emptyList(), kind = "dm")
 
     private class FakeClient(
         var signedIn: Boolean = true,
@@ -50,7 +50,7 @@ class ConversationNoterTest {
 
         assertEquals(NoteResult.Noted("$host|0192-d"), result)
         val shortcut = sink.pushed.single()
-        assertEquals("Harper", shortcut.shortLabel.toString())
+        assertEquals("Sam", shortcut.shortLabel.toString())
         assertEquals("/chat/0192-d", shortcut.intent.getStringExtra(com.koboai.burrow.LaunchRouter.EXTRA_CONVERSATION_PATH))
         assertEquals(false, shortcut.extras!!.getBoolean(ConversationShortcuts.EXTRA_IS_GROUP))
         // Only the well-formed recipient, keyed like stage 1's sender.

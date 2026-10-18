@@ -37,7 +37,7 @@ settings:
     DEVELOPMENT_TEAM: XJ2GLJ9ST2
     ENABLE_USER_SCRIPT_SANDBOXING: "NO"
     ALWAYS_SEARCH_USER_PATHS: "NO"
-    # This rock's xcodegen ships without its setting presets ("No iOS
+    # This build host's xcodegen ships without its setting presets ("No iOS
     # settings found"), so the defaults a preset would supply are explicit.
     PRODUCT_NAME: "$(TARGET_NAME)"
     SDKROOT: iphoneos

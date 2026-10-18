@@ -21,8 +21,10 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
   require Phoenix.LiveViewTest
 
+  alias Platform.Regression.InstallIdentityScanner, as: Scanner
   alias Platform.Repo
   alias Platform.Tenancy
+  alias Platform.Tenancy.HistoricalRootSlug
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.ScopeColor
   alias PlatformWeb.ChatLive
@@ -43,7 +45,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   # before stage 5 deleted the chip utilities. Pasted, not read from the
   # migration: the point is that the migration's numbers reproduce these.
   @shipped_fills %{
-    "fabrikam" => "oklch(72% 0.16 50)",
+    "legacy" => "oklch(72% 0.16 50)",
     "soylent" => "oklch(65% 0.20 295)",
     "wayne_tech" => "oklch(68% 0.15 240)",
     "sxi" => "oklch(70% 0.15 162)",
@@ -54,7 +56,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   # The four shipped tenants `test_helper.exs` seeds into the test database
   # before re-running `pin_shipped_colours/1`. The test database's root is
   # the neutral `acme` fixture (task 01a116de stage 4), so the historical
-  # `fabrikam` pin has no row here; "fabrikam is painted when its row exists" below
+  # `legacy` pin has no row here; "legacy is painted when its row exists" below
   # inserts one. Cyberdyne was created through the admin panel on installs
   # that have it, so it is not in a fresh test database either.
   @seeded ~w(soylent wayne_tech sxi paragon)
@@ -73,9 +75,11 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
     )
   end
 
+  # The migration pins the root's row under the original operator's slug;
+  # this file calls it `legacy` (Platform.Tenancy.HistoricalRootSlug).
   defp pinned(slug) do
     {^slug, hue, chroma, lightness} =
-      Enum.find(migration().shipped(), &(elem(&1, 0) == slug))
+      Enum.find(HistoricalRootSlug.relabel(migration().shipped()), &(elem(&1, 0) == slug))
 
     {hue, chroma, lightness}
   end
@@ -93,10 +97,17 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
   describe "the pinned values" do
     test "cover the six shipped orgs, plus the hyphen spelling of wayne-tech" do
-      slugs = migration().shipped() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+      rows = migration().shipped()
+      slugs = rows |> HistoricalRootSlug.relabel() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
 
       assert slugs ==
-               Enum.sort(~w(fabrikam soylent wayne_tech wayne-tech sxi paragon cyberdyne))
+               Enum.sort(~w(legacy soylent wayne_tech wayne-tech sxi paragon cyberdyne))
+
+      # The relabelled row really is the historical root: it is keyed by the
+      # sha256 of a slug the install-identity guard denies, so the migration
+      # matches that slug without spelling it (task 01a14b9e stage 5).
+      assert {:sha256, hex} = HistoricalRootSlug.from_rows(rows)
+      assert Scanner.listed_digest?(hex)
 
       assert pinned("wayne-tech") == pinned("wayne_tech")
     end
@@ -181,15 +192,26 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       assert Tenancy.get_org_by_slug("cyberdyne") == nil
     end
 
-    test "paints a fabrikam row when one exists (the pin is keyed on the historical slug)" do
-      assert Tenancy.get_org_by_slug("fabrikam") == nil
-      tenant!("fabrikam", %{color_hue: 12, color_chroma: 0.15})
+    test "paints a legacy row when one exists (the pin is keyed on the historical slug's digest)" do
+      # The shipped root arm matches by the sha256 of the slug. Drive that
+      # same arm with a slug this test owns: a row whose slug hashes to the
+      # key is painted, and a row whose slug does not is left alone.
+      {:sha256, _} = HistoricalRootSlug.from_rows(migration().shipped())
 
-      counts = migration().pin_shipped_colours(Repo)
+      {_, hue, chroma, lightness} =
+        Enum.find(migration().shipped(), &match?({{:sha256, _}, _, _, _}, &1))
 
-      assert counts["fabrikam"] == 1
-      assert colour("fabrikam") == {50, 0.16, 0.72}
-      assert colour("fabrikam") == pinned("fabrikam")
+      root = "legacy-root-#{System.unique_integer([:positive])}"
+      tenant!(root, %{color_hue: 12, color_chroma: 0.15})
+      bystander = tenant!(root <> "-other", %{color_hue: 12, color_chroma: 0.15})
+      key = {:sha256, Scanner.digest(root)}
+
+      counts = migration().pin_colours(Repo, [{key, hue, chroma, lightness}])
+
+      assert counts == %{key => 1}
+      assert colour(root) == {50, 0.16, 0.72}
+      assert colour(root) == pinned("legacy")
+      assert colour(bystander.slug) == {12, 0.15, nil}
     end
 
     test "colours a cyberdyne row an operator created with a hue of their own" do
@@ -228,7 +250,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       # the header's `@scope_filter == header_scope` active state keeps working.
       # The root org is the exception since task 01a116de stage 3: it has no
       # compiled atom and takes the binary path like any runtime org.
-      assert ChatLive.org_scope("fabrikam") == "fabrikam"
+      assert ChatLive.org_scope("legacy") == "legacy"
 
       atoms = Enum.map(~w(paragon soylent wayne_tech sxi cyberdyne), &ChatLive.org_scope/1)
 

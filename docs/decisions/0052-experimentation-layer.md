@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-09-24
-**Author:** Rowan Ellis / Dalton
+**Author:** the product owner / Dalton
 **Task:** 01a0d415-b616-7001-b87d-bb5568a776d3
 **Related:** ADR-0048 (Experimentation Substrate for Prompt Templates — EXTENDED here, not superseded)
 
@@ -184,7 +184,7 @@ filter a data change, as that decision intended.
 
 ### 10. Launch approval is opt-in per org; default launches within guardrails
 
-`require_human_approval` **defaults to false** (Rowan, 2026-09-24), both as
+`require_human_approval` **defaults to false** (the product owner, 2026-09-24), both as
 the column default and as the built-in default `Guardrails.for_org/1`
 returns when no row exists. **Approval is opt-in per org; by default an
 agent's start launches within the guardrails** — it still has to pass

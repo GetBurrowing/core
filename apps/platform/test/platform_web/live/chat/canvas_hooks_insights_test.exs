@@ -41,7 +41,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     dreaming_agent!()
     person = person!()
 
-    line = insight!(addressee: person, body: "Deploys moved to moon.")
+    line = insight!(addressee: person, body: "Deploys moved to host-b.")
 
     question =
       insight!(
@@ -165,17 +165,19 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
 
     assert Repo.aggregate(InsightVerdict, :count) == 0
 
-    assert %{"props" => %{"value" => "Deploys moved to moon."}} =
+    assert %{"props" => %{"value" => "Deploys moved to host-b."}} =
              CanvasDocument.get_node(live_doc(ctx.canvas), "done-" <> k)
 
     # Positive control: with a reason, the flag lands and the line is retracted.
-    submit(view, ctx.canvas, "insight_flag_reason:" <> k, %{"reason" => "Still on hive."})
+    submit(view, ctx.canvas, "insight_flag_reason:" <> k, %{"reason" => "Still on host-a."})
     assert flash(view)["info"] =~ "Flagged"
-    assert [%InsightVerdict{kind: "flagged", reason: "Still on hive."}] = Repo.all(InsightVerdict)
+
+    assert [%InsightVerdict{kind: "flagged", reason: "Still on host-a."}] =
+             Repo.all(InsightVerdict)
 
     document = live_doc(ctx.canvas)
 
-    assert %{"props" => %{"value" => "Retracted: Still on hive."}} =
+    assert %{"props" => %{"value" => "Retracted: Still on host-a."}} =
              CanvasDocument.get_node(document, "done-" <> k)
 
     refute CanvasDocument.get_node(document, "insight_flag_reason:" <> k)
@@ -201,7 +203,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     assert Enum.any?(
              Insights.exemplars(),
              &match?(
-               %{kind: "flagged", reason: "Wrong host.", body: "Deploys moved to moon."},
+               %{kind: "flagged", reason: "Wrong host.", body: "Deploys moved to host-b."},
                &1
              )
            )
@@ -228,7 +230,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     assert flash(view)["error"] == "This item expired. Nothing was changed."
     refute CanvasDocument.get_node(live_doc(ctx.canvas), "insight_flag_reason:" <> key(ctx.bline))
 
-    submit(view, ctx.canvas, "insight_answer:" <> key(ctx.question), %{"answer" => "Rowan."})
+    submit(view, ctx.canvas, "insight_answer:" <> key(ctx.question), %{"answer" => "Alex."})
     assert flash(view)["error"] == "This item expired. Nothing was changed."
 
     assert Repo.aggregate(WikiJournalEntry, :count) == 0
@@ -239,7 +241,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     view = mount!(ctx.person, ctx.briefing.space_id)
     k = key(ctx.question)
 
-    submit(view, ctx.canvas, "insight_answer:" <> k, %{"answer" => "Rowan does."})
+    submit(view, ctx.canvas, "insight_answer:" <> k, %{"answer" => "Alex does."})
     assert flash(view)["info"] =~ "Answer saved"
 
     [entry] = Repo.all(WikiJournalEntry)
@@ -249,7 +251,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     document = live_doc(ctx.canvas)
     refute CanvasDocument.get_node(document, "insight_answer:" <> k)
 
-    assert %{"props" => %{"value" => "Answered: Rowan does."}} =
+    assert %{"props" => %{"value" => "Answered: Alex does."}} =
              CanvasDocument.get_node(document, "note-" <> k)
   end
 
@@ -311,7 +313,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
     assert flash(view)["error"] == "Give a reason to flag this."
     assert Repo.aggregate(InsightVerdict, :count) == 0
 
-    assert %{"props" => %{"value" => "Deploys moved to moon."}} =
+    assert %{"props" => %{"value" => "Deploys moved to host-b."}} =
              CanvasDocument.get_node(live_doc(ctx.canvas), "done-" <> k)
 
     # With "wrong person" the line is retracted and a flagged verdict exists.

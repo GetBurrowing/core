@@ -66,7 +66,7 @@ final class ExtensionRenderTests: XCTestCase {
     // MARK: Share sheet
 
     private func sheet(_ configure: (ShareSheetModel) -> Void) -> some View {
-        let model = ShareSheetModel(install: Install(host: "suite.example.com"))
+        let model = ShareSheetModel(install: Install(host: "suite.example.net"))
         configure(model)
         return ShareSheetView(model: model, onCancel: {}, onDone: {})
     }
@@ -76,7 +76,7 @@ final class ExtensionRenderTests: XCTestCase {
             SuiteSpace.self,
             from: Data(
                 """
-                {"id":"s1","name":"Internal Fabrikam SXI","slug":"sxi","kind":"channel","agents":[{"id":"a1","name":"Saru","slug":"saru"}]}
+                {"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel","agents":[{"id":"a1","name":"Saru","slug":"saru"}]}
                 """.utf8))
     ]
 
@@ -96,7 +96,7 @@ final class ExtensionRenderTests: XCTestCase {
                 $0.payload = url
                 $0.debugSet(phase: .ready, spaces: spaces)
                 $0.selectedSpaceID = "s1"
-                $0.debugSet(phase: .sent(spaceName: "Internal Fabrikam SXI"))
+                $0.debugSet(phase: .sent(spaceName: "Internal Legacy SXI"))
             }, size: size)
         try snapshot(
             "share-failed",
@@ -214,7 +214,7 @@ final class ExtensionRenderTests: XCTestCase {
 
     private func entry(approvals: Int, tasks: Int, minutesOld: Double = 2, signedIn: Bool = true) -> CountsEntry {
         CountsEntry(
-            date: now, host: "suite.example.com", signedIn: signedIn,
+            date: now, host: "suite.example.net", signedIn: signedIn,
             counts: SuiteCounts(approvals: approvals, tasks: tasks, fetchedAt: now.addingTimeInterval(-minutesOld * 60)))
     }
 
@@ -298,14 +298,14 @@ final class ExtensionRenderTests: XCTestCase {
         let size = CGSize(width: 402, height: 520)
         func row(_ n: Int, _ title: String, _ space: String) -> (id: String, approval: SuiteApproval) {
             (
-                "suite.example.com|ap\(n)",
+                "suite.example.net|ap\(n)",
                 SuiteApproval(
                     id: "ap\(n)", kind: n == 1 ? "plan" : "review", title: title, spaceName: space, spacePathSegment: nil, taskID: nil,
                     insertedAt: nil, summary: nil)
             )
         }
         let summary = WaitingSummary(
-            approvals: [row(1, "Burrow iOS intents plan", "Burrow iOS"), row(2, "Banner copy review", "Internal Fabrikam SXI")],
+            approvals: [row(1, "Burrow iOS intents plan", "Burrow iOS"), row(2, "Banner copy review", "Internal Legacy SXI")],
             tasks: [
                 SuiteTask(id: "t1", title: "Ship the widget confirm strip", status: "in_progress", projectName: "Burrow iOS"),
                 SuiteTask(id: "t2", title: "Rotate the APNs key", status: "todo", projectName: "Infrastructure"),
@@ -335,8 +335,8 @@ final class ExtensionRenderTests: XCTestCase {
         try snapshot(
             "snippet-approve-confirm-multi-install",
             siriCard(
-                dialog: IntentCopy.approveConfirm(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Fabrikam Suite"),
-                ConfirmSnippetView.approve(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Fabrikam Suite")),
+                dialog: IntentCopy.approveConfirm(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Suite"),
+                ConfirmSnippetView.approve(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Suite")),
             size: CGSize(width: 402, height: 340))
         let question = "Is the banner copy final?"
         try snapshot(
@@ -361,13 +361,13 @@ final class ExtensionRenderTests: XCTestCase {
     ) -> ApprovalsEntry {
         let titles = [
             ("Burrow iOS intents plan", "Burrow iOS", "Add App Intents, entities and Spotlight"),
-            ("Banner copy review", "Internal Fabrikam SXI", "Final wording for the launch banner"),
+            ("Banner copy review", "Internal Legacy SXI", "Final wording for the launch banner"),
             ("Rotate the APNs key", "Infrastructure", "Move to the new team key before expiry"),
             ("Android share target", "Burrow Android", "Share sheet and Glance widgets"),
             ("Meeting notes export", "Meetings", "Export transcripts as Markdown"),
             ("Quota alerts", "Control", "Warn at 80 percent of the monthly budget"),
         ]
-        let host = "suite.example.com"
+        let host = "suite.example.net"
         let all = displays + Array(repeating: ApprovalsEntry.Display.live, count: extra)
         let rows = all.enumerated().map { index, display in
             let t = titles[index % titles.count]
@@ -388,11 +388,11 @@ final class ExtensionRenderTests: XCTestCase {
             ("approving", approvalsEntry([.approving, .live], extra: 3)),
             ("approved", approvalsEntry([.approved, .live], extra: 3)),
             ("failed", approvalsEntry([.failed, .live], extra: 3)),
-            ("already-handled", approvalsEntry([.alreadyHandled(by: "Rowan Ellis"), .live], extra: 3)),
+            ("already-handled", approvalsEntry([.alreadyHandled(by: "Alex Rivera"), .live], extra: 3)),
             ("stale", approvalsEntry([.stale, .stale], extra: 0, minutesOld: 47)),
             ("zero", approvalsEntry([])),
             ("signed-out", approvalsEntry([], signedIn: false)),
-            ("multi-install", approvalsEntry([.live, .live], extra: 1, installName: "Fabrikam Suite")),
+            ("multi-install", approvalsEntry([.live, .live], extra: 1, installName: "Legacy Suite")),
         ]
         let sizes: [(String, WidgetFamily, CGSize)] = [
             ("medium", .systemMedium, CGSize(width: 364, height: 170)),
@@ -442,7 +442,7 @@ final class ExtensionRenderTests: XCTestCase {
             ("waiting-live", .waiting(signedIn: true, approvals: 3, install: nil)),
             ("waiting-zero", .waiting(signedIn: true, approvals: 0, install: nil)),
             ("waiting-signed-out", .waiting(signedIn: false, approvals: nil, install: nil)),
-            ("waiting-multi-install", .waiting(signedIn: true, approvals: 2, install: "Fabrikam Suite")),
+            ("waiting-multi-install", .waiting(signedIn: true, approvals: 2, install: "Legacy Suite")),
             ("start-meeting", .startMeeting(lastSpace: "Burrow iOS", install: nil)),
             ("start-meeting-first", .startMeeting(lastSpace: nil, install: nil)),
         ]
@@ -572,7 +572,7 @@ final class ExtensionRenderTests: XCTestCase {
     private func unreadPicker(_ counts: [String: (Int, Bool)], dark: Bool = false) -> some View {
         let defaults = UserDefaults(suiteName: "ExtensionRenderTests.unread.\(UUID().uuidString)")!
         let store = InstallStore(defaults: defaults)
-        for host in ["suite.example.com", "suite.example.com", "suite.milv.life"] { store.remove(host: host) }
+        for host in ["suite.example.net", "suite.example.org", "suite.example.test"] { store.remove(host: host) }
         store.add(host: "suite-a.localhost", name: "Acme")
         store.add(host: "suite-b.localhost", name: "B launch")
         store.select("suite-a.localhost")

@@ -35,7 +35,7 @@ defmodule Platform.Federation.Peers.Client do
       permanent pool per sender-chosen hostname (see its moduledoc).
 
   The rig exception: when `Config.allow_http?/0` is true (non-prod only, for
-  the two-install rig on moon's podman `dev` network, whose peers have
+  the two-install rig on the test rig's podman `dev` network, whose peers have
   private addresses), the address checks and pinning are skipped.
 
   Redirects are never followed (`redirect: false`), so a public host cannot

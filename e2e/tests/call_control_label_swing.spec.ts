@@ -55,7 +55,7 @@ import { allRects, visibleRect, type Rect } from "./support/geometry"
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:4000"
 const MEETING_SLUG = process.env.SWING_MEETING_SLUG ?? "label-swing"
-const LOGIN_AS = process.env.SWING_LOGIN_AS ?? "marlowe"
+const LOGIN_AS = process.env.SWING_LOGIN_AS ?? "robin"
 
 /** 1440x900 is FE-19's viewport, kept so the two stages' absolute numbers are
  *  comparable. The width also matters on its own account: the control row must

@@ -124,7 +124,7 @@ defmodule Mix.Tasks.Responsibilities.PromptAudit do
 
   # 14, not 12: `chat_pattern` is exactly 12 characters, so a 12-wide column
   # renders `chat_patterndesign.brand_check.v1` with no separator at all —
-  # measured on moon at 3ab3b019 against the real 26-row table. A column
+  # measured on the test rig at 3ab3b019 against the real 26-row table. A column
   # whose width equals its widest value is a column with no gutter.
   @trigger_width 14
 

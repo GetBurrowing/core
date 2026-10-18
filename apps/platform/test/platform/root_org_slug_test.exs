@@ -2,7 +2,7 @@ defmodule Platform.RootOrgSlugTest do
   @moduledoc """
   Task 01a081c2 stage 1 pinned every path that resolves "the org a write
   lands in when the caller named none" to `Platform.Tenancy.root_org_slug/0`
-  rather than a hardcoded `"fabrikam"`. Task 01a068f6 stage 1 went further for
+  rather than a hardcoded `"legacy"`. Task 01a068f6 stage 1 went further for
   the six call sites below: they no longer read `root_org_slug/0` AT ALL —
   they resolve the root org structurally via `Platform.Tenancy.get_root_org/0`
   (`parent_org_id IS NULL`), so an operator does not have to configure
@@ -34,7 +34,7 @@ defmodule Platform.RootOrgSlugTest do
       id is the only way to catch that regression.
 
   `describe "root org renamed away"` is the literal production shape: on
-  suite.example.com the single org was RENAMED from `"acme"` to
+  suite.example.org the single org was RENAMED from `"acme"` to
   `"milhouse"` on 2026-09-03 — same *row*, same `parent_org_id IS NULL`,
   different slug. That is what made a first-time OIDC login unable to
   create a user under the pre-01a068f6 slug-based lookup —

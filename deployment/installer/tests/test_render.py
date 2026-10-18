@@ -3,7 +3,7 @@
 Run: PYTHONPATH=deployment/installer python3 -m unittest discover -s deployment/installer/tests -v
 
 Design:
-- Every class renders the shipped moon-equivalent example FIRST (positive
+- Every class renders the shipped single-host example FIRST (positive
   control), so a renderer that emits nothing, or refuses everything, fails
   loudly instead of passing the absence checks.
 - (a) Golden files are compared byte-for-byte, whole-file, after secret values
@@ -34,11 +34,13 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(INSTALLER))
-EXAMPLE = os.path.join(REPO, "deployment", "examples", "moon-equivalent.install.toml")
+EXAMPLE = os.path.join(REPO, "deployment", "examples", "single-host.install.toml")
 RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
 GOLDEN = os.path.join(HERE, "golden")
 
 sys.path.insert(0, INSTALLER)
+
+from identity_terms import identity_hits, planted_term
 
 from suite_install import envcompat, registry
 from suite_install.__main__ import main
@@ -47,10 +49,10 @@ from suite_install.render import TARGETS, RenderError, build, plan, render
 from suite_install.secrets import parse_env_file
 from suite_install.validate import validate
 
-MEMORY_OFF = os.path.join(RENDER_FIXTURES, "moon-equivalent-memory-off.toml")
+MEMORY_OFF = os.path.join(RENDER_FIXTURES, "single-host-memory-off.toml")
 VOICE_CUDA = os.path.join(RENDER_FIXTURES, "voice-cuda-gpu.toml")
 BYO = os.path.join(RENDER_FIXTURES, "byo-endpoint.toml")
-PLAY = os.path.join(RENDER_FIXTURES, "moon-equivalent-play.toml")
+PLAY = os.path.join(RENDER_FIXTURES, "single-host-play.toml")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
 # The knobs the single-host target runs. `meetings` is a mac-only knob in v1
@@ -60,20 +62,21 @@ SINGLE_HOST_SERVICES = {
 }
 
 GOLDEN_CASES = {
-    "moon-equivalent": EXAMPLE,
-    "moon-equivalent-memory-off": MEMORY_OFF,
+    "single-host": EXAMPLE,
+    "single-host-memory-off": MEMORY_OFF,
     # Native agents (task 01a10322 stage 3); test_agents_render.py covers the rest.
-    "moon-equivalent-agents-full": os.path.join(
-        RENDER_FIXTURES, "moon-equivalent-agents-full.toml"
-    ),
-    "moon-equivalent-agents-contained": os.path.join(
-        RENDER_FIXTURES, "moon-equivalent-agents-contained.toml"
+    "single-host-agents-full": os.path.join(RENDER_FIXTURES, "single-host-agents-full.toml"),
+    "single-host-agents-contained": os.path.join(
+        RENDER_FIXTURES, "single-host-agents-contained.toml"
     ),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
-# unless a manifest declares them (Rowan, 2026-09-25).
-FORBIDDEN = ("ellis", "192.168.", "lightning", "OPENCLAW_")
+# unless a manifest declares them (product decision, 2026-09-25). Install and
+# personal identity (an operator's org, domains, hosts, people) is checked by
+# identity_hits, on the same digest rule as core's Elixir guard, so this file
+# does not spell it (task 01a14b9e stage 5); the LAN prefix stays literal.
+FORBIDDEN = ("192.168.", "lightning", "OPENCLAW_")
 
 MEMORY_EXPECTED_IDENTIFIERS = {
     "memory-service",
@@ -177,17 +180,17 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
                 )
                 self.fail(f"{case}/{rel} differs from golden:\n{diff}")
 
-    def test_golden_moon_equivalent(self):
-        self.check_golden("moon-equivalent")
+    def test_golden_single_host(self):
+        self.check_golden("single-host")
 
-    def test_golden_moon_equivalent_memory_off(self):
-        self.check_golden("moon-equivalent-memory-off")
+    def test_golden_single_host_memory_off(self):
+        self.check_golden("single-host-memory-off")
 
-    def test_golden_moon_equivalent_agents_full(self):
-        self.check_golden("moon-equivalent-agents-full")
+    def test_golden_single_host_agents_full(self):
+        self.check_golden("single-host-agents-full")
 
-    def test_golden_moon_equivalent_agents_contained(self):
-        self.check_golden("moon-equivalent-agents-contained")
+    def test_golden_single_host_agents_contained(self):
+        self.check_golden("single-host-agents-contained")
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES
@@ -487,22 +490,27 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
                 rendered = build(m)
                 self.assertNotIn("models.json", rendered.files)
                 text = all_text(rendered)
-                # The default image refs live under the docker.io/example
-                # namespace (the stage's own defaults), which contains
-                # "ellis". An image namespace is not a host or endpoint,
-                # so image refs are removed before the search, and the only
-                # "ellis" left anywhere must be inside one of them.
-                images = {svc.image for svc in plan(m).services.values()}
-                self.assertEqual(text.count("ellis"), text.count("example/"))
-                for image in sorted(images, key=len, reverse=True):
-                    text = text.replace(image, "<image>")
+                # The image namespace is the manifest's own input (task
+                # 01a14b9e), so image refs are searched like everything else.
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
+                self.assertEqual(identity_hits(text), [])
 
     def test_forbidden_search_can_hit(self):
         raw = load(BYO)
-        raw["models"]["endpoints"][0]["base_url"] = "http://192.168.0.9:8000/v1"
+        # A LAN address planted on purpose; assembled so this file does not
+        # carry one (task 01a14b9e stage 5).
+        raw["models"]["endpoints"][0]["base_url"] = "http://" + "192." + "168.0.9:8000/v1"
         raw["models"]["endpoints"][0].pop("api_key_ref")
         self.assertIn("192.168.", all_text(build(valid(raw))))
+
+    def test_identity_search_can_hit(self):
+        raw = load(BYO)
+        raw["models"]["endpoints"][0]["base_url"] = f"http://llm.{planted_term()}.example/v1"
+        raw["models"]["endpoints"][0].pop("api_key_ref")
+        hits = identity_hits(all_text(build(valid(raw))))
+        # the endpoint is rendered more than once (models.json and user-data)
+        self.assertGreater(len(hits), 0)
+        self.assertEqual(set(hits), {planted_term()})
 
 
 # ---------------------------------------------------------------------------
@@ -842,8 +850,17 @@ def _ci_main_build_steps():
     ]
 
 
+# CI publishes Docker Hub refs under the repo variable, never a literal
+# namespace (task 01a14b9e); the installer's are under images.image_namespace.
+CI_NAMESPACE = "${{ vars.DOCKERHUB_NAMESPACE }}"
+
+
 def _published_tags(step):
-    """Image refs a step tags: `tags:` list lines and `-t <ref> \\` arguments."""
+    """Image refs a step tags: `tags:` list lines and `-t <ref> \\` arguments.
+
+    The namespace expression is read as the token ``<ns>``.
+    """
+    step = step.replace(CI_NAMESPACE, "<ns>")
     refs = re.findall(r"^\s+(?:-t )?(docker\.io/\S+?)(?: \\)?$", step, flags=re.MULTILINE)
     return set(refs)
 
@@ -923,7 +940,84 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         published = set().union(*map(_published_tags, steps))
         for module_set, tag in registry.IMAGE_FLAVOURS.items():
             with self.subTest(modules=sorted(module_set)):
-                self.assertIn(f"{registry.CORE_IMAGE_REPO}:{tag}", published)
+                self.assertIn(f"docker.io/<ns>/{registry.CORE_IMAGE_NAME}:{tag}", published)
+
+    def test_ci_names_no_literal_docker_hub_namespace(self):
+        # Every suite-* ref CI tags or pushes on Docker Hub is built from the
+        # DOCKERHUB_NAMESPACE variable (task 01a14b9e). Positive control: the
+        # same scan of a planted literal finds it.
+        with open(CI_WORKFLOW, encoding="utf-8") as handle:
+            text = handle.read()
+        pattern = re.compile(r"docker\.io/([^/\s'\"]+(?:\s[^/\s'\"]+)*?)/suite-")
+        found = pattern.findall(text)
+        self.assertTrue(found, "positive control: ci.yml must tag docker.io suite-* refs")
+        self.assertEqual(set(found), {CI_NAMESPACE})
+        self.assertEqual(pattern.findall("x docker.io/acme/suite-core:core"), ["acme"])
+
+    def test_the_namespace_reaches_every_suite_image(self):
+        # Task 01a14b9e: every suite-* default is docker.io/<image_namespace>/.
+        def suite_images(path):
+            raw = load(path)
+            raw["images"]["image_namespace"] = "acme-images"
+            services = plan(valid(raw)).services
+            return {n: svc.image for n, svc in services.items() if "/suite-" in svc.image}
+
+        contained = os.path.join(RENDER_FIXTURES, "single-host-agents-contained.toml")
+        mac = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
+        self.assertEqual(
+            suite_images(contained),
+            {
+                "agent-host": "docker.io/acme-images/suite-agent-host:latest",
+                "core-platform": "docker.io/acme-images/suite-core:core",
+                "files-service": "docker.io/acme-images/suite-files-service:latest",
+                "memory-service": "docker.io/acme-images/suite-memory-service:latest",
+            },
+        )
+        self.assertEqual(
+            suite_images(mac)["meeting-transcriber"],
+            "docker.io/acme-images/suite-meeting-transcriber:latest",
+        )
+
+
+class ImageNamespaceRequiredTest(unittest.TestCase):
+    """images.image_namespace is REQUIRED with no default (task 01a14b9e)."""
+
+    def test_render_without_it_refuses_naming_the_input_and_writes_nothing(self):
+        work = tempfile.mkdtemp(prefix="suite-ns-")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        path = os.path.join(work, "install.toml")
+        with open(EXAMPLE, encoding="utf-8") as handle:
+            text = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text.replace('image_namespace = "example"\n', ""))
+        self.assertNotIn("image_namespace", load(path)["images"])
+        out = os.path.join(work, "out")
+        code, stdout = run_cli("render", path, "--out", out)
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            stdout,
+            "error missing_required at images.image_namespace: image_namespace is required "
+            "and has no default: the Docker Hub namespace the suite-* images are pulled from "
+            "(docker.io/<image_namespace>/suite-core)\n",
+        )
+        self.assertFalse(os.path.exists(out))
+
+    def test_render_with_it_uses_it(self):
+        work = tempfile.mkdtemp(prefix="suite-ns-")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        out = os.path.join(work, "out")
+        code, stdout = run_cli("render", EXAMPLE, "--out", out)
+        self.assertEqual(code, 0, stdout)
+        with open(os.path.join(out, "user-data"), encoding="utf-8") as handle:
+            self.assertIn("image='docker.io/example/suite-core:core'", handle.read())
+
+    def test_an_unvalidated_manifest_cannot_reach_a_default_image(self):
+        m = manifest_from(EXAMPLE)
+        m["images"]["image_namespace"] = None
+        with self.assertRaises(RenderError) as ctx:
+            build(m)
+        self.assertEqual(ctx.exception.code, "missing_required")
+        self.assertEqual(ctx.exception.path, "images.image_namespace")
 
     def test_every_module_names_a_project_with_its_own_mix_file(self):
         for name, project in registry.MODULES.items():

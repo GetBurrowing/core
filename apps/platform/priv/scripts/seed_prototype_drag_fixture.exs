@@ -35,7 +35,7 @@
 # finds, and re-publishes the page as a new version of the same prototype so
 # the frame always serves the HTML in this file.
 #
-# Run from apps/platform (in the dev container on the moon rig):
+# Run from apps/platform (in the dev container on the dev-server rig):
 #   mix run priv/scripts/seed_prototype_drag_fixture.exs
 #
 # Prints CANVAS_ID=, SPACE_ID=, SPACE_SLUG= and USER_SLUG= lines.

@@ -65,7 +65,7 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
     [
       %{
         "participant_identity" => "user_1",
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" => "Helios milestone is on track.",
         "start_time" => 0,
         "end_time" => 3000,
@@ -204,7 +204,7 @@ defmodule Platform.Responsibilities.ContextProvidersTest do
       # formatted_text must byte-for-byte match SummaryPrompt.format_segments/1
       # so handlers stay in sync with the canonical formatting.
       assert payload.formatted_text == SummaryPrompt.format_segments(sample_segments())
-      assert payload.formatted_text =~ "Harper"
+      assert payload.formatted_text =~ "Sam"
       assert payload.formatted_text =~ "Mira Chen"
     end
 

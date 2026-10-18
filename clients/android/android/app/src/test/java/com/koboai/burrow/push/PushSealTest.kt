@@ -24,7 +24,7 @@ class PushSealTest {
         val map = PushSeal.open(SealFixture.sealed, SealFixture.host, SealFixture.privateKey)!!
         assertEquals("chat_mention", map["kind"])
         assertEquals("Dana in launch", map["title"])
-        assertEquals("@Marlowe can you check the deck before 3?", map["body"])
+        assertEquals("@Robin can you check the deck before 3?", map["body"])
         assertEquals(SealFixture.innerData, map)
     }
 

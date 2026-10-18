@@ -618,14 +618,14 @@ defmodule PlatformWeb.AppIntentsControllerTest do
       user: user
     } do
       {_org, project} = org_project!(user)
-      harper = create_user!()
+      sam = create_user!()
 
       body =
         conn
         |> bearer(token)
         |> post("/api/app/meetings", %{
           "project_id" => project.id,
-          "invitee_user_ids" => [harper.id]
+          "invitee_user_ids" => [sam.id]
         })
         |> json_response(201)
 
@@ -634,7 +634,7 @@ defmodule PlatformWeb.AppIntentsControllerTest do
       assert [%Invite{user_id: invited}] =
                Repo.all(from(i in Invite, where: i.meeting_id == ^body["id"]))
 
-      assert invited == harper.id
+      assert invited == sam.id
     end
 
     test "a refused invitee is 403 and creates NO meeting", %{

@@ -38,7 +38,7 @@ class MonogramTest {
 
     @Test
     fun `a person gets up to two initials, an agent one, first grapheme of each word`() {
-        assertEquals("JL", Monogram.initials("Harper Lee", 2))
+        assertEquals("SL", Monogram.initials("Sam Lee", 2))
         assertEquals("AB", Monogram.initials("  ada   bea  cy ", 2))
         assertEquals("O", Monogram.initials("Octavius Bot", 1))
         assertEquals("ÉD", Monogram.initials("élodie durand", 2))
@@ -62,16 +62,16 @@ class MonogramTest {
 
     @Test
     fun `the tone picks the colours, an agent gets base-300 and primary`() {
-        assertEquals(Monogram.FALLBACK_BACKGROUNDS[5] to Monogram.FALLBACK_FOREGROUNDS[5], Monogram.colors("5", "Harper", Monogram.LIGHT))
+        assertEquals(Monogram.FALLBACK_BACKGROUNDS[5] to Monogram.FALLBACK_FOREGROUNDS[5], Monogram.colors("5", "Sam", Monogram.LIGHT))
         assertEquals(Monogram.LIGHT.base300 to Monogram.LIGHT.primary, Monogram.colors("agent", "Octavius", Monogram.LIGHT))
         assertEquals(Monogram.DARK.base300 to Monogram.DARK.primary, Monogram.colors("agent", "Octavius", Monogram.DARK))
         // An unknown tone still picks a stable palette pair from the name.
-        assertEquals(Monogram.colors(null, "Harper", Monogram.LIGHT), Monogram.colors("9", "Harper", Monogram.LIGHT))
+        assertEquals(Monogram.colors(null, "Sam", Monogram.LIGHT), Monogram.colors("9", "Sam", Monogram.LIGHT))
     }
 
     @Test
     fun `the disc is filled in the tone's colour inside the circle and transparent outside it`() {
-        val disc = Monogram.fallback("Harper Lee", "3", Monogram.LIGHT, size = 200)
+        val disc = Monogram.fallback("Sam Lee", "3", Monogram.LIGHT, size = 200)
         // Inside the circle, above the glyphs.
         assertTrue(near(Monogram.FALLBACK_BACKGROUNDS[3], disc.getPixel(100, 14)))
         assertEquals(0, Color.alpha(disc.getPixel(2, 2)))
@@ -102,7 +102,7 @@ class MonogramTest {
     @Test
     fun `a DM shortcut keeps the face inside the adaptive safe zone, on an opaque fill`() {
         val context = RuntimeEnvironment.getApplication()
-        val icon = Monogram.personShortcutIcon("Harper", "1", decoded(AvatarServer.png(Color.RED)), Monogram.LIGHT)
+        val icon = Monogram.personShortcutIcon("Sam", "1", decoded(AvatarServer.png(Color.RED)), Monogram.LIGHT)
         val bitmap = AvatarServer.bitmapOf(icon, context)
         val size = bitmap.width
         assertTrue(near(Color.RED, bitmap.getPixel(size / 2, size / 2)))

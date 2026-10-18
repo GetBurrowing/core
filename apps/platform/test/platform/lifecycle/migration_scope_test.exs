@@ -259,7 +259,7 @@ defmodule Platform.Lifecycle.MigrationScopeTest do
           space_id: Platform.Types.UUIDv7.generate(),
           segments: [
             %{
-              "speaker_name" => "Harper",
+              "speaker_name" => "Sam",
               "text" => "Quick standup.",
               "start_time" => 0,
               "end_time" => 500,

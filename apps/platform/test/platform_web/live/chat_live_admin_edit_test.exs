@@ -753,7 +753,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
 
       # No action button. Undo is deliberately out of scope for this stage: the
       # move already carries a two-step confirmation and the row's menu moves it
-      # back in one click. Marlowe's separate decision to offer an Undo here is
+      # back in one click. Robin's separate decision to offer an Undo here is
       # task 01a01052-3155-7c15-8c48-9ff8955b9b70, and this line is what that
       # task will change.
       refute has_element?(view, ~s(#{move_toast_selector()} button)),

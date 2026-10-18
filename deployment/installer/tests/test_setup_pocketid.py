@@ -8,8 +8,8 @@ Two classes run the SAME assertions:
   are set (legacy ``SUITE_INSTALL_TEST_POCKETID_URL`` and
   ``SUITE_INSTALL_TEST_POCKETID_KEY`` are still read). For stage 4 it ran
   against the throwaway container ``pocketid-01a0d6ab``
-  (ghcr.io/pocket-id/pocket-id:v2, sqlite, bound to 127.0.0.1 on moon,
-  reached from hive through an ssh -L forward).
+  (ghcr.io/pocket-id/pocket-id:v2, sqlite, bound to 127.0.0.1 on test-host,
+  reached from build-host through an ssh -L forward).
 
 Running ``pocket-id`` + ``oidc-client`` twice must leave exactly one admin
 user, one client ``suite-core`` whose callback is the literal URL, PKCE on,

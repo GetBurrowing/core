@@ -948,6 +948,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Agent Name"
     assert html =~ "federate-form"
     assert html =~ "Federate Agent"
+    # Task 01a14b9e stage 3: neutral placeholder examples.
+    assert html =~ ~s(placeholder="e.g. alex-home-openclaw")
+    assert html =~ ~r/placeholder="Alex(&#39;|')s OpenClaw"/
   end
 
   test "import flow with workspace configured shows agent checkboxes", %{conn: conn} do

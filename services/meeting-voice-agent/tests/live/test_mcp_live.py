@@ -5,7 +5,7 @@ Requires `MVA_MCP_BASE_URL` and `MVA_MCP_AUTH_TOKEN` — a real, active
 voice-runtime token, e.g. printed once by
 `mix platform.seed_meeting_voice_agent --owner <email>` (see
 apps/platform/lib/mix/tasks/platform/seed_meeting_voice_agent.ex). Unlike
-wave/moon, Core is not LAN-gated: point this at a locally-run
+wave/test-host, Core is not LAN-gated: point this at a locally-run
 `mix phx.server` or at a real deployed Core URL.
 
 Each test opens and closes its own `MCPToolset` within a single `asyncio.run`

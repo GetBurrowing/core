@@ -24,14 +24,14 @@ defmodule Platform.Repo.Migrations.ForceUpdateDeployingTemplateAutoMergeConditio
   THIS MIGRATION IS THE DELIVERABLE, not the descriptor edit. `seed_defaults/0`
   is INSERT-only, so a descriptor-only change reaches no existing deployment,
   and the row edit it carries reached only the install it was typed against:
-  fabrikam held the new body (5078 chars, 17:57:00Z) while milv still held the old
+  install A held the new body (5078 chars, 17:57:00Z) while install B still held the old
   one (4501 chars, 01:48:15Z).
 
   ## What was checked before overwriting, because this one is NOT a superset
 
   Unlike `20260911180000`, the new body is not the old body plus lines — the
-  section was rewritten in place, so `diff` shows three lines only on milv and
-  four only on fabrikam. Each dropped line was confirmed to survive in rewritten
+  section was rewritten in place, so `diff` shows three lines only on install B and
+  four only on install A. Each dropped line was confirmed to survive in rewritten
   form rather than to have been lost: the ANNOTATIONS / retry-sentinel rule,
   the known-flake list, and the `mergedAt`-as-a-field check all still appear,
   and the new body additionally carries the `git ls-remote` check (a merged

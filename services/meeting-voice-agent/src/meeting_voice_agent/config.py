@@ -2,17 +2,17 @@
 
 Everything that affects the experiment surface this task declares (LLM model
 switch, VAD/endpointing thresholds) — and everything that points at a specific
-backend deployment (moon's speaches STT/TTS, Dalton's wave LLM endpoint) — is
-read from the environment here and nowhere else. No module outside this file
-should hard-code a base_url, model name, or threshold; they should all accept
-an `AgentConfig` (or a value pulled from one) as an argument.
+backend deployment (the STT/TTS server, the LLM endpoint) — is read from the
+environment here and nowhere else. No module outside this file should
+hard-code a base_url, model name, or threshold; they should all accept an
+`AgentConfig` (or a value pulled from one) as an argument.
 
-Every value has a documented default so the service is runnable out of the
-box against moon/wave's currently-known addresses, but every one of those
-defaults is expected to be overridden per-deployment via env vars. The one
-exception is `MVA_MCP_BASE_URL`, the Burrow install this agent talks to: it has
-no default, because any default would name one particular install, and an
-empty or unset value raises `ConfigError`. See README.md for the full list.
+Tuning values (models, thresholds, voices) have documented defaults. Every
+value that names a deployment does NOT: `MVA_MCP_BASE_URL` (the Burrow install
+this agent talks to, task 01a116de) and `MVA_LLM_BASE_URL`, `MVA_STT_BASE_URL`
+and `MVA_TTS_BASE_URL` (task 01a14b9e) are required, because any default
+would name one particular install's hosts. An empty or unset value raises
+`ConfigError` naming the variable. See README.md for the full list.
 """
 
 from __future__ import annotations
@@ -147,7 +147,11 @@ class LlmConfig:
             # toggle shape outside config.
             extra_body = {"chat_template_kwargs": {"enable_thinking": thinking_enabled}}
         return cls(
-            base_url=_env_str("MVA_LLM_BASE_URL", "http://192.0.2.107:8090/v1"),
+            base_url=_env_required_str(
+                "MVA_LLM_BASE_URL",
+                "set it to this deployment's OpenAI-compatible LLM endpoint, "
+                "e.g. http://llm.example.com:8090/v1",
+            ),
             model=_env_str("MVA_LLM_MODEL", "qwen3.5-9b"),
             fallback_model=_env_str("MVA_LLM_FALLBACK_MODEL", "granite4.1-8b"),
             api_key=_env_str("MVA_LLM_API_KEY", "not-needed"),
@@ -277,7 +281,7 @@ class McpConfig:
             # redirects that (e.g. to its canonical host or to https), and
             # the MCP client correctly refuses to follow a redirect rather
             # than silently re-POSTing — so the *URL* has to be right, not
-            # the client's redirect handling (Dalton's moon run, rollup
+            # the client's redirect handling (a live test run, rollup
             # space 01a0b5bf). Required, with no default: a default would
             # name one particular Burrow install (task 01a116de).
             base_url=_env_required_str(
@@ -312,12 +316,20 @@ class AgentConfig:
     @classmethod
     def from_env(cls) -> AgentConfig:
         stt = BackendEndpoint(
-            base_url=_env_str("MVA_STT_BASE_URL", "http://build-host.local:8081/v1"),
+            base_url=_env_required_str(
+                "MVA_STT_BASE_URL",
+                "set it to this deployment's OpenAI-compatible STT endpoint, "
+                "e.g. http://speech.example.com:8081/v1",
+            ),
             model=_env_str("MVA_STT_MODEL", "faster-distil-whisper-small.en"),
             api_key=_env_str("MVA_STT_API_KEY", "not-needed"),
         )
         tts = BackendEndpoint(
-            base_url=_env_str("MVA_TTS_BASE_URL", "http://build-host.local:8081/v1"),
+            base_url=_env_required_str(
+                "MVA_TTS_BASE_URL",
+                "set it to this deployment's OpenAI-compatible TTS endpoint, "
+                "e.g. http://speech.example.com:8081/v1",
+            ),
             model=_env_str("MVA_TTS_MODEL", "kokoro"),
             api_key=_env_str("MVA_TTS_API_KEY", "not-needed"),
         )
@@ -337,7 +349,7 @@ class AgentConfig:
             agent_name=_env_str("MVA_AGENT_NAME", "meeting-voice-agent"),
             # Task 01a0d4a0 stage 4 round 2 tightened this once already
             # (name the one hand-off tool, call it exactly once, never
-            # substitute mail on failure). Stage 5 round 3's live moon run
+            # substitute mail on failure). Stage 5 round 3's live test run
             # found three MORE failure modes the round-2 wording still let
             # through:
             #
@@ -364,7 +376,7 @@ class AgentConfig:
             #      see `mix platform.seed_meeting_voice_agent`) and saying
             #      explicitly that no other tool exists to call.
             #
-            # Task 01a0e8c1-c1c1 stage 3: Dalton's live moon run also found
+            # Task 01a0e8c1-c1c1 stage 3: a live test run also found
             # the tool-call e2e case's own example prompt ("what's the
             # context of this space?") triggered NO tool call at all. Naming
             # space_get_context as an available tool (above) never told the
@@ -374,7 +386,7 @@ class AgentConfig:
             # than answering from what it already believes it knows.
             #
             # Task 01a0f8f5 stage 2, and independently task 01a0f842 stage 4
-            # (round 2 of Harper's Burrow ticket, item 4 / commit 43a14172):
+            # (round 2 of the product lead's Burrow ticket, item 4 / commit 43a14172):
             # Burrow's `allowed_bundles` (`mix
             # platform.seed_meeting_voice_agent`) already exclude `canvas`
             # (the write bundle), `task`, and `plan` server-side -- this is

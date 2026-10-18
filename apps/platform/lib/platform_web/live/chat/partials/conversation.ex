@@ -173,7 +173,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            shape of bug this stage exists to find. --%>
       <div class="flex items-center gap-2 overflow-hidden">
         <%!-- Mobile: static channel name. Channel switching now happens via the
-             pills strip below the header (Refined Option A — Marlowe approval
+             pills strip below the header (Refined Option A — design approval
              2026-05-10). The previous tap-channel-name-to-open-browser flow
              was confusing with the shell's hamburger menu — both opened
              drawers, so users could tap one when they meant the other. The
@@ -1083,14 +1083,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   """
   def channel_pills(assigns) do
     ~H"""
-    <%!-- Mobile-only channel pills strip — Refined Option A nav (Marlowe approval 2026-05-10).
+    <%!-- Mobile-only channel pills strip — Refined Option A nav (design approval 2026-05-10).
          Replaces the previous tap-channel-name-to-open-browser flow. Horizontally
          scrollable pills with the active channel highlighted; the magnifying-glass
          icon at the LEFT opens the @mobile_browser_open drawer (search + full
          channel/DM list). 1-tap switching for the pills shown; 2-tap
          (magnifying glass → search) for the long tail.
 
-         ORDERING CONTRACT (Marlowe decision 2026-07-05, this task's Stage 3):
+         ORDERING CONTRACT (design decision 2026-07-05, this task's Stage 3):
          pills render `Sidebar.flatten_sections(@sidebar_sections)` — the user's
          curated drawer arrangement flattened left-to-right — NOT the raw
          @channels list. Consequences, both deliberate: (1) dragging sections
@@ -1109,7 +1109,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       aria-label="Channel switcher"
     >
       <%!-- Search/jump button anchored at the LEFT of the pills strip
-           (Rowan request, Marlowe approval 2026-05-11). Sticks to the left
+           (operator request, design approval 2026-05-11). Sticks to the left
            edge so it stays in reach even as the channel pills overflow
            horizontally and scroll. phx-value-intent="search" (Stage 2):
            this entry declares search intent, so the drawer opens with the

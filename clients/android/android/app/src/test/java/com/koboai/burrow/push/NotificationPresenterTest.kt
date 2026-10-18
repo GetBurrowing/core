@@ -55,15 +55,15 @@ class NotificationPresenterTest {
         assertEquals("mentions:$HOST", n.channelId)
         assertEquals("mentions:$HOST:0192-s", n.group)
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)!!
-        assertEquals("Internal Fabrikam SXI", style.conversationTitle)
+        assertEquals("Internal Legacy SXI", style.conversationTitle)
         val message = style.messages.single()
-        assertEquals("Harper", message.person!!.name)
-        assertEquals("@Marlowe can you check the banner copy", message.text)
+        assertEquals("Sam", message.person!!.name)
+        assertEquals("@Robin can you check the banner copy", message.text)
 
         val actions = n.actions.map { it.title.toString() }
         assertEquals(listOf("Reply", "Open"), actions)
         val reply = n.actions[0]
-        assertEquals("Message Internal Fabrikam SXI", reply.remoteInputs.single().label)
+        assertEquals("Message Internal Legacy SXI", reply.remoteInputs.single().label)
         assertEquals(NotificationPresenter.KEY_REPLY, reply.remoteInputs.single().resultKey)
     }
 
@@ -133,7 +133,7 @@ class NotificationPresenterTest {
     fun `mentions in one space summarise as N new in the space`() {
         for (i in 1..4) NotificationPresenter.present(app, mention + ("message_id" to "m$i"))
         val summary = active(app).single { it.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0 }.notification
-        assertEquals("4 new in Internal Fabrikam SXI", summary.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("4 new in Internal Legacy SXI", summary.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
     }
 
     @Test
@@ -176,12 +176,12 @@ class NotificationPresenterTest {
         assertTrue(manager.notificationChannelGroups.isEmpty())
         assertNull(manager.getNotificationChannel("mentions:$HOST").group)
 
-        PushTestSupport.signIn(app, "suite.milv.life")
+        PushTestSupport.signIn(app, "b.example.org")
         BurrowPush.ensureChannels(app)
-        assertEquals(setOf("install:$HOST", "install:suite.milv.life"), manager.notificationChannelGroups.map { it.id }.toSet())
+        assertEquals(setOf("install:$HOST", "install:b.example.org"), manager.notificationChannelGroups.map { it.id }.toSet())
         assertEquals("install:$HOST", manager.getNotificationChannel("mentions:$HOST").group)
-        assertEquals("install:suite.milv.life", manager.getNotificationChannel("approvals:suite.milv.life").group)
-        assertNotEquals(manager.getNotificationChannel("mentions:$HOST").id, manager.getNotificationChannel("mentions:suite.milv.life").id)
+        assertEquals("install:b.example.org", manager.getNotificationChannel("approvals:b.example.org").group)
+        assertNotEquals(manager.getNotificationChannel("mentions:$HOST").id, manager.getNotificationChannel("mentions:b.example.org").id)
     }
 
     @Test
@@ -220,11 +220,11 @@ class NotificationPresenterTest {
         NotificationPresenter.present(app, mention)
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted(app, mentionTag()))!!
         val sender = style.messages.single().person!!
-        assertEquals("Harper", sender.name.toString())
+        assertEquals("Sam", sender.name.toString())
         assertEquals("$HOST|user:0192-u", sender.key)
         assertNotNull(sender.icon)
         assertEquals(
-            "Harper",
+            "Sam",
             sink.pushed
                 .single()
                 .personsForTest
@@ -239,7 +239,7 @@ class NotificationPresenterTest {
         NotificationPresenter.present(app, mention - "author_id" + ("author_type" to "user"))
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted(app, mentionTag()))!!
         assertEquals(
-            "$HOST|name:Harper",
+            "$HOST|name:Sam",
             style.messages
                 .single()
                 .person!!

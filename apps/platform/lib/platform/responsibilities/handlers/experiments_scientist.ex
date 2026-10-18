@@ -34,7 +34,7 @@ defmodule Platform.Responsibilities.Handlers.ExperimentsScientist do
       WORDS (`insufficient_data` reads "not yet", never 0.0);
     * a stopped experiment's `stop_feedback` — the stopping person's own
       words, which the prompt tells the Scientist to answer before it
-      proposes the next experiment (Rowan, 2026-09-24; ADR section 11);
+      proposes the next experiment (product decision, 2026-09-24; ADR section 11);
     * signal counts by status and label, plus the last 20
       `{label, subject_id, confidence, reason}` tuples;
     * the guardrails that apply to the goal's org, with the live count.

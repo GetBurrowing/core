@@ -51,7 +51,7 @@ final class CallAndMeetingTests: XCTestCase {
     private func respond(projects lastMeetingProjectID: String?) {
         let last = lastMeetingProjectID.map { "\"\($0)\"" } ?? "null"
         let projects =
-            #"{"projects":[{"id":"\#(project)","name":"Burrow iOS","org":{"id":"o1","name":"Fabrikam"}}],"last_meeting_project_id":\#(last)}"#
+            #"{"projects":[{"id":"\#(project)","name":"Burrow iOS","org":{"id":"o1","name":"Legacy"}}],"last_meeting_project_id":\#(last)}"#
         let meeting = self.meeting
         StubURLProtocol.respond = { request in
             if request.url?.path == "/api/app/projects" { return (200, Data(projects.utf8)) }
@@ -84,11 +84,11 @@ final class CallAndMeetingTests: XCTestCase {
         let actions = CallActions(env: env(hosts: [a]))
         var prompts: [String] = []
         var requestsAtConfirm = -1
-        _ = try await actions.start(.conversation(id: "\(a)|\(group)", name: "design · Fabrikam"), video: false) { prompt in
+        _ = try await actions.start(.conversation(id: "\(a)|\(group)", name: "design · Legacy"), video: false) { prompt in
             prompts.append(prompt)
             requestsAtConfirm = StubURLProtocol.requests.count
         }
-        XCTAssertEqual(prompts, ["Call design · Fabrikam? This rings everyone in it, up to 25 people."])
+        XCTAssertEqual(prompts, ["Call design · Legacy? This rings everyone in it, up to 25 people."])
         XCTAssertEqual(requestsAtConfirm, 0, "nothing is posted before the confirm")
         let body = try XCTUnwrap(StubURLProtocol.json(at: 0))
         XCTAssertEqual(body["invite_space_id"] as? String, group)
@@ -192,10 +192,10 @@ final class CallAndMeetingTests: XCTestCase {
     func testProjectSubtitlesCarryTheOrg() async {
         respond(projects: nil)
         let single = await EntityCatalog(env: env(hosts: [a])).projects(hosts: [a])
-        XCTAssertEqual(single.map(\.subtitle), ["Project, Fabrikam"])
+        XCTAssertEqual(single.map(\.subtitle), ["Project, Legacy"])
         XCTAssertEqual(single.map(\.id), ["\(a)|\(project)"])
         let both = await EntityCatalog(env: env(hosts: [a, b])).projects(hosts: [a])
-        XCTAssertEqual(both.first?.subtitle.hasPrefix("Project, Fabrikam, "), true, "plus the install when there are several")
+        XCTAssertEqual(both.first?.subtitle.hasPrefix("Project, Legacy, "), true, "plus the install when there are several")
     }
 
     func testCreateTaskPostsTheTitleToTheProjectsHost() async throws {

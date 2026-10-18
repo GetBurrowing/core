@@ -14,7 +14,7 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassify do
   classifier: one transcript chunk in, one JSON object out, closed
   intent + role enums, and a stable dedupe_key normalisation so
   paraphrases of the same intent collapse in the downstream dispatcher.
-  Rowan and the Producer team iterate wording live via the
+  The operator and the Producer team iterate wording live via the
   `prompt_template_update` MCP tool after the seed lands.
 
   Idempotent — if the slug already exists we leave the row alone (this

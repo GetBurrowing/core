@@ -6,7 +6,7 @@ defmodule Platform.Responsibilities.JanitorRegistrationTest do
 
   ## Against unfixed code (the stack tip before this stage, 0adb37899)
 
-  Measured on moon: all 11 tests fail there, because no `janitor` role,
+  Measured on test_host: all 11 tests fail there, because no `janitor` role,
   handler, provider or template exists. Two of those failures say less than
   they look like:
 
@@ -23,7 +23,7 @@ defmodule Platform.Responsibilities.JanitorRegistrationTest do
   ## Canonical detonation
 
   Remove `"janitor"` from `Platform.Responsibilities.Providers.@feature_providers`
-  and leave `providers/janitor.ex` in place. Measured on moon: 4 failures
+  and leave `providers/janitor.ex` in place. Measured on test_host: 4 failures
   across this file and `provider_coverage_test.exs`. Then:
 
     * two reachability tests fail (`feature_provider("janitor")` is

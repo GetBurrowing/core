@@ -17,7 +17,7 @@ Usage (testflight.sh calls it after the upload):
   /usr/bin/python3 set_testflight_notes.py --check <marketing_version>
 
 `--check` only parses WHATSNEW.md (no network); the build uses it to fail
-before spending an upload. Needs pyjwt + cryptography, which rock's
+before spending an upload. Needs pyjwt + cryptography, which the build host's
 /usr/bin/python3 has and Homebrew's python3 does not.
 """
 from __future__ import annotations

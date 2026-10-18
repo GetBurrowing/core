@@ -3679,7 +3679,7 @@ defmodule Platform.Orchestration.TaskRouter do
   # 019f6791). Leases whose `stage_id` matches a `passed` stage are
   # historical and MUST NOT rehydrate into `state.lease_status`; carrying a
   # stale `blocked` row into `state.status = :waiting_human` was the
-  # direct cause of the boot-time leak Rowan observed on task 019f6380.
+  # direct cause of the boot-time leak the operator observed on task 019f6380.
   defp maybe_hydrate_from_lease(%State{} = state) do
     plan = Tasks.current_plan(state.task_id)
     running_stage = current_running_stage(plan)
@@ -4095,7 +4095,7 @@ defmodule Platform.Orchestration.TaskRouter do
     # the suppression is "expected" and we don't post a per-dispatch log. The
     # review_request itself is the visible signal a human needs. Posting the
     # same "Dispatch suppressed" line on every dispatch was the message
-    # pile-up Rowan reported.
+    # pile-up the operator reported.
     #
     # Some call sites pass `stage = nil` when `current_stage_id` is unset
     # (early dispatch, pre-stage_transitioned). Fall back to the running stage

@@ -73,7 +73,7 @@ defmodule Platform.InsightFixtures do
       run_id: Insights.run_id(nil, @date),
       action_type: "briefing",
       confidence: "high",
-      body: "Deploys moved to moon, ref #{n()}.",
+      body: "Deploys moved to host-b, ref #{n()}.",
       action: %{},
       org_id: acme_org_id(),
       addressee_user_id: addressee && addressee.id,

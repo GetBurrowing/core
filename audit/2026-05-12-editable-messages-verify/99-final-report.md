@@ -16,9 +16,9 @@ The editable-messages feature has shipped **substantively** — schema, PATCH en
 
 | # | Gap | Severity | Follow-up | Status (2026-05-13) |
 |---|---|---|---|---|
-| 1 | 3-dot menu Edit deadclick (LV streams attr-propagation) — users can't reach the editor on the canonical UX path | **High** | [`019e1e78-16fd-7615-93fa-115ac4c8beaa`](https://suite.example.com/tasks/019e1e78-16fd-7615-93fa-115ac4c8beaa) | ⏳ **OPEN** |
-| 2 | Policy 2 freeze trigger not implemented — schema + 409 response exist but nothing calls `MessageVersions.freeze` in production | **High** | [`019e1e80-4230-7a79-ac73-c157975b3999`](https://suite.example.com/tasks/019e1e80-4230-7a79-ac73-c157975b3999) | ✅ **SHIPPED** PR #343 (squash `60f24be`) |
-| 3 | Policy 1 narrow notification scoping not implemented — broadcast fires to whole space topic, no mention-or-task filter | **High** | [`019e1e83-fe24-77c4-8a7b-8f90fb5cfca5`](https://suite.example.com/tasks/019e1e83-fe24-77c4-8a7b-8f90fb5cfca5) | ✅ **SHIPPED** PR #345 (squash `e185599`) |
+| 1 | 3-dot menu Edit deadclick (LV streams attr-propagation) — users can't reach the editor on the canonical UX path | **High** | [`019e1e78-16fd-7615-93fa-115ac4c8beaa`](https://burrow.example.com/tasks/019e1e78-16fd-7615-93fa-115ac4c8beaa) | ⏳ **OPEN** |
+| 2 | Policy 2 freeze trigger not implemented — schema + 409 response exist but nothing calls `MessageVersions.freeze` in production | **High** | [`019e1e80-4230-7a79-ac73-c157975b3999`](https://burrow.example.com/tasks/019e1e80-4230-7a79-ac73-c157975b3999) | ✅ **SHIPPED** PR #343 (squash `60f24be`) |
+| 3 | Policy 1 narrow notification scoping not implemented — broadcast fires to whole space topic, no mention-or-task filter | **High** | [`019e1e83-fe24-77c4-8a7b-8f90fb5cfca5`](https://burrow.example.com/tasks/019e1e83-fe24-77c4-8a7b-8f90fb5cfca5) | ✅ **SHIPPED** PR #345 (squash `e185599`) |
 
 **Updated recommendation:** the Policy 1 + Policy 2 protections users were promised are now real. The remaining 3-dot deadclick is a UX-path gap; the announcement should either (a) wait on its fix, or (b) caveat that users currently reach the editor via the hover pencil rather than the 3-dot menu. The infrastructure is in place; the privacy + freeze contracts are now enforced; the only outstanding gap is reach-the-editor ergonomics.
 
@@ -162,7 +162,7 @@ Two paths to step 5:
 - **(A) Wait on `019e1e78`.** Deadclick fix is small; once merged, the 3-dot menu reaches the editor. Cleanest announcement story.
 - **(B) Announce now with caveat.** Hover pencil reaches the editor; the 3-dot path will be fixed in a follow-up. Trade-off: ~half of the discovery surface is degraded until then.
 
-Decision belongs with Marlowe / product.
+Decision belongs with the design lead / product.
 
 **Verifier sign-off — updated:** sections a, b, c (broadcast + payload), d (render minus deadclick), e (1, 2, 3, **4, 5, 6**), f (**1, 2**, 3, 4), g all pass. The only remaining gap is section d's 3-dot Edit deadclick (`019e1e78`).
 

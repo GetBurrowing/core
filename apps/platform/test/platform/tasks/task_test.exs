@@ -303,7 +303,7 @@ defmodule Platform.Tasks.TaskTest do
         })
 
       assert {:ok, _} =
-               Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+               Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "alex")
 
       passed = Repo.get!(Validation, validation.id)
       assert passed.status == "passed"

@@ -148,7 +148,7 @@ describe("createReconnectEscalation", () => {
 
   it("an app resume that reports offline for a moment never goes red", () => {
     // Phone brings the app back: offline event, socket drop, then online
-    // and a rejoin about a second later (Rowan, 2026-10-11).
+    // and a rejoin about a second later (Alex, 2026-10-11).
     make()
     online = false
     engine.offline()

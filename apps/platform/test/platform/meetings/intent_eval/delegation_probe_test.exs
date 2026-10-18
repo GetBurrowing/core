@@ -32,7 +32,7 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   **Stage 5 closed it in CODE.** `Platform.Meetings.IntentAddressee` is a
   post-model gate over a routable answer whose ADDRESSED NAME is absent from
   the roster the model was shown. As first shipped it demoted that answer to
-  `off_topic`; task `01a08fde` (ruling 2026-09-11, Rowan: gate) aligned it
+  `off_topic`; task `01a08fde` (ruling 2026-09-11, Alex: gate) aligned it
   with migration `20260902140000` instead — the model's intent and quote are
   KEPT, `target_role` is rewritten to the `"null"` sentinel, and the row is
   marked `addressee_nulled_from: <the role overwritten>`. The same cassette,
@@ -87,7 +87,7 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   @control_vague "Is anything happening?"
 
   # Replay only. A live call here would make the suite host-bound on
-  # dev-host:8085 and would score a different sample every run.
+  # test-host:8085 and would score a different sample every run.
   defmodule ForbiddenProvider do
     @moduledoc false
     def chat_completion(_agent, _messages, _opts),
@@ -171,7 +171,7 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
   end
 
   describe "the model still does not discriminate — the GATE does (task 01a05997 stage 5)" do
-    # RULING (task 01a08fde, 2026-09-11, Rowan: gate): the addressee gate
+    # RULING (task 01a08fde, 2026-09-11, Alex: gate): the addressee gate
     # keeps the intent and nulls the role; it no longer demotes. These
     # assertions are re-authored onto that contract. Cassette bytes and
     # slice labels are untouched.

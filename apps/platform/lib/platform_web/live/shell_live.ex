@@ -236,7 +236,7 @@ defmodule PlatformWeb.ShellLive do
       # two facts anyway ("permission granted" AND "registration failed"),
       # which one string cannot carry.
       #
-      # WHY a reason and not a boolean. It shipped as `true`/`false` and Marlowe
+      # WHY a reason and not a boolean. It shipped as `true`/`false` and the designer
       # rejected the copy on review: "If we are going to tell the user
       # something is broken, we need to tell them how to fix (whether they need
       # to do something, or we need to do something)." That question cannot be
@@ -894,7 +894,7 @@ defmodule PlatformWeb.ShellLive do
         # above (task 019ffe52 fix B): same assign, DIFFERENT reason. It first
         # shipped setting the same boolean as that branch, on the argument that
         # one user-visible outcome reached from two directions should be one
-        # state. Marlowe's review killed that argument: the outcomes are not the
+        # state. Design review killed that argument: the outcomes are not the
         # same, because who has to act differs. Here the browser refused the
         # subscribe, so a reload can genuinely change the result and the user
         # is the one who can try. There, the account is in no conversation and

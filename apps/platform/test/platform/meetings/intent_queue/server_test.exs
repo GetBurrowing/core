@@ -323,12 +323,12 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
 
       {:ok, updated} =
         IntentQueue.transition(meeting_id, row.id, :acked, %{
-          subagent_id: "higgins.moon",
+          subagent_id: "higgins.test-host",
           elapsed_ms: 1234,
           seq: 999_999
         })
 
-      assert updated.subagent_id == "higgins.moon"
+      assert updated.subagent_id == "higgins.test-host"
       assert updated.elapsed_ms == 1234
       # `seq` is not writable — list/1's ordering must not be forgeable.
       assert updated.seq == row.seq
@@ -672,10 +672,10 @@ defmodule Platform.Meetings.IntentQueue.ServerTest do
       meeting_id: meeting_id,
       row: row
     } do
-      {:ok, acked} = IntentQueue.ack(meeting_id, row.id, "higgins.moon", :working)
+      {:ok, acked} = IntentQueue.ack(meeting_id, row.id, "higgins.test-host", :working)
 
       assert acked.status == :acked
-      assert acked.subagent_id == "higgins.moon"
+      assert acked.subagent_id == "higgins.test-host"
       assert %DateTime{} = acked.acked_at
       assert IntentQueue.cursor(meeting_id) == row.id
     end

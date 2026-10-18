@@ -21,7 +21,7 @@ from livekit.plugins import silero as lk_silero
 # livekit.agents.inference.TurnDetector, which requires LiveKit Cloud
 # inference credentials (api_key/api_secret) to reach a hosted model. We
 # deliberately keep the local, deprecated-but-functional English/Multilingual
-# models here so this service runs fully self-hosted against moon/wave with
+# models here so this service runs fully self-hosted against the test host/wave with
 # no LiveKit Cloud dependency. Revisit if/when a local-inference path lands
 # on the new API.
 from livekit.plugins.turn_detector.english import EnglishModel
@@ -61,7 +61,7 @@ def build_turn_detector(config: TurnDetectorConfig):
 
 
 def build_stt(config: AgentConfig) -> stt_types.STT:
-    """STT client against an OpenAI-compatible endpoint (moon's speaches by default)."""
+    """STT client against an OpenAI-compatible endpoint (the test host's speaches by default)."""
     return lk_openai.STT(
         base_url=config.stt.base_url,
         model=config.stt.model,
@@ -70,7 +70,7 @@ def build_stt(config: AgentConfig) -> stt_types.STT:
 
 
 def build_tts(config: AgentConfig) -> tts_types.TTS:
-    """TTS client against an OpenAI-compatible endpoint (moon's speaches Kokoro by default)."""
+    """TTS client against an OpenAI-compatible endpoint (the test host's speaches Kokoro by default)."""
     return lk_openai.TTS(
         base_url=config.tts.base_url,
         model=config.tts.model,

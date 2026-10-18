@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-06-18
-**Author:** Dalton (drafted at Rowan's request)
+**Author:** Dalton (drafted at the product owner's request)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Burrow has two parallel hierarchies in the schema that don't intersect:
 
-1. **Orgs** (`orgs`): hierarchical via `parent_org_id`, with a partial unique index (`orgs_single_root`) enforcing **exactly one root**. Today: `Fabrikam` (root) → 4 tenant children (`Soylent`, `Wayne-Tech`, `SXI`, `Paragon`). Membership lives in `org_memberships(user_id, org_id, role)` with `role ∈ {admin, member}` and a `roles_locked_at` lock against the email-domain auto-promote rule (ADR-adjacent — see migration `20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`).
+1. **Orgs** (`orgs`): hierarchical via `parent_org_id`, with a partial unique index (`orgs_single_root`) enforcing **exactly one root**. Today: `Acme` (root) → 4 tenant children (`Soylent`, `Wayne-Tech`, `SXI`, `Paragon`). Membership lives in `org_memberships(user_id, org_id, role)` with `role ∈ {admin, member}` and a `roles_locked_at` lock against the email-domain auto-promote rule (ADR-adjacent — see migration `20260519160000_refine_root_admin_membership_by_email_domain.exs`).
 
 2. **Projects** (`projects`): flat — **no `org_id` FK, no `parent_project_id`**. Today: `Soylent`, `Startup Suite`, `Stark Industries`. The cascade chain is project → epics / tasks / task_stacks / meetings. All work units hang off a project.
 
@@ -22,7 +22,7 @@ The naming overlap between projects and tenant orgs (`Soylent` project / `Soylen
 
 The Files module currently in plan-review (task `019ebd47-bb4e-7a7c-bcf9-67d5dab2c729`, plan `019ed691-…` v2) sits squarely on this gap: scoping Files at the org level groups every project's docs into one bag; scoping only at project level orphans tenant-level brand/governance docs across multiple projects per client.
 
-The user (Rowan) confirmed the model on 2026-06-18: **one org has many projects**; root Fabrikam gets "super-context" of all tenant orgs; agents operating in a tenant org get inherited Fabrikam context plus their own tenant context but NOT sibling-org context.
+The user (the product owner) confirmed the model on 2026-06-18: **one org has many projects**; root Acme gets "super-context" of all tenant orgs; agents operating in a tenant org get inherited Acme context plus their own tenant context but NOT sibling-org context.
 
 ---
 
@@ -35,13 +35,13 @@ Add `projects.org_id uuid NOT NULL` with FK → `orgs(id) ON DELETE RESTRICT`.
 `ON DELETE RESTRICT` — deleting an org with live projects must require explicit reassignment first, not silently nuke them. Aligned with existing FK strictness on `runtime_events.owner_org_id` and `execution_leases.owner_org_id`.
 
 **Backfill rules** for existing projects (by name match):
-- `Startup Suite` → Fabrikam (root)
+- `Startup Suite` → Acme (root)
 - `Soylent` project → Soylent org
 - `Stark Industries` project → SXI org
 
 All three match cleanly today. No orphans.
 
-**New project creation** (UI + the follow-up `project_create` MCP tool) requires an `org_id`. UI default is the currently-active org, or Fabrikam (root) when no org is selected.
+**New project creation** (UI + the follow-up `project_create` MCP tool) requires an `org_id`. UI default is the currently-active org, or Acme (root) when no org is selected.
 
 The `projects.workspace_id` column (nullable, unused, no FK) stays vestigial for now; ADR 0033's "future multi-tenancy" escape hatch overlaps with the org model this ADR makes real, and that vestige can be dropped in a follow-up cleanup.
 
@@ -51,7 +51,7 @@ ADR 0041's deferred namespacing lands. The scope levels:
 
 | Level | Path prefix | Cardinality |
 |-------|-------------|-------------|
-| Root org | `org/fabrikam/` | 1 (the root) |
+| Root org | `org/acme/` | 1 (the root) |
 | Tenant org | `org/<tenant-slug>/` | N (Soylent, SXI, Wayne-Tech, Paragon, …) |
 | Project | `project/<project-id>/` | M per tenant |
 | Space | `space/<space-id>/` | K per project (or per tenant for non-project spaces) |
@@ -66,19 +66,19 @@ Context flows **upward** in the org tree (a child inherits its ancestors' contex
 
 **Per operating context:**
 
-- **Operating at root Fabrikam (no scoped tenant org):** preamble loads `org/fabrikam/*` (full) + a summary surface for each descendant (`org/<tenant>/IDENTITY.md` + a single auto-curated `org/fabrikam/TENANTS_SUMMARY.md` paragraph per tenant). Full per-tenant memory loads only on explicit search via `memory_search` filtered by `org_id`. This avoids blowing the 4096-token preamble budget with N×tenant-full-context.
+- **Operating at root Acme (no scoped tenant org):** preamble loads `org/acme/*` (full) + a summary surface for each descendant (`org/<tenant>/IDENTITY.md` + a single auto-curated `org/acme/TENANTS_SUMMARY.md` paragraph per tenant). Full per-tenant memory loads only on explicit search via `memory_search` filtered by `org_id`. This avoids blowing the 4096-token preamble budget with N×tenant-full-context.
 
-- **Operating in a tenant org (e.g. SXI) on a tenant project (e.g. Orion):** preamble loads `project/<orion_id>/*` + `org/sxi/*` + inherited `org/fabrikam/*` (root). Sibling-org content (`org/wayne-tech/*`) is **excluded** — strict tenant isolation between siblings.
+- **Operating in a tenant org (e.g. SXI) on a tenant project (e.g. Orion):** preamble loads `project/<orion_id>/*` + `org/sxi/*` + inherited `org/acme/*` (root). Sibling-org content (`org/wayne-tech/*`) is **excluded** — strict tenant isolation between siblings.
 
-- **Operating in a tenant org with no specific project context:** `org/<tenant>/*` + inherited `org/fabrikam/*`. No project memory loaded.
+- **Operating in a tenant org with no specific project context:** `org/<tenant>/*` + inherited `org/acme/*`. No project memory loaded.
 
 - **Within a chat space:** add `space/<space_id>/*` on top of whichever org/project context applies.
 
-**Eviction order** when the 4096-token budget is exceeded: project > org (direct) > org (ancestors) > space. Direct-scope content evicts last; inherited and space-attached evict first. The historian agent is responsible for keeping `org/fabrikam/TENANTS_SUMMARY.md` short enough that the root-level summary always fits.
+**Eviction order** when the 4096-token budget is exceeded: project > org (direct) > org (ancestors) > space. Direct-scope content evicts last; inherited and space-attached evict first. The historian agent is responsible for keeping `org/acme/TENANTS_SUMMARY.md` short enough that the root-level summary always fits.
 
 ### 4. Cross-tenant attention signals (not preamble)
 
-Rowan's concern is preserving the ability to cross-pollinate without polluting every agent with every tenant's context. The split:
+The product owner's concern is preserving the ability to cross-pollinate without polluting every agent with every tenant's context. The split:
 
 - **Preamble** (always loaded) follows the strict inheritance rules above. Sibling orgs are invisible to each other in the preamble.
 - **Attention signals** (event-driven, scoped to the routing model in ADR 0013) can still hop sibling-org boundaries when a user explicitly mentions or @-tags across orgs. The router doesn't gate by org scope; the agent reads sibling-org context on-demand via `memory_search`.
@@ -89,7 +89,7 @@ All tenant-org default channels rename to `General` (display name) with slug `ge
 
 | Org | Current default channel | Becomes |
 |-----|------------------------|---------|
-| Fabrikam | "General" / `general` | unchanged |
+| Acme | "General" / `general` | unchanged |
 | Soylent | "Soylent" / `soylent` | "General" / `general` |
 | Wayne-Tech | "Wayne-Tech" / `wayne-tech` | "General" / `general` |
 | SXI | "Stark Industries" / `stark-industries` | "General" / `general` |
@@ -115,8 +115,8 @@ The existing unique index `chat_spaces_unique_slug` on `(workspace_id, slug)` is
 ## Topology after this ADR
 
 ```
-Fabrikam (root org)                    ← "super-context" vantage point
-├── Suite (project)                ← internal Fabrikam work
+Acme (root org)                    ← "super-context" vantage point
+├── Suite (project)                ← internal Acme work
 ├── Soylent (tenant org)
 │   └── Soylent (project)         ← moved under Soylent org
 ├── SXI (tenant org)
@@ -131,11 +131,11 @@ Fabrikam (root org)                    ← "super-context" vantage point
 
 1. **Schema** — add `projects.org_id` (nullable initially), backfill, then alter to NOT NULL + FK. Same migration adds the org_id/project_id columns to `org_wiki_pages` and `org_wiki_journal_entries`, loosens the file_key constraint, and renames the tenant default chat_spaces.
 2. **PreambleBuilder** — drop the `@preamble_whitelist` v1 hack; implement real namespace resolution + the super-context-at-root summary aggregation.
-3. **Historian / dreaming agent** — extend to maintain `org/fabrikam/TENANTS_SUMMARY.md` as the auto-curated short-form aggregate.
+3. **Historian / dreaming agent** — extend to maintain `org/acme/TENANTS_SUMMARY.md` as the auto-curated short-form aggregate.
 4. **MCP surface** — `memory_search` filters, `org_list_descendants`, `project_list` filter.
 5. **UI** — project switcher in the shell respects `org_id`; project creation form requires choosing an org; project list groups by org.
 
-The Files module v2 plan (task `019ebd47-…`, plan `019ed691-…`) becomes much simpler with `projects.org_id` in place — `platform_files.project_id` (required) + `platform_files.org_id` (nullable, for tenant-level docs) gives Rowan the "co-locate per project but also have org-level docs" goal directly.
+The Files module v2 plan (task `019ebd47-…`, plan `019ed691-…`) becomes much simpler with `projects.org_id` in place — `platform_files.project_id` (required) + `platform_files.org_id` (nullable, for tenant-level docs) gives the product owner the "co-locate per project but also have org-level docs" goal directly.
 
 ---
 

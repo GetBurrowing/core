@@ -313,7 +313,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
     end
   end
 
-  # Marlowe, 2026-08-13: "this banner needs a way to be dismissed. A user should
+  # Robin, 2026-08-13: "this banner needs a way to be dismissed. A user should
   # be able to dismiss this notification if they dont want notifications or
   # they dont want to set it up right now."
   describe "dismissal (stage 5 rework)" do
@@ -342,7 +342,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
     # `group-hover:` inside `@media (hover: hover)`, which never matches on a
     # touch device — a visibility rule written that way makes the x absent on
     # a phone rather than merely quiet. Same trap the rail's pin control fell
-    # into (Marlowe: "hover doesn't work on mobile").
+    # into (Robin: "hover doesn't work on mobile").
     test "no hover variant gates the x's visibility", %{conn: conn} do
       view = mount_chat(member_conn(conn))
 
@@ -371,7 +371,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
       refute render(view) =~ @banner_text
     end
 
-    # THE point of the rework. One of Marlowe's two reasons ("they dont want
+    # THE point of the rework. One of Robin's two reasons ("they dont want
     # notifications") is permanent, so a dismissal that dies with the
     # LiveView process would re-nag that user on every single visit — the
     # exact behaviour the feedback asks to stop. The state is written to

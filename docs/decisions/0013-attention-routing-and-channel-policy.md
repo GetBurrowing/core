@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-19  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Supersedes:** Attention routing sections of ADR 0008  
 
 ---

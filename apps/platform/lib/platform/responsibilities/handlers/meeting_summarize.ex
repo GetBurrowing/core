@@ -126,7 +126,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
           "fallback_kind" => "legacy",
           # Task 019f2570 bug 2 fix — override the dispatcher's default
           # (2500) with an explicit ceiling for meeting summaries. The
-          # OpenAI-compat concierge at dev-host:8084 defaults to ~800 tokens
+          # OpenAI-compat concierge at test-host:8084 defaults to ~800 tokens
           # when the field is absent, which truncates summaries mid-
           # sentence. `Dispatcher.request_body/3` reads this hint and
           # forwards it as top-level `max_tokens`. Refreshed on next boot
@@ -409,7 +409,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
 
   # Task 019f2566 stage 3 — kind-specific preamble.
   #
-  # Rowan's framing: "Claude conversational agent like Dalton should get
+  # The operator's framing: "Claude conversational agent like Dalton should get
   # extra information templated in recommending running the
   # summarization in a subagent, while an external agent like Hermione
   # is single responsibility and thus shouldn't need additional

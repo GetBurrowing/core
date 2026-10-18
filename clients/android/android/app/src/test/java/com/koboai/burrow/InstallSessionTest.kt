@@ -58,7 +58,7 @@ class InstallSessionTest {
     @Test
     fun `sign-out deletes the device, revokes the session, then forgets the bearer`() {
         tokens.store(install.host, "b1")
-        tokens.store("suite.milv.life", "b2")
+        tokens.store("suite.example.org", "b2")
         val transport =
             RecordingTransport(
                 mapOf(
@@ -73,7 +73,7 @@ class InstallSessionTest {
         )
         assertEquals(listOf("Bearer b1", "Bearer b1"), transport.requests.map { it.headers["Authorization"] })
         assertNull(tokens.token(install.host))
-        assertEquals("b2", tokens.token("suite.milv.life"))
+        assertEquals("b2", tokens.token("suite.example.org"))
     }
 
     @Test
@@ -98,7 +98,7 @@ class InstallSessionTest {
     @Test
     fun `signing out of A removes A's shortcuts only`() {
         tokens.store(install.host, "b1")
-        tokens.store("suite.milv.life", "b2")
+        tokens.store("suite.example.org", "b2")
         NativeSignOut(AppApiClient(tokens, RecordingTransport()), tokens, "i") { removed.add(it) }.run(install.host)
         assertEquals(listOf(install.host), removed)
     }

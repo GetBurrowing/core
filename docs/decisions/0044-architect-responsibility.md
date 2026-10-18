@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-08
-**Author:** Rowan Ellis / Dalton
+**Author:** the product owner / Dalton
 **Related:** ADR-0033 (Org Context Management), ADR-0041 (Org Memory V2 + Responsibilities), ADR-0043 (Security Guard Responsibility — sibling)
 
 ---

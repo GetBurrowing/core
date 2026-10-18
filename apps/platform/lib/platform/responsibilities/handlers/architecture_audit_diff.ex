@@ -80,7 +80,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
     %{
       key: "ETS for ephemeral state",
       note:
-        "meeting-lifetime / session-lifetime queues + caches go in ETS, not Ecto. Durable-by-default creates cleanup obligations Rowan doesn't want."
+        "meeting-lifetime / session-lifetime queues + caches go in ETS, not Ecto. Durable-by-default creates cleanup obligations the operator doesn't want."
     },
     %{
       key: "Suite ToolSurface smell",

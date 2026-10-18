@@ -1992,7 +1992,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     # `cast/4` waves non-UUID binaries through for `:binary_id`, so the
     # failure surfaced as a raised Ecto.ChangeError inside `Repo.insert` —
     # not the `{:error, changeset}` this handler expects — and the channel
-    # process died. Observed live against `rowan-home-openclaw`.
+    # process died. Observed live against `alex-home-openclaw`.
     test "a non-UUID space_id does not crash the channel and still records the event", ctx do
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{

@@ -2,7 +2,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
   @moduledoc """
   Consolidated regression net for the cross-tenant disclosure (task 019f9257).
 
-  Ties the three fixes together against the EXACT reported repro (Rowan Testerson,
+  Ties the three fixes together against the EXACT reported repro (Alex Testerson,
   an SXI external user granted ONLY the Orion channel via the real grant path)
   so a future refactor of any single seam — identity scope derivation (stage 1),
   the plug host fence (stage 2), or the admission/recovery redirects (stage 3) —
@@ -99,7 +99,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
 
   setup %{conn: conn} do
     sxi = sxi_org!()
-    testerson = create_user!("Rowan Testerson")
+    testerson = create_user!("Alex Testerson")
     orion = channel!("Orion", org_id: sxi.id)
     # Acme-internal channel — Testerson has NO participant row for it.
     general = channel!("General")

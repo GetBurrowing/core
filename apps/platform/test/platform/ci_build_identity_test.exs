@@ -28,7 +28,7 @@ defmodule Platform.CiBuildIdentityTest do
   disappeared.
 
   GHCR dual-publish (task 01a14a79): every image is pushed to BOTH
-  `docker.io/example/suite-core` and `ghcr.io/startup-suite/core`. Each
+  `docker.io/<DOCKERHUB_NAMESPACE>/suite-core` and `ghcr.io/startup-suite/core`. Each
   registry's tag list is compared, per step, as a FULL list against its own
   raw literal, so a tag missing from either registry fails, and so does a
   stray extra tag on either registry (a membership check alone would pass a
@@ -125,8 +125,8 @@ defmodule Platform.CiBuildIdentityTest do
       code = code_only(step)
 
       assert code =~
-               ~r/^\s+outputs: type=image,"name=docker\.io\/example\/suite-core,ghcr\.io\/startup-suite\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
-             "the build step no longer pushes by digest to BOTH docker.io/example/suite-core " <>
+               ~r/^\s+outputs: type=image,"name=docker\.io\/\$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}\/suite-core,ghcr\.io\/startup-suite\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
+             "the build step no longer pushes by digest to BOTH docker.io/<namespace>/suite-core " <>
                "and ghcr.io/startup-suite/core. A leg that tags directly would overwrite " <>
                "`latest` with a single-arch image; a leg missing a name leaves " <>
                "publish-manifest nothing to stitch on that registry."
@@ -161,14 +161,14 @@ defmodule Platform.CiBuildIdentityTest do
     # core-<branch tag>, core-<sha>, core-<short sha>). Each must appear as a
     # `-t` argument.
     @main_tags [
-      "docker.io/example/suite-core:core",
-      "docker.io/example/suite-core:core-${{ github.sha }}",
-      "docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }}"
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }}"
     ]
     @branch_tags [
-      "docker.io/example/suite-core:core-${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/example/suite-core:core-${{ github.sha }}",
-      "docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }}"
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.branch_tag }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }}"
     ]
     @ghcr_main_tags [
       "ghcr.io/startup-suite/core:core",
@@ -229,7 +229,7 @@ defmodule Platform.CiBuildIdentityTest do
 
       assert code =~ ~r/^    needs: publish-manifest\s*$/m,
              "`build-and-push-play` must wait for publish-manifest, so `latest` " <>
-               "(on the play image, watched by moon's auto-update) is the last tag to move."
+               "(on the play image, watched by test-host's auto-update) is the last tag to move."
     end
 
     test "has exactly two build-push-action steps (main and feature branch)",
@@ -241,20 +241,20 @@ defmodule Platform.CiBuildIdentityTest do
     end
 
     @play_main_tags [
-      "docker.io/example/suite-core:play",
-      "docker.io/example/suite-core:play-${{ github.sha }}",
-      "docker.io/example/suite-core:play-${{ steps.vars.outputs.short_sha }}",
-      "docker.io/example/suite-core:latest",
-      "docker.io/example/suite-core:${{ github.sha }}",
-      "docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}"
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:latest",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}"
     ]
     @play_branch_tags [
-      "docker.io/example/suite-core:play-${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/example/suite-core:play-${{ github.sha }}",
-      "docker.io/example/suite-core:play-${{ steps.vars.outputs.short_sha }}",
-      "docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/example/suite-core:${{ github.sha }}",
-      "docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}"
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.branch_tag }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.branch_tag }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}"
     ]
     @ghcr_play_main_tags [
       "ghcr.io/startup-suite/core:play",
@@ -300,6 +300,90 @@ defmodule Platform.CiBuildIdentityTest do
       assert play_tags(step, "docker.io/") == @play_branch_tags
       assert play_tags(step, "ghcr.io/") == @ghcr_play_branch_tags
     end
+  end
+
+  # Task 01a14b9e: Docker Hub refs are built from the DOCKERHUB_NAMESPACE
+  # repository variable. Every job that pushes refuses, as its FIRST step,
+  # to run with the variable empty, so nothing is ever pushed to
+  # `docker.io//suite-core`. The step's shell is executed here, both ways.
+  describe "the DOCKERHUB_NAMESPACE guard" do
+    @pushing_jobs [
+      "build-and-push",
+      "publish-manifest",
+      "build-and-push-play",
+      "build-and-push-agent-host"
+    ]
+    @guard_name "Require the DOCKERHUB_NAMESPACE variable"
+
+    setup do
+      {:ok, lines: @ci_workflow |> File.read!() |> String.split("\n")}
+    end
+
+    test "is the first step of every job that pushes", %{lines: lines} do
+      for name <- @pushing_jobs do
+        first =
+          lines
+          |> job_body(name)
+          |> code_only()
+          |> String.split("\n    steps:\n", parts: 2)
+          |> List.last()
+          |> String.split("\n")
+          |> hd()
+
+        assert first == "      - name: #{@guard_name}", "#{name}: first step is #{inspect(first)}"
+      end
+    end
+
+    test "exits non-zero naming the variable when it is empty, and passes when set",
+         %{lines: lines} do
+      script = lines |> job_body("build-and-push") |> named_step(@guard_name) |> guard_script()
+      assert script =~ "DOCKERHUB_NAMESPACE"
+
+      for unset <- [nil, "", "  "] do
+        {out, code} = run_guard(script, unset)
+        assert code == 1, "guard passed with DOCKERHUB_NAMESPACE=#{inspect(unset)}"
+        assert out =~ "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset"
+      end
+
+      assert run_guard(script, "example") ==
+               {"pushing Docker Hub refs under docker.io/example/\n", 0}
+
+      for name <- @pushing_jobs do
+        assert lines |> job_body(name) |> named_step(@guard_name) |> guard_script() == script,
+               "#{name}: its guard differs from build-and-push's"
+      end
+    end
+
+    test "no Docker Hub suite-* ref spells a namespace" do
+      text = File.read!(@ci_workflow)
+
+      refs =
+        Regex.scan(
+          ~r/docker\.io\/(\$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}|[a-z0-9._-]+)\/suite-/,
+          text
+        )
+
+      namespaces = refs |> Enum.map(&List.last/1) |> Enum.uniq()
+      assert namespaces == ["${{ vars.DOCKERHUB_NAMESPACE }}"]
+      # Positive control: the same scan names a planted literal.
+      assert Regex.scan(~r/docker\.io\/([a-z0-9._-]+)\/suite-/, "docker.io/acme/suite-core") ==
+               [["docker.io/acme/suite-", "acme"]]
+    end
+  end
+
+  # The step's `run: |` block, dedented.
+  defp guard_script(step) do
+    [_, block] = String.split(step, "        run: |\n", parts: 2)
+
+    block
+    |> String.split("\n")
+    |> Enum.take_while(&String.starts_with?(&1, "          "))
+    |> Enum.map_join("\n", &String.replace_prefix(&1, "          ", ""))
+  end
+
+  defp run_guard(script, value) do
+    env = [{"DOCKERHUB_NAMESPACE", value}]
+    System.cmd("sh", ["-c", script], env: env, stderr_to_stdout: true)
   end
 
   defp named_step(job, name) do

@@ -1,6 +1,6 @@
 # 03 — Voice
 
-**Phase 2 deliverable.** Copy guidance, button verbs, error messages, and Burrow's agent-native empty-state pattern. Anchored to the naming drifts resolved by Marlowe (2026-05-08) + the empty-state direction Marlowe pinned during Phase 2 drafting (2026-05-09).
+**Phase 2 deliverable.** Copy guidance, button verbs, error messages, and Burrow's agent-native empty-state pattern. Anchored to the naming drifts resolved by the design lead (2026-05-08) + the empty-state direction the design lead pinned during Phase 2 drafting (2026-05-09).
 
 ---
 
@@ -103,7 +103,7 @@ When the error is a transient network condition that the user will recover from:
 
 ---
 
-## 5. Empty state pattern (anchored to `1B-USE-3` + Marlowe's 2026-05-09 direction)
+## 5. Empty state pattern (anchored to `1B-USE-3` + the design lead's 2026-05-09 direction)
 
 Every empty state has **three components**: what's empty, why it's empty in context, one **agent-mediated action** the user can take. Burrow is agent-native — the empty state is precisely where an agent could fill the gap, and copy should reflect that.
 
@@ -118,7 +118,7 @@ Connect your agent and add them to a space, or
 
 The two CTAs cover the two paths a new user takes: bring an agent in to an existing thing, or set up a thing for the agent to live in.
 
-### 5.2 Brand-new space / channel (Marlowe's pin: in a brand-new created channel)
+### 5.2 Brand-new space / channel (the design lead's pin: in a brand-new created channel)
 
 ```
 This space is quiet.
@@ -129,7 +129,7 @@ Connect your agent and @ them to plan and work in this space.
 
 The CTA "Add an agent" is the single primary action. After that's done, the user mentions the agent and the space comes alive. The phrase "@ them" in the body teaches the syntax inline.
 
-### 5.3 Tasks (Marlowe's pin: the task surface)
+### 5.3 Tasks (the design lead's pin: the task surface)
 
 ```
 No tasks here yet.
@@ -140,7 +140,7 @@ Create a task and assign to an agent to plan and execute.
 
 Single CTA. The body sentence sets the workflow expectation: the agent does the planning + execution; the human creates the task and reviews.
 
-### 5.4 Activity feed (no agent actions in range) — **stays minimal** (Marlowe 2026-05-09)
+### 5.4 Activity feed (no agent actions in range) — **stays minimal** (the design lead 2026-05-09)
 
 ```
 When your agents start working, what they do appears here. Try a wider date range, or connect an agent to start.
@@ -148,7 +148,7 @@ When your agents start working, what they do appears here. Try a wider date rang
 
 No CTA buttons, no chips. The time-range filter pills already visible at the top of the Activity surface ARE the "wider date range" path referenced in the copy — no separate button needed. The "connect an agent" path is upstream (handled in chat/sidebar empty state); on this surface, the prose mention is sufficient.
 
-This deviates from the V3-conversational pattern used on the other empty states (chat sidebar, chat space, tasks). Activity is a read-only audit feed; over-styling its empty state with a Saru bubble + chips would push the user to "do something" when the user might just be a passive viewer waiting for events. Kept minimal on Marlowe's pin.
+This deviates from the V3-conversational pattern used on the other empty states (chat sidebar, chat space, tasks). Activity is a read-only audit feed; over-styling its empty state with a Saru bubble + chips would push the user to "do something" when the user might just be a passive viewer waiting for events. Kept minimal on the design lead's pin.
 
 ### 5.5 Search (no results)
 

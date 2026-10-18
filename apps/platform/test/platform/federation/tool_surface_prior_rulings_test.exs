@@ -45,7 +45,7 @@ defmodule Platform.Federation.ToolSurfacePriorRulingsTest do
         items: [%{label: "Desktop view"}]
       })
 
-    {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "rowan", feedback)
+    {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "alex", feedback)
     {:ok, _} = PlanEngine.reopen_manual_approval(ctx.validation.id)
     :ok
   end

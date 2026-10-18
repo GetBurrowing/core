@@ -2210,7 +2210,7 @@ defmodule Platform.MeetingsTest do
       room_name = room.livekit_room_name
       transcript = presence_transcript!(space.id, room_name)
 
-      join!(room, "Harper", 3600)
+      join!(room, "Sam", 3600)
       join!(room, "Alex", 3600)
 
       assert Meetings.transcriber_presence_seconds(transcript) == 0

@@ -28,7 +28,7 @@ import LinkPresentation
 // that name are orphaned (domain = host, dropped at sign-out) and the
 // next per-host refresh indexes this type; round 8's
 // SpotlightIndexMigration deletes them once (hydrating one failed on
-// Rowan's iPad). The query follows the SDK
+// a test iPad). The query follows the SDK
 // documentation's `<Entity>Query` naming (MessagePerson ->
 // MessagePersonQuery); Apple's runtime adopters have no query.
 @available(iOS 27, *)
@@ -289,7 +289,7 @@ struct ConversationEntity {
     /// `<host>|<space uuid>`.
     let id: String
     var recipients: [MessagePersonEntity]
-    /// "general · Fabrikam": the org tells same-named spaces apart.
+    /// "general · Acme": the org tells same-named spaces apart.
     var displayName: String
     var previewText: AttributedString
     var conversationName: String?
@@ -364,7 +364,7 @@ extension ConversationEntity: IndexedEntity, SyncableEntity, OwnershipProvidingE
     var ownership: EntityOwnership { .shared }
 
     /// The schema's mapping, plus the bare name ("general") as an alternate
-    /// to the org-qualified display name ("general · Fabrikam").
+    /// to the org-qualified display name ("general · Acme").
     var attributeSet: CSSearchableItemAttributeSet {
         let set = defaultAttributeSet
         set.alternateNames = [displayName, conversationName].compactMap { $0 }

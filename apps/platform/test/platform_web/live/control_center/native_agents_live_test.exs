@@ -278,7 +278,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
           %{slug: "octo-#{System.unique_integer([:positive])}", name: "Octo", status: "active"},
           %{
             runtime_id: "octo-rt-#{System.unique_integer([:positive])}",
-            display_name: "moon.fabrikam"
+            display_name: "test-host.legacy"
           }
         )
 
@@ -287,7 +287,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
       assert has_element?(
                view,
                "#agent-row-#{agent.slug} [data-role=row-meta]",
-               "Federated from moon.fabrikam"
+               "Federated from test-host.legacy"
              )
 
       # The pill is gone; the offline state has words, not only a grey dot.

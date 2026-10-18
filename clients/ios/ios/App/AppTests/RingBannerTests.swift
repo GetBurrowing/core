@@ -14,9 +14,9 @@ final class RingBannerTests: XCTestCase {
     private var switched: [RingInvite] = []
     private var missed: [RingInvite] = []
 
-    private let harper = RingInvite(
+    private let sam = RingInvite(
         ringID: "01a111f0-0000-7000-8000-000000000002", meetingID: "m2", installHost: "suite.example.com",
-        title: "Harper in Design review")
+        title: "Sam in Design review")
 
     override func setUp() async throws {
         waiting = RingWaiting()
@@ -32,35 +32,35 @@ final class RingBannerTests: XCTestCase {
     }
 
     func testShowingTheBannerIsOneSoftHapticAndRevealsTheCall() {
-        waiting.show(harper)
-        XCTAssertEqual(waiting.current, harper)
+        waiting.show(sam)
+        XCTAssertEqual(waiting.current, sam)
         XCTAssertEqual(haptics, 1)
         XCTAssertEqual(reveals, 1)
         XCTAssertEqual(scheduled.map(\.0), [30])
-        waiting.show(harper)
+        waiting.show(sam)
         XCTAssertEqual(haptics, 1, "the same ring twice is one banner, one haptic")
     }
 
     func testNotNowDeclines() {
-        waiting.show(harper)
+        waiting.show(sam)
         waiting.notNow()
         XCTAssertNil(waiting.current)
-        XCTAssertEqual(notNow, [harper])
+        XCTAssertEqual(notNow, [sam])
         XCTAssertTrue(switched.isEmpty && missed.isEmpty)
     }
 
     func testSwitchAnswersTheInvite() {
-        waiting.show(harper)
+        waiting.show(sam)
         waiting.switchToInvite()
         XCTAssertNil(waiting.current)
-        XCTAssertEqual(switched, [harper])
+        XCTAssertEqual(switched, [sam])
     }
 
     func testThirtySecondsWithoutAChoiceIsAMissedInvite() {
-        waiting.show(harper)
+        waiting.show(sam)
         scheduled[0].1()
         XCTAssertNil(waiting.current)
-        XCTAssertEqual(missed, [harper])
+        XCTAssertEqual(missed, [sam])
         // A choice after the timeout does nothing.
         waiting.notNow()
         XCTAssertTrue(notNow.isEmpty)
@@ -68,11 +68,11 @@ final class RingBannerTests: XCTestCase {
 
     func testTheInviteDecodesFromTheRingWaitingAlert() {
         let userInfo: [AnyHashable: Any] = [
-            "aps": ["alert": ["title": "Harper in Design review", "body": "Invites you to join"], "category": "SUITE_RING_WAITING"],
-            "ring_id": harper.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
+            "aps": ["alert": ["title": "Sam in Design review", "body": "Invites you to join"], "category": "SUITE_RING_WAITING"],
+            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
         ]
-        XCTAssertEqual(RingInvite(userInfo: userInfo), harper)
-        XCTAssertEqual(harper.initial, "J")
+        XCTAssertEqual(RingInvite(userInfo: userInfo), sam)
+        XCTAssertEqual(sam.initial, "S")
         XCTAssertNil(RingInvite(userInfo: ["meeting_id": "m2"]))
     }
 
@@ -93,10 +93,10 @@ final class RingBannerTests: XCTestCase {
 
     func testTheInviteDecodesFromABurrowRingWaitingAlert() {
         let userInfo: [AnyHashable: Any] = [
-            "aps": ["alert": ["title": "Harper in Design review", "body": "Invites you to join"], "category": "BURROW_RING_WAITING"],
-            "ring_id": harper.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
+            "aps": ["alert": ["title": "Sam in Design review", "body": "Invites you to join"], "category": "BURROW_RING_WAITING"],
+            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
         ]
-        XCTAssertEqual(RingInvite(userInfo: userInfo), harper)
+        XCTAssertEqual(RingInvite(userInfo: userInfo), sam)
     }
 
     func testBannerColoursAndCopy() {

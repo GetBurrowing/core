@@ -115,7 +115,7 @@ enum CallPersonResolution {
 }
 
 // Indexed per host (task 01a111bb stage 7) from the same people directory
-// as MessagePersonEntity, humans only: Siri resolves "Start a meeting with Harper"
+// as MessagePersonEntity, humans only: Siri resolves "Start a meeting with Sam"
 // against the index, as it does a message recipient.
 @available(iOS 27, *)
 extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {

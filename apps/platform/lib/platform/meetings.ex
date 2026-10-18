@@ -4298,7 +4298,7 @@ defmodule Platform.Meetings do
 
   # Guest tokens are short-TTL (30 min) — shorter than user tokens
   # (6h) because a guest invite is a single-use "click and join" ticket.
-  # Rowan's note about the phantom-fix rotation of LIVEKIT_API_KEY /
+  # The operator's note about the phantom-fix rotation of LIVEKIT_API_KEY /
   # LIVEKIT_API_SECRET applies here: tokens are minted ON-DEMAND at
   # click time (MeetingLive guest-mount branch), never pre-generated at
   # invite-generation time, so an API key rotation cannot invalidate an
@@ -6061,7 +6061,7 @@ defmodule Platform.Meetings do
   matches `"runtime:" <> runtime_id` and requires it to equal
   `socket.assigns.runtime_id`, which `PlatformWeb.RuntimeSocket.connect/3`
   assigns from `AgentRuntime.runtime_id` — the external, human-readable
-  STRING (`"rowan-claude-agent-1"`), not an agent UUID. Because
+  STRING (`"agent-runtime-1"`), not an agent UUID. Because
   `Phoenix.Endpoint.broadcast/3` returns `:ok` whether or not anyone is
   subscribed, the old code logged "dispatched" and delivered to nobody.
 
@@ -7426,7 +7426,7 @@ defmodule Platform.Meetings do
   # `dispatch_meeting_join/3`'s metadata so the livekit-agents worker can
   # pin its `AgentSession` to THIS participant instead of accepting
   # whichever remote participant it happens to observe first — the failure
-  # mode Dalton's dual-agent moon run hit when two agents were invited
+  # mode a live test run hit when two agents were invited
   # within milliseconds of each other and the second worker linked to the
   # first agent's own room participant instead of the human.
   #

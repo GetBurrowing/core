@@ -25,10 +25,10 @@
 #   6. drop the database.
 # prod-like:
 #   1. fresh database; boot the base image; insert one game_stream_sessions
-#      row (the state every moon install is in: both Play versions applied
+#      row (the state every existing install is in: both Play versions applied
 #      from the OLD path);
-#   2. boot the play image (GAME_STREAM_ENABLED unset, as on Milhouse and Red
-#      Star): zero migrations run, every version over its paths is `up` with
+#   2. boot the play image (GAME_STREAM_ENABLED unset, as on installs
+#      without Play): zero migrations run, every version over its paths is `up` with
 #      no `** FILE NOT FOUND **`, and a play-granted runtime gets exactly the
 #      answer the base image gave it (no play tools listed; a call refused as
 #      disabled);
@@ -37,7 +37,8 @@
 #   4. boot the play image again: still a no-op;
 #   5. drop the database.
 #
-# MOON ONLY, never hive (it boots three BEAMs). It talks to moon's dev rig:
+# TEST-RIG ONLY, never a workstation (it boots three BEAMs). It talks to the
+# test rig's dev services:
 # podman network `dev` and the `dev-postgres` container, never a production
 # database. Every container is named core-test-task_01a0ee08-c2ec-7001-89d2-
 # c888d6a7b73e-rig-<case>-<pid>-<phase>, every database rig_01a0ee08_<case>_<pid>,
@@ -45,7 +46,7 @@
 # logs go to $RIG_OUT (default ~/testruns/rig-01a0ee08-<case>-<pid>).
 set -euo pipefail
 
-usage() { sed -n '2,40p' "$0"; exit 2; }
+usage() { sed -n '2,41p' "$0"; exit 2; }
 [ $# -ge 1 ] || usage
 CASE="$1"; shift
 case "$CASE" in
@@ -58,7 +59,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RIG_SCRIPTS="$HERE/module_rig"
 NETWORK="${RIG_NETWORK:-dev}"
 PG_CONTAINER="${RIG_PG_CONTAINER:-dev-postgres}"
-PG_PASSWORD_FILE="${RIG_PG_PASSWORD_FILE:-$HOME/dev-from-hive/.env-dev-postgres}"
+PG_PASSWORD_FILE="${RIG_PG_PASSWORD_FILE:-}"
 PREFIX="core-test-task_01a0ee08-c2ec-7001-89d2-c888d6a7b73e-rig-$CASE-$$"
 DB="rig_01a0ee08_${CASE//-/_}_$$"
 OUT="${RIG_OUT:-$HOME/testruns/rig-01a0ee08-$CASE-$$}"
@@ -71,8 +72,9 @@ exec > >(tee -a "$LOG") 2>&1
 say() { echo "$(date -u +%H:%M:%S) [rig $CASE $$] $*"; }
 fail() { say "FAIL: $*"; exit 1; }
 
-command -v podman >/dev/null || fail "podman not found: this rig runs on moon"
-podman container exists "$PG_CONTAINER" || fail "no $PG_CONTAINER container: this rig runs on moon's dev rig"
+[ -n "$PG_PASSWORD_FILE" ] || fail "RIG_PG_PASSWORD_FILE is required (no default): the env file holding DEV_PG_PASS on the test rig"
+command -v podman >/dev/null || fail "podman not found: this rig runs on the test rig"
+podman container exists "$PG_CONTAINER" || fail "no $PG_CONTAINER container: this rig runs on the test rig's dev services"
 [ -r "$PG_PASSWORD_FILE" ] || fail "cannot read $PG_PASSWORD_FILE"
 PG_PASS=$(grep '^DEV_PG_PASS=' "$PG_PASSWORD_FILE" | cut -d= -f2-)
 [ -n "$PG_PASS" ] || fail "DEV_PG_PASS is empty in $PG_PASSWORD_FILE"

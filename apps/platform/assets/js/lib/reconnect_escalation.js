@@ -27,7 +27,7 @@
 // but goes red only once it has stayed offline for offlineGraceMs, default
 // 3000. It used to go red at once, and a phone resuming the app from the
 // background often reports offline for a moment while its radio wakes, so
-// every resume flashed the red toast (Rowan, 2026-10-11). Back online inside
+// every resume flashed the red toast (product decision, 2026-10-11). Back online inside
 // the grace and the offline clock resets; the ordinary attempt and time
 // limits still apply to the loss throughout.
 //
@@ -35,7 +35,7 @@
 // of someone. Chrome on Android freezes a backgrounded page: no JS runs,
 // the socket dies, and on resume the wall clock has jumped by minutes. A
 // loss that began before the freeze then read as "lost for minutes" and
-// went red at once, a second before the reconnect landed (Rowan, 2026-10-11,
+// went red at once, a second before the reconnect landed (product decision, 2026-10-11,
 // still seen after the offline grace). So:
 //   - while isHidden() is true nothing escalates;
 //   - resumed() (app.js: visibilitychange to visible, pageshow, resume)

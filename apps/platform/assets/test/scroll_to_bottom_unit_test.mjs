@@ -14,7 +14,7 @@
 // Why a hand-rolled DOM shim instead of jsdom: the platform/assets
 // tree intentionally has zero npm dependencies. Pulling jsdom in for
 // these assertions would balloon the asset toolchain and force a
-// network install on the moon dev container. The hook uses a small,
+// network install on the test-host dev container. The hook uses a small,
 // well-bounded slice of the DOM API (querySelectorAll, dataset,
 // classList, style.visibility/display/paddingTop), so an inline shim
 // is sufficient and keeps the test deps at zero.

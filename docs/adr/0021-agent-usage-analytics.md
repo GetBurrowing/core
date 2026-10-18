@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-03-22
-**Author:** Zip (requested by Rowan Member, approved by Rowan Ellis)
+**Author:** Zip (requested by a stakeholder, approved by the product owner)
 
 ## Context
 

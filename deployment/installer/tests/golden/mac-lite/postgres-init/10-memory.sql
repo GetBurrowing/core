@@ -1,6 +1,6 @@
 -- memory-service database (registry service: memory-service).
 -- Runs once, on an EMPTY core-postgres data volume. A fresh postgres has none of
--- this; moon's did because its data was restored from hive.
+-- this; the reference install's did because its data was restored from another host.
 \getenv memory_db_password MEMORY_DB_PASSWORD
 CREATE ROLE memory LOGIN PASSWORD :'memory_db_password';
 CREATE DATABASE memory OWNER memory;

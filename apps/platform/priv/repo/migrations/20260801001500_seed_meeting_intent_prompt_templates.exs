@@ -6,7 +6,7 @@ defmodule Platform.Repo.Migrations.SeedMeetingIntentPromptTemplates do
 
   Extends the live-meeting responsibility path that task `019fb90f-36e3`
   opened for `meetings.action_items`, to the other five classified
-  intents the Meeting Producer can route. No task of its own — Rowan
+  intents the Meeting Producer can route. No task of its own — the operator
   asked for this directly, without the plan machinery, so the work
   reference above is the task this builds on rather than one that
   covers it.

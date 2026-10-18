@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08-17
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0016 (Control Center LiveView Modularization), ADR 0035 (ChatLive Modularization)
 
 ---

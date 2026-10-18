@@ -5026,7 +5026,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
               "asked the deploy agent in the execution space: no reply in 30m"
             ],
             "memory_ref" => "org/page/deploy.md",
-            "unblock_action" => "Rowan pastes the deploy token into the CI secret",
+            "unblock_action" => "Avery pastes the deploy token into the CI secret",
             "category" => "decision"
           },
           %{runtime_id: task_runtime!(), agent_id: "agent:test"}
@@ -5369,7 +5369,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       caller = create_agent()
       space = create_space()
-      human = create_participant(space.id, %{display_name: "Rowan"})
+      human = create_participant(space.id, %{display_name: "Avery"})
 
       # Try to target the human's participant_id — the helper filters on
       # participant_type="agent", so this should come back with not-found
@@ -9644,7 +9644,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
             "reset the test DB: same failure"
           ],
           "memory_ref" => "org/page/identity.md",
-          "unblock_action" => "Rowan picks A or B",
+          "unblock_action" => "Avery picks A or B",
           "category" => "product"
         },
         overrides
@@ -9728,7 +9728,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert event.event_type == "execution.blocked"
       assert event.payload["attempts"] == args["attempts"]
       assert event.payload["memory_ref"] == "org/page/identity.md"
-      assert event.payload["unblock_action"] == "Rowan picks A or B"
+      assert event.payload["unblock_action"] == "Avery picks A or B"
       assert event.payload["category"] == "product"
       assert event.payload["reported_by"] == "agent:cost"
     end
@@ -9739,6 +9739,47 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert {:ok, %{blocked: true}} =
                ToolSurface.execute("report_blocker", args, blocker_context())
+    end
+  end
+
+  # Task 01a14b9e stage 3: tool copy served live to every agent names roles and
+  # neutral examples, never one install's people or hosts.
+  defp neutral_copy_strings(term) when is_binary(term), do: [term]
+
+  defp neutral_copy_strings(term) when is_map(term),
+    do: term |> Map.values() |> Enum.flat_map(&neutral_copy_strings/1)
+
+  defp neutral_copy_strings(term) when is_list(term),
+    do: Enum.flat_map(term, &neutral_copy_strings/1)
+
+  defp neutral_copy_strings(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> neutral_copy_strings()
+
+  defp neutral_copy_strings(_term), do: []
+
+  describe "install-neutral tool copy (task 01a14b9e stage 3)" do
+    test "descriptions carry the neutral examples" do
+      text = ToolSurface.tool_definitions() |> neutral_copy_strings() |> Enum.join("\n")
+
+      for literal <- [
+            "Only these runtime_ids (the slug, e.g. \"alex-coder\"). Omit for all.",
+            "Useful for understanding what shape of content a human editor prefers to keep.",
+            "the runtime slug (e.g. `agent-1.host-a`) for openclaw agents",
+            "`category` is one of `infra` (test rig, containers, deps, ssh, CI runners)",
+            "e.g. \"a human picks option A or B\"."
+          ] do
+        assert text =~ literal, "missing tool copy: #{literal}"
+      end
+    end
+
+    test "no tool definition string carries an install-identity hit" do
+      offenders =
+        for string <- neutral_copy_strings(ToolSurface.tool_definitions()),
+            hits = Platform.Regression.InstallIdentityScanner.hits(string),
+            hits != [],
+            do: Enum.map(hits, fn {s, l} -> binary_part(string, s, l) end)
+
+      assert offenders == []
     end
   end
 end

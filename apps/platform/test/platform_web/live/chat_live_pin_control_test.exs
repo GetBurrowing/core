@@ -24,7 +24,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
   ## What task 019ff8ba stage 1 moved
 
-  Marlowe, 2026-08-13, taking Option C off the design canvas: the pin leaves
+  Robin, 2026-08-13, taking Option C off the design canvas: the pin leaves
   the row in EVERY mode. An ordinary row now carries one three-dot trigger
   and nothing else, and the pin is the first item in the menu that trigger
   opens.
@@ -37,7 +37,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
   finds it in the menu unchanged.
 
   Stage 1 shipped one exception: a Pinned-block row kept its `hero-x-mark` on
-  the row beside the trigger, because Marlowe had asked for a visible way out of
+  the row beside the trigger, because Robin had asked for a visible way out of
   the block on 2026-08-12. She reversed that on 2026-08-13 with a reason: "for
   pinned items, it's a little weird to see an 'x' with 3-dots menu, so we
   should keep the interaction more consistent and just have a 3-dot menu where
@@ -88,7 +88,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
   end
 
   # An Acme admin, which is the viewer the arrange-mode section below uses.
-  # Marlowe reported this bug as an admin, and an admin's menu is the LONGEST
+  # Robin reported this bug as an admin, and an admin's menu is the LONGEST
   # one — it is the only viewer whose row menu holds "Move to organisation…" —
   # so a menu-parity assertion made as an admin covers the shorter menus too.
   defp admin_authed(conn) do
@@ -266,7 +266,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
   end
 
   # Click one row's trigger and return the menu that opened. The two-step is
-  # the cost Marlowe accepted with Option C: pinning is two clicks now.
+  # the cost Robin accepted with Option C: pinning is two clicks now.
   defp open_menu(view, space_id) do
     view
     |> element(~s(button[data-role="row-actions-trigger"][data-space-id="#{space_id}"]))
@@ -405,7 +405,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
       # The half that would otherwise pass for a no-op. Option C takes the pin
       # off the row in EVERY mode, so a build that merely ADDED the trigger
-      # beside it has not done the thing Marlowe asked for.
+      # beside it has not done the thing Robin asked for.
       refute pin_control_for(client, channel.id),
              "the pin still renders on the row beside the trigger"
 
@@ -460,7 +460,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     test "the row carries the trigger, and the pin is one menu-open away", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, html} = live_rail(conn)
       dms = desktop_sidebar(html) |> dm_section()
@@ -478,7 +478,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     test "the accessible name carries the person's display name", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, _html} = live_rail(conn)
 
@@ -488,27 +488,27 @@ defmodule PlatformWeb.ChatLivePinControlTest do
         |> pin_control_for(dm.id)
         |> attr("aria-label")
 
-      assert label == "Pin Rowan Ellis",
+      assert label == "Pin Alex Rivera",
              "accessible name #{inspect(label)} does not name the person"
     end
 
     test "the control adds no visible text and no glyph to the DM row", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       wrap = rail(conn) |> dm_section() |> row_wrap(dm.id)
 
-      assert visible_text(wrap) == "Rowan Ellis",
+      assert visible_text(wrap) == "Alex Rivera",
              "DM row wrap text #{inspect(visible_text(wrap))} is not a bare name"
     end
   end
 
   # ── 3. The control is visible at rest, on touch as much as on a mouse ───
   #
-  # Marlowe, 2026-08-11: "when developing pinned channels, use similar
+  # Robin, 2026-08-11: "when developing pinned channels, use similar
   # interactions as what's used for pinned tasks (hover doesn't work on
-  # mobile)." Rowan had already chosen visible-at-rest for the task row's
+  # mobile)." Alex had already chosen visible-at-rest for the task row's
   # unpin control, so both directions land on the same answer.
   #
   # The control used to carry
@@ -549,7 +549,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     test "an unpinned DM row's trigger has no reveal gate, and holds the pin", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, html} = live_rail(conn)
       trigger = desktop_sidebar(html) |> dm_section() |> trigger_for(dm.id)
@@ -563,10 +563,10 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       # empty target is a distinct failure and one this surface is
       # specifically prone to. It is asserted on the trigger AND on the pin,
       # since both now carry the name and they resolve it separately.
-      assert attr(trigger, "aria-label") == "More actions for Rowan Ellis"
+      assert attr(trigger, "aria-label") == "More actions for Alex Rivera"
 
       pin = view |> open_menu(dm.id) |> pin_control_for(dm.id)
-      assert attr(pin, "aria-label") == "Pin Rowan Ellis"
+      assert attr(pin, "aria-label") == "Pin Alex Rivera"
     end
 
     test "no row control anywhere in the rail is gated behind hover alone", %{conn: conn} do
@@ -579,7 +579,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       # vanished from the rail entirely — the worse bug — would pass.
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
-      _dm = create_dm(user, "Rowan Ellis")
+      _dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       %{space: task_space} = seed_pinned_task_for(user, "Hovering Task")
 
@@ -592,7 +592,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       assert length(triggers) == 3,
              "expected a trigger on the pinned channel, the pinned task and the DM row, got #{length(triggers)}"
 
-      # Both of the row-level unpin controls are off the rows now (Marlowe,
+      # Both of the row-level unpin controls are off the rows now (Robin,
       # 2026-08-13). Refuted for BOTH contracts, since the two pinned rows
       # carried a different one each.
       assert pin_controls(sidebar) == [],
@@ -628,7 +628,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
   # ── 4. A pinned row carries the trigger, and its menu carries the x ─────
   #
-  # Three of Marlowe's reviews land here, on DIFFERENT objects. Keeping them
+  # Three of Robin's reviews land here, on DIFFERENT objects. Keeping them
   # apart is the whole reason these tests are worded the way they are.
   #
   # 2026-08-11, on a permanent FILLED pin: "No need to append a pin icon to
@@ -767,7 +767,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
     test "the removed pinned-STATE marker stays removed, and no glyph replaced it",
          %{conn: conn} do
-      # Marlowe's EARLIER review, still binding. What she removed was a FILLED
+      # Robin's EARLIER review, still binding. What she removed was a FILLED
       # variant used to mark the row as pinned. No fill may come back, and
       # since 2026-08-13 no OUTLINE pin marks the row either — the block's
       # rows carry a trigger and a name.
@@ -817,7 +817,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       # so both are asserted.
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       {:ok, view, html} = live_rail(conn)
@@ -826,7 +826,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
       assert trigger, "no row-actions trigger on the pinned DM row"
       assert attr(trigger, "class") == @trigger_resting_class
-      assert attr(trigger, "aria-label") == "More actions for Rowan Ellis"
+      assert attr(trigger, "aria-label") == "More actions for Alex Rivera"
 
       refute pin_control_for(block, dm.id),
              "the pinned DM row still wears its own x beside the trigger"
@@ -834,7 +834,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       control = view |> open_menu(dm.id) |> pin_control_for(dm.id)
 
       assert control, "no unpin item in the pinned DM's menu"
-      assert attr(control, "aria-label") == "Unpin Rowan Ellis"
+      assert attr(control, "aria-label") == "Unpin Alex Rivera"
       assert control =~ "hero-x-mark"
       refute attr(control, "class") =~ "opacity-0"
     end
@@ -847,7 +847,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
   # `unpin_task_from_chat`, so `toggle_pinned` is the wrong verb for it, and
   # hide and org filing are meaningless on a task-exec space.
   #
-  # Marlowe overrode that on 2026-08-13 and stated the reason the menu holds one
+  # Robin overrode that on 2026-08-13 and stated the reason the menu holds one
   # item: "task - unpin since it gets pinned from a diff page." So the row's
   # own x moved into the menu exactly as the conversation rows' did, and the
   # rail is one interaction rather than two.
@@ -973,8 +973,8 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     test "pins a DM: the row lifts out of Direct Messages", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
-      _other = create_dm(user, "Marlowe Quill")
+      dm = create_dm(user, "Alex Rivera")
+      _other = create_dm(user, "Robin Park")
 
       {:ok, view, _html} = live_rail(conn)
 
@@ -987,9 +987,9 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
       sidebar = desktop_sidebar(html)
 
-      assert pinned_block(sidebar) =~ "Rowan Ellis"
-      refute dm_section(sidebar) =~ "Rowan Ellis"
-      assert dm_section(sidebar) =~ "Marlowe Quill"
+      assert pinned_block(sidebar) =~ "Alex Rivera"
+      refute dm_section(sidebar) =~ "Alex Rivera"
+      assert dm_section(sidebar) =~ "Robin Park"
     end
 
     test "the menu's x unpins a channel: it persists, and the row returns to its client section",
@@ -1006,7 +1006,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       {:ok, view, _html} = live_rail(conn)
 
       # The unpin is in the menu now, on a pinned row as on every other one
-      # (Marlowe, 2026-08-13), so the click needs the row's trigger first.
+      # (Robin, 2026-08-13), so the click needs the row's trigger first.
       _ = open_menu(view, channel.id)
 
       html =
@@ -1030,7 +1030,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
          %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       {:ok, view, _html} = live_rail(conn)
@@ -1044,14 +1044,14 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
       sidebar = desktop_sidebar(html)
       refute pinned_block(sidebar)
-      assert dm_section(sidebar) =~ "Rowan Ellis"
+      assert dm_section(sidebar) =~ "Alex Rivera"
 
       assert Sidebar.list_pinned_space_ids(user.id) == [],
              "the click re-rendered the rail but never wrote the unpin to preferences"
 
       fresh = rail(conn)
       refute pinned_block(fresh)
-      assert dm_section(fresh) =~ "Rowan Ellis"
+      assert dm_section(fresh) =~ "Alex Rivera"
     end
 
     test "the event posts the DESIRED next state, so a double-fire is idempotent",
@@ -1104,7 +1104,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
       #
       # What moved is where the action lives. It used to be on the row in both
       # modes; it is now in the row's menu in both modes, which is exactly the
-      # half of the earlier version that Marlowe's 2026-08-13 change broke.
+      # half of the earlier version that Robin's 2026-08-13 change broke.
       {conn, _user} = authed(conn)
       channel = create_channel("gen-migration")
 
@@ -1126,7 +1126,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
   # ── 8. Arrange mode: the row's control set (019ff8ba stage 2) ───────────
   #
-  # Marlowe's report was about arrange mode: for an Acme admin the sub-org channel
+  # Robin's report was about arrange mode: for an Acme admin the sub-org channel
   # names read "f...", "e...", "p...". Six controls held a slot on that row —
   # drag, up, down, pin, hide and "Move to organisation…" — and the name got
   # 25px at the rail's 224px width. Stage 1 took the last three off the row in

@@ -665,7 +665,7 @@ defmodule Platform.Tasks.StackDeployerTest do
                Platform.Tasks.StackDeployer.GitShellRunner.merge_member_into_rollup(%{})
     end
 
-    # Regression for the moon container /app permission-denied crash on
+    # Regression for the test-host container /app permission-denied crash on
     # 2026-07-17: the previous default `@default_repo_root "tmp/stack_deployer"`
     # `Path.expand`ed to `<CWD>/tmp/stack_deployer` — inside the release image
     # that resolved to `/app/tmp/stack_deployer`, which the beam (running as

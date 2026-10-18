@@ -20,7 +20,7 @@ defmodule Platform.Orchestration.DeployCredentialsTest do
             "type" => "docker_deploy",
             "config" => %{
               "target" => "production",
-              "host" => "dev@192.0.2.234",
+              "host" => "queen@192.0.2.234",
               "image" => "ghcr.io/org/app:latest"
             }
           },
@@ -29,7 +29,7 @@ defmodule Platform.Orchestration.DeployCredentialsTest do
               "name" => "production",
               "type" => "docker_compose",
               "config" => %{
-                "host" => "dev@192.0.2.234",
+                "host" => "queen@192.0.2.234",
                 "stack_path" => "~/docker/stacks/app"
               }
             }
@@ -80,7 +80,7 @@ defmodule Platform.Orchestration.DeployCredentialsTest do
         CredentialLease.lease(:custom,
           run_id: "test-run",
           credentials: [
-            DEPLOY_HOST: "dev@192.0.2.234",
+            DEPLOY_HOST: "queen@192.0.2.234",
             DEPLOY_SSH_KEY: "ssh-rsa AAAA..."
           ]
         )
@@ -89,7 +89,7 @@ defmodule Platform.Orchestration.DeployCredentialsTest do
 
       assert context != nil
       assert context.deploy_credentials != nil
-      assert context.deploy_credentials["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert context.deploy_credentials["DEPLOY_HOST"] == "queen@192.0.2.234"
       assert context.deploy_credentials["DEPLOY_SSH_KEY"] == "ssh-rsa AAAA..."
     end
 
@@ -144,7 +144,7 @@ defmodule Platform.Orchestration.DeployCredentialsTest do
       env = CredentialLease.to_env(lease)
       assert env["DEPLOY_TARGET_NAME"] == "production"
       assert env["DEPLOY_TARGET_TYPE"] == "docker_compose"
-      assert env["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert env["DEPLOY_HOST"] == "queen@192.0.2.234"
       assert env["DEPLOY_STACK_PATH"] == "~/docker/stacks/app"
     end
 

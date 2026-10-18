@@ -202,10 +202,10 @@ defmodule Platform.Chat.ContentRendererTest do
     end
 
     test "decorates bracketed multi-word mentions (ADR 0037)" do
-      result = render("Hello @[Rowan Ellis] and @[Sloane Scott]")
+      result = render("Hello @[Alex Rivera] and @[Sloane Scott]")
 
       assert result =~
-               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Rowan Ellis</span>)
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Alex Rivera</span>)
 
       assert result =~
                ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Sloane Scott</span>)
@@ -216,14 +216,14 @@ defmodule Platform.Chat.ContentRendererTest do
     end
 
     test "bracketed mention span contains full multi-word name" do
-      result = render("ping @[Rowan Ellis] please")
-      # The span should wrap the full '@Rowan Ellis', not split after Rowan.
-      assert result =~ ~r{<span[^>]*>@Rowan Ellis</span>}
+      result = render("ping @[Alex Rivera] please")
+      # The span should wrap the full '@Alex Rivera', not split after Alex.
+      assert result =~ ~r{<span[^>]*>@Alex Rivera</span>}
     end
 
     test "mixed bracketed and legacy mentions both highlight" do
-      result = render("@[Rowan Ellis] and @alice")
-      assert result =~ ~r{<span[^>]*>@Rowan Ellis</span>}
+      result = render("@[Alex Rivera] and @alice")
+      assert result =~ ~r{<span[^>]*>@Alex Rivera</span>}
       assert result =~ ~r{<span[^>]*>@alice</span>}
       # Must not double-wrap: no span nested inside a mention span.
       refute result =~ ~r{<span[^>]*><span}
@@ -246,19 +246,19 @@ defmodule Platform.Chat.ContentRendererTest do
     end
 
     test "regular @[Name] still renders with the primary-tone span" do
-      result = render("hey @[Rowan]")
+      result = render("hey @[Alex]")
 
       assert result =~
-               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Rowan</span>)
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Alex</span>)
 
       refute result =~ ~s(bg-warning/30)
     end
 
-    test "mixed @[Rowan] @[here] produces both spans with correct classes" do
-      result = render("@[Rowan] @[here]")
+    test "mixed @[Alex] @[here] produces both spans with correct classes" do
+      result = render("@[Alex] @[here]")
 
       assert result =~
-               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Rowan</span>)
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Alex</span>)
 
       assert result =~
                ~s(<span class="rounded bg-warning/30 text-warning px-1 font-semibold">@here</span>)

@@ -37,7 +37,7 @@ defmodule Platform.MeetingsTranscriberPredicateTest do
 
     test "a human row with a user FK is not a transcriber" do
       refute Meetings.transcriber_participant?(
-               row(user_id: @user_id, display_name: "Marlowe", metadata: %{"identity" => "user:1"})
+               row(user_id: @user_id, display_name: "Robin", metadata: %{"identity" => "user:1"})
              )
     end
 
@@ -70,7 +70,7 @@ defmodule Platform.MeetingsTranscriberPredicateTest do
       refute Meetings.transcriber_participant?(
                row(
                  user_id: @user_id,
-                 display_name: "transcriber: Marlowe",
+                 display_name: "transcriber: Robin",
                  metadata: %{"identity" => "transcriber:space-1"}
                )
              )
@@ -90,7 +90,7 @@ defmodule Platform.MeetingsTranscriberPredicateTest do
 
       assert Meetings.transcriber_participant?(%{name: "meeting-transcriber"})
       assert Meetings.transcriber_participant?(%{display_name: "meeting-transcriber"})
-      refute Meetings.transcriber_participant?(%{identity: "user:1", name: "Marlowe"})
+      refute Meetings.transcriber_participant?(%{identity: "user:1", name: "Robin"})
     end
 
     test "anything else is not a transcriber" do

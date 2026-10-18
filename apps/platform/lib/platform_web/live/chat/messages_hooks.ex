@@ -119,7 +119,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @anchor_half 25
 
   # Bounded-DOM cap for the chat message stream (task 019e18fc Stage 2,
-  # "virtual list" per Rowan Ellis 2026-05-15). Phoenix LiveView's
+  # "virtual list", product decision 2026-05-15). Phoenix LiveView's
   # built-in stream `:limit` only evicts from one fixed end (positive =
   # evict beginning; negative = evict end), which doesn't handle the
   # bidirectional case (prepend older = evict newest; append live tail
@@ -2203,7 +2203,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   #
   # THE CAP IS ONE LITERAL IN ONE PLACE. The design canvas specifies `99+`;
   # Chat's icon-rail badge caps at `9+`. That disagreement is an OPEN
-  # question with @Marlowe at the time of writing, so this ships the canvas's
+  # question with the designer at the time of writing, so this ships the canvas's
   # 99 and confines the answer to `@jump_count_cap` below. Flipping the
   # ruling is editing this single integer — no second constant exists
   # anywhere, the template does not compare against a number, and the tests
@@ -2258,12 +2258,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   The middle-left cell is the whole point. Before this, visibility was the
   distance predicate alone, so scrolling up to re-read three messages raised a
-  pill nobody asked for — Rowan's complaint in his own words. It is also the
+  pill nobody asked for — the operator's complaint in his own words. It is also the
   cell most easily left untested: at-bottom and deep both pass comfortably
   while it is broken in either direction.
 
   PROVENANCE: the two-threshold rule was proposed, WITHDRAWN by Saru in canvas
-  revision 3, then REINSTATED BY ROWAN DIRECTLY — the deep case is not the same
+  revision 3, then REINSTATED BY THE OPERATOR DIRECTLY — the deep case is not the same
   as reading a few messages up. Collapsing `deep?` back into `away?` here
   restores behaviour that was explicitly rejected.
 

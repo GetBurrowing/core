@@ -169,10 +169,10 @@ defmodule Platform.Tasks.PlanRejectionTest do
     test "renders the exact body for a user, an agent, and an unresolvable actor", %{plan: plan} do
       feedback = "Use postgres instead of sqlite for the metrics store."
 
-      user = a_user("Rowan Ellis")
+      user = a_user("Alex Rivera")
 
       assert PlanRejection.compose_message(plan, user.id, feedback) ==
-               "Plan v1 rejected by Rowan Ellis:\n\nUse postgres instead of sqlite for the metrics store."
+               "Plan v1 rejected by Alex Rivera:\n\nUse postgres instead of sqlite for the metrics store."
 
       # The ONE semantic widening in this stage: an AGENT id resolves to
       # the agent's name. Stage 3's actor is the architect agent, not a
@@ -252,11 +252,11 @@ defmodule Platform.Tasks.PlanRejectionTest do
       assert :ok == PlanRejection.post_feedback(plan, nil, "")
       assert length(messages_in(space.id)) == before
 
-      user = a_user("Rowan Ellis")
+      user = a_user("Alex Rivera")
       assert :ok == PlanRejection.post_feedback(plan, user.id, "Split stage 2.")
 
       assert [msg] = plan_rejected_messages(space.id)
-      assert msg.content == "Plan v1 rejected by Rowan Ellis:\n\nSplit stage 2."
+      assert msg.content == "Plan v1 rejected by Alex Rivera:\n\nSplit stage 2."
       assert msg.metadata["reason"] == "plan_rejected"
       assert msg.metadata["plan_id"] == plan.id
 

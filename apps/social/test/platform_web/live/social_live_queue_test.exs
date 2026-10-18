@@ -24,27 +24,27 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     ctx = approval_fixture()
     {post, card} = pending_post!(ctx, ctx.a, %{body: "HTC-Q1 SECRET-PREVIEW-BODY"})
 
-    # A second profile in the same org, "Fabrikam" sorting after "HTC".
-    fabrikam_space = channel!(ctx.org_id)
+    # A second profile in the same org, "Legacy" sorting after "HTC".
+    legacy_space = channel!(ctx.org_id)
 
-    {:ok, fabrikam} =
+    {:ok, legacy} =
       Social.create_profile(ctx.org_id, %{
-        name: "Fabrikam #{unique()}",
-        space_id: fabrikam_space.id,
+        name: "Legacy #{unique()}",
+        space_id: legacy_space.id,
         approver_user_ids: [ctx.h1.id]
       })
 
-    {:ok, fabrikam_account} =
-      Social.create_account(ctx.org_id, fabrikam, %{platform: "youtube", handle: "Fabrikam channel"})
+    {:ok, legacy_account} =
+      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy channel"})
 
-    {fabrikam_post, fabrikam_card} = pending_post!(ctx, fabrikam_account, %{body: "FABRIKAM-Q1 body"})
+    {legacy_post, legacy_card} = pending_post!(ctx, legacy_account, %{body: "LEGACY-Q1 body"})
 
     Map.merge(ctx, %{
       post: post,
       card: card,
-      fabrikam: fabrikam,
-      fabrikam_post: fabrikam_post,
-      fabrikam_card: fabrikam_card
+      legacy: legacy,
+      legacy_post: legacy_post,
+      legacy_card: legacy_card
     })
   end
 
@@ -73,7 +73,7 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     assert has_element?(child, in_row(ctx.post, "[data-role='social-card-edit']"))
     assert has_element?(child, in_row(ctx.post, "[data-role='social-card-reject']"))
     assert render(child) =~ "SECRET-PREVIEW-BODY"
-    refute has_element?(child, row(ctx.fabrikam_post))
+    refute has_element?(child, row(ctx.legacy_post))
   end
 
   test "Approve in the queue publishes once, decides the card the chat card shows, and a second approve is refused",
@@ -199,21 +199,21 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     assert Fake.calls(:publish) == []
   end
 
-  test "switching HTC to Fabrikam leaves no HTC row in the DOM, and back again",
+  test "switching HTC to Legacy leaves no HTC row in the DOM, and back again",
        %{conn: conn} = ctx do
     child = open(conn, ctx.h1)
     assert has_element?(child, row(ctx.post))
 
-    child |> form("#social-profile-switcher", %{profile_id: ctx.fabrikam.id}) |> render_change()
+    child |> form("#social-profile-switcher", %{profile_id: ctx.legacy.id}) |> render_change()
 
     refute has_element?(child, row(ctx.post))
     refute has_element?(child, "#queue-card-#{ctx.card.id}")
-    assert has_element?(child, row(ctx.fabrikam_post))
+    assert has_element?(child, row(ctx.legacy_post))
     refute render(child) =~ "SECRET-PREVIEW-BODY"
 
     child |> form("#social-profile-switcher", %{profile_id: ctx.profile.id}) |> render_change()
     assert has_element?(child, row(ctx.post))
-    refute has_element?(child, row(ctx.fabrikam_post))
+    refute has_element?(child, row(ctx.legacy_post))
   end
 
   test "a decision made in chat updates the queued card and the counts", %{conn: conn} = ctx do

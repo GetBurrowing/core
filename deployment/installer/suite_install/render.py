@@ -211,7 +211,9 @@ def plan(manifest):
     result.customer_refs = _customer_refs(manifest)
     result.core_image = result.services["core-platform"].image
     # full_machine copies the daemon out of the agent-host image on the host.
-    result.agent_host_image = overrides.get(registry.AGENT_HOST) or registry.AGENT_HOST_IMAGE
+    result.agent_host_image = overrides.get(registry.AGENT_HOST) or registry.agent_host_image(
+        manifest
+    )
     _check_references(result)
     return result
 
@@ -325,6 +327,8 @@ def build(
             f"media_reach = {exc.reach!r} could not detect this machine's address; "
             "set [meetings] node_ip",
         ) from exc
+    except registry.ImageNamespaceMissing as exc:
+        raise RenderError("missing_required", registry.IMAGE_NAMESPACE_INPUT, str(exc)) from exc
 
     private_defaults = [
         c

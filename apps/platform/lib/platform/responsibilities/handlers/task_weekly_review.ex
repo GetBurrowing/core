@@ -32,7 +32,7 @@ defmodule Platform.Responsibilities.Handlers.TaskWeeklyReview do
   019f2455) not to fire live.
 
   `handle_output/2` and `handle_output/3` log a placeholder warning
-  and return `:ok`. Rowan/Marlowe iterate the prompt template content
+  and return `:ok`. The operator and designer iterate the prompt template content
   live via `prompt_template_update` MCP after the seed migration lands
   — this handler doesn't gate that iteration.
   """

@@ -281,7 +281,7 @@ defmodule Platform.Chat.AgentResponderAttentionFunnelTest do
     end
 
     test "a fire whose metadata NAMES a space invites the agent into it" do
-      # THE DEFECT THIS CLOSES (2026-08-01, Rowan's DM). A mid-meeting
+      # THE DEFECT THIS CLOSES (2026-08-01, Alex's DM). A mid-meeting
       # classified intent routes to a responsibility whose assignee is a
       # native agent, and the prompt tells it to create or patch a canvas
       # "in this meeting's space". `broadcast_system_event/3` passed

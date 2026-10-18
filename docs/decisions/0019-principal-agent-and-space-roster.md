@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-20  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Extends:** ADR 0013 (Attention Routing and Channel Policy)  
 
 ---
@@ -163,7 +163,7 @@ proactively; the dot pulls them in.
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  ⚡ Burrow      [Zip 🔴]               [Rowan]   │
+│  ⚡ Burrow      [Zip 🔴]               [Alex]   │
 │                  ↑ composite dot                 │
 └─────────────────────────────────────────────────┘
 ```
@@ -225,7 +225,7 @@ On mobile: bottom sheet. On desktop: dropdown popover.
 | 🔵 busy | "busy — reviewing PR #128" |
 | 🔴 error | "error — disconnected 3m ago" |
 | 🔴 error | "error — runtime crashed" |
-| ⚫ dismissed | "dismissed by Rowan 2h ago" |
+| ⚫ dismissed | "dismissed by the product owner 2h ago" |
 
 #### Chat participant list
 
@@ -233,7 +233,7 @@ In the space's full participant list (sidebar or members panel), agents are
 shown alongside human participants with role and status:
 
 ```
-Rowan Ellis        (owner)
+Alex Rivera          (owner)
 Zip              🟢  (agent · principal)
 CodeBot          🔴  (agent · error)
 Reviewer         🔵  (agent · busy)

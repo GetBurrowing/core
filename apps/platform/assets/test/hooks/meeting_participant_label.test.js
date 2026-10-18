@@ -29,7 +29,7 @@ describe("participantLabel", () => {
 
   it("a named participant keeps its own name, even when the map disagrees", () => {
     expect(participantLabel({ identity: "agent-AJ_x", name: "Other" }, JSON.parse(NAMES))).toBe("Other")
-    expect(participantLabel({ identity: "user:1", name: "Marlowe" }, JSON.parse(NAMES))).toBe("Marlowe")
+    expect(participantLabel({ identity: "user:1", name: "Robin" }, JSON.parse(NAMES))).toBe("Robin")
   })
 
   it("an unmapped zzz: participant keeps the identity fallback", () => {
@@ -71,9 +71,9 @@ describe("MeetingRoom._onTranscription labels", () => {
 
   it("a named participant keeps its name; an unmapped one keeps its identity", () => {
     const { hook, dispatched } = harness()
-    hook._onTranscription(seg("a"), { identity: "user:1", name: "Marlowe" })
+    hook._onTranscription(seg("a"), { identity: "user:1", name: "Robin" })
     hook._onTranscription(seg("b"), { identity: "zzz:stranger" })
-    expect(dispatched.map((e) => e.detail.speaker)).toEqual(["Marlowe", "zzz:stranger"])
+    expect(dispatched.map((e) => e.detail.speaker)).toEqual(["Robin", "zzz:stranger"])
   })
 
   it("re-reads the attribute on every event (no caching)", () => {
@@ -120,9 +120,9 @@ describe("MeetingClient._ensureTile labels (quick-meet)", () => {
   it("names a legacy unnamed agent-AJ_ tile Burrow, a human by name, an unmapped one by identity", () => {
     const { hook, grid } = harness()
     hook._ensureTile({ identity: "agent-AJ_x", name: "", isLocal: false })
-    hook._ensureTile({ identity: "user:1", name: "Marlowe", isLocal: false })
+    hook._ensureTile({ identity: "user:1", name: "Robin", isLocal: false })
     hook._ensureTile({ identity: "zzz:stranger", isLocal: false })
-    expect(grid.children.map(tileName)).toEqual(["Burrow", "Marlowe", "zzz:stranger"])
+    expect(grid.children.map(tileName)).toEqual(["Burrow", "Robin", "zzz:stranger"])
     expect(grid.children.map((t) => t.dataset.participant)).toEqual([
       "agent-AJ_x",
       "user:1",

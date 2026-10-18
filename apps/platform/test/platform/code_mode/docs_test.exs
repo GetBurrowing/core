@@ -155,7 +155,7 @@ defmodule Platform.CodeMode.DocsTest do
       %{runtime: runtime, token: token}
     end
 
-    # Measured on moon with this test's runtime (bundles default + code_mode +
+    # Measured on test-host with this test's runtime (bundles default + code_mode +
     # task + plan), byte_size of `docs` and of the /mcp tools/call text block:
     #
     #   before this stage (= detail "full" now): docs 11,479 B, text 11,875 B

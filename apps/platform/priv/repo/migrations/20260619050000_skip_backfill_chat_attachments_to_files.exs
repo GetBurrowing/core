@@ -6,8 +6,8 @@ defmodule Platform.Repo.Migrations.SkipBackfillChatAttachmentsToFiles do
   `chat_attachments` rows into `platform_files` by deriving
   `project_id` through `chat_space.metadata.task_id → tasks.project_id`.
 
-  After plan approval Rowan determined that derivation is unsound for
-  org-level chat spaces — Fabrikam's General channel can discuss any Fabrikam
+  After plan approval the operator determined that derivation is unsound for
+  org-level chat spaces — Acme's General channel can discuss any Acme
   project, so no single `project_id` maps cleanly. The product call:
   `chat_attachments` and `platform_files` remain distinct affordances.
 

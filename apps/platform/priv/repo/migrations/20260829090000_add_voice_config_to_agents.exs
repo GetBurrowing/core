@@ -7,7 +7,7 @@ defmodule Platform.Repo.Migrations.AddVoiceConfigToAgents do
 
   ## Why a map and not columns
 
-  Harper's requirement is explicit — "but also a different provider if we
+  The product lead's requirement is explicit — "but also a different provider if we
   want." A column named `elevenlabs_voice_id` would make the vendor part of
   the schema, so a second provider becomes a migration. Here the provider is
   a VALUE (`voice_config["provider"]`), the same way `model_config["primary"]`

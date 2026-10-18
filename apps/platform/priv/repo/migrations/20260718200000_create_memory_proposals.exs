@@ -22,8 +22,8 @@ defmodule Platform.Repo.Migrations.CreateMemoryProposals do
       surgery.
 
     * `status` transitions:
-        pending → approved   (Rowan clicks Approve at `/memory/proposals`)
-        pending → rejected   (Rowan clicks Reject-with-feedback)
+        pending → approved   (the operator clicks Approve at `/memory/proposals`)
+        pending → rejected   (the operator clicks Reject-with-feedback)
         pending → expired    (`Proposals.expire_stale/0` after 7 days)
 
       Rejected + expired rows persist (acceptance criterion 8) — we

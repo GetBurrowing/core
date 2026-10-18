@@ -2,7 +2,7 @@ defmodule Platform.Chat.DefaultSpace do
   @moduledoc """
   A fresh install's first channel, "General" (task 01a10322 stage 6).
 
-  Measured on moon on 2026-10-09: the release image booted on an empty
+  Measured on the test rig on 2026-10-09: the release image booted on an empty
   database has ZERO spaces after its migrations, so the first person to sign
   in lands in a chat with nothing in it. `ensure/0` creates `#general` in the
   root org when, and only when, the install has no channel at all.

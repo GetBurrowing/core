@@ -952,7 +952,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   (b) every other node tree: re-create the document on YOUR dev server (`Platform.Chat.create_canvas/1` in a dev space), log in there with `/dev/login`, and screenshot `/canvases/<dev id>` at the same viewports.
   (c) `prototype` nodes (multi-file bundles): the bytes sit behind `/proto/` auth with no agent byte read path. Record "could not render prototype <id> v<n>" and do not guess.
 
-  Rig by runtime: Rowan-owned agents use the dev-on-moon-e2e-rig and agent-chrome-cdp skills (chromedp/headless-shell on moon, CDP at 192.0.2.200:9222); other runtimes use their own rig; never run a BEAM or Chrome on hive.
+  Rig: use the CDP endpoint named in your org's browser-rig skill (`skill_list` query: browser rig); never run a BEAM or Chrome on a person's workstation.
   """
 
   @doc false

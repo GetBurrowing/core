@@ -74,7 +74,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
                "payload" => %{
                  "description" => "migration fails",
                  "attempts" => ["ran mix test", "read the ADR", "reset the DB"],
-                 "unblock_action" => "Rowan picks A or B"
+                 "unblock_action" => "Alex picks A or B"
                }
              })
 
@@ -82,7 +82,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert lease.status == "blocked"
 
     assert lease.block_reason ==
-             "migration fails | tried: ran mix test; read the ADR; reset the DB | unblock: Rowan picks A or B"
+             "migration fails | tried: ran mix test; read the ADR; reset the DB | unblock: Alex picks A or B"
   end
 
   test "record_event/1 is idempotent by idempotency_key" do

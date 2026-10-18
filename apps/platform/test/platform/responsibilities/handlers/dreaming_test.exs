@@ -178,7 +178,7 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
         Learned: pricing anchors keep drifting.
 
         <synthesis-proposal category="recurring-theme" confidence="high" evidence="entries from 07-15..07-18">
-        Pricing anchors keep drifting when Rowan reviews SXI deliverables.
+        Pricing anchors keep drifting when Alex reviews SXI deliverables.
         </synthesis-proposal>
         """
 

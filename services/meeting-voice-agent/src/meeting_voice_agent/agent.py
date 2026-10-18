@@ -129,7 +129,7 @@ def build_room_options(human_identity: str | None) -> NotGivenOr[RoomOptions]:
 
     Task 01a0d4a0 stage 5 item 2: without `participant_identity` set,
     `RoomIO` links to the first room participant that clears its
-    `participant_kinds` filter — Dalton's dual-agent moon run hit exactly
+    `participant_kinds` filter — a live test run hit exactly
     this race, where two agents dispatched within milliseconds of each
     other, and the second worker's session linked to the FIRST agent's own
     room participant instead of the human (`RoomIO linked to participant:

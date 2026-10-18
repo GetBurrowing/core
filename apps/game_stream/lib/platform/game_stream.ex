@@ -1,7 +1,7 @@
 defmodule Platform.GameStream do
   @moduledoc """
   Playable review builds (task 01a0db5f): stream a task's review build of a
-  game, running on a play host on Rowan's LAN, into a `game_stream` canvas.
+  game, running on a play host on the operator's LAN, into a `game_stream` canvas.
 
   This module is the context — the one API the agent tools (`play` bundle),
   the runtime channel and (stage 4) the canvas LiveView hook go through.

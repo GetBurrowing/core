@@ -9,9 +9,9 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
     function merely returns rows, would pass against a sampler that shuffled
     freshly on every call.
   * **Caps** are measured against a fixture that WOULD violate them. The
-    chatty transcript below carries 40 segments and `Rowan` speaks 40 of the
+    chatty transcript below carries 40 segments and `Alex` speaks 40 of the
     fixture's 58 — with the caps removed the run would take far more than 8
-    from that transcript, and Rowan would be the overwhelming majority of the
+    from that transcript, and Alex would be the overwhelming majority of the
     set. The pre-cap counts are asserted directly so the fixture cannot
     silently drift into a shape that could never violate anything.
   * **Redaction** asserts BOTH the absence of the secret literal and the
@@ -64,7 +64,7 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
   defp chatty_fixture do
     segments =
       for i <- 1..40 do
-        segment("Rowan", "standup line number #{i}, and then some more words", i * 1000)
+        segment("Alex", "standup line number #{i}, and then some more words", i * 1000)
       end
 
     insert_transcript("room-chatty", segments)
@@ -170,17 +170,17 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
       chatty_fixture()
       varied_fixture()
 
-      # Pre-cap: "Rowan" owns 40 of 58 candidates (69%), far above the 15%
+      # Pre-cap: "Alex" owns 40 of 58 candidates (69%), far above the 15%
       # share. The cap for limit 20 is ceil(20 * 0.15) = 3.
       cap = ceil(@limit * @speaker_share)
       assert cap == 3
 
       rows = Sample.sample_rows(opts())
 
-      rowan_rows = Enum.count(rows, &(&1["speaker"] == "Rowan"))
+      alex_rows = Enum.count(rows, &(&1["speaker"] == "Alex"))
 
-      assert rowan_rows <= cap,
-             "Rowan took #{rowan_rows} of #{length(rows)} rows; cap is #{cap}"
+      assert alex_rows <= cap,
+             "Alex took #{alex_rows} of #{length(rows)} rows; cap is #{cap}"
     end
 
     test "the caps are what limit the long transcript, not the candidate supply" do
@@ -205,7 +205,7 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
     test "an account id and an ARN do not survive into the output row" do
       insert_transcript("room-secrets", [
         segment(
-          "Rowan",
+          "Alex",
           "the account is 123456789012 and the role is arn:aws:iam::123456789012:role/orion-apply",
           1000
         )
@@ -232,13 +232,13 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
 
     test "prior context is carried and is scrubbed too" do
       insert_transcript("room-prior", [
-        segment("Rowan", "my key is AKIAIOSFODNN7EXAMPLE by the way", 1000),
-        segment("Rowan", "second line", 2000),
-        segment("Rowan", "third line", 3000),
-        segment("Rowan", "fourth line", 4000)
+        segment("Alex", "my key is AKIAIOSFODNN7EXAMPLE by the way", 1000),
+        segment("Alex", "second line", 2000),
+        segment("Alex", "third line", 3000),
+        segment("Alex", "fourth line", 4000)
       ])
 
-      # Speaker share opened up: all four lines are Rowan's, and the point of
+      # Speaker share opened up: all four lines are Alex's, and the point of
       # this test is the `prior` window, not the cap.
       rows = Sample.sample_rows(opts(speaker_share: 1.0))
 

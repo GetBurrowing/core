@@ -1,6 +1,6 @@
 # Temporary server-side timing probe for the ui_sluggishness harness
 # (task 01a13884 stage 1). Attaches a :telemetry handler INSIDE the running
-# dev BEAM (started with `--sname dev`, as dev-on-moon does) and records
+# dev BEAM (started with `--sname dev`, as the dev-server rig does) and records
 # handle_params / render / handle_event durations with wall-clock stamps, so
 # profile.py's per-row start/end times can be joined against them.
 #

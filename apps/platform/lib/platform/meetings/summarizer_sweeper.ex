@@ -439,7 +439,7 @@ defmodule Platform.Meetings.SummarizerSweeper do
   # `meeting_transcripts` (no schema column, no migration). Instead
   # we resolve the CURRENTLY-assigned agent for `meetings.summarize`
   # at sweep time. This is the right call because the fallback notice
-  # targets the agent Rowan reassigned to (if any) — that's who the
+  # targets the agent the operator reassigned to (if any) — that's who the
   # dashboard operator needs to poke, not the historical slug at the
   # time of the original dispatch.
   #

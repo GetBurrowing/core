@@ -289,8 +289,8 @@ defmodule PlatformWeb.Components.Meetings.CandidateDisplay do
   The full reason line: the label, plus `closed_note` when the close
   path wrote one.
 
-  The note is where the checkable part lives (`Stopped by Harper
-  Parker`, a retraction quote, a duplicate's task id), so it is joined
+  The note is where the checkable part lives (`Stopped by Sam
+  Taylor`, a retraction quote, a duplicate's task id), so it is joined
   with an em dash exactly as the mockup draws it rather than dropped.
   A nil or blank note degrades to the label alone — never to a dangling
   dash, which reads as a truncation bug.

@@ -1,7 +1,7 @@
 defmodule PlatformWeb.Components.NotificationStateTest do
   @moduledoc """
   DOM contract tests for the `/inbox` notification-state row (task 019ffb7b
-  stage 4, revised after Marlowe's review).
+  stage 4, revised after Robin's review).
 
   Most of these moved here from `icon_rail_test.exs`: they were written
   against the rail bell, but their subject was the BEHAVIOUR per permission
@@ -93,7 +93,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
   # record the device. Two variants, because the two ways to get here need
   # opposite instructions.
   #
-  # This block first shipped as ONE variant behind a boolean and Marlowe rejected
+  # This block first shipped as ONE variant behind a boolean and Robin rejected
   # the copy: "If we are going to tell the user something is broken, we need to
   # tell them how to fix (whether they need to do something, or we need to do
   # something)." A boolean cannot answer that when it is set by two failures
@@ -174,7 +174,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
              ":subscribe_failed is not about conversations; a reload is the fix"
     end
 
-    # Marlowe's actual question. Each variant has to answer "who acts": one says
+    # Robin's actual question. Each variant has to answer "who acts": one says
     # outright that the user does not, the other gives them the single step
     # that can change the outcome.
     test "each variant says who has to act" do
@@ -196,7 +196,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
 
       refute text =~ "Open a conversation"
 
-      # And it does not fall back on the vague line Marlowe rejected.
+      # And it does not fall back on the vague line Robin rejected.
       refute text =~ "could not finish setting them up"
     end
 
@@ -458,7 +458,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
     assert count(row_doc("denied"), ".hero-bell-slash") == 1
   end
 
-  # --- naming the browser (Marlowe's review, 2026-08-13) -------------------
+  # --- naming the browser (Robin's review, 2026-08-13) -------------------
   #
   # "Allow them in your browser's site settings" is wrong or useless for most
   # people who read it: they do not know their browser has site settings, let
@@ -551,7 +551,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
 
   # --- the browser refused without ever asking --------------------------
   #
-  # Marlowe clicked enable in a private window. Chrome refuses a notification
+  # Robin clicked enable in a private window. Chrome refuses a notification
   # prompt there outright, so she was never shown a dialog and was then told
   # to change a site setting that was not the problem. The hook reports that
   # refusal by TIMING (a human choosing Block cannot answer in single-digit

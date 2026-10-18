@@ -112,7 +112,7 @@ defmodule Platform.Meetings.SummarizerTest do
     [
       %{
         "participant_identity" => "user_1",
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" => "Let's discuss the roadmap for Q3.",
         "start_time" => 0,
         "end_time" => 3000,
@@ -130,7 +130,7 @@ defmodule Platform.Meetings.SummarizerTest do
       },
       %{
         "participant_identity" => "user_1",
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" => "Agreed. Let's make that the priority.",
         "start_time" => 6500,
         "end_time" => 9000,
@@ -144,9 +144,9 @@ defmodule Platform.Meetings.SummarizerTest do
     test "formats segments with speaker attribution and timestamps" do
       result = SummaryPrompt.format_segments(sample_segments())
 
-      assert result =~ "[00:00:00] Harper: Let's discuss the roadmap for Q3."
+      assert result =~ "[00:00:00] Sam: Let's discuss the roadmap for Q3."
       assert result =~ "[00:00:03] Alex: I think we should focus on the mobile app."
-      assert result =~ "[00:00:06] Harper: Agreed. Let's make that the priority."
+      assert result =~ "[00:00:06] Sam: Agreed. Let's make that the priority."
     end
 
     test "handles missing speaker name" do
@@ -175,17 +175,17 @@ defmodule Platform.Meetings.SummarizerTest do
 
     test "handles nil start_time" do
       segments = [
-        %{"speaker_name" => "Harper", "text" => "Hello", "start_time" => nil, "final" => true}
+        %{"speaker_name" => "Sam", "text" => "Hello", "start_time" => nil, "final" => true}
       ]
 
       result = SummaryPrompt.format_segments(segments)
-      assert result =~ "[00:00:00] Harper: Hello"
+      assert result =~ "[00:00:00] Sam: Hello"
     end
 
     test "formats large timestamps correctly" do
       segments = [
         %{
-          "speaker_name" => "Harper",
+          "speaker_name" => "Sam",
           "text" => "Wrapping up",
           "start_time" => 3_723_000,
           "final" => true
@@ -193,7 +193,7 @@ defmodule Platform.Meetings.SummarizerTest do
       ]
 
       result = SummaryPrompt.format_segments(segments)
-      assert result =~ "[01:02:03] Harper: Wrapping up"
+      assert result =~ "[01:02:03] Sam: Wrapping up"
     end
 
     test "returns empty string for empty segments" do
@@ -264,7 +264,7 @@ defmodule Platform.Meetings.SummarizerTest do
     test "GENUINE-SILENCE CONTROL: zero segments with only humans stays complete" do
       {space, room} = presence_room!()
       transcript = create_transcript!(%{room_id: room.livekit_room_name, space_id: space.id})
-      human_joined!(room, "Harper", 3600)
+      human_joined!(room, "Sam", 3600)
       human_joined!(room, "Alex", 3600)
 
       {:ok, finalized} = Meetings.finalize_transcript(transcript.id)
@@ -476,7 +476,7 @@ defmodule Platform.Meetings.SummarizerTest do
         create_transcript!(%{
           segments: [
             %{
-              "speaker_name" => "Harper",
+              "speaker_name" => "Sam",
               "text" => "Quick standup.",
               "start_time" => 0,
               "end_time" => 500,
@@ -877,7 +877,7 @@ defmodule Platform.Meetings.SummarizerTest do
       [
         %{
           "participant_identity" => "user_1",
-          "speaker_name" => "Harper",
+          "speaker_name" => "Sam",
           "text" => "The single agenda item is #{marker}.",
           "start_time" => 0,
           "end_time" => 3000,

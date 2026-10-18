@@ -6,7 +6,7 @@ defmodule Platform.Meetings.IntentEval.Cassette do
   ## Why a cassette exists at all
 
   The classifier under test is a ~2B model served by llama-server on
-  `dev-host:8085`. That host is not reachable from every box: an agent asked to
+  `test-host:8085`. That host is not reachable from every box: an agent asked to
   pick up the off_topic work found no DNS, no HTTP and no SSH to it, and
   correctly declined rather than ship blind. Host-boundness is a standing
   tax and this harness must not inherit it — so every live call is recorded

@@ -321,7 +321,7 @@ final class SystemSearchableIndex: SearchableIndexStore {
 /// (task 01a111bb stage 7): an index refresh still in flight when the person
 /// signs out must not put that install's people back after the delete.
 ///
-/// Round 8 (Rowan's iPad, iOS 27.0.1, 2026-10-14): after the suite-exp
+/// Round 8 (a test iPad, iOS 27.0.1, 2026-10-14): after the suite-exp
 /// install was removed, Siri still found its people, hydration of them
 /// failed ("Entity hydration failed") and the send broke. The domain delete
 /// alone did not take them out of what Siri searches: an item built with

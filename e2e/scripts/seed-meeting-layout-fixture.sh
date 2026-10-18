@@ -30,7 +30,7 @@ DB="platform_dev_$(echo "$SLUG" | tr '-' '_')"
 # warnings plus an empty result — which then reads as "the row does not
 # exist" and the script exits claiming the fixture is unseeded.
 psql_q() {
-  ssh dev@build-host.local "podman exec -i dev-postgres psql -U postgres -d '$DB' -v ON_ERROR_STOP=1 -tA"
+  ssh deploy@test-host.local "podman exec -i dev-postgres psql -U postgres -d '$DB' -v ON_ERROR_STOP=1 -tA"
 }
 
 space_id=$(echo "select id from chat_spaces where slug='general' limit 1;" | psql_q)
@@ -96,7 +96,7 @@ insert into meeting_candidates
 values
   ('01a06520-0000-7001-0000-00000000000a','01a06520-0000-7001-0000-000000000002','$org_id',
    'shaping','task','we should rotate the staging secrets','action_item',
-   'Harper Parker','geo-alpha',null,ARRAY[gen_random_uuid()],null,
+   'Sam Moreno','geo-alpha',null,ARRAY[gen_random_uuid()],null,
    now(),now()-interval '2 minutes','[]',now(),now()),
   ('01a06520-0000-7001-0000-00000000000b','01a06520-0000-7001-0000-000000000002','$org_id',
    'shaping','task','and somebody should rewrite the pricing copy','action_item',
@@ -104,11 +104,11 @@ values
    now(),now()-interval '3 minutes','[]',now(),now()),
   ('01a06520-0000-7001-0000-00000000000c','01a06520-0000-7001-0000-000000000002','$org_id',
    'heard','task','let us pin the deploy target before Friday',null,
-   'Harper Parker',null,null,ARRAY[gen_random_uuid()],null,
+   'Sam Moreno',null,null,ARRAY[gen_random_uuid()],null,
    now(),now()-interval '1 minute','[]',now(),now()),
   ('01a06520-0000-7001-0000-00000000000d','01a06520-0000-7001-0000-000000000002','$org_id',
    'shaping','task','open a ticket for the flaky pins test','action_item',
-   'Harper Parker','geo-bravo',null,ARRAY[gen_random_uuid()],now()+interval '1 hour',
+   'Sam Moreno','geo-bravo',null,ARRAY[gen_random_uuid()],now()+interval '1 hour',
    now(),now()-interval '30 seconds','[]',now(),now())
 on conflict (id) do update set
   acts_at = excluded.acts_at,

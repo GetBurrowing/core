@@ -86,7 +86,7 @@ defmodule Platform.PushExternalPreviewTest do
 
   describe "chat push builder shape" do
     @chat_payload %{
-      title: "Rowan Ellis in Suite",
+      title: "Avery Rivera in Suite",
       body: "internal roadmap: shipping the Acme deal Friday",
       url: "/chat"
     }
@@ -100,13 +100,13 @@ defmodule Platform.PushExternalPreviewTest do
                url: "/chat"
              }
 
-      refute_leak(resolved, ["Rowan Ellis", "internal roadmap", "Acme"])
+      refute_leak(resolved, ["Avery Rivera", "internal roadmap", "Acme"])
     end
 
     test "internal recipient's payload is byte-identical (sender name + text intact)" do
       resolved = Push.preview_for_recipient(internal_participant().id, @chat_payload)
       assert resolved == @chat_payload
-      assert resolved.title =~ "Rowan Ellis"
+      assert resolved.title =~ "Avery Rivera"
       assert resolved.body =~ "internal roadmap"
     end
   end

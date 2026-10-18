@@ -104,7 +104,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   `AgentResponder.dispatch_space_id/1` reads nil and no participant row is ever
   minted for them. That is the opt-in design working as intended — granting one
   would hand them the execution space's whole message history — and they are
-  therefore denied by this gate. It is a known open decision owned by Marlowe,
+  therefore denied by this gate. It is a known open decision owned by Robin,
   not a bug for this stage to fix by widening grants. The test named for it
   below asserts the denial as the CURRENT contract so the decision stays
   visible; it does not assert that the denial is correct.
@@ -632,7 +632,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       # POSITIVE CONTROL, and the thing that makes this a fence rather than a
       # bug report: the SAME agent, once given the participant row the design
       # step gets and the architecture fires deliberately do not, attaches.
-      # Widening the grant is a one-line change; the decision is Marlowe's.
+      # Widening the grant is a one-line change; the decision is Robin's.
       {:ok, _} = Chat.add_agent_participant(space.id, ctx.agent)
       assert {:ok, _} = attach(ctx.conn, token, ctx.target, ctx.canvas)
     end

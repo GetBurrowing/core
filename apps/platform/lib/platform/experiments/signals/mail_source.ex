@@ -19,7 +19,7 @@ defmodule Platform.Experiments.Signals.MailSource do
 
   Matching a reply to a SUBJECT is done by the blind labeler reading the
   reply against the candidates (`Platform.Experiments.Labeler`). There are
-  no sub-address tokens: Rowan declined them.
+  no sub-address tokens: the operator declined them.
 
   ## Idempotence and the at-most-once gap
 

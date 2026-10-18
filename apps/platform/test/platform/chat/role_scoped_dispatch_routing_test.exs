@@ -76,7 +76,7 @@ defmodule Platform.Chat.RoleScopedDispatchRoutingTest do
       Chat.add_participant(space_id, %{
         participant_type: "user",
         participant_id: Ecto.UUID.generate(),
-        display_name: "Rowan",
+        display_name: "Alex",
         joined_at: DateTime.utc_now()
       })
 

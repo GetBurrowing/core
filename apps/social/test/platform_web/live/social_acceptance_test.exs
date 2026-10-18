@@ -1,7 +1,7 @@
 defmodule PlatformWeb.SocialAcceptanceTest do
   @moduledoc """
   Social 7/7 acceptance (stage 5): one describe per Done-when item, on one
-  seeded world: profiles HTC and Fabrikam in one org with distinct accounts and
+  seeded world: profiles HTC and Legacy in one org with distinct accounts and
   posts. Each case is the target of a named mutation probe (P1-P6; P7 is the
   core boundary test). `async: false`: the Fake's call log is global.
   """
@@ -30,18 +30,18 @@ defmodule PlatformWeb.SocialAcceptanceTest do
     tue = Date.add(SocialCalendar.week_start(Date.utc_today()), 1)
     htc_s1 = placed!(ctx, ctx.a, at(tue, 10), "HTC-S1 scheduled")
 
-    {:ok, fabrikam} =
+    {:ok, legacy} =
       Social.create_profile(ctx.org_id, %{
-        name: "Fabrikam #{unique()}",
+        name: "Legacy #{unique()}",
         space_id: channel!(ctx.org_id).id,
         approver_user_ids: [ctx.h1.id]
       })
 
-    {:ok, fabrikam_yt} =
-      Social.create_account(ctx.org_id, fabrikam, %{platform: "youtube", handle: "Fabrikam channel"})
+    {:ok, legacy_yt} =
+      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy channel"})
 
-    {fabrikam_q1, _} = pending_post!(ctx, fabrikam_yt, %{body: "FABRIKAM-Q1 body"})
-    fabrikam_s1 = placed!(ctx, fabrikam_yt, at(tue, 14), "FABRIKAM-S1 scheduled")
+    {legacy_q1, _} = pending_post!(ctx, legacy_yt, %{body: "LEGACY-Q1 body"})
+    legacy_s1 = placed!(ctx, legacy_yt, at(tue, 14), "LEGACY-S1 scheduled")
 
     Map.merge(ctx, %{
       htc_q1: htc_q1,
@@ -49,10 +49,10 @@ defmodule PlatformWeb.SocialAcceptanceTest do
       htc_d1: htc_d1,
       htc_d_card: htc_d_card,
       htc_s1: htc_s1,
-      fabrikam: fabrikam,
-      fabrikam_yt: fabrikam_yt,
-      fabrikam_q1: fabrikam_q1,
-      fabrikam_s1: fabrikam_s1
+      legacy: legacy,
+      legacy_yt: legacy_yt,
+      legacy_q1: legacy_q1,
+      legacy_s1: legacy_s1
     })
   end
 
@@ -94,26 +94,26 @@ defmodule PlatformWeb.SocialAcceptanceTest do
       Enum.flat_map(accounts, &["#accounts-#{&1.id}", "#calendar_rows-#{&1.id}"])
   end
 
-  describe "1. switching HTC <-> Fabrikam changes accounts, queue and calendar with no leak" do
+  describe "1. switching HTC <-> Legacy changes accounts, queue and calendar with no leak" do
     test "nothing of the other profile remains in the DOM, both ways", %{conn: conn} = ctx do
       htc = %{queued: [ctx.htc_q1, ctx.htc_d1], scheduled: [ctx.htc_s1], accounts: [ctx.a, ctx.d]}
-      fabrikam = %{queued: [ctx.fabrikam_q1], scheduled: [ctx.fabrikam_s1], accounts: [ctx.fabrikam_yt]}
+      legacy = %{queued: [ctx.legacy_q1], scheduled: [ctx.legacy_s1], accounts: [ctx.legacy_yt]}
       child = open(conn, ctx.h1)
       tab(child, "calendar")
 
       for sel <- ids_of(htc), do: assert(has_element?(child, sel), "HTC missing #{sel}")
-      for sel <- ids_of(fabrikam), do: refute(has_element?(child, sel), "Fabrikam leaked #{sel}")
+      for sel <- ids_of(legacy), do: refute(has_element?(child, sel), "Legacy leaked #{sel}")
 
-      switch(child, ctx.fabrikam)
+      switch(child, ctx.legacy)
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='calendar']")
-      for sel <- ids_of(fabrikam), do: assert(has_element?(child, sel), "Fabrikam missing #{sel}")
+      for sel <- ids_of(legacy), do: assert(has_element?(child, sel), "Legacy missing #{sel}")
       for sel <- ids_of(htc), do: refute(has_element?(child, sel), "HTC leaked #{sel}")
       refute render(child) =~ "HTC-"
 
       switch(child, ctx.profile)
       for sel <- ids_of(htc), do: assert(has_element?(child, sel), "HTC missing #{sel}")
-      for sel <- ids_of(fabrikam), do: refute(has_element?(child, sel), "Fabrikam leaked #{sel}")
-      refute render(child) =~ "FABRIKAM-"
+      for sel <- ids_of(legacy), do: refute(has_element?(child, sel), "Legacy leaked #{sel}")
+      refute render(child) =~ "LEGACY-"
     end
   end
 

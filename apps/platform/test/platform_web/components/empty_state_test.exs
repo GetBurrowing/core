@@ -33,7 +33,7 @@ defmodule PlatformWeb.Components.EmptyStateTest do
       assert html =~ "When your agents start working, what they do appears here."
     end
 
-    test ":minimal does NOT render conversational chrome (Marlowe pin regression check)" do
+    test ":minimal does NOT render conversational chrome (Robin pin regression check)" do
       assigns = %{}
 
       html =
@@ -43,7 +43,7 @@ defmodule PlatformWeb.Components.EmptyStateTest do
         </.empty_state>
         """)
 
-      # The Marlowe 2026-05-09 pin: Activity uses :minimal; conversational chrome
+      # The Robin 2026-05-09 pin: Activity uses :minimal; conversational chrome
       # (bot bubble, system message, chips) must NOT leak in. This test would fail
       # if a regression accidentally swapped the variant or rendered both.
       refute html =~ "empty-bot-bubble"

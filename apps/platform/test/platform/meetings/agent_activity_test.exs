@@ -670,7 +670,7 @@ defmodule Platform.Meetings.AgentActivityTest do
   # ── `:heard` (task 01a06e07 stage 2) ────────────────────────────────────────
   #
   # `:listening` was removed from this rail (canvas `01a05b11-54ff`, ratified
-  # by Harper 2026-09-03) because every agent in a call is always listening,
+  # by Sam 2026-09-03) because every agent in a call is always listening,
   # so a badge on for everyone all the time takes a row from a state that
   # actually turns over. `:heard` is legitimate only because it decays — the
   # load-bearing test below is the one that pins that decay, not the ones
@@ -1164,7 +1164,7 @@ defmodule Platform.Meetings.AgentActivityTest do
     end
 
     # `:listening` is untouched by this stage, and must stay that way: it is
-    # deliberately unreachable (canvas `01a05b11-54ff`, ratified by Harper
+    # deliberately unreachable (canvas `01a05b11-54ff`, ratified by Sam
     # 2026-09-03), and giving a runtime a way to declare it would rebuild
     # the always-on badge that decision removed.
     test ":listening gained no producer here", %{

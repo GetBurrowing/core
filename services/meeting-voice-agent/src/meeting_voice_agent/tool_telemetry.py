@@ -1,7 +1,7 @@
 """External tool-call telemetry over the LiveKit data channel (task 01a0d4a0
 stage 4, round 2).
 
-Dalton's live moon run found the latency harness's `tool_call` field is
+A live test run found the latency harness's `tool_call` field is
 *always* `False`: nothing in this service ever told an outside observer that
 a tool call happened, so the harness had no signal to record even when the
 worker's own logs showed a real ~3.0s tool-call turnaround. This module is

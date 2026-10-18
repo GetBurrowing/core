@@ -16,11 +16,11 @@ other, where models come from, how sign-in works, or where backups go.
 
 In practice, that knowledge lives in hand-kept host files. Measured on 2026-09-25:
 
-- core-ops `targets/` holds only `hive-production` and `moon-production`. Both are
+- core-ops `targets/` holds only `build-host-production` and `test-host-production`. Both are
   host-specific, so there is no parametric target to stamp a new install from.
-- **The core-ops moon target does not describe moon.** core-ops `origin/main` tracks
+- **The core-ops test-host target does not describe test-host.** core-ops `origin/main` tracks
   `core-platform`, `core-postgres`, `memory-service`, `embeddings` and `suite.network`. Live
-  moon also runs `files-service`, `speaches` (cuda, on the host's NVIDIA GPU), `meeting-voice`
+  test-host also runs `files-service`, `speaches` (cuda, on the host's NVIDIA GPU), `meeting-voice`
   and `wyoming-openai`, none of which core-ops tracks. The live core-platform quadlet sets
   `FILES_SERVICE_URL`; the tracked one has no such line. The only accurate description of a
   full Burrow install is the set of live quadlets on one machine.
@@ -28,7 +28,7 @@ In practice, that knowledge lives in hand-kept host files. Measured on 2026-09-2
 That cannot scale to customer installs, and the product decision below means every customer
 gets one.
 
-**Product decision (Rowan, 2026-09-25).** Every customer gets their own owned Burrow install.
+**Product decision (the product owner, 2026-09-25).** Every customer gets their own owned Burrow install.
 Hosting several customers as orgs inside one install is not an option, because multi-org
 isolation is not strong enough to sell across customers. ADR 0042's org hierarchy (one root
 org, tenant children) organises clients *within* an install. It is not a boundary between
@@ -61,8 +61,8 @@ The schema is `schema_version = 1`. It is documented field by field in
 its validator lives in `deployment/installer/suite_install/`.
 
 **Scope note.** "Single source" holds for installs rendered from a manifest. It does **not**
-yet hold for moon or hive: their quadlets stay hand-maintained until the follow-ups below move
-moon onto a manifest.
+yet hold for test-host or build-host: their quadlets stay hand-maintained until the follow-ups below move
+test-host onto a manifest.
 
 ### 2. The manifest owns infrastructure only
 
@@ -76,7 +76,7 @@ field, and a manifest never configures an org.
 - The manifest has **no default model endpoint of ours**. `[[models.endpoints]]` entries carry
   `kind = "local" | "hosted" | "byo"`, and `hosted` and `byo` are equally first-class.
 - Agent runtimes are **not configured by the manifest at all**. They federate in through the
-  admin panel and runtime registration. So no agent-harness env (for example moon's
+  admin panel and runtime registration. So no agent-harness env (for example test-host's
   `OPENCLAW_GATEWAY_URL`) is ever rendered by default.
 - A renderer emits a model endpoint, agent setting or host literal only when the manifest
   declares it.
@@ -146,7 +146,7 @@ acted on, so adding these later does not need a schema version bump.
 Per ADR 0001 (Core owns "reusable deployment contracts, generic deployment templates and
 examples"), the schema, validator, renderers and safe examples live in **Core** under
 `deployment/`. Per ADR 0003's guardrails, Core Ops does not become the home for reusable
-deployment logic. Core Ops holds real instances only, such as a future moon manifest.
+deployment logic. Core Ops holds real instances only, such as a future test-host manifest.
 
 ## Consequences
 
@@ -161,8 +161,8 @@ deployment logic. Core Ops holds real instances only, such as a future moon mani
 
 ### Tradeoffs
 
-- Until moon is rendered from a manifest, there are two descriptions of a Burrow install: the
-  manifest format, and moon's hand-kept quadlets. The quadlets have already drifted from
+- Until test-host is rendered from a manifest, there are two descriptions of a Burrow install: the
+  manifest format, and test-host's hand-kept quadlets. The quadlets have already drifted from
   core-ops.
 - `registry.py` restates part of core's env contract (`MEMORY_SERVICE_URL`,
   `FILES_SERVICE_URL`, the prod-required secrets, the `OIDC_*` keys) in Python. It can drift
@@ -192,9 +192,9 @@ Named here; not yet created as tickets:
 5. Tested backup **and** restore for each `backup.target`.
 6. First-run bootstrap: admin user, OIDC client, generated secrets, outbound mail.
 7. Health phone-home (`day2.phone_home`).
-8. A podman-quadlet renderer target. Migrating moon onto a core-ops manifest needs it, because
-   moon runs quadlets, not compose.
-9. Migrate moon onto a core-ops manifest, and fix the core-ops moon target drift recorded in
+8. A podman-quadlet renderer target. Migrating test-host onto a core-ops manifest needs it, because
+   test-host runs quadlets, not compose.
+9. Migrate test-host onto a core-ops manifest, and fix the core-ops test-host target drift recorded in
    Context.
 10. A core env var for extra CA certificates, so that `tls = "internal"` installs do not need
     to bind-mount a combined bundle over the CAStore file inside the core image. Prioritise
@@ -221,7 +221,7 @@ Named here; not yet created as tickets:
 ## Proof
 
 Recorded 2026-09-25 by task 01a0d69d. Stage 3 ran the first boot. Stage 4 ran the memory-knob
-flip on branch `task/01a0d69d-8469-7001-bc2c-8d6e3de56dff` at `48f8de5`, from a clone on moon.
+flip on branch `task/01a0d69d-8469-7001-bc2c-8d6e3de56dff` at `48f8de5`, from a clone on test-host.
 The proof scripts are in `deployment/installer/proof/` and are described in its README. No
 secret value is quoted here. The redacted copies come from `suite_install redact`, which
 replaces every value with `<secret:NAME>`. Secret values are compared only as sha256
@@ -229,7 +229,7 @@ digests.
 
 ### VM host method
 
-moon is Bluefin 42 (bootc) with rootless podman 5.6.2. It has no qemu, virsh or virt-install,
+test-host is Bluefin 42 (bootc) with rootless podman 5.6.2. It has no qemu, virsh or virt-install,
 and `sudo -n` needs a password. `/dev/kvm` is `crw-rw-rw- root kvm`, and a rootless
 `podman run --device /dev/kvm` container ran `KVM_GET_API_VERSION` (12) and `KVM_CREATE_VM`.
 So the guest is a real QEMU/KVM VM, with its own kernel (Ubuntu 24.04, `6.8.0-139-generic`),
@@ -259,21 +259,21 @@ The Ubuntu cloud image is checked against Ubuntu's `SHA256SUMS` before use.
   but the rendered server listens on 8188, so embeddings reported unhealthy while it was
   serving. The registry now declares a healthcheck on 8188. In both stage 4 runs,
   embeddings shows `healthy`.
-- **Images absent from moon.** `docker.io/library/caddy:2` and
-  `ghcr.io/pocket-id/pocket-id:v2` are not in moon's podman store. The guest pulls them
+- **Images absent from test-host.** `docker.io/library/caddy:2` and
+  `ghcr.io/pocket-id/pocket-id:v2` are not in test-host's podman store. The guest pulls them
   anonymously (`preload.sh --pull-missing-public`). The other five refs are streamed from
-  moon's store (`podman save | docker load`), and their layer diff ids match the host. No
+  test-host's store (`podman save | docker load`), and their layer diff ids match the host. No
   registry credential enters the guest.
 - **Image under test.** The tag is `docker.io/example/suite-core:feat-01a0d69d-oidc-ca`.
   Its `org.opencontainers.image.revision` is `a5c2e83`, and its digest is
   `sha256:279b457d09a2...`. The only change since `a5c2e83` is a README. The manifests below
   pin it with `[images] refs.core-platform`, which is the one line that differs from
-  `deployment/examples/moon-equivalent.install.toml`.
+  `deployment/examples/single-host.install.toml`.
 
 ### Step 1: memory on
 
 ```text
-$ diff moon-equivalent.install.toml memory-on.toml
+$ diff single-host.install.toml memory-on.toml
 > refs.core-platform = "docker.io/example/suite-core:feat-01a0d69d-oidc-ca"
 $ suite_install validate memory-on.toml         -> ok
 $ suite_install render memory-on.toml --out render-on
@@ -285,7 +285,7 @@ $ preload.sh ... --pull-missing-public --file <Qwen3-Embedding-0.6B-f16.gguf>=mo
   suite-stack.service active; 7 containers running                      04:53:17Z-04:55:28Z
 ```
 
-Every curl ran from moon with `--cacert <guest root.crt>` and
+Every curl ran from test-host with `--cacert <guest root.crt>` and
 `--connect-to <name>:443:127.0.0.1:18443`. None used `-k`. The root is
 `CN=suite-01a0d69d internal root`, SHA-256 fingerprint `E5:71:69:C2:...:18:35:92`. Its key
 never left the guest.
@@ -373,7 +373,7 @@ Two findings from the flip:
 
 ### Step 5: teardown
 
-`vm-down.sh --name 01a0d69d --workdir /srv/dev/01a0d69d-vm` ran at 04:57:23Z. Its
+`vm-down.sh --name 01a0d69d --workdir ~/01a0d69d-vm` ran at 04:57:23Z. Its
 before-block hit 6 of 6 checks, which is the positive control: the container
 `vm-01a0d69d`, the image `localhost/vmhost-01a0d69d`, the workdir, listeners on 18443 and
 18022, and the conmon and qemu processes. Afterwards, only the image check still hit: the
@@ -383,38 +383,38 @@ for that reason. After `podman rmi` on that image:
 ```text
 podman ps -a --filter name=01a0d69d                -> (empty)
 podman images --filter reference='*01a0d69d*'      -> (empty)
-ls -d /srv/dev/01a0d69d-vm                   -> absent
+ls -d ~/01a0d69d-vm                   -> absent
 ss -ltnH 'sport = :18443' / 'sport = :18022'        -> (empty)
 pgrep -af 01a0d69d                                  -> (empty)
 podman volume ls / podman network ls | grep 01a0d69d -> 0 / 0
 ```
 
 Prod units, `systemctl --user is-active core-platform core-postgres memory-service
-files-service embeddings` on moon, read `active active active active active` at 04:51:49Z,
+files-service embeddings` on test-host, read `active active active active active` at 04:51:49Z,
 before the run, and at 04:57:31Z, after teardown. The run started, stopped and removed no unit,
-container, volume or network without `01a0d69d` in its name. The only image pulled onto moon
+container, volume or network without `01a0d69d` in its name. The only image pulled onto test-host
 was the `feat-01a0d69d-oidc-ca` tag, and it was removed again.
 
 ## Proof (Mac)
 
-Task 01a0d6ab stage 5. The proof ran on **2026-10-05 between 04:50Z and 05:23Z**, on **rock**,
-from branch `task/01a0d6ab-6ea3-7001-8976-86dd066069ca`. The installer code on rock was the
+Task 01a0d6ab stage 5. The proof ran on **2026-10-05 between 04:50Z and 05:23Z**, on **mac-host**,
+from branch `task/01a0d6ab-6ea3-7001-8976-86dd066069ca`. The installer code on mac-host was the
 branch at `ef321ef0` plus three fixes this run found. Those fixes are committed in the same
 commit as this section (see "Found by the proof and fixed").
 
 The core image was pinned to `docker.io/example/suite-core:feat-01a0d6ab-multiarch`: index
 `sha256:7b39215b...`, revision `17a3df5d`. `/health` reported exactly that commit.
 
-### Where it ran, and why rock
+### Where it ran, and why mac-host
 
-- **The machine.** rock is the team's own Apple Silicon Mac mini: arm64, 8 GB RAM, macOS 26.3,
-  OrbStack 29.4.0, and a 4 GiB VM limit. hive reaches it as `ssh rock`.
-- **Why not Harper's Mac mini.** The plan targeted Harper's Mac mini through Octavius, because
-  hive has no route there (measured 2026-09-25 and recorded in this section's first draft). On
-  2026-10-05 Rowan moved the proof to rock: *"run it on rock yes, but please tear it down once
-  its up"*. That meant the executor could run every step over ssh, so no relay to Harper or
+- **The machine.** mac-host is the team's own Apple Silicon Mac mini: arm64, 8 GB RAM, macOS 26.3,
+  OrbStack 29.4.0, and a 4 GiB VM limit. build-host reaches it as `ssh mac-host`.
+- **Why not a team member's Mac mini.** The plan targeted a team member's Mac mini through Octavius, because
+  build-host has no route there (measured 2026-09-25 and recorded in this section's first draft). On
+  2026-10-05 the product owner moved the proof to mac-host: *"run it on mac-host yes, but please tear it down once
+  its up"*. That meant the executor could run every step over ssh, so no relay to a team member or
   Octavius was needed.
-- **Rock is shared and live.** Brosnan's agent runtime runs there, working the iOS app
+- **Mac-host is shared and live.** Brosnan's agent runtime runs there, working the iOS app
   (Xcode/TestFlight). The run therefore waited for a quiet window. The first check, at 04:02Z,
   measured memory-pressure level 2 (warn): 4.2 of 5.1 GB swap used and 133 MB unused. The
   executor polled every 10 minutes. It started only after two consecutive level-1 (normal)
@@ -427,28 +427,28 @@ The core image was pinned to `docker.io/example/suite-core:feat-01a0d6ab-multiar
 
 ### Deviations from the customer path (and why)
 
-- **No OpenAI key.** At Rowan's request, embeddings used moon's LAN llama-server (model
-  `embeddings`, Qwen3, **1024-dim**), and speech-to-text used moon's LAN speaches (model
+- **No OpenAI key.** At the product owner's request, embeddings used test-host's LAN llama-server (model
+  `embeddings`, Qwen3, **1024-dim**), and speech-to-text used test-host's LAN speaches (model
   `Systran/faster-distil-whisper-large-v3`). The width the proof expects is therefore 1024, not
   1536. `api_key_ref` pointed at a 0600 dummy key file, because neither server checks a bearer.
   A customer Mac uses the hosted endpoints, which is the default of `proof.sh init`. The
   `--embed-url/--embed-model/--stt-url/--stt-model` flags exist for runs like this one.
-- **OrbStack containers could not reach the LAN.** From inside the VM, `192.0.2.200:8188`
-  and `:8000` timed out, while rock itself reached both. The likely cause is macOS's Local
+- **OrbStack containers could not reach the LAN.** From inside the VM, `192.0.2.10:8188`
+  and `:8000` timed out, while mac-host itself reached both. The likely cause is macOS's Local
   Network privacy permission for OrbStack; it was not checked, because that is a System
   Settings change on a shared desktop. The run worked around it with a throwaway loopback TCP
-  forwarder on rock (`lanfwd-01a0d6ab`, 127.0.0.1:18188 and :18001). Containers reached it
+  forwarder on mac-host (`lanfwd-01a0d6ab`, 127.0.0.1:18188 and :18001). Containers reached it
   through `host.docker.internal`. The hosted-endpoint customer path does not hit this.
 - **The installer was driven by the executor over ssh,** not by a headless `claude -p` with
   SKILL.md loaded. Every CLI command and its full output went to a transcript (113 JSONL lines).
   Its first line is the planted marker. That is the file the hygiene grep read.
-- **The agent-connect session ran on hive, not rock.** A fresh `CLAUDE_CONFIG_DIR` on rock reports
+- **The agent-connect session ran on build-host, not mac-host.** A fresh `CLAUDE_CONFIG_DIR` on mac-host reports
   "Not logged in". Logging it in would have meant copying Brosnan's credentials, which the run
-  must not touch. The session was a separate `claude -p` on hive with `--strict-mcp-config` and
+  must not touch. The session was a separate `claude -p` on build-host with `--strict-mcp-config` and
   its own MCP config: a 0600 file holding the new instance's `/mcp` URL and a throwaway runtime
   token.
-- **The passkey was enrolled from hive's headless Chrome over CDP,** in an isolated browser
-  context with a WebAuthn virtual authenticator. The `open location` call was shimmed on rock,
+- **The passkey was enrolled from build-host's headless Chrome over CDP,** in an isolated browser
+  context with a WebAuthn virtual authenticator. The `open location` call was shimmed on mac-host,
   so no browser window opened on the shared desktop. On pocket-id's `/login/alternative/code`
   page the **Submit button stayed disabled** with the code prefilled (pocket-id 2.18.0, which the
   `:v2` tag now resolves to; stage 4 measured 2.16.0). The page made no request. The script
@@ -462,17 +462,17 @@ The core image was pinned to `docker.io/example/suite-core:feat-01a0d6ab-multiar
 |---|---|---|---|
 | 2 | Preflight | 7881/tcp and 7882/udp free; no container-name clash | PASS. 21 TCP and 11 UDP listeners recorded; both media ports free; no name collision; 47 GiB free disk (29 GiB needed); runtime OrbStack, VM 3.9 GiB (advisory: give it 4 GiB) |
 | 3 | `setup status` after `verify` | `complete: true` | `complete: true`; only `keepalive` (advisory) not done. Its human steps: `sudo pmset`, OrbStack start-at-login. FileVault and automatic login were already off. |
-| 4 | From hive: `/health` | 200, `commit` = `17a3df5d...` | 200, `status ok`, commit `17a3df5d020b91c88bf8ccd92a72f0d111b4e51b`. Public TLS with no `-k` (`ssl_verify_result` 0); the edge certificate is issued by Google Trust Services WE1. |
-| 4 | From hive: `/auth/login` | 302 to `https://auth-01a0d6ab.<zone>/`, and that page 200 text/html | 302 to `https://auth-01a0d6ab.example.com/authorize?client_id=suite-core&...` (PKCE S256). Following it gives 200 text/html at `/interaction`; the auth host root is 200 text/html. |
+| 4 | From build-host: `/health` | 200, `commit` = `17a3df5d...` | 200, `status ok`, commit `17a3df5d020b91c88bf8ccd92a72f0d111b4e51b`. Public TLS with no `-k` (`ssl_verify_result` 0); the edge certificate is issued by Google Trust Services WE1. |
+| 4 | From build-host: `/auth/login` | 302 to `https://auth-01a0d6ab.<zone>/`, and that page 200 text/html | 302 to `https://auth-01a0d6ab.example.com/authorize?client_id=suite-core&...` (PKCE S256). Following it gives 200 text/html at `/interaction`; the auth host root is 200 text/html. |
 | 4b | First user signs in | Lands in Suite | Passkey (virtual authenticator) at pocket-id, then `https://suite-01a0d6ab.example.com/chat`, title "Chat" |
 | 5 | `proof.sh memory --expect-dim 1024` | width 1024; opposite orderings | PASS. `atttypmod` 1024. Cat query: canary rank 1 (fused and semantic), control rank 2. VAT query: control rank 1 (semantic 1, lexical 1), canary rank 2. Ingest wait 6 s. memory-service logged `Dimension: 1024`, `api_key=set`, with no mismatch. |
 | 5 | `proof.sh files` | sha256 equal, `cmp` identical, unauthenticated GET denied, runtime revoked, token 401, file deleted | PASS. 1 MiB up and down, sha256 `8e190dfe...` on both sides and the server's content hash; `cmp` identical; unauthenticated GET 302; runtime revoked (token hash cleared); the same token then got 401; token file deleted |
 | 6 | `proof.sh arch` | every image arm64; `uname -m` aarch64 | PASS. All 7 running images arm64; `uname -m` aarch64 in core-platform, files-service and memory-service |
-| 8 | Meetings on (`media_reach = "lan"`, transcription on) | 2 publishers with tracks; livekit host 200 from hive | Both media ports re-checked free. `lk room participants list proof-01a0d6ab` showed `pub_0 (ACTIVE) tracks: 1` and `pub_1 (JOINED) tracks: 1`; LiveKit logged connectionType udp twice. From hive, `https://livekit-01a0d6ab.example.com/` returned 200 after fix (b) below; before it, 404. meeting-transcriber registered as a worker; RestartCount 0 for both. core carried 4 `LIVEKIT_*` names. |
-| 8 | Meetings back off | livekit absent; `LIVEKIT_*` count 0; health 200 | PASS. Running services: caddy, cloudflared, core-platform, core-postgres, files-service, memory-service, pocket-id. `LIVEKIT_*` count 0. `/health` 200 from hive. The 18 shared `secrets.env` names had equal sha256 prefixes across the flip. The only core `[error]` was the known `prompt_template_missing meetings.summarize`. |
+| 8 | Meetings on (`media_reach = "lan"`, transcription on) | 2 publishers with tracks; livekit host 200 from build-host | Both media ports re-checked free. `lk room participants list proof-01a0d6ab` showed `pub_0 (ACTIVE) tracks: 1` and `pub_1 (JOINED) tracks: 1`; LiveKit logged connectionType udp twice. From build-host, `https://livekit-01a0d6ab.example.com/` returned 200 after fix (b) below; before it, 404. meeting-transcriber registered as a worker; RestartCount 0 for both. core carried 4 `LIVEKIT_*` names. |
+| 8 | Meetings back off | livekit absent; `LIVEKIT_*` count 0; health 200 | PASS. Running services: caddy, cloudflared, core-platform, core-postgres, files-service, memory-service, pocket-id. `LIVEKIT_*` count 0. `/health` 200 from build-host. The 18 shared `secrets.env` names had equal sha256 prefixes across the flip. The only core `[error]` was the known `prompt_template_missing meetings.summarize`. |
 | 9 | A separate agent session | one message posted; one memory search | Runtime `agent-01a0d6ab` (bundles memory and messaging, in its own channel). The `claude -p` session's `memory_search` returned the canary (`01a10a78-ca6b...`, source journal). `send_media` posted message `01a10a7b-abe0...` into the agent's channel; rpc confirmed its space. `send_media` reads `file_path` on the server, so the file was placed in the core-platform container. It is the only messaging tool reachable over MCP; plain text posts go through the channel socket. Afterwards the runtime was revoked, and `tools/list` with its token returned 401. |
 | 10 | `setup run backup` | a dump passes `pg_restore --list` | LaunchAgent installed (daily 03:15). Entry counts: core_platform 694, memory 13, pocketid 179. A re-run of `pg_restore --list` on the newest core dump exited 0. |
-| 11 | Transcript hygiene | every secret 0; marker 1 | PASS. 30 secret values checked, 0 found: every `secrets.env` name, the Cloudflare token, the dummy key, the registry auth and its tokens, and the agent token. Marker count 1. The hive-side `claude -p` output and the CDP log also had 0 occurrences of the agent token; the positive control, the MCP config file, had 1. |
+| 11 | Transcript hygiene | every secret 0; marker 1 | PASS. 30 secret values checked, 0 found: every `secrets.env` name, the Cloudflare token, the dummy key, the registry auth and its tokens, and the agent token. Marker count 1. The build-host-side `claude -p` output and the CDP log also had 0 occurrences of the agent token; the positive control, the MCP config file, had 1. |
 
 RAM. Readings are `docker stats --no-stream`; "VM" is OrbStack's VM limit; "free" is
 `memory_pressure` free percentage. Total host RAM is 8 GiB.
@@ -509,11 +509,11 @@ RAM. Readings are `docker stats --no-stream`; "VM" is OrbStack's VM limit; "free
   the bundled postgres a 180 s `start_period`.
 - **(d) The livekit DNS record outlived the meetings flip and teardown.** Both only looked at
   the hostnames the current knobs route. The `tunnel` step now deletes its own CNAME for a
-  configured host that is no longer routed, and teardown covers every configured host. On rock,
+  configured host that is no longer routed, and teardown covers every configured host. On mac-host,
   the stale `livekit-01a0d6ab` CNAME was deleted by hand during teardown, through the API with a
   name-plus-target match.
 
-### Teardown (Rowan: "please tear it down once its up")
+### Teardown (the product owner: "please tear it down once its up")
 
 Each item was listed before teardown, using the same filter or path, and shown gone after it.
 Every filter was shown matching the live resources first.
@@ -538,26 +538,26 @@ Every filter was shown matching the live resources first.
 - **The forwarder:** `lanfwd-01a0d6ab` was killed; listeners on 18188/18001 went from 2 to 0.
 - **The pulled images were removed:** suite-core feat tag, files-service, memory-service,
   meeting-transcriber, pocket-id, livekit-server and cloudflared.
-  `pgvector/pgvector:pg16` was on rock before the run and was kept. `caddy:2` was kept because
+  `pgvector/pgvector:pg16` was on mac-host before the run and was kept. `caddy:2` was kept because
   whether it pre-dated the run is unknown.
 - **OrbStack:** it was running before and was left running.
 
-### Human prerequisites (not the CLI's to solve), as found on rock
+### Human prerequisites (not the CLI's to solve), as found on mac-host
 
 - **(a) A container runtime.** OrbStack was already installed and running.
-- **(b) A Docker Hub read credential for the private `example` images.** moon's
-  `auth.json` was copied as a 0600 file. **The open decision is still Rowan's:** make the
+- **(b) A Docker Hub read credential for the private `example` images.** test-host's
+  `auth.json` was copied as a 0600 file. **The open decision is still the product owner's:** make the
   images public, or build a pull-token flow.
 - **(c) A Cloudflare zone and a scoped token.** This run minted a 24-hour token from the
   account's legacy global key, scoped to the zone (Zone:Read, DNS:Edit) and the account
   (Cloudflare Tunnel:Edit). It was deleted at teardown.
-- **(d) The core repository is private.** The run avoided cloning it on rock: it copied only
+- **(d) The core repository is private.** The run avoided cloning it on mac-host: it copied only
   `deployment/` with `git archive`, because the installer needs nothing else.
 
 ### Day-2 note: embedding width varies per install
 
 memory-service creates `embeddings.embedding` at whatever width the configured model returns
-on its first boot. That is 1536 for `text-embedding-3-small`, and 1024 for moon's Qwen3 (and
+on its first boot. That is 1536 for `text-embedding-3-small`, and 1024 for test-host's Qwen3 (and
 for this proof). Since memory-service `2ef3312f` it refuses to start if a table already exists
 at a different width. So changing `[embeddings] model` on a live install is a migration, not a
 knob: re-embed, or drop and re-create the tables. The width is part of an install's state and
@@ -571,7 +571,7 @@ must be read from the install (`atttypmod`), never assumed.
 4. A slim memory-service image without torch for the `http` embedding backend, if the measured
    arm64 image size warrants it.
 5. files-service speech-to-text through the same hosted OpenAI endpoint.
-6. Public images or a pull-token flow, to remove prerequisite (b). This is Rowan's decision.
+6. Public images or a pull-token flow, to remove prerequisite (b). This is the product owner's decision.
 7. Per-install container names, so that two installs, or an install and an unrelated
    `caddy`, can share a host.
 8. An arm64 build of the `play` flavour. Since the main merge, CI builds `core` for amd64 and
@@ -614,7 +614,7 @@ because its script made the page's POST itself.
   secret an admin added later is never touched. Against v2.16.0, no `createdSecret` is
   returned, so nothing is deleted.
 
-**Live re-proof (hive, docker, throwaway `pocketid-01a0d6ab-<pid>` at v2.18.0).** The link was
+**Live re-proof (build-host, docker, throwaway `pocketid-01a0d6ab-<pid>` at v2.18.0).** The link was
 minted with the installer's own `ensure_admin` + `login_link` and opened in an isolated
 headless-Chrome context. Nothing was injected; only network events were observed.
 
@@ -624,11 +624,11 @@ headless-Chrome context. Nothing was injected; only network events were observed
 | `15m` (control) | 6 | none | `/login/alternative/code?code=<redacted>&redirect=...`, title "Login Code", Submit `disabled: true` |
 
 The container was removed afterwards. `docker ps -a --filter name=pocket` then listed only
-hive's production `pocket-id`, which shows the filter matches.
+build-host's production `pocket-id`, which shows the filter matches.
 
 **The skill-driven transcript clause is still UNMEASURED.** The clause says the only human
 inputs are the domain, the Cloudflare token path, the OpenAI key path and the passkey. Measuring
-it needs Claude logged in on the Mac. rock's fresh config is not logged in, and Brosnan's
+it needs Claude logged in on the Mac. mac-host's fresh config is not logged in, and Brosnan's
 credentials are off limits. Procedure for a human on a logged-in Mac:
 
 1. Copy `deployment/` onto the Mac (`git archive HEAD deployment | tar -x -C ~/suite-src`) and
@@ -657,5 +657,5 @@ credentials are off limits. Procedure for a human on a logged-in Mac:
 records whose `origin.kind` is not `human`, and harness text (`<task-notification`,
 `<local-command-`, `<system-reminder`). It is tested on synthetic fixtures of both shapes that
 plant exactly four inputs among every excluded kind, with a negative control that adds a fifth.
-On a real `claude -p` stream-json run on hive, it listed exactly the one message fed in and
+On a real `claude -p` stream-json run on build-host, it listed exactly the one message fed in and
 dropped the tool result.

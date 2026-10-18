@@ -4,7 +4,7 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
   (stage 1) plus MODULE LOCKS (stage 2) and channel denies, end to end, for
   the shape the post-deploy data steps build for SXI.
 
-  The world: root org R (a project with a task titled FABRIKAM-SECRET, two
+  The world: root org R (a project with a task titled LEGACY-SECRET, two
   channels, an execution space) and sub-org S (project P with two tasks,
   seven channels). U is an INTERNAL member of S only, denied `chat.read` on
   five of S's channels, and locked out of every lockable module except
@@ -136,7 +136,7 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
     rm = member!(r, "rm")
 
     pr = project!(r, "sxi-pr")
-    secret = task!(pr, "FABRIKAM-SECRET #{n}")
+    secret = task!(pr, "LEGACY-SECRET #{n}")
     r_channels = for _ <- 1..2, do: space!("channel", r)
     er = space!("execution", r, %{"task_id" => secret.id})
 
@@ -209,13 +209,13 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
     assert board(u_scope) == ids(ctx.p_tasks)
 
     {:ok, _view, board_html} = live(authed(ctx.u), "/tasks")
-    refute board_html =~ "FABRIKAM-SECRET"
+    refute board_html =~ "LEGACY-SECRET"
     for t <- ctx.p_tasks, do: assert(board_html =~ t.title)
 
     {:ok, detail, _} = live(authed(ctx.u), "/tasks/#{ctx.secret.id}")
     detail_html = render(detail)
     assert detail_html =~ "Task not found."
-    refute detail_html =~ "FABRIKAM-SECRET"
+    refute detail_html =~ "LEGACY-SECRET"
 
     for {path, key} <- [
           {"/control", "agents"},

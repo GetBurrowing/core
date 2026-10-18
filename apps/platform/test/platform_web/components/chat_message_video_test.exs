@@ -31,7 +31,7 @@ defmodule PlatformWeb.Components.ChatMessageVideoTest do
       current_participant={nil}
       agent_participant_ids={MapSet.new()}
       agent_colors_map={%{}}
-      participants_map={%{"p-1" => %{name: "Rowan", avatar_url: nil, avatar_seed: nil}}}
+      participants_map={%{"p-1" => %{name: "Alex", avatar_url: nil, avatar_seed: nil}}}
       quick_emojis={[]}
       pinned_message_ids={MapSet.new()}
       canvases_by_id={%{}}

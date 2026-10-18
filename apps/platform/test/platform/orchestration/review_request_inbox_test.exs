@@ -2,7 +2,7 @@ defmodule Platform.Orchestration.ReviewRequestInboxTest do
   @moduledoc """
   Producer coverage for the review-gate → task-SPONSOR inbox seam.
 
-  Rowan's directives (inbox hardening):
+  Alex's directives (inbox hardening):
 
     * review items route to the task's **sponsor** (the human who owns the
       task), NOT the review-phase technical assignee (an agent on agent-run

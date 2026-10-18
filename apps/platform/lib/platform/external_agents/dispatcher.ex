@@ -108,7 +108,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
   @receive_timeout_ms 60_000
   @connect_timeout_ms 10_000
 
-  # Task 019f2570 bug 2 fix — the OpenAI-compat concierge at dev-host:8084
+  # Task 019f2570 bug 2 fix — the OpenAI-compat concierge at test-host:8084
   # applies its own ~800-token default when `max_tokens` is absent from
   # the request body, which truncates meeting summaries mid-sentence.
   # We now ALWAYS send `max_tokens` on external dispatch. Per-

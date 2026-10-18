@@ -94,7 +94,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
       Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: Ecto.UUID.generate(),
-        display_name: "Marlowe",
+        display_name: "Robin",
         joined_at: DateTime.utc_now()
       })
 
@@ -345,7 +345,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
 
       # The author prefix that every other user turn carries — the agent must
       # be able to tell WHO sent the screenshot, not just that one exists.
-      assert entry.content =~ "Marlowe:"
+      assert entry.content =~ "Robin:"
 
       # Structured metadata still travels alongside the rendered body.
       assert [%{filename: "prior.png", content_type: "image/png", byte_size: 999}] =
@@ -368,7 +368,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
         end)
 
       assert entry
-      assert entry.content == "Marlowe: see attached"
+      assert entry.content == "Robin: see attached"
       refute entry.content =~ "attachment(s)"
 
       assert [%{url: url}] = entry.attachments
@@ -439,7 +439,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
       # first. If this assertion is ever relaxed, the built-in path's
       # `agent_body/2` and this decision have to be revisited together.
       assert payload.message.content == ""
-      assert payload.message.author == "Marlowe"
+      assert payload.message.author == "Robin"
     end
 
     test "POSITIVE CONTROL — a text message's content survives verbatim" do

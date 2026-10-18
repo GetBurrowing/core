@@ -2,7 +2,7 @@ defmodule Platform.Repo.Migrations.RenameMeetingAssistantAgentToBurrow do
   use Ecto.Migration
 
   @moduledoc """
-  Task 01a0f31d stage 1, item 1: Harper renamed the "Meeting Assistant"
+  Task 01a0f31d stage 1, item 1: the product lead renamed the "Meeting Assistant"
   persona to **Burrow** (an earlier "Borough" spelling was a correction
   miss and is not used anywhere). Data-only migration: `@agent_name` in
   `mix platform.seed_meeting_voice_agent` moving from `"Meeting Assistant"`

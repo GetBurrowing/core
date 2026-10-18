@@ -5,7 +5,7 @@ defmodule Platform.Social.Brand do
 
   **PROVISIONAL.** Every default below is a neutral placeholder from design
   canvas 01a140fc-14a9 ("Palette (provisional, until HTC brand values
-  arrive)"). Harper still owes HTC's colours, typeface, logo and end-card
+  arrive)"). The product lead still owes HTC's colours, typeface, logo and end-card
   text; when they arrive they go into `social_profiles.brand` for the HTC
   profile, and no code changes. The clip carries the CUSTOMER's brand, so no
   Burrow token colour appears here.

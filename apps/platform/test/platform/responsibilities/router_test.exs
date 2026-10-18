@@ -1006,7 +1006,7 @@ defmodule Platform.Responsibilities.RouterTest do
           segments: [
             %{
               "participant_identity" => "user_1",
-              "speaker_name" => "Harper",
+              "speaker_name" => "Sam",
               "text" => "We agreed to ship the adapter fix.",
               "start_time" => 0,
               "end_time" => 3000,

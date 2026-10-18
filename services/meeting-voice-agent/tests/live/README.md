@@ -16,11 +16,11 @@ marked `@pytest.mark.live_infra` and excluded from the default `pytest` run
 ## What each file needs
 
 - `test_wave_llm_live.py` — Dalton's wave LLM endpoint
-  (`MVA_LLM_BASE_URL`, default `http://192.0.2.107:8090/v1`). Confirms the
+  (`MVA_LLM_BASE_URL`, required, no default). Confirms the
   model-switch config (`qwen3.5-9b` / `granite4.1-8b`) actually selects a
   different model on a real completion.
-- `test_moon_speech_live.py` — moon's speaches STT/TTS
-  (`MVA_STT_BASE_URL` / `MVA_TTS_BASE_URL`, default `http://build-host.local:8081/v1`).
+- `test_rig_speech_live.py` — test-host's speaches STT/TTS
+  (`MVA_STT_BASE_URL` / `MVA_TTS_BASE_URL`, required, no default).
   Confirms real audio in, real transcript out (STT) and real text in, real
   audio bytes out (TTS) — not mocks.
 - `test_mcp_live.py` — a running Core instance's `/mcp` endpoint
@@ -31,8 +31,8 @@ marked `@pytest.mark.live_infra` and excluded from the default `pytest` run
   hand-off tool posts into the derived chat space for real, readable back
   via `space_get_context`.
 
-Both `192.0.2.107:8090` and `build-host.local:8081` are LAN addresses on
-Dalton/moon's physical network — this sandbox has no route to that LAN
+Both `192.0.2.107:8090` and `test-host.local:8081` are LAN addresses on
+Dalton/test-host's physical network — this sandbox has no route to that LAN
 (confirmed: every attempt times out at the TCP level, not refused/DNS-failed
 in a way that would indicate a config bug on this end). `MVA_MCP_BASE_URL`
 has no such constraint — Core is a service this repo can run locally

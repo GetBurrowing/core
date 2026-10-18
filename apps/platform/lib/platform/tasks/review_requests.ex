@@ -731,7 +731,7 @@ defmodule Platform.Tasks.ReviewRequests do
       :ok
   end
 
-  # Resolve the task SPONSOR to a human user id, or `:skip`. Rowan's directive:
+  # Resolve the task SPONSOR to a human user id, or `:skip`. The operator's directive:
   # review items route to the sponsor (the human who owns the task), never fan
   # out to a separate review-phase assignee.
   defp sponsor_user_id(%{sponsor_user_id: uid}) when is_binary(uid), do: {:user, uid}

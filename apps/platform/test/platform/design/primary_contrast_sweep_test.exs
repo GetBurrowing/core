@@ -6,7 +6,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   ## Why a sweep and not an equality check
 
   Task 01a07435 stage 1 set `--color-primary` and `--color-accent` to `#06D5ED` in
-  both themes. Harper Parker waived the human approval gate for that change on
+  both themes. Sam Moreno waived the human approval gate for that change on
   2026-09-06, so nothing between the token and production looks at the result with
   an eye. This file is the substitute, which is the whole reason it computes ratios
   instead of comparing strings. `assert primary == "#06D5ED"` would prove the
@@ -139,7 +139,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   ## The cyan-on-light findings, and what happened to them
 
   Filed as Suite task `01a0785c-bf6f-7001-824d-dd99bcb7db89` (high priority) after
-  FE-18 found them. Harper waived the approval gate for FE-18's token change, not for
+  FE-18 found them. Sam waived the approval gate for FE-18's token change, not for
   re-colouring shipped surfaces, so each of these went through a gate of its own.
   Stage 1 of that ticket pointed the three text sites at `--color-interactive`, the
   slot the brand rule already names for cyan-as-text. Three generations of the same

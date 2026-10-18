@@ -29,7 +29,7 @@ def test_build_vad_passes_config_thresholds(monkeypatch):
     assert result is mock_load.return_value
 
 
-def test_build_stt_uses_moon_speaches_defaults():
+def test_build_stt_uses_the_configured_endpoint_and_default_model():
     config = AgentConfig.from_env()
 
     with patch.object(backends.lk_openai, "STT") as mock_stt:
@@ -37,7 +37,7 @@ def test_build_stt_uses_moon_speaches_defaults():
         result = backends.build_stt(config)
 
     mock_stt.assert_called_once_with(
-        base_url="http://build-host.local:8081/v1",
+        base_url="http://stt.example.test:8081/v1",
         model="faster-distil-whisper-small.en",
         api_key="not-needed",
     )
@@ -45,7 +45,7 @@ def test_build_stt_uses_moon_speaches_defaults():
 
 
 def test_build_stt_honors_env_override(monkeypatch):
-    monkeypatch.setenv("MVA_STT_BASE_URL", "http://moon-box:9001/v1")
+    monkeypatch.setenv("MVA_STT_BASE_URL", "http://test-host-box:9001/v1")
     monkeypatch.setenv("MVA_STT_MODEL", "some-other-stt")
     config = AgentConfig.from_env()
 
@@ -53,7 +53,7 @@ def test_build_stt_honors_env_override(monkeypatch):
         backends.build_stt(config)
 
     mock_stt.assert_called_once_with(
-        base_url="http://moon-box:9001/v1",
+        base_url="http://test-host-box:9001/v1",
         model="some-other-stt",
         api_key="not-needed",
     )
@@ -66,7 +66,7 @@ def test_build_tts_uses_kokoro_default_voice():
         backends.build_tts(config)
 
     mock_tts.assert_called_once_with(
-        base_url="http://build-host.local:8081/v1",
+        base_url="http://tts.example.test:8081/v1",
         model="kokoro",
         voice="af_heart",
         api_key="not-needed",
@@ -80,7 +80,7 @@ def test_build_llm_uses_primary_model_by_default():
         backends.build_llm(config)
 
     mock_llm.assert_called_once_with(
-        base_url="http://192.0.2.107:8090/v1",
+        base_url="http://llm.example.test:8090/v1",
         model="qwen3.5-9b",
         api_key="not-needed",
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},

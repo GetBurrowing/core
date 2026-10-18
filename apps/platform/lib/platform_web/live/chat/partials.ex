@@ -116,7 +116,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   ## Dismissal, and why it is PERSISTENT
 
-  Marlowe, 2026-08-13: "this banner needs a way to be dismissed. A user should
+  Design review, 2026-08-13: "this banner needs a way to be dismissed. A user should
   be able to dismiss this notification if they dont want notifications or they
   dont want to set it up right now."
 
@@ -148,7 +148,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   VISIBLE AT REST. No `hover:` or `group-hover:` variant may gate it: Tailwind
   compiles both inside `@media (hover: hover)`, which never matches on a touch
   device, so a hover-revealed control is not subtle there, it is absent. This
-  is the same rule the rail's pin control had to learn (Marlowe: "hover doesn't
+  is the same rule the rail's pin control had to learn (the designer: "hover doesn't
   work on mobile"). `:hover` and `:focus-visible` move its colour only, as
   plain selectors in `app.css`.
   """
@@ -299,7 +299,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   `.modal-box` as `scale: 95%; opacity: 0`, revealed only by a `.modal`
   ancestor carrying `.modal-open`, `[open]` or `:target` (assets/vendor
   daisyui.js). `.modal` + `.modal-box` alone renders a correctly-sized,
-  correctly-placed, completely invisible dialog — the symptom Marlowe hit on
+  correctly-placed, completely invisible dialog — the symptom the designer hit on
   task 019f4eaa. All three classes, or none of them.
   """
   attr(:confirm, :map,
@@ -393,7 +393,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   ## Accessible name
 
-  Carries the verb AND the target: "More actions for Rowan Ellis". A bare
+  Carries the verb AND the target: "More actions for Alex Morgan". A bare
   "More" is meaningless in a list of twenty identical controls, and a DM has
   no `name` field — reaching for `space.name` renders it empty, which has
   already shipped on this surface once. Callers pass the row's resolved label.
@@ -447,7 +447,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   transformed rail centres on the rail instead of the viewport, which has
   shipped here before.
 
-  `lg:hidden` is load-bearing, not decoration. Marlowe reported the bottom-sheet
+  `lg:hidden` is load-bearing, not decoration. The designer reported the bottom-sheet
   component rendering on desktop at all widths on 2026-07-12; the design
   system scopes sheets to mobile. Desktop keeps its hover-and-focus reveal.
 
@@ -483,9 +483,9 @@ defmodule PlatformWeb.ChatLive.Partials do
   This is the drawer's unpin path, the touch counterpart to the pin item in
   the rail's `row_actions_dialog/1`, so it holds the same rule: the accessible
   name carries the verb AND the target. The visible label stays "Unpin
-  conversation" and the `aria-label` extends it to "Unpin conversation Rowan
-  Ellis". Extends rather than replaces, because WCAG 2.5.3 requires the
-  accessible name to contain the visible label, so "Unpin Rowan Ellis"
+  conversation" and the `aria-label` extends it to "Unpin conversation Alex
+  Morgan". Extends rather than replaces, because WCAG 2.5.3 requires the
+  accessible name to contain the visible label, so "Unpin Alex Morgan"
   alone would break speech input on a control reading "Unpin conversation".
 
   The sheet title already shows the name, but a title is context a screen
@@ -570,7 +570,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   A sub-org row carried three trailing controls — pin, "Move to
   organisation…", hide — and the pin was visible at rest on every row of the
-  rail, all the time. Marlowe, 2026-08-13, choosing Option C off the design
+  rail, all the time. Design review, 2026-08-13, choosing Option C off the design
   canvas: the pin leaves the row in EVERY mode, not only while arranging. One
   trigger replaces the set.
 
@@ -579,7 +579,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   ## Every row, including the pinned task rows
 
-  Marlowe, 2026-08-13: "let's simplify and make it consistent where 3-dots brings
+  Design review, 2026-08-13: "let's simplify and make it consistent where 3-dots brings
   up additional actions for a row in the Chat page (channel - unpin/pin, task -
   unpin since it gets pinned from a diff page)." So the trigger is the one
   trailing control on every row of the rail, and what varies is what its menu
@@ -588,7 +588,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   Stage 1 shipped this control on every row EXCEPT the pinned task rows, on the
   reasoning that a task row's menu would be empty: a task pin comes off through
   `unpin_task_from_chat` rather than `toggle_pinned`, and it carries no hide and
-  no org filing. Marlowe's answer is that the unpin IS the item, and it is the
+  no org filing. The design answer is that the unpin IS the item, and it is the
   only one because a task is pinned from another page.
 
   ## Chrome

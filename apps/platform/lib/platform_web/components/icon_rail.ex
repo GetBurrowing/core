@@ -35,7 +35,7 @@ defmodule PlatformWeb.Components.IconRail do
     * Reconciling destinations whose `:path` doesn't yet have a route.
 
   Task 019ffb7b stage 4 first added a notification-state bell here, in the Live
-  cluster directly under the Inbox tile. Marlowe rejected that placement on
+  cluster directly under the Inbox tile. The designer rejected that placement on
   review and it was removed: a rail row whose only behaviour was opening a
   hover panel collided with the Inbox tile beside it, which is where the actual
   activity notifications live, and a rail is a set of navigation targets. The

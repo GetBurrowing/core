@@ -495,7 +495,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         {pressed_agent_announcement(assigns)}
       </span>
       <%!-- ── Section 1: Agents ─────────────────────────────────────────── --%>
-      <%!-- VERBATIM PORT of Harper's approved Ask mockup (shared in
+      <%!-- VERBATIM PORT of the approved Ask mockup (shared in
            Burrow's Meeting System space, not checked in). The DOM and
            class names below are the mockup's own: `.row > .av, .who > .nm +
            .st(.i/.l), .tools > .ask(.ring, .bars i×4, .lbl .off/.on) +
@@ -1097,7 +1097,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            "HEARD box" (`meeting-ask-heard-box`) that used to sit here,
            carrying the live transcript text and growing with every word,
            is RETIRED as a heard-text holder. That auto-growth inside a
-           CENTRED card was the reflow Harper's round-3 report named —
+           CENTRED card was the reflow the round-3 product review named —
            every word visibly moved the card, and the card sits over the
            whole stage, so it moved everything under it too. The live
            text now lives in the held row's own `.tr.live` popover (the
@@ -1510,7 +1510,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   # ── Verbatim-port helpers (meeting Ask row) ─────────────────────────────
 
   # The mockup's `.av` shows ONE uppercase initial ("B" for Burrow, and
-  # "J" even for "Harper Parker").
+  # "S" even for "Sam Taylor").
   defp initials(name) when is_binary(name) do
     case name |> String.trim() |> String.first() do
       nil -> "?"

@@ -29,7 +29,7 @@
 # Idempotent: a second run reuses the users, the space and the canvas row it
 # finds, so the spec can re-seed freely.
 #
-# Run from apps/platform (in the dev container on the moon rig):
+# Run from apps/platform (in the dev container on the dev-server rig):
 #   mix run priv/scripts/seed_prototype_fullscreen_fixture.exs
 #
 # Prints SPACE_ID=, SPACE_SLUG=, USER_SLUG= and SECOND_SLUG= lines.

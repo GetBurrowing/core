@@ -53,7 +53,7 @@ defmodule Platform.Federation.Peers.ClientTest do
 
   describe "refused before any request is made" do
     test "cloud metadata, loopback, private, CGNAT, unspecified and multicast IPv4" do
-      for host <- ~w(169.254.169.254 127.0.0.1 10.1.2.3 172.16.5.4 192.168.1.1
+      for host <- ~w(169.254.169.254 127.0.0.1 10.1.2.3 172.16.5.4 192.0.2.1
                      100.64.0.1 0.0.0.0 224.0.0.1 255.255.255.255) do
         assert {:error, {:forbidden_address, ^host}} =
                  Client.fetch_descriptor("https://#{host}"),

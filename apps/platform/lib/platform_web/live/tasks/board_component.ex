@@ -361,7 +361,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          is hidden on mobile via the same breakpoint, so desktop stays
          unchanged.
 
-         Status-filter pill bar (Marlowe + Rowan, 2026-05-12) reuses the chat
+         Status-filter pill bar (design review, 2026-05-12) reuses the chat
          channel-pill pattern. Default-active = "in_progress" so users land
          on actionable work; previously the section iteration began at
          "Backlog" which buried in-progress work below the scroll fold. The
@@ -791,7 +791,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                clutter the board. :minimal keeps the column readable. The
                broader "no tasks anywhere" board-level conversational state
                is a separate concern that doesn't exist on this surface
-               (no board-level @all_tasks == [] check); add later if Marlowe
+               (no board-level @all_tasks == [] check); add later if the designer
                wants the V3 voice on the kanban-empty case. --%>
             <.empty_state
               :if={
@@ -1055,7 +1055,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             <%!-- Stage 4 of task 019f487e (ADR-0042 Decision 8):
                sponsor avatar mirrors desktop stack card. Absent
                sponsor renders nothing. No own-sponsorship ring
-               affordance — Rowan rejected it as always wrong. --%>
+               affordance — the operator rejected it as always wrong. --%>
             <.human_avatar
               :if={@sponsor}
               name={@sponsor.name}
@@ -1360,7 +1360,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
              `sponsor_user_id` is set — an absent sponsor is
              silent, not a noisy "Unsponsored" pill. No own-
-             sponsorship ring affordance — Rowan rejected it as
+             sponsorship ring affordance — the operator rejected it as
              always wrong (stage 4 rework). --%>
           <%= if @sponsor do %>
             <.human_avatar
@@ -1500,7 +1500,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
              sponsor avatar (Stage 4 of task 019f487e —
              ADR-0042 Decision 8). Mirrors the task-card
              sponsor chip: absent sponsor renders nothing.
-             No own-sponsorship ring affordance — Rowan
+             No own-sponsorship ring affordance — the operator
              rejected it as always wrong (stage 4 rework). --%>
           <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
             <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
@@ -1785,7 +1785,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
               <% end %>
               <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
                  renders nothing. No own-sponsorship ring
-                 affordance — Rowan rejected it as always wrong
+                 affordance — the operator rejected it as always wrong
                  (stage 4 rework). Mirrors the mobile chip shape. --%>
               <.human_avatar
                 :if={@sponsor}
@@ -2033,7 +2033,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # purely status-driven (`task.status == "in_review"`), so EVERY task parked
   # in `in_review` rendered the "Needs review" pill — including the common
   # case of zero pending ReviewRequests. That makes the pill report STATUS
-  # when its whole job is to say YOUR TURN. Rowan rejected that directly:
+  # when its whole job is to say YOUR TURN. The operator rejected that directly:
   # "We need to conditionally show it when they have actionable review items
   # and clear it when there are none."
   #
@@ -2041,7 +2041,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # `needs_human_action_reason/2` or `pending_review_counts/1` — keeps the
   # reason atom intact for every other consumer (desktop stack-detail rows
   # still call `stack_member_action_label/1`) and confines the change to the
-  # mobile card surface Rowan was looking at.
+  # mobile card surface the operator was looking at.
   defp mobile_stack_member_action_label(:validation_failed), do: {nil, nil}
 
   defp mobile_stack_member_action_label(reason), do: stack_member_action_label(reason)

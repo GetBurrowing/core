@@ -23,18 +23,18 @@ Every resource carries the `--name` id, and the workdir path must contain it.
 example a core build tagged with the id) is not removed, but the image check reports it, so
 teardown fails until you `podman rmi` it.
 
-## Example (the ADR 0053 proof on moon)
+## Example (the ADR 0053 proof on test-host)
 
 ```bash
 id=01a0d69d
-wd=/srv/dev/$id-vm
-src=/srv/dev/$id-src            # a clone at the branch tip
+wd=~/$id-vm
+src=~/$id-src            # a clone at the branch tip
 export PYTHONPATH=$src/deployment/installer
-python3 -m suite_install render $src/deployment/examples/moon-equivalent.install.toml --out $wd/render
+python3 -m suite_install render $src/deployment/examples/single-host.install.toml --out $wd/render
 $src/deployment/installer/proof/vm-up.sh --name $id --workdir $wd --render $wd/render \
   --https-port 18443 --ssh-port 18022
 $src/deployment/installer/proof/preload.sh --workdir $wd --render $wd/render --pull-missing-public \
-  --file /srv/dev/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-f16.gguf=models/Qwen3-Embedding-0.6B-f16.gguf
+  --file ~/models/qwen3-embedding-0.6b-gguf/Qwen3-Embedding-0.6B-f16.gguf=models/Qwen3-Embedding-0.6B-f16.gguf
 
 # The guest's PUBLIC root certificate; the key never leaves the guest.
 $src/deployment/installer/proof/vm-exec.sh --workdir $wd -- sudo cat /opt/suite/tls/root.crt > $wd/root.crt

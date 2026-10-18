@@ -2,7 +2,7 @@
 
 **Phase 4 deliverable.** The exact diff to apply to `apps/platform/assets/css/app.css` to land the design system. **NOT applied here** — this file is the source-of-truth for whatever future code task lands the actual edit.
 
-> **Status of pivot direction:** The Gemini-suggested brand pivot (deep indigo + tactile micro-depth) was evaluated via `system-preview-v2.html` and **rejected by Marlowe** (2026-05-09). V1 (original cyan, flat) is canonical. The diff below reflects that.
+> **Status of pivot direction:** The Gemini-suggested brand pivot (deep indigo + tactile micro-depth) was evaluated via `system-preview-v2.html` and **rejected by the design lead** (2026-05-09). V1 (original cyan, flat) is canonical. The diff below reflects that.
 
 ---
 

@@ -25,14 +25,14 @@ defmodule PlatformWeb.Components.ScopePill do
   * Propagated — two chips joined by a `hero-arrow-right` heroicon
     (renders when `:propagated_to` is set).
   * Clickable (default) — renders as a `<button>` with `phx-click`.
-  * Non-clickable — renders as a `<span>` at 0.55 opacity (Marlowe approved
+  * Non-clickable — renders as a `<span>` at 0.55 opacity (the designer approved
     2026-05-18) so context is still visible but no affordance. At `:compact`
     size the floor is 0.70 — the smaller chip needs more signal, not less.
     The opacity is on the chip ROOT, so it composites the LABEL as well as
     the fill: in light theme this variant's label reads 2.11-2.26:1
     (2.69-2.88 at compact) where the clickable chip reads 4.55-4.67. Below
     AA in 47 of the 48 slug/surface/theme/size cells, each one measured in
-    `ScopePillStaticOpacityTest`. Marlowe's 2026-09-13 ruling moved the six
+    `ScopePillStaticOpacityTest`. The designer's 2026-09-13 ruling moved the six
     pills' colours and said nothing about this opacity; changing it is her
     call, not an executor's.
   * Active — full-saturation fill + check icon (filtered-to-this-scope). At
@@ -95,7 +95,7 @@ defmodule PlatformWeb.Components.ScopePill do
   `border-<slug>` at 30%, `bg-<slug>-active`, `hover:bg-<slug>/22`), chosen
   by an explicit six-slug branch here, because their labels were
   solved against one contrast cell of four and moving them was a brand
-  call. Marlowe ruled on 2026-09-13 that they move. They now take the var
+  call. The designer ruled on 2026-09-13 that they move. They now take the var
   path like every other org, coloured from their rows (hue, chroma and, for
   these six, the fill lightness they shipped at), and the chip-only
   utilities are deleted from `app.css` in the same change, so no chip can
@@ -125,7 +125,7 @@ defmodule PlatformWeb.Components.ScopePill do
   shipped opacity and pins the figure. Every cell LOSES contrast to the
   opacity and 47 of the 48 land below AA (the exception is paragon on the
   dark rail at compact, 5.10:1, down from 9.44:1). Not disputed, and NOT
-  this component's to change: the opacity is Marlowe-approved (2026-05-18)
+  this component's to change: the opacity is design-approved (2026-05-18)
   and the ruling is open. Read "Non-clickable" under "Variants" before
   proposing a number.
 
@@ -179,7 +179,7 @@ defmodule PlatformWeb.Components.ScopePill do
   carries `opacity-55` (`opacity-70` at compact), which composites its edge
   toward the ground along with its label: the root org's solved edge paints at
   about 1.8:1 there (2.2:1 at compact), and its label at 2.21:1 (2.83:1 at
-  compact). That opacity is Marlowe-approved (2026-05-18) and its conflict
+  compact). That opacity is design-approved (2026-05-18) and its conflict
   with the contrast rules is an open decision on the design canvas; neither
   stage 4 nor stage 6 changed it. Stage 6 measured the label cost it had
   left unmeasured (`ScopePillStaticOpacityTest`, 48 cells).
@@ -498,7 +498,7 @@ defmodule PlatformWeb.Components.ScopePill do
   # the identical classes in `opacity-55` (`opacity-70` at compact), which
   # composites label and tint alike toward the ground and leaves the label
   # at 2.11-2.26:1 in light theme (2.69-2.88 compact): below AA in 47 of 48
-  # cells. That opacity is Marlowe-approved and this stage did not touch it;
+  # cells. That opacity is design-approved and this stage did not touch it;
   # the figures are computed and pinned in `ScopePillStaticOpacityTest`.
   # Quote the 4.5 figure about the clickable chip only.
   #

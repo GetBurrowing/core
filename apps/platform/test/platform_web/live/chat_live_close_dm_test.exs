@@ -10,7 +10,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
   SAME TEST.
 
   Closing a PINNED DM unpins it too, so that row leaves the rail on the same
-  click (section 2b, added when Marlowe reported that it did not). The pin is
+  click (section 2b, added when Robin reported that it did not). The pin is
   discarded rather than remembered, so the DM returns unpinned.
 
   ## Anti-vacuity notes
@@ -319,7 +319,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
          %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      closed = create_dm(user, "Rowan Ellis")
+      closed = create_dm(user, "Alex Rivera")
       kept = create_dm(user, "Saru Watanabe")
 
       {:ok, view, html} = live_rail(conn)
@@ -355,7 +355,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     test "the row leaves the rail and OPENING that DM brings it back", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      closed = create_dm(user, "Rowan Ellis")
+      closed = create_dm(user, "Alex Rivera")
       kept = create_dm(user, "Saru Watanabe")
 
       {:ok, view, html} = live_rail(conn)
@@ -385,7 +385,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
          %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       group = create_conversation(user, "group", "Design huddle")
 
       {:ok, view, _html} = live_rail(conn)
@@ -409,7 +409,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     test "the phone sheet offers Close on a DM row and not on a channel row", %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, _html} = live_rail(conn)
 
@@ -429,13 +429,13 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
   # ── 2b. Closing a PINNED DM ─────────────────────────────────────────────
   #
   # This section replaces a test that asserted the OPPOSITE rule. Until
-  # Marlowe's report on 2026-08-13, "a PINNED DM is unaffected by a close"
+  # Robin's report on 2026-08-13, "a PINNED DM is unaffected by a close"
   # asserted that the row STAYED in the Pinned block after a close, and that
   # no toast claimed otherwise. The close was still recorded, so the DM
   # vanished from the rail whenever the user unpinned it later, possibly days
   # later, attached to a click they had no reason to connect to it.
   #
-  # Marlowe: "Closing a pinned item doesn't do anything. As soon as I unpin the
+  # Robin: "Closing a pinned item doesn't do anything. As soon as I unpin the
   # item (DM), it disappears because I closed it at some point. I expect if I
   # closed a pinned item, it would undo the pin and close the DM."
   #
@@ -445,7 +445,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     test "unpins it AND closes it, so the row leaves the rail in one action", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       kept_dm = create_dm(user, "Saru Watanabe")
       kept_channel = create_channel("pin-control")
 
@@ -488,7 +488,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       assert dm_row(html, kept_dm.id), "the close removed the OTHER DM too"
 
       # THE RETURN, and the shape of it. The pin is discarded rather than
-      # stashed for later restoration (Designer's call, accepted by Marlowe), so
+      # stashed for later restoration (Designer's call, accepted by Robin), so
       # the DM comes back UNPINNED and one click re-pins it. A build that
       # remembered the pin would put this row back in the Pinned block, and
       # would be carrying exactly the invisible state that caused the bug.
@@ -504,13 +504,13 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     end
 
     test "unpinning afterwards is uneventful: it is already gone and stays gone", %{conn: conn} do
-      # THE DELAYED DETONATION, which is the bug Marlowe actually hit. Before the
+      # THE DELAYED DETONATION, which is the bug Robin actually hit. Before the
       # fix this second click is where the DM disappeared: the row sat in the
       # Pinned block, which the close filter never sees, and the unpin dropped
       # it into the DM bucket where the close it never showed was waiting.
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       kept = create_dm(user, "Saru Watanabe")
 
       Sidebar.set_space_pinned(user.id, dm.id, true)
@@ -547,7 +547,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # not start touching the pin list.
       {conn, user} = authed(conn)
       channel = create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       Sidebar.set_space_pinned(user.id, channel.id, true)
 
@@ -590,7 +590,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # task is fixing, one tab over.
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       kept = create_dm(user, "Saru Watanabe")
 
       Sidebar.set_space_pinned(user.id, dm.id, true)
@@ -620,7 +620,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
          %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, _html} = live_rail(conn)
       opened = open_menu(view, dm.id)
@@ -656,7 +656,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       assert attr(close, "phx-click") == "close_dm"
       assert attr(close, "phx-value-id") == dm.id
 
-      assert attr(close, "aria-label") == "Close Rowan Ellis",
+      assert attr(close, "aria-label") == "Close Alex Rivera",
              "the Close item's accessible name does not name the conversation"
 
       # The sheet's item, same rules, its own role.
@@ -692,7 +692,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # forced removal on 2026-08-11.
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, _html} = live_rail(conn)
       opened = open_menu(view, dm.id)
@@ -723,7 +723,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
   describe "closing a DM raises no acknowledgement" do
     test "a close raises no toast, and Hide's is still there", %{conn: conn} do
-      # Marlowe's ruling at the stage-3 gate: "We don't need a acknowledgement /
+      # Robin's ruling at the stage-3 gate: "We don't need a acknowledgement /
       # affirmation for a close action on a DM. A User can simply search for a
       # person or agent to DM again if they want to bring back the window."
       # Stage 2 shipped a "Closed <name>" toast with an Undo and stage 3 gave
@@ -735,7 +735,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # Close's, and Hide was never rejected.
       {conn, user} = authed(conn)
       channel = create_channel("hide-me")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, view, _html} = live_rail(conn)
 
@@ -749,7 +749,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
              "the close did not take the row off the rail, so the silence below proves nothing"
 
       assert count(html, ".channel-undo-toast") == 0,
-             "closing a DM raised an acknowledgement, which Marlowe rejected"
+             "closing a DM raised an acknowledgement, which Robin rejected"
 
       refute html =~ "undo_close_dm",
              "the page still offers an undo for a close"
@@ -833,7 +833,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # for a user sitting on the page while someone writes to them.
       {conn, user} = authed(conn)
       create_channel("gen-migration")
-      closed = create_dm(user, "Rowan Ellis")
+      closed = create_dm(user, "Alex Rivera")
       kept = create_dm(user, "Saru Watanabe")
 
       {:ok, view, html} = live_rail(conn)

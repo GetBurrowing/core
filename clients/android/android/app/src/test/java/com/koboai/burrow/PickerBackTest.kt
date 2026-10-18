@@ -10,7 +10,7 @@ class PickerBackTest {
     private val pickerReturn = PickerReturn(store)
 
     private val a = "suite.example.com"
-    private val b = "suite.example.com"
+    private val b = "suite.example.net"
 
     /** Install A open and confirmed, as after a Continue. The app ships no installs, so both are saved first. */
     private fun confirmA() {

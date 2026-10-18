@@ -15,7 +15,7 @@ defmodule Platform.Repo.Migrations.SeedExperimentsScientistPrompt do
   figure without its n; `insufficient_data` means not yet; stopping is not
   concluding; exclusions need a reason), the guardrails, and the instruction
   to answer a human's `stop_feedback` before proposing the next experiment.
-  Launch approval is described as opt-in per org (Rowan, 2026-09-24): by
+  Launch approval is described as opt-in per org (product decision, 2026-09-24): by
   default a start runs within the guardrails, and `pending_human_approval` is
   success where an org has turned approval on.
 

@@ -56,7 +56,7 @@ defmodule Platform.Memory.Insights.GroundingTest do
 
     ~s(<synthesis-insight action="page_edit" confidence="high" target="#{target}"#{source_attr}>
     The runbook still names the old deploy host.
-    <old>deploy to hive</old><new>deploy to moon</new>
+    <old>deploy to host-a</old><new>deploy to host-b</new>
     </synthesis-insight>)
   end
 
@@ -77,13 +77,13 @@ defmodule Platform.Memory.Insights.GroundingTest do
       target = "org/page/runbook-#{n()}.md"
 
       {:ok, _} =
-        Wiki.upsert_page(target, %{content: "Steps: deploy to hive.", updated_by: owner.id})
+        Wiki.upsert_page(target, %{content: "Steps: deploy to host-a.", updated_by: owner.id})
 
       # Positive control: the same edit citing the page itself stays a page_edit.
       grounded = ingest_one!(page_edit(target, "page:#{target}"))
       assert grounded.action_type == "page_edit"
       assert grounded.downgraded_from == nil
-      assert [%{"old" => "deploy to hive"}] = grounded.action["hunks"]
+      assert [%{"old" => "deploy to host-a"}] = grounded.action["hunks"]
       Repo.delete_all(Insight)
 
       for source <- [nil, "page:org/page/nowhere-#{n()}.md", "rumour:hallway", "query:select 1"] do
@@ -104,7 +104,7 @@ defmodule Platform.Memory.Insights.GroundingTest do
       owner = user!()
       agent = agent_with_owner!(owner)
       target = "org/page/agents-#{n()}.md"
-      {:ok, _} = Wiki.upsert_page(target, %{content: "deploy to hive", updated_by: agent.id})
+      {:ok, _} = Wiki.upsert_page(target, %{content: "deploy to host-a", updated_by: agent.id})
 
       q = ingest_one!(page_edit(target, nil))
       assert q.action_type == "question"
@@ -114,7 +114,7 @@ defmodule Platform.Memory.Insights.GroundingTest do
 
     test "a page with no author leaves the question unrouted" do
       target = "org/page/orphan-#{n()}.md"
-      {:ok, _} = Wiki.upsert_page(target, %{content: "deploy to hive", updated_by: nil})
+      {:ok, _} = Wiki.upsert_page(target, %{content: "deploy to host-a", updated_by: nil})
 
       q = ingest_one!(page_edit(target, nil))
       assert q.action_type == "question"
@@ -125,7 +125,7 @@ defmodule Platform.Memory.Insights.GroundingTest do
     test "a non-page_edit insight is never rewritten, grounded or not" do
       q =
         ingest_one!(~s(<synthesis-insight action="briefing" confidence="high" source="rumour:x">
-        Deploys moved to moon.
+        Deploys moved to host-b.
         </synthesis-insight>))
 
       assert q.action_type == "briefing"

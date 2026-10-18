@@ -141,7 +141,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   `.modal-box` here renders at the right size, in the right place, with
   its text — and is completely invisible. The symptom is "the page dims
   but nothing happens", because the hand-rolled backdrop is the only
-  thing you can see. Fixed after Marlowe hit it walking the review
+  thing you can see. Fixed after the designer hit it walking the review
   (task 019f4eaa).
 
   The affirmative-looking primary is deliberately NOT used — the confirm
@@ -394,7 +394,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   approved design, and the reason is the house principle: recoverable by
   default, undo rather than consent. But instant-and-silent meant an org
   archive could hide several things with no acknowledgement of what went.
-  Marlowe asked for the same visibility the confirm dialog now has, so this is
+  The designer asked for the same visibility the confirm dialog now has, so this is
   the undo-shaped version of it: act immediately, say what happened, keep the
   escape hatch one click away.
 

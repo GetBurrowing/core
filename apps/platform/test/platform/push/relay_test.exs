@@ -45,7 +45,7 @@ defmodule Platform.Push.RelayTest do
     Application.put_env(:platform, :push_relay, url: @relay_url, credential: @credential)
   end
 
-  defp insert_user(name \\ "Marlowe") do
+  defp insert_user(name \\ "Robin") do
     n = System.unique_integer([:positive])
 
     Repo.insert!(%Platform.Accounts.User{
@@ -61,7 +61,7 @@ defmodule Platform.Push.RelayTest do
         %{
           kind: "chat_mention",
           title: "Dana in launch",
-          body: "@Marlowe can you check the deck before 3?",
+          body: "@Robin can you check the deck before 3?",
           url: "/chat/launch?message=m1",
           space_id: "01a1261e-0000-7000-8000-00000000000a",
           message_id: "01a1261e-0000-7000-8000-00000000000b",
@@ -376,7 +376,7 @@ defmodule Platform.Push.RelayTest do
       relay_mode!()
       {:ok, install, relay_credential} = RelayServer.create_install("B", @host)
 
-      user = insert_user("Marlowe")
+      user = insert_user("Robin")
       {apns_pub, apns_priv} = device_keypair()
       {fcm_pub, fcm_priv} = device_keypair()
       insert_apns_device!(user, push_public_key: apns_pub)
@@ -393,7 +393,7 @@ defmodule Platform.Push.RelayTest do
       n =
         notification(%{
           title: "Dana Sentinelson in launch-sentinel",
-          body: "@Marlowe ZEBRA-7731 quarterly numbers",
+          body: "@Robin ZEBRA-7731 quarterly numbers",
           author_name: "Dana Sentinelson",
           space_name: "launch-sentinel",
           url: "/chat/launch-sentinel?message=m1"

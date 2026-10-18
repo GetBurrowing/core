@@ -100,6 +100,26 @@
             {@upload_error}
           </p>
         </form>
+
+        <%!-- Only while an upload is set: unset falls back to the Burrow icon
+             set, all seven variants together (task 01a14b9e stage 6). --%>
+        <div
+          :if={@branding.source_storage_key}
+          class="mt-4 flex flex-wrap items-center gap-3 border-t border-edge pt-4"
+        >
+          <button
+            type="button"
+            phx-click="reset_icon"
+            data-confirm="Reset the icon to the Burrow default for everyone on this install?"
+            class="btn btn-ghost btn-sm focus-visible-ring"
+            data-role="branding-reset-icon"
+          >
+            <span class="hero-arrow-uturn-left size-4"></span> Reset icon to Burrow default
+          </button>
+          <p class="text-xs text-base-content/50">
+            Removes the uploaded image and every icon derived from it.
+          </p>
+        </div>
       </section>
 
       <%!-- ── Identity fields ─────────────────────────────────────── --%>
@@ -122,7 +142,7 @@
             <p class="mt-1 text-xs text-base-content/50" data-role="branding-label-budget">
               Home screens show about {label_budget()} characters
               — currently {@app_name_length}. Put the distinguishing word FIRST:
-              "Ellis Suite" is shown as "Ellis S…". Longer names are allowed and are
+              "Acme Workspace" is shown as "Acme Works…". Longer names are allowed and are
               used in full in the install prompt.
             </p>
           </div>

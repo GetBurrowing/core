@@ -18,7 +18,7 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
  * purpose. A suite that covers at-bottom and deep passes comfortably while the
  * shallow band is broken in either direction — and "shallow with nothing new"
  * is not one case among five, it is the entire visibility half of this change.
- * It is the state Rowan described in his own words and it did not exist before
+ * It is the state Alex described in his own words and it did not exist before
  * this stage.
  *
  * What this file can and cannot see: the hook does not know the unread count,
@@ -192,7 +192,7 @@ describe("ScrollToBottom — jump-to-latest visibility bands", () => {
   // ── The band this whole stage exists for ────────────────────────────────
 
   it("BAND shallow/nothing-new: reports away WITHOUT deep, so no pill is raised", () => {
-    // Rowan's case: scrolled up to re-read a few messages, nothing arriving.
+    // Alex's case: scrolled up to re-read a few messages, nothing arriving.
     // The server needs `deep: false` here — that is the only thing keeping the
     // pill out of the DOM when the unread count is zero.
     const { el, hook } = settledHook({ distance: SHALLOW_PX });

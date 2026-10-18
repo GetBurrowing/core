@@ -402,7 +402,7 @@ defmodule PlatformWeb.TasksLiveSearchTest do
 
     {:ok, view, _html} = conn |> authenticated_conn() |> live("/tasks")
 
-    # Marlowe 2026-07-12: every on-screen count describes the filtered board.
+    # Robin 2026-07-12: every on-screen count describes the filtered board.
     _ = render_change(filters(view), "filter_search", %{"q" => "composer"})
     html = after_filter(view)
     assert html =~ "Composer dock retrofit"

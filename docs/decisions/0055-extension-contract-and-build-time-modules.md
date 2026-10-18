@@ -35,7 +35,7 @@ layout:
 - CI runs with `working-directory: apps/platform` and caches `apps/platform/deps`.
 - `apps/platform/config/config.exs` sets esbuild's `NODE_PATH` to `Path.expand("../deps",
   __DIR__)` in three profiles, which resolves to `apps/platform/deps`.
-- moon's `core-test.sh` runs the suite container with `-w /app/apps/platform`.
+- test-host's `core-test.sh` runs the suite container with `-w /app/apps/platform`.
 
 **Play registers no rail item and no route.** `canonical_destinations/0` in
 `lib/platform_web/components/icon_rail.ex` has no Play entry, and `router.ex` has no play or
@@ -52,20 +52,20 @@ undercounts, because it matches only the `Platform.GameStream` prefix and drops 
 containing `game_stream`. The full set of places where core names Play is tabled in
 [§ Inbound references and the seam that replaces each](#inbound-references-and-the-seam-that-replaces-each).
 
-**Installs.** Read-only, 2026-09-29, on moon:
+**Installs.** Read-only, 2026-09-29, on test-host:
 
 | Install | Core container | Image | `GAME_STREAM_ENABLED` | DB | Play versions in `schema_migrations` | `schema_migrations` rows / newest | `game_stream_sessions` rows | runtimes granted `play` | `game_stream.*` experiments |
 |---|---|---|---|---|---|---|---|---|---|
-| Fabrikam | `core-platform` | `docker.io/example/suite-core:latest` | `true` | `core-postgres` / `core_platform` | `20260926030000` (2026-09-26 09:36:51), `20260928200000` (2026-09-29 07:37:17) | 306 / `20260928230000` | 10 | 2 | 0 |
-| Milhouse | `core-platform-milv` | `docker.io/example/suite-core:latest` | unset | `milv-postgres` / `milv_platform` | `20260926030000` (09:36:41), `20260928200000` (07:36:55) | 306 / `20260928230000` | 0 | 0 | 0 |
-| Red Star | `core-platform-milvlife` | `docker.io/example/suite-core:latest` | unset | `milvlife-postgres` / `milvlife_platform` | `20260926030000` (09:36:29), `20260928200000` (07:37:06) | 306 / `20260928230000` | 0 | 0 | 0 |
+| Install A | `core-platform` | `docker.io/example/suite-core:latest` | `true` | `core-postgres` / `core_platform` | `20260926030000` (2026-09-26 09:36:51), `20260928200000` (2026-09-29 07:37:17) | 306 / `20260928230000` | 10 | 2 | 0 |
+| Install B | `core-platform-b` | `docker.io/example/suite-core:latest` | unset | `b-postgres` / `b_platform` | `20260926030000` (09:36:41), `20260928200000` (07:36:55) | 306 / `20260928230000` | 0 | 0 | 0 |
+| Install C | `core-platform-c` | `docker.io/example/suite-core:latest` | unset | `c-postgres` / `c_platform` | `20260926030000` (09:36:29), `20260928200000` (07:37:06) | 306 / `20260928230000` | 0 | 0 | 0 |
 | exp | `core-platform-exp` | `docker.io/library/elixir:1.19-otp-27` (source-mounted) | unset | `core-postgres-exp` / `core_platform_exp` | neither | 221 / `20260804220000` | table absent | not read | not read |
 
 `apps/platform/priv/repo/migrations` holds 306 files on `eb30c8593`, so each of the three
 production installs has run every core migration, including both Play migrations and
 `20260928230000`, which is newer than either of them. The flag was read from each container's
 `Config.Env` (which includes EnvironmentFile values); the migration rows were read with `psql`
-as each postgres container's `POSTGRES_USER`. Nothing was written or restarted. moon deploys by
+as each postgres container's `POSTGRES_USER`. Nothing was written or restarted. test-host deploys by
 webhook: a push to the registry restarts every install that pulls the pushed tag.
 
 **All three production installs pull the same tag and disagree on the flag.** No single-tag
@@ -88,7 +88,7 @@ image, with **no change to any command**:
 
 - `cd apps/platform && mix compile --warnings-as-errors && mix test`;
 - `podman build -f apps/platform/Dockerfile .`;
-- `~/cron/moon-mix-test.sh <branch>` (core-test.sh's `-w /app/apps/platform`).
+- the test rig's mix-test wrapper `<branch>` (core-test.sh's `-w /app/apps/platform`).
 
 The spike in [§ Proof](#proof) shows this holds with a module and a release host present, and
 that core cannot reference a module without failing its own compile.
@@ -240,7 +240,7 @@ Play child.
   flavours. The without-modules bundle must not contain a Play hook literal.
 
 The spike below does **not** prove the asset path; it proves compilation only. Stage 3 proves
-it. Measured on moon, `node:24-slim` and core's Tailwind 4.1.12:
+it. Measured on test-host, `node:24-slim` and core's Tailwind 4.1.12:
 
 - **The generator is core's and generic.** `mix platform.extensions.assets --out
   assets/generated`, run from a host, reads `Platform.Extensions.assets/0` and writes two
@@ -295,15 +295,15 @@ function still says 11) is core. None moves in this task:
 | `skills` | `/skills` | working | none |
 | `files` | `/files` | working | none |
 | `context` | `/org_memory` | working | none |
-| `prompts` | `/admin/prompts` | working | `fabrikam_only?: true` |
+| `prompts` | `/admin/prompts` | working | `root_only?: true` |
 | `experiments` | `/control/experiments` | working | none |
 | `meetings` | `/meetings` | working | none |
 | `email` | `/email` | working | env-gated: `enabled?: &Platform.Mail.Config.enabled?/0` (`MAIL_ENABLED`) |
-| `admin` | `/admin` | admin | `fabrikam_only?: true` |
+| `admin` | `/admin` | admin | `root_only?: true` |
 
 Play contributes no rail item. `email` is the only env-gated entry and is the natural next
 candidate for a module, which is out of scope here. `canonical_destinations/0` appends
-`Extensions.rail_items()`, and an extension's item goes through the same `fabrikam_only?` and
+`Extensions.rail_items()`, and an extension's item goes through the same `root_only?` and
 `enabled?` filters as a core item.
 
 ### 6. Migrations
@@ -368,15 +368,15 @@ Hazards, and the rule that removes each:
   catch a collision that would ship. The static guard (`migration_paths_test.exs`, and the CI
   duplicate-timestamp step, both over `apps/*/priv/repo/migrations`) is what catches it.
 
-**What a without-module install does with what the module left behind.** Milhouse and Red
-Star hold the Play table and both versions today, although the flag has been off on both.
+**What a without-module install does with what the module left behind.** Install B and Install
+C hold the Play table and both versions today, although the flag has been off on both.
 
 - **The `game_stream_sessions` table stays.** It is orphaned: no code reads or writes it, and
   nothing drops it. `mix ecto.migrations` in the without-module build lists both versions as
   `up` with `** FILE NOT FOUND **`, which is the expected state and not an error; `migrate`
   does nothing for them. Dropping the table is a manual, per-install decision that this ADR
   does not take.
-- **`agent_runtimes.allowed_bundles` containing `"play"`.** Fabrikam has two such rows; the other
+- **`agent_runtimes.allowed_bundles` containing `"play"`.** Install A has two such rows; the other
   installs have none. `ToolSurface.list_tools/1` already skips unknown bundle names, so
   `tools/list` omits the tools, and a call to a `play_session_*` name gets the ordinary
   unknown-tool error. The row itself is the problem: `AgentRuntime.changeset/2` validates
@@ -458,12 +458,12 @@ This is exactly what CI's with-Play job (stage 4) will prove, because it is the 
 
 Stage 3 removes `GAME_STREAM_ENABLED` as a code gate: the module is present or absent. The
 installs table shows three production installs on one tag, `suite-core:latest`, with the flag
-set on one (Fabrikam) and unset on two (Milhouse, Red Star). After the flag is gone:
+set on one (Install A) and unset on two (Install B, Install C). After the flag is gone:
 
-- if `latest` is the with-Play image, Milhouse and Red Star gain Play on the webhook restart
+- if `latest` is the with-Play image, Install B and Install C gain Play on the webhook restart
   that follows the merge: the `game_stream` canvas kind validates, the `play` tools join the
   full catalogue and the runtime channel accepts play frames;
-- if `latest` is the without-Play image, Fabrikam loses Play and its two `play` grants go inert.
+- if `latest` is the without-Play image, Install A loses Play and its two `play` grants go inert.
 
 Either way an install changes behaviour, so "a merge before the repoint changes nothing" is
 true **only if the flag survives inside the module until the repoint**. Decision:
@@ -484,26 +484,26 @@ true **only if the flag survives inside the module until the repoint**. Decision
    `Platform.GameStream.RuntimeConfig` (§ 8). Core never reads the flag.
 2. Stage 4 publishes both flavours. `latest` stays the with-Play image, and a without-Play tag
    is published beside it.
-3. core-ops repoints Milhouse and Red Star to the without-Play tag, and Fabrikam to an explicit
+3. core-ops repoints Install B and Install C to the without-Play tag, and Install A to an explicit
    with-Play tag.
 4. Only then does a follow-up remove the in-module flag. That change is one file inside
    `apps/game_stream`, because core has none.
 
 This departs from stage 3's text, which removes the flag outright. With the flag removed
-before step 3, a merge changes Milhouse and Red Star.
+before step 3, a merge changes Install B and Install C.
 
 **Stage 3 alone must not merge.** The existing `apps/platform/Dockerfile` builds
 `apps/platform` alone, which since stage 3 is the **without-Play** build. If stage 3 merged
-before stage 4 publishes `latest` as the with-Play host image, Fabrikam would lose Play on the
+before stage 4 publishes `latest` as the with-Play host image, Install A would lose Play on the
 webhook restart. Step 2 is what keeps every install's behaviour.
 
-**Stage 4: what the merge does, measured.** Read-only on moon, 2026-10-02:
+**Stage 4: what the merge does, measured.** Read-only on test-host, 2026-10-02:
 
 | Install | Container | Image | `GAME_STREAM_ENABLED` | Play versions in its DB |
 |---|---|---|---|---|
-| Fabrikam | `core-platform` (:4000) | `suite-core:latest`, `AutoUpdate=registry` | set, `true` | both |
-| Milhouse | `core-platform-milv` (:4200) | `suite-core:latest`, `AutoUpdate=registry` | unset | both |
-| Red Star | `core-platform-milvlife` (:4300) | `suite-core:latest`, `AutoUpdate=registry` | unset | both |
+| Install A | `core-platform` (:4000) | `suite-core:latest`, `AutoUpdate=registry` | set, `true` | both |
+| Install B | `core-platform-b` (:4200) | `suite-core:latest`, `AutoUpdate=registry` | unset | both |
+| Install C | `core-platform-c` (:4300) | `suite-core:latest`, `AutoUpdate=registry` | unset | both |
 
 The three containers ran image revision `237374145` (origin/main). `core-platform-exp`
 runs `elixir:1.19-otp-27` and no `suite-core` tag, so the tag mapping does not touch it.
@@ -519,14 +519,14 @@ Stage 4 implements step 2 in `.github/workflows/ci.yml`:
   that `latest` is the last tag to move.
 
 So **the merge changes no install's product surface, and no quadlet has to change before
-it.** Fabrikam keeps Play because the flag is set. Milhouse and Red Star keep it off, because
+it.** Install A keeps Play because the flag is set. Install B and Install C keep it off, because
 the with-Play image with the flag unset behaves as main does with it unset. This was
 verified for a merge-base DB by `scripts/module-enable-later-rig.sh prod-like` (§ Proof).
 
 The proposal for core-ops (step 3), to make after the merge, in any order:
 
 - `core-platform.container`: `Image=docker.io/example/suite-core:play`.
-- `core-platform-milv.container` and `core-platform-milvlife.container`:
+- `core-platform-b.container` and `core-platform-c.container`:
   `Image=docker.io/example/suite-core:core`.
 
 Each is followed by `systemctl --user daemon-reload` and a restart of that unit. After all
@@ -534,17 +534,17 @@ three, follow-up 1 removes the flag.
 
 **What changes product surface, and when:**
 
-- Removing the in-module flag (follow-up 1) before Milhouse and Red Star are repointed:
+- Removing the in-module flag (follow-up 1) before Install B and Install C are repointed:
   both gain Play on their next restart. The `play` tools join the catalogue for any
   runtime granted the bundle, the `game_stream` canvas kind validates, and play frames
   are accepted.
-- Moving `latest` to the without-Play image while Fabrikam still pulls `latest`: Fabrikam loses
+- Moving `latest` to the without-Play image while Install A still pulls `latest`: Install A loses
   Play. Its `play` grants go inert, and `play_session_*` calls get the unknown-tool
   refusal.
-- Repointing Milhouse or Red Star to `core` before follow-up 1: no visible change. Their
+- Repointing Install B or Install C to `core` before follow-up 1: no visible change. Their
   Play is already off. They stop carrying Play's code, and the two `game_stream.*`
   experiment surfaces and metrics leave their registries.
-- Repointing Fabrikam to `play`: no change.
+- Repointing Install A to `play`: no change.
 
 ### 10. How to add a module to an install
 
@@ -683,7 +683,7 @@ core test files; this table lists 7, because it counts the migration test as Pla
 
 ### Composition spike (option B, with option A for comparison)
 
-Throwaway, never pushed and never merged. Run 2026-09-29 on moon in podman with
+Throwaway, never pushed and never merged. Run 2026-09-29 on test-host in podman with
 `localhost/core-test:1.19.5-otp-28-slim-cc` (`elixir:1.19.5-otp-28-slim` plus ca-certificates,
 git and build-essential, the image `core-test.sh` uses), from a clone of `eb30c8593` in a
 scratch directory. The spike committed `apps/game_stream` and `apps/suite_release` on a local
@@ -742,7 +742,7 @@ evaluates core's `runtime.exs` must be settled there. For releases, T5 shows
 
 ### Stage 3: Play moved, both flavours measured
 
-Measured on moon in podman: `localhost/core-test:1.19.5-otp-28-slim-cc` for Mix, and
+Measured on test-host in podman: `localhost/core-test:1.19.5-otp-28-slim-cc` for Mix, and
 `node:24-slim` for JS. The baseline is the stage 2 tip, `79191cba2`.
 
 **The move.** 44 files moved with `git mv`, all detected as renames against `79191cba2`:
@@ -757,7 +757,7 @@ keeps no `GAME_STREAM_*` read and no Play module name.
 
 **Test totals.**
 
-- Without Play (core alone, `~/cron/moon-mix-test.sh`): 20,150 before, 19,997 after, with 0
+- Without Play (core alone, the test rig's mix-test wrapper): 20,150 before, 19,997 after, with 0
   failures, 3 skipped and 44 doctests.
 - With Play (`apps/game_stream`'s own `mix test`): 181 tests, 0 failures.
 
@@ -833,7 +833,7 @@ Two of them changed Play while it was being extracted, and both were ported into
 - #1163 (task 01a0f84e, game stream audio). `game_stream_audio.js` and its vitest file moved
   to the module.
 
-Re-measured on moon at the resumed tip, with the same images as above:
+Re-measured on test-host at the resumed tip, with the same images as above:
 
 - **Core alone:** 20,083 tests, 44 doctests, 0 failures, 3 skipped. Main at `237374145` has
   20,218. The difference is reconciled as follows:
@@ -857,9 +857,9 @@ Re-measured on moon at the resumed tip, with the same images as above:
   - pass again once the plants are restored.
 
 
-### Stage 4: both images built, booted and switched on moon
+### Stage 4: both images built, booted and switched on test-host
 
-Both flavours were built with podman on moon from the branch at `ec8c101e6`. They were built
+Both flavours were built with podman on test-host from the branch at `ec8c101e6`. They were built
 before that commit's message was reworded, as `e48204fc8`; the tree is the same, and the older
 sha is the one in `priv/build_commit`. The image inputs
 have not changed since; later commits touch only the ADR text, the installer, the CI
@@ -892,7 +892,7 @@ not have, and it skips a missing root silently. Nothing failed.
   itself it reports 0.
 
 **`scripts/module-enable-later-rig.sh`** runs the images with their own CMD
-(`Platform.Release.migrate()`, then `start`) against a private database on moon's
+(`Platform.Release.migrate()`, then `start`) against a private database on test-host's
 `dev-postgres`. The database is named `rig_01a0ee08_<case>_<pid>` and is dropped on exit.
 
 *enable-later*, at rig commit `5ad653c1d`:

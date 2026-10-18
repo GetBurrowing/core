@@ -14,6 +14,7 @@ defmodule Platform.Org.BurrowDocsContentTest do
   use ExUnit.Case, async: true
 
   alias Platform.Federation.ToolSurface
+  alias Platform.Regression.InstallIdentityScanner, as: Scanner
   alias Platform.Org.BurrowDocs.Source
   alias Platform.Org.Wiki
 
@@ -92,7 +93,11 @@ defmodule Platform.Org.BurrowDocsContentTest do
   # agents will not find in `tools/list`.
 
   @tool_shape ~r/\A[a-z][a-z0-9]*(?:[._][a-z0-9]+)+\z/
-  @banned_words ~r/\b(acme|ellis|hive|moon)\b/i
+  # `acme` is the test fixture org (config/test.exs), banned from docs pages
+  # by name. Install and personal identity (an operator's org, domains,
+  # hosts, people) is banned through the install-identity scanner's digest
+  # rule, so this file does not spell those terms (task 01a14b9e stage 5).
+  @banned_words ~r/\b(acme)\b/i
   @sha ~r/\A[0-9a-f]{8,40}\z/
   # A page that documents the separately released `suite` CLI also stamps the
   # CLI commit it was checked against: `_Last verified at <core>; suite CLI at
@@ -250,7 +255,15 @@ defmodule Platform.Org.BurrowDocsContentTest do
       |> Enum.map(fn [w] -> "contains banned word #{inspect(w)}" end)
       |> Enum.uniq()
 
-    mention ++ words
+    identity =
+      content
+      |> Scanner.hits()
+      |> Enum.map(fn {s, l} ->
+        "contains install identity #{inspect(binary_part(content, s, l))}"
+      end)
+      |> Enum.uniq()
+
+    mention ++ words ++ identity
   end
 
   @doc """
@@ -488,12 +501,19 @@ defmodule Platform.Org.BurrowDocsContentTest do
       token = "@" <> "[Someone]"
       assert banned_errors("ask #{token} now") == ["contains an at-bracket mention token"]
 
-      for word <- ~w(acme Ellis HIVE moon) do
-        assert banned_errors("runs on #{word} today") == ["contains banned word #{inspect(word)}"]
-      end
+      assert banned_errors("runs on acme today") == [~s(contains banned word "acme")]
+      assert banned_errors("runs on ACME today") == [~s(contains banned word "ACME")]
+
+      # An install-identity term, taken from the shipped Android package id
+      # so this file does not spell one: its org token, upper-cased.
+      [{android, _, _} | _] = Scanner.published_ids()
+      org = android |> String.split(".") |> Enum.at(1) |> String.upcase()
+
+      assert banned_errors("runs on #{org} today") ==
+               ["contains install identity #{inspect(org)}"]
 
       # Word-bounded: a longer word containing one is not a hit.
-      assert banned_errors("honeymoon archive") == []
+      assert banned_errors("acmeish #{String.downcase(org)}ish archive") == []
     end
 
     test "check 2 holds a suite CLI sha in the last line to its frontmatter key" do

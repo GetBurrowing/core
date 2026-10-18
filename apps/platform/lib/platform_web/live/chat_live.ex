@@ -595,7 +595,7 @@ defmodule PlatformWeb.ChatLive do
       # The two lines are raised by different verbs that a person can perform
       # seconds apart, and on one assign whichever came second would silently
       # blank the first. Task 019ffc5f already tried sharing this element between
-      # two verbs and Marlowe rejected the result, so the shared surface stays and
+      # two verbs and the designer rejected the result, so the shared surface stays and
       # the state does not.
       |> assign(:move_toast, nil)
       # Per-user sub-org section order (chat plan v2 Stage 3) is stored in
@@ -1614,7 +1614,7 @@ defmodule PlatformWeb.ChatLive do
     # Note: do NOT auto-collapse the hidden-channels drawer here. An earlier
     # iteration did, because the toast was absolute-positioned and could
     # overlap an expanded drawer panel. The toast is now in-flow above
-    # "+ New channel" (Marlowe's 2026-05-29 review), so the toast and an
+    # "+ New channel" (the 2026-05-29 design review), so the toast and an
     # expanded drawer panel occupy different vertical bands and never
     # collide — collapsing the drawer here would just yank the user's
     # browsing context away for no UX win.
@@ -1641,7 +1641,7 @@ defmodule PlatformWeb.ChatLive do
        )
      )
      # Hide is the only action that raises this toast. Stage 2 of task
-     # 019ffc5f added a `:kind` so DM Close could share it; Marlowe rejected
+     # 019ffc5f added a `:kind` so DM Close could share it; the designer rejected
      # that acknowledgement at the stage-3 gate, so the map is back to the
      # two fields the one remaining verb needs.
      |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})
@@ -1675,7 +1675,7 @@ defmodule PlatformWeb.ChatLive do
   # Stage 3 v3 (chat sidebar Option B). Toggle the single global
   # `Hidden channels` drawer at the bottom of the sidebar. There's only one
   # drawer state now (a boolean), not one expand-state per sub-org bucket
-  # as in v2 — Marlowe's review removed the per-section chips in favour of a
+  # as in v2 — design review removed the per-section chips in favour of a
   # single quieter affordance at the rail's foot.
   def handle_event("toggle_hidden_drawer", _params, socket) do
     {:noreply, assign(socket, :hidden_drawer_open, !socket.assigns.hidden_drawer_open)}
@@ -2043,7 +2043,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("archive_container", %{"type" => type, "id" => id} = params, socket) do
     case LifecycleActions.archive(%{id: socket.assigns.user_id}, type, id) do
       {:ok, resource} ->
-        # Undo toast rather than a flash (Marlowe, 2026-07-16) — archive stays
+        # Undo toast rather than a flash (design review, 2026-07-16) — archive stays
         # instant + dialog-free, but says what it took. See
         # PlatformWeb.LifecycleControls.archive_undo_toast/1.
         {:noreply,
@@ -2951,7 +2951,7 @@ defmodule PlatformWeb.ChatLive do
 
   # ── Pin-to-Chat rail unpin (task 019f62a1 stage 4 fixup #2) ───────────────
   #
-  # Rowan asked for a "small pin icon next to the task" so users can unpin
+  # The operator asked for a "small pin icon next to the task" so users can unpin
   # a task-exec space directly from the Pinned rail without navigating to
   # the task detail panel. This handler is PARTICIPANT-SCOPED — every
   # viewer that sees a rail row can unpin themselves regardless of whether
@@ -3063,7 +3063,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Close raises NO acknowledgement. Stage 2 gave it an undo toast and stage 3
-  # gave that toast a line explaining the return; Marlowe rejected both at the
+  # gave that toast a line explaining the return; the designer rejected both at the
   # stage-3 gate: "We don't need a acknowledgement / affirmation for a close
   # action on a DM. A User can simply search for a person or agent to DM again
   # if they want to bring back the window." The row leaves and that is the
@@ -3074,7 +3074,7 @@ defmodule PlatformWeb.ChatLive do
     user_id = socket.assigns.user_id
 
     # Closing a PINNED DM unpins it as well, so the row leaves the rail on the
-    # click that closed it (Marlowe, 2026-08-13: "Closing a pinned item doesn't
+    # click that closed it (design review, 2026-08-13: "Closing a pinned item doesn't
     # do anything. As soon as I unpin the item (DM), it disappears because I
     # closed it at some point. I expect if I closed a pinned item, it would
     # undo the pin and close the DM.").
@@ -3088,7 +3088,7 @@ defmodule PlatformWeb.ChatLive do
     # list now.
     #
     # THE OLD PIN IS DISCARDED, NOT STASHED. Designer's decision, tradeoff
-    # accepted by Marlowe: a DM that comes back (a new message in it, or the user
+    # accepted by the designer: a DM that comes back (a new message in it, or the user
     # opening it) comes back UNPINNED and is re-pinned in one click. Do not
     # "improve" this by remembering the pin and restoring it on return. That
     # would be a second piece of state the user cannot see, and invisible state
@@ -3786,7 +3786,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # No action button. The move already carries a two-step confirmation and the
   # row's own menu moves the channel back in one click, so this stage renders the
-  # reused toast shape with the message alone. Marlowe's separate decision to offer
+  # reused toast shape with the message alone. The designer's separate decision to offer
   # an Undo here is task 01a01052-3155-7c15-8c48-9ff8955b9b70.
   #
   # Auto-clears on the hide toast's pattern exactly: a `Process.send_after/3`
@@ -3916,7 +3916,7 @@ defmodule PlatformWeb.ChatLive do
   # Flash + navigate MUST happen in one pipeline: a flash sent as its own
   # message renders (and is consumed) on the old view for a few ms before
   # the navigate remounts, so the user never sees it (task 019e95ea —
-  # Marlowe's stage-4 review caught the missing delete confirmation toast).
+  # the designer's stage-4 review caught the missing delete confirmation toast).
   def handle_info({:settings_navigate, path, {kind, msg}}, socket) do
     {:noreply,
      socket
@@ -4260,7 +4260,7 @@ defmodule PlatformWeb.ChatLive do
       # kept rendering a stale Pinned block until its next navigation.
       #
       # `@closed_dm_at` is re-read here for the same reason and from the same
-      # place, the user's preferences (task 019ffc5f, Marlowe's pinned-close
+      # place, the user's preferences (task 019ffc5f, the designer's pinned-close
       # report). Close now writes the pin AND the close together, so a tab that
       # refreshed only the pin list would take the row out of the Pinned block
       # and leave it in Direct Messages: half the action applied, which is the
@@ -4941,7 +4941,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # The rail used to carry two adjacent pinned blocks — "Pinned Channels"
   # from `channel_sections/4` and "Pinned Tasks" from `@pinned_task_spaces`.
-  # Marlowe pinned a task from the Tasks page, went to Chat, and found its
+  # The designer pinned a task from the Tasks page, went to Chat, and found its
   # execution log in her rail: pinning a task is the same act as pinning a
   # channel, so it is one need and one block.
   #
@@ -4967,7 +4967,7 @@ defmodule PlatformWeb.ChatLive do
 
   `move_index` / `move_count` describe the row's place among the rows it may
   be REORDERED among, which is the conversation half only: a task row carries
-  `move_index: nil` and renders no reorder chrome (Marlowe, 2026-08-12). A
+  `move_index: nil` and renders no reorder chrome (design review, 2026-08-12). A
   conversation carries its 0-based index within the conversation run and the
   run's length, which is what disables the ▲ on the first conversation and
   the ▼ on the last. Indexing against the whole block instead would disable
@@ -4988,14 +4988,14 @@ defmodule PlatformWeb.ChatLive do
   @doc """
   The Pinned block as ONE ordered list of `%{kind:, space:}` entries.
 
-  Tasks sit at the TOP (Marlowe, 2026-08-11): "if I'm working on a task and I
+  Tasks sit at the TOP (design review, 2026-08-11): "if I'm working on a task and I
   deliberately pin, I would want to have that as easiest to access while I'm
   on the go / on my phone." It also makes this list agree with the mobile
   chip strip, which already iterates `@pinned_task_spaces` before
   `@channel_sections.pinned`.
 
   The two halves cannot be INTERLEAVED, and now they are not meant to be.
-  Marlowe, 2026-08-12, choosing between commingling the two pin models and
+  Design review, 2026-08-12, choosing between commingling the two pin models and
   keeping them apart: "I lean towards #2 — it's essentially two separate
   lists so makes me think to not commingle the interactions too much." Task
   rows keep their own ordering and are not hand-orderable; hand-ordering
@@ -5029,7 +5029,7 @@ defmodule PlatformWeb.ChatLive do
 
   The reflow that costs is accepted, not overlooked. A task row removes
   itself when its task hits done or cancelled, so every conversation row
-  below it shifts up. Marlowe's call: the row gets no animation, no
+  below it shifts up. The design call: the row gets no animation, no
   placeholder and no notice.
   """
   @spec pinned_rail_entries([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) ::
@@ -5065,7 +5065,7 @@ defmodule PlatformWeb.ChatLive do
   `@channel_sections.pinned` directly. Two reasons, and the second is the
   bug this function exists to prevent:
 
-    * Task rows are in the block but are NOT hand-orderable (Marlowe,
+    * Task rows are in the block but are NOT hand-orderable (the designer,
       2026-08-12), so the baseline has to drop them or a conversation could
       be given a destination among them.
 

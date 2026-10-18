@@ -28,7 +28,7 @@ defmodule Mix.Tasks.Platform.Vault.InspectSlug do
   matching row, unranked, and stops.
 
   Deciding which `t3` row (if any) to remove or rename, and executing that
-  decision, is Rowan Ellis's call to make against production — not
+  decision, is the operator's call to make against production — not
   something this task infers or automates.
 
   ## Never prints `encrypted_data`

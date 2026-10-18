@@ -54,7 +54,10 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin")
 
       assert html =~ "Admin · Operations"
-      refute html =~ "Fabrikam Operations"
+
+      refute html =~
+               ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} Operations/i
+
       assert html =~ "Agent Resources"
       assert html =~ "Agent Federation"
       assert html =~ "Usage / Cost Metering"

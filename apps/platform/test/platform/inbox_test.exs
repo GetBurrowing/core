@@ -23,7 +23,7 @@ defmodule Platform.InboxTest do
         source_type: "chat_message",
         source_id: Ecto.UUID.generate(),
         title: "You were mentioned",
-        body: "Rowan mentioned you",
+        body: "Alex mentioned you",
         url: "/chat/123"
       },
       overrides
@@ -73,7 +73,7 @@ defmodule Platform.InboxTest do
           kind: "meeting_invited",
           source_type: "meeting",
           source_id: Ecto.UUID.generate(),
-          title: "Rowan invited you to Weekly sync",
+          title: "Alex invited you to Weekly sync",
           url: "/meetings/weekly-sync"
         })
 

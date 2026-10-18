@@ -153,22 +153,22 @@ final class WidgetApprovalTests: XCTestCase {
 
     func testConflictIsAlreadyHandledAndKeepsTheRowUntilTheNextRefresh() async {
         let actions = actions()
-        StubURLProtocol.respond = { _ in (409, Data(#"{"error":"already_handled","by":"Rowan Ellis"}"#.utf8)) }
+        StubURLProtocol.respond = { _ in (409, Data(#"{"error":"already_handled","by":"Alex Rivera"}"#.utf8)) }
         actions.arm(id(b, uuid))
         let result = await confirmThenTimeline(actions, id(b, uuid))
         XCTAssertEqual(result, .queued)
         XCTAssertEqual(posts.count, 1)
-        XCTAssertEqual(actions.store.marks()[id(b, uuid)]?.state, .alreadyHandled(by: "Rowan Ellis"))
+        XCTAssertEqual(actions.store.marks()[id(b, uuid)]?.state, .alreadyHandled(by: "Alex Rivera"))
 
         // The reload right after Confirm: the server no longer lists it.
         let marks = actions.store.marks()
         let merged = ApprovalsCache.merge(fetched: [], previous: [approval(uuid)], host: b, marks: marks, now: clock)
         let cached = CachedApprovals(approvals: merged, fetchedAt: clock)
         let entries = ApprovalsTimeline.entries(now: clock, host: b, installName: nil, signedIn: true, cached: cached, arm: nil, marks: marks)
-        XCTAssertEqual(entries.first?.rows.map(\.display), [.alreadyHandled(by: "Rowan Ellis")])
+        XCTAssertEqual(entries.first?.rows.map(\.display), [.alreadyHandled(by: "Alex Rivera")])
         let later = entries.first { $0.date >= clock.addingTimeInterval(WidgetApprovalStore.settledHold) }
         XCTAssertEqual(later?.rows.count, 0, "the row leaves on the next refresh")
-        XCTAssertEqual(IntentCopy.alreadyHandled(by: "Rowan Ellis"), "Already approved by Rowan Ellis.")
+        XCTAssertEqual(IntentCopy.alreadyHandled(by: "Alex Rivera"), "Already approved by Alex Rivera.")
     }
 
     func testFailedPostKeepsTheRowAsFailed() async {
@@ -447,7 +447,7 @@ final class WidgetApprovalTests: XCTestCase {
         XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 0, install: nil).value, "Nothing waiting")
         XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 0, install: nil).symbol, "tray")
         XCTAssertEqual(ControlCopy.waiting(signedIn: false, approvals: 3, install: nil).value, "Sign in to Burrow")
-        XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 1, install: "Fabrikam Suite").value, "1 approval, Fabrikam Suite")
+        XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 1, install: "Legacy Suite").value, "1 approval, Legacy Suite")
         XCTAssertEqual(
             ControlCopy.startMeeting(lastSpace: "Burrow iOS", install: nil),
             ControlCopy(symbol: "video.badge.plus", label: "Start meeting", value: "in Burrow iOS"))

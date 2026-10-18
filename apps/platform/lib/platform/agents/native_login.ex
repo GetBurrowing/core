@@ -9,7 +9,7 @@ defmodule Platform.Agents.NativeLogin do
   that finishes on its own. `claude auth login` prints a claude.com authorize
   URL whose redirect is Anthropic's code page, then waits at "Paste code here
   if prompted >". The only other variant redirects to `localhost:<port>`, so it
-  finishes only in a browser on the agent's own machine. (Measured on moon on
+  finishes only in a browser on the agent's own machine. (Measured on the test rig on
   2026-10-09; see the org journal for that date.)
 
   Anthropic's Claude Code terms say developers "may not collect, store, or

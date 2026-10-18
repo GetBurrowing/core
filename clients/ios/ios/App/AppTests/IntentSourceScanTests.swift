@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 @testable import App
@@ -92,14 +93,60 @@ final class IntentSourceScanTests: XCTestCase {
 
 /// Fails if shipped app code or config names a personal install host
 /// (task 01a12787). The app ships no install list: a fresh install starts
-/// empty. Test code is not scanned, since it does not ship. The bundle id
-/// `com.kobo-ai.burrow` does not match `example\.com`, which is correct:
-/// it is the app's identity, not an install.
+/// empty. Test code is not scanned, since it does not ship.
+///
+/// The hosts are matched by sha256 digest, the rule core's install-identity
+/// guard uses (apps/platform/test/support/install_identity_scanner.ex), so
+/// this file does not spell them (task 01a14b9e stage 5). A line is
+/// tokenised: every `[a-z0-9]+([.-][a-z0-9]+)+` run of the lowercased line
+/// and each of its dot-suffixes is a host candidate, and every `[a-z0-9]+`
+/// run is a name candidate. The bundle id is the app's identity, not an
+/// install: none of its candidates hashes to a listed host.
 ///
 /// Lives here rather than in its own file so it needs no project file edit
 /// while PR #1219 also edits the project.
 final class ShippedHostScanTests: XCTestCase {
-    static let personalHost = try! NSRegularExpression(pattern: #"example\.com|ellis|milv\.life|red-st\.ar"#)
+    /// sha256 of the personal install hosts (three domains and one org name).
+    static let personalHostDigests: Set<String> = [
+        "5dea22a579e9477122312d9f7269eabfa8147527a8d24738683f6b6734487560",
+        "b29a46a27acbba77b0aaba113e3d343cbd951a3a848f8356c164c3728b1c8e05",
+        "b185c3068c145f728a1aab6f00091fb6735ddf72311b368f592cb7b0a2a5f37c",
+        "44506f784f8d79f5c01259f925b02d157fc5703fa334313d7575d43f308c9a36",
+    ]
+    static let compound = try! NSRegularExpression(pattern: #"[a-z0-9]+(?:[.\-][a-z0-9]+)+"#)
+    static let token = try! NSRegularExpression(pattern: #"[a-z0-9]+"#)
+
+    static func sha256(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Host candidates (each compound and its dot-suffixes) and name
+    /// candidates (each token) of one line, lowercased.
+    static func candidates(_ line: String) -> [String] {
+        let low = line.lowercased()
+        let range = NSRange(low.startIndex..., in: low)
+        var out: [String] = []
+        for match in compound.matches(in: low, range: range) {
+            guard let r = Range(match.range, in: low) else { continue }
+            let word = String(low[r])
+            out.append(word)
+            for index in word.indices where word[index] == "." {
+                out.append(String(word[word.index(after: index)...]))
+            }
+        }
+        for match in token.matches(in: low, range: range) {
+            if let r = Range(match.range, in: low) { out.append(String(low[r])) }
+        }
+        return out
+    }
+
+    static func namesHost(_ line: String, digests: Set<String>) -> Bool {
+        candidates(line).contains { digests.contains(sha256($0)) }
+    }
+
+    static func namesPersonalHost(_ line: String) -> Bool {
+        namesHost(line, digests: personalHostDigests)
+    }
     /// The only example hosts shipped code may name: the add-install
     /// placeholder and the widget gallery previews use it.
     static let allowedHosts: Set<String> = ["yourteam.example.com"]
@@ -139,12 +186,11 @@ final class ShippedHostScanTests: XCTestCase {
         return Array(Set(files.map(\.standardizedFileURL))).sorted { $0.path < $1.path }
     }
 
-    static func matches(_ pattern: NSRegularExpression, in files: [URL]) throws -> [String] {
+    static func matches(_ digests: Set<String>, in files: [URL]) throws -> [String] {
         var hits: [String] = []
         for file in files {
             let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines)
-            for (number, line) in lines.enumerated()
-            where pattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil {
+            for (number, line) in lines.enumerated() where namesHost(line, digests: digests) {
                 hits.append("\(file.lastPathComponent):\(number + 1)")
             }
         }
@@ -158,15 +204,19 @@ final class ShippedHostScanTests: XCTestCase {
         XCTAssertTrue(files.contains { $0.path.hasSuffix("Shared/InstallStore.swift") }, "the walk misses InstallStore.swift")
         XCTAssertTrue(files.contains { $0.lastPathComponent == "capacitor.config.ts" }, "the walk misses capacitor.config.ts")
         XCTAssertTrue(files.contains { $0.pathExtension == "entitlements" }, "the walk finds no entitlements")
-        let control = try NSRegularExpression(pattern: #"manifest\.json"#)
-        XCTAssertTrue(try Self.matches(control, in: files).contains { $0.hasPrefix("InstallStore.swift:") })
-        XCTAssertEqual(
-            try Self.matches(Self.personalHost, in: [URL(fileURLWithPath: #filePath)]).isEmpty, false,
-            "the pattern matches its own literal in this file")
+        XCTAssertTrue(try Self.matches([Self.sha256("manifest.json")], in: files).contains { $0.hasPrefix("InstallStore.swift:") })
+        // The matcher names a real personal host: the org's own domain,
+        // built from project.yml's bundleIdPrefix so this file does not spell
+        // it, and hidden inside a URL as shipped code would carry it.
+        let project = try String(contentsOf: iosRoot.appendingPathComponent("App/project.yml"), encoding: .utf8)
+        let prefix = try XCTUnwrap(project.components(separatedBy: .newlines).first { $0.contains("bundleIdPrefix:") })
+        let org = try XCTUnwrap(prefix.components(separatedBy: ".").last)
+        XCTAssertTrue(Self.namesPersonalHost("let url = \"https://chat.\(org).com/x\""))
+        XCTAssertFalse(Self.namesPersonalHost("let url = \"https://chat.\(org).org/x\""))
     }
 
     func testNoShippedFileNamesAPersonalInstallHost() throws {
-        XCTAssertEqual(try Self.matches(Self.personalHost, in: shippedFiles()), [])
+        XCTAssertEqual(try Self.matches(Self.personalHostDigests, in: shippedFiles()), [])
     }
 
     /// Every example host in shipped code is on the allow-list, and the
@@ -182,7 +232,7 @@ final class ShippedHostScanTests: XCTestCase {
         XCTAssertTrue(found.contains(AddInstallCopy.placeholder), "the scan did not see the placeholder")
         XCTAssertEqual(found.subtracting(Self.allowedHosts), [])
         for host in Self.allowedHosts {
-            XCTAssertNil(Self.personalHost.firstMatch(in: host, range: NSRange(host.startIndex..., in: host)), host)
+            XCTAssertFalse(Self.namesPersonalHost(host), host)
         }
     }
 }

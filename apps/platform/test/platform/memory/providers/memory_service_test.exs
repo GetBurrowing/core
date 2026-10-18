@@ -333,7 +333,7 @@ defmodule Platform.Memory.Providers.MemoryServiceTest do
       # The other margins only have to survive a loaded machine. Before
       # task 019f5931 this was a 600ms stall on both paths against a 2_000ms
       # ingest_timeout. CI run 37017583264 failed it with the ingest timing
-      # out, and on moon, under CPU contention, both halves failed: an
+      # out, and on test-host, under CPU contention, both halves failed: an
       # ingest answered more than 1.4s late, and a search whose 200ms timer
       # had not fired by the time the 600ms answer arrived. Now ingest has
       # 29s of slack and search 9.8s. The exact value reaching Req is pinned

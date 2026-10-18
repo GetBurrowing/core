@@ -556,7 +556,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "review_request_create" or content =~ "suite_review_request_create"
     end
 
-    test "evidence-capture step routes through hive-local CDP via federation preamble" do
+    test "evidence-capture step routes through build-host-local CDP via federation preamble" do
       # After task 019f5e2a stage 3, the evidence-workflow copy is folded
       # into `federation_preamble` rather than a standalone
       # {{evidence_workflow_reference}} placeholder. dispatch.in_review must
@@ -1063,7 +1063,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       content = PromptTemplates.default_content_for_slug("dispatch.scribe_completion")
 
       assert is_binary(content)
-      refute content =~ ~r/fabrikam/i
+      assert Platform.Regression.InstallIdentityScanner.hits(content) == []
       refute content =~ ~r/cozoa/i
 
       assert content =~
@@ -1079,7 +1079,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       install_content =
         "Install-specific scribe prompt.\n" <>
-          ~s(- always call out "Cozoa" → "Fabrikam" and "sweet.cozoa.ai.com" → "suite.example.com"\n)
+          ~s(- always call out "Cozoa" → "Legacy" and "sweet.cozoa.ai.com" → "suite.example.com"\n)
 
       template = PromptTemplates.get_template_by_slug("dispatch.scribe_completion")
       assert template
@@ -1253,7 +1253,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "afd767f1e0cc81633",
              "intent_attention must show a concrete Claude Code agentId example"
 
-      assert content =~ "higgins.moon",
+      assert content =~ "(e.g. `agent-1.host-a`)",
              "intent_attention must show a concrete openclaw runtime-slug example"
     end
 
@@ -2287,7 +2287,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
 
     test "20260725120000 intent_attention migration INSERTS when the slug is absent" do
-      # The prod case. `suite.example.com` has already run the
+      # The prod case. `suite.example.net` has already run the
       # earlier seed migrations, so `seed_defaults/0` never re-runs there
       # and a force-update-only migration would leave the new slug missing
       # forever. Assert the insert branch actually inserts.
@@ -3290,7 +3290,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         workspace_id: "ws-dreaming-001",
         activity_digest: "[digest] 12 journal entries, 4 chat threads today.",
         rejected_exemplars:
-          "- [recurring-theme] Rowan asked about avatar rings twice this month\n  - Rowan's feedback: this is not a durable insight, avoid re-surfacing",
+          "- [recurring-theme] Avery asked about avatar rings twice this month\n  - Avery's feedback: this is not a durable insight, avoid re-surfacing",
         skills_reference: "## Skill discovery\n\nDiscover skills via skill_list."
       }
 
@@ -3393,9 +3393,12 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     test "dreaming template body names no person and no install" do
       content = PromptTemplates.default_content_for_slug("historian.dreaming")
 
-      for word <- [~r/\bRyan\b/, ~r/\bSuite\b/, ~r/fabrikam/i, ~r/\bmoon\b/, ~r/\bhive\b/] do
-        refute content =~ word, "dreaming template must not carry #{inspect(word)}"
-      end
+      # Install and personal identity is checked by digest, so this test does
+      # not spell the terms it refutes (install-identity guard, task 01a14b9e).
+      assert Platform.Regression.InstallIdentityScanner.hits(content) == [],
+             "dreaming template must carry no install or personal identity"
+
+      refute content =~ ~r/\bSuite\b/, "dreaming template must not carry the old product name"
     end
 
     test "both dreaming slugs carry exactly what the force-update migration writes" do
@@ -5951,5 +5954,54 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     [_, after_heading] = String.split(rendered, ~r/^## Summary[^\n]*\n/m, parts: 2)
     [section | _] = String.split(after_heading, ~r/^## /m, parts: 2)
     section
+  end
+
+  # Task 01a14b9e stage 3: the code defaults name roles and skills, never one
+  # install's hosts, people or LAN addresses. seed_defaults/0 is INSERT-only,
+  # so these literals reach only fresh rows and later force-updates.
+  describe "install-neutral default copy (task 01a14b9e stage 3)" do
+    @neutral_copy [
+      {"federation.preamble",
+       "Never run the core test suite on a person's workstation; run it where your org's test-rig skill says (skill_list query: test rig)."},
+      {"federation.preamble", "the dev server, the test or build hosts, docker or podman,"},
+      {"dispatch.planning",
+       "the rig your org's test-rig skill names (`skill_list` query: test rig); never a person's workstation."},
+      {"dispatch.review_e2e", "The skill explains the dev host's constraints and DB seeding."},
+      {"dispatch.review_e2e", "No agent-reachable headless Chrome holds a production"},
+      {"dispatch.scribe_completion",
+       "the transcriber heard \"Sam\" but the participant roster has both `user:sam` and"},
+      {"dispatch.scribe_completion",
+       "Example: `\"Alex: draft the SXI Q3 pricing memo by Friday\"`."},
+      {"dispatch.scribe_completion", "\"owner\": \"user:alex\","},
+      {"dispatch.intent_attention", "(e.g. `agent-1.host-a`). Same field,"},
+      {"nudge", "(test rig, containers, ports, test hosts, credentials, missing tools)"},
+      {"architecture.cron_sweep.v1", "The install's operator decides"},
+      {"architecture.audit_diff.v1", "A human reviewer reads your annotations and decides"},
+      {"architecture.audit_diff.v1", "a human reviewer sees drift before it compounds."}
+    ]
+
+    for {slug, literal} <- @neutral_copy do
+      @slug slug
+      @literal literal
+      test "#{slug} carries #{inspect(String.slice(literal, 0, 48))}" do
+        assert PromptTemplates.default_content_for_slug(@slug) =~ @literal
+      end
+    end
+
+    test "no default template carries an install-identity hit" do
+      offenders =
+        for %{slug: slug, content: content} <- PromptTemplates.default_templates(),
+            is_binary(content),
+            hits = Platform.Regression.InstallIdentityScanner.hits(content),
+            hits != [],
+            do: {slug, Enum.map(hits, fn {s, l} -> binary_part(content, s, l) end)}
+
+      assert offenders == []
+
+      # Positive control: the same instrument names a host in a template body.
+      assert Platform.Regression.InstallIdentityScanner.count(
+               "run it on " <> "mo" <> "on via the rig"
+             ) == 1
+    end
   end
 end

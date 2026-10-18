@@ -245,7 +245,7 @@ defmodule Platform.Meetings.IntentDispatcher do
   and the producer's cancel/correct control over the row.
 
   The roster started as a one-entry map inline in this module, with a
-  comment requiring each addition to be argued per key. Rowan made that
+  comment requiring each addition to be argued per key. The operator made that
   argument on 2026-07-31 — every classified intent should reach its
   responsibility with a prompt an operator can tune, rather than every
   intent but one sharing a single generic runtime envelope. The table

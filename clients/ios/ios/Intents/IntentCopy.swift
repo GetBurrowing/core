@@ -19,7 +19,7 @@ enum IntentCopy {
     static let markedRead = "Marked as read."
     static let draftOpened = "Opened in Burrow."
 
-    /// A conversation's spoken title: "general · Fabrikam". The org tells two
+    /// A conversation's spoken title: "general · Acme". The org tells two
     /// same-named spaces in two orgs apart; a DM or org-less space is its
     /// name alone.
     static func conversationTitle(name: String, org: String?) -> String {

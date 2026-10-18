@@ -17,8 +17,8 @@
 #
 # Prerequisites (per host, NOT enforced by this script):
 #   - A headless Chrome must be running with --remote-debugging-port=<PORT>
-#     (default 9222). On hive this is the dedicated CDP profile under
-#     ~/.openclaw/chrome-cdp-profile. The endpoint is auto-detected across
+#     (default 9222). Where it lives is per host; your org's browser-rig
+#     skill names it. The endpoint is auto-detected across
 #     both loopback families — 127.0.0.1 first, then [::1] — because Chrome
 #     >=150 on macOS binds the DevTools listener to [::1] even when given
 #     --remote-debugging-address=127.0.0.1. Pass --cdp to pin one explicitly.
@@ -116,8 +116,8 @@ done
 if [[ -z "$CDP_FOUND" ]]; then
   cat <<EOF >&2
 cdp_capture.sh: no CDP endpoint reachable (tried: ${CDP_CANDIDATES[*]}).
-                Start a headless Chrome with --remote-debugging-port (on hive,
-                this is the chrome-cdp-profile process; see ~/.openclaw skills)
+                Start a headless Chrome with --remote-debugging-port (your
+                org's browser-rig skill names the profile for this host)
                 and retry. Exit code 3.
 EOF
   exit 3

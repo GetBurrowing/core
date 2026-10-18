@@ -4,7 +4,7 @@ import Foundation
 
 // The proactive personal index (task 01a111bb stage 7).
 //
-// Measured on Rowan's iPad (iPadOS 27.0.1, review of 37737c21): Siri resolves
+// Measured on a test iPad (iPadOS 27.0.1, review of 37737c21): Siri resolves
 // a spoken person or conversation in the messages schema ONLY against what
 // is already on the device. It never called MessagePersonEntityQuery.entities(matching:)
 // or ConversationQuery, so "Message Dalton…" failed while the server would
@@ -92,7 +92,7 @@ struct PersonalIndexRefresh {
 /// A one-time rebuild of Burrow's Spotlight index, keyed on an index-schema
 /// version in UserDefaults (task 01a111bb stage 7, round 8).
 ///
-/// Measured on Rowan's iPad (iOS 27.0.1, 2026-10-14): Siri still found items
+/// Measured on a test iPad (iOS 27.0.1, 2026-10-14): Siri still found items
 /// indexed by older builds under the OLD type name `PersonEntity` (renamed
 /// MessagePersonEntity in 0b5b5e85d), and hydrating them failed ("Entity
 /// hydration failed"), as it did for a removed install's people. On the

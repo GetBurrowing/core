@@ -396,8 +396,8 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     test "renders in the Pinned block and is ABSENT from the DM section", %{conn: conn} do
       {conn, user} = authed(conn)
       create_channel("general")
-      dm = create_dm(user, "Rowan Ellis")
-      _other_dm = create_dm(user, "Marlowe Quill")
+      dm = create_dm(user, "Alex Rivera")
+      _other_dm = create_dm(user, "Robin Park")
 
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
@@ -405,14 +405,14 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       block = pinned_block(sidebar)
       dms = dm_section(sidebar)
 
-      assert block =~ "Rowan Ellis"
+      assert block =~ "Alex Rivera"
 
-      refute dms =~ "Rowan Ellis",
+      refute dms =~ "Alex Rivera",
              "pinned DM is still rendered in the Direct Messages section: copied, not lifted"
 
       # The unpinned DM stays where it belongs.
-      assert dms =~ "Marlowe Quill"
-      refute block =~ "Marlowe Quill"
+      assert dms =~ "Robin Park"
+      refute block =~ "Robin Park"
     end
   end
 
@@ -459,14 +459,14 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # it happened to be sitting in.
       {conn, user} = authed(conn)
       channel = create_channel("build-log")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
 
       block = pinned_block(rail(conn))
       channel_row = row_containing(block, "Build-log")
-      dm_row = row_containing(block, "Rowan Ellis")
+      dm_row = row_containing(block, "Alex Rivera")
 
       assert channel_row, "expected a pinned row for the channel"
       assert dm_row, "expected a pinned row for the DM"
@@ -480,12 +480,12 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # an EMPTY row also has no hash, and an empty row is precisely the bug
       # the mobile surfaces shipped. The name has to be there too.
       refute dm_row =~ ~s(data-role="pinned-row-hash")
-      assert row_text(dm_row) == "Rowan Ellis"
+      assert row_text(dm_row) == "Alex Rivera"
 
       # No avatar anywhere in the block. `initials/1` takes the first two
       # whitespace-separated words, so a group DM labelled
-      # "Rowan Ellis, Alexandra ..." rendered "RM" and was indistinguishable
-      # from a private DM with Rowan.
+      # "Alex Rivera, Alexandra ..." rendered "RM" and was indistinguishable
+      # from a private DM with Alex.
       refute block =~ ~s(data-role="pinned-row-avatar")
       refute block =~ "human-avatar"
 
@@ -668,7 +668,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     test "a channel chip carries the hash and a DM chip is a bare name", %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("mobile-chan")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
@@ -679,7 +679,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert strip, "expected the mobile pinned strip to render"
 
       channel_chip = row_containing(strip, "Mobile-chan")
-      dm_chip = row_containing(strip, "Rowan Ellis")
+      dm_chip = row_containing(strip, "Alex Rivera")
 
       assert channel_chip, "expected a chip for the pinned channel"
       assert dm_chip, "expected a chip for the pinned DM"
@@ -690,7 +690,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # Same pairing as desktop: no marker AND the name is present. Asserting
       # the whole text is what stops an empty chip passing the "no hash" half.
       refute dm_chip =~ ~s(data-role="pinned-row-hash")
-      assert row_text(dm_chip) == "Rowan Ellis"
+      assert row_text(dm_chip) == "Alex Rivera"
 
       refute strip =~ ~s(data-role="pinned-row-avatar")
       refute strip =~ "human-avatar"
@@ -718,7 +718,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     test "a pinned DM renders its display name, not a bare hash", %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("drawer-chan")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
@@ -728,7 +728,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert section, "expected a Pinned section in the mobile drawer"
 
       channel_row = row_containing(section, "Drawer-chan")
-      dm_row = row_containing(section, "Rowan Ellis")
+      dm_row = row_containing(section, "Alex Rivera")
 
       assert channel_row, "expected a drawer row for the pinned channel"
       assert dm_row, "expected a drawer row for the pinned DM"
@@ -740,7 +740,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # a `#` with no name read as an unnamed CHANNEL, the wrong object type
       # rather than a missing label. Both halves are asserted together.
       refute dm_row =~ ~s(data-role="pinned-row-hash")
-      assert row_text(dm_row) == "Rowan Ellis"
+      assert row_text(dm_row) == "Alex Rivera"
       assert dm_row =~ ~s(data-role="pinned-row-indent")
 
       refute section =~ ~s(data-role="pinned-row-avatar")
@@ -755,7 +755,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   #
   # The rail carried two adjacent pinned blocks until 2026-08-10: "Pinned
   # Channels" from the viewer's preferences and "Pinned Tasks" from
-  # `task_chat_pins`. Marlowe pinned a task from the Tasks page, went to Chat
+  # `task_chat_pins`. Robin pinned a task from the Tasks page, went to Chat
   # and found its execution log in her rail — pinning a task is the same act
   # as pinning a channel, so it is one need and one block.
   #
@@ -806,7 +806,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       {conn, user} = authed(conn)
 
       channel = create_channel("three-kinds")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
       seed_pinned_task_for(user, "Three Kinds Task")
@@ -821,7 +821,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # that rendered a glyph and an empty label, which is the exact bug the
       # mobile surfaces shipped when this list first mixed kinds.
       assert row_text(row_containing(block, "Three-kinds")) == "# Three-kinds"
-      assert row_text(row_containing(block, "Rowan Ellis")) == "Rowan Ellis"
+      assert row_text(row_containing(block, "Alex Rivera")) == "Alex Rivera"
       assert row_text(row_containing(block, "Three Kinds Task")) == "Three Kinds Task"
 
       # The task row keeps its own glyph, and it is the only thing that marks
@@ -986,7 +986,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     test "the desktop block carries no handle and no arrows at rest", %{conn: conn} do
       {conn, user} = authed(conn)
       channel = create_channel("rest-state-chan")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
 
       for space <- [channel, dm],
           do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
@@ -1003,7 +1003,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
       # And the row still reads as its name, whole. One assertion that catches
       # a stray glyph AND an emptied label, which marker-absence does not.
-      assert block |> row_containing("Rowan Ellis") |> row_text() == "Rowan Ellis"
+      assert block |> row_containing("Alex Rivera") |> row_text() == "Alex Rivera"
 
       # Same block in edit mode. Predicted: 2 rows × 2 buttons = 4 move
       # controls, and 2 grab handles.
@@ -1045,7 +1045,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # An implementation reaching for `space.name` renders "Move  up" and
       # passes any check that only asserts the verb.
       {conn, user} = authed(conn)
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       channel = create_channel("named-arrows-chan")
 
       for space <- [dm, channel],
@@ -1057,7 +1057,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
         view |> render_click("toggle_sidebar_edit", %{}) |> desktop_sidebar() |> pinned_block()
 
       assert block |> move_button(dm.id, "pinned-move-down") |> aria_label() ==
-               "Move Rowan Ellis down"
+               "Move Alex Rivera down"
 
       # The channel beside it, so the DM assertion is not passing on a string
       # every row happens to share.
@@ -1089,7 +1089,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
   # ── The task rows are a floor a conversation cannot cross (019fe987) ────
   #
-  # Marlowe, 2026-08-12, choosing between commingling the two pin models and
+  # Robin, 2026-08-12, choosing between commingling the two pin models and
   # keeping them apart: "I lean towards #2 - it's essentially two separate
   # lists so makes me think to not commingle the interactions too much."
   #
@@ -1285,7 +1285,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
   # ── Task rows lead the block (task 019feec6-73d9) ───────────────────────
   #
-  # Marlowe, 2026-08-11: "if I'm working on a task and I deliberately pin, I
+  # Robin, 2026-08-11: "if I'm working on a task and I deliberately pin, I
   # would want to have that as easiest to access while I'm on the go / on my
   # phone." Tasks sat at the BOTTOM when the two blocks were first merged.
   # Putting them on top also makes the rail agree with the mobile chip strip,
@@ -1294,7 +1294,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   #
   # The cost is accepted: a task row removes itself when its task hits done
   # or cancelled, so every conversation row below it shifts up. No animation,
-  # no placeholder, no notice — Marlowe's call.
+  # no placeholder, no notice — Robin's call.
 
   describe "task rows come first" do
     test "the desktop rail renders the pinned task ABOVE the pinned channel", %{conn: conn} do
@@ -1317,7 +1317,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
     test "the mobile drawer renders the same order", %{conn: conn} do
       # Two surfaces or neither. An ordering change on the rail alone is a
-      # change the phone user Marlowe described never sees.
+      # change the phone user Robin described never sees.
       {conn, user} = authed(conn)
 
       channel = create_channel("ordering-drawer")
@@ -1340,7 +1340,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       {conn, user} = authed(conn)
 
       channel = create_channel("lead-chan")
-      dm = create_dm(user, "Rowan Ellis")
+      dm = create_dm(user, "Alex Rivera")
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
       seed_pinned_task_for(user, "Leading Task")
@@ -1354,7 +1354,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
              "the task row is not first: #{inspect(row_texts(block))}"
 
       assert row_index(block, "Lead-chan") > 0
-      assert row_index(block, "Rowan Ellis") > 0
+      assert row_index(block, "Alex Rivera") > 0
     end
   end
 
@@ -1434,7 +1434,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   describe "the vanishing row" do
     test "completing the task removes its row and nothing marks the departure",
          %{conn: conn} do
-      # Marlowe, explicitly: "I want it out of my Chat view so that I don't have
+      # Robin, explicitly: "I want it out of my Chat view so that I don't have
       # to manually close it." No animation, no toast, no tombstone.
       {conn, user} = authed(conn)
 

@@ -55,7 +55,7 @@ extension MessageDestination {
     /// 7): a system person or an unresolved entity through PersonResolver,
     /// asking `choose` when several match. A resolved entity is the one Siri
     /// picked from the index, which on two installs may be the wrong
-    /// namesake (round 8, "Message Harper"): unless `confirmsInstall` is
+    /// namesake (round 8, "Message Sam"): unless `confirmsInstall` is
     /// false (a Shortcut that set the Install), it is used only if no one
     /// on another signed-in install answers to the same name, else `choose`
     /// asks (PersonResolver.confirmInstall). Throws a spoken failure, never
@@ -143,13 +143,13 @@ struct MessagesSendIntent {
         let text = content.map { String($0.characters) } ?? ""
         // No confirmation of our own: Siri already shows its "Send / Cancel"
         // confirmation for this schema intent before calling perform(), and a
-        // second one made Rowan confirm the same message twice (iOS 27.0.1,
+        // second one made the operator confirm the same message twice (iOS 27.0.1,
         // 2026-10-14). The legacy SendMessageIntent still confirms.
         let sent = try await MessagingActions().send(to: target, text: text) { _ in }
         let entity = MessagingIntentSupport.messageEntity(for: sent, destination: destination)
         MessageRegistry.shared.remember(entity)
         IntentHooks.didSucceed?(self)
-        // Fire and forget, to agents too (Rowan, 2026-10-14): the agent's reply
+        // Fire and forget, to agents too (product decision, 2026-10-14): the agent's reply
         // arrives as a normal notification, not through this intent. Waiting
         // for it showed Siri's progress bar for up to 90 s. Ask is the intent
         // that waits for and speaks a reply.

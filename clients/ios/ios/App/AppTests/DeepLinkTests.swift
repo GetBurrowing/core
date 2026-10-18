@@ -5,7 +5,7 @@ import XCTest
 /// `burrow://open?host=&path=`: the path validator, the constructors App
 /// Intents use, and the null-name space decode the share sheet depends on.
 final class DeepLinkTests: XCTestCase {
-    private let host = "suite.example.com"
+    private let host = "suite.example.net"
     private let dmSegment = "019f7d30-4a54-7730-aecc-5df5caa400b9"
     private let taskID = "01A10DB6-DD0B-7001-94EB-C06DEBB66A4A"
 
@@ -20,7 +20,7 @@ final class DeepLinkTests: XCTestCase {
             "/tasks/\(taskID)",
             "/tasks/\(taskID.lowercased())",
             "/chat/general",
-            "/chat/internal-fabrikam_sxi",
+            "/chat/internal-legacy_sxi",
             // A DM's path_segment is its bare UUID: DMs have no slug.
             "/chat/\(dmSegment)",
             "/meetings/standup-2026-10-05",
@@ -97,8 +97,8 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(DeepLink.space(host: host, pathSegment: dmSegment)?.path, "/chat/\(dmSegment)")
         XCTAssertEqual(DeepLink.task(host: host, id: taskID)?.path, "/tasks/\(taskID)")
         XCTAssertEqual(
-            DeepLink.meeting(host: "Suite.Milv.Life", slug: "standup")?.destination.absoluteString,
-            "https://suite.milv.life/meetings/standup")
+            DeepLink.meeting(host: "Suite.Example.Test", slug: "standup")?.destination.absoluteString,
+            "https://suite.example.test/meetings/standup")
 
         // Each link carries the host it was built for, and nothing else.
         let a = DeepLink.space(host: "a.example.com", pathSegment: "general")
@@ -121,7 +121,7 @@ final class DeepLinkTests: XCTestCase {
             """
             {"spaces":[
               {"id":"d1","name":null,"slug":null,"kind":"dm","path_segment":"\(dmSegment)","agents":[]},
-              {"id":"s1","name":"Internal Fabrikam SXI","slug":"sxi","kind":"channel","path_segment":"sxi",
+              {"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel","path_segment":"sxi",
                "agents":[{"id":"a1","name":"Saru","slug":"saru"}]},
               {"id":"d2","kind":"dm"}
             ]}
@@ -129,7 +129,7 @@ final class DeepLinkTests: XCTestCase {
         struct Body: Decodable { let spaces: [SuiteSpace] }
         let spaces = try JSONDecoder().decode(Body.self, from: json).spaces
 
-        XCTAssertEqual(spaces.map(\.name), ["Direct message", "Internal Fabrikam SXI", "Direct message"])
+        XCTAssertEqual(spaces.map(\.name), ["Direct message", "Internal Legacy SXI", "Direct message"])
         XCTAssertEqual(spaces[0].pathSegment, dmSegment)
         XCTAssertNil(spaces[0].slug)
         XCTAssertEqual(spaces[1].agents.map(\.name), ["Saru"])

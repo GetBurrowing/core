@@ -3,15 +3,15 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
   Regression coverage for how `20260618181114_adr_0042_org_project_topology`
   resolves the org its backfill writes into (task 01a0dbc4 stage 1).
 
-  The migration used to look the root up by the literal slug `"fabrikam"` and
+  The migration used to look the root up by the literal slug `"legacy"` and
   raise when it was absent. `20260519143620_seed_root_orgs.exs` seeds the
   root under `ROOT_ORG_SLUG` (default `"root"`), so every fresh install
-  whose root was not slugged `fabrikam` crashed on its first migrate. The root
+  whose root was not slugged `legacy` crashed on its first migrate. The root
   is now resolved structurally: the single `orgs` row with
   `parent_org_id IS NULL`.
 
   CI never saw the crash because `config/test.exs` pinned
-  `ROOT_ORG_SLUG=fabrikam`, so every test DB's root WAS slugged `fabrikam` (task
+  `ROOT_ORG_SLUG=legacy`, so every test DB's root WAS slugged `legacy` (task
   01a116de stage 4 renamed the fixture root to `acme`). A test against a
   seeded row passes before and after the fix. Each case here
   therefore clears `orgs` first and builds its own topology inside the
@@ -69,22 +69,22 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
 
   defp loaded(raw_id), do: Ecto.UUID.load!(raw_id)
 
-  test "resolves a root org that is not slugged fabrikam" do
+  test "resolves a root org that is not slugged legacy" do
     red_star = insert_org!("red-star", nil)
 
     assert loaded(Adr0042OrgProjectTopology.root_org_id!()) == red_star
   end
 
-  # The discriminating case: a slug-first lookup (or a `|| fabrikam` fallback)
+  # The discriminating case: a slug-first lookup (or a `|| legacy` fallback)
   # returns the CHILD here. Only a structural lookup returns the root.
-  test "returns the root, not a child org that happens to be slugged fabrikam" do
+  test "returns the root, not a child org that happens to be slugged legacy" do
     red_star = insert_org!("red-star", nil)
-    fabrikam_child = insert_org!("fabrikam", red_star)
+    legacy_child = insert_org!("legacy", red_star)
 
     resolved = loaded(Adr0042OrgProjectTopology.root_org_id!())
 
     assert resolved == red_star
-    refute resolved == fabrikam_child
+    refute resolved == legacy_child
   end
 
   test "raises naming the structural predicate when there is no root org" do

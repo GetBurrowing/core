@@ -5,7 +5,7 @@ default (task 01a0d4a0 stage 5 item 6).
 WHOLE has no unit tests (it needs a real LiveKit room/connection to do
 anything else useful) -- but `DEFAULT_AGENT_IDENTITY_PREFIX` and the
 `str.startswith` matching built on it are pure, network-free string logic,
-and are exactly what Dalton's third live moon run found broken: the old
+and are exactly what Dalton's third live test-host run found broken: the old
 default (`"meeting-voice-agent"`, the configured `agent_name`) matched NO
 real dispatched worker identity (`"agent-AJ_..."`), so the harness's first
 `_wait_for_first_agent_audio_frame` call always timed out and aborted the

@@ -59,7 +59,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   own centre returned the NAME LABEL, because the label came later in DOM
   order. The badge rendered, reported `display: block, opacity: 1,
   visibility: visible`, and passed every DOM assertion written against it.
-  Harper still could not see it.
+  The product lead still could not see it.
 
   Relocating that chip would not have fixed it. At 19px on a 155x218 tile
   it is 361px² of 33,790px², about 1% of the tile, competing with moving
@@ -404,7 +404,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   #
   # Why not `h-full w-full` (f1e16f1, REJECTED): forcing both axes to
   # 100% inside a tall cell (e.g. 312×780 for 2p sideways) makes the
-  # tile 312×780 — tall, narrow, distorted. Rowan: "it shouldn't go long
+  # tile 312×780 — tall, narrow, distorted. The operator: "it shouldn't go long
   # vertically".
   #
   # Why not bare `aspect-video h-full` (3ee579f, REJECTED): without

@@ -361,7 +361,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
              about the pipeline, not the card, while it is still
              shimmering with nothing to show. A `:full` card is past
              that: it already carries a title, a quote and a byline, so
-             a small rung label ADDS the one thing Harper named
+             a small rung label ADDS the one thing the product lead named
              explicitly missing — "the connection to the cards" — without
              repeating the removed defect, because there is a real card
              here for the number to be ABOUT.
@@ -751,7 +751,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
 
       <div class="min-w-0 flex-1">
         <%!-- TITLE and BYLINE on ONE LINE, as the drawing sets them:
-             `▤ Pricing objection — Harper · just now`. Two elements
+             `▤ Pricing objection — Sam · just now`. Two elements
              rather than one nested pair, so each reads on its own —
              the title says WHAT THIS IS, the byline says WHO SPOKE, and
              neither can be queried and get the other's words back.

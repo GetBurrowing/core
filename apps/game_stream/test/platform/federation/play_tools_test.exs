@@ -284,7 +284,7 @@ defmodule Platform.Federation.PlayToolsTest do
       {:ok, project} =
         Tasks.create_project(%{
           name: "Voltron #{unique()}",
-          repo_url: "https://github.com/rowanellis/voltron"
+          repo_url: "https://github.com/example/voltron"
         })
 
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Play #{unique()}"})

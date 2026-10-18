@@ -2,7 +2,7 @@ defmodule PlatformWeb.ChatLiveGameStreamInlineTest do
   @moduledoc """
   A Play canvas posted in chat never opens the canvas sidebar from its inline
   card, and the user's own path (canvas selector, then an explorer row) still
-  opens it (task 01a0ee4f stage 1). Rowan, 2026-09-29: *"we need to ensure that
+  opens it (task 01a0ee4f stage 1). Alex, 2026-09-29: *"we need to ensure that
   it never opens that sidebar, but also, if i were to engage the sidebar
   myself, by going through the canvas selector in the chat shell ... that that
   is where we connect."*

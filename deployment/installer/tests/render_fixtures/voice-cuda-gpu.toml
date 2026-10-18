@@ -22,4 +22,5 @@ embeddings = false
 accelerator = "cuda"
 
 [images]
+image_namespace = "example"
 source = "preloaded"

@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-10-12
-- **Owners:** Rowan, Dalton
+- **Owners:** the product owner, Dalton
 - **Task:** 01a1316b-1376-7001-ad5e-0d9628ccfb2f (stack `prototype-runtime`)
 - **Extends:** [ADR 0036](0036-canvases-first-class-collaboration-surfaces.md). 0036 already
   anticipated sandboxed `ui_preview` / `iframe` kinds (its Specialized kinds list and Follow-ups)
@@ -19,10 +19,10 @@ Agents and people want to publish full clickable prototypes inside Burrow, not o
 `*.trycloudflare.com` tunnel, and later to let those prototypes hold data and run logic. It has
 to be a standard Burrow feature that works on a fresh single-host install.
 
-The thesis, from Rowan, 2026-10-12: **"multiplayer by default. That's our differentiator."**
+The thesis, from the product owner, 2026-10-12: **"multiplayer by default. That's our differentiator."**
 Every prototype and every scripted canvas is shared and live for all viewers, with no opt-in.
 
-This revives a 2026-05-08/09 thread. Rowan asked about exposing IEx over MCP so agents could
+This revives a 2026-05-08/09 thread. The product owner asked about exposing IEx over MCP so agents could
 create backend capability behind a canvas. Raw IEx was rejected: it is remote code execution,
 it can mint auth, and it can call `:erlang.halt`. The alternative proposed then was canvas-bound
 Luerl scripts stored in the canvas's unused `bindings` field, calling only curated bindings, run
@@ -187,7 +187,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
   user data with its own retention questions. The event log has no compaction in v1.
 - Open items for the build, not settled here:
   - Room ops are gated only by canvas visibility, so any viewer can write room state. Whether
-    "multiplayer by default" deliberately means that is a product call, flagged to Rowan. It
+    "multiplayer by default" deliberately means that is a product call, flagged to the product owner. It
     applies to handler-emitted ops too.
   - A timer runs as the actor who scheduled it. Its access should be re-checked at fire time.
   - `Platform.Canvas` is a new namespace beside `Platform.Chat.Canvas.*`. The room-scripts build

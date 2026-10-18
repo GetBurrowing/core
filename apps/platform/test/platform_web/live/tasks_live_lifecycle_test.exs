@@ -101,7 +101,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "archiving an org's LAST project keeps the org header, kebab, and scope chip (regression: task 019f4eaa)",
          %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      # Soylent with exactly one project — the reported case (Marlowe, 2026-07-16).
+      # Soylent with exactly one project — the reported case (Robin, 2026-07-16).
       project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -160,7 +160,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "the confirm dialog's card does NOT use DaisyUI's .modal-box", %{conn: conn} do
-      # Regression, found by Marlowe walking the review (task 019f4eaa).
+      # Regression, found by Robin walking the review (task 019f4eaa).
       #
       # `.modal-box` ships `scale: 95%; opacity: 0` and is only revealed by a
       # `.modal` PARENT carrying .modal-open / [open] / :target. This dialog
@@ -249,7 +249,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
   end
 
-  # ── Archive undo toast (task 019f4eaa, Marlowe's ask 2026-07-16) ─────────
+  # ── Archive undo toast (task 019f4eaa, Robin's ask 2026-07-16) ─────────
 
   describe "archive undo toast" do
     # Archive is instant + dialog-free by design (recoverable by default, undo

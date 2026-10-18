@@ -226,7 +226,7 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "data-draft-key=\"chat-draft:"
   end
 
-  # PWA scroll-lock take 2 (Rowan's mobile follow-up after #333). Even
+  # PWA scroll-lock take 2 (Alex's mobile follow-up after #333). Even
   # with the shell chrome correctly rooted at h-[100dvh], the chat
   # surface itself was blowing the layout from the inside: long message
   # threads pushed past the viewport and dragged the bottom-tab nav with
@@ -1719,7 +1719,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # for unread-count updates — so the LV IS listening on `other_space`'s
       # topic. Before this fix, the receiver used the participant_id only
       # and would flip `:agent_typing_pids` regardless of which space the
-      # broadcast originated in, so Marlowe-in-a-DM saw Higgins-typing-in-
+      # broadcast originated in, so Robin-in-a-DM saw Higgins-typing-in-
       # #general. After the fix, the broadcast's :space_id must match
       # `active_space.id` or the LV drops the event.
       Platform.Chat.PubSub.broadcast(
@@ -2245,7 +2245,7 @@ defmodule PlatformWeb.ChatLiveTest do
         Chat.get_space_by_slug("general") ||
           elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
 
-      user = insert_chat_user(%{name: "Marlowe", email: "marlowe@example.com", oidc_sub: "marlowe"})
+      user = insert_chat_user(%{name: "Robin", email: "robin@example.com", oidc_sub: "robin"})
       agent = insert_chat_agent(%{name: "Higgins", slug: "higgins"})
 
       _user_participant = add_user_message(space, user, "anyone around?")
@@ -2585,7 +2585,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # has to open the picker to succeed is testing the wrong thing.
   #
   # The strip is 👍 ❤️ 😂 🎉 + — five targets in ONE row, the last of them a
-  # "+" that opens the picker. Harper ruled out the separate "More
+  # "+" that opens the picker. Sam ruled out the separate "More
   # reactions…" row these tests originally pinned: stage 3 puts a "+" beside
   # the same four emoji in the desktop hover row, and a labelled menu row on
   # touch against a glyph on pointer would be two ways to do one thing.
@@ -2634,7 +2634,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert strip_at < reply_at
 
       # The escape hatch is the "+" INSIDE the strip, not a labelled row of
-      # its own — Harper's ruling, and the shape stage 3 gives the desktop
+      # its own — Sam's ruling, and the shape stage 3 gives the desktop
       # hover row. So it must fall between the strip and "Reply in thread",
       # and the old bottom row must be gone entirely.
       more_at = :binary.match(html, ~s(id="message-actions-more-reactions")) |> elem(0)
@@ -3258,7 +3258,7 @@ defmodule PlatformWeb.ChatLiveTest do
     # verify the *wiring*: that :rendered_message_ids is maintained and
     # that participants_map mutations trigger the batched reinsert path.
     # The actual bug-resistance proof is a manual browser verification
-    # Marlowe does at PR time.
+    # Robin does at PR time.
 
     test "mount populates :rendered_message_ids matching the loaded message list",
          %{conn: conn} do
@@ -3745,7 +3745,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "hero-clipboard-document-list-mini"
     end
 
-    # Stage-4 review feedback (Rowan): the rail row label was the cryptic
+    # Stage-4 review feedback (Alex): the rail row label was the cryptic
     # synthesised `task-exec-<8-char-id>` space slug, so two pinned tasks
     # were indistinguishable. Row must render the real task title now.
     test "rail row renders the task title, not the cryptic exec-space slug",
@@ -3877,7 +3877,7 @@ defmodule PlatformWeb.ChatLiveTest do
       refute has_element?(view, "[aria-label='Pinned']")
     end
 
-    # ── Stage 4 fixup #2 (Rowan review): every viewer that sees a row can
+    # ── Stage 4 fixup #2 (Alex review): every viewer that sees a row can
     # unpin themselves without navigating to the task detail panel. Unpin is
     # participant-scoped (self only), so a sponsor's unpin does NOT drop other
     # participants' rows.
@@ -4164,7 +4164,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # to the slug directly). Before the fix, the exec-space slug resolved
   # to nil for org-membered viewers, `handle_params/3` push_navigated to
   # `/chat`, and the chat index rebounded to the first channel — the
-  # "loading bar but doesn't take me to the space" symptom Rowan filed.
+  # "loading bar but doesn't take me to the space" symptom Alex filed.
   #
   # These tests are disjoint from the pin-write coverage in PR #548's
   # "Pinned task-exec rail section" describe: they lock the OPEN flow
@@ -4210,7 +4210,7 @@ defmodule PlatformWeb.ChatLiveTest do
       active_space = :sys.get_state(view.pid).socket.assigns.active_space
       assert active_space.id == exec.id
       # display_name_for_space renders the task title in the header, so a
-      # sponsor viewer sees the human-readable task name (Rowan's stage-4
+      # sponsor viewer sees the human-readable task name (Alex's stage-4
       # fixup on the pinned-rail label).
       assert html =~ task.title
     end
@@ -4354,7 +4354,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # click actually posts to the `react` event: a row that displayed the right
   # glyph and sent a different string would fail here and pass a text check.
   # It also drops the picker "+" for free — that control carries no
-  # `phx-value-emoji`, which is the distinction Harper's ruling turns on.
+  # `phx-value-emoji`, which is the distinction Sam's ruling turns on.
   defp quick_row_emoji(html, selector) do
     html
     |> Floki.parse_document!()

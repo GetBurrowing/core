@@ -5,7 +5,7 @@ defmodule Platform.Federation.MemoryRenamePrefixTest do
   When BOTH paths are page-namespace prefixes ending in `/`, the tool routes
   to `Platform.Org.Wiki.rename_prefix/3`. That trailing-slash input is the
   only response this stage changes. Measured on the base
-  (`origin/stack/rbac-roles` 94dc8189, a probe run on moon) before the change:
+  (`origin/stack/rbac-roles` 94dc8189, a probe run on test-host) before the change:
 
     * Historian, pages under the prefix: `{:error, %{code: :not_found,
       error: "Page not found at path \\"org/page/eng/\\".", …}}` and the pages

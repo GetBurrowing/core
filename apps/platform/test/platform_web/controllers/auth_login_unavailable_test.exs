@@ -4,7 +4,7 @@ defmodule PlatformWeb.AuthLoginUnavailableTest do
   its provider (task 01a10322 stage 6): a readable 503, never a raise and
   never an inspected exception struct.
 
-  Measured on moon (release image 336bdefe, empty DB, 2026-10-09): a release
+  Measured on test-host (release image 336bdefe, empty DB, 2026-10-09): a release
   with no OIDC settings refuses to boot (`Platform.Config.validate!/0`), and
   one whose issuer is unreachable answered `/auth/login` with a 500 that
   printed `%Assent.ServerUnreachableError{...}`. The missing-settings branch

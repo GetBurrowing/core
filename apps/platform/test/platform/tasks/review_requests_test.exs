@@ -74,7 +74,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
         |> Repo.update!()
 
       {:ok, request} = create_request(%{ctx | task: task}, ["Desktop"])
-      {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "alex", "Needs work")
 
       assert Repo.get!(Task, task.id).status == "in_progress"
       assert Repo.get!(Validation, ctx.validation.id).status == "failed"
@@ -116,13 +116,13 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       ctx = %{ctx | task: task}
 
       {:ok, first} = create_request(ctx, ["Desktop"])
-      {:ok, _} = ReviewRequests.reject_item(hd(first.items).id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(hd(first.items).id, "alex", "Needs work")
 
       {:ok, retry} = create_request(ctx, ["Retried desktop"])
       assert Repo.get!(Validation, ctx.validation.id).status == "pending"
       assert Repo.get!(Stage, ctx.stage.id).status == "running"
 
-      assert {:ok, _} = ReviewRequests.approve_item(hd(retry.items).id, "rowan")
+      assert {:ok, _} = ReviewRequests.approve_item(hd(retry.items).id, "alex")
 
       passed = Repo.get!(Validation, ctx.validation.id)
       assert passed.status == "passed"
@@ -321,16 +321,16 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       [stale_item] = first.items
       {:ok, _second} = create_request(ctx, ["Fresh evidence"])
 
-      assert {:error, :request_superseded} = ReviewRequests.approve_item(stale_item.id, "rowan")
+      assert {:error, :request_superseded} = ReviewRequests.approve_item(stale_item.id, "alex")
 
       assert {:error, :request_superseded} =
-               ReviewRequests.reject_item(stale_item.id, "rowan", "nope")
+               ReviewRequests.reject_item(stale_item.id, "alex", "nope")
 
       # Anti-vacuity: the SAME calls against the live request succeed, so the
       # refusals above are about supersession and not about a broken fixture.
       {:ok, live} = create_request(ctx, ["Live evidence"])
       [live_item] = live.items
-      assert {:ok, approved} = ReviewRequests.approve_item(live_item.id, "rowan")
+      assert {:ok, approved} = ReviewRequests.approve_item(live_item.id, "alex")
       assert approved.status == "approved"
     end
 
@@ -344,7 +344,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       # still pending — WITHOUT going through `approve_item/2`, which would
       # settle the gate before supersession could be tested against it.
       Repo.get!(ReviewItem, stale_item.id)
-      |> ReviewItem.changeset(%{status: "approved", reviewed_by: "rowan"})
+      |> ReviewItem.changeset(%{status: "approved", reviewed_by: "alex"})
       |> Repo.update!()
 
       assert Repo.get!(ReviewRequest, first.id).status == "pending"
@@ -404,9 +404,9 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["Check A"])
       item = hd(request.items)
 
-      assert {:ok, updated} = ReviewRequests.approve_item(item.id, "rowan")
+      assert {:ok, updated} = ReviewRequests.approve_item(item.id, "alex")
       assert updated.status == "approved"
-      assert updated.reviewed_by == "rowan"
+      assert updated.reviewed_by == "alex"
       assert updated.reviewed_at != nil
     end
 
@@ -414,7 +414,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["A", "B"])
 
       for item <- request.items do
-        {:ok, _} = ReviewRequests.approve_item(item.id, "rowan")
+        {:ok, _} = ReviewRequests.approve_item(item.id, "alex")
       end
 
       # Request should be resolved
@@ -429,7 +429,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
     end
 
     test "returns error for nonexistent item" do
-      assert {:error, :not_found} = ReviewRequests.approve_item(Ecto.UUID.generate(), "rowan")
+      assert {:error, :not_found} = ReviewRequests.approve_item(Ecto.UUID.generate(), "alex")
     end
   end
 
@@ -441,11 +441,11 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       item = hd(request.items)
 
       assert {:ok, updated} =
-               ReviewRequests.reject_item(item.id, "rowan", "Button alignment is off")
+               ReviewRequests.reject_item(item.id, "alex", "Button alignment is off")
 
       assert updated.status == "needs_revision"
       assert updated.feedback == "Button alignment is off"
-      assert updated.reviewed_by == "rowan"
+      assert updated.reviewed_by == "alex"
       assert updated.reviewed_at != nil
     end
 
@@ -453,7 +453,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["Solo check"])
       item = hd(request.items)
 
-      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(item.id, "alex", "Needs work")
 
       resolved = ReviewRequests.get_review_request(request.id)
       assert resolved.status == "resolved"
@@ -471,7 +471,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       # this test used to reject through is no longer actionable. Disposition
       # the LIVE request instead.
       item = hd(request_b.items)
-      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(item.id, "alex", "Needs work")
 
       assert ReviewRequests.list_pending_for_task(ctx.task.id) == []
       assert ReviewRequests.get_review_request(request_b.id).status == "resolved"
@@ -491,7 +491,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(%{ctx | task: task}, ["Desktop"])
       item = hd(request.items)
 
-      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(item.id, "alex", "Needs work")
 
       assert Repo.get!(Task, task.id).status == "in_progress"
     end
@@ -504,9 +504,9 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["Desktop", "Mobile", "Tablet"])
       [item_a, item_b, item_c] = request.items
 
-      {:ok, _} = ReviewRequests.approve_item(item_a.id, "rowan")
-      {:ok, _} = ReviewRequests.approve_item(item_b.id, "rowan")
-      {:ok, _} = ReviewRequests.reject_item(item_c.id, "rowan", "Tablet layout broken")
+      {:ok, _} = ReviewRequests.approve_item(item_a.id, "alex")
+      {:ok, _} = ReviewRequests.approve_item(item_b.id, "alex")
+      {:ok, _} = ReviewRequests.reject_item(item_c.id, "alex", "Tablet layout broken")
 
       resolved = ReviewRequests.get_review_request(request.id)
       assert resolved.status == "resolved"
@@ -519,7 +519,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["Desktop", "Mobile", "Tablet"])
       [item_a | _rest] = request.items
 
-      {:ok, _} = ReviewRequests.reject_item(item_a.id, "rowan", "Desktop state is incorrect")
+      {:ok, _} = ReviewRequests.reject_item(item_a.id, "alex", "Desktop state is incorrect")
 
       resolved = ReviewRequests.get_review_request(request.id)
       assert resolved.status == "resolved"
@@ -536,7 +536,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       {:ok, request} = create_request(ctx, ["A", "B"])
 
       # Approve only one item
-      {:ok, _} = ReviewRequests.approve_item(hd(request.items).id, "rowan")
+      {:ok, _} = ReviewRequests.approve_item(hd(request.items).id, "alex")
 
       # Calling directly — second item is still pending and no rejection exists yet
       assert :not_yet == ReviewRequests.maybe_resolve_request(request.id)
@@ -577,7 +577,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
 
       for item <- request.items do
-        {:ok, _} = ReviewRequests.approve_item(item.id, "rowan")
+        {:ok, _} = ReviewRequests.approve_item(item.id, "alex")
       end
 
       assert_receive {:review_request_resolved, %{outcome: :passed, request_id: rid}}, 500
@@ -589,7 +589,7 @@ defmodule Platform.Tasks.ReviewRequestsTest do
       :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
 
       [item | _] = request.items
-      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
+      {:ok, _} = ReviewRequests.reject_item(item.id, "alex", "Needs work")
 
       assert_receive {:review_request_resolved, %{outcome: :failed, request_id: rid}}, 500
       assert rid == request.id
@@ -663,9 +663,9 @@ defmodule Platform.Tasks.ReviewRequestsTest do
     end
 
     test "an agent SLUG renders the agent's display name, not the raw slug", ctx do
-      agent = insert_agent("higgins-#{uniq()}", "Higgins Moon")
+      agent = insert_agent("higgins-#{uniq()}", "Higgins Test-Host")
 
-      assert requested_by(ctx, agent.slug) == "Higgins Moon"
+      assert requested_by(ctx, agent.slug) == "Higgins Test-Host"
       refute requested_by(ctx, agent.slug) == agent.slug
     end
 

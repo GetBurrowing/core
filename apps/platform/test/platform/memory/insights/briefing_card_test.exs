@@ -70,7 +70,7 @@ defmodule Platform.Memory.Insights.BriefingCardTest do
 
   test "sections: done lines get actions, questions get a form, needs-call is admin-only" do
     [b, q, c] = [
-      insight("briefing", "reversible", "Deploys moved to moon."),
+      insight("briefing", "reversible", "Deploys moved to host-b."),
       insight("question", "reversible", "Who owns the bucket?"),
       insight("page_edit", "needs_call", "Delete the old runbook.")
     ]

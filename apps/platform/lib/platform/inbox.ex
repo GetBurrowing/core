@@ -840,7 +840,7 @@ defmodule Platform.Inbox do
   Lazy reconciler: dismiss every live inbox row for `user_id` whose underlying
   subject can be POSITIVELY confirmed resolved.
 
-  Rowan's "simple & reliable" self-healing seam (no push coupling): rather than
+  The operator's "simple & reliable" self-healing seam (no push coupling): rather than
   chase every resolution path to dismiss the row it produced, callers run this
   at load so a stale row drops off on next view. Eager per-actor clearing
   (`Meetings.maybe_dismiss_meeting_inbox/2`, the rollup dismiss on the last

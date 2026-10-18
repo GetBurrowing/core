@@ -689,7 +689,7 @@ defmodule Platform.TenancyTest do
   # ── email-domain admin rule (stage 1 backfill migration) ────────────
   #
   # Exercises the SQL from
-  # `20260519160000_refine_acme_admin_membership_by_email_domain.exs`
+  # `20260519160000_refine_root_admin_membership_by_email_domain.exs`
   # by re-running it inside the test sandbox after inserting fixtures
   # with the email shapes we care about. The migration is ADDITIVE: it
   # promotes matching emails to :admin and never downgrades anyone.

@@ -1,9 +1,9 @@
 # Burrow design system — overview
 
-**Authored:** 2026-05-08 by saru-claude-clode for Marlowe's UI/UX audit + design system refinement.
+**Authored:** 2026-05-08 by saru-claude-clode for the design lead's UI/UX audit + design system refinement.
 **Source-of-truth document for:** the visual + interaction conventions the Burrow core platform follows. **Refined**, not invented — the existing system is DaisyUI 5 + Tailwind v4 + Public Sans on a Phoenix LiveView app, and this spec sharpens it rather than replacing it.
 
-> **Status:** Approved by Marlowe and committed to the repo 2026-06-01. After approval, Phase 3 produces mock variations against this system, then Phase 4 finalizes with HEEx component specs.
+> **Status:** Approved by the design lead and committed to the repo 2026-06-01. After approval, Phase 3 produces mock variations against this system, then Phase 4 finalizes with HEEx component specs.
 
 ## What this system is
 
@@ -14,7 +14,7 @@ A canonical specification for:
 - **Voice** — copy guidance, button verbs, error messages, agent-native empty states ([`03-voice.md`](./03-voice.md))
 - **Accessibility** — focus rings, target sizes, motion, keyboard interaction ([`04-accessibility.md`](./04-accessibility.md))
 
-After Gate 3 (Marlowe picks variations), Phase 4 adds:
+After Gate 3 (the design lead picks variations), Phase 4 adds:
 - `05-app-css-diff.md` — proposed daisyui-theme diff (NOT applied — proposed only)
 - `components/[name].md` — per-component HEEx specs
 - `IMPLEMENTATION.md` — ordered fix list with effort estimates
@@ -31,11 +31,11 @@ After Gate 3 (Marlowe picks variations), Phase 4 adds:
 
 | Decision                                                                  | Source                              | Status         |
 |---------------------------------------------------------------------------|--------------------------------------|----------------|
-| Canonical term for the chat-entity primitive: **`space`**                  | Marlowe, 2026-05-08, resolves `1A-IA-DRIFT-1` | Pinned         |
-| "Channels" and "DMs" remain as section labels / kinds-of-space in copy   | Marlowe, 2026-05-08                    | Pinned         |
+| Canonical term for the chat-entity primitive: **`space`**                  | The design lead, 2026-05-08, resolves `1A-IA-DRIFT-1` | Pinned         |
+| "Channels" and "DMs" remain as section labels / kinds-of-space in copy   | The design lead, 2026-05-08                    | Pinned         |
 | Bigger-picture: data model is already `space` — UI vocabulary aligns to it | Implicit; matches codebase + MCP    | Confirmed      |
 
-Additional canonical-term picks (DRIFT-2/3/4) are deferred to `03-voice.md` for Marlowe's call.
+Additional canonical-term picks (DRIFT-2/3/4) are deferred to `03-voice.md` for the design lead's call.
 
 ## How Phase 1 findings map to this system
 
@@ -47,21 +47,21 @@ Additional canonical-term picks (DRIFT-2/3/4) are deferred to `03-voice.md` for 
 | `1B-A11Y-6` — no button-loading state                                             | `02-components.md` Button (loading) |
 | `1B-A11Y-2` — 7 icon-only buttons missing accessible names                        | `02-components.md` IconButton     |
 | `1B-VIS-2` — `<.input>` used once; bare inputs everywhere                          | `02-components.md` Input + Form patterns |
-| `1B-USE-3` — empty states lack agent-native context (Marlowe: connect-agent + add-to-space) | `03-voice.md` empty-state pattern |
+| `1B-USE-3` — empty states lack agent-native context (the design lead: connect-agent + add-to-space) | `03-voice.md` empty-state pattern |
 | `1A-IA-DRIFT-2..4` — naming drift remaining after DRIFT-1 resolved                | `03-voice.md` canonical-term map  |
 | `1B-A11Y-3` — `prefers-reduced-motion` narrowly scoped (best-practice)          | `04-accessibility.md` motion rule |
 | `1A-COMP-RATIO-1` — only 3 component modules + 15 distinct invocations            | `02-components.md` consolidation roadmap |
 
 ## Reading order
 
-For Marlowe: **start with `02-components.md`** if you only have time for one — it's where the audit's biggest leverage lives (consolidation roadmap). Then `03-voice.md` for empty-state copy direction. `01-foundations.md` and `04-accessibility.md` are mostly verification + token diffs.
+For the design lead: **start with `02-components.md`** if you only have time for one — it's where the audit's biggest leverage lives (consolidation roadmap). Then `03-voice.md` for empty-state copy direction. `01-foundations.md` and `04-accessibility.md` are mostly verification + token diffs.
 
 For Phase 2 reviewers: read in file order (00 → 04). Each subsequent file builds on the prior.
 
 ## What this system does NOT cover
 
 - **Marketing site / public landing pages** — out of scope; the audit was mobile-first product scope.
-- **Admin / Control Center / Org-context surfaces** — Marlowe excluded these from the audit. Phase 4 may file follow-up tasks if these surfaces would benefit from the same system.
+- **Admin / Control Center / Org-context surfaces** — the design lead excluded these from the audit. Phase 4 may file follow-up tasks if these surfaces would benefit from the same system.
 - **Email / push-notification visual templates** — separate concern, not refined here.
 - **Print / PDF rendering** — n/a.
 

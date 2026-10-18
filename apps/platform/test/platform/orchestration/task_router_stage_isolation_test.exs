@@ -3,7 +3,7 @@ defmodule Platform.Orchestration.TaskRouterStageIsolationTest do
   End-to-end integration coverage for the stage-scoped lease + blocker
   contract shipped by task 019f6791. Where the per-module unit tests
   (`task_router_test.exs`, `runtime_supervision_test.exs`) exercise
-  each helper in isolation, this suite drives the full sequence Rowan
+  each helper in isolation, this suite drives the full sequence Alex
   observed on task 019f6380 through the public API surface:
 
     * `Tasks.broadcast_board({:stage_transitioned, stage})` +

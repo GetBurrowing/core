@@ -6,7 +6,7 @@ defmodule PlatformWeb.ChatLiveRowReorderTest do
   Coverage:
     * edit-mode rows are not navigation links (mis-tap can no longer
       eject the user from edit mode)
-    * every edit-mode row shows its ▲▼ pair persistently (Marlowe a11y
+    * every edit-mode row shows its ▲▼ pair persistently (Robin a11y
       request 2026-07-09, reversing the July 6 select-to-reveal design)
     * ▼/▲ reorder within the section via the EXISTING move_channel
       pipeline and persist across a remount (chat_channel_order pref)
@@ -102,7 +102,7 @@ defmodule PlatformWeb.ChatLiveRowReorderTest do
              ),
              "Edit-mode rows must not be navigation links"
 
-      # ▲▼ are persistent on every row — no tap-to-reveal step (Marlowe a11y
+      # ▲▼ are persistent on every row — no tap-to-reveal step (Robin a11y
       # request 2026-07-09; matches the section headers' always-on chevrons).
       assert has_element?(view, ~s(#{row_selector(ch1)} .channel-row-move-controls--touch)),
              "First row must show its move buttons without any interaction"

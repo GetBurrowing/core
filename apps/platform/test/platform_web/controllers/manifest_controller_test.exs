@@ -297,5 +297,29 @@ defmodule PlatformWeb.ManifestControllerTest do
 
       assert icon(body, "maskable") == maskable
     end
+
+    test "an icon reset moves all three icon srcs back to /images/ (task 01a14b9e stage 6)",
+         %{conn: conn} do
+      admin = admin!()
+
+      {:ok, branding} =
+        Branding.put_source(admin, {:binary, solid_png([200, 30, 40])}, content_type: "image/png")
+
+      {_conn, uploaded} = render(conn)
+      assert hd(uploaded["icons"])["src"] == "/branding/#{branding.version}/icon_192"
+
+      {:ok, _} = Branding.reset_source(admin)
+
+      {_conn, body} = render(conn)
+
+      assert Enum.map(body["icons"], & &1["src"]) == [
+               "/images/icon-192.png",
+               "/images/icon-512.png",
+               "/images/icon-512-maskable.png"
+             ]
+
+      refute Enum.any?(body["icons"], &String.starts_with?(&1["src"], "/branding/"))
+      assert Branding.icon_url(:icon_192) == "/images/icon-192.png"
+    end
   end
 end

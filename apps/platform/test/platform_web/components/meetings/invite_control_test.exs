@@ -148,7 +148,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
         control(
           candidates: [
             user("11111111-0000-4000-8000-000000000001", "Dalton", "dalton@example.test"),
-            user("11111111-0000-4000-8000-000000000002", "Marlowe", "marlowe@example.test")
+            user("11111111-0000-4000-8000-000000000002", "Robin", "robin@example.test")
           ],
           email_option: nil
         )
@@ -473,9 +473,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
     end
 
     test "the name is the element's own text, not a match anywhere on the row" do
-      html = row(internal_entry(name: "Rowan Ellis", subtitle: "host"), mode: :live)
+      html = row(internal_entry(name: "Alex Rivera", subtitle: "host"), mode: :live)
 
-      assert text_at(html, "[data-role=meeting-invite-row-name]") == "Rowan Ellis"
+      assert text_at(html, "[data-role=meeting-invite-row-name]") == "Alex Rivera"
     end
   end
 

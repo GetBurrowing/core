@@ -56,10 +56,10 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptAgentRosterOnU
   slugs (`heartbeat`, `historian.scheduled`, the three `design.*.v1` rows),
   so neither was assumed to stand for the other.
 
-  | | fabrikam (`core-postgres` / `core_platform`) | milv (`milv-postgres` / `milv_platform`) |
+  | | install A (`core-postgres` / `core_platform`) | install B (`installb-postgres` / `installb_platform`) |
   |---|---|---|
   | `updated_at` | 2026-09-03 08:23:49.764041Z | 2026-09-03 20:16:11.043652Z |
-  | `updated_by` | `86149c7d-1e45-42aa-a250-1e190e169341` (Rowan) | NULL |
+  | `updated_by` | `86149c7d-1e45-42aa-a250-1e190e169341` (the operator) | NULL |
   | `inserted_at` | 2026-07-08 14:39:03Z | 2026-09-03 20:16:10Z |
   | bytes | 8311 | 8311 |
   | sha256 | `66b75c4467048314cdbded4ee3d3770d9e6bc455b09f37eae38a5ed929796b80` | same |
@@ -67,7 +67,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptAgentRosterOnU
 
   Both live rows are **byte-identical to the 09-02 heredoc** — not merely
   equal under `diff -w -B`, but the same sha256 this migration's base was
-  extracted from. Rowan's uuid on the fabrikam row is a UI re-save, not a hand
+  extracted from. The operator's uuid on the install A row is a UI re-save, not a hand
   edit: `updated_by` names the last SAVER, never the author of the content.
   Nothing in either row is absent from the 09-02 heredoc, so nothing is
   destroyed by overwriting, and the stop condition (an install carrying

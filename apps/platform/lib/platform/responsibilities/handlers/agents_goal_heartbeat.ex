@@ -24,9 +24,9 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   ## Which tasks are counted: the goal's project scope (task `01a0ca9f`)
 
-  Install-wide by default. Rowan, 2026-09-22: "we need to scope the tasks
+  Install-wide by default. Product decision, 2026-09-22: "we need to scope the tasks
   just to the Job Hunt project, not all tasks across all projects" --
-  measured on milv the same day, the install-wide "31 open tasks" was 28
+  measured on a second install the same day, the install-wide "31 open tasks" was 28
   Job Hunt tasks plus 3 from an unrelated project, so the number moved
   with work that had nothing to do with the goal.
 
@@ -149,7 +149,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   ## The heartbeat drives; it does not report
 
-  Rowan, 2026-09-22: "this is just a way to make sure that our assigned
+  Product decision, 2026-09-22: "this is just a way to make sure that our assigned
   agent gets regular prods saying, keep working towards this goal, and
   you have no agents to delegate to, so this is on you to manage." The
   first live fire of the status-report version was answered with three
@@ -188,7 +188,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
 
   Task `01a0caa5`: "pick the open item ... and work it" is the right
   prod for a goal that shrinks a count and the wrong one for a goal that
-  grows one (milv's job-board backlog has no open item to pick). The
+  grows one (the second install's job-board backlog has no open item to pick). The
   gather reads `goal_direction/1` from the goal text -- a CLOSED,
   word-bounded match, not a parser -- and passes it to
   `drive_instruction/2`, and the context carries it as `goal_direction`:
@@ -400,7 +400,7 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
         key: @key,
         feature: @feature,
         trigger_kind: "cron",
-        # Top of every hour. Rowan, 2026-09-22: "that heartbeat should fire
+        # Top of every hour. Product decision, 2026-09-22: "that heartbeat should fire
         # every hour at minimum. You need to be regularly reminded of your
         # goal." Dispatch is gated by the `agents_leader` role assignee via
         # `Roles.assignee_for/1` in the Router, so with no leader pinned this

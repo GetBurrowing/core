@@ -70,7 +70,7 @@ defmodule Platform.Chat.SidebarMask do
       space slug in the URL bar still carry real slugs. Rendered text,
       `aria-label`s and the accessibility tree do not.
     * **The letter sequence.** `Workspace A..F` publishes the section COUNT
-      and the rail's display ORDER. Explicitly accepted by Harper Parker.
+      and the rail's display ORDER. Explicitly accepted by Sam Taylor.
     * **Colour dots.** Section colours are unchanged and are a weak
       fingerprint across sessions.
     * **Message bodies, canvases, task titles, uploaded file names.** Out of

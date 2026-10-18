@@ -207,8 +207,8 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       assert "space_get_context" in ToolAuthorization.tool_names(runtime)
     end
 
-    test "no longer grants space or memory (round 3 of Dalton's live moon run, task 01a0d4a0 stage 5)" do
-      # Dalton's third live moon run against 2312d761 found the seeded row
+    test "no longer grants space or memory (round 3 of Dalton's live test-host run, task 01a0d4a0 stage 5)" do
+      # Dalton's third live test-host run against 2312d761 found the seeded row
       # still granting `memory_create`/`memory_delete`/`memory_rename`/
       # `memory_str_replace`, `space_create`, `space_leave`, and `dm_create`
       # — none of which a single-purpose meeting assistant has any business
@@ -238,7 +238,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
     end
 
     test "does NOT allow mail_draft_create even with the Mail module enabled (task 01a0d4a0 stage 4 round 2)" do
-      # Regression for Dalton's live moon run (rollup space 01a0b5bf): before
+      # Regression for Dalton's live test-host run (rollup space 01a0b5bf): before
       # `mail` was split out of the `messaging` bundle
       # (`Platform.Federation.ToolSurface`), this runtime's `messaging` grant
       # implicitly carried `mail_draft_create`/`mail_draft_update` too, and
@@ -263,7 +263,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       refute "mail_draft_create" in ToolAuthorization.tool_names(runtime)
     end
 
-    # Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item 4): the
+    # Task 01a0f842 stage 4 (round 2 of Sam's Burrow ticket, item 4): the
     # fix for "Burrow attempts canvas/task work herself instead of routing
     # it" is a prompt change in services/meeting-voice-agent's config.py,
     # NOT a re-scope of tool_profile -- canvas (the write bundle), task,
@@ -318,7 +318,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
 
   # ── Burrow cannot be an meeting-intent-dispatch target (task 01a0f842 stage 3) ──
   #
-  # Round 2 of Harper's Burrow ticket asked us to confirm
+  # Round 2 of Sam's Burrow ticket asked us to confirm
   # `Platform.Meetings.IntentClassifier`/`IntentDispatcher` — the background
   # pipeline that classifies EVERY live transcript chunk for the
   # task-filing/candidate-rail feature, regardless of Ask-floor state — can

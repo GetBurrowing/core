@@ -4,7 +4,7 @@ Mac-only by nature. Everything here runs through a ``Host`` so tests on Linux
 exercise it with a recording fake; one test (skipped off Darwin) round-trips a
 real Keychain item.
 
-Keychain contract (task 01a0d6ab, Rowan 2026-09-25):
+Keychain contract (task 01a0d6ab, product decision 2026-09-25):
 - items live in the login Keychain under service ``suite-install.<install.name>``,
   account = the item name the CLI was given (``keychain:<item>``);
 - a value is WRITTEN through ``security -i`` reading its command from stdin,

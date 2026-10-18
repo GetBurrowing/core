@@ -72,7 +72,7 @@ defmodule Platform.Chat.Sidebar do
   row of its own in `channel_sections` and the cascade never touched it. So the
   channels correctly vanished while the org's section header kept rendering
   above an empty "No channels yet" placeholder — the org looked half-deleted.
-  Marlowe hit this walking the review.
+  The designer hit this walking the review.
 
   Mirrors `Tenancy.list_tenants/0` vs `list_active_tenants_unscoped/0`: the data API
   keeps returning every row; only the render path filters. Restoring the org
@@ -297,7 +297,7 @@ defmodule Platform.Chat.Sidebar do
   and flat ones (the mobile pills strip): both consume the same resolver
   output, so they cannot drift. Because the input is the resolver's
   hidden-filtered result, hidden channels/sections are absent here too —
-  hidden means hidden everywhere (Marlowe's decision, 2026-07-05).
+  hidden means hidden everywhere (the design decision, 2026-07-05).
   """
   @spec flatten_sections([resolved()]) :: [Chat.Space.t()]
   def flatten_sections(sections), do: Enum.flat_map(sections, & &1.channels)

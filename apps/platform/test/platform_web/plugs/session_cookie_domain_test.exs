@@ -30,7 +30,7 @@ defmodule PlatformWeb.Plugs.SessionCookieDomainTest do
   ]
 
   @cookie_key "_platform_session"
-  @prod_domain ".example.com"
+  @prod_domain ".example.net"
 
   setup do
     on_exit(fn ->
@@ -44,7 +44,7 @@ defmodule PlatformWeb.Plugs.SessionCookieDomainTest do
     :ok
   end
 
-  describe "domain configured (prod: SESSION_COOKIE_DOMAIN=.example.com)" do
+  describe "domain configured (prod: SESSION_COOKIE_DOMAIN=.example.net)" do
     setup do
       Application.put_env(:platform, :session_cookie_domain, @prod_domain)
       :ok
@@ -60,7 +60,7 @@ defmodule PlatformWeb.Plugs.SessionCookieDomainTest do
 
       set_cookie = raw_set_cookie(conn)
       down = String.downcase(set_cookie)
-      assert down =~ "domain=.example.com"
+      assert down =~ "domain=.example.net"
       assert down =~ "samesite=lax"
       assert down =~ "httponly"
     end

@@ -19,7 +19,7 @@ defmodule Platform.Federation.PlayTools do
   ## The bundle is NOT a default grant
 
   `play` is grantable (`AgentRuntime.valid_bundles/0`) but absent from
-  `@default_allowed_bundles`: it drives a physical GPU on Rowan's LAN
+  `@default_allowed_bundles`: it drives a physical GPU on the operator's LAN
   machine, so only a runtime an admin deliberately granted it can see or
   call these tools.
   """

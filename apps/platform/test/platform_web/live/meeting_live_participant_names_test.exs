@@ -152,7 +152,7 @@ defmodule PlatformWeb.MeetingLiveParticipantNamesTest do
   describe "data-participant-names" do
     setup %{conn: conn} do
       {meeting, space, room} = meeting!()
-      host = human!(room, "Rowan")
+      host = human!(room, "Alex")
       burrow = burrow!()
       invite = invite_row!(room, burrow)
 
@@ -203,7 +203,7 @@ defmodule PlatformWeb.MeetingLiveParticipantNamesTest do
           %{participant_type: "agent", identity: "agent-AJ_x", display_name: "Burrow"},
           %{participant_type: "agent", identity: nil, display_name: "Pending"},
           %{participant_type: "agent", identity: "agent:blank", display_name: "  "},
-          %{participant_type: "user", identity: "user:1", display_name: "Marlowe"},
+          %{participant_type: "user", identity: "user:1", display_name: "Robin"},
           %{participant_type: "user", identity: "zzz:stranger", display_name: nil}
         ])
 
@@ -219,7 +219,7 @@ defmodule PlatformWeb.MeetingLiveParticipantNamesTest do
   describe "rail status while a voice agent speaks" do
     setup %{conn: conn} do
       {meeting, _space, room} = meeting!()
-      _host = human!(room, "Rowan")
+      _host = human!(room, "Alex")
       burrow = burrow!()
       _invite = invite_row!(room, burrow)
 

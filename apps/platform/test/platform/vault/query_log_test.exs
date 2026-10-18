@@ -2,7 +2,7 @@ defmodule Platform.Vault.QueryLogTest do
   @moduledoc """
   Task 01a131c5 stage 2: Ecto's :debug query log renders CAST params, so an
   INSERT/UPDATE carrying the Cloak-typed `encrypted_data` field printed the
-  plaintext secret into the server log. Measured on the dev-on-moon rig: one
+  plaintext secret into the server log. Measured on the dev-on-test-host rig: one
   `INSERT INTO "vault_credentials"` line held the e2e canary verbatim.
 
   Every write carrying `encrypted_data` now passes `log: false`. The positive

@@ -1,6 +1,6 @@
 defmodule Platform.Responsibilities.NativeDispatchSpaceTest do
   @moduledoc """
-  The Router half of the meeting-intent invite fix (2026-08-01, Rowan's DM
+  The Router half of the meeting-intent invite fix (2026-08-01, Alex's DM
   — no task behind it).
 
   ## What is under test

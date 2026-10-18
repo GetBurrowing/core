@@ -7,7 +7,7 @@
 > `apps/platform/priv/measurements/01a0cf85-dark-token-diff/results-burrow-01a120c5.json`.
 
 **Decision document, task 01a0cf85.** Every dark-theme token, live Suite
-against the meetings desktop mock, with a recommendation per token for Marlowe to
+against the meetings desktop mock, with a recommendation per token for the design lead to
 approve or reject row by row. **Nothing here is applied.** No `app.css` value
 changes in this task. Any recolour is a separate follow-up task, created only
 for the rows that are signed.

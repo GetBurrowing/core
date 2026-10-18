@@ -19,7 +19,7 @@ What is pinned here, each check with a positive control:
   byte for byte (the image ships those files).
 
 The network reach itself (agent host -> core-platform yes, -> Postgres no) is a
-property of podman/docker, not of this renderer, and is measured on moon by
+property of podman/docker, not of this renderer, and is measured on test-host by
 services/agent-host/test/contained/reachability.sh.
 """
 
@@ -34,17 +34,17 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(INSTALLER))
-EXAMPLE = os.path.join(REPO, "deployment", "examples", "moon-equivalent.install.toml")
+EXAMPLE = os.path.join(REPO, "deployment", "examples", "single-host.install.toml")
 MAC = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
 FIXTURES = os.path.join(HERE, "render_fixtures")
-FULL = os.path.join(FIXTURES, "moon-equivalent-agents-full.toml")
-CONTAINED = os.path.join(FIXTURES, "moon-equivalent-agents-contained.toml")
+FULL = os.path.join(FIXTURES, "single-host-agents-full.toml")
+CONTAINED = os.path.join(FIXTURES, "single-host-agents-contained.toml")
 AGENT_HOST_DIR = os.path.join(REPO, "services", "agent-host")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
 sys.path.insert(0, INSTALLER)
 
-from suite_install import agents, registry
+from suite_install import agents
 from suite_install.manifest import load
 from suite_install.render import RenderError, build
 from suite_install.validate import validate
@@ -323,6 +323,7 @@ class FullMachineTest(unittest.TestCase):
     def test_registry_source_needs_registry_auth_for_the_agent_host_image(self):
         raw = load(FULL)
         raw["images"] = {
+            "image_namespace": "example",
             "source": "registry",
             "refs": {"core-platform": "registry.example.com/suite-core:1"},
         }
@@ -382,7 +383,7 @@ class ContainedTest(unittest.TestCase):
 
     def test_agent_host_runs_systemd_with_persistent_homes(self):
         block = self.services["agent-host"]
-        self.assertIn(f'image: "{registry.AGENT_HOST_IMAGE}"', block)
+        self.assertIn('image: "docker.io/example/suite-agent-host:latest"', block)
         self.assertIn('stop_signal: "SIGRTMIN+3"', block)
         self.assertIn('- "agent-homes:/home"', block)
         self.assertIn('- "/run"', block)
@@ -425,8 +426,9 @@ class PackagingTest(unittest.TestCase):
         self.assertIn('git diff --quiet "$BEFORE" "$GITHUB_SHA" -- services/agent-host', job)
         push = job.split("- name: Build and push agent-host\n", 1)[1]
         self.assertIn("if: steps.changed.outputs.agent_host == 'true'", push)
-        self.assertIn("docker.io/example/suite-agent-host:latest", push)
-        self.assertIn("docker.io/example/suite-agent-host:${{ github.sha }}", push)
+        hub = "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host"
+        self.assertIn(f"{hub}:latest", push)
+        self.assertIn(f"{hub}:${{{{ github.sha }}}}", push)
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
 
 

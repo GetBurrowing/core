@@ -200,7 +200,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
           %{
             "task_id" => task.id,
             "stage_id" => stage.id,
-            "subagent_id" => "higgins.moon"
+            "subagent_id" => "higgins.test-host"
           },
           %{runtime_id: @owner}
         )
@@ -216,7 +216,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert event.event_type == "execution.acked"
       assert event.task_id == task.id
       assert event.payload["stage_id"] == stage.id
-      assert event.payload["subagent_id"] == "higgins.moon"
+      assert event.payload["subagent_id"] == "higgins.test-host"
     end
 
     test "extends the LeaseManager safety-net past the initial dispatch deadline",
@@ -235,7 +235,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
           %{
             "task_id" => task.id,
             "stage_id" => stage.id,
-            "subagent_id" => "higgins.moon"
+            "subagent_id" => "higgins.test-host"
           },
           %{runtime_id: @owner}
         )
@@ -257,7 +257,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:ok, result} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task.id, "subagent_id" => "higgins.moon"},
+          %{"task_id" => task.id, "subagent_id" => "higgins.test-host"},
           %{}
         )
 
@@ -286,7 +286,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task2.id, "subagent_id" => "higgins.moon"},
+          %{"task_id" => task2.id, "subagent_id" => "higgins.test-host"},
           %{}
         )
 
@@ -306,7 +306,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => planning_task.id, "subagent_id" => "x.moon"},
+          %{"task_id" => planning_task.id, "subagent_id" => "x.test-host"},
           %{}
         )
 
@@ -339,7 +339,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => review_task.id, "subagent_id" => "x.moon"},
+          %{"task_id" => review_task.id, "subagent_id" => "x.test-host"},
           %{}
         )
 
@@ -353,7 +353,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => Ecto.UUID.generate(), "subagent_id" => "higgins.moon"},
+          %{"task_id" => Ecto.UUID.generate(), "subagent_id" => "higgins.test-host"},
           %{}
         )
 
@@ -368,7 +368,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
     # make the assertion pass for the wrong reason.
     test "returns error when task_id is missing entirely" do
       {:error, err} =
-        ToolArguments.dispatch("task_ack", %{"subagent_id" => "higgins.moon"}, %{})
+        ToolArguments.dispatch("task_ack", %{"subagent_id" => "higgins.test-host"}, %{})
 
       assert err.error =~ "task_id is required"
       assert err.code == :missing_task_id
@@ -391,7 +391,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
           %{
             "task_id" => task.id,
             "stage_id" => stage.id,
-            "subagent_id" => "higgins.moon"
+            "subagent_id" => "higgins.test-host"
           },
           %{runtime_id: task_runtime!("runtime-boot-race-#{System.unique_integer([:positive])}")}
         )
@@ -469,7 +469,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       :ok
     end
 
-    test "accepts openclaw runtime slug shape (higgins.moon)",
+    test "accepts openclaw runtime slug shape (higgins.test-host)",
          %{task: task, stage: stage} do
       {:ok, result} =
         ToolSurface.execute(
@@ -477,13 +477,13 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
           %{
             "task_id" => task.id,
             "stage_id" => stage.id,
-            "subagent_id" => "higgins.moon"
+            "subagent_id" => "higgins.test-host"
           },
           %{runtime_id: @owner}
         )
 
       event = Repo.get!(RuntimeEvent, result.event_id)
-      assert event.payload["subagent_id"] == "higgins.moon"
+      assert event.payload["subagent_id"] == "higgins.test-host"
     end
 
     test "accepts Claude Code Task-tool agentId shape (hex)",
@@ -622,7 +622,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
     defp ack_with_stage(task_id, stage_id) do
       ToolSurface.execute(
         "task_ack",
-        %{"task_id" => task_id, "stage_id" => stage_id, "subagent_id" => "higgins.moon"},
+        %{"task_id" => task_id, "stage_id" => stage_id, "subagent_id" => "higgins.test-host"},
         %{}
       )
     end

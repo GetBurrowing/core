@@ -102,14 +102,14 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       _behind = enqueue!(meeting_id)
 
       {:ok, result} =
-        ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "working"})
+        ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "working"})
 
       assert result.intent_id == row.id
       assert result.meeting_id == meeting_id
       # The word you send is not the word you get back: `working` is
       # what the runtime did, `:acked` is what the queue now believes.
       assert result.status == :acked
-      assert result.subagent_id == "higgins.moon"
+      assert result.subagent_id == "higgins.test-host"
       assert %DateTime{} = result.acked_at
 
       # Still holding the queue open — the target confirmed a spawn,
@@ -121,10 +121,10 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     test "completed advances the cursor", %{meeting_id: meeting_id} do
       row = dispatch!(meeting_id)
 
-      {:ok, _} = ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "working"})
+      {:ok, _} = ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "working"})
 
       {:ok, result} =
-        ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "completed"})
+        ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "completed"})
 
       assert result.status == :completed
       assert IntentQueue.cursor(meeting_id) == nil
@@ -370,7 +370,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     test "unknown intent_id is :not_found and unrecoverable" do
       {:error, err} =
         ack(Platform.Types.UUIDv7.generate(), %{
-          "subagent_id" => "higgins.moon",
+          "subagent_id" => "higgins.test-host",
           "status" => "working"
         })
 
@@ -387,7 +387,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       # to ack, and pretending otherwise would mean resurrecting state
       # the ETS-ephemeral rule deliberately doesn't keep.
       {:error, err} =
-        ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "working"})
+        ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "working"})
 
       assert err.error =~ "Intent not found"
     end
@@ -401,7 +401,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       {:error, err} =
         ToolArguments.dispatch(
           "intent_ack",
-          %{"status" => "working", "subagent_id" => "higgins.moon"},
+          %{"status" => "working", "subagent_id" => "higgins.test-host"},
           %{}
         )
 
@@ -413,7 +413,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     test "an unrecognised status is rejected with the allowed set", %{meeting_id: meeting_id} do
       row = dispatch!(meeting_id)
 
-      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "finished"})
+      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "finished"})
 
       assert err.error =~ "status must be one of"
       assert err.error =~ "cancel_honored"
@@ -424,7 +424,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     test "a missing status is rejected", %{meeting_id: meeting_id} do
       row = dispatch!(meeting_id)
 
-      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.moon"})
+      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.test-host"})
 
       assert err.error =~ "status must be one of"
     end
@@ -432,7 +432,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     test "acking a queued intent is :invalid_ack_state", %{meeting_id: meeting_id} do
       row = enqueue!(meeting_id)
 
-      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.moon", "status" => "working"})
+      {:error, err} = ack(row.id, %{"subagent_id" => "higgins.test-host", "status" => "working"})
 
       assert err.error =~ "queued"
       assert err.recoverable == false

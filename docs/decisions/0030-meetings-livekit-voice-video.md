@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-03-26
-- **Owners:** Rowan Ellis
+- **Owners:** the product owner
 
 ## Context
 
@@ -12,11 +12,11 @@ Discord-style persistent voice/video channels are a natural extension: users dro
 
 ### Existing Infrastructure
 
-- **LiveKit 1.9.11** already runs on hive (`~/docker/stacks/livekit/`)
+- **LiveKit 1.9.11** already runs on build-host (`~/docker/stacks/livekit/`)
 - **SIP trunk** (Telnyx) with phone number `+1 555-010-0100` for inbound/outbound calls
 - **Voice agent SDK** (Python, LiveKit Agents SDK 1.4.4) already handles phone-based agent conversations
 - **LiveKit Egress** available for recording
-- **LiveKit MCP** at `http://192.0.2.234:8090/mcp/` for room management
+- **LiveKit MCP** at `http://192.0.2.12:8090/mcp/` for room management
 
 The infrastructure exists. This decision is about how Burrow consumes it.
 

@@ -2,8 +2,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateEvidenceTemplatesForCdp do
   use Ecto.Migration
 
   @moduledoc """
-  Switches the dispatch evidence-capture flow from rock-node-screenshot
-  (`openclaw nodes canvas navigate/snapshot --node Rock`) to a hive-local
+  Switches the dispatch evidence-capture flow from the macOS node-screenshot
+  skill (`openclaw nodes canvas navigate/snapshot --node <mac node>`) to a workstation-local
   headless Chrome via CDP at 127.0.0.1:9222 (driven by the new
   `apps/platform/priv/scripts/cdp_capture.sh` helper).
 

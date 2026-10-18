@@ -66,7 +66,7 @@ class AvatarPresentTest {
 
     private fun withAvatar(
         data: Map<String, String?> = mention,
-        url: String = avatars.url("/idp/harper.png"),
+        url: String = avatars.url("/idp/sam.png"),
         tone: String = "4",
     ): Map<String, String?> = data + ("author_avatar_url" to url) + ("author_avatar_tone" to tone)
 

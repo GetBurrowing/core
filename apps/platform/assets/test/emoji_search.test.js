@@ -116,7 +116,7 @@ describe("rankEmoji against the shipped dataset", () => {
     expect(rankEmoji("   ", REAL)).toEqual([])
   })
 
-  // SKIN TONE. The inventory ships neutral forms only (Marlowe's
+  // SKIN TONE. The inventory ships neutral forms only (Robin's
   // no-personalisation decision, stage 1), but the generator kept the CLDR tone
   // keywords, so a tone term the user can see is real must land on the neutral
   // emoji rather than on the empty state.

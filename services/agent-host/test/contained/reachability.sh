@@ -1,17 +1,17 @@
 #!/bin/bash
 # The `contained` profile's network reach, measured on podman (core task
-# 01a10322 stage 3). Run on moon, never on hive:
+# 01a10322 stage 3). Run on test-host, never on build-host:
 #
 #   reachability.sh <agent-host image> [strict|true|none]
 #
-# Builds a throwaway copy of moon's topology, every name carrying the task id:
+# Builds a throwaway copy of test-host's topology, every name carrying the task id:
 #   suite net   : a Postgres standing in for core-postgres, and core-platform
 #   agents net  : core-platform (on BOTH nets) and the agent-host image
 # core-platform is a stand-in HTTP server on :4000 (the reach is a property of
 # the networks, not of core). The agents network is created with
 # isolate=strict, as core-ops' agents.network does. `true` and `none` measure
 # the same topology with the weaker settings: both let the agent host reach
-# Postgres BY IP (measured 2026-10-09, podman 5.6.2 rootless on moon), so each
+# Postgres BY IP (measured 2026-10-09, podman 5.6.2 rootless on test-host), so each
 # is the mutation under which the by-IP probes must go red. isolate=true only
 # blocks traffic between networks that BOTH set it; strict blocks it to every
 # other network.

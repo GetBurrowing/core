@@ -39,7 +39,7 @@ REFERENCE_TARGET_LABEL = "Brosnan's 31 December voice-latency deadline"
 #: raising or returning NaN/-inf that would poison a comparison.
 SILENCE_DBFS_FLOOR = -120.0
 
-#: Dalton's working value from the live moon run this fixes (rollup space
+#: the working value from the live test run this fixes (rollup space
 #: 01a0b5bf): loud enough to be real speech, quiet enough not to miss a
 #: quiet response. The agent's LiveKit audio track publishes a frame every
 #: ~20ms whether or not it is actually speaking (see
@@ -77,7 +77,7 @@ def is_audio_frame_loud(samples, threshold_dbfs: float = DEFAULT_ENERGY_GATE_DBF
 
     This is the fix for the harness bug where "first audio frame" fired on
     the agent's very first (silent) keepalive frame, reporting a nonsense
-    ~7ms median instead of a real latency (Dalton's moon run, rollup space
+    ~7ms median instead of a real latency (a live test run, rollup space
     01a0b5bf) — gate on measured energy, not mere frame arrival.
     """
     return samples_dbfs(samples) >= threshold_dbfs
@@ -92,7 +92,7 @@ def sample_with_tool_call(
     """Return a copy of `sample` recording that a tool call was actually observed.
 
     Fixes the harness bug where `LatencySample.tool_call` was always `False`
-    because nothing ever set it (Dalton's moon run: "the harness never
+    because nothing ever set it (a live test run: "the harness never
     records tool-call latency ... its `tool_call` field is always false").
     Callers pass real, externally-observed tool names (see
     `tool_telemetry.parse_tool_call_names` in `latency_harness_live.py`) —

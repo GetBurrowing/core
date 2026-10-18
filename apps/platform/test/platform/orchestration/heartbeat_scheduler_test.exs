@@ -1594,14 +1594,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
     defp claude_runtime do
       %Platform.Agents.AgentRuntime{
-        runtime_id: "rowan-claude-agent-1",
+        runtime_id: "alex-claude-agent-1",
         metadata: %{"client_info" => %{"product" => "claude_channel", "version" => "0.2.0"}}
       }
     end
 
     defp openclaw_runtime do
       %Platform.Agents.AgentRuntime{
-        runtime_id: "rowan-coder",
+        runtime_id: "alex-coder",
         metadata: %{"client_info" => %{"product" => "openclaw", "version" => "0.6.2"}}
       }
     end

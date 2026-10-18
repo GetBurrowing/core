@@ -2,7 +2,7 @@ defmodule PlatformWeb.Components.EmptyState do
   @moduledoc """
   Three layouts of empty state, per `docs/design-system/02-components.md` §2.13:
 
-    * `:minimal`        — centered text only. Used on Activity per Marlowe's
+    * `:minimal`        — centered text only. Used on Activity per the designer's
                           2026-05-09 pin: "the activity feed empty state is
                           fine to stay empty at start, we don't need to
                           force content."

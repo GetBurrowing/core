@@ -321,7 +321,7 @@ defmodule Platform.Tasks.ChatPins do
   Rail rows render `space.name`, which for execution spaces is the
   synthesised slug `task-exec-<8-char-id>` — cryptic and
   non-differentiating when a viewer has more than one task pinned
-  (Rowan, stage-4 review: "People won't know which one is which if you
+  (the operator, stage-4 review: "People won't know which one is which if you
   have two"). This helper joins into `tasks` via
   `space.metadata["task_id"]` and returns the task's real title.
 

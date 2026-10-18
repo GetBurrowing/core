@@ -124,7 +124,7 @@ end
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when
-# Pocket-ID redirects the callback to `suite.example.com` → "Invalid
+# Pocket-ID redirects the callback to `app.example.com` → "Invalid
 # OIDC state". Setting SESSION_COOKIE_DOMAIN=.example.com shares the
 # cookie across every `*.example.com` host so the state survives the
 # cross-host redirect. `SameSite=Lax` is intentionally retained — it is correct
@@ -677,7 +677,7 @@ config :platform, :webmcp_enabled, webmcp_enabled
 # negative values fall back to the defaults (11/10);
 # PlatformWeb.ReconnectEscalation.config/0 clamps and renders them into the
 # root layout's <meta name="reconnect-escalation">. Runs in dev too, so the
-# dev-on-moon rig's EXTRA_ENV can set it.
+# dev rig's EXTRA_ENV can set it.
 reconnect_escalate = fn var, default ->
   case Integer.parse(String.trim(System.get_env(var) || "")) do
     {n, ""} when n > 0 -> n
@@ -744,6 +744,19 @@ end
 # fixture secret and leave the whole suite with no app-level candidate.
 if github_webhook_secret = System.get_env("GITHUB_WEBHOOK_SECRET") do
   config :platform, :github_webhook_secret, github_webhook_secret
+end
+
+# ── Deploy audit: core-ops checkout (task 01a14b9e stage 2) ─────────────────
+# `Platform.Security.Scanners.DeployAudit`'s env-diff probe reads the install's
+# private ops checkout (targets/*/env/*.env.example vs secrets/<target>/). The
+# path is install-specific, so there is no default anywhere in code: unset or
+# blank leaves `deploy_audit_core_ops_root: nil` (config.exs) and the probe
+# returns `{:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}`. Guarded on
+# presence, like the secret above, so tests can configure it with
+# Application.put_env.
+case String.trim(System.get_env("DEPLOY_AUDIT_CORE_OPS_ROOT") || "") do
+  "" -> :ok
+  root -> config :platform, Platform.Security, deploy_audit_core_ops_root: root
 end
 
 # ── Deploy skip notice (task 01a0feff) ────────────────────────────────────────

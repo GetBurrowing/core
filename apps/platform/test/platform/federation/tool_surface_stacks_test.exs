@@ -90,7 +90,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     # can render immediately without another round-trip.
     test "accepts sponsor_user_id and returns the preloaded sponsor envelope" do
       project = create_project()
-      user = insert_sponsor_user(name: "Rowan")
+      user = insert_sponsor_user(name: "Alex")
       slug = unique_slug("e2e-create-sponsored")
 
       {:ok, result} =
@@ -106,7 +106,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
         )
 
       assert is_binary(result.stack_id)
-      assert result.sponsor == %{id: user.id, name: "Rowan", email: user.email}
+      assert result.sponsor == %{id: user.id, name: "Alex", email: user.email}
     end
 
     test "returns a sponsor_fk envelope when sponsor_user_id references no user" do
@@ -136,7 +136,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
   describe "stack_update end-to-end" do
     test "sets the sponsor on an unsponsored stack" do
       project = create_project()
-      user = insert_sponsor_user(name: "Rowan")
+      user = insert_sponsor_user(name: "Alex")
 
       %{stack_id: stack_id, sponsor: initial_sponsor} =
         create_stack_via_tool(project.id, unique_slug("e2e-upd-set"), "Unsponsored")
@@ -152,7 +152,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       assert updated.id == stack_id
       assert updated.sponsor_user_id == user.id
-      assert updated.sponsor == %{id: user.id, name: "Rowan", email: user.email}
+      assert updated.sponsor == %{id: user.id, name: "Alex", email: user.email}
     end
 
     test "clears the sponsor when sponsor_user_id is explicitly null" do
@@ -184,7 +184,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
     test "updates name and description without touching sponsor" do
       project = create_project()
-      user = insert_sponsor_user(name: "Rowan")
+      user = insert_sponsor_user(name: "Alex")
 
       {:ok, %{stack_id: stack_id}} =
         ToolSurface.execute(

@@ -420,7 +420,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "rotate the staging secrets",
           state: :shaping,
           classified_intent: "action_item",
-          speaker: "Harper Parker",
+          speaker: "Sam Moreno",
           assigned_agent_slug: "octavius"
         })
 
@@ -432,7 +432,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       # which credited a verbatim quote to somebody who was not in the
       # room; the assignee now has its own trailing segment.
       assert text_of(card(html, shaping), "[data-role='meeting-candidate-byline']") ==
-               "Harper Parker"
+               "Sam Moreno"
 
       assert text_of(card(html, shaping), "[data-role='meeting-candidate-assignment']") =~
                "@octavius · drafting"
@@ -476,7 +476,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "rotate the staging secrets",
           state: :shaping,
           classified_intent: "action_item",
-          speaker: "Harper Parker",
+          speaker: "Sam Moreno",
           assigned_agent_slug: "octavius",
           last_utterance_at: DateTime.utc_now()
         })
@@ -486,7 +486,7 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
           evidence_quote: "and send the SOC2 pack",
           state: :shaping,
           classified_intent: "action_item",
-          speaker: "Rowan Ellis",
+          speaker: "Alex Rivera",
           assigned_agent_slug: "mycroft",
           last_utterance_at: DateTime.add(DateTime.utc_now(), -12 * 60, :second)
         })
@@ -503,12 +503,12 @@ defmodule PlatformWeb.MeetingLiveCandidateBoardTest do
       {_view, html} = mount_board(conn, meeting)
 
       assert text_of(card(html, recent), "[data-role='meeting-candidate-byline']") ==
-               "Harper Parker · just now"
+               "Sam Moreno · just now"
 
       # A DIFFERENT time, not a constant — the assertion the "just now"
       # above cannot make on its own.
       assert text_of(card(html, older), "[data-role='meeting-candidate-byline']") ==
-               "Rowan Ellis · 12m ago"
+               "Alex Rivera · 12m ago"
 
       # And a card with no utterance timestamp does not grow an empty
       # separator or a fabricated time.

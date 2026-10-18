@@ -38,7 +38,7 @@ def _service(plan, svc):
     health = out.get("healthcheck")
     if health and health["test"][:2] == ["CMD", "pg_isready"]:
         # First boot runs initdb plus the postgres-init scripts, then a
-        # restart. On rock (8 GB, under memory pressure, 2026-10-05) that
+        # restart. On the Mac build host (8 GB, under memory pressure, 2026-10-05) that
         # checkpoint's fsync alone took 22 s and postgres was marked unhealthy
         # after the 5 x 10 s retries, failing `up`. A start period lets the
         # first boot finish; afterwards the check is as tight as before.

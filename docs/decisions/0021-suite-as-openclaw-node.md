@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-20  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Extends:** ADR 0014 (Agent Federation), ADR 0012 (Canvas Architecture)  
 
 ---
@@ -243,12 +243,12 @@ Canvas appears in two places simultaneously:
 ┌──────────────────────────────────┬───────────────────┐
 │  Chat messages                   │  Canvas panel     │
 │                                  │                   │
-│  Rowan: diagram the pipeline?     │  ┌─────────────┐ │
+│  Alex: diagram the pipeline?     │  ┌─────────────┐ │
 │                                  │  │             │ │
 │  Zip: Here's the deploy pipeline │  │  [diagram]  │ │
 │  📎 Canvas: Deploy Pipeline      │  │             │ │
 │                                  │  └─────────────┘ │
-│  Rowan: add the CI step           │                   │
+│  Alex: add the CI step           │                   │
 │                                  │  (live updates)   │
 │  Zip: Updated ✓                  │                   │
 └──────────────────────────────────┴───────────────────┘

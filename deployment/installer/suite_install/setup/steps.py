@@ -270,7 +270,7 @@ def check_registry_auth(ctx, auth_text, image):
         raise SetupError(
             "registry_auth_rejected",
             f"the credential cannot pull {repo}:{tag} (HTTP {head.status})",
-            "the Docker Hub user needs read access to the example repositories",
+            "the Docker Hub user needs read access to the images.image_namespace repositories",
         )
     return f"{repo}:{tag} pullable"
 
@@ -484,7 +484,7 @@ def render_step(ctx):
 # plugin dir along with the credential: OrbStack installs `docker-compose`
 # only into ~/.docker/cli-plugins, so with the install's DOCKER_CONFIG the
 # `compose` subcommand vanished and `up` failed with "unknown flag:
-# --project-directory" (measured on rock, 2026-10-05). Docker Desktop's
+# --project-directory" (measured on the Mac build host, 2026-10-05). Docker Desktop's
 # system dirs are listed too; docker skips a listed dir that does not exist.
 PLUGIN_DIRS = (
     "{home}/.docker/cli-plugins",
@@ -537,7 +537,7 @@ def compose_ps(ctx):
 # {install-relative file: (service, path inside the container)}. A re-render
 # replaces the file, but a single-file bind mount keeps pointing at the old
 # inode, and `docker compose up -d` sees an unchanged service and leaves it
-# running. Measured on rock, 2026-10-05: after the meetings flip added the
+# running. Measured on the Mac build host, 2026-10-05: after the meetings flip added the
 # livekit host block, caddy still served its first Caddyfile (the in-container
 # path read "No such file") and https://livekit-<tag>.<zone>/ returned 404.
 MOUNTED_CONFIGS = {

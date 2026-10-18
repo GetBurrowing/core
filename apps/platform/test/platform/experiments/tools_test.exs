@@ -4,7 +4,7 @@ defmodule Platform.Experiments.ToolsTest do
   (task 01a0d415 stage 2): every step is a tool call, with no code change
   between steps.
 
-  Launch approval is OPT-IN (Rowan, 2026-09-24): both the default (an agent's
+  Launch approval is OPT-IN (Alex, 2026-09-24): both the default (an agent's
   start runs) and the approval-on path (pending, then a human approves) are
   driven here. Stop feedback round-trips through experiment_get and
   experiment_list, and stopped is never concluded.

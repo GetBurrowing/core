@@ -9,7 +9,7 @@ defmodule Platform.Repo.Migrations.BackfillReadAsDismissedInboxItems do
   Until this stage, opening an inbox row WAS clearing it. `InboxLive`'s
   `handle_event("open", ...)` calls `Inbox.mark_read/2`, the row leaves
   `Inbox.unread_scope/1`, and it drops off both the `/inbox` list and the rail
-  badge — that was deliberate, and it is the mechanism Harper was describing
+  badge — that was deliberate, and it is the mechanism the product lead was describing
   when he said he had to click each and every message to clear it out.
 
   The same commit as this migration narrows `unread_scope/1` to

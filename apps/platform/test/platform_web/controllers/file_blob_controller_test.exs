@@ -12,7 +12,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     * 200 inline for image/text/pdf (Content-Disposition: inline).
     * 200 attachment for unknown content type (forced attachment).
     * 200 attachment when `?download=1` is passed regardless of type
-      (the revision contract from Rowan's feedback).
+      (the revision contract from Alex's feedback).
     * 404 for unknown file id.
     * 403 for an unauthenticated session.
     * 403 for an authenticated user who's not a member of the file's

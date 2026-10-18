@@ -53,15 +53,15 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
     next_week = placed!(ctx, ctx.a, "scheduled", at(Date.add(monday, 8), 12), %{body: "NEXT"})
     _draft = placed!(ctx, ctx.a, "draft", at(tue, 11), %{body: "DRAFT-NOT-ON-CAL"})
 
-    {:ok, fabrikam} =
+    {:ok, legacy} =
       Social.create_profile(ctx.org_id, %{
-        name: "Fabrikam #{unique()}",
+        name: "Legacy #{unique()}",
         space_id: channel!(ctx.org_id).id,
         approver_user_ids: [ctx.h1.id]
       })
 
     {:ok, _} =
-      Social.create_account(ctx.org_id, fabrikam, %{platform: "youtube", handle: "Fabrikam channel"})
+      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy channel"})
 
     Map.merge(ctx, %{
       monday: monday,
@@ -71,7 +71,7 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
       published: published,
       failed: failed,
       next_week: next_week,
-      fabrikam: fabrikam
+      legacy: legacy
     })
   end
 
@@ -167,7 +167,7 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
     child = open(conn, ctx.h1)
     assert has_element?(child, item(ctx.scheduled))
 
-    child |> form("#social-profile-switcher", %{profile_id: ctx.fabrikam.id}) |> render_change()
+    child |> form("#social-profile-switcher", %{profile_id: ctx.legacy.id}) |> render_change()
 
     refute has_element?(child, item(ctx.scheduled))
     refute has_element?(child, row(ctx.a))
@@ -176,7 +176,7 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
     assert has_element?(
              child,
              "[data-role='social-empty']",
-             "Nothing scheduled for #{ctx.fabrikam.name} this week."
+             "Nothing scheduled for #{ctx.legacy.name} this week."
            )
   end
 

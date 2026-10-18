@@ -1,7 +1,7 @@
 defmodule PlatformWeb.MeetingPressCardVisibilityTest do
   @moduledoc """
   A push-to-talk press card is visible to EVERY participant, not only to
-  the person holding the key (task 01a03f4e, plan v2 stage 3; Harper's
+  the person holding the key (task 01a03f4e, plan v2 stage 3; Sam's
   ruling).
 
   ## Why this file mounts a second LiveView instead of re-reading the DB

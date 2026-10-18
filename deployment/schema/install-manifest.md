@@ -12,7 +12,7 @@ behaviour (orgs, agents, prompts, feature settings) stays in the admin panel.
 - Format: TOML. `tomllib` parses it with the Python standard library, so no pip step is needed.
 - Validator: `PYTHONPATH=deployment/installer python3 -m suite_install validate <manifest>`
 - Service set: `PYTHONPATH=deployment/installer python3 -m suite_install services <manifest>`
-- Examples: [`moon-equivalent.install.toml`](../examples/moon-equivalent.install.toml)
+- Examples: [`single-host.install.toml`](../examples/single-host.install.toml)
   (target `single-host`), [`mac.install.toml`](../examples/mac.install.toml) and
   [`mac-lite.install.toml`](../examples/mac-lite.install.toml) (target `mac`, meetings on and off)
 
@@ -134,6 +134,7 @@ A missing required field gives one `backup_incomplete` error. A field the target
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
+| `image_namespace` | string | **required**, no default | The Docker Hub namespace the `suite-*` images come from: `docker.io/<image_namespace>/suite-core`, `suite-files-service`, `suite-memory-service`, `suite-meeting-transcriber` and `suite-agent-host`. A default would name one publisher, so a manifest without it is `missing_required`, and one that is not a Docker Hub namespace is `invalid_value`. |
 | `source` | `registry` \| `preloaded` | `registry` | `preloaded`: images are loaded onto the host out of band, and nothing is pulled. |
 | `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `agent-host`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
 
@@ -191,12 +192,12 @@ agent host reports.
   (`%suite-agents ALL=(ALL) NOPASSWD:ALL`, mode 0440). Agents reach core at the install's public
   URL through Caddy; with `tls = "internal"` the install root is added to the system trust store.
 - **`contained`** (shared hosts): the agent host is the `agent-host` container
-  (`docker.io/example/suite-agent-host`, systemd as PID 1) on a dedicated `agents` network.
+  (`docker.io/<image_namespace>/suite-agent-host`, systemd as PID 1) on a dedicated `agents` network.
   `core-platform` is the only service on both networks, so the agent host reaches core and the
   internet and not Postgres or any other service. It reads its own `agent-host.env` (0600, only
   `AGENT_HOST_TOKEN`), not `secrets.env`. Under DOCKER (this renderer) the container needs the
   host cgroup namespace for systemd, so it is network and filesystem containment, not a privilege
-  boundary; under rootless podman (moon, see core-ops) container root is not host root.
+  boundary; under rootless podman (test-host, see core-ops) container root is not host root.
 - Both: `AGENT_HOST_TOKEN` is generated and given to core-platform through `secrets.env`.
 
 **Isolation limit (option A).** An install is one trust group. Per-agent OS users stop

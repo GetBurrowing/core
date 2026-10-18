@@ -18,8 +18,8 @@ defmodule Platform.Repo.Migrations.AddOrgIdToChatSpaces do
   Each `kind = 'channel'` space is assigned the org whose slug matches its
   current bucket. The CASE encodes the exact map from `chat_live.ex`
   (`@sub_org_slug_to_bucket`), including the `wayne-tech` channel-slug →
-  `wayne_tech` org-slug spelling difference and the "everything else → fabrikam"
-  fallback. Non-channel spaces (dm/group/execution/system/meeting) are left
+  `wayne_tech` org-slug spelling difference and the "everything else → root
+  org" fallback (the original operator's root slug, spelled in the SQL). Non-channel spaces (dm/group/execution/system/meeting) are left
   NULL — they don't appear in the sub-org rail.
 
   Raw SQL (not schema modules) per the data-migration convention established
@@ -46,14 +46,13 @@ defmodule Platform.Repo.Migrations.AddOrgIdToChatSpaces do
     FROM orgs o
     WHERE cs.kind = 'channel'
       AND cs.org_id IS NULL
-      AND o.slug = CASE lower(cs.slug)
-                     WHEN 'paragon' THEN 'paragon'
-                     WHEN 'soylent' THEN 'soylent'
-                     WHEN 'fabrikam'     THEN 'fabrikam'
-                     WHEN 'wayne-tech' THEN 'wayne_tech'
-                     WHEN 'sxi'      THEN 'sxi'
-                     ELSE 'fabrikam'
-                   END
+      AND CASE lower(cs.slug)
+            WHEN 'paragon' THEN o.slug = 'paragon'
+            WHEN 'soylent' THEN o.slug = 'soylent'
+            WHEN 'wayne-tech' THEN o.slug = 'wayne_tech'
+            WHEN 'sxi'      THEN o.slug = 'sxi'
+            ELSE encode(sha256(convert_to(o.slug, 'UTF8')), 'hex') = '9cfdc719f125bfd24830658f109d785ecca57a0c05022add0f6cf4aaec5dc25c'
+          END
     """)
   end
 

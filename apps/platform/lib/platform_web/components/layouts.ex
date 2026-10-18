@@ -191,7 +191,7 @@ defmodule PlatformWeb.Layouts do
   `aspect-ratio: 16/9; max-width: 100%; max-height: 100%` — with no
   explicit width/height, the browser renders it at its intrinsic
   ~300×150 size, floating as a thumbnail regardless of how large the
-  cell tracks are. That's the "shockingly small camera views" bug Rowan
+  cell tracks are. That's the "shockingly small camera views" bug the operator
   hit on prod on 2026-07-10 after the guest-consolidation deploy.
 
   The auth shell (`shell.html.heex`) uses `h-[100dvh]` for the same
@@ -493,7 +493,17 @@ defmodule PlatformWeb.Layouts do
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
       >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <%!-- Heroicons v2.2.0 16/solid dark-mode path (MIT), inlined so no
+              class token names it (task 01a14b9e stage 6). --%>
+        <svg
+          class="size-4 opacity-75 hover:opacity-100"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 16 16"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M14.438 10.148c.19-.425-.321-.787-.748-.601A5.5 5.5 0 0 1 6.453 2.31c.186-.427-.176-.938-.6-.748a6.501 6.501 0 1 0 8.585 8.586Z" />
+        </svg>
       </button>
     </div>
     """

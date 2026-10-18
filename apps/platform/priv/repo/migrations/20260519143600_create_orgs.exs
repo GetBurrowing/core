@@ -47,8 +47,8 @@ defmodule Platform.Repo.Migrations.CreateOrgs do
   `apps/platform/test/platform/orchestration/`, and
   `apps/platform/test/platform/federation/` insert rows with arbitrary
   `Ecto.UUID.generate()` values into the now-FK'd columns. Those tests
-  have been updated in the same commit to use the seeded Fabrikam org id via
-  the new `Platform.TestFixtures.fabrikam_org_id/0` helper.
+  have been updated in the same commit to use the seeded root org id via
+  a new test-fixtures helper (today `Platform.TenancyFixtures.acme_org_id/0`).
 
   ## Reversibility
 

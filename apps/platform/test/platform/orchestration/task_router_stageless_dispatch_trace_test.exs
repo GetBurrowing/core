@@ -305,7 +305,7 @@ defmodule Platform.Orchestration.TaskRouterStagelessDispatchTraceTest do
       # plan is submitted. The boot dispatch is still inside its debounce when
       # `start_router!/1` returns, and a submit that lands first moves the
       # router to `:waiting_human` with no stage-less dispatch ever sent — a
-      # run measured on moon at token 0 throughout. So drive one and wait for
+      # run measured on test-host at token 0 throughout. So drive one and wait for
       # the arm, as the suppression tests above do.
       send(pid, :dispatch)
 
@@ -427,7 +427,7 @@ defmodule Platform.Orchestration.TaskRouterStagelessDispatchTraceTest do
   # under test is the BOOT dispatch itself. An injected second `:dispatch` is
   # not equivalent: the router debounces / suppresses a repeat whose engagement
   # is unchanged, so the second frame is not reliably sent and an assertion on
-  # it is flaky (observed on the moon rig: green on one run, "no attention
+  # it is flaky (observed on the test-host rig: green on one run, "no attention
   # broadcast" on the next).
   defp start_router!(%{task: task}) do
     runtime_id = "runtime-stageless-#{System.unique_integer([:positive])}"

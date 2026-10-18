@@ -6,13 +6,13 @@ defmodule Platform.Chat.Canvas.Kinds.EmbedRenderIdentityTest do
   The fixtures under `test/support/fixtures/canvas/embed_render_*.html` were
   captured with `rendered_to_string/1` from the module as it was BEFORE this
   task touched it (identical to origin/main ea0137bee, `git diff ea0137bee
-  32f23bcf4 -- .../kinds/embed.ex` is empty), on the moon rig. Adding
+  32f23bcf4 -- .../kinds/embed.ex` is empty), on the test-host rig. Adding
   `scripts: true` must not move one byte of the markup every existing embed
   renders.
 
   The guard was shown to fire before its silence was trusted: with one extra
   attribute (`data-x="1"`) added to the srcdoc branch's wrapper, all four
-  tests below failed (moon, 2026-10-13, 22/26 in that run).
+  tests below failed (test-host, 2026-10-13, 22/26 in that run).
   """
 
   use ExUnit.Case, async: true

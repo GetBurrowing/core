@@ -193,7 +193,7 @@ defmodule PlatformWeb.ShellLivePushRegistrationTest do
   # reports granted, which IS the bug. "Enabling worked" and "we told the user
   # enabling worked" are only the same statement when the write lands.
   describe "reporting the registration honestly" do
-    # The assign carries WHY, not whether. It was a boolean until Marlowe
+    # The assign carries WHY, not whether. It was a boolean until Robin
     # rejected the copy it produced: one flag set by two failures with opposite
     # answers forced the wording vague. Asserting the exact reason is the point,
     # since truthiness alone would let the two collapse back together unnoticed.
@@ -269,7 +269,7 @@ defmodule PlatformWeb.ShellLivePushRegistrationTest do
     #
     # This first shipped setting the same boolean as the server-side branch, on
     # the argument that one user-visible outcome reached two ways should be one
-    # state. Marlowe's review killed that: the outcomes differ in who can act.
+    # state. Robin's review killed that: the outcomes differ in who can act.
     # Here a reload can genuinely change the result, so the user has a step to
     # take; on the other branch they have none. Asserting the exact reason is
     # what stops the two collapsing back together.

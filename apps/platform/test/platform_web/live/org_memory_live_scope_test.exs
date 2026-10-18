@@ -151,8 +151,8 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # module's `@moduledoc` described `maybe_default_org_id/1` as filling a
   # nil `org_id` with the `"acme"` org; that slug is now
   # `Platform.Tenancy.root_org_slug/0`, so the sentence named a literal the
-  # code no longer contains. Two phrases changed ("root-Fabrikam row" → "root-org
-  # row", "Fabrikam default included" → "root-org default included") plus the
+  # code no longer contains. Two phrases changed ("root-Legacy row" → "root-org
+  # row", "Legacy default included" → "root-org default included") plus the
   # accessor's name. No function, arity, clause, query or return value in
   # this file moved — `git diff` on the file is the moduledoc and nothing
   # else. The pin is re-taken rather than the sentence left stale because a
@@ -172,8 +172,8 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # the assertion message below stays greppable.
   #
   # Re-pinned 2026-10-07 (task 01a116de stage 2): DOC COMMENT ONLY. Two
-  # comment phrases that named one install's root org ("the root Fabrikam org",
-  # "the Fabrikam default") now say "the root org" / "the root-org default".
+  # comment phrases that named one install's root org ("the root Legacy org",
+  # "the Legacy default") now say "the root org" / "the root-org default".
   # No function, arity, clause, query or return value moved — `git diff` on
   # the file is those two comment lines and nothing else.
   #
@@ -186,7 +186,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # under a prefix all-or-nothing, refusing with `{:error, {:conflict, paths}}`
   # when any target exists. Page rows, ids, versions and the single-page
   # overwrite semantics are unchanged. Stage 1 did not run this file, so the
-  # pin is re-taken by stage 2, measured on moon at the stage-2 branch.
+  # pin is re-taken by stage 2, measured on test-host at the stage-2 branch.
   #
   # Re-pinned 2026-10-15 (task 01a1386d-e528 stage 4, same approved plan):
   # read scoping, authorized by the stage's specification. `get_page/2`,

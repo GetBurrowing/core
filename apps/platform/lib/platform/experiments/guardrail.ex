@@ -14,7 +14,7 @@ defmodule Platform.Experiments.Guardrail do
 
   ## Launch approval is opt-in
 
-  `require_human_approval` defaults to FALSE (Rowan, 2026-09-24). It is a
+  `require_human_approval` defaults to FALSE (product decision, 2026-09-24). It is a
   guardrail an admin can switch on per org; the UI controls (approve, stop,
   promote, revert) are present whatever it says.
   """

@@ -246,7 +246,7 @@ defmodule PlatformWeb.GithubWebhookDeliveredButOpenTest do
         "merged_at" => "2026-08-31T10:00:00Z",
         "body" => "",
         "user" => %{"login" => "agent-bot"},
-        "merged_by" => %{"login" => "rowan"},
+        "merged_by" => %{"login" => "alex"},
         "head" => %{"ref" => "task/#{task.id}"}
       }
     }

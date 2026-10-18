@@ -8,7 +8,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
     * PARITY: with Play registered, every registry reads as main's did, flag
       off and on. The snapshots were MEASURED on main (eb30c8593) by a probe
-      run in the test env on moon, not copied from this branch.
+      run in the test env on test-host, not copied from this branch.
     * Play's processes absent: a disconnect is `:ok` and a play frame is
       dropped, at boot (before `Platform.GameStream.Application` has started
       its tree) or at shutdown.
@@ -285,31 +285,31 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # same change; both values were measured by main CI at ccff9306b.
     #
     # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
-    # `experiments` bundle. Both values measured on moon at the stage's
+    # `experiments` bundle. Both values measured on test-host at the stage's
     # branch; the off digest equals the one extensions_test.exs pins.
     #
     # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
-    # bundle. Both values measured on moon at the stage's branch; the off
+    # bundle. Both values measured on test-host at the stage's branch; the off
     # digest equals the one extensions_test.exs pins.
     #
     # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
     # `returns_schema` key on 12 definitions, federation_status's filters and
-    # the suite_run primer. Measured on moon; off equals extensions_test.exs.
+    # the suite_run primer. Measured on test-host; off equals extensions_test.exs.
     #
     # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`
-    # and experiment_create doc text. Measured on moon; off equals
+    # and experiment_create doc text. Measured on test-host; off equals
     # extensions_test.exs.
     #
     # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
-    # parameter and description text. Both values measured on moon at the
+    # parameter and description text. Both values measured on test-host at the
     # stage's branch; off equals extensions_test.exs.
     #
     # Re-pinned by task 01a116de stage 2: two description strings stop naming
     # one install's root org ("Use the root org id", "root-org admin"). Both
-    # values measured on moon at the stage's branch; off equals
+    # values measured on test-host at the stage's branch; off equals
     # extensions_test.exs.
     #
-    # Re-pinned by task 019fa1ac at the rebased tip (after the Fabrikam scrub
+    # Re-pinned by task 019fa1ac at the rebased tip (after the Legacy scrub
     # and Burrow rebrand landed on main): task_create/task_update expose the
     # kind taxonomy and task read/write docs name kind. Both values measured
     # by main CI at this branch head; off equals extensions_test.exs.
@@ -317,57 +317,64 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
     # (PR #1226): the stack's kind, external-feedback provenance and
     # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
-    # values measured on moon at the merge; off equals extensions_test.exs.
+    # values measured on test-host at the merge; off equals extensions_test.exs.
     #
     # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
-    # tools, after core's others. Both values measured on moon at the stage's
+    # tools, after core's others. Both values measured on test-host at the stage's
     # branch; off equals extensions_test.exs.
     #
     # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
     # last in core's registry, which also enters canvas_create/patch's
-    # document schema. All six values measured on moon at the stage's branch;
+    # document schema. All six values measured on test-host at the stage's branch;
     # off equals extensions_test.exs.
     #
     # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
     # and `prototype_ref` props and its srcdoc / list_kinds text, which also
     # enter canvas_create/patch's document schema. All six values measured on
-    # moon at the stage's branch; off equals extensions_test.exs. The metrics
+    # test-host at the stage's branch; off equals extensions_test.exs. The metrics
     # catalog digest is unchanged.
     #
     # Re-pinned by task 01a1316b-aab0 stage 2: canvas_patch's operation
     # description names the new `set_binding` op. Both values measured on
-    # moon at the stage's branch; off equals extensions_test.exs. The kinds
+    # test-host at the stage's branch; off equals extensions_test.exs. The kinds
     # and metrics digests are unchanged.
     #
     # Re-pinned by task 01a131c5 (deploy fix-forward): `vault_fetch` and
     # `vault_list` in the `federation` bundle, after `federation_status`. Off
-    # equals extensions_test.exs (stage 1's moon measurement); on measured by
+    # equals extensions_test.exs (stage 1's test-host measurement); on measured by
     # main CI at this branch head.
     #
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
-    # above. All six values measured on moon at the merge commit; off equals
+    # above. All six values measured on test-host at the merge commit; off equals
     # extensions_test.exs.
     # RBAC v2 adds four Access tools, text principal_id/action disabled canvas
     # properties, the Agents rail destination and agents.tool_profile surface.
-    # Re-measured whole definitions/kinds on Moon at 3d831a04, flag off/on;
+    # Re-measured whole definitions/kinds on Test-Host at 3d831a04, flag off/on;
     # literal names and whole-payload digests remain strict independent pins.
     # Re-pinned by task 01a14a7f stage 3: the 17 dotted tool names became
     # underscores, in names and in every description and schema text that
     # cites one (the image kind's `src` text moves the kinds tool-schemas
-    # digests; the summaries digests do not move). Measured on moon at the
+    # digests; the summaries digests do not move). Measured on test-host at the
     # stage's branch.
     # Re-pinned by task 01a14b9e-50a4 (Burrow rename A2, deploy fix-forward):
     # stage 1 renamed suite_run / suite_run_describe to burrow_run /
     # burrow_run_describe and stages 1-2 changed "Suite" to "Burrow" in tool
     # descriptions, canvas kind descriptions and the embed kind's schema text,
     # so all six digests move. The metrics catalog digest is unchanged. All six
-    # measured on moon (elixir:1.20.4-otp-28-slim, CI's image) at the merge of
+    # measured on test-host (elixir:1.20.4-otp-28-slim, CI's image) at the merge of
     # main into the branch; the kinds-summaries off value equals what main CI
     # printed for the unpinned branch. These are NOT equal to
     # apps/platform/test/platform/extensions_test.exs's off pins, and were not
     # on main either (c48e9187 here vs 26c07041 there).
-    @main_tool_digest_off "ac7c560b1e0681626893e09ca3ce5a2d93687b965b2ff2d04fcae2e237ec679d"
-    @main_tool_digest_on "85382db3a7667c1b9c3eb50cd95b4081952d97fc448a105ad369afd0d46c2f0b"
+    #
+    # Re-pinned by task 01a14b9e-c802 stage 3: tool descriptions name neutral
+    # examples instead of one install's people and hosts (`alex-coder`,
+    # `agent-1.host-a`, `infra` (test rig, ...), "a human picks option A or
+    # B", "a human editor"), so the two tool-definition digests move. The
+    # summaries, schemas and metrics digests are unchanged. Measured on the
+    # test rig at the A3 branch after merging main (fb3332ff).
+    @main_tool_digest_off "45abbab343801ca17cc799b2df73ccf67b94f74cdc458d5ccdb6a2287b866bce"
+    @main_tool_digest_on "d6d663e20cf1062de27c84a91702a898c540b12ed64aba926b892d68daa3d449"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

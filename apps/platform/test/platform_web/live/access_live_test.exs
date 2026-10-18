@@ -426,7 +426,7 @@ defmodule PlatformWeb.AccessLiveTest do
     assert Platform.Access.module_access?(Scope.for_user(Accounts.get_user(subject.id)), :files)
   end
 
-  # Found on dev-on-moon: the root admin's `membership_org` admin rule names
+  # Found on dev-on-test_host: the root admin's `membership_org` admin rule names
   # only the root org, so a bare `can?(access.manage, sub_org)` is false for
   # them. They manage a sub-org through Delegation's root-admin bypass, and
   # the panel must show and offer that sub-org's locks.

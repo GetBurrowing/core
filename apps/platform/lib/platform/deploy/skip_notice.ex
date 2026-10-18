@@ -7,7 +7,7 @@ defmodule Platform.Deploy.SkipNotice do
   ## Why this lives in core
 
   The production deploy hook (Startup-Suite/core-ops
-  `targets/moon-production/scripts/deploy-hook.py`) deploys only on a
+  `targets/<target>/scripts/deploy-hook.py`) deploys only on a
   `workflow_run` event with `action == "completed"`,
   `workflow_run.conclusion == "success"` and
   `workflow_run.head_branch == DEPLOY_HOOK_BRANCH` (default `main`) — see its
@@ -171,8 +171,8 @@ defmodule Platform.Deploy.SkipNotice do
 
     "Prod did NOT deploy: #{cfg.branch} #{cfg.workflow} run #{run_id} attempt #{run_attempt} " <>
       "concluded #{run["conclusion"] || "unknown"} at #{short_sha} (#{run["html_url"]}). " <>
-      "moon's deploy hook deploys only on conclusion=success; a re-run that ends in " <>
-      "success deploys. Otherwise run podman auto-update on moon."
+      "this install's deploy hook deploys only on conclusion=success; a re-run that ends in " <>
+      "success deploys. Otherwise update the install's image by hand."
   end
 
   # Platform.UUID.valid?/1, not a bare Ecto.UUID.cast/1: the bare cast accepts

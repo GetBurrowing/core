@@ -68,7 +68,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
       })
 
     for content <- [
-          "Rowan asked about the deployment pipeline on 2026-08-15",
+          "Alex asked about the deployment pipeline on 2026-08-15",
           "Task #{@uuid} is the federation gap ticket",
           "--- ??? !!! ---"
         ] do
@@ -105,7 +105,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
 
       rows =
         for {label, query} <- [
-              {"ordinary word", "Rowan"},
+              {"ordinary word", "Alex"},
               {"ordinary phrase", "deployment pipeline"},
               {"date token", "2026-08-15"},
               {"uuid", @uuid},
@@ -149,7 +149,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
       # The acceptance criterion: ordinary-word terms that space_get_messages
       # shows are present MUST be findable. This is the assertion that decides
       # reproduce vs non-reproduce.
-      assert length(Chat.search_messages(ctx.space.id, "Rowan", limit: 10)) > 0
+      assert length(Chat.search_messages(ctx.space.id, "Alex", limit: 10)) > 0
       assert length(Chat.search_messages(ctx.space.id, "deployment pipeline", limit: 10)) > 0
     end
 
@@ -165,7 +165,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
 
   describe "step 3 — no_searchable_terms guard" do
     test "searchable_query?/1 separates real terms from empty-tsquery input" do
-      assert Chat.searchable_query?("Rowan")
+      assert Chat.searchable_query?("Alex")
       assert Chat.searchable_query?(@uuid)
       assert Chat.searchable_query?("2026-08-15")
 
@@ -204,13 +204,13 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
       {:ok, results} =
         ToolSurface.execute(
           "space_search_messages",
-          %{"space_id" => ctx.space.id, "query" => "Rowan"},
+          %{"space_id" => ctx.space.id, "query" => "Alex"},
           ctx.context
         )
 
       assert is_list(results)
       assert [hit] = results
-      assert hit.content =~ "Rowan"
+      assert hit.content =~ "Alex"
       assert hit.content =~ "deployment pipeline"
       assert hit.id
     end

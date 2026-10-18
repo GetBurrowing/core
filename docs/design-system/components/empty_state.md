@@ -2,7 +2,7 @@
 
 **Phase 4 deliverable.** Code-ready specification for the EmptyState component. Implements Phase 2 `02-components.md` §2.13 + `03-voice.md` §5 (per-surface copy + V3 conversational pattern).
 
-> **Anchored:** `1B-USE-3` (empty states lack agent-native context), Marlowe's empty-state direction (2026-05-09).
+> **Anchored:** `1B-USE-3` (empty states lack agent-native context), the design lead's empty-state direction (2026-05-09).
 
 ---
 
@@ -15,7 +15,7 @@ defmodule PlatformWeb.Components.EmptyState do
   @moduledoc """
   Three layouts of empty state, per `docs/design-system/02-components.md` §2.13:
 
-  - `:minimal`     — centered text only. Used on Activity (Marlowe pin 2026-05-09).
+  - `:minimal`     — centered text only. Used on Activity (the design lead pin 2026-05-09).
   - `:standard`    — icon + headline + body + CTA(s). Used as a generic fallback.
   - `:conversational` — V3 pattern: system message + Saru bubble + chip CTAs.
                         Used on chat sidebar, chat space, tasks (per `03-voice.md` §5.1, §5.2, §5.3).
@@ -238,7 +238,7 @@ CSS rules land in `app.css` (proposed):
 </.empty_state>
 ```
 
-### Activity (no actions in range) — `:minimal` (Marlowe pin 2026-05-09)
+### Activity (no actions in range) — `:minimal` (the design lead pin 2026-05-09)
 
 ```heex
 <.empty_state variant={:minimal}>
@@ -248,7 +248,7 @@ CSS rules land in `app.css` (proposed):
 </.empty_state>
 ```
 
-**Important:** Activity uses `:minimal`, NOT `:conversational`. Per Marlowe 2026-05-09: "the activity feed empty state is fine to stay empty at start, we don't need to force content."
+**Important:** Activity uses `:minimal`, NOT `:conversational`. Per the design lead 2026-05-09: "the activity feed empty state is fine to stay empty at start, we don't need to force content."
 
 ### Search (no results) — `:standard`
 
@@ -286,7 +286,7 @@ CSS rules land in `app.css` (proposed):
 | `chat_live.html.heex:454` (search no results) | `:standard` | `03-voice.md` §5.5 |
 | Future: chat space empty (no posts)      | `:conversational` | `03-voice.md` §5.2 |
 | `tasks_live.html.heex:331` (no tasks)    | `:conversational` | `03-voice.md` §5.3 |
-| `activity_live.html.heex` (no actions)   | **`:minimal`**     | `03-voice.md` §5.4 (Marlowe pin) |
+| `activity_live.html.heex` (no actions)   | **`:minimal`**     | `03-voice.md` §5.4 (the design lead pin) |
 
 ### Inline empty-state replacement
 
@@ -324,6 +324,6 @@ Existing inline pattern (e.g. `chat_live.html.heex:54-55`):
 - [ ] Add CSS rules to `app.css` (folded into `05-app-css-diff.md`).
 - [ ] Migrate the 4 chat empty-state sites in `chat_live.html.heex`.
 - [ ] Migrate `tasks_live.html.heex` empty-state.
-- [ ] Migrate `activity_live.html.heex` empty-state — **MUST use `:minimal`, not `:conversational`** (Marlowe pin).
+- [ ] Migrate `activity_live.html.heex` empty-state — **MUST use `:minimal`, not `:conversational`** (the design lead pin).
 - [ ] Manual verification: each empty state renders the verbatim copy from `03-voice.md` §5.
 - [ ] LiveView tests: when the list is empty, `assert has_element?(view, ".empty-state")`; when the list has items, `assert not has_element?(view, ".empty-state")`.

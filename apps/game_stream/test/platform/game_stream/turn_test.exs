@@ -218,7 +218,7 @@ defmodule Platform.GameStream.TurnTest do
       {:ok, project} =
         Tasks.create_project(%{
           name: "Voltron #{System.unique_integer([:positive])}",
-          repo_url: "https://github.com/rowanellis/voltron"
+          repo_url: "https://github.com/example/voltron"
         })
 
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Relay"})

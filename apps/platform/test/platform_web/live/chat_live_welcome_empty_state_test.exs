@@ -3,7 +3,7 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
   The brand-new-user "Welcome to Burrow" empty state vs archived channels
   (task 019f4eaa).
 
-  Marlowe, walking the review: after archiving her orgs, the chat sidebar showed
+  Robin, walking the review: after archiving her orgs, the chat sidebar showed
   "— no spaces yet — / Welcome to Suite. To get started, create a space or
   connect your agent." rendered DIRECTLY ABOVE the ARCHIVED section. The block
   keyed only on `@channels == [] and @dm_conversations == []`, which cannot
@@ -107,7 +107,7 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
 
     test "does NOT show when an ORG archive cascade-hides the only channel",
          %{conn: conn} do
-      # Marlowe's exact path: archive the org, not the channel.
+      # Robin's exact path: archive the org, not the channel.
       {conn, admin} = admin_conn(conn)
       _space = channel!("paragon")
 

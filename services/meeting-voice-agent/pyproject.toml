@@ -35,11 +35,11 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
-    "live_infra: requires real network access to a live endpoint (Dalton's wave LLM, moon's speaches STT/TTS, or a running Core instance) — not run by default, see tests/live/README.md",
+    "live_infra: requires real network access to a live endpoint (Dalton's wave LLM, the test host's speaches STT/TTS, or a running Core instance) — not run by default, see tests/live/README.md",
 ]
 # Stage-1's unit tests (mocked backends, no network) run by default. Stage-3's
 # live_infra integration tests are opt-in only (`pytest -m live_infra`) so a
-# plain `pytest` stays fast and green regardless of whether wave/moon/Core
+# plain `pytest` stays fast and green regardless of whether wave/the test host/Core
 # are reachable from wherever this suite runs.
 addopts = "-m 'not live_infra'"
 

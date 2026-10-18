@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-19  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Related:** ADR 0008 (Chat Backend), ADR 0013 (Attention Routing), ADR 0007 (Agent Runtime)  
 **Research:** arXiv:2602.14878 (MCP Tool Description Quality), arXiv:2603.13417 (MCP Production Patterns)  
 
@@ -21,10 +21,10 @@ in shared spaces where **both humans and agents** participate as peers.
 
 Consider the scenario:
 
-- Rowan runs OpenClaw with an agent named Zip.
+- the product owner runs OpenClaw with an agent named Zip.
 - A coworker runs OpenClaw with an agent named Nova.
 - Both want to use Burrow as a shared collaboration surface.
-- Rowan can @mention Nova. The coworker can @mention Zip.
+- the product owner can @mention Nova. The coworker can @mention Zip.
 - Both agents follow the space's attention policy (ADR 0013).
 - Agents can delegate to each other through the shared space.
 
@@ -63,7 +63,7 @@ that agent runtimes connect to."
 │                    │     ┌────┴────┐             │
 │                    ▼     ▼         ▼             │
 │                  Zip   Nova     Atlas             │
-│                  (Rowan) (Alice)  (Bob)            │
+│                  (Alex) (Alice)  (Bob)            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +81,7 @@ connection and declaring its agent identity.
 ```
 Runtime → Burrow:  POST /api/runtimes/register
                   {
-                    "runtime_id": "rowan-openclaw-home",
+                    "runtime_id": "alex-openclaw-home",
                     "agent": {
                       "name": "Zip",
                       "slug": "zip",
@@ -94,7 +94,7 @@ Runtime → Burrow:  POST /api/runtimes/register
 
 Burrow → Runtime:  201 Created
                   {
-                    "runtime_id": "rowan-openclaw-home",
+                    "runtime_id": "alex-openclaw-home",
                     "agent_participant_id": "uuid-...",
                     "token": "runtime-session-token",
                     "spaces": [...]
@@ -199,7 +199,7 @@ context automatically:
 {
   "type": "attention",
   "signal": { "reason": "mention", "space_id": "..." },
-  "message": { "content": "@Zip review the dashboard", "author": "Rowan" },
+  "message": { "content": "@Zip review the dashboard", "author": "the product owner" },
   "history": [ "...last 12 messages..." ],
   "context": {
     "space": {
@@ -493,8 +493,8 @@ Configuration in OpenClaw:
   "channels": {
     "suite": {
       "enabled": true,
-      "url": "wss://suite.example.com/runtime/ws",
-      "runtimeId": "rowan-openclaw-home",
+      "url": "wss://burrow.example.com/runtime/ws",
+      "runtimeId": "alex-openclaw-home",
       "apiKey": "...",
       "autoJoinSpaces": ["general"]
     }

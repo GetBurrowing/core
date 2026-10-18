@@ -214,14 +214,16 @@ config :platform, Platform.Security.Sweeper,
 # project UUID at deploy time. `cve_scan_stale_days` gates the
 # medium/low-severity long-tail rule from the task description.
 # The `deploy_audit_*_root` keys let DeployAudit's four probes point
-# at tmp fixtures under test — the shipped defaults point at the
-# real prod-adjacent paths on `moon`.
+# at tmp fixtures under test. `deploy_audit_core_ops_root` has NO
+# default: it names an install's private ops checkout, so it is read
+# from DEPLOY_AUDIT_CORE_OPS_ROOT in runtime.exs, and while it is
+# unset the env-diff probe reports `{:not_configured, ...}`.
 config :platform, Platform.Security,
   project_id: nil,
   cve_scan_stale_days: 30,
   deploy_audit_traefik_root: "~/docker/traefik3/rules",
   deploy_audit_containers_root: "~/.config/containers/systemd",
-  deploy_audit_core_ops_root: "/srv/dev/core-ops",
+  deploy_audit_core_ops_root: nil,
   deploy_audit_tls_root: "/etc/letsencrypt/live",
   deploy_audit_tls_expiry_warning_days: 30,
   # SecretLeak (task 019f3e8e-4406 stage 5). Full git-history scans

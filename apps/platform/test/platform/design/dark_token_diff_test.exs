@@ -18,7 +18,7 @@ defmodule Platform.Design.DarkTokenDiffTest do
        taken from. Edit a token and this fails with "re-measure", so the
        table cannot silently describe a palette that no longer ships;
     5. `docs/design-system/06-dark-token-diff.md`, the decision document
-       Marlowe signs, carries exactly the fixture's hexes and ratios, and every
+       Robin signs, carries exactly the fixture's hexes and ratios, and every
        pass/FAIL verdict in it agrees with its floor (stage 2).
 
   Ratio conventions (see `Platform.Design.WcagContrast`): `painted` is

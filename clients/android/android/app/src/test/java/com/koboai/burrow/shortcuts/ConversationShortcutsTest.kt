@@ -23,24 +23,24 @@ class ConversationShortcutsTest {
 
     private fun shortcuts(sink: RecordingShortcutSink) = ConversationShortcuts(context, sink, registry) { now++ }
 
-    private val harper =
+    private val sam =
         Person
             .Builder()
-            .setName("Harper")
+            .setName("Sam")
             .setKey("suite.example.com|user:u1")
             .build()
 
     private fun ConversationShortcuts.publish(
         host: String,
         space: String,
-    ) = publish(host, space, "Space $space", "/chat/$space", listOf(harper))
+    ) = publish(host, space, "Space $space", "/chat/$space", listOf(sam))
 
     @Test
     fun `(a) the id is host-scoped and parse round-trips`() {
-        assertEquals("suite.example.com|0192-s", ConversationShortcuts.shortcutId("Suite.example.com", "0192-s"))
+        assertEquals("suite.example.com|0192-s", ConversationShortcuts.shortcutId("Suite.Example.Com", "0192-s"))
         assertEquals("suite.example.com" to "0192-s", ConversationShortcuts.parse("suite.example.com|0192-s"))
         // The same space id on two installs is two shortcuts.
-        val other = ConversationShortcuts.shortcutId("suite.milv.life", "0192-s")
+        val other = ConversationShortcuts.shortcutId("suite.example.org", "0192-s")
         assertNotEquals(other, ConversationShortcuts.shortcutId("suite.example.com", "0192-s"))
         assertNull(ConversationShortcuts.shortcutId("not a host", "0192-s"))
         assertNull(ConversationShortcuts.shortcutId("suite.example.com", "../x"))
@@ -55,13 +55,13 @@ class ConversationShortcutsTest {
         val s = shortcuts(sink)
         s.publish("10.0.2.2", "a")
         s.publish("10.0.2.20", "b")
-        s.publish("suite.milv.life", "c")
+        s.publish("suite.example.org", "c")
 
         s.removeForHost("10.0.2.2")
 
         assertEquals(listOf("10.0.2.2|a"), sink.removedDynamic)
-        assertEquals(setOf("10.0.2.20|b", "suite.milv.life|c"), sink.dynamic.keys)
-        assertEquals(setOf("10.0.2.20|b", "suite.milv.life|c"), registry.keys())
+        assertEquals(setOf("10.0.2.20|b", "suite.example.org|c"), sink.dynamic.keys)
+        assertEquals(setOf("10.0.2.20|b", "suite.example.org|c"), registry.keys())
     }
 
     @Test
@@ -101,7 +101,7 @@ class ConversationShortcutsTest {
     @Test
     fun `(d) a published shortcut is a long-lived conversation that opens the space`() {
         val sink = RecordingShortcutSink()
-        val id = shortcuts(sink).publish("suite.example.com", "0192-s", "Internal Fabrikam SXI", "/chat/internal-fabrikam-sxi", listOf(harper))
+        val id = shortcuts(sink).publish("suite.example.com", "0192-s", "Internal Legacy SXI", "/chat/internal-legacy-sxi", listOf(sam))
         assertEquals("suite.example.com|0192-s", id)
         val shortcut = sink.pushed.single()
 
@@ -109,9 +109,9 @@ class ConversationShortcutsTest {
         assertTrue(shortcut.longLivedForTest)
         assertEquals(setOf(ConversationShortcuts.CATEGORY_CONVERSATION, ConversationShortcuts.CATEGORY_SHARE_TARGET), shortcut.categories)
         assertEquals(id, shortcut.locusId!!.id)
-        assertEquals("Internal Fabrikam SXI", shortcut.shortLabel.toString())
+        assertEquals("Internal Legacy SXI", shortcut.shortLabel.toString())
         assertEquals(
-            "Harper",
+            "Sam",
             shortcut.personsForTest
                 .single()
                 .name
@@ -123,12 +123,12 @@ class ConversationShortcutsTest {
         assertEquals(LaunchRouter.ACTION_OPEN_CONVERSATION, intent.action)
         assertEquals(MainActivity::class.java.name, intent.component!!.className)
         assertEquals("suite.example.com", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_HOST))
-        assertEquals("/chat/internal-fabrikam-sxi", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_PATH))
+        assertEquals("/chat/internal-legacy-sxi", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_PATH))
     }
 
     @Test
     fun `the conversation path strips the query and refuses anything that is not a chat path`() {
-        assertEquals("/chat/internal-fabrikam-sxi", ConversationShortcuts.conversationPath("/chat/internal-fabrikam-sxi?message=0192-m", "s"))
+        assertEquals("/chat/internal-legacy-sxi", ConversationShortcuts.conversationPath("/chat/internal-legacy-sxi?message=0192-m", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("//evil.example/chat/x", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("/chat", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath(null, "s"))
@@ -136,7 +136,7 @@ class ConversationShortcutsTest {
 
     @Test
     fun `Monogram takes the first letter`() {
-        assertEquals("J", Monogram.letter(" harper"))
+        assertEquals("S", Monogram.letter(" sam"))
         assertEquals("?", Monogram.letter(null))
         assertEquals("?", Monogram.letter("  "))
     }

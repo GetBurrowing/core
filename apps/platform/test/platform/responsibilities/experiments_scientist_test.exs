@@ -307,7 +307,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
       assert user =~ @goal
       assert user =~ "50.0% · n=2 (0 excluded, 1 pending)"
       assert user =~ @feedback
-      # Rowan, 2026-09-24: approval is opt-in per org.
+      # Alex, 2026-09-24: approval is opt-in per org.
       assert user =~ "By default a start goes straight to `running`"
       assert user =~ "`pending_human_approval`: that is success, not a failure to retry"
       refute user =~ "{{state}}"

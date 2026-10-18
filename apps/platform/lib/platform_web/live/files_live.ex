@@ -1282,7 +1282,7 @@ defmodule PlatformWeb.FilesLive do
   defp snippet_for(_result, _file_id), do: nil
 
   # Detail-pane text loader — returns the FULL extracted text so the
-  # viewer can render the document in-app (Rowan's stage-5 revision
+  # viewer can render the document in-app (the operator's stage-5 revision
   # feedback: "we need a way to view the file in app as well"). For
   # very large extractions we still cap at a generous ceiling so the
   # LV diff doesn't blow past the websocket frame size; in practice

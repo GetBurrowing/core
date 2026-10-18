@@ -1,6 +1,6 @@
 """`setup run up` recreates a service whose bind-mounted config went stale.
 
-rock proof, 2026-10-05: the meetings flip re-rendered the Caddyfile with the
+lab-host proof, 2026-10-05: the meetings flip re-rendered the Caddyfile with the
 livekit host block, but caddy kept serving its first Caddyfile (a single-file
 bind mount pins the replaced inode) and `docker compose up -d` left the
 unchanged service running, so https://livekit-<tag>.<zone>/ returned 404.
@@ -74,7 +74,7 @@ class StaleMountTest(unittest.TestCase):
         )
 
     def test_stale_mount_that_reads_as_missing_recreates(self):
-        # What rock showed: the replaced file is gone from the container's view.
+        # What lab-host showed: the replaced file is gone from the container's view.
         ctx = _Ctx(self.dir, {})
         self.assertEqual(steps._recreate_stale_mounts(ctx), ["caddy"])
 

@@ -24,7 +24,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
 
   alias PlatformWeb.Components.Canvases.CanvasExplorer
 
-  @creator "Marlowe Quill"
+  @creator "Robin Park"
 
   # ── Fixtures ───────────────────────────────────────────────────────────
 

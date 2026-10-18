@@ -36,13 +36,14 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
   optional tenant orgs are resolved by slug. UUIDs are environment-specific —
   hardcoding prod ids here would break dev/test.
 
-  ## Root org resolved structurally, not by slug "fabrikam" (task 01a0dbc4)
+  ## Root org resolved structurally, not by slug (task 01a0dbc4)
 
-  This file used to resolve the root with a raising lookup of slug `"fabrikam"`.
+  This file used to resolve the root with a raising lookup of the original
+  operator's root slug.
   `20260519143620_seed_root_orgs.exs` seeds the root under `ROOT_ORG_SLUG`
   (default `"root"`), so a fresh install whose root was slugged anything but
-  `fabrikam` crashed here on its first migrate. CI never saw it: `config/test.exs`
-  and `config/dev.exs` pin `ROOT_ORG_SLUG=fabrikam`.
+  that slug crashed here on its first migrate. CI never saw it: `config/test.exs`
+  and `config/dev.exs` then pinned `ROOT_ORG_SLUG` to it.
 
   `root_org_id!/0` returns the id of the one row with `parent_org_id IS NULL`,
   and raises on zero rows (SeedRootOrgs always runs first, so zero roots means
@@ -56,7 +57,7 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
 
   ## Soylent/SXI are now OPTIONAL (task 01a068f6 stage 2)
 
-  `20260519143620_seed_root_orgs.exs` no longer seeds the four Fabrikam-brand
+  `20260519143620_seed_root_orgs.exs` no longer seeds the four operator-brand
   tenant orgs, only a root. This migration is already applied (recorded in
   `schema_migrations`) on every install that ever had Soylent/SXI rows, so
   rewriting `up/0` is inert there for the same reason `SeedRootOrgs`'

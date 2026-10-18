@@ -76,7 +76,7 @@ const MODULE_TO_PATH = Object.fromEntries(
 // root. A fresh return within the window still resumes your last spot; a
 // stale read is treated as missing by ClientState.get (expire-on-read +
 // self-clean), the click intercept bails, and normal LiveView navigation to
-// the module root proceeds. 3h per Rowan: long enough to feel like "take me
+// the module root proceeds. 3h per the operator: long enough to feel like "take me
 // back to where I was" within a work session, short enough that a next-day
 // or post-deploy visit lands on root.
 const RESUME_TTL_MS = 3 * 60 * 60 * 1000;

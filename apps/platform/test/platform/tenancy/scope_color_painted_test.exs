@@ -24,7 +24,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
   # The six shipped orgs, as `app.css` declares them: `.bg-<slug>` fill and
   # the light `.text-<slug>-label`.
   @orgs %{
-    "fabrikam" => {"oklch(72% 0.16 50)", "oklch(55% 0.16 50)"},
+    "legacy" => {"oklch(72% 0.16 50)", "oklch(55% 0.16 50)"},
     "soylent" => {"oklch(65% 0.20 295)", "oklch(55% 0.20 295)"},
     "wayne-tech" => {"oklch(68% 0.15 240)", "oklch(52% 0.15 240)"},
     "sxi" => {"oklch(70% 0.15 162)", "oklch(51% 0.15 162)"},
@@ -46,7 +46,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
 
   describe "composite_painted/3: shape" do
     test "returns integer bytes and the matching lowercase #rrggbb" do
-      painted = ScopeColor.composite_painted(fill("fabrikam"), 0.12, @base_100)
+      painted = ScopeColor.composite_painted(fill("legacy"), 0.12, @base_100)
 
       assert %{rgb: {r, g, b}, hex: hex} = painted
       assert Enum.all?([r, g, b], &(is_integer(&1) and &1 in 0..255))
@@ -345,7 +345,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
     # table says 4.5854 and the green floor is 4.5920. That figure is pinned
     # separately so the moduledoc's claim about it stays true.
     @green_worst %{
-      "fabrikam" => 4.5804,
+      "legacy" => 4.5804,
       "soylent" => 4.6042,
       "wayne-tech" => 4.6224,
       "sxi" => 4.4974,

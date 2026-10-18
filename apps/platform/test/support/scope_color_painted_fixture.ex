@@ -27,13 +27,13 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   """
   def tints do
     %{
-      {"fabrikam", "base-100"} => {"#FDF0E7", 4.6121},
+      {"legacy", "base-100"} => {"#FDF0E7", 4.6121},
       {"soylent", "base-100"} => {"#F3EDFE", 4.6375},
       {"wayne-tech", "base-100"} => {"#E3F4FD", 4.6738},
       {"sxi", "base-100"} => {"#E3F7F0", 4.5539},
       {"paragon", "base-100"} => {"#FBF7E3", 4.6724},
       {"cyberdyne", "base-100"} => {"#FBEBF6", 4.6142},
-      {"fabrikam", "base-200"} => {"#F1E4DB", 4.1375},
+      {"legacy", "base-200"} => {"#F1E4DB", 4.1375},
       {"soylent", "base-200"} => {"#E7E1F2", 4.1560},
       {"wayne-tech", "base-200"} => {"#D7E8F1", 4.1914},
       {"sxi", "base-200"} => {"#D7EBE4", 4.0857},
@@ -48,7 +48,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   """
   def labels do
     %{
-      "fabrikam" => {183, 77, 0},
+      "legacy" => {183, 77, 0},
       "soylent" => {126, 78, 215},
       "wayne-tech" => {0, 112, 181},
       "sxi" => {0, 127, 74},
@@ -67,7 +67,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   def known_divergences do
     %{
       {"soylent", "base-100"} => {0, 1, 0},
-      {"fabrikam", "base-200"} => {1, 0, 1},
+      {"legacy", "base-200"} => {1, 0, 1},
       {"soylent", "base-200"} => {0, 1, 1},
       {"wayne-tech", "base-200"} => {1, 0, 0},
       {"paragon", "base-200"} => {0, 0, 1}

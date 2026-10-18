@@ -74,7 +74,7 @@ export const COMMON_SLUG = "common"
  * Human labels for the dataset's category slugs, plus COMMON.
  *
  * "Common", never "Frequently used" or "Recently used". The set is static and
- * system-wide (Marlowe's no-personalisation decision, recorded in stage 1), so a
+ * system-wide (the designer's no-personalisation decision, recorded in stage 1), so a
  * label implying it learned from this user's behaviour would be a lie. The
  * uppercase rendering is `text-transform` in CSS, not the string.
  */

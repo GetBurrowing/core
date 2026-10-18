@@ -11,7 +11,7 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
 
   ## On the sizing tests
 
-  Rowan rejected the first build for two coupled reasons — the body was legible
+  Alex rejected the first build for two coupled reasons — the body was legible
   rather than a preview, and content dictated the tile's size. The second is
   the one that is easy to test vacuously: asserting "the tile has class X"
   passes just as happily against an implementation where a long document grows
@@ -197,7 +197,7 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
     test "the body is scaled down to a preview, and the scale is clipped to the tile" do
       html = render_tile(two_block_canvas(), [])
 
-      # Reduced, not true type size. Rowan: "not necessarily to see at a fine
+      # Reduced, not true type size. Alex: "not necessarily to see at a fine
       # level what the content is, just that THERE IS content".
       assert node_count(html, ~s([data-role="canvas-tile-preview"])) == 1
       assert html =~ "scale-[0.3333]"
@@ -232,7 +232,7 @@ defmodule PlatformWeb.Components.Meeting.CanvasTileTest do
 
   describe "canvas_tile/1 — geometry is independent of content" do
     # THE anti-vacuity pair. Neither fixture alone can fail on the bug: a
-    # one-line canvas produces a correctly-sized tile even in the build Rowan
+    # one-line canvas produces a correctly-sized tile even in the build Alex
     # rejected, where content dictated the box.
     test "a 120-block canvas produces the same sizing classes as a one-line canvas" do
       small = render_tile(tiny_canvas(), layout: :gallery)

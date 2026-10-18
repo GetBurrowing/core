@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-03-27
-- **Owners:** Rowan Ellis
+- **Owners:** the product owner
 
 ## Context
 
@@ -14,7 +14,7 @@ Burrow needs to support parallel development tracks: one team works on `main` (p
 - Regular absorption of `main` into the feature branch
 
 The existing infrastructure already supports this partially:
-- `core-platform-exp` runs as a source-mounted container on hive at `suite-exp.example.com`
+- `core-platform-exp` runs as a source-mounted container on build-host at `suite-exp.example.com`
 - The task system has epics that group related tasks
 - `project.default_branch` drives git workflow in agent prompts
 
@@ -59,9 +59,9 @@ For the source-mounted exp instance, no image is needed — it runs from the git
 
 ### Exp instance: branch switching
 
-The `core-platform-exp` container on hive source-mounts `/home/dev/sources/core`. To target `feat/reskin`:
+The `core-platform-exp` container on build-host source-mounts `~/sources/core`. To target `feat/reskin`:
 
-1. `cd /home/dev/sources/core && git fetch origin && git checkout feat/reskin`
+1. `cd ~/sources/core && git fetch origin && git checkout feat/reskin`
 2. Restart `core-platform-exp` (it recompiles on start via `mix deps.get && mix ecto.migrate && mix phx.server`)
 
 A helper script in core-ops automates this.

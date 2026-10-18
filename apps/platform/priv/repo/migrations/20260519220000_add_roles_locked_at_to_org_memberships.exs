@@ -14,7 +14,7 @@ defmodule Platform.Repo.Migrations.AddRolesLockedAtToOrgMemberships do
       gets `role = :member` AND `roles_locked_at = NOW()` — the rule sees
       the lock and leaves the row alone.
 
-    * A non-Fabrikam collaborator who SHOULD have admin gets `role = :admin`
+    * A non-Acme collaborator who SHOULD have admin gets `role = :admin`
       AND `roles_locked_at = NOW()` — the rule (which would otherwise
       default them to `:member` on email-change) sees the lock and leaves
       the row alone.

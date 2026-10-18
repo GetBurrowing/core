@@ -28,11 +28,11 @@ start. A runtime id can change if an agent is re-provisioned.
 
 | Agent   | agent_id                               | runtime_id           | Harness / host           | Status then |
 |---------|----------------------------------------|----------------------|--------------------------|-------------|
-| Brosnan | `019f7d30-4a54-7730-aecc-5df5caa400b9` | `brosnan`            | Claude Code, rock        | online      |
-| Dalton  | `019dc658-b64c-7deb-bad7-c34d86924e32` | `rowan-claude-agent-1`| Claude Code, hive        | online      |
-| Moore   | `019f9b0b-aadb-73f9-9564-2aa59d349a09` | `rowan-claude-moore`  | Claude Code, rock        | online      |
-| Oddjob  | `01a054e0-470b-7001-afc4-331957a2bbb1` | `oddjob-dsh`         | DeepSeek harness, hive   | OFFLINE since 2026-10-03T14:18Z |
-| Geordi  | `019d9e54-c297-7165-b72d-9d3019d3e911` | `rowan-coder`         | OpenClaw (gpt-5.6), its own host | online |
+| Brosnan | `019f7d30-4a54-7730-aecc-5df5caa400b9` | `brosnan`            | Claude Code, mac-host        | online      |
+| Dalton  | `019dc658-b64c-7deb-bad7-c34d86924e32` | `alex-claude-agent-1`| Claude Code, build-host        | online      |
+| Moore   | `019f9b0b-aadb-73f9-9564-2aa59d349a09` | `alex-claude-moore`  | Claude Code, mac-host        | online      |
+| Oddjob  | `01a054e0-470b-7001-afc4-331957a2bbb1` | `oddjob-dsh`         | DeepSeek harness, build-host   | OFFLINE since 2026-10-03T14:18Z |
+| Geordi  | `019d9e54-c297-7165-b72d-9d3019d3e911` | `alex-coder`         | OpenClaw (gpt-5.6), its own host | online |
 
 Higgins and Mycroft run local models. They are candidates for a later
 weak-model cohort, not this run.
@@ -44,10 +44,10 @@ weak-model cohort, not this run.
    with `targets: ["dispatch.prompt_directive"]`. If it is missing, stop:
    the deploy has not landed.
 2. Call `federation_status` with
-   `{"runtime_ids": ["brosnan", "rowan-claude-agent-1", "rowan-claude-moore", "oddjob-dsh", "rowan-coder"], "fields": ["agent_slug", "online", "last_seen_at"]}`.
+   `{"runtime_ids": ["brosnan", "alex-claude-agent-1", "alex-claude-moore", "oddjob-dsh", "alex-coder"], "fields": ["agent_slug", "online", "last_seen_at"]}`.
    Record the output in the execution space.
 3. Moore's ack capability. Call `runtime_event_list` for Moore's recent
-   tasks and look for `execution.acked` rows from `rowan-claude-moore`. Stage 1
+   tasks and look for `execution.acked` rows from `alex-claude-moore`. Stage 1
    found Moore's only done task used `alarm_silence` and never acked, which
    suggests Moore's MCP client cache lacks `task_ack`. **That does not stop
    enrolment.** Moore's dispatches are still measured as `stage_row` units
@@ -170,8 +170,8 @@ finished session's transcript, counts turns, tool calls and tokens, and POSTs
 one row to `/api/internal/usage-events`. Without it, a Claude Code agent's
 `client_*` metrics are null, never 0.
 
-**Each agent installs it on its OWN host, in its own config: Dalton on hive,
-Brosnan and Moore on rock.** No agent edits another agent's config. Never
+**Each agent installs it on its OWN host, in its own config: Dalton on build-host,
+Brosnan and Moore on mac-host.** No agent edits another agent's config. Never
 restart a live agent session to load it. Claude Code reads hooks at session
 start, so the hook takes effect at the next session.
 
@@ -187,7 +187,7 @@ start, so the hook takes effect at the next session.
    example `~/.config/suite/usage-hook.env` with mode 0600:
 
    ```
-   BURROW_BASE_URL=https://suite.example.com
+   BURROW_BASE_URL=https://burrow.example.com
    BURROW_AGENT_ID=<the agent's id from the roster>
    BURROW_RUNTIME_TOKEN=<the runtime bearer token>
    ```
@@ -242,7 +242,7 @@ needs no hook. Check its `client_reports` the same way.
 ## Step 4: dsh `usage_event` gains task_id and stage_id (separate PR)
 
 **This change lives in the dsh-suite repo, not in core.** Open it as its own
-small PR there. The copy at `~/sources/dsh-suite` on hive is NOT a git
+small PR there. The copy at `~/sources/dsh-suite` on build-host is NOT a git
 checkout, so edit and commit in the real dsh-suite repository.
 
 Today `plugins/suite-federation/index.js` (around line 255) pushes
@@ -274,7 +274,7 @@ fabricated 0 reads as a measurement.
 
 ## Step 5: Oddjob's unit
 
-Oddjob's user unit (`~/.config/systemd/user/oddjob.service` on hive) is
+Oddjob's user unit (`~/.config/systemd/user/oddjob.service` on build-host) is
 `Type=oneshot` + `RemainAfterExit=yes`. It launches a tmux session through
 `~/agents/oddjob/run.sh`. So the unit reads `active (exited)` whether or not
 the agent process is alive, and nothing restarts it. It has been offline
@@ -292,12 +292,12 @@ Whoever owns Oddjob makes this change. It is not part of this task's branch.
    ```ini
    [Service]
    Type=simple
-   WorkingDirectory=/home/dev/agents/oddjob
-   ExecStart=/home/dev/sources/dsh-suite/run-oddjob.sh
+   WorkingDirectory=~/agents/oddjob
+   ExecStart=~/sources/dsh-suite/run-oddjob.sh
    Restart=on-failure
    RestartSec=30
-   StandardOutput=append:/home/dev/agents/oddjob/oddjob.log
-   StandardError=append:/home/dev/agents/oddjob/oddjob.log
+   StandardOutput=append:~/agents/oddjob/oddjob.log
+   StandardError=append:~/agents/oddjob/oddjob.log
    ```
 
    Then `systemctl --user daemon-reload && systemctl --user restart oddjob`.

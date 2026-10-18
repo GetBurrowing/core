@@ -438,7 +438,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
             "merge_commit_sha" => "aaaaaaa",
             "merged_at" => "2026-05-05T12:00:00Z",
             "body" => "",
-            "user" => %{"login" => "rowan"},
+            "user" => %{"login" => "alex"},
             "head" => %{"ref" => "task/#{task_a.id}"}
           }
         })
@@ -470,7 +470,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
             "merged_at" => "2026-07-25T21:18:05Z",
             "body" => "",
             "user" => %{"login" => "agent-bot"},
-            "merged_by" => %{"login" => "rowan"},
+            "merged_by" => %{"login" => "alex"},
             "head" => %{"ref" => "task/#{task.id}"}
           }
         })
@@ -487,7 +487,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       assert updated.evaluated_by == "github_webhook"
       assert updated.evidence["pr_url"] == "https://github.com/test/ci-repo/pull/603"
       assert updated.evidence["merge_commit_sha"] == "0ff1ce0ff1ce"
-      assert updated.evidence["merged_by"] == "rowan"
+      assert updated.evidence["merged_by"] == "alex"
       assert is_binary(updated.evidence["merged_at"])
     end
 
@@ -506,7 +506,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
             "merge_commit_sha" => "bbbbbbb",
             "merged_at" => "2026-07-25T21:18:05Z",
             "body" => "",
-            "user" => %{"login" => "rowan"},
+            "user" => %{"login" => "alex"},
             "head" => %{"ref" => "task/#{task_a.id}"}
           }
         })
@@ -534,7 +534,7 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
             "merge_commit_sha" => "cafebabe",
             "merged_at" => "2026-07-25T21:18:05Z",
             "body" => "",
-            "user" => %{"login" => "rowan"},
+            "user" => %{"login" => "alex"},
             "head" => %{"ref" => "task/#{task.id}"}
           }
         })

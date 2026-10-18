@@ -173,7 +173,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   # A reconnect mount is one LiveView has re-established after a transient
-  # socket drop (Rowan's 1006). LiveView increments the `_mounts` connect
+  # socket drop (a 1006 close). LiveView increments the `_mounts` connect
   # param on every reconnect, so `> 0` distinguishes a reconnect from a
   # fresh first mount. A first mount (`_mounts == 0` or absent, or a
   # disconnected/static render) must still require the explicit Join
@@ -188,7 +188,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   # Task 01a08d5a stage 3: committed mic/camera intent survives a remount.
   #
-  # THE DEFECT. A LiveView socket drop (Rowan's 1006) tears the LV process
+  # THE DEFECT. A LiveView socket drop (a 1006 close) tears the LV process
   # down; the reconnect mount runs `attach/2` again, which re-seeded
   # `:mic_enabled` / `:camera_enabled` to the literal `true`. The
   # `#meeting-client` dataset rendered from those assigns is what the JS
@@ -450,7 +450,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   Task 019e4b3e stage 2: a LiveView process dying does NOT mean the user
   left the meeting. Phoenix tears the LV process down on a transient socket
-  drop (Rowan's 1006), and the LiveKit room is now kept alive across that
+  drop (a 1006 close), and the LiveKit room is now kept alive across that
   reconnect (stage 1). Broadcasting "left" here would evict a participant
   who is merely reconnecting — the exact "I'm not in the participant list"
   symptom for the reconnect case.

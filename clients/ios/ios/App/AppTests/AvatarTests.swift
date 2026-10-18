@@ -218,7 +218,7 @@ final class AvatarTests: XCTestCase {
     // MARK: Renderer
 
     func testInitialsFollowTheInAppRule() {
-        XCTAssertEqual(AvatarRenderer.initials("Harper Lee", count: 2), "JL")
+        XCTAssertEqual(AvatarRenderer.initials("Sam Lee", count: 2), "SL")
         XCTAssertEqual(AvatarRenderer.initials("  ada  bea cy ", count: 2), "AB")
         XCTAssertEqual(AvatarRenderer.initials("Octavius Bot", count: 1), "O")
         XCTAssertEqual(AvatarRenderer.initials("élodie durand", count: 2), "ÉD")
@@ -248,7 +248,7 @@ final class AvatarTests: XCTestCase {
     }
 
     func testTheDiscIsTheTonesColourAndAnAgentGetsBase300() {
-        let person = AvatarRenderer.fallback(name: "Harper Lee", tone: "3", theme: AvatarRenderer.light)
+        let person = AvatarRenderer.fallback(name: "Sam Lee", tone: "3", theme: AvatarRenderer.light)
         XCTAssertTrue(near(pixel(person, x: 96, y: 8), AvatarRenderer.fallbackPairs[3].background))
         let agent = AvatarRenderer.fallback(name: "Octavius", tone: "agent", theme: AvatarRenderer.light)
         XCTAssertTrue(near(pixel(agent, x: 96, y: 8), AvatarRenderer.light.base300))

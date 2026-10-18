@@ -43,7 +43,7 @@ defmodule PlatformWeb.ThemeToggleTest do
       assert html =~ ~s(phx-hook="ThemeToggle")
     end
 
-    test "shell renders sun and moon icon spans for ThemeToggle", %{conn: conn} do
+    test "shell renders the light and dark glyphs for ThemeToggle", %{conn: conn} do
       {:ok, space} =
         Chat.create_space(%{
           name: "Theme Icons Space",
@@ -53,12 +53,25 @@ defmodule PlatformWeb.ThemeToggleTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/chat/#{space.slug}")
 
-      # Icon spans that ThemeToggle.updateIcon() manages
-      assert html =~ ~s(data-icon="sun")
-      assert html =~ ~s(data-icon="moon")
+      # Glyphs that ThemeToggle.updateIcon() manages
+      assert html =~ ~s(data-icon="light")
+      assert html =~ ~s(data-icon="dark")
+
+      # The dark glyph is an inline SVG drawn in currentColor at size-4, so no
+      # class token names it (task 01a14b9e stage 6). The hook only toggles
+      # `hidden` on it, which works on an <svg> as on a <span>.
+      dark =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s(#theme-toggle [data-icon="dark"]))
+
+      assert LazyHTML.tag(dark) == ["svg"]
+      assert LazyHTML.attribute(dark, "class") == ["size-4 align-middle"]
+      assert LazyHTML.attribute(dark, "stroke") == ["currentColor"]
+      assert dark |> LazyHTML.query("path") |> LazyHTML.tag() == ["path"]
     end
 
-    test "sun icon starts hidden (dark default, moon should be visible)", %{conn: conn} do
+    test "the light glyph starts hidden (dark default, the dark glyph is visible)", %{conn: conn} do
       {:ok, space} =
         Chat.create_space(%{
           name: "Theme Default Space",
@@ -68,9 +81,9 @@ defmodule PlatformWeb.ThemeToggleTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/chat/#{space.slug}")
 
-      # In dark mode (default), sun icon is hidden and moon is visible
-      # The sun span should include the "hidden" class
-      assert html =~ ~r/data-icon="sun"[^>]*class="[^"]*hidden/
+      # In dark mode (default), the light glyph is hidden and the dark glyph is
+      # visible. The light span should include the "hidden" class
+      assert html =~ ~r/data-icon="light"[^>]*class="[^"]*hidden/
     end
   end
 

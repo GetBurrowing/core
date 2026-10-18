@@ -128,7 +128,7 @@ When `loading={true}`, the button:
 - Sets `aria-busy="true"`.
 - CSS rule (`05-app-css-diff.md` §3) applies `cursor: wait; pointer-events: none`.
 
-**Delay-before-show:** the `loading={true}` flag should be flipped only after a 100ms delay from the action firing, not immediately. Phase 4 wires this in the JS hook `~/projects/core/apps/platform/assets/js/hooks/button_loading.js` (see `IMPLEMENTATION.md` step 3). Per Marlowe 2026-05-09: most Burrow messages are near-instant; the delay prevents flicker.
+**Delay-before-show:** the `loading={true}` flag should be flipped only after a 100ms delay from the action firing, not immediately. Phase 4 wires this in the JS hook `~/projects/core/apps/platform/assets/js/hooks/button_loading.js` (see `IMPLEMENTATION.md` step 3). Per the design lead 2026-05-09: most Burrow messages are near-instant; the delay prevents flicker.
 
 ### Disabled
 

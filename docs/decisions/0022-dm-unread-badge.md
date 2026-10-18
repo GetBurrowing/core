@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-21  
 **Status:** Accepted  
-**Author:** Sage (Harper Parker / Fabrikam)
+**Author:** Sage (a team member)
 
 ---
 

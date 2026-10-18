@@ -330,7 +330,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                 class="w-full h-full block"
                 data-role="stack-detail-dag-svg"
               >
-                <%!-- Edges render as dashed lines with no arrowhead per Rowan's
+                <%!-- Edges render as dashed lines with no arrowhead per the operator's
                  T8 stage-5 review: direction is implicit from the
                  topological-row layout (sources are above targets), so
                  the marker-end arrowhead is intentionally omitted. --%>
@@ -627,7 +627,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
       </div>
       <%!-- Stage 3 of task 019e2c27 (Stack-Level Review Rollup): the rollup
          overlay. Modal/takeover surface that floats OVER the stack pane
-         (NOT inline in it — the inline layout was the design Rowan rejected
+         (NOT inline in it — the inline layout was the design the operator rejected
          from v1). Lists every open ReviewRequest across the stack's
          members; each row renders the member task title + the canvas
          content inline via the same CanvasRenderer.canvas_document

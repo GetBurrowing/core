@@ -71,6 +71,9 @@ MAC_ERROR_CODES = (
 AGENTS_ABSENT_PROFILE = "off"
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+# A Docker Hub namespace (user or organisation): lowercase alphanumerics,
+# single separators between them.
+_IMAGE_NAMESPACE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -414,6 +417,24 @@ def _rules(m, bad, errors, present=frozenset()):
         check_url("backup.endpoint", backup["endpoint"])
         check_ref("backup.access_key_ref", backup["access_key_ref"])
         check_ref("backup.secret_key_ref", backup["secret_key_ref"])
+
+    # [images] image_namespace: required, no default (task 01a14b9e).
+    namespace = m["images"]["image_namespace"]
+    if namespace is None:
+        if not _is_bad("images.image_namespace", bad):
+            add(
+                "missing_required",
+                "images.image_namespace",
+                "image_namespace is required and has no default: the Docker Hub namespace "
+                "the suite-* images are pulled from (docker.io/<image_namespace>/suite-core)",
+            )
+    elif not _IMAGE_NAMESPACE_RE.match(namespace):
+        add(
+            "invalid_value",
+            "images.image_namespace",
+            "must be a Docker Hub namespace: lowercase letters and digits, "
+            "with single . _ or - between them",
+        )
 
     # [images.refs]
     for container, ref in m["images"]["refs"].items():

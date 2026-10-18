@@ -52,7 +52,7 @@
 /*
  * Force-include hero icon classes used in dynamic expressions (if/else)
  * so Tailwind's scanner picks them up even when not statically present:
- * hero-eye hero-eye-slash hero-user-group hero-sun hero-moon
+ * hero-eye hero-eye-slash hero-user-group hero-sun
  */
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
@@ -75,7 +75,7 @@
   default: true;
   prefersdark: false;
   color-scheme: "light";
-  /* Burrow surfaces (task 01a120c5, Harper's 2026-10-05 "minimal recolor"
+  /* Burrow surfaces (task 01a120c5, the product lead's 2026-10-05 "minimal recolor"
      spec): warm off-whites. Hex literals, because a hex cannot drift from
      its own comment. */
   --color-base-100: #fbfaf9;
@@ -195,11 +195,11 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Burrow dark surfaces (task 01a120c5, Harper's 2026-10-05 "minimal
+  /* Burrow dark surfaces (task 01a120c5, the product lead's 2026-10-05 "minimal
      recolor" spec): neutral charcoals with a faint cool cast.
 
      GROUND. The spec's ground is --color-base-200 #111214, superseding the
-     2026-09-06 ruling by Harper Parker that kept #000306 and rejected the
+     2026-09-06 ruling by Sam Taylor that kept #000306 and rejected the
      mockup's #0C1016 on panel-against-ground separation (the pre-Burrow
      #171b25 panel was 1.2011:1 against #000306 and 1.1077:1 against
      #0C1016). The #191b20 panel is 1.0879:1 against the Burrow ground. Raised fills (--color-base-300 #25272b) are now LIGHTER
@@ -2014,7 +2014,7 @@ body, .font-suite {
    the composer — see the `.chat-jump-anchor` rules below. It shipped as a
    mobile-only overlay (task 01a0419a stage 2) with desktop keeping an
    in-flow flex sibling; task 01a0419a v3 promoted it to all widths on
-   Rowan's 2026-08-27 instruction, per canvas revision 37. There is no
+   the operator's 2026-08-27 instruction, per canvas revision 37. There is no
    in-flow chip at any width now.
    It is still NOT a floating action button in the Burrow sense: Burrow's FAB
    offset (safe-area + 1.5rem + --bottom-nav-height, action_patterns.ex:232)
@@ -2315,7 +2315,7 @@ body, .font-suite {
 /* The mobile overlay (task 01a0419a stage 2). STRUCTURE ONLY — the pill's
    own appearance is unchanged here and lands in stage 3.
 
-   The overlay applies AT EVERY WIDTH as of task 01a0419a v3, on Rowan's
+   The overlay applies AT EVERY WIDTH as of task 01a0419a v3, on the operator's
    2026-08-27 instruction ("works great on mobile, can we please make
    desktop consistent with mobile?"). That is the exact revisit condition
    the design canvas named when it originally scoped the overlay to mobile,
@@ -2701,7 +2701,7 @@ body, .font-suite {
    The width that matters is the BAR's, not the viewport's -- at one
    1280px viewport this component renders a 712px bar on `/meetings`
    and a 319px bar inside the quickmeet's `w-80` panel, and it was the
-   second of those that clipped the Leave button in the capture Harper
+   second of those that clipped the Leave button in the capture the product lead
    rejected. Four labelled pills plus their gaps measure ~380px, hence
    the 389px threshold.
 
@@ -5048,7 +5048,7 @@ body, .font-suite {
   /* Desktop (>= 768px): bottom sheet floats as a TRUE-centered card —
      anchored to the viewport center regardless of content height, so a
      short form (Create Project) opens in the same place as a tall one
-     (New Task). Marlowe 2026-07-12: dialogs must open aligned to the same
+     (New Task). Design review 2026-07-12: dialogs must open aligned to the same
      spot. Entrance slides up 1rem into center; reduced-motion rule below
      already disables it. Width is the form-modal standard token
      --sheet-form-max-width (576px; task 019f5e32). */
@@ -5648,7 +5648,7 @@ body, .font-suite {
 
   /* Disabled (boundary) buttons: solid /40 token, NOT an opacity multiplier.
      opacity-30 stacked on the /60 base color rendered ≈18% white (≈1.8:1 on
-     the drawer bg) — invisible on a real phone (Marlowe, 2026-07-09). /40 is
+     the drawer bg) — invisible on a real phone (design review, 2026-07-09). /40 is
      ≈3.5:1: clearly dimmer than enabled (≈6:1) but unmistakably present.
      WCAG 1.4.11 exempts disabled controls; we hold its 3:1 floor anyway
      because "present but disabled" is this drawer's whole convention. */
@@ -5748,7 +5748,7 @@ body, .font-suite {
      PLUS the device safe-area inset. The shared .safe-area-bottom utility
      REPLACES padding-bottom with the inset, which is 0 everywhere except
      notched iOS — on desktop PWA the window's rounded corners then clipped
-     the label (found by Marlowe, 2026-07-05). */
+     the label (found in design review, 2026-07-05). */
   .mobile-drawer-footer-safe {
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
@@ -5826,7 +5826,7 @@ body, .font-suite {
      the button. Removed 2026-08-11: Tailwind compiles `hover:` and
      `group-hover:` inside `@media (hover: hover)`, so on a touch device the
      reveal rule never matches and the control is unreachable rather than
-     merely quiet (Marlowe: "hover doesn't work on mobile"). Rowan had already
+     merely quiet (the designer: "hover doesn't work on mobile"). The operator had already
      chosen visible-at-rest for the task row's control, so both surfaces now
      agree.
 
@@ -5864,7 +5864,7 @@ body, .font-suite {
   }
 
   /* Dismiss control on the chat notification opt-in banner (task 019ffb7b
-     stage 5, Marlowe 2026-08-13: "dismissal could take the form of an 'x' in
+     stage 5, Design review 2026-08-13: "dismissal could take the form of an 'x' in
      top right corner of the banner").
 
      Written as PLAIN SELECTORS, not `@apply hover:…`. Tailwind compiles every
@@ -6130,7 +6130,7 @@ body, .font-suite {
   /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"
      drawer + supporting undo toast. The v2 per-section chip/footer rows
      were removed in favour of one quiet entry at the rail's foot —
-     Marlowe's review judged per-section noise as the bigger problem than
+     design review judged per-section noise as the bigger problem than
      per-section context loss. Pattern is closest to Notion's "N more"
      row lifted from per-section to the sidebar level. */
 
@@ -6148,7 +6148,7 @@ body, .font-suite {
      space regardless of how many channels are hidden (1 vs 20), and the
      internal scroll engages whenever content exceeds the cap. This
      trades a little empty space at low hidden counts for a consistent,
-     predictable footprint (per Marlowe's 2026-05-29 review: "fixed height
+     predictable footprint (per the 2026-05-29 design review: "fixed height
      that gets adjusted appropriately to mobile"). Responsive by design
      — caps at 360px on tall viewports, scales to 50vh on short ones. */
   .channel-hidden-drawer-panel {
@@ -6183,7 +6183,7 @@ body, .font-suite {
 
   /* Trigger row — silent at N=0 (the wrapper :if guards that). Visually
      quiet by default so it reads as "rail chrome" not "actionable noise".
-     No leading eye icon — Marlowe's review explicitly removed it. */
+     No leading eye icon — design review explicitly removed it. */
   .channel-hidden-drawer-trigger {
     @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
@@ -6200,7 +6200,7 @@ body, .font-suite {
      IN-FLOW as a flex-shrink-0 child of <aside>, sitting between the
      scrolling channel nav (flex-1, absorbs the toast's height by
      shrinking when it appears) and the pinned "+ New channel" button
-     below. This is per Marlowe's 2026-05-29 review: an earlier absolute-
+     below. This is per the 2026-05-29 design review: an earlier absolute-
      positioned float trial overlapped scroll-area content for 4s and
      felt intrusive; the in-flow approach trades a soft scroll-area
      compression for stable pinned chrome and zero content overlap
@@ -6436,7 +6436,7 @@ body, .font-suite {
   }
 
   .card-body {
-    padding: 1.5rem; /* 24px — roomier density, Marlowe's decision 2026-07-11 */
+    padding: 1.5rem; /* 24px — roomier density, the design decision 2026-07-11 */
   }
 
   /* Opt-in hover lift for interactive cards (kanban etc.) — never blanket. */
@@ -6675,7 +6675,7 @@ body, .font-suite {
     border-left: 3px solid var(--agent-accent-safe);
   }
 
-  /* Form-control height consistency (Marlowe 2026-07-12): inside a
+  /* Form-control height consistency (design review 2026-07-12): inside a
      .form-fields form every single-line control shares one 2.5rem height —
      selects may not render shorter than inputs, and single-row textareas
      match. Type stays DaisyUI's default-size (uniform across controls);
@@ -7581,7 +7581,7 @@ body, .font-suite {
 
 /* The separator between title and byline. Its own element, aria-hidden,
    so the byline's text node is the attribution and nothing else — a
-   test that reads the byline gets `Harper · 2m ago`, not a dash. */
+   test that reads the byline gets `Sam · 2m ago`, not a dash. */
 .candidate-card__dash {
   font-size: 9.5px;
   color: var(--cc-byline);
@@ -8393,7 +8393,7 @@ body, .font-suite {
      `none` in that state.
    * Silent: `data-wave-state="idle"`, inline transforms dropped, and this
      slow low-amplitude breath runs (0.15 to 0.3, 2.4s each way). Deviation 1
-     of the stage spec: Saru's canvas has a static idle; the ticket, Rowan's
+     of the stage spec: Saru's canvas has a static idle; the ticket, the operator's
      ask, wants "a subtle idle animation when silent".
    * Reduced motion: no animation in any state and a static mid-height
      profile (`--wave-mid`, set per bar by the component). The universal

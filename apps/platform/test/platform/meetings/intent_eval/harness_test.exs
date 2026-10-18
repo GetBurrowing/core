@@ -205,6 +205,58 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     end
   end
 
+  # ── endpoint override (task 01a14b9e stage 2) ─────────────────────────
+
+  describe "INTENT_EVAL_BASE_URL" do
+    setup %{root: root} do
+      previous = System.get_env("INTENT_EVAL_BASE_URL")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("INTENT_EVAL_BASE_URL", previous),
+          else: System.delete_env("INTENT_EVAL_BASE_URL")
+      end)
+
+      write_slice!(root, rows())
+      prompt = write_prompt!(root, "p.txt", "classify: {{meeting_transcript_chunk}}")
+      write_config!(root, "c", %{"inline_file" => prompt})
+      Process.put(:stub_answers, %{})
+      :ok
+    end
+
+    defp manifest_for(root, extra_opts) do
+      opts =
+        [root: root, mode: :record, live_module: StubProvider, repo_root: root, write: false] ++
+          extra_opts
+
+      assert {:ok, result} = Harness.run("c", opts)
+      result["manifest"]
+    end
+
+    test "overrides the config's base_url, and is recorded as an override", %{root: root} do
+      System.put_env("INTENT_EVAL_BASE_URL", " http://192.0.2.30:9/v1 ")
+      manifest = manifest_for(root, [])
+      assert manifest["base_url_host"] == "192.0.2.30:9"
+      assert manifest["base_url_overridden"] == true
+    end
+
+    test "an explicit --base-url beats it", %{root: root} do
+      System.put_env("INTENT_EVAL_BASE_URL", "http://192.0.2.30:9/v1")
+      manifest = manifest_for(root, base_url: "http://192.0.2.40:9/v1")
+      assert manifest["base_url_host"] == "192.0.2.40:9"
+    end
+
+    test "unset or blank leaves the config's base_url", %{root: root} do
+      System.delete_env("INTENT_EVAL_BASE_URL")
+      manifest = manifest_for(root, [])
+      assert manifest["base_url_host"] == "127.0.0.1:9"
+      assert manifest["base_url_overridden"] == false
+
+      System.put_env("INTENT_EVAL_BASE_URL", "   ")
+      assert manifest_for(root, [])["base_url_host"] == "127.0.0.1:9"
+    end
+  end
+
   # ── replay cache miss ─────────────────────────────────────────────────
 
   describe "replay cache miss" do

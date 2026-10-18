@@ -10,7 +10,7 @@ defmodule Platform.Experiments.Guardrails do
   `Repo.one` cannot see two); else the BUILT-IN DEFAULT:
 
     * `require_human_approval: false` — launch approval is opt-in per org
-      (Rowan, 2026-09-24). Under the default an agent's `experiment_start`
+      (product decision, 2026-09-24). Under the default an agent's `experiment_start`
       goes straight to `running`, still inside every other rule below.
     * `max_live: 3`
     * `allowed_surfaces:` every registered surface except a mail SEND path

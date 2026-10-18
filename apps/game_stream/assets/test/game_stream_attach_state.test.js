@@ -14,7 +14,7 @@ import {
 /**
  * The attach state of a game_stream frame (task 01a0dbd6 stage 1).
  *
- * Reproduced on the moon rig (force_relay through hive coturn): with the
+ * Reproduced on the test-host rig (force_relay through build-host coturn): with the
  * chat canvas panel open, the node renders twice (desktop panel + mobile
  * overlay, and the inline chat copy). When the window narrows below `lg`
  * the overlay copy becomes rendered and takes the stream; widening back

@@ -461,7 +461,7 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
           "intent_ack",
           %{
             "intent_id" => intent_id,
-            "subagent_id" => "historian.moon",
+            "subagent_id" => "historian.test-host",
             "status" => "working"
           },
           %{}
@@ -475,7 +475,7 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
           "intent_ack",
           %{
             "intent_id" => intent_id,
-            "subagent_id" => "historian.moon",
+            "subagent_id" => "historian.test-host",
             "status" => "completed"
           },
           %{}

@@ -6,6 +6,7 @@ version 1, documented in deployment/installer/mac/README.md):
 
   setup init --from <manifest> [--dir D] [--name N] [--domain HOST]
              [--auth-host HOST] [--livekit-host HOST] [--meetings on|off]
+             [--image-namespace NS]
   setup status --json [--dir D]
   setup run <step> [--dir D] [--input NAME=@/path | NAME=env:VAR |
                     NAME=keychain:ITEM | NAME=value (non-secret only)] ...
@@ -331,6 +332,8 @@ def _init(args, env, out):
         put(["domain", "livekit_host"], args.livekit_host)
     if args.meetings:
         put(["services", "meetings"], args.meetings == "on")
+    if args.image_namespace:
+        put(["images", "image_namespace"], args.image_namespace)
     errors, normalized = validate(raw)
     if errors:
         raise SetupError(
@@ -492,6 +495,11 @@ def parser():
     c.add_argument("--auth-host")
     c.add_argument("--livekit-host")
     c.add_argument("--meetings", choices=("on", "off"))
+    c.add_argument(
+        "--image-namespace",
+        help="Docker Hub namespace of the suite-* images (images.image_namespace; required "
+        "unless the --from manifest sets it)",
+    )
 
     c = sub.add_parser("status", help="every step's state as JSON")
     c.add_argument("--json", action="store_true", help="accepted for clarity; output is JSON")

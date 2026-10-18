@@ -64,7 +64,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptUnmergeIntentA
 
   ## What this migration does NOT and CANNOT demonstrate
 
-  The eval endpoint (`http://192.0.2.200:8085/v1`) was unreachable
+  The eval endpoint (`http://<eval host>:8085/v1`) was unreachable
   when this shipped, so no before/after model comparison backs it. The
   accompanying tests prove the SEEDED ROW changed and that the pipeline
   handles the response shape the new body asks for; they do not prove

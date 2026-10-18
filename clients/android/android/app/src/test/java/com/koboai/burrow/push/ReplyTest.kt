@@ -68,7 +68,7 @@ class ReplyTest {
 
         val n = posted(app, payload.tag)
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)!!
-        assertEquals(listOf("@Marlowe can you check the banner copy", "On it"), style.messages.map { it.text.toString() })
+        assertEquals(listOf("@Robin can you check the banner copy", "On it"), style.messages.map { it.text.toString() })
         assertNull(style.messages.last().person)
         assertEquals("You", style.user.name)
         // MessagingStyle renders a person-less message under the user's
@@ -92,7 +92,7 @@ class ReplyTest {
             assertEquals(R.drawable.ic_stat_error, n.smallIcon.resId)
             assertEquals(0, n.flags and Notification.FLAG_AUTO_CANCEL)
             assertEquals(
-                "/chat/internal-fabrikam-sxi?message=0192-m",
+                "/chat/internal-legacy-sxi?message=0192-m",
                 shadowOf(n.contentIntent).savedIntent.getStringExtra(NotificationPresenter.EXTRA_PATH),
             )
         }
@@ -109,7 +109,7 @@ class ReplyTest {
 
     @Test
     fun `a reply to another install uses that install's bearer only`() {
-        val other = PushPayload.from(mention + ("install_host" to "suite.milv.life"))
+        val other = PushPayload.from(mention + ("install_host" to "suite.example.org"))
         val transport = RecordingTransport(mapOf(route to HttpResponse(201, "{}")))
         assertFalse(handler(transport).handle(app, other, "On it"))
         // Not signed in there: no request, and never install A's bearer.

@@ -72,7 +72,7 @@ defmodule Platform.Responsibilities.Handlers.TaskTriage do
   has not been wired yet.
 
   `handle_output/2` and `handle_output/3` log a placeholder warning and
-  return `:ok`. Rowan/Marlowe iterate the prompt template content live via
+  return `:ok`. The operator and designer iterate the prompt template content live via
   `prompt_template_update` MCP after the seed migration lands — this
   handler doesn't gate that iteration.
   """

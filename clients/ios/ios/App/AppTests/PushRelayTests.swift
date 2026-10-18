@@ -111,7 +111,7 @@ final class PushRelayTests: XCTestCase {
         let out = prep.prepare(relayed(host: f.host, sealed: f.sealed))
 
         XCTAssertEqual(out.title, "Dana in launch")
-        XCTAssertEqual(out.body, "@Marlowe can you check the deck before 3?")
+        XCTAssertEqual(out.body, "@Robin can you check the deck before 3?")
         XCTAssertEqual(out.categoryIdentifier, "BURROW_MENTION")
         XCTAssertEqual(out.threadIdentifier, "suite-b.localhost:\(f.inner["thread_id"]!)", "the NSE adds the host prefix")
         XCTAssertEqual(out.userInfo["space_id"] as? String, f.inner["space_id"])
@@ -437,7 +437,7 @@ final class PushRelayTests: XCTestCase {
     private func chatPush(host: String, space: String?, author: String, kind: String = "chat_mention") -> UNNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = space.map { "\(author) in \($0)" } ?? author
-        content.body = "@Marlowe can you check the deck before 3?"
+        content.body = "@Robin can you check the deck before 3?"
         var info: [AnyHashable: Any] = [
             "kind": kind, "install_host": host, "space_id": UUID().uuidString, "message_id": UUID().uuidString,
             "author_id": UUID().uuidString, "author_type": "user", "author_name": author,
@@ -454,7 +454,7 @@ final class PushRelayTests: XCTestCase {
     /// iOS 27 draws a communication notification as sender, conversation
     /// name, body, and the conversation name ONLY for a group (two or more
     /// recipients); `content.subtitle` is never drawn. Measured on the
-    /// simulator: "Dana, launch · B, @Marlowe ..." (review round 2 evidence).
+    /// simulator: "Dana, launch · B, @Robin ..." (review round 2 evidence).
     func testTwoSignedInInstallsPutTheInstallInADrawnGroupName() throws {
         let hosts = ["suite-a.localhost", "suite-b.localhost"]
         let (prep, _) = preparer(key: nil, hosts: hosts, signedIn: Set(hosts))

@@ -3,7 +3,7 @@ defmodule Platform.Repo.Migrations.ForceUpdatePromptTemplatesSyncLiveRows2026091
 
   @moduledoc """
   PR #995. On 2026-09-10 five `prompt_templates` rows were patched directly in the
-  database on both installs (fabrikam and milv): `dispatch.planning`,
+  database on both installs (install A and install B): `dispatch.planning`,
   `dispatch.review_e2e`, `federation.preamble`, `nudge`, `dispatch.deploying`.
   The sibling change to `do_default_templates/0` makes each descriptor
   byte-identical to the patched row.
@@ -14,7 +14,7 @@ defmodule Platform.Repo.Migrations.ForceUpdatePromptTemplatesSyncLiveRows2026091
   earlier force-update migrations (2026-07-31 through 2026-08-16) rewrite
   these rows after the seed runs. This migration is that last one: it writes
   `default_content_for_slug/1` for each of the five slugs, which also
-  collapses the fabrikam/milv drift on `dispatch.planning` (one install carried a
+  collapses the install A/install B drift on `dispatch.planning` (one install carried a
   trailing newline the other did not).
 
   Same shape as `20260908235900_force_update_architect_review_plan_plan_level_finding`:

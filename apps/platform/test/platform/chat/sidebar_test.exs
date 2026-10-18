@@ -167,7 +167,7 @@ defmodule Platform.Chat.SidebarTest do
   # ── Archived orgs drop out of the rendered sidebar (task 019f4eaa) ───────
 
   describe "archived orgs vs the sidebar" do
-    # Marlowe, walking the review: scheduling Paragon for deletion hid its
+    # Robin, walking the review: scheduling Paragon for deletion hid its
     # channels but LEFT its section header in the sidebar, sitting above an
     # empty "No channels yet" placeholder — the org read as half-deleted.
     # The org cascade hides projects and chat_spaces; a section is its own row

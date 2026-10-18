@@ -50,7 +50,7 @@ defmodule PlatformWeb.InboxLiveTest do
           source_type: "chat_message",
           source_id: Ecto.UUID.generate(),
           title: "You were mentioned",
-          body: "Rowan mentioned you",
+          body: "Alex mentioned you",
           url: "/chat/general"
         },
         Map.new(overrides)
@@ -269,7 +269,7 @@ defmodule PlatformWeb.InboxLiveTest do
           [
             kind: "meeting_invited",
             source_type: "meeting",
-            title: "Rowan invited you to Weekly sync",
+            title: "Alex invited you to Weekly sync",
             url: "/meetings/weekly-sync"
           ],
           overrides
@@ -383,7 +383,7 @@ defmodule PlatformWeb.InboxLiveTest do
 
       # The PubSub insert path calls the same section_for/1, so the previously
       # hidden Meetings section must appear carrying the row.
-      invite = invite!(user, title: "Rowan invited you to Live one")
+      invite = invite!(user, title: "Alex invited you to Live one")
 
       assert has_element?(lv, ~s([data-section="meetings"] #{row_selector(invite)}))
       refute has_element?(lv, ~s([data-section="review"] #{row_selector(invite)}))
@@ -667,7 +667,7 @@ defmodule PlatformWeb.InboxLiveTest do
 
   # ── Bulk selection (task 01a00108 stage 2) ─────────────────────────────
   #
-  # Harper's report was "I have to click each and every message to clear it
+  # Sam's report was "I have to click each and every message to clear it
   # out". Clicking a row IS today's clear mechanism (open → mark_read → the row
   # leaves `unread_scope/1`), so the fix is not to the badge but to the batch:
   # tick rows, clear them together.

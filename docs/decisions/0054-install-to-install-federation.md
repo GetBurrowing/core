@@ -9,7 +9,7 @@
 
 ## Context
 
-On 2026-09-25 Rowan decided that every customer gets their own owned Burrow install. Multi-org
+On 2026-09-25 the product owner decided that every customer gets their own owned Burrow install. Multi-org
 inside one install is not a customer isolation boundary (ADR 0053 records this). Owned
 installs still need to collaborate: two businesses, or a family and a contractor, each on their
 own install, want one shared space.
@@ -83,7 +83,7 @@ is a server-side request forgery surface. Before the fetch the implementation mu
 https, resolve the host and refuse loopback, private (RFC 1918, ULA), link-local and
 cloud-metadata ranges, follow no redirects, and cap the response size. The only exception is
 `PEER_FEDERATION_ALLOW_HTTP`, which permits plain http, is honoured only outside `:prod`, and
-exists for the two-install rig on moon's podman network.
+exists for the two-install rig on test-host's podman network.
 
 **Revocation is unilateral.** Revoking sets the local row to `revoked`, persists that first,
 and only then sends a best-effort `relationship.revoke` notice. From that moment the revoking

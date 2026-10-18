@@ -134,9 +134,9 @@ describe("a spectator's hook writes nothing to the host's data channels", () => 
 
   it("losing the last slot (displaced) turns every path off again", () => {
     const { h } = hook({ slots: { 0: 0 } })
-    h.onDisplaced({ slot: 0, by: "Rowan" })
+    h.onDisplaced({ slot: 0, by: "Alex" })
     expect(h.router.player).toBe(false)
-    expect(h.displaced).toEqual({ slot: 0, by: "Rowan" })
+    expect(h.displaced).toEqual({ slot: 0, by: "Alex" })
     h.events.sent.length = 0
     drive(h)
     expect(h.events.sent).toEqual([])

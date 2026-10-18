@@ -281,7 +281,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
           })
 
         [item] = request.items
-        {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", filler(1_500))
+        {:ok, _} = ReviewRequests.reject_item(item.id, "alex", filler(1_500))
       end
 
       %{task: task}
@@ -347,7 +347,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
         })
 
       [item] = request.items
-      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "FAB overlaps the bottom nav")
+      {:ok, _} = ReviewRequests.reject_item(item.id, "alex", "FAB overlaps the bottom nav")
 
       {:ok, result} = ToolSurface.execute("review_item_list", %{"task_id" => task.id}, %{})
 

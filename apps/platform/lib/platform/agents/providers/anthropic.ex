@@ -335,7 +335,7 @@ defmodule Platform.Agents.Providers.Anthropic do
   # safe — an unclassified card is not due — and
   # `countdown_test.exs` binds the two numbers so neither can move
   # without the other being looked at. Do not raise the countdown to
-  # match this; it is a human review window (Harper, 2026-08-27).
+  # match this; it is a human review window (product decision, 2026-08-27).
   @receive_timeout_ms 60_000
 
   @doc """

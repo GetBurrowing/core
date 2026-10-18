@@ -58,8 +58,10 @@ the CLI says it needs, when it needs it.
 ## The loop
 
 1. Create the install once:
-   `suite-install setup init --from deployment/examples/mac-lite.install.toml --name <short-name> --domain <suite hostname>`
-   Use `mac.install.toml` instead if they want meetings.
+   `suite-install setup init --from deployment/examples/mac-lite.install.toml --name <short-name> --domain <suite hostname> --image-namespace <Docker Hub namespace>`
+   Use `mac.install.toml` instead if they want meetings. The image namespace
+   is whoever publishes their Suite images; there is no default, so ask
+   whoever gave them access.
    Keep every hostname exactly ONE label below the Cloudflare zone. With the
    zone `example.com`, use `--domain suite.example.com --auth-host auth-suite.example.com`,
    not `auth.suite.example.com`. Cloudflare's free certificate covers only one

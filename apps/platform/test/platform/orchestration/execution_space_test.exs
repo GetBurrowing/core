@@ -383,7 +383,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
         Chat.add_participant(space.id, %{
           participant_type: "user",
           participant_id: Ecto.UUID.generate(),
-          display_name: "Rowan",
+          display_name: "Alex",
           joined_at: DateTime.utc_now()
         })
 
@@ -414,7 +414,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       [msg] = ExecutionSpace.list_messages_with_participants(space.id)
 
       assert msg.id == message.id
-      assert msg.sender_name == "Rowan"
+      assert msg.sender_name == "Alex"
       assert msg.sender_type == "user"
       assert msg.content_type == "text"
       assert msg.log_only == false

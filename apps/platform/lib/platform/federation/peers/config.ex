@@ -20,7 +20,7 @@ defmodule Platform.Federation.Peers.Config do
   `allow_http?/0` reads `PEER_FEDERATION_ALLOW_HTTP` (same exact-`"true"`
   rule, same `:peer_federation_allow_http` override) and is honoured ONLY when
   `Application.get_env(:platform, :env) != :prod`. The two-install rig peers
-  speak plain http on moon's podman `dev` network; a production install always
+  speak plain http on the test rig's podman `dev` network; a production install always
   requires https, whatever the variable says.
 
   ## Advertised base URL

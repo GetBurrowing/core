@@ -166,7 +166,7 @@ const TOUCH_ON = { enabled: true, slop_px: 8, move_hz: 60, variant: null }
 const TOUCH_OFF = { enabled: false, slop_px: 8, move_hz: 60, variant: null }
 
 function roster(touch) {
-  const r = { multi: true, max_players: 2, slots: { 0: { peer_id: "peer-1", name: "Rowan" } }, spectators: 0, names: [] }
+  const r = { multi: true, max_players: 2, slots: { 0: { peer_id: "peer-1", name: "Alex" } }, spectators: 0, names: [] }
   // null: an older core that sends no touch map at all.
   if (touch !== null) r.touch = touch
   return r
@@ -382,7 +382,7 @@ describe("touch through the real hook", () => {
       ["leaving (src 0 loses its slot)", async ({ h }) => {
         await h.leave()
       }],
-      ["being displaced (viewer transfer)", ({ h }) => h.onDisplaced({ slot: 0, by: "Harper" })],
+      ["being displaced (viewer transfer)", ({ h }) => h.onDisplaced({ slot: 0, by: "Sam" })],
       ["touch turning off", ({ h }) => h.setRoster(roster(TOUCH_OFF))],
       ["destroyed", ({ h }) => h.destroyed()],
     ]
@@ -416,7 +416,7 @@ describe("touch through the real hook", () => {
     it("after a lost slot, a new touch sends nothing and the well turns off", async () => {
       setup({ coarse: true })
       const { h, well, touches } = await live()
-      h.onDisplaced({ slot: 0, by: "Harper" })
+      h.onDisplaced({ slot: 0, by: "Sam" })
       expect(well.hasAttribute("data-gs-touch")).toBe(false)
       const n = touches().length
       expect(down(well).prevented).toBe(false)

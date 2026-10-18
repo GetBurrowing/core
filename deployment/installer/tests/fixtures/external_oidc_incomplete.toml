@@ -44,6 +44,7 @@ mode = "external-oidc"
 target = "none"
 
 [images]
+image_namespace = "example"
 source = "preloaded"
 
 [day2]

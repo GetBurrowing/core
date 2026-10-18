@@ -20,8 +20,8 @@ import java.io.ByteArrayInputStream
 /**
  * The share sheet on the real transport against a TLS MockWebServer.
  *
- * On 2026-10-10 suite.milv.life began answering every path, the `/api/app` routes
- * included, with a 302 to burrow.red-st.ar. The transport never follows a
+ * On 2026-10-10 suite.example.test began answering every path, the `/api/app` routes
+ * included, with a 302 to burrow.example.invalid. The transport never follows a
  * redirect, so `GET /api/app/spaces` failed, the sheet said "Couldn't load
  * your spaces", and because `upload_config` was only asked after the space
  * list loaded, it also said "Burrow can send files up to 8 MB each" about an

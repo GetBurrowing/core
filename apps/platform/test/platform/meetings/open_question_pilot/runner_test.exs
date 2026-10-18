@@ -52,12 +52,25 @@ defmodule Platform.Meetings.OpenQuestionPilot.RunnerTest do
   end
 
   describe "the mix task's flags" do
+    setup do
+      previous = System.get_env("INTENT_EVAL_BASE_URL")
+      System.delete_env("INTENT_EVAL_BASE_URL")
+
+      on_exit(fn ->
+        if previous,
+          do: System.put_env("INTENT_EVAL_BASE_URL", previous),
+          else: System.delete_env("INTENT_EVAL_BASE_URL")
+      end)
+
+      :ok
+    end
+
     test "default to the stage's caps and the configured classifier endpoint" do
       opts = RunTask.parse_args!([])
       assert opts[:max_metric_calls] == 300
       assert opts[:hard_call_cap] == 400
       assert opts[:reflection_cap] == 40
-      assert opts[:base_url] == "http://192.0.2.200:8085/v1"
+      assert opts[:base_url] == "http://localhost:8085/v1"
       assert opts[:model] == "classifier"
       assert opts[:out_dir] == "priv/imp_pilot/open_question"
 
@@ -67,6 +80,18 @@ defmodule Platform.Meetings.OpenQuestionPilot.RunnerTest do
       assert opts[:out_dir] == "/x"
 
       assert_raise Mix.Error, fn -> RunTask.parse_args!(~w(--skip-baseline)) end
+    end
+
+    # Task 01a14b9e stage 2: the endpoint is the operator's, given at run time.
+    test "INTENT_EVAL_BASE_URL replaces the shipped endpoint; --base-url beats both" do
+      System.put_env("INTENT_EVAL_BASE_URL", " http://192.0.2.10:8085/v1 ")
+      assert RunTask.parse_args!([])[:base_url] == "http://192.0.2.10:8085/v1"
+
+      assert RunTask.parse_args!(~w(--base-url http://192.0.2.20:8085/v1))[:base_url] ==
+               "http://192.0.2.20:8085/v1"
+
+      System.put_env("INTENT_EVAL_BASE_URL", "  ")
+      assert RunTask.parse_args!([])[:base_url] == "http://localhost:8085/v1"
     end
   end
 

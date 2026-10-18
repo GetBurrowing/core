@@ -43,7 +43,7 @@ defmodule Platform.Meetings.IntentCorrections.TelemetryHandlerTest do
         target_role: "designer",
         target_agent_id: Platform.Types.UUIDv7.generate(),
         chunk_excerpt: "make the sidebar narrower",
-        subagent_id: "higgins.moon",
+        subagent_id: "higgins.test-host",
         dispatch_outcome: :dispatched
       },
       overrides

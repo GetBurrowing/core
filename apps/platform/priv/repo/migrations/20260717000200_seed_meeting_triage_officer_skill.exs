@@ -8,7 +8,7 @@ defmodule Platform.Repo.Migrations.SeedMeetingTriageOfficerSkill do
   missing — idempotent.
 
   Mirrors the shape of `20260326190000_seed_deploying_prompt_template.exs`.
-  Down: no-op (skill rows are not migration-owned once seeded — Rowan curates
+  Down: no-op (skill rows are not migration-owned once seeded — the operator curates
   them manually thereafter).
   """
   def up do

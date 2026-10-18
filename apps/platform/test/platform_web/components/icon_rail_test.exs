@@ -166,7 +166,7 @@ defmodule PlatformWeb.Components.IconRailTest do
 
     test "cluster assignment" do
       # Live = Chat / Tasks / Inbox / Activity
-      # Working = Skills / Context / Prompts / Meetings (Memory tabs under Context per Marlowe 2026-05-18)
+      # Working = Skills / Context / Prompts / Meetings (Memory tabs under Context per Robin 2026-05-18)
       # Admin = Admin
       by_key =
         destinations(root_user: true)
@@ -334,7 +334,7 @@ defmodule PlatformWeb.Components.IconRailTest do
 
   describe "icon_rail/1 — group eyebrows + indent-only child rows (stage 4)" do
     # No canonical destination carries children today (re-parenting is
-    # Marlowe's call); the rendering contract is locked in via the
+    # Robin's call); the rendering contract is locked in via the
     # `destinations` test seam.
     @stage4_destinations [
       %{
@@ -732,7 +732,7 @@ defmodule PlatformWeb.Components.IconRailTest do
   # Notification state is NOT in the rail (task 019ffb7b stage 4, revised).
   #
   # The first cut of this stage put a notification-state bell in the Live
-  # cluster, under the Inbox tile. Marlowe rejected the placement on review: the
+  # cluster, under the Inbox tile. Robin rejected the placement on review: the
   # row navigated nowhere, and it collided with the Inbox tile beside it, which
   # is where the actual notifications land. The row now lives on `/inbox` and
   # its behavioural tests moved with it, to `notification_state_test.exs`.

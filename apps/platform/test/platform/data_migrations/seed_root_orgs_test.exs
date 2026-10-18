@@ -3,8 +3,8 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   Regression coverage for `20260519143620_seed_root_orgs` (task 01a068f6
   stage 2).
 
-  The migration used to seed five hardcoded Fabrikam-brand orgs (Fabrikam root +
-  Soylent, Wayne-Tech, SXI, Paragon tenants) — the exact bug this task
+  The migration used to seed five hardcoded operator-brand orgs (the
+  operator's own root + Soylent, Wayne-Tech, SXI, Paragon tenants) — the exact bug this task
   fixes: every fresh Suite install came up owned by one customer's org
   structure. It now seeds exactly ONE root org (`parent_org_id IS NULL`),
   named/slugged from `ROOT_ORG_NAME`/`ROOT_ORG_SLUG`, defaulting to
@@ -20,6 +20,7 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   """
   use Platform.DataCase, async: false
 
+  alias Platform.Regression.InstallIdentityScanner, as: Scanner
   alias Platform.Repo
   alias Platform.Repo.Migrations.SeedRootOrgs
   alias Platform.Tenancy.Org
@@ -36,7 +37,10 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
                     "priv/repo/migrations/20260519143620_seed_root_orgs.exs"
                   ])
 
-  @fabrikam_brand_terms ~w(fabrikam soylent wayne_tech wayne-tech sxi paragon)
+  # The tenant names the old migration seeded. The operator's own root name
+  # is checked with the install-identity scanner instead, so this file does
+  # not spell it (task 01a14b9e stage 5).
+  @brand_terms ~w(soylent wayne_tech wayne-tech sxi paragon)
 
   setup_all do
     Code.require_file(@migration_path)
@@ -82,9 +86,14 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
 
     assert [%Org{name: "Root Org", slug: "root", parent_org_id: nil}] = Repo.all(Org)
 
-    for org <- Repo.all(Org), term <- @fabrikam_brand_terms do
-      refute String.downcase(org.name) == term, "org name matched Fabrikam-brand term #{term}"
-      refute String.downcase(org.slug) == term, "org slug matched Fabrikam-brand term #{term}"
+    for org <- Repo.all(Org) do
+      for term <- @brand_terms do
+        refute String.downcase(org.name) == term, "org name matched brand term #{term}"
+        refute String.downcase(org.slug) == term, "org slug matched brand term #{term}"
+      end
+
+      assert Scanner.hits(org.name) == [], "org name carries install identity"
+      assert Scanner.hits(org.slug) == [], "org slug carries install identity"
     end
   end
 
@@ -113,15 +122,16 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   # The prior tests above already exercise the same fresh-migrate shape;
   # this case is the plan's own named exhaustiveness assertion — checked
   # against every org row (not just the seeded one) and against the exact
-  # brand-term list the plan's validation payload names: fabrikam, soylent,
-  # wayne_tech, sxi, paragon. The payload's expectation is phrased as
-  # "matches OR CONTAINS", not exact-equality, so this uses
-  # `String.contains?/2` rather than `==` — a name like "Fabrikam Corp" would
-  # dodge an equality check but must still fail this test.
+  # brand-term list the plan's validation payload names: the operator's root
+  # name, soylent, wayne_tech, sxi, paragon. The payload's expectation is
+  # phrased as "matches OR CONTAINS", not exact-equality, so this uses
+  # `String.contains?/2` for the tenant names, and the install-identity
+  # scanner (whole tokens anywhere in the string) for the root name: a name
+  # like "<root> Corp" would dodge an equality check but must still fail.
   # `ROOT_ORG_ADMIN_EMAIL_DOMAIN` is included in the cleared-env set per
   # the payload's stated setup even though `SeedRootOrgs.up/0` never reads
   # it — only `ROOT_ORG_NAME` and `ROOT_ORG_SLUG` affect this migration.
-  test "case 1: a fresh migrate has zero Fabrikam references anywhere in the orgs table" do
+  test "case 1: a fresh migrate has zero operator-brand references anywhere in the orgs table" do
     System.delete_env("ROOT_ORG_NAME")
     System.delete_env("ROOT_ORG_SLUG")
     System.delete_env("ROOT_ORG_ADMIN_EMAIL_DOMAIN")
@@ -132,7 +142,15 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
 
     assert [%Org{name: "Root Org", slug: "root", parent_org_id: nil}] = orgs
 
-    banned = ~w(fabrikam soylent wayne_tech sxi paragon)
+    banned = ~w(soylent wayne_tech sxi paragon)
+
+    for org <- orgs do
+      assert Scanner.hits(org.name) == [],
+             "org #{org.id} name #{inspect(org.name)} carries install identity"
+
+      assert Scanner.hits(org.slug) == [],
+             "org #{org.id} slug #{inspect(org.slug)} carries install identity"
+    end
 
     for org <- orgs, term <- banned do
       refute String.contains?(String.downcase(org.name), term),

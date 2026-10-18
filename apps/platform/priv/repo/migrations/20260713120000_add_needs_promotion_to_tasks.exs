@@ -12,7 +12,7 @@ defmodule Platform.Repo.Migrations.AddNeedsPromotionToTasks do
   sees them but the badge doesn't render.
 
   A dedicated boolean (rather than a metadata JSONB key) gives the
-  kanban a partial index for the badge-count Marlowe may want later —
+  kanban a partial index for the badge-count the designer may want later —
   metadata JSONB would need a functional index.
   """
   def change do

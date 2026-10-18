@@ -562,10 +562,10 @@ defmodule Platform.Meetings.CandidatesTest do
 
     test "accepts a {reason, note} tuple" do
       {:ok, closed} =
-        Candidates.close(orphan_candidate!(), {:vetoed, "Rowan said not this quarter"})
+        Candidates.close(orphan_candidate!(), {:vetoed, "Alex said not this quarter"})
 
       assert closed.closed_reason == :vetoed
-      assert closed.closed_note == "Rowan said not this quarter"
+      assert closed.closed_note == "Alex said not this quarter"
     end
 
     test "is idempotent — the first close is the true one" do

@@ -77,7 +77,7 @@ defmodule Platform.Meetings.ScribeMisfireRateTest do
   alias Platform.Responsibilities.Responsibility
   alias Platform.Roles
 
-  # Measured at e86a2fca on the moon rig. See "What the gates do not
+  # Measured at e86a2fca on the test-host rig. See "What the gates do not
   # reach" in the moduledoc before moving either pin.
   @surviving_fp 25
   @survivors_by_shape %{

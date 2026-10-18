@@ -296,7 +296,7 @@ defmodule Platform.Federation.AttentionDispatchTest do
 
   describe "topic/1" do
     test "is keyed by the runtime_id string, which is what RuntimeChannel joins" do
-      assert AttentionDispatch.topic("rowan-claude-agent-1") == "runtime:rowan-claude-agent-1"
+      assert AttentionDispatch.topic("alex-claude-agent-1") == "runtime:alex-claude-agent-1"
     end
 
     test "is keyed by runtime_id and not by the linked agent's id" do

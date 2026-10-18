@@ -27,7 +27,7 @@ defmodule PlatformWeb.MeetingAgentController do
         "segments": [
           {
             "participant_identity": "user:...",
-            "speaker_name": "Rowan",
+            "speaker_name": "Alex",
             "text": "hello",
             "start_time": 0,
             "end_time": 0,

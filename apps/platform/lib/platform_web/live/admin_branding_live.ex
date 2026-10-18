@@ -51,7 +51,7 @@ defmodule PlatformWeb.AdminBrandingLive do
   ## The label budget is guidance, NOT validation
 
   iOS truncates a home-screen label at ~11–12 characters and Android at
-  ~12, so "Ellis Suite" renders as "Ellis S…" — the differentiator
+  ~12, so "Acme Workspace" renders as "Acme Works…" — the differentiator
   survives only if it comes FIRST. The form shows a live count against 11
   and says so, and then accepts whatever the admin types. Blocking a
   longer name would be wrong: the manifest `name` is also used untruncated
@@ -409,6 +409,26 @@ defmodule PlatformWeb.AdminBrandingLive do
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You don't have access to that page.")}
+    end
+  end
+
+  # Unset the uploaded icon (task 01a14b9e stage 6). The page re-renders
+  # in place: the preview strip reads `icon_urls/0`, which follows the row,
+  # and the root layout's icon links are a full redirect away, so redirect
+  # like the colour reset does.
+  def handle_event("reset_icon", _params, socket) do
+    case Branding.reset_source(actor(socket)) do
+      {:ok, %InstallBranding{}} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Icon reset to the Burrow default.")
+         |> redirect(to: ~p"/admin/branding")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You don't have access to that page.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "The icon could not be reset. Try again.")}
     end
   end
 

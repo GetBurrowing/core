@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — pending Rowan's approval
+Draft — pending the product owner's approval
 
 ## Context
 
@@ -105,7 +105,7 @@ Task includes an optional deploy target. UI provides a picker with these options
 
 | Target | Description | "Done" means |
 |--------|-------------|-------------|
-| **Hive Production** | Docker compose on Hive via GHCR + Watchtower | Container running new image, health check passes |
+| **Production host** | Docker compose on the production host via GHCR + Watchtower | Container running new image, health check passes |
 | **GitHub PR** | Deliverable is a merged PR | PR opened, CI green, merged to target branch |
 | **Google Drive** | Deliverable is a file/folder uploaded to Drive | File uploaded to specified folder, shareable link generated |
 | **None** | No deploy (docs, design, research, planning) | Task completed, no deploy step |

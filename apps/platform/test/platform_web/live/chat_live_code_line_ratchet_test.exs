@@ -563,11 +563,11 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # (upload wiring and its handle_event clauses) in chat_live.ex. That commit
   # did not move this pin, so the rollup tip failed here; task 01a1316b-677a
   # stage 1 (which does not touch chat_live.ex) records it. Measured by the
-  # guard on moon: 2397 + 50 = 2447.
+  # guard on test_host: 2397 + 50 = 2447.
   # Task 01a1386e-59d1 remediation adds the denied-link landing branch so a
   # restricted deep link stops at /chat instead of opening another channel.
   # Rebasing onto the rollup also brought 21 ChatLive code lines from sibling
-  # members. The moon guard measured 2521 + 21 = 2542 at the merged SHA.
+  # members. The test-host guard measured 2521 + 21 = 2542 at the merged SHA.
   # RBAC member 6 stage 3 (7efd11c6d): +27 code lines for the shared
   # access-change/sidebar refresh and active-space revocation navigation.
   # The member-6 rebase onto rollup 9c5b4eacc measures 2569 with this

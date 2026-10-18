@@ -14,7 +14,7 @@ defmodule Platform.Meetings.IntentEvalTest do
   alias Platform.Meetings.IntentEval
 
   @strong "strong-labeller"
-  @human "rowan"
+  @human "alex"
 
   # ── the shipped set ───────────────────────────────────────────────────
 

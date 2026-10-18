@@ -79,7 +79,7 @@ vi.mock("livekit-client", async (importOriginal) => {
  * (task 019e42f6 v2 — "Switching Active Tab In Meeting Drops Video").
  *
  * v1 kept the local camera alive across mode switches but left it in a
- * fixed free-floating PiP, which broke the gallery layout (Rowan rejected
+ * fixed free-floating PiP, which broke the gallery layout (Alex rejected
  * the placement). v2 keeps ONE persistent local <video> with the camera
  * track attached EXACTLY ONCE, and on each stage-mode change MOVES it
  * (appendChild) into the dock for the active mode — never detaching the
@@ -392,7 +392,7 @@ describe("MeetingClient — local self-view reparenting (v2)", () => {
  * "Meeting Module Participant List not reflective").
  *
  * Per ORG_MEMORY "render_hook bypasses JS hooks — verify the JS layer
- * separately": Rowan's bug lived ENTIRELY in the JS hook lifecycle (a
+ * separately": Alex's bug lived ENTIRELY in the JS hook lifecycle (a
  * transient LiveView socket drop re-mounting the hook, whose destroyed()
  * disconnected the LiveKit room and killed the media session). An LV
  * render_hook test alone would have missed it, so this asserts the JS
@@ -1957,7 +1957,7 @@ describe("MeetingClient — transcriber gets no quick-meet tile (01a0d4fe)", () 
 
   it("POSITIVE CONTROL: a camera-less human DOES get a .meeting-tile", () => {
     const { room, grid } = setup(DEFAULT_MARKERS)
-    room.emit("participantConnected", remote("user:abc", "Marlowe"))
+    room.emit("participantConnected", remote("user:abc", "Robin"))
     expect(grid.children.length).toBe(1)
     expect(grid.children[0].className).toBe("meeting-tile")
     expect(tileIds(grid)).toEqual(["user:abc"])
@@ -2025,7 +2025,7 @@ describe("MeetingClient — transcriber gets no quick-meet tile (01a0d4fe)", () 
       n.insertBefore = (child) => n.appendChild(child)
       return n
     }
-    hook._attachTrack(track, remote("user:abc", "Marlowe"))
+    hook._attachTrack(track, remote("user:abc", "Robin"))
     expect(tileIds(grid)).toEqual(["user:abc"])
   })
 

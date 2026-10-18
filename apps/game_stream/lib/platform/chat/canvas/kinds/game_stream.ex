@@ -125,7 +125,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   A Play card in a chat message never opens the canvas sidebar on click
   (task 01a0ee4f). `PlatformWeb.Chat.CanvasRenderer` reads this convention
   function and drops the inline wrapper's `phx-click="canvas_open"` for any
-  document holding this node. Rowan, 2026-09-29: *"we need to ensure that it
+  document holding this node. Product decision, 2026-09-29: *"we need to ensure that it
   never opens that sidebar, but also, if i were to engage the sidebar myself,
   by going through the canvas selector in the chat shell ... that that is
   where we connect."* The canvas selector's explorer row still sends

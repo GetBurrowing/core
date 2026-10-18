@@ -9,7 +9,7 @@ etc., plus the local `post_to_meeting_chat` hand-off wrapper) attaches to the
 (and stage-1's tests) that construct `MeetingVoiceAgent(config)` with no
 tools keep working unchanged.
 
-Stage 5 (task 01a0d4a0 item 3) adds `space_id`: Dalton's live moon run found
+Stage 5 (task 01a0d4a0 item 3) adds `space_id`: a live test run found
 the model taking three attempts and 9.1s to call `space_get_context`
 successfully because nothing ever told it its own space_id — every
 space-scoped tool requires that parameter and the model had to discover it

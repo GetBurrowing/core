@@ -322,13 +322,56 @@ defmodule Platform.Branding do
     end
   end
 
+  @doc """
+  Unset the uploaded icon, so every variant falls back to the repo's own
+  Burrow icon set (`default_icon_url/1`) and the manifest with it (task
+  01a14b9e stage 6). Root-admin only, re-checked here for the reason
+  `update_identity/2` documents.
+
+  `source_storage_key`, `derived` and `version` are cleared in ONE update, so
+  the seven variants leave together: the install serves the full uploaded
+  set or the full default set, never a mix. ONLY THEN are the blobs the row
+  pointed at deleted through `IconStorage.delete/1`, the same order and the
+  same storage module `put_source/3` uses. Deleting first would leave a
+  failed update pointing at bytes that no longer exist.
+
+  With no upload this is a no-op that still answers `{:ok, branding}`.
+  Broadcasts `{:install_branding_updated, branding}` when the row changed.
+  """
+  @spec reset_source(any()) :: {:ok, InstallBranding.t()} | {:error, term()}
+  def reset_source(actor) do
+    with_root_admin_authz(actor, fn ->
+      case get() do
+        %InstallBranding{source_storage_key: nil, version: nil} = branding ->
+          {:ok, branding}
+
+        %InstallBranding{} = branding ->
+          branding
+          |> Ecto.Changeset.change(%{source_storage_key: nil, derived: %{}, version: nil})
+          |> Repo.update()
+          |> case do
+            {:ok, %InstallBranding{} = updated} ->
+              delete_keys(stored_keys(branding))
+              broadcast(updated)
+              {:ok, updated}
+
+            {:error, %Ecto.Changeset{}} = err ->
+              err
+          end
+      end
+    end)
+  end
+
   # Everything the old row referenced that the new row does not. The guard
   # matters when the same bytes are re-uploaded: the version is identical,
   # the keys are identical, and deleting "the previous version" would delete
   # the blobs the committed row now points at.
   defp previous_keys(%InstallBranding{version: version}, version), do: []
 
-  defp previous_keys(%InstallBranding{} = branding, _new_version) do
+  defp previous_keys(%InstallBranding{} = branding, _new_version), do: stored_keys(branding)
+
+  # Every blob key the row points at: the source and the derived variants.
+  defp stored_keys(%InstallBranding{} = branding) do
     keys = Map.values(branding.derived || %{})
     if branding.source_storage_key, do: [branding.source_storage_key | keys], else: keys
   end

@@ -15,7 +15,7 @@
 <%!-- data-camera-enabled / data-mic-enabled carry the server's committed
      media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
      hook reads these off the dataset to re-engage the camera/mic WITHOUT
-     waiting for a fresh LV push — reconnect-safe (Rowan's exact error was
+     waiting for a fresh LV push — reconnect-safe (the operator's exact error was
      "unable to push hook event. LiveView not connected").
      data-transcriber-markers (task 01a0d4fe stage 3): the server's
      transcriber identity markers, so MeetingClient skips the worker's tile
@@ -610,7 +610,7 @@
      DM's menu is open.
 
      A DIFFERENT resolver from the sheet's, and deliberately so. The rail's
-     Pinned block carries task rows and they now carry a trigger too (Marlowe,
+     Pinned block carries task rows and they now carry a trigger too (the designer,
      2026-08-13), so this one also looks in `@pinned_task_spaces`. The sheet
      keeps the conversation-only resolver: the phone drawer's task rows unpin
      on the row itself and never open it, and the sheet's two actions

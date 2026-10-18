@@ -2,7 +2,7 @@
 
 **Status:** Proposed (revised after architect + security review 2026-05-01 — see "Amendments")
 **Date:** 2026-05-01 (initial); 2026-05-01 (revised post-review)
-**Deciders:** Marlowe (drafting + revised path); Rowan + org-admin + legal review needed before "Accepted" — specifically D4 GDPR classification and the disclosure-flow threat model
+**Deciders:** the design lead (drafting + revised path); the product owner + org-admin + legal review needed before "Accepted" — specifically D4 GDPR classification and the disclosure-flow threat model
 **Related:** BACKLOG #18 (this work item), BACKLOG #9 (privacy leak that surfaced the gap), BACKLOG #17 (thinking-stream PubSub split — depends on this), ADR 0034 (MCP endpoint + capability bundles), ADR 0038 (membership author snapshots — precedent for owner snapshotting)
 
 ---
@@ -90,7 +90,7 @@ The original rights table had two assignments wrong and three rights missing.
 
 ### Stage 2 prerequisites (governance-blocked, must resolve before Stage 2)
 
-- **D2-1 audit content/metadata split** — formally accepted by Marlowe + Rowan
+- **D2-1 audit content/metadata split** — formally accepted by the design lead + the product owner
 - **D1-1 untrusted-user-id-from-peer enforcement** — design and acceptance of mint-by-originating-org constraint
 - **D2 in-flight kill SLA** — operational signoff on ≤5s kill propagation requirement
 - **Federation peer authentication primitive cited** — the trust root for everything in this ADR; if `node_identity.ex` Ed25519 device key isn't sufficient, that's a hard prerequisite
@@ -286,7 +286,7 @@ Out-of-scope for Stage 1: visibility filtering (Stage 2 / BACKLOG #17), rate lim
 
 The BACKLOG entry frames the work as schema + plumbing — implementation. This ADR distinguishes:
 
-- The **governance decisions** (D1-D4), which are not implementation choices and should be reviewed by Rowan / org-admin / legal independently of the schema work.
+- The **governance decisions** (D1-D4), which are not implementation choices and should be reviewed by the product owner / org-admin / legal independently of the schema work.
 - The **non-blocking technical groundwork** (Stage 1), which can ship now and unblocks Stage 2 the moment governance lands.
 - The **enforcement work** (Stages 2-3), which is governance-gated and not safe to start until decisions are accepted.
 
@@ -296,7 +296,7 @@ Encoding this split in an ADR rather than a BACKLOG line ensures the decisions d
 
 ## What the implementer should do next
 
-1. **Get D1-D4 reviewed.** Even with recommended defaults, these need explicit signoff from Rowan + org-admin + legal before Stage 2 starts. Stage 1 can begin in parallel — none of Stage 1 commits to a specific D1-D4 interpretation.
+1. **Get D1-D4 reviewed.** Even with recommended defaults, these need explicit signoff from the product owner + org-admin + legal before Stage 2 starts. Stage 1 can begin in parallel — none of Stage 1 commits to a specific D1-D4 interpretation.
 2. **Ship Stage 1 in one PR.** Single commit chain, full test coverage, no observable behavior change. Mark the PR as "follow-up to ADR 0040."
 3. **Open BACKLOG entries** for Stage 2 and Stage 3 referencing this ADR.
 4. **Coordinate sequencing with BACKLOG #17.** If both ADRs are in flight, the maintainer should ensure #17's Option C lands after this ADR's Stage 2 (otherwise #17 has to ship with runtime-id scoping and migrate later).

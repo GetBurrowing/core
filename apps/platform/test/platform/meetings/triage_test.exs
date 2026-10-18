@@ -541,7 +541,7 @@ defmodule Platform.Meetings.TriageTest do
         "Schedule board dry-run rehearsal",
         "Prep quarterly finance packet",
         "Order laptops for the new hires",
-        "Review Marlowe slide deck for Q3",
+        "Review Robin slide deck for Q3",
         "Book photographer for retreat",
         "Publish revised handbook",
         "File H1B extension paperwork",
@@ -603,7 +603,7 @@ defmodule Platform.Meetings.TriageTest do
         %{title: "Schedule board dry-run"},
         %{title: "Prep quarterly finance packet"},
         %{title: "Order laptops for offsite"},
-        %{title: "Review Marlowe's slide deck"},
+        %{title: "Review Robin's slide deck"},
         %{title: "Book photographer for retreat"}
       ]
 

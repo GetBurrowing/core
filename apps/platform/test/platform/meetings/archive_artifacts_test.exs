@@ -351,7 +351,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
-      host = participant!(meeting, "Rowan")
+      host = participant!(meeting, "Alex")
       participant!(meeting, "Dalton")
       participant!(meeting, "Vega")
 
@@ -364,7 +364,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       context = Map.fetch!(Archive.artifacts_for(viewer, [meeting]), meeting.id)
 
       assert context.duration_minutes == 52
-      assert context.host_name == "Rowan"
+      assert context.host_name == "Alex"
       assert context.attendee_count == 3
       assert context.project_path == "#{org.name} / #{project.name}"
     end

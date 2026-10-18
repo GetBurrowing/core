@@ -10,7 +10,7 @@ defmodule Platform.Tasks.Feedback do
 
       Platform.Tasks.Feedback.push(run_id, %{
         source: :chat,
-        author: "user:rowan",
+        author: "user:alex",
         content: "Use postgres instead of sqlite",
         timestamp: DateTime.utc_now()
       })

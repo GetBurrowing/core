@@ -77,7 +77,7 @@ defmodule Platform.Push.SealFixtureParityTest do
       Notification.new(%{
         kind: "chat_mention",
         title: "Dana in launch",
-        body: "@Marlowe can you check the deck before 3?",
+        body: "@Robin can you check the deck before 3?",
         url: "/chat/launch?message=01a1261e-0000-7000-8000-00000000000b",
         space_id: "01a1261e-0000-7000-8000-00000000000a",
         message_id: "01a1261e-0000-7000-8000-00000000000b",

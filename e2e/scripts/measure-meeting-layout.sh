@@ -55,8 +55,8 @@ BASE_URL="${BASE_URL%/}"
 
 # ─── PART B — THE ASSETS PRECHECK, IN THE RUNNER, NOT IN A README ───────────
 #
-# The hive->moon rsync runs `--delete` and `priv/static` does not exist on hive,
-# so ANY source edit wipes the built assets on moon. `/assets/js/app.js` then
+# The build-host->test-host rsync runs `--delete` and `priv/static` does not exist on build-host,
+# so ANY source edit wipes the built assets on test-host. `/assets/js/app.js` then
 # 404s, LiveView never connects, and the page renders with NO TILES AT ALL —
 # which reads exactly like the feature being missing and would turn every
 # assertion below red for a reason that has nothing to do with layout.
@@ -70,8 +70,8 @@ ASSET_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$ASSET_URL" 
 if [ "$ASSET_CODE" != "200" ]; then
   echo "assets 404 — rig fault, not a layout failure"
   echo "  GET $ASSET_URL returned $ASSET_CODE (expected 200)"
-  echo "  The hive->moon rsync runs --delete and priv/static does not exist on hive, so a"
-  echo "  source edit wipes the built assets on moon; the page then renders with no tiles at"
+  echo "  The build-host->test-host rsync runs --delete and priv/static does not exist on build-host, so a"
+  echo "  source edit wipes the built assets on test-host; the page then renders with no tiles at"
   echo "  all. That reads exactly like the feature being missing. Rebuild assets in the dev"
   echo "  container (mix assets.build — ignore its exit code, it fails on esbuild excalidraw"
   echo "  while still writing a serving bundle) and re-run until this curl returns 200."
@@ -93,15 +93,15 @@ ASSET_LEN="$(curl -s -o /dev/null -w '%{size_download}' --max-time 20 "$ASSET_UR
 # Checked 2026-09-02 — this task's container on :4046 and the sibling task's on
 # :4040 return a BYTE-IDENTICAL app.js, so a reviewer comparing hashes would see
 # a match while measuring the wrong branch entirely. The identifying question is
-# WHICH CONTAINER owns the port, so ask moon directly. Best-effort: if the ssh
+# WHICH CONTAINER owns the port, so ask test-host directly. Best-effort: if the ssh
 # is unavailable the block says UNKNOWN rather than silently claiming a match.
 PORT="${BASE_URL##*:}"
 WORKTREE_ID="$(basename "$(cd "$E2E_DIR/.." && pwd)")"
-SERVED_BY="$(ssh -o BatchMode=yes -o ConnectTimeout=6 dev@build-host.local \
+SERVED_BY="$(ssh -o BatchMode=yes -o ConnectTimeout=6 deploy@test-host.local \
   "podman ps --format '{{.Names}} {{.Ports}}'" 2>/dev/null \
   | awk -v p=":$PORT->" '$0 ~ p {print $1}' | head -1)"
 if [ -z "$SERVED_BY" ]; then
-  SERVER_ID="UNKNOWN (could not ask moon which container owns port $PORT)"
+  SERVER_ID="UNKNOWN (could not ask test-host which container owns port $PORT)"
 elif [ "$SERVED_BY" = "dev-platform-$WORKTREE_ID" ]; then
   SERVER_ID="$SERVED_BY == dev-platform-$WORKTREE_ID (MATCHES this worktree)"
 else

@@ -100,7 +100,7 @@ defmodule Platform.Meetings.AgentSpeakerGuardTest do
       refute Meetings.agent_identity?("guest:#{Ecto.UUID.generate()}")
       refute Meetings.agent_identity?("transcriber:worker-1")
       refute Meetings.agent_identity?("meeting-transcriber")
-      refute Meetings.agent_identity?("Harper Parker")
+      refute Meetings.agent_identity?("Blake Moreno")
       refute Meetings.agent_identity?("")
       refute Meetings.agent_identity?(nil)
       refute Meetings.agent_identity?(:agent)
@@ -150,7 +150,7 @@ defmodule Platform.Meetings.AgentSpeakerGuardTest do
       append!(
         human_transcript,
         "user:#{Ecto.UUID.generate()}",
-        "Harper",
+        "Blake",
         @acknowledgement
       )
 
@@ -250,7 +250,7 @@ defmodule Platform.Meetings.AgentSpeakerGuardTest do
       append!(
         human_transcript,
         "user:#{Ecto.UUID.generate()}",
-        "Harper",
+        "Blake",
         @acknowledgement
       )
 
@@ -285,7 +285,7 @@ defmodule Platform.Meetings.AgentSpeakerGuardTest do
       append!(
         human_transcript,
         "user:#{Ecto.UUID.generate()}",
-        "Harper",
+        "Blake",
         @acknowledgement
       )
 
@@ -332,7 +332,7 @@ defmodule Platform.Meetings.AgentSpeakerGuardTest do
       append!(
         transcript,
         "user:#{Ecto.UUID.generate()}",
-        "Harper",
+        "Blake",
         "yes please do that before Friday"
       )
 

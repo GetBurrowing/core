@@ -10,8 +10,8 @@ defmodule Mix.Tasks.Platform.OpenQuestionPilot.Run do
           [--max-metric-calls 300] [--hard-call-cap 400] [--reflection-cap 40]
           [--selection-cap 120] [--seed N]
 
-  The default provider is the configured classifier endpoint
-  (`http://192.0.2.200:8085/v1`, model `classifier`). It is used for both
+  The default provider is the classifier endpoint `INTENT_EVAL_BASE_URL`
+  names, else `http://localhost:8085/v1` (model `classifier`). It is used for both
   the task model and GEPA's reflection model. No other provider is wired.
 
   This task makes model calls, and it writes to `--out-dir` (default
@@ -67,7 +67,7 @@ defmodule Mix.Tasks.Platform.OpenQuestionPilot.Run do
     |> Keyword.put_new(:out_dir, "priv/imp_pilot/open_question")
   end
 
-  # The moon rig runs this task under MIX_ENV=test against a scratch
+  # The test rig runs this task under MIX_ENV=test against a scratch
   # database, where the Repo pool is the SQL sandbox. A sandboxed checkout
   # lives inside a transaction that is rolled back when its 120 s ownership
   # expires, taking the artefact room with it mid-run (seen on the first

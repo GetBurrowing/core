@@ -880,7 +880,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           />
 
           <%!-- Project. When the board is filtered to a single project we hide
-               the picker entirely and pin via a hidden input — matches Rowan's
+               the picker entirely and pin via a hidden input — matches the operator's
                brief and removes a redundant click. Otherwise show a select. --%>
           <%= if @selected_project_id do %>
             <input type="hidden" name="epic[project_id]" value={@selected_project_id} />

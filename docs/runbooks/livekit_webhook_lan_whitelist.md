@@ -27,10 +27,10 @@ You need the source CIDR to allow:
   project → Settings → Network → Egress IPs. Copy the listed
   `/32`s (or the region CIDR they publish).
 - **Self-hosted on LAN**: use the internal CIDR the LiveKit server sits
-  on. On the moon host this is typically the podman default bridge
-  (`10.88.0.0/16`) plus the LAN (`192.168.1.0/24`).
+  on. On the test host this is typically the podman default bridge
+  (`10.88.0.0/16`) plus the LAN (`192.0.2.0/24`).
 
-Also note: Traefik on moon lives at `~/docker/traefik3/` and watches the
+Also note: Traefik on test-host lives at `~/docker/traefik3/` and watches the
 `rules/` directory for dynamic-config reloads.
 
 ## Traefik v3 Middleware
@@ -51,7 +51,7 @@ Add a new file `~/docker/traefik3/rules/livekit-webhook-allowlist.toml`:
 
       # Self-hosted / LAN
       "10.88.0.0/16",
-      "192.168.1.0/24",
+      "192.0.2.0/24",
     ]
 
     # Behind Cloudflare: trust the client-IP chain far enough back to

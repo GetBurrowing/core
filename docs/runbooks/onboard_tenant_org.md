@@ -1,6 +1,6 @@
 # Onboard a tenant org
 
-Ops procedure for adding a new client org (a "tenant" of the Fabrikam root org).
+Ops procedure for adding a new client org (a "tenant" of the Acme root org).
 
 Introduced by task `019ffe9d`, which added `Tenancy.create_org/2`, the
 `/admin/orgs` surface that calls it, and the `cyberdyne` scope ramp.
@@ -12,7 +12,7 @@ Introduced by task `019ffe9d`, which added `Tenancy.create_org/2`, the
 **`019ffe9d` ships a capability, a form and a colour ramp. It creates no org
 rows.** Every org in the running system still comes from the seed migration
 `20260519143620_seed_root_orgs.exs`, which seeds exactly five:
-`fabrikam`, `soylent`, `wayne_tech`, `sxi`, `paragon`.
+`acme`, `soylent`, `wayne_tech`, `sxi`, `paragon`.
 
 In particular: **Cyberdyne does not exist in production after this branch
 deploys.** The diff registers `cyberdyne` as a scope — a label, a magenta
@@ -35,7 +35,7 @@ assertions, a seed has crept in — investigate rather than edit.
 
 ## Step 1 — create the org row (form, not migration)
 
-Prereqs: you hold an `admin` `org_memberships` row **on the Fabrikam root org**.
+Prereqs: you hold an `admin` `org_memberships` row **on the Acme root org**.
 `Tenancy.create_org/2` refuses anyone else, and `/admin/orgs` sits behind the
 same `:ensure_admin` gate as `/admin/users`.
 
@@ -50,7 +50,7 @@ underscores. Must be unique. A duplicate comes back as an inline error on the
 field, not a crash.
 
 Parentage is **derived, not chosen**: new orgs are created as tenants of the
-single `parent_org_id IS NULL` row (Fabrikam). There is one root org, enforced by
+single `parent_org_id IS NULL` row (Acme). There is one root org, enforced by
 the `orgs_single_root` partial unique index, so the form offers no parent
 field and a crafted `org[parent_org_id]` cannot reparent anything.
 
@@ -65,7 +65,7 @@ actor.
 The form creates the org row and nothing else. A brand-new org has **zero
 members**, and the Tasks scope rail is viewer-scoped
 (`Tenancy.list_active_tenants_for_user/1`): a user sees an org's chip only if
-they hold a membership in it. Fabrikam *admins* bypass the membership filter and
+they hold a membership in it. Acme *admins* bypass the membership filter and
 see every active org, which is why the chip can look fine to you and be
 invisible to everyone else.
 
@@ -122,7 +122,7 @@ want it to jump the queue.
 
 After steps 1–3, for a user holding a membership in the new org:
 
-- `Tenancy.tier/1` is `:tenant`, `parent_org_id` is the Fabrikam root id, and the
+- `Tenancy.tier/1` is `:tenant`, `parent_org_id` is the Acme root id, and the
   org appears in `Tenancy.list_orgs/0` and `Tenancy.list_tenants/0`.
 - Its chip appears on the `/tasks` scope rail, and its group appears in the
   Tasks project sidebar, in `list_orgs_in_priority_order/0` position.
@@ -131,7 +131,7 @@ After steps 1–3, for a user holding a membership in the new org:
 - The label clears 4.5:1 in both themes.
 - The chat surface renders it (section dot + recolor palette swatch).
 - The five pre-existing scopes are unchanged — same hues, labels and rail
-  order, Fabrikam still first.
+  order, Acme still first.
 
 **The failure mode to watch for is the org row existing while no chip appears
 anywhere.** That is what a migration-only org used to produce, and it is why

@@ -43,7 +43,7 @@
  *
  * ## SKIN TONE
  *
- * The dataset ships neutral forms only (Marlowe's no-personalisation decision,
+ * The dataset ships neutral forms only (the designer's no-personalisation decision,
  * recorded in stage 1), but the generator KEPT the CLDR tone keywords on the
  * 300 tone-capable emoji: 👍 carries "light skin tone" … "dark skin tone".
  * So "thumbs up medium skin tone" still lands on the neutral 👍 through the

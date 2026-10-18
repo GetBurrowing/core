@@ -340,4 +340,19 @@ defmodule Platform.Orchestration.HeartbeatSchedulerDesignCanvasesTest do
       assert HeartbeatScheduler.design_canvases_heading() == @heading
     end
   end
+
+  # Task 01a14b9e stage 3: the render recipe points at the org's browser-rig
+  # skill instead of naming one install's hosts and LAN address.
+  describe "render recipe rig line" do
+    test "names the browser-rig skill, not a host or address" do
+      body = HeartbeatScheduler.render_design_canvases_section([canvas()], :ui)
+
+      assert body =~
+               "Rig: use the CDP endpoint named in your org's browser-rig skill (`skill_list` query: browser rig); never run a BEAM or Chrome on a person's workstation."
+
+      assert body =~ @recipe_marker
+      refute body =~ ":9222"
+      refute body =~ "Rig by runtime"
+    end
+  end
 end

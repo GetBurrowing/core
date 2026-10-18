@@ -206,7 +206,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
         "props" => %{
           "columns" => ["Name", "Owner", "Status"],
           "rows" => [
-            %{"Name" => "Alembic", "Owner" => "Rowan", "Status" => "shipping"},
+            %{"Name" => "Alembic", "Owner" => "Alex", "Status" => "shipping"},
             %{"Name" => "Suite", "Owner" => "Dalton", "Status" => "wip"}
           ]
         }
@@ -217,7 +217,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
       assert out == """
              | Name | Owner | Status |
              | --- | --- | --- |
-             | Alembic | Rowan | shipping |
+             | Alembic | Alex | shipping |
              | Suite | Dalton | wip |\
              """
     end

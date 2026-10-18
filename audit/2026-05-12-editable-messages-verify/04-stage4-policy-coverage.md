@@ -67,8 +67,8 @@ Lint_pass: ✅ — `mix format --check-formatted` exit 0
 
 ## Cumulative gaps surfaced by Task 6 — close-out status
 
-1. **Stage 3** — Policy 2 freeze trigger not implemented. ✅ **CLOSED** by [`019e1e80-...`](https://suite.example.com/tasks/019e1e80-4230-7a79-ac73-c157975b3999) (PR #343 / `60f24be`).
-2. **Stage 4** — Policy 1 narrow notification scoping not implemented. ✅ **CLOSED** by [`019e1e83-...`](https://suite.example.com/tasks/019e1e83-fe24-77c4-8a7b-8f90fb5cfca5) (PR #345 / `e185599`).
-3. **Pre-Stage 1** — 3-dot menu Edit deadclick on the canonical UX path. ⏳ **OPEN**: [`019e1e78-...`](https://suite.example.com/tasks/019e1e78-16fd-7615-93fa-115ac4c8beaa). Not yet shipped on main as of 2026-05-13.
+1. **Stage 3** — Policy 2 freeze trigger not implemented. ✅ **CLOSED** by [`019e1e80-...`](https://burrow.example.com/tasks/019e1e80-4230-7a79-ac73-c157975b3999) (PR #343 / `60f24be`).
+2. **Stage 4** — Policy 1 narrow notification scoping not implemented. ✅ **CLOSED** by [`019e1e83-...`](https://burrow.example.com/tasks/019e1e83-fe24-77c4-8a7b-8f90fb5cfca5) (PR #345 / `e185599`).
+3. **Pre-Stage 1** — 3-dot menu Edit deadclick on the canonical UX path. ⏳ **OPEN**: [`019e1e78-...`](https://burrow.example.com/tasks/019e1e78-16fd-7615-93fa-115ac4c8beaa). Not yet shipped on main as of 2026-05-13.
 
 The editable-messages feature is announce-ready on the Policy 1 + Policy 2 axes. The 3-dot deadclick remains a UX-path gap that the announcement should account for (or wait on).

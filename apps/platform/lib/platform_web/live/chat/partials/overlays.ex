@@ -298,7 +298,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     ~H"""
     <%!-- Removal-warning modal (task 019e0f29 Stage 5, contract Section F.4
          Policy 4). Surfaces only when the user's edit shortens / removes
-         content. Copy locked in by Marlowe on 2026-05-11 review round 1:
+         content. Copy locked in by the designer on 2026-05-11 review round 1:
          terse, factual, no editorial. Buttons: Cancel (keeps editor open
          with the user's draft) / Edit anyway (fires the actual edit). --%>
     <div
@@ -358,7 +358,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   """
   def message_actions_sheet(assigns) do
     ~H"""
-    <%!-- Per-message actions sheet (task 019e0f29 Stage 3 — fixes Marlowe's bug
+    <%!-- Per-message actions sheet (task 019e0f29 Stage 3 — fixes the designer's bug
          report that the chat-message 3-dot dropdown didn't open on touch).
          Single Sheet at the page bottom, sourced by :open_message_actions_id;
          same pattern as the per-row task-actions sheet from Task 05 Stage 2.
@@ -427,7 +427,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
              three onto `Platform.Chat.Emoji.quick_defaults/0`. Do not hardcode
              a literal list here; if the set is wrong, change quick_defaults/0.
 
-             THE "+" IS IN THIS ROW, NOT A ROW OF ITS OWN: Harper's ruling —
+             THE "+" IS IN THIS ROW, NOT A ROW OF ITS OWN: the product ruling —
              "the reaction should be next to the other emojis as a + sign; when
              you hit that you get the other options". The desktop hover action
              row renders these same @quick_emojis beside its own "+", so touch

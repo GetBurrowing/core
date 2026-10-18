@@ -19,7 +19,7 @@ Commands (``--dir`` defaults to the single install under ~/suite):
       a one-flag flip (`setup init --meetings on`), which a mac-lite-based
       manifest cannot do: it has no [meetings] table. REF pins core-platform
       (images.refs). The --embed-*/--stt-* flags swap the hosted OpenAI
-      endpoints for self-hosted OpenAI-compatible ones (the rock proof used a
+      endpoints for self-hosted OpenAI-compatible ones (the Mac proof used a
       LAN llama-server and speaches).
   ports
       Listening TCP/UDP ports with their process names, the LiveKit media
@@ -84,7 +84,6 @@ from .setup.steps import compose_ps
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(HERE)), "examples")
 DEFAULT_TAG = "01a0d6ab"
-DEFAULT_CORE_IMAGE = "docker.io/example/suite-core:feat-01a0d6ab-multiarch"
 USER_AGENT = "suite-install-proof/1"
 RELEASE = "/app/bin/platform"
 ARM_SERVICES = ("core-platform", "files-service", "memory-service")
@@ -344,7 +343,7 @@ class Proof:
 def apply_endpoint_overrides(raw, args):
     """Point the proof manifest at self-hosted OpenAI-compatible endpoints.
 
-    The defaults keep mac.install.toml's hosted OpenAI endpoints. The rock
+    The defaults keep mac.install.toml's hosted OpenAI endpoints. The Mac
     proof (2026-10-05) used a LAN llama-server for embeddings and a LAN
     speaches for speech-to-text instead; both still go through the same
     `api_key_ref` (a dummy key file there, since neither checks a bearer).
@@ -371,7 +370,11 @@ def cmd_init(args, env, stream):
     tag = args.tag
     zone = args.zone.strip().strip(".")
     raw = load(os.path.join(EXAMPLES, "mac.install.toml"))
-    raw.setdefault("images", {}).setdefault("refs", {})["core-platform"] = args.core_image
+    # No default namespace or core image (task 01a14b9e): both name a publisher.
+    raw.setdefault("images", {})["image_namespace"] = args.image_namespace
+    if args.core_image:
+        raw["images"].setdefault("refs", {})["core-platform"] = args.core_image
+    core = args.core_image or "the namespace's suite-core flavour"
     apply_endpoint_overrides(raw, args)
     work = tempfile.mkdtemp(prefix=f"suite-proof-{tag}-")
     path = os.path.join(work, f"suite-{tag}.install.toml")
@@ -381,7 +384,7 @@ def cmd_init(args, env, stream):
                 raw,
                 [
                     f"Proof manifest for task {tag}: mac.install.toml with meetings off",
-                    f"(the mac-lite render plus an unmounted models.json); core-platform {args.core_image}.",
+                    f"(the mac-lite render plus an unmounted models.json); core-platform {core}.",
                 ],
             )
         )
@@ -900,7 +903,7 @@ def human_turns(lines):
       stdin is re-emitted with ``isReplay: true``; tool results come back as
       ``user`` records whose content is ``tool_result`` blocks; a subagent's
       prompt carries a non-null ``parent_tool_use_id``. (Shape measured with
-      claude on hive, 2026-10-05, task 01a0d6ab stage 6.)
+      claude on a workstation, 2026-10-05, task 01a0d6ab stage 6.)
     - an interactive session's ``~/.claude/projects/<cwd>/<session>.jsonl``.
       Records carry ``origin.kind`` ("human" for typed turns,
       "task-notification" for harness ones); ``isMeta``, ``isSidechain`` and
@@ -987,7 +990,12 @@ def parser():
 
     c = add("init")
     c.add_argument("--zone", required=True)
-    c.add_argument("--core-image", default=DEFAULT_CORE_IMAGE)
+    c.add_argument(
+        "--image-namespace",
+        required=True,
+        help="Docker Hub namespace of the suite-* images (images.image_namespace)",
+    )
+    c.add_argument("--core-image", help="core-platform image ref (default: the namespace's)")
     c.add_argument("--embed-url", help="embeddings base_url, no /v1 (default: hosted OpenAI)")
     c.add_argument("--embed-model", help="embeddings model (default: text-embedding-3-small)")
     c.add_argument("--stt-url", help="speech-to-text endpoint base_url ending at /v1")

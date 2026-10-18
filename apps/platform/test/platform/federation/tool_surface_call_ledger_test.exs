@@ -42,7 +42,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
     # plan rejection_reason
     "rollback is missing",
     # message content
-    "Rowan asked about the deployment pipeline"
+    "Alex asked about the deployment pipeline"
   ]
 
   setup do
@@ -117,7 +117,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
         space_id: space.id,
         participant_id: participant.id,
         content_type: "text",
-        content: "Rowan asked about the deployment pipeline"
+        content: "Alex asked about the deployment pipeline"
       })
 
     %{

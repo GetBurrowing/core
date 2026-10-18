@@ -81,7 +81,7 @@ defmodule Platform.SandboxHelpersStopTaskRoutersTest do
 
       # Not also a Registry lookup: Registry drops the entry when it handles the
       # router's exit, which can land after terminate_child/2 has returned (seen
-      # once under load on moon).
+      # once under load on test-host).
       refute Process.alive?(pid)
 
       assert stopped_rows(space_id, task.id) == 1,

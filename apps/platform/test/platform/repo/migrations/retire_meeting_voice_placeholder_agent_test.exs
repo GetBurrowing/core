@@ -7,7 +7,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgentTest do
   agent + runtime the way the ad hoc prod row was actually shaped (an
   active, federated agent with its own runtime declaring the
   `meeting_voice` feature — no separate voice "mouth" row, unlike
-  `meeting-assistant`), confirm it shows up exactly where Harper's mistaken
+  `meeting-assistant`), confirm it shows up exactly where Sam's mistaken
   invite came from (`Chat.list_agents_for_picker/0`, and therefore
   `MeetingLive.invitable_roster/1`'s "outsiders" list for a brand-new
   meeting space), run the migration's `up/0`, and assert it is gone from
@@ -87,7 +87,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgentTest do
     runtime =
       Repo.insert!(
         AgentRuntime.changeset(%AgentRuntime{}, %{
-          runtime_id: "meeting-voice-moon-test-#{unique()}",
+          runtime_id: "meeting-voice-test-host-test-#{unique()}",
           owner_user_id: owner.id,
           agent_id: agent.id,
           status: "active",
@@ -131,7 +131,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgentTest do
         |> Enum.map(& &1.name)
 
       assert "Meeting Voice" in invitable_names,
-             "positive control failed — the fixture must reproduce Harper's mistaken-invite " <>
+             "positive control failed — the fixture must reproduce Sam's mistaken-invite " <>
                "shape before the migration can be shown to fix it"
 
       # Sanity: the fixture matches the live row's classification.
@@ -187,7 +187,9 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgentTest do
       assert is_binary(at)
       assert by =~ "01a0e47c"
       assert reason =~ "Dalton"
-      assert reason =~ "Harper"
+      # The note names the person who invited it; the migration is applied
+      # history, so this file matches the words around the name instead.
+      assert reason =~ "invited it by mistake the same night"
     end
 
     test "is idempotent — a second up/0 against the migrated rows changes nothing" do

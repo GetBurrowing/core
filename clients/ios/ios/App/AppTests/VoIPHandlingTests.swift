@@ -121,7 +121,7 @@ final class VoIPHandlingTests: XCTestCase {
     private func payload(_ overrides: [String: Any?] = [:]) -> [AnyHashable: Any] {
         var p: [String: Any] = [
             "ring_id": ringID, "meeting_id": "m1", "space_id": "s1", "trigger": "live_invite",
-            "caller_name": "Harper in Design review", "install_host": "suite.example.com",
+            "caller_name": "Sam in Design review", "install_host": "suite.example.com",
             "sent_at": "2026-10-06T16:00:00Z",
         ]
         for (k, v) in overrides { p[k] = v }
@@ -154,7 +154,7 @@ final class VoIPHandlingTests: XCTestCase {
         await center.settle()
         XCTAssertEqual(log.events, ["report", "completion", "status"])
         XCTAssertEqual(reporter.reported.first?.0, uuid, "the CallKit UUID is the ring id")
-        XCTAssertEqual(reporter.reported.first?.1, "Harper in Design review")
+        XCTAssertEqual(reporter.reported.first?.1, "Sam in Design review")
         XCTAssertTrue(reporter.ended.isEmpty)
         XCTAssertEqual(center.phase(of: uuid), .ringing)
         XCTAssertEqual(scheduled.map(\.0), [30])
@@ -330,7 +330,7 @@ final class VoIPHandlingTests: XCTestCase {
         push(payload())
         await center.settle()
         XCTAssertEqual(reporter.ended.map(\.1), [.unanswered])
-        XCTAssertEqual(invites, [RingInvite(ringID: ringID, meetingID: "m1", installHost: "suite.example.com", title: "Harper in Design review")])
+        XCTAssertEqual(invites, [RingInvite(ringID: ringID, meetingID: "m1", installHost: "suite.example.com", title: "Sam in Design review")])
         XCTAssertEqual(server.statusCalls, 0)
     }
 

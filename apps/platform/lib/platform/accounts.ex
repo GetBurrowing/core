@@ -51,10 +51,10 @@ defmodule Platform.Accounts do
 
   Stub: returns `true` for every user today. Multi-tenant org membership lives
   on a downstream stack (see TODO below); until that ships, all current Burrow
-  users are root-org admins per product decision (Marlowe, 2026-05-18).
+  users are root-org admins per product decision (design review, 2026-05-18).
   """
   # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c): replace with Platform.Tenancy.root_admin?/1
-  # All current users are root-org admins (Marlowe 2026-05-18); stub returns true until MT/RBAC ships.
+  # All current users are root-org admins (design review 2026-05-18); stub returns true until MT/RBAC ships.
   def root_user?(_user), do: true
 
   @doc """

@@ -38,7 +38,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
         build_socket(%{
           composite_status:
             AsyncResult.ok(AsyncResult.loading(), %{healthy: 2, total: 3, state: :degraded}),
-          principal_name: AsyncResult.ok(AsyncResult.loading(), "rowan@example.com"),
+          principal_name: AsyncResult.ok(AsyncResult.loading(), "alex@example.com"),
           active_space: nil,
           agent_typing_pids: MapSet.new()
         })
@@ -60,7 +60,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
       socket =
         build_socket(%{
           composite_status: seed,
-          principal_name: AsyncResult.ok(AsyncResult.loading(), "rowan@example.com"),
+          principal_name: AsyncResult.ok(AsyncResult.loading(), "alex@example.com"),
           # nil active_space steers the typing:false branch into the no-op
           # case clause without touching SpaceAgentPresence (DB-free unit test).
           active_space: nil,
@@ -81,7 +81,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooksTest do
         build_socket(%{
           composite_status:
             AsyncResult.ok(AsyncResult.loading(), %{healthy: 3, total: 4, state: :degraded}),
-          principal_name: AsyncResult.ok(AsyncResult.loading(), "rowan@example.com"),
+          principal_name: AsyncResult.ok(AsyncResult.loading(), "alex@example.com"),
           active_space: nil,
           agent_typing_pids: MapSet.new()
         })

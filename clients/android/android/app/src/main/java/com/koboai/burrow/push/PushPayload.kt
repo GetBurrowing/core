@@ -159,7 +159,7 @@ data class PushPayload(
             return url
         }
 
-        /** "3 approvals"; "4 new in Internal Fabrikam SXI". */
+        /** "3 approvals"; "4 new in Internal Acme SXI". */
         fun summaryText(
             payload: PushPayload,
             count: Int,

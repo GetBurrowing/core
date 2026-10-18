@@ -55,7 +55,7 @@ final class SlabStateTests: XCTestCase {
     /// the timeline carries a second entry just past the stale boundary.
     func testTimelineCarriesAnEntryThatTurnsStale() {
         let counts = SuiteCounts(approvals: 3, tasks: 0, fetchedAt: now)
-        let entry = CountsEntry(date: now, host: "suite.example.com", signedIn: true, counts: counts)
+        let entry = CountsEntry(date: now, host: "suite.example.net", signedIn: true, counts: counts)
         let timeline = CountsEntry.timeline(from: entry, now: now)
 
         XCTAssertEqual(timeline.entries.count, 2)
@@ -68,7 +68,7 @@ final class SlabStateTests: XCTestCase {
 
     func testSignedOutEntryHasNoCountState() {
         let entry = CountsEntry(
-            date: now, host: "suite.example.com", signedIn: false,
+            date: now, host: "suite.example.net", signedIn: false,
             counts: SuiteCounts(approvals: 3, tasks: 1, fetchedAt: now))
         XCTAssertEqual(entry.state(.approvals), .signedOut)
         XCTAssertEqual(CountsEntry.timeline(from: entry, now: now).entries.first?.state(.tasks), .signedOut)
@@ -86,15 +86,15 @@ final class SlabStateTests: XCTestCase {
     }
 
     func testDeepLinksRoundTripAndRefuseOtherPaths() throws {
-        let approvals = DeepLink(host: "suite.example.com", path: SlabKind.approvals.path)
-        XCTAssertEqual(approvals.url.absoluteString, "burrow://open?host=suite.example.com&path=/inbox")
+        let approvals = DeepLink(host: "suite.example.net", path: SlabKind.approvals.path)
+        XCTAssertEqual(approvals.url.absoluteString, "burrow://open?host=suite.example.net&path=/inbox")
         XCTAssertEqual(DeepLink(url: approvals.url), approvals)
-        XCTAssertEqual(approvals.destination.absoluteString, "https://suite.example.com/inbox")
+        XCTAssertEqual(approvals.destination.absoluteString, "https://suite.example.net/inbox")
         XCTAssertEqual(
-            DeepLink(host: "suite.example.com", path: SlabKind.tasks.path).destination.absoluteString,
-            "https://suite.example.com/tasks")
+            DeepLink(host: "suite.example.net", path: SlabKind.tasks.path).destination.absoluteString,
+            "https://suite.example.net/tasks")
 
-        XCTAssertNil(DeepLink(url: URL(string: "burrow://open?host=suite.example.com&path=/admin")!))
+        XCTAssertNil(DeepLink(url: URL(string: "burrow://open?host=suite.example.net&path=/admin")!))
         XCTAssertNil(DeepLink(url: URL(string: "burrow://open?host=evil.example.com%2Fx&path=//evil.example.com")!))
         XCTAssertNil(DeepLink(url: URL(string: "burrow://auth/callback?code=x")!))
         XCTAssertNil(DeepLink(url: URL(string: "burrow://open?path=/inbox")!))

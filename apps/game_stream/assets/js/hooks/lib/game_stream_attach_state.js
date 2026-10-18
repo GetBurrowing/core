@@ -3,8 +3,8 @@
  * whether an on-screen copy of the node takes the stream back from a twin
  * (task 01a0dbd6 stage 1). Pure, so the rules are tested without a browser.
  *
- * The cause these rules fix, reproduced on the moon rig with force_relay
- * through hive coturn: the node renders more than once in one page (chat
+ * The cause these rules fix, reproduced on the test rig with force_relay
+ * through the install's coturn: the node renders more than once in one page (chat
  * inline, desktop canvas panel, mobile overlay), and the page keeps one
  * claimant per session. A copy that became rendered took the stream and
  * suspended the one on screen into Connecting; nothing ever gave it back.
@@ -57,7 +57,7 @@ export function panelFor({ serverState, pcId, lastFrame, now }) {
  * on the inline copy or "Playing in the chat" on the panel copy, with Play
  * here), never Connecting: a copy that gave its pc up does not say it is
  * connecting.
- * Rowan saw the inline chat copy sit on "Connecting..." beside the canvas
+ * The operator saw the inline chat copy sit on "Connecting..." beside the canvas
  * sidebar he had opened, which held the stream on its own pc. `ended` and
  * `failed` (and `unavailable`) still win and show as themselves.
  */

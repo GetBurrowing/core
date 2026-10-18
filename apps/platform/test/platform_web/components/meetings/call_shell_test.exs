@@ -109,7 +109,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       Keyword.merge(
         [
           tab_event: "call_rail_tab",
-          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          participants: [human("Sam", "u-1"), agent("Saru", "a-1")],
           agents_by_id: %{},
           meeting: meeting(),
           chat: chat_slot("MOUNTED CHAT PANE")
@@ -468,7 +468,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
       assert html =~ ~s(data-section="humans")
       assert html =~ ~s(data-section="agents")
-      assert html =~ "Harper"
+      assert html =~ "Sam"
       assert html =~ "Saru"
     end
 
@@ -1235,7 +1235,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       html =
         rail(
           active_tab: "people",
-          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          participants: [human("Sam", "u-1"), agent("Saru", "a-1")],
           agent_activity: %{"a-1" => :computing}
         )
 
@@ -1257,7 +1257,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       html =
         rail(
           active_tab: "people",
-          participants: [human("Harper", "u-1"), agent("Saru", "a-1")],
+          participants: [human("Sam", "u-1"), agent("Saru", "a-1")],
           agent_activity: %{"a-1" => :computing}
         )
 

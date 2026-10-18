@@ -2,7 +2,7 @@
 
 **Phase 4 deliverable.** Ordered fix list for whoever builds this. Each item: audit finding → chosen approach → files touched → effort estimate (in agent-hours, not human-days).
 
-> **Status:** All Phase 1-3 deliverables landed and approved by Marlowe. This file sequences the actual code work that comes next. No code is modified by this audit; this is the bridge to the implementing tasks.
+> **Status:** All Phase 1-3 deliverables landed and approved by the design lead. This file sequences the actual code work that comes next. No code is modified by this audit; this is the bridge to the implementing tasks.
 
 ---
 
@@ -12,7 +12,7 @@
 - **Effort** is "agent-hours assuming a focused agent with the design system docs and audit findings open." Add ~30-50% for human pair-programming.
 - **Files touched** uses `~/projects/core/...` paths.
 - **Anchors** cite the audit finding ID(s) that justify the work.
-- **Each item should be filed as its own Burrow Task** under project `019d1357-cb08-7023-b165-fd19e9462316` once Marlowe approves this plan. Recommend NOT batching multiple items into one task — they'll have different validation gates.
+- **Each item should be filed as its own Burrow Task** under project `019d1357-cb08-7023-b165-fd19e9462316` once the design lead approves this plan. Recommend NOT batching multiple items into one task — they'll have different validation gates.
 
 ---
 
@@ -55,7 +55,7 @@
 
 **Approach:**
 - Add `phx-disable-with={...}` attribute to existing `<button type="submit">` and `phx-click="..."` buttons that fire mutations (send-message, save-task, create-task).
-- Wire the JS hook `~/projects/core/apps/platform/assets/js/hooks/button_loading.js` (new file) implementing the **delay-before-show** pattern: `setTimeout(showSpinner, 100)`, cleared on response. Per Marlowe 2026-05-09: "most messages are near-instant" — don't flash for sub-100ms operations.
+- Wire the JS hook `~/projects/core/apps/platform/assets/js/hooks/button_loading.js` (new file) implementing the **delay-before-show** pattern: `setTimeout(showSpinner, 100)`, cleared on response. Per the design lead 2026-05-09: "most messages are near-instant" — don't flash for sub-100ms operations.
 - The CSS rule for `.phx-click-loading .btn[aria-busy="true"]` lands in step 1 (`05-app-css-diff.md`).
 
 **Files touched:**
@@ -118,7 +118,7 @@
 
 ## 6 — Build the `<.empty_state>` component (2 agent-hours)
 
-**Anchors:** `1B-USE-3` + Marlowe's empty-state direction (2026-05-09).
+**Anchors:** `1B-USE-3` + the design lead's empty-state direction (2026-05-09).
 
 **Approach:**
 - New file: `~/projects/core/apps/platform/lib/platform_web/components/empty_state.ex`.
@@ -127,7 +127,7 @@
   - Chat sidebar (no spaces) → V3 conversational with "+ Create a space" / "+ Connect an agent" chips.
   - Chat space (no posts) → V3 conversational with "Connect your agent and @ them..." + "+ Add an agent" chip.
   - Tasks (no tasks) → V3 conversational with "+ Create a task" / "@ Saru, plan a project" chips.
-  - **Activity (no actions) → minimal text only** (Marlowe pin 2026-05-09 — no V3 conversational here).
+  - **Activity (no actions) → minimal text only** (the design lead pin 2026-05-09 — no V3 conversational here).
   - Search (no results) → simple "no matches" + clear-search.
 
 **Files touched:**
@@ -137,7 +137,7 @@
 - `activity_live.html.heex` (1 site: minimal variant).
 
 **Verification:**
-- Manual: each empty state renders the canonical pattern + matches Marlowe's verbatim copy.
+- Manual: each empty state renders the canonical pattern + matches the design lead's verbatim copy.
 - The Activity surface deliberately stays minimal — verify no conversational chrome leaks in.
 
 ---
@@ -166,7 +166,7 @@
 
 ## 8 — Tasks-list mobile redesign per hero mock (3 agent-hours)
 
-**Anchors:** `1B-USE-2` (inline UI dominates) + Marlowe's hero approval (2026-05-09).
+**Anchors:** `1B-USE-2` (inline UI dominates) + the design lead's hero approval (2026-05-09).
 
 **Approach:**
 - Rebuild `tasks_live.html.heex` task list per `~/projects/core/audit/2026-05-08-ui-ux/mocks/_hero/all-surfaces-redesign.html` Tasks frame:
@@ -190,7 +190,7 @@
   - Group items by day ("Today", "Yesterday", explicit date) — relative for ≤2 days, absolute for older.
   - Inline `Undo` button on each item card.
   - Card border replaces the unbordered list.
-- Empty state stays minimal (intro text only) per Marlowe.
+- Empty state stays minimal (intro text only) per the design lead.
 
 **Verification:**
 - Manual: undo button still triggers the existing `:undo_action` event handler (no API change).
@@ -221,7 +221,7 @@
 
 ## Burrow Tasks — recommend filing
 
-Once Marlowe approves this implementation plan, recommend filing each numbered item above as its own Burrow Task under project `019d1357-cb08-7023-b165-fd19e9462316`. Don't batch — each item has different validation needs (CSS-only items just need `lint_pass` + `test_pass`; component-rebuild items need `manual_approval` for visual verification).
+Once the design lead approves this implementation plan, recommend filing each numbered item above as its own Burrow Task under project `019d1357-cb08-7023-b165-fd19e9462316`. Don't batch — each item has different validation needs (CSS-only items just need `lint_pass` + `test_pass`; component-rebuild items need `manual_approval` for visual verification).
 
 **Suggested task naming:**
 - "01: Land app.css design-system diff (contrast + focus + motion)"

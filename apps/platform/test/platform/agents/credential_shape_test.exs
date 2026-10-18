@@ -215,7 +215,7 @@ defmodule Platform.Agents.CredentialShapeTest do
 
     test "a bare https URL is not credential-shaped" do
       assert refute_shaped("https://github.com/Startup-Suite/core/pull/1030")
-      assert refute_shaped("see https://suite.example.com/tasks for the board")
+      assert refute_shaped("see https://suite.example.net/tasks for the board")
     end
 
     test "nil is not credential-shaped" do
@@ -322,7 +322,7 @@ defmodule Platform.Agents.CredentialShapeTest do
     end
 
     test "recognises a bare URL with no userinfo but NOT one carrying a password" do
-      assert CredentialShape.benign_shape?("https://suite.example.com/tasks")
+      assert CredentialShape.benign_shape?("https://suite.example.net/tasks")
       refute CredentialShape.benign_shape?("postgres://user:" <> random_urlsafe(20) <> "@db/x")
     end
 

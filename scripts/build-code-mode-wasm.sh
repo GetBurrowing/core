@@ -5,7 +5,7 @@
 #
 # QuickJS-ng + the code_mode harness (apps/platform/native/code_mode/cm.c),
 # compiled to wasm32-wasip1 with a pinned wasi-sdk inside a pinned container.
-# Run it on the build box (moon, podman), never on a developer's daily-driver
+# Run it on the build host (podman), never on a developer's daily-driver
 # machine. Nothing here is fetched unverified:
 #
 #   * the container base image is pinned by manifest-list digest;

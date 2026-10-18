@@ -73,8 +73,8 @@ const CALL_RAIL_TOGGLE = '[data-role="call-rail-toggle"]'
 /**
  * ─── THE RIG PRECHECK ────────────────────────────────────────────────────
  *
- * The hive→moon rsync runs `--delete` and `priv/static` does not exist on
- * hive, so ANY source edit wipes the built assets on moon. `/assets/js/app.js`
+ * The build_host→test-host rsync runs `--delete` and `priv/static` does not exist on
+ * build-host, so ANY source edit wipes the built assets on test-host. `/assets/js/app.js`
  * then 404s, LiveView never connects, and the page renders with NO TILES AT
  * ALL — which reads exactly like the feature being missing and would fail
  * every assertion below for a reason that has nothing to do with layout.
@@ -95,8 +95,8 @@ test.beforeAll(async ({ request }) => {
   if (status !== 200) {
     throw new Error(
       `assets 404 — rig fault, not a layout failure. GET ${url} returned ${status}. ` +
-        `The hive→moon rsync runs --delete and priv/static does not exist on hive, so a ` +
-        `source edit wipes the built assets on moon; the page then renders with no tiles ` +
+        `The build_host→test-host rsync runs --delete and priv/static does not exist on build-host, so a ` +
+        `source edit wipes the built assets on test-host; the page then renders with no tiles ` +
         `at all. Rebuild assets in the dev container and re-run. Do NOT read the ` +
         `assertions below as layout regressions until this returns 200.`,
     )

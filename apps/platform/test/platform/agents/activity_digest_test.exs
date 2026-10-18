@@ -1377,7 +1377,7 @@ defmodule Platform.Agents.ActivityDigestTest do
         "task 01a09c9b-5d2d-7001-b7bd-0ea5b3fb1def moved to in_review",
         "deployed 2910fad5c681e3f6ece7c6e1b375a424f9ee31ee to staging",
         "promoted org/page/evidence-and-measurement-discipline.md",
-        "see https://suite.example.com/tasks for the board"
+        "see https://suite.example.org/tasks for the board"
       ]
 
       space = insert_space(%{name: "Ops", slug: "ops-w1", kind: "channel"})

@@ -82,7 +82,7 @@ import { paintBars } from "./lib/ptt_waveform"
  * This hook no longer owns the transcript text. Round 2 put it inside
  * this card's dashed "heard box" (`meeting-ask-heard-box`), which grew
  * with every word and visibly reflowed the centred card over the stage —
- * exactly the defect Harper's round-3 report named. The design canvas for
+ * exactly the defect the round-3 product review named. The design canvas for
  * this round (`01a0fa80-da74`) moves that text into its own fixed-size,
  * absolutely-positioned overlay owned by `MeetingAskHeardOverlay`
  * (`meeting_ask_heard_overlay.js`), decoupled from this hook the same way

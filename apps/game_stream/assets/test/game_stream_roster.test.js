@@ -34,16 +34,16 @@ function raw({ slots = {}, spectators = 0, names = [], max = 4, multi = true } =
   return { slots, spectators, names, max_players: max, multi }
 }
 
-const HARPER = { peer_id: "p-harper", name: "Harper", user_id: "u1" }
-const ROWAN = { peer_id: "p-rowan", name: "Rowan", user_id: "u2" }
+const SAM = { peer_id: "p-sam", name: "Sam", user_id: "u1" }
+const ALEX = { peer_id: "p-alex", name: "Alex", user_id: "u2" }
 
 describe("normalizeRoster", () => {
   it("reads string slot keys, the caps and the multi flag", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN }, spectators: 2, names: ["Ann", "", "Bo"] }))
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX }, spectators: 2, names: ["Ann", "", "Bo"] }))
     expect(r.multi).toBe(true)
     expect(r.maxPlayers).toBe(4)
     expect(Array.from(r.slots.keys())).toEqual([0, 1])
-    expect(r.slots.get(1)).toEqual({ peerId: "p-rowan", name: "Rowan" })
+    expect(r.slots.get(1)).toEqual({ peerId: "p-alex", name: "Alex" })
     expect(r.spectators).toBe(2)
     expect(r.names).toEqual(["Ann", "Bo"])
   })
@@ -56,9 +56,9 @@ describe("normalizeRoster", () => {
 
 describe("chips: the you-marker and no per-player hue", () => {
   it("your chip is YOU, others are OTHER with their name, free slots are OPEN", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN } }))
-    expect(chips(r, "p-rowan")).toEqual([
-      { slot: 0, label: "P1", state: OTHER, name: "Harper", title: "P1 Harper" },
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX } }))
+    expect(chips(r, "p-alex")).toEqual([
+      { slot: 0, label: "P1", state: OTHER, name: "Sam", title: "P1 Sam" },
       { slot: 1, label: "P2", state: YOU, name: "You", title: "P2 (you)" },
       { slot: 2, label: "P3", state: OPEN, name: "open", title: "Join as player 3" },
       { slot: 3, label: "P4", state: OPEN, name: "open", title: "Join as player 4" },
@@ -66,8 +66,8 @@ describe("chips: the you-marker and no per-player hue", () => {
   })
 
   it("two pads in one browser: both slots are marked yours", () => {
-    const r = normalizeRoster(raw({ slots: { 0: ROWAN, 1: ROWAN } }))
-    expect(chips(r, "p-rowan").map(c => c.state)).toEqual([YOU, YOU, OPEN, OPEN])
+    const r = normalizeRoster(raw({ slots: { 0: ALEX, 1: ALEX } }))
+    expect(chips(r, "p-alex").map(c => c.state)).toEqual([YOU, YOU, OPEN, OPEN])
   })
 
   it("a spectator (no peer yet) sees nobody as itself; a nameless player is Player", () => {
@@ -94,7 +94,7 @@ describe("watchView: opening watches", () => {
   const none = new Map()
 
   it("a spectator with a free slot: 'Watching' and 'Join as player N' for the next free slot", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER } }))
+    const r = normalizeRoster(raw({ slots: { 0: SAM } }))
     expect(watchView({ roster: r, mine: none, displaced: null })).toEqual({
       line: "Watching",
       join: { slot: 1, label: "Join as player 2" },
@@ -102,85 +102,85 @@ describe("watchView: opening watches", () => {
   })
 
   it("slots full: the design's line and NO Join", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN }, max: 2 }))
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX }, max: 2 }))
     expect(watchView({ roster: r, mine: none, displaced: null })).toEqual({
       line: "All 2 player slots are taken. You are watching.",
       join: null,
     })
-    const four = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN, 2: HARPER, 3: ROWAN } }))
+    const four = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX, 2: SAM, 3: ALEX } }))
     expect(watchView({ roster: four, mine: none, displaced: null }).line).toBe(
       "All 4 player slots are taken. You are watching.",
     )
   })
 
   it("displaced: who took which slot, and Join when a slot is free", () => {
-    const r = normalizeRoster(raw({ slots: { 0: ROWAN } }))
-    expect(watchView({ roster: r, mine: none, displaced: { slot: 0, by: "Rowan" } })).toEqual({
-      line: "Rowan took over P1. You are watching.",
+    const r = normalizeRoster(raw({ slots: { 0: ALEX } }))
+    expect(watchView({ roster: r, mine: none, displaced: { slot: 0, by: "Alex" } })).toEqual({
+      line: "Alex took over P1. You are watching.",
       join: { slot: 1, label: "Join as player 2" },
     })
-    const full = normalizeRoster(raw({ slots: { 0: ROWAN }, max: 1 }))
-    expect(watchView({ roster: full, mine: none, displaced: { slot: 0, by: "Rowan" } }).join).toBe(null)
+    const full = normalizeRoster(raw({ slots: { 0: ALEX }, max: 1 }))
+    expect(watchView({ roster: full, mine: none, displaced: { slot: 0, by: "Alex" } }).join).toBe(null)
   })
 
   it("a player has no watching row", () => {
-    const r = normalizeRoster(raw({ slots: { 1: ROWAN } }))
+    const r = normalizeRoster(raw({ slots: { 1: ALEX } }))
     expect(watchView({ roster: r, mine: new Map([[0, 1]]), displaced: null })).toBe(null)
   })
 })
 
 describe("overflow: take over and End session", () => {
   it("one item per slot someone ELSE holds, and a one-line confirm", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN, 2: { peer_id: "p3", name: null } } }))
-    const items = takeOverItems(r, "p-rowan")
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX, 2: { peer_id: "p3", name: null } } }))
+    const items = takeOverItems(r, "p-alex")
     expect(items).toEqual([
-      { slot: 0, label: "Take over P1 from Harper" },
+      { slot: 0, label: "Take over P1 from Sam" },
       { slot: 2, label: "Take over P3" },
     ])
-    expect(confirmLine(items[0])).toBe("Take over P1 from Harper?")
+    expect(confirmLine(items[0])).toBe("Take over P1 from Sam?")
   })
 
   it("a spectator may take over any held slot", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER } }))
-    expect(takeOverItems(r, "p-spectator")).toEqual([{ slot: 0, label: "Take over P1 from Harper" }])
+    const r = normalizeRoster(raw({ slots: { 0: SAM } }))
+    expect(takeOverItems(r, "p-spectator")).toEqual([{ slot: 0, label: "Take over P1 from Sam" }])
   })
 
   it("'Ends the session for N people': each player once, plus every spectator", () => {
-    const r = normalizeRoster(raw({ slots: { 0: ROWAN, 1: ROWAN, 2: HARPER }, spectators: 1 }))
+    const r = normalizeRoster(raw({ slots: { 0: ALEX, 1: ALEX, 2: SAM }, spectators: 1 }))
     expect(peopleCount(r)).toBe(3)
     expect(endLine(r)).toBe("Ends the session for 3 people")
-    expect(endLine(normalizeRoster(raw({ slots: { 0: ROWAN } })))).toBe("Ends the session for 1 person")
+    expect(endLine(normalizeRoster(raw({ slots: { 0: ALEX } })))).toBe("Ends the session for 1 person")
   })
 })
 
 describe("phone line", () => {
   it("'You are P2 · N others playing · N watching'", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN, 2: { peer_id: "p3", name: "C" } }, spectators: 2 }))
-    expect(phoneLine({ roster: r, peerId: "p-rowan", mine: new Map([[0, 1]]) })).toBe(
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX, 2: { peer_id: "p3", name: "C" } }, spectators: 2 }))
+    expect(phoneLine({ roster: r, peerId: "p-alex", mine: new Map([[0, 1]]) })).toBe(
       "You are P2 · 2 others playing · 2 watching",
     )
   })
 
   it("singular other, two slots of your own, and a spectator's line", () => {
-    const r = normalizeRoster(raw({ slots: { 0: ROWAN, 1: ROWAN, 2: HARPER }, spectators: 1 }))
+    const r = normalizeRoster(raw({ slots: { 0: ALEX, 1: ALEX, 2: SAM }, spectators: 1 }))
     const mine = new Map([
       [0, 0],
       [1, 1],
     ])
-    expect(phoneLine({ roster: r, peerId: "p-rowan", mine })).toBe("You are P1 and P2 · 1 other playing · 1 watching")
+    expect(phoneLine({ roster: r, peerId: "p-alex", mine })).toBe("You are P1 and P2 · 1 other playing · 1 watching")
     expect(phoneLine({ roster: r, peerId: "p-spec", mine: new Map() })).toBe("You are watching · 2 playing · 1 watching")
   })
 })
 
 describe("pad rows: each pad claims its own slot", () => {
   it("'Pad 1 → P2' for a slotted pad, 'press any button to join as P3' for one without", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN } }))
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX } }))
     const rows = padRows({ pads: [{ src: 0 }, { src: 1 }], mine: new Map([[0, 1]]), roster: r })
     expect(rows.map(x => x.text)).toEqual(["Pad 1 → P2", "Pad 2: press any button to join as P3"])
   })
 
   it("no free slot for the second pad", () => {
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN }, max: 2 }))
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX }, max: 2 }))
     const rows = padRows({ pads: [{ src: 0 }, { src: 1 }], mine: new Map([[0, 1]]), roster: r })
     expect(rows[1].text).toBe("Pad 2: all player slots are taken")
   })
@@ -202,8 +202,8 @@ describe("slots: core's {src: slot} and reconciling with the roster", () => {
       [0, 0],
       [1, 1],
     ])
-    const r = normalizeRoster(raw({ slots: { 0: HARPER, 1: ROWAN, 2: ROWAN } }))
-    expect(reconcileSlots(mine, r, "p-rowan")).toEqual(new Map([[1, 1]]))
+    const r = normalizeRoster(raw({ slots: { 0: SAM, 1: ALEX, 2: ALEX } }))
+    expect(reconcileSlots(mine, r, "p-alex")).toEqual(new Map([[1, 1]]))
     expect(mySlotList(new Map([[1, 2], [0, 0]]))).toEqual([0, 2])
     expect(nextFree(r)).toBe(3)
   })

@@ -81,7 +81,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
 
     case LifecycleActions.archive(socket.assigns.current_user_record, type, id) do
       {:ok, resource} ->
-        # An undo toast rather than a flash (Marlowe, 2026-07-16). Archive stays
+        # An undo toast rather than a flash (design review, 2026-07-16). Archive stays
         # instant + dialog-free — recoverable by default, undo not consent —
         # but it now SAYS what it took and keeps the reversal one click away.
         # Labels are read AFTER the archive on purpose: cascade_hidden reads

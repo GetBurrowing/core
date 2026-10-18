@@ -140,7 +140,7 @@ defmodule Platform.Review.RouterHeartbeatE2EReviewTest do
   defp long_dialogue_segments do
     [
       %{
-        "speaker_name" => "Harper",
+        "speaker_name" => "Sam",
         "text" =>
           "Let's kick off the roadmap review for Q3. Mobile focus this week so partners get a stable target.",
         "start_time" => 0,
@@ -516,7 +516,7 @@ defmodule Platform.Review.RouterHeartbeatE2EReviewTest do
         recent_journal: %{entries_by_date: [], missing?: true},
         meeting_transcript: %{
           transcript_id: Ecto.UUID.generate(),
-          formatted_text: "[00:00:00] Harper: Standup notes.",
+          formatted_text: "[00:00:00] Sam: Standup notes.",
           missing?: false
         }
       }

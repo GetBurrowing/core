@@ -36,7 +36,7 @@ defmodule Platform.Roles.Seeds do
       Router)
 
   Responsibility keys here are aligned with the **v2 design canvas
-  `019e0fb8-d87d-72b2-aab4-205b84fe23aa` rev 3** that Rowan signed off on,
+  `019e0fb8-d87d-72b2-aab4-205b84fe23aa` rev 3** that the operator signed off on,
   NOT the planner's earlier sketch-level pseudocode (which used
   speculative keys like `inbox.triage` / `meetings.transcribe` that
   predate the canvas).
@@ -72,7 +72,7 @@ defmodule Platform.Roles.Seeds do
         # `seed_defaults/0` — the pair index makes that safe.
         "design.task_direction",
         # A `meetings.*` key in the DESIGNER's bundle, deliberately
-        # (Rowan, 2026-07-31): the namespace records where the work
+        # (product decision, 2026-07-31): the namespace records where the work
         # originates — one utterance in a live meeting — and the bundle
         # records who does it. `Platform.Meetings.IntentRouting` holds
         # both facts in one row so they cannot drift, and

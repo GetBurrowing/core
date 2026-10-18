@@ -1,0 +1,10 @@
+{
+  "description": "Whatever body is LIVE in this environment's prompt_templates row for meetings.intent_classify.v1. Deliberately environment-dependent: it exists so 'what is actually running here?' is a nameable arm rather than an implicit default, and its rendered sha256 in the run manifest is what tells one environment's row from another's.",
+  "prompt_source": {"db_slug": "meetings.intent_classify.v1"},
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

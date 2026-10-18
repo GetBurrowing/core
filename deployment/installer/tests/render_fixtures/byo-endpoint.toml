@@ -22,4 +22,5 @@ base_url = "https://llm.byo-endpoint.example/v1"
 api_key_ref = "OWN_LLM_API_KEY"
 
 [images]
+image_namespace = "example"
 source = "preloaded"

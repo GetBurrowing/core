@@ -69,7 +69,7 @@ defmodule Platform.Meetings.IntentRuntimeAdapter do
 
   There is deliberately no branching on runtime type. A Claude Code
   runtime returns Task-tool `agentId`s and an openclaw runtime returns
-  slugs like `higgins.moon`, but both are just a `subagent_id` string
+  slugs like `agent-1.host-a`, but both are just a `subagent_id` string
   as far as this module is concerned. The difference is expressed once,
   in prose, in the `dispatch.intent_attention` prompt template (stage
   5) — not as a branch here that would have to be kept in sync with
@@ -109,7 +109,7 @@ defmodule Platform.Meetings.IntentRuntimeAdapter do
   The runtime topic for an external `runtime_id` string.
 
   Note the argument is the AgentRuntime's `runtime_id` field (e.g.
-  `"rowan-claude-agent-1"`), NOT its primary key and NOT the agent's id.
+  `"agent-runtime-1"`), NOT its primary key and NOT the agent's id.
   """
   @spec runtime_topic(binary()) :: binary()
   def runtime_topic(runtime_id) when is_binary(runtime_id), do: "runtime:#{runtime_id}"

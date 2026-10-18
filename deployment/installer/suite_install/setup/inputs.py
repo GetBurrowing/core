@@ -77,7 +77,7 @@ def declared(manifest):
             REGISTRY_AUTH,
             True,
             "a docker config.json with a Docker Hub read credential for the private "
-            "example images (anonymous pulls return 401)",
+            "suite-* images under images.image_namespace (anonymous pulls return 401)",
         )
     for ref, where in customer_refs(manifest).items():
         out[ref] = Input(ref, True, f"customer secret named by {where}")

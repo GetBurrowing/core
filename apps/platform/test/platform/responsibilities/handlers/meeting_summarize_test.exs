@@ -40,7 +40,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
           space_id: Map.get(overrides, :space_id) || unique_id(),
           segments: [
             %{
-              "speaker_name" => "Harper",
+              "speaker_name" => "Sam",
               "text" => "Hello",
               "start_time" => 0,
               "end_time" => 1000,
@@ -88,7 +88,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       assert :ok =
                MeetingSummarize.handle_output(
                  responsibility(),
-                 "## Overview\nWe shipped X.\n## Action Items\n- Harper: follow up",
+                 "## Overview\nWe shipped X.\n## Action Items\n- Sam: follow up",
                  trigger_meta(transcript)
                )
 
@@ -217,7 +217,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       context = %{
         org_identity: identity,
         recent_journal: %{entries_by_date: [], total: 0, days: 7},
-        meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hello"}
+        meeting_transcript: %{formatted_text: "[00:00:00] Sam: Hello"}
       }
 
       [system_msg, user_msg] = MeetingSummarize.build_messages(context)
@@ -228,7 +228,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       assert system_msg.content =~ "### Org identity"
 
       assert user_msg.role == "user"
-      assert user_msg.content =~ "[00:00:00] Harper: Hello"
+      assert user_msg.content =~ "[00:00:00] Sam: Hello"
     end
 
     test "system prompt contains a journal date string when recent_journal has entries" do
@@ -295,7 +295,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
         org_identity: %{content: "", missing?: true, version: nil},
         recent_journal: %{entries_by_date: [], total: 0, days: 7},
         meeting_transcript: %{
-          formatted_text: "[00:00:00] Harper: We shipped X.\n[00:00:10] Alex: Great."
+          formatted_text: "[00:00:00] Sam: We shipped X.\n[00:00:10] Alex: Great."
         }
       }
 
@@ -309,7 +309,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       # actually see the segments, not the "meetings.summarize.v1"
       # slug the pre-019f2570 dispatcher shipped as literal text.
       assert user =~ "Please summarize the following meeting transcript:"
-      assert user =~ "[00:00:00] Harper: We shipped X."
+      assert user =~ "[00:00:00] Sam: We shipped X."
       assert user =~ "[00:00:10] Alex: Great."
     end
 
@@ -347,7 +347,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       context = %{
         org_identity: identity,
         recent_journal: %{entries_by_date: [], total: 0, days: 7},
-        meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hello"}
+        meeting_transcript: %{formatted_text: "[00:00:00] Sam: Hello"}
       }
 
       assert {:ok, %{system: system}} = MeetingSummarize.build_prompt(context)
@@ -401,7 +401,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       [system_msg, _user_msg] =
         MeetingSummarize.build_messages(%{
           agent_kind: :fed_conversational,
-          meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+          meeting_transcript: %{formatted_text: "[00:00:00] Sam: Hi"}
         })
 
       assert system_msg.role == "system"
@@ -413,7 +413,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       [system_msg, _user_msg] =
         MeetingSummarize.build_messages(%{
           agent_kind: :ext_single_responsibility,
-          meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+          meeting_transcript: %{formatted_text: "[00:00:00] Sam: Hi"}
         })
 
       refute system_msg.content =~ "conversational Claude runtime"
@@ -435,7 +435,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
         agent_kind: :fed_conversational,
         org_identity: identity,
         recent_journal: %{entries_by_date: [], total: 0, days: 7},
-        meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+        meeting_transcript: %{formatted_text: "[00:00:00] Sam: Hi"}
       }
 
       [system_msg, _] = MeetingSummarize.build_messages(context)

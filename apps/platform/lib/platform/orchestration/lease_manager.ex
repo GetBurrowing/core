@@ -11,7 +11,7 @@ defmodule Platform.Orchestration.LeaseManager do
   Deliberately distinct from `Platform.Orchestration.ExecutionLease`
   (Ecto schema, `execution_leases` table) — that module is the
   persistent per-runtime lease used by RuntimeSupervision. This module
-  is the transient router liveness view per Rowan's ETS rule
+  is the transient router liveness view per the operator's ETS rule
   ("meeting-lifetime / session-lifetime queues + caches go in ETS,
   not Ecto"). Router state is per-task and reconstructed at boot
   from PubSub replay — no need for durability.
@@ -143,7 +143,7 @@ defmodule Platform.Orchestration.LeaseManager do
 
   See `stage_kind_timeouts/0` for the p95-buffer values embedded from
   the audit (task 019f640d stage 3). `manual_approval` is disabled
-  (both `ack_ms` and `safety_net_ms` are `nil`) per Rowan's spec — the
+  (both `ack_ms` and `safety_net_ms` are `nil`) per the operator's spec — the
   router treats such stages as "no safety-net" and skips arming the
   timers entirely.
   """

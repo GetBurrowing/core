@@ -194,10 +194,10 @@ describe("MeetingTranscript", () => {
     expect(hook.el.innerHTML).not.toContain("transcript-empty")
     expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(false)
 
-    caption(listeners, { id: "a", speaker: "Rowan", text: "hello" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "hello" })
 
     expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(true)
-    expect(renderedLines(hook)).toEqual(["Rowan hello"])
+    expect(renderedLines(hook)).toEqual(["Alex hello"])
     // Still nothing of the empty state in the host: it is hidden by CSS
     // on the sibling, not by this hook rewriting copy.
     expect(hook.el.innerHTML).not.toContain("transcript-empty")
@@ -216,61 +216,61 @@ describe("MeetingTranscript", () => {
     // An interim line is a line the reader can see, so it flags too —
     // NAMED MUTATION: delete the `classList.add` in `_render` and both
     // this and the final-caption case above go red.
-    caption(listeners, { id: "i1", speaker: "Rowan", text: "hello th", final: false })
+    caption(listeners, { id: "i1", speaker: "Alex", text: "hello th", final: false })
 
     expect(hook.el.classList.contains(HAS_LINES_CLASS)).toBe(true)
     expect(interimCount(hook)).toBe(1)
   })
 
   it("renders finalized lines in arrival order", () => {
-    caption(listeners, { id: "a", speaker: "Rowan", text: "first" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "first" })
     caption(listeners, { id: "b", speaker: "Saru", text: "second" })
-    caption(listeners, { id: "c", speaker: "Rowan", text: "third" })
+    caption(listeners, { id: "c", speaker: "Alex", text: "third" })
 
-    expect(renderedLines(hook)).toEqual(["Rowan first", "Saru second", "Rowan third"])
+    expect(renderedLines(hook)).toEqual(["Alex first", "Saru second", "Alex third"])
   })
 
   it("caps the buffer at MAX_LINES, dropping the OLDEST", () => {
     for (let i = 0; i < MAX_LINES + 25; i++) {
-      caption(listeners, { id: `seg-${i}`, speaker: "Rowan", text: `line ${i}` })
+      caption(listeners, { id: `seg-${i}`, speaker: "Alex", text: `line ${i}` })
     }
 
     const lines = renderedLines(hook)
     expect(lines).toHaveLength(MAX_LINES)
     // The window is the TAIL, not the head.
-    expect(lines[0]).toBe("Rowan line 25")
-    expect(lines[lines.length - 1]).toBe(`Rowan line ${MAX_LINES + 24}`)
+    expect(lines[0]).toBe("Alex line 25")
+    expect(lines[lines.length - 1]).toBe(`Alex line ${MAX_LINES + 24}`)
   })
 
   it("updates an interim line in place rather than appending each revision", () => {
-    caption(listeners, { id: "i1", speaker: "Rowan", text: "he", final: false })
-    caption(listeners, { id: "i1", speaker: "Rowan", text: "hell", final: false })
-    caption(listeners, { id: "i1", speaker: "Rowan", text: "hello th", final: false })
+    caption(listeners, { id: "i1", speaker: "Alex", text: "he", final: false })
+    caption(listeners, { id: "i1", speaker: "Alex", text: "hell", final: false })
+    caption(listeners, { id: "i1", speaker: "Alex", text: "hello th", final: false })
 
-    expect(renderedLines(hook)).toEqual(["Rowan hello th"])
+    expect(renderedLines(hook)).toEqual(["Alex hello th"])
     expect(interimCount(hook)).toBe(1)
   })
 
   it("replaces an interim with its final even when the final carries a DIFFERENT id", () => {
-    caption(listeners, { id: "interim-1", speaker: "Rowan", text: "hello th", final: false })
+    caption(listeners, { id: "interim-1", speaker: "Alex", text: "hello th", final: false })
 
     // DIRECTION CONTROL: exactly one line, and it IS the interim.
-    expect(renderedLines(hook)).toEqual(["Rowan hello th"])
+    expect(renderedLines(hook)).toEqual(["Alex hello th"])
     expect(interimCount(hook)).toBe(1)
 
     // Transcribers do not reliably reuse the interim id for the final
     // (task 019ff712). A different id must still END the interim.
-    caption(listeners, { id: "final-9", speaker: "Rowan", text: "hello there" })
+    caption(listeners, { id: "final-9", speaker: "Alex", text: "hello there" })
 
-    expect(renderedLines(hook)).toEqual(["Rowan hello there"])
+    expect(renderedLines(hook)).toEqual(["Alex hello there"])
     expect(interimCount(hook)).toBe(0)
   })
 
   it("does not duplicate a redelivered final", () => {
-    caption(listeners, { id: "a", speaker: "Rowan", text: "hello" })
-    caption(listeners, { id: "a", speaker: "Rowan", text: "hello there" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "hello" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "hello there" })
 
-    expect(renderedLines(hook)).toEqual(["Rowan hello there"])
+    expect(renderedLines(hook)).toEqual(["Alex hello there"])
   })
 
   it("suffixes guest speakers and escapes markup in speaker and text", () => {
@@ -287,7 +287,7 @@ describe("MeetingTranscript", () => {
   })
 
   it("ignores blank captions", () => {
-    caption(listeners, { id: "a", speaker: "Rowan", text: "   " })
+    caption(listeners, { id: "a", speaker: "Alex", text: "   " })
 
     expect(renderedLines(hook)).toEqual([])
     // Nothing rendered, nothing flagged: the sibling empty state stays.
@@ -304,14 +304,14 @@ describe("MeetingTranscript", () => {
     hook.el.scrollHeight = 1000
     scrollTo(hook, 100)
 
-    caption(listeners, { id: "a", speaker: "Rowan", text: "hello" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "hello" })
 
     // Untouched — re-reading is not yanked away by the next utterance.
     expect(hook.el.scrollTop).toBe(100)
 
     // Now pinned: bottom of the content is within the slack window.
     scrollTo(hook, 800)
-    caption(listeners, { id: "b", speaker: "Rowan", text: "again" })
+    caption(listeners, { id: "b", speaker: "Alex", text: "again" })
 
     expect(hook.el.scrollTop).toBe(1000)
   })
@@ -330,36 +330,36 @@ describe("MeetingTranscript", () => {
   // ── Task 01a06524 stage 1 ──────────────────────────────────────────
 
   it("groups consecutive same-speaker lines under ONE header, hairline only on speaker change", () => {
-    caption(listeners, { id: "a", speaker: "Rowan", identity: "user:1", text: "one" })
-    caption(listeners, { id: "b", speaker: "Rowan", identity: "user:1", text: "two" })
-    caption(listeners, { id: "c", speaker: "Rowan", identity: "user:1", text: "three" })
+    caption(listeners, { id: "a", speaker: "Alex", identity: "user:1", text: "one" })
+    caption(listeners, { id: "b", speaker: "Alex", identity: "user:1", text: "two" })
+    caption(listeners, { id: "c", speaker: "Alex", identity: "user:1", text: "three" })
 
     // DIRECTION CONTROL: three lines, one name, no rule — there is no
     // speaker change above the first group to mark.
-    expect(renderedLines(hook)).toEqual(["Rowan one", "Rowan two", "Rowan three"])
+    expect(renderedLines(hook)).toEqual(["Alex one", "Alex two", "Alex three"])
     expect(headerCount(hook)).toBe(1)
     expect(hairlineCount(hook)).toBe(0)
 
     caption(listeners, { id: "d", speaker: "Saru", identity: "agent:saru", text: "four" })
-    caption(listeners, { id: "e", speaker: "Rowan", identity: "user:1", text: "five" })
+    caption(listeners, { id: "e", speaker: "Alex", identity: "user:1", text: "five" })
 
-    // Rowan / Saru / Rowan = three groups, two changes, two hairlines.
+    // Alex / Saru / Alex = three groups, two changes, two hairlines.
     expect(headerCount(hook)).toBe(3)
     expect(hairlineCount(hook)).toBe(2)
     // Each line still carries its own speaker, whatever the grouping.
     expect(renderedLines(hook)).toEqual([
-      "Rowan one",
-      "Rowan two",
-      "Rowan three",
+      "Alex one",
+      "Alex two",
+      "Alex three",
       "Saru four",
-      "Rowan five",
+      "Alex five",
     ])
     // Timestamp per group header, HH:MM from detail.timestamp / arrival.
     expect(hook.el.innerHTML.match(/data-role="transcript-time">\d{2}:\d{2}</g)).toHaveLength(3)
   })
 
   it("marks an agent speaker with an outline chip keyed on the agent: identity prefix, never a colour", () => {
-    caption(listeners, { id: "a", speaker: "Rowan", identity: "user:1", text: "human" })
+    caption(listeners, { id: "a", speaker: "Alex", identity: "user:1", text: "human" })
     expect(hook.el.innerHTML).not.toContain("transcript-agent-chip")
 
     caption(listeners, { id: "b", speaker: "Saru", identity: "agent:saru", text: "agent" })
@@ -375,7 +375,7 @@ describe("MeetingTranscript", () => {
   it("never yanks a scrolled-up reader, and offers a pill naming who is speaking", () => {
     hook.el.clientHeight = 200
     hook.el.scrollHeight = 1000
-    caption(listeners, { id: "a", speaker: "Rowan", text: "before" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "before" })
     expect(hook.el.scrollTop).toBe(1000)
 
     // Reader scrolls up into the scrollback. Quiet room: no pill yet —
@@ -383,16 +383,16 @@ describe("MeetingTranscript", () => {
     scrollTo(hook, 100)
     expect(pillHtml(hook)).toBeNull()
 
-    caption(listeners, { id: "b", speaker: "Marlowe", text: "new line" })
+    caption(listeners, { id: "b", speaker: "Robin", text: "new line" })
 
     expect(hook.el.scrollTop).toBe(100)
-    expect(pillHtml(hook)).toBe("Marlowe is speaking ↓")
+    expect(pillHtml(hook)).toBe("Robin is speaking ↓")
     // The pill is the ONLY primary in the pane.
     expect(hook.el.innerHTML.match(/btn-primary/g)).toHaveLength(1)
 
     // A later speaker replaces the name — it says who is speaking NOW.
-    caption(listeners, { id: "c", speaker: "Harper", text: "newer" })
-    expect(pillHtml(hook)).toBe("Harper is speaking ↓")
+    caption(listeners, { id: "c", speaker: "Sam", text: "newer" })
+    expect(pillHtml(hook)).toBe("Sam is speaking ↓")
     expect(hook.el.scrollTop).toBe(100)
 
     clickPill(hook)
@@ -402,7 +402,7 @@ describe("MeetingTranscript", () => {
 
     // And follow-live is restored: the next line pulls the view down.
     hook.el.scrollHeight = 1200
-    caption(listeners, { id: "d", speaker: "Rowan", text: "after" })
+    caption(listeners, { id: "d", speaker: "Alex", text: "after" })
     expect(hook.el.scrollTop).toBe(1200)
   })
 
@@ -412,14 +412,14 @@ describe("MeetingTranscript", () => {
     // Within PIN_SLACK_PX of the bottom counts as at the edge.
     scrollTo(hook, 1000 - 200 - (PIN_SLACK_PX - 1))
 
-    caption(listeners, { id: "a", speaker: "Rowan", text: "hello" })
+    caption(listeners, { id: "a", speaker: "Alex", text: "hello" })
 
     expect(hook.el.scrollTop).toBe(1000)
     expect(pillHtml(hook)).toBeNull()
 
     // Returning to the bottom after a detour also retires the pill.
     scrollTo(hook, 100)
-    caption(listeners, { id: "b", speaker: "Rowan", text: "away" })
+    caption(listeners, { id: "b", speaker: "Alex", text: "away" })
     expect(pillHtml(hook)).not.toBeNull()
     scrollTo(hook, 1000)
     expect(pillHtml(hook)).toBeNull()
@@ -427,7 +427,7 @@ describe("MeetingTranscript", () => {
 
   it("says the record is truncated once the cap first drops a line", () => {
     for (let i = 0; i < MAX_LINES; i++) {
-      caption(listeners, { id: `seg-${i}`, speaker: "Rowan", text: `line ${i}` })
+      caption(listeners, { id: `seg-${i}`, speaker: "Alex", text: `line ${i}` })
     }
 
     // DIRECTION CONTROL: exactly at the cap nothing has been dropped, so
@@ -435,7 +435,7 @@ describe("MeetingTranscript", () => {
     expect(renderedLines(hook)).toHaveLength(MAX_LINES)
     expect(hook.el.innerHTML).not.toContain("transcript-truncated")
 
-    caption(listeners, { id: "seg-over", speaker: "Rowan", text: "one more" })
+    caption(listeners, { id: "seg-over", speaker: "Alex", text: "one more" })
 
     expect(renderedLines(hook)).toHaveLength(MAX_LINES)
     expect(hook.el.innerHTML).toContain('data-role="transcript-truncated"')
@@ -444,14 +444,14 @@ describe("MeetingTranscript", () => {
   })
 
   it("renders interim text muted and NOT italic, and finals at full base-content", () => {
-    caption(listeners, { id: "i1", speaker: "Rowan", text: "settling", final: false })
+    caption(listeners, { id: "i1", speaker: "Alex", text: "settling", final: false })
 
     const interim = lineClass(hook, "settling")
     expect(interim).toContain("text-base-content/60")
     expect(interim).not.toContain("italic")
     expect(interim).not.toContain("opacity")
 
-    caption(listeners, { id: "f1", speaker: "Rowan", text: "settled" })
+    caption(listeners, { id: "f1", speaker: "Alex", text: "settled" })
 
     const final = lineClass(hook, "settled")
     expect(final).toContain("text-base-content ")

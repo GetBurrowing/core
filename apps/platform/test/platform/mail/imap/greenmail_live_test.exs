@@ -6,7 +6,7 @@
 # recorded bytes over a loopback socket) and
 # `test/platform/mail/smtp_receipt_test.exs`.
 #
-# Run it on moon against a real container:
+# Run it on test-host against a real container:
 #
 #   podman run -d --name greenmail-<id> --network dev \
 #     -e GREENMAIL_OPTS='-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.auth.disabled' \

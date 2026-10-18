@@ -1,0 +1,11 @@
+{
+  "description": "The 20260726000100 corrections revision read straight out of its migration heredoc — the arm that disagreed with the live DB row in the 2026-08-26 runs. Reading it from the file makes that arm reproducible on any checkout, with or without a database.",
+  "prompt_source": {"migration": "priv/repo/migrations/20260726000100_update_intent_classify_prompt_with_corrections.exs"},
+  "prompt_attribute": "new_content",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

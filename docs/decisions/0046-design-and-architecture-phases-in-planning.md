@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-25
-**Author:** Rowan Ellis / Brosnan
+**Author:** the product owner / Brosnan
 **Related:** ADR-0044 (Architect Responsibility — this supersedes its stage-level dispatch model), ADR-0032 (Design Handoff Action Cards), ADR-0029 (Task Lifecycle Responsibility Split), ADR-0045 (Task Stacks v2)
 **Amended:** [Amendment 1 (2026-08-08)](#amendment-1--lifecycle-hook-pipelines-2026-08-08) generalises the two hard-coded hooks below into configurable **lifecycle hook pipelines**, extending the `complete / not_applicable / failed` outcome vocabulary to them. It also carries a correction to a claim about the architecture gate's expiry path. Read it before acting on the Decision section.
 

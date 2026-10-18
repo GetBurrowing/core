@@ -44,7 +44,7 @@ defmodule Platform.Chat.MeetingSpacesTest do
 
     test "false for every non-meeting kind" do
       refute MeetingSpaces.meeting_kind?(space("gen", "channel"))
-      refute MeetingSpaces.meeting_kind?(space("rowan", "dm"))
+      refute MeetingSpaces.meeting_kind?(space("alex", "dm"))
       refute MeetingSpaces.meeting_kind?(space("crew", "group"))
       refute MeetingSpaces.meeting_kind?(space("task-exec", "execution"))
       refute MeetingSpaces.meeting_kind?(space("sys", "system"))

@@ -1,10 +1,10 @@
 # Phase 1B — Audit
 
-**Generated:** 2026-05-08 by saru-claude-clode for Marlowe's UI/UX audit.
+**Generated:** 2026-05-08 by saru-claude-clode for the design lead's UI/UX audit.
 **Method:** Manual + Playwright contrast fallback (axe-core/lighthouse install blocked, see `019e09a9-...`). Static HEEx analysis cross-referenced with `app.css` token computations and the structural findings in `01-inventory.md`.
 **Scope:** mobile-first surfaces — `chat`, `tasks`, `activity`, `shell` + subroutes.
 
-> **Why no axe-core / lighthouse?** Tooling install denied by harness classifier despite Marlowe's prompt + chat authorization (`feedback_channel_authorization_doesnt_unlock_classifier.md` in agent memory). Audit proceeds with manual + static + Playwright contrast as the substitute. Where automated tooling would have been more authoritative, findings note "axe-core would have surfaced X programmatically" and Phase 1B re-runs after install would strengthen severity claims.
+> **Why no axe-core / lighthouse?** Tooling install denied by harness classifier despite the design lead's prompt + chat authorization (`feedback_channel_authorization_doesnt_unlock_classifier.md` in agent memory). Audit proceeds with manual + static + Playwright contrast as the substitute. Where automated tooling would have been more authoritative, findings note "axe-core would have surfaced X programmatically" and Phase 1B re-runs after install would strengthen severity claims.
 
 ---
 
@@ -108,7 +108,7 @@ Reminder per scope: **DO NOT flag `maximum-scale=1`** — Suite intentionally lo
 ### 1B-USE-1 — Naming drift compounds cognitive load (resolved + remaining)
 
 - **NN/g heuristic: Consistency and standards** + **Match between system and the real world**
-- **Severity:** DRIFT-1 was **blocker** → **resolved 2026-05-08 (Marlowe: `space`)**. DRIFT-2/3/4 remain **medium-high**.
+- **Severity:** DRIFT-1 was **blocker** → **resolved 2026-05-08 (the design lead: `space`)**. DRIFT-2/3/4 remain **medium-high**.
 - **Anchored to:** `1A-IA-DRIFT-1..5` in `01-inventory.md`.
 - **Current behavior (after DRIFT-1 resolution):** UI still says `participant` / `member` / `user` / `attendee` interchangeably (DRIFT-2), surfaces three orthogonal task lifecycles (`task` / `plan` / `review`) at peer level (DRIFT-3), and uses four names for the agent runtime (DRIFT-4). New users encountering "members" then "participants" then "user" in adjacent UI pieces have to mentally unify them — and may incorrectly conclude they're different concepts.
 - **Why it fails the user:** higher learning curve, especially for first-time users. For agent-native UX, where the agent is also a "participant"/"member"/"user", the ambiguity scales: which of these is the agent? Which is the human?
@@ -193,7 +193,7 @@ Reminder per scope: **DO NOT flag `maximum-scale=1`** — Suite intentionally lo
 
 - **Anchored:** `1A-COMP-DOCDRIFT-1`.
 - **Severity: Medium** (process / contributor friction, not user-facing)
-- **Current state:** `apps/platform/AGENTS.md:33` says "Always manually write your own tailwind-based components instead of using daisyUI". The codebase is built on DaisyUI 5. Marlowe's audit prompt confirms DaisyUI 5 + Public Sans as the active brand.
+- **Current state:** `apps/platform/AGENTS.md:33` says "Always manually write your own tailwind-based components instead of using daisyUI". The codebase is built on DaisyUI 5. The design lead's audit prompt confirms DaisyUI 5 + Public Sans as the active brand.
 - **Why this fails (not the user, but the contributor):** any new contributor reading AGENTS.md will get conflicting guidance. Phase 4 should propose a one-line correction.
 
 ---
@@ -225,14 +225,14 @@ Manual + Playwright fallback covered ~60-70% of what an axe-core + lighthouse-eq
 
 - **State matrix (per Phase 1A Section 5)** — hover, focus-visible, active, loading visuals across every interactive element. Static analysis showed structural gaps; verifying *which specific styles render* needs CDP-driven inspection.
 - **Real contrast measurement per surface** — A11Y-5 was computed from token values; actual rendered contrast can differ by user-agent / color profile. Playwright `axe-core/contrast` rule would catch surface-specific failures statically computation can't.
-- **Lighthouse perf / best-practices / SEO** — full deferral. No findings claimed in this audit; if Marlowe wants performance signals, Phase 1B re-run after install.
+- **Lighthouse perf / best-practices / SEO** — full deferral. No findings claimed in this audit; if the design lead wants performance signals, Phase 1B re-run after install.
 - **Touch target size measurement (WCAG 2.5.8)** — needs rendered geometry. Static review identified candidate icon buttons (1B-A11Y-2 list) but didn't measure 24×24 / 44×44 minimums on mobile viewport.
 
 These deferrals are **explicit gaps**, not silent skips. Phase 2 anchors against the findings I DID surface; if the deferred axe-core pass surfaces additional findings, they slot into Phase 2 amendments rather than blocking the next stage.
 
 ---
 
-## 6. Summary for Marlowe
+## 6. Summary for the design lead
 
 10 findings across a11y + usability + visual coherence, mostly concentrated in three structural patterns:
 

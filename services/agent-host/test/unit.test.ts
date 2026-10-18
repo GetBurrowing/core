@@ -72,7 +72,7 @@ describe("names", () => {
   });
 });
 
-// From suite-cli 0.7.2 agentKey("/home/agent-98259d347cbe/work"), run on moon 2026-10-09.
+// From suite-cli 0.7.2 agentKey("/home/agent-98259d347cbe/work"), run on test-host 2026-10-09.
 const BURROW_CLI_KEY_VECTOR = "work-4e19478c8cac30c4";
 
 describe("units", () => {

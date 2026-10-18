@@ -47,7 +47,7 @@ final class EvidenceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 15))
         sleep(6)
         shot("picker-saved-unreachable")
-        app.staticTexts["suite.milv.life"].firstMatch.swipeLeft()
+        app.staticTexts["suite.example.test"].firstMatch.swipeLeft()
         sleep(1)
         shot("picker-swipe-remove")
         app.staticTexts["Choose a Burrow install"].tap()
@@ -78,7 +78,7 @@ final class EvidenceUITests: XCTestCase {
         shot("picker-cant-reach")
         app.buttons["Choose another install"].tap()
 
-        app.staticTexts["suite.example.com"].firstMatch.tap()
+        app.staticTexts["suite.example.net"].firstMatch.tap()
         app.buttons["Continue"].tap()
         // ASWebAuthenticationSession's consent alert belongs to springboard.
         let consent = consentButton(app, "Continue")
@@ -86,7 +86,7 @@ final class EvidenceUITests: XCTestCase {
             shot("login-consent")
             consent.tap()
             sleep(8)
-            shot("login-sheet-fabrikam")
+            shot("login-sheet-legacy")
             // Leave the sheet: Cancel in the auth session's navigation bar.
             if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
             sleep(2)
@@ -96,7 +96,7 @@ final class EvidenceUITests: XCTestCase {
     }
 
     func test2LoginProbe() {
-        let app = launch(["-SuiteLoginProbe", "suite.example.com"])
+        let app = launch(["-SuiteLoginProbe", "suite.example.org"])
         let signIn = app.webViews.buttons["Sign in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 30))
         shot("probe-1-pocket-id-in-wkwebview")
@@ -115,7 +115,7 @@ final class EvidenceUITests: XCTestCase {
         for _ in 0..<3 {
             let allow = springboard.buttons["Allow"]
             if allow.waitForExistence(timeout: 5) { allow.tap() }
-            // Relaunching with fabrikam confirmed and no session starts sign-in.
+            // Relaunching with legacy confirmed and no session starts sign-in.
             let cancel = consentButton(app, "Cancel")
             if cancel.waitForExistence(timeout: 5) { cancel.tap() }
         }
@@ -240,7 +240,7 @@ final class EvidenceUITests: XCTestCase {
 
         // The confirmation card against a live install: its own logo, name and host.
         app = freshAddFlow()
-        type(app, "https://suite-exp.example.com/chat ")
+        type(app, "https://suite-exp.example.org/chat ")
         app.buttons["Continue"].tap()
         XCTAssertTrue(app.buttons["Continue to sign in"].waitForExistence(timeout: 20))
         // The install's logo loads after the card appears.
@@ -273,7 +273,7 @@ final class EvidenceUITests: XCTestCase {
         app.terminate()
 
         // The switcher's Add install sheet: the same flow.
-        app = launch(["-SuiteEvidenceReset", "YES", "-SuiteExtraInstall", "suite-exp.example.com"])
+        app = launch(["-SuiteEvidenceReset", "YES", "-SuiteExtraInstall", "suite-exp.example.org"])
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 20))
         app.buttons["Add an install"].tap()
         XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 5))

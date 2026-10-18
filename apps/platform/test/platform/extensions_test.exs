@@ -14,7 +14,7 @@ defmodule Platform.ExtensionsTest do
       without-modules build), and every registry reads as main's did with
       Play's flag unset, minus Play's always-registered entries.
       The snapshots were MEASURED on main (eb30c8593) by a probe run in the
-      test env on moon, not copied from this branch. The with-Play parity
+      test env on test-host, not copied from this branch. The with-Play parity
       cases moved with the module
       (apps/game_stream/test/platform/game_stream/extension_parity_test.exs).
 
@@ -796,95 +796,101 @@ defmodule Platform.ExtensionsTest do
     # is the only tool-definition change; names and bundles are unchanged.
     #
     # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
-    # `experiments` bundle. Measured on moon at the stage's branch.
+    # `experiments` bundle. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
-    # bundle, last. Measured on moon at the stage's branch.
+    # bundle, last. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
     # `returns_schema` key on 12 definitions, federation_status's filter
-    # parameters and the suite_run primer. Measured on moon.
+    # parameters and the suite_run primer. Measured on test-host.
     #
     # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`,
     # plus doc text on experiment_create (dispatch_usage, agent_id cohort,
-    # dispatch.code_mode target). Measured on moon at the stage's branch.
+    # dispatch.code_mode target). Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
-    # parameter and description text. Measured on moon at the stage's branch.
+    # parameter and description text. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 019fa1ac stage 1: task_create/task_update expose the
     # first-class kind taxonomy and task read/write docs now name kind.
-    # Measured on moon at the stage's branch (recomputed at the rebased tip
-    # after main's Fabrikam scrub landed; see task 019fa1ac PR).
+    # Measured on test-host at the stage's branch (recomputed at the rebased tip
+    # after main's Legacy scrub landed; see task 019fa1ac PR).
     #
     # Re-pinned by task 01a11ec3 stage 1: task_create/task_update expose
     # origin, trust and external repository/issue provenance alongside the
-    # independent kind taxonomy. Measured on moon at the stage's branch.
+    # independent kind taxonomy. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 019fa1ac-6685 stage 3: `janitor_hand_back` in the
-    # `task` bundle, after `stack_assign_agents`. Measured on moon at the
+    # `task` bundle, after `stack_assign_agents`. Measured on test-host at the
     # stage's branch.
     #
     # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
-    # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
-    # copy. Measured on moon at the merge.
+    # (c135cbe7, PR #1226): the stack's surface with main's Legacy-scrubbed tool
+    # copy. Measured on test-host at the merge.
     #
     # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
-    # tools, last. Measured on moon at the stage's branch.
+    # tools, last. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
     # last in the registry, which also enters canvas_create/patch's document
-    # schema. Measured on moon at the stage's branch.
+    # schema. Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
     # and `prototype_ref` props and its srcdoc / list_kinds text, which also
-    # enter canvas_create/patch's document schema. Measured on moon at the
+    # enter canvas_create/patch's document schema. Measured on test-host at the
     # stage's branch.
     #
     # Re-pinned by task 01a1316b-aab0 stage 2: canvas_patch's operation
     # description names the new `set_binding` op (the MCP tool's text in
     # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
-    # Measured on moon at the stage's branch.
+    # Measured on test-host at the stage's branch.
     #
     # Re-pinned by task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
-    # the `federation` bundle, after `federation_status`. Measured on moon at
+    # the `federation` bundle, after `federation_status`. Measured on test-host at
     # the stage's branch.
     #
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
-    # above. Measured on moon at the merge commit.
+    # above. Measured on test-host at the merge commit.
     #
     # Re-pinned by task 01a1386d-e528 stage 2 for stage 1's change: the
     # `memory_rename` tool's description and `limitations` now document the
     # prefix mode (both paths ending in `/` route to `Wiki.rename_prefix/3`).
     # Tool names and bundles are unchanged (the name assertion above passes
-    # unmodified). Measured on moon at the stage-2 branch.
+    # unmodified). Measured on test-host at the stage-2 branch.
     #
     # Re-pinned by task 01a1386d-e528 stage 5: the `canvas_get` tool's
     # `limitations` now says a canvas a `canvas.read` deny covers answers
     # exactly as a nonexistent one (canvas_get passes the runtime's Access
     # Scope to `ToolAccess.fetch_for_read/3`). Names and bundles unchanged.
-    # Measured on moon at the stage-5 wip ref.
+    # Measured on test-host at the stage-5 wip ref.
     #
     # Re-pinned by task 01a14a7f stage 3: the 17 dotted tool names became
     # underscores (`canvas.create` -> `canvas_create`, ...), in names and in
     # every description that cites one, including the image kind's `src`
     # schema text (so the tool-schemas digest moves and the summaries digest
-    # does not). Measured on moon at the stage's branch (ac42fe5e).
+    # does not). Measured on test-host at the stage's branch (ac42fe5e).
     #
     # Re-pinned by task 01a14b9e-50a4 stage 1: `suite_run` / `suite_run_describe`
     # became `burrow_run` / `burrow_run_describe` (names, primer and
     # describe text), "Suite" became "Burrow" in tool_surface.ex's tool
     # descriptions, and code_mode_report's text names burrow_run. Bundles are
-    # unchanged. Measured on moon at the stage's branch (8cefc9fc).
+    # unchanged. Measured on test-host at the stage's branch (8cefc9fc).
     #
     # Re-pinned by task 01a14b9e-50a4 stage 2: product-name copy "Suite"
     # became "Burrow" in tool descriptions outside tool_surface.ex (canvas
     # tools' sharing boundary, experiment, mail-draft and prototype tools)
     # and in the canvas kind descriptions and the embed kind's `scripts`
     # schema text ("no Burrow cookies"), so the summaries and tool-schemas
-    # digests move too. Names and bundles unchanged. Measured on moon at the
+    # digests move too. Names and bundles unchanged. Measured on test-host at the
     # stage's branch (512cdde0, 1a46cef5).
-    @main_tool_digest_off "63ca056ab51ae9f8e663738d6c8584a314d8f3060770b1867ad82a145a3bc941"
+    #
+    # Re-pinned by task 01a14b9e stage 3: tool descriptions name neutral
+    # examples instead of one install's people and hosts (`alex-coder`,
+    # `agent-1.host-a`, `infra` (test rig, ...), "a human picks option A or
+    # B", "a human editor"). Names, bundles and schemas are unchanged.
+    # Re-measured on the test rig after merging main (A2) into the stage branch.
+    @main_tool_digest_off "9512b484ba74ab3e1e07711d2b91a3d4784d870299fd380d71ecd204fb763097"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

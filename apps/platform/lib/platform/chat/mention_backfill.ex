@@ -137,8 +137,8 @@ defmodule Platform.Chat.MentionBackfill do
   Rewrites legacy `@Name` spans in `content` to `@[Canonical Name]` based on
   `roster` (a list of `%{display_name: _, participant_id: _}` maps).
 
-  Longest-match-wins: with both "Rowan" and "Rowan Ellis" in the roster,
-  `@Rowan Ellis hi` resolves to the longer name, and bare `@Rowan hey`
+  Longest-match-wins: with both "Alex" and "Alex Morgan" in the roster,
+  `@Alex Morgan hi` resolves to the longer name, and bare `@Alex hey`
   resolves to the shorter.
   """
   @spec rewrite_content(String.t() | nil, [map()]) :: String.t() | nil

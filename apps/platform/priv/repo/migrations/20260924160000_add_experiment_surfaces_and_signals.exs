@@ -162,7 +162,7 @@ defmodule Platform.Repo.Migrations.AddExperimentSurfacesAndSignals do
       add(:org_id, references(:orgs, type: :binary_id, on_delete: :restrict))
       add(:max_live, :integer, null: false, default: 3)
       add(:allowed_surfaces, {:array, :string}, null: false, default: [])
-      # Opt-in per org (Rowan, 2026-09-24): launch approval is a guardrail an
+      # Opt-in per org (product decision, 2026-09-24): launch approval is a guardrail an
       # admin can switch on, off by default. The UI controls are present
       # either way.
       add(:require_human_approval, :boolean, null: false, default: false)

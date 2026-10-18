@@ -23,12 +23,12 @@ defmodule Platform.Repo.Migrations.AddColorToOrgs do
   insert, and only the changeset produces a form error.
 
   The six shipped orgs are backfilled from the oklch() literals already in
-  app.css so nothing regresses: fabrikam 50/0.16, paragon 95/0.16, sxi
+  app.css so nothing regresses: the root org 50/0.16, paragon 95/0.16, sxi
   162/0.15, wayne_tech 240/0.15, soylent 295/0.20, cyberdyne 340/0.19.
   """
 
   @backfill [
-    {"fabrikam", 50, 0.16},
+    {{:sha256, "9cfdc719f125bfd24830658f109d785ecca57a0c05022add0f6cf4aaec5dc25c"}, 50, 0.16},
     {"paragon", 95, 0.16},
     {"sxi", 162, 0.15},
     {"wayne_tech", 240, 0.15},
@@ -55,10 +55,18 @@ defmodule Platform.Repo.Migrations.AddColorToOrgs do
       execute("""
       UPDATE orgs
          SET color_hue = #{hue}, color_chroma = #{chroma}
-       WHERE slug = '#{slug}' AND color_hue IS NULL
+       WHERE #{slug_match(slug)} AND color_hue IS NULL
       """)
     end
   end
+
+  # The root org's historical slug is matched by its sha256 digest so the
+  # public tree does not spell it (task 01a14b9e stage 5); the predicate is
+  # true for exactly the rows the literal `slug = '<slug>'` matched.
+  defp slug_match({:sha256, hex}),
+    do: "encode(sha256(convert_to(slug, 'UTF8')), 'hex') = '#{hex}'"
+
+  defp slug_match(slug) when is_binary(slug), do: "slug = '#{slug}'"
 
   def down do
     drop(constraint(:orgs, :orgs_color_hue_range))

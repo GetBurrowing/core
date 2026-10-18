@@ -88,7 +88,7 @@ final class IntentsTests: XCTestCase {
 
     private func space(_ host: String) -> SpaceEntity {
         SpaceEntity(
-            id: EntityRef(host: host, uuid: "5a000000-0000-4000-8000-000000000001").id, name: "Internal Fabrikam SXI", isDirectMessage: false,
+            id: EntityRef(host: host, uuid: "5a000000-0000-4000-8000-000000000001").id, name: "Internal Legacy SXI", isDirectMessage: false,
             pathSegment: "sxi", subtitle: "Space")
     }
 
@@ -187,7 +187,7 @@ final class IntentsTests: XCTestCase {
             [
                 "Approve the plan Burrow iOS: App Intents in Burrow iOS on a.example.com? Agents start building as soon as you approve.",
                 "Reject the review Burrow iOS: App Intents in Burrow iOS on a.example.com? It goes back to the agent with your note.",
-                "Send \"On my way\" to Internal Fabrikam SXI on a.example.com?",
+                "Send \"On my way\" to Internal Legacy SXI on a.example.com?",
             ])
     }
 
@@ -209,8 +209,8 @@ final class IntentsTests: XCTestCase {
         StubURLProtocol.respond = { _ in (201, self.json(#"{"message":{"id":"m1"}}"#)) }
         var prompt = ""
         let text = try await actions.send(space(a), message: "On my way") { prompt = $0 }
-        XCTAssertEqual(prompt, "Send \"On my way\" to Internal Fabrikam SXI?")
-        XCTAssertEqual(text, "Sent to Internal Fabrikam SXI.")
+        XCTAssertEqual(prompt, "Send \"On my way\" to Internal Legacy SXI?")
+        XCTAssertEqual(text, "Sent to Internal Legacy SXI.")
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.path, "/api/app/spaces/5a000000-0000-4000-8000-000000000001/messages")
         XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
     }
@@ -219,9 +219,9 @@ final class IntentsTests: XCTestCase {
 
     func testConflictMapsToAlreadyHandled() async throws {
         let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a]))
-        StubURLProtocol.respond = { _ in (409, self.json(#"{"error":"already_handled","by":"Rowan Ellis"}"#)) }
+        StubURLProtocol.respond = { _ in (409, self.json(#"{"error":"already_handled","by":"Alex Rivera"}"#)) }
         let named = try await actions.approve(approval(a)) { _ in }
-        XCTAssertEqual(named, "Already approved by Rowan Ellis.")
+        XCTAssertEqual(named, "Already approved by Alex Rivera.")
 
         StubURLProtocol.respond = { _ in (409, self.json(#"{"error":"already_handled","by":null}"#)) }
         let unnamed = try await actions.reject(approval(a), note: "No", confirm: { _ in })
@@ -466,9 +466,9 @@ final class IntentsTests: XCTestCase {
 
         UserDefaults().removePersistentDomain(forName: defaultsName)
         let multi = env(tokens: [:], hosts: [a, b])
-        multi.installs.updateName("Fabrikam Suite", for: b)
+        multi.installs.updateName("Legacy Suite", for: b)
         XCTAssertEqual(
-            AgentEntity(SuiteAgent(id: "g1", name: "Saru", slug: nil, role: "historian"), host: b, env: multi).subtitle, "Agent, historian, Fabrikam Suite")
+            AgentEntity(SuiteAgent(id: "g1", name: "Saru", slug: nil, role: "historian"), host: b, env: multi).subtitle, "Agent, historian, Legacy Suite")
         XCTAssertEqual(SpaceEntity(SuiteSpace(id: "s2", name: "SXI", kind: "channel"), host: b, env: multi).id, "\(b)|s2")
     }
 

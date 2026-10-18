@@ -224,7 +224,7 @@ Feedback from any source is a context push into the run scope:
 # From Chat surface
 Platform.Tasks.Feedback.push(run_id, %{
   source: :chat,
-  author: "user:rowan",
+  author: "user:alex",
   content: "Use postgres instead of sqlite",
   timestamp: DateTime.utc_now()
 })
@@ -232,7 +232,7 @@ Platform.Tasks.Feedback.push(run_id, %{
 # From UI review
 Platform.Tasks.Feedback.push(run_id, %{
   source: :review,
-  author: "user:rowan",
+  author: "user:alex",
   content: "Approved with changes: add error handling",
   timestamp: DateTime.utc_now()
 })
@@ -252,7 +252,7 @@ deploy_targets: [
     "name" => "production",
     "type" => "docker_compose",
     "config" => %{
-      "host" => "dev@192.0.2.234",
+      "host" => "deploy@192.0.2.12",
       "stack_path" => "~/docker/stacks/my-app",
       "image_registry" => "ghcr.io/org/repo",
       "watchtower" => true,

@@ -148,7 +148,7 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
 
   # Archived-user participants live in `participants_map` for historical
   # rendering (see `PresenceHooks.enter_space/4` — `include_archived: true`
-  # is deliberate). Reject them here so `@Rowan Kl` doesn't autocomplete to
+  # is deliberate). Reject them here so `@Alex Kl` doesn't autocomplete to
   # an archived user. Agents carry `archived: false` (see
   # `PresenceHooks.participant_identity/2`), so this is safe as a single
   # boolean lookup regardless of `participant_type`.

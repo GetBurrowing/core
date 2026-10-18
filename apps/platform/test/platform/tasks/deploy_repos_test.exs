@@ -258,13 +258,13 @@ defmodule Platform.Tasks.DeployReposTest do
     test "leaves a non-pr_merge strategy's other keys intact", %{project: project} do
       task =
         task_with(project, %{
-          deploy_strategy: %{"type" => "docker_deploy", "config" => %{"host" => "moon"}}
+          deploy_strategy: %{"type" => "docker_deploy", "config" => %{"host" => "test-host"}}
         })
 
       strategy = Tasks.resolve_deploy_strategy_with_repos(task)
 
       assert strategy["type"] == "docker_deploy"
-      assert strategy["config"] == %{"host" => "moon"}
+      assert strategy["config"] == %{"host" => "test-host"}
     end
   end
 end

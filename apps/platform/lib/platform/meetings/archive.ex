@@ -635,7 +635,7 @@ defmodule Platform.Meetings.Archive do
   # ── Row context ───────────────────────────────────────────────────────────
 
   # The subtitle the design renders under the meeting name:
-  # "52 min · hosted by Rowan · 5 attended · Suite / Control Center".
+  # "52 min · hosted by the operator · 5 attended · Suite / Control Center".
   #
   # The attendee count is a correlated sub-select rather than a fifth join so
   # it cannot multiply this query's rows — it must stay one row per meeting,

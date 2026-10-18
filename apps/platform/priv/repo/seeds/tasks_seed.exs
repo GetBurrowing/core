@@ -42,7 +42,7 @@ project =
               %{
                 "name" => "production",
                 "type" => "docker_compose",
-                "host" => "dev@192.0.2.234"
+                "host" => "deploy@test-host.example.com"
               }
             ]
           }

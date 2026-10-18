@@ -50,7 +50,7 @@ defmodule PlatformWeb.ExperimentsLive do
   single irreversible action without passing the evidence. Every other
   action is neutral.
 
-  ## Human controls (Rowan, 2026-09-24)
+  ## Human controls (product decision, 2026-09-24)
 
   An admin can create, start, approve, stop (with feedback), conclude and
   promote from this page. Every handler calls the same `Platform.Experiments`
@@ -364,7 +364,7 @@ defmodule PlatformWeb.ExperimentsLive do
     admin_only(socket, fn -> {:noreply, assign(socket, :show_stop_form, true)} end)
   end
 
-  # Stop WITH feedback (Rowan, 2026-09-24): `Experiments.stop/3` records the
+  # Stop WITH feedback (product decision, 2026-09-24): `Experiments.stop/3` records the
   # feedback, who stopped it and when in the transition itself.
   def handle_event("stop", params, socket) do
     admin_only(socket, fn ->

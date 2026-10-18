@@ -613,7 +613,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     # regression this stage could ship. Each test derives what is live at
     # >=640px AND what is live below it, and asserts on both.
     #
-    # PREMISE, measured on the dev-on-moon rig at 375x812 BEFORE the change,
+    # PREMISE, measured on the dev-on-test-host rig at 375x812 BEFORE the change,
     # with the goal input's own `maxlength="500"` as the range: the
     # measurement clause reached 0px width at a 38-character goal, and the
     # strip overflowed the viewport (scrollWidth 382 > clientWidth 375) at
@@ -629,7 +629,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       # the pencil does NOT render for an ordinary user. Without this the
       # pencil test reads a nil class attribute, every `refute ... in` on it
       # passes vacuously, and only the one `assert` catches it — which is
-      # how this was caught on the first moon run rather than shipped.
+      # how this was caught on the first test-host run rather than shipped.
       if Keyword.get(opts, :admin?, false), do: make_acme_admin(user)
 
       space = create_space(goal: "Close backlog items in Suite", leader_agent_id: agent.id)

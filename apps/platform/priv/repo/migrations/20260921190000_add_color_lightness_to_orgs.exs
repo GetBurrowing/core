@@ -21,7 +21,7 @@ defmodule Platform.Repo.Migrations.AddColorLightnessToOrgs do
   Read from each slug's own `oklch()` literal in the per-slug blocks of
   `app.css` at 98eb79ab, the last commit that carried them:
 
-      fabrikam        oklch(72% 0.16 50)      paragon    oklch(80% 0.16 95)
+      (root)      oklch(72% 0.16 50)      paragon    oklch(80% 0.16 95)
       soylent    oklch(65% 0.20 295)     sxi         oklch(70% 0.15 162)
       wayne_tech    oklch(68% 0.15 240)     cyberdyne  oklch(66% 0.19 340)
 
@@ -53,7 +53,7 @@ defmodule Platform.Repo.Migrations.AddColorLightnessToOrgs do
   use Ecto.Migration
 
   @shipped [
-    {"fabrikam", 50, 0.16, 0.72},
+    {{:sha256, "9cfdc719f125bfd24830658f109d785ecca57a0c05022add0f6cf4aaec5dc25c"}, 50, 0.16, 0.72},
     {"soylent", 295, 0.20, 0.65},
     {"wayne_tech", 240, 0.15, 0.68},
     {"wayne-tech", 240, 0.15, 0.68},
@@ -62,7 +62,11 @@ defmodule Platform.Repo.Migrations.AddColorLightnessToOrgs do
     {"cyberdyne", 340, 0.19, 0.66}
   ]
 
-  @doc "`{slug, hue, chroma, fill_lightness}` for every row this migration pins."
+  @doc """
+  `{key, hue, chroma, fill_lightness}` for every row this migration pins,
+  where `key` is a slug or, for the root org's historical slug,
+  `{:sha256, hex}` (see `pin_colours/2`).
+  """
   def shipped, do: @shipped
 
   def up do
@@ -91,23 +95,39 @@ defmodule Platform.Repo.Migrations.AddColorLightnessToOrgs do
 
   @doc """
   Writes the pinned hue, chroma and fill lightness onto each of the six
-  slugs' rows, unconditionally. Returns `%{slug => rows updated}`: 1 where
+  slugs' rows, unconditionally. Returns `%{key => rows updated}`: 1 where
   the row exists, 0 where it does not. Raw SQL through `repo.query!/2`, so
   it runs inside the migration and inside a test sandbox alike.
   """
-  def pin_shipped_colours(repo) do
-    Map.new(@shipped, fn {slug, hue, chroma, lightness} ->
-      %{num_rows: rows} =
+  def pin_shipped_colours(repo), do: pin_colours(repo, @shipped)
+
+  @doc """
+  `pin_shipped_colours/1` over an explicit row list, so a test can drive
+  the digest-keyed arm with a slug of its own. A row's key is either a
+  slug or `{:sha256, hex}`: the root org's historical slug is matched by
+  the sha256 of the slug, so the public tree does not spell it (task
+  01a14b9e stage 5), and that predicate is true for exactly the rows the
+  literal `slug = <slug>` matched.
+  """
+  def pin_colours(repo, rows) do
+    Map.new(rows, fn {key, hue, chroma, lightness} ->
+      %{num_rows: updated} =
         repo.query!(
           """
           UPDATE orgs
              SET color_hue = $1, color_chroma = $2, color_lightness = $3
-           WHERE slug = $4
+           WHERE #{match_sql(key)}
           """,
-          [hue, chroma, lightness, slug]
+          [hue, chroma, lightness, match_value(key)]
         )
 
-      {slug, rows}
+      {key, updated}
     end)
   end
+
+  defp match_sql({:sha256, _hex}), do: "encode(sha256(convert_to(slug, 'UTF8')), 'hex') = $4"
+  defp match_sql(slug) when is_binary(slug), do: "slug = $4"
+
+  defp match_value({:sha256, hex}), do: hex
+  defp match_value(slug) when is_binary(slug), do: slug
 end

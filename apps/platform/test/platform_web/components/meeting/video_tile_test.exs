@@ -575,7 +575,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
   # max-bound caused tiles to overflow / shrink to floating thumbnails.
   #
   # Why not inline `h-full w-full` (f1e16f1, REJECTED): forcing both
-  # axes to 100% inside a tall cell distorts faces vertically. Rowan:
+  # axes to 100% inside a tall cell distorts faces vertically. Alex:
   # "it shouldn't go long vertically, it should still fit the aspect
   # ratio."
   #

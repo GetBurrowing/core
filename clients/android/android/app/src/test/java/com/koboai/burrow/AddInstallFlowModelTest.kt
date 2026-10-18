@@ -164,7 +164,7 @@ class AddInstallFlowModelTest {
     @Test
     fun `the copy is the canvas's and the placeholder is the example host`() {
         assertEquals("yourteam.example.com", strings.getValue("add_flow_placeholder"))
-        assertFalse(ShippedHostScanTest.PERSONAL_HOST.containsMatchIn(strings.getValue("add_flow_placeholder")))
+        assertFalse(ShippedHostScanTest.namesPersonalHost(strings.getValue("add_flow_placeholder")))
         assertEquals("Add your install", strings.getValue("add_flow_title"))
         assertEquals("Enter the address your team uses for Burrow.", strings.getValue("add_flow_body"))
         assertEquals("Continue", strings.getValue("add_flow_continue"))

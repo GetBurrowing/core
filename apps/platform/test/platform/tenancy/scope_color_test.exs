@@ -206,10 +206,10 @@ defmodule Platform.Tenancy.ScopeColorTest do
       end
     end
 
-    test "fabrikam's pane tint is the painted #FDF0E7, and its rail tint carries stage 1's recorded byte" do
+    test "legacy's pane tint is the painted #FDF0E7, and its rail tint carries stage 1's recorded byte" do
       # Provenance against PAINTED bytes (`ScopeColorPaintedTest`), not
-      # against the derivation. fabrikam over base-100 is one of the seven cells
-      # the compositor matches exactly. fabrikam over base-200 is one of the five
+      # against the derivation. legacy over base-100 is one of the seven cells
+      # the compositor matches exactly. legacy over base-200 is one of the five
       # it computes one byte HIGH (red and blue; painted #F1E4DB). Once a tint
       # ships as opaque hex the browser paints these bytes, so the byte no
       # longer matters for contrast; it matters to anyone expecting today's
@@ -258,7 +258,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
 
     # The resting 12% chip over the light rail ground, painted.
     @painted_rail_chips %{
-      "fabrikam" => {{"oklch(72% 0.16 50)"}, {241, 228, 219}},
+      "legacy" => {{"oklch(72% 0.16 50)"}, {241, 228, 219}},
       "soylent" => {{"oklch(65% 0.20 295)"}, {231, 225, 242}},
       "wayne-tech" => {{"oklch(68% 0.15 240)"}, {215, 232, 241}},
       "sxi" => {{"oklch(70% 0.15 162)"}, {215, 235, 228}},
@@ -278,7 +278,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
     test "every shipped chip composites to within one byte of the painted value" do
       # One byte, not zero, and the tolerance is the finding rather than a
       # concession: six of eighteen channels differ by exactly 1 and none by
-      # more (fabrikam red and blue, soylent green and blue, wayne-tech red,
+      # more (legacy red and blue, soylent green and blue, wayne-tech red,
       # paragon blue; every one computed one HIGH. Re-counted 2026-09-21,
       # task 01a09333-d374, see `ScopeColorPaintedTest`). That measured
       # noise floor is WHY the solver targets a margin
@@ -305,7 +305,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
       # painted tuple, or a tolerance wide enough to swallow anything. A 22%
       # chip is the same colour at the wrong alpha, which is exactly the
       # confusion a one-byte tolerance must NOT absorb.
-      {{fill}, painted} = Map.fetch!(@painted_rail_chips, "fabrikam")
+      {{fill}, painted} = Map.fetch!(@painted_rail_chips, "legacy")
       {r, g, b} = byte(ScopeColor.composite_ground(fill, 0.22, "oklch(96% 0 0)"))
       {pr, pg, pb} = painted
 
@@ -419,11 +419,11 @@ defmodule Platform.Tenancy.ScopeColorTest do
     end
 
     test "the solved values are pinned, so a change to the solver has to explain itself" do
-      fabrikam = ScopeColor.derive(50, 0.16)
-      assert fabrikam.label_light_100 == "oklch(55% 0.16 50)"
-      assert fabrikam.label_light_200 == "oklch(52.5% 0.16 50)"
-      assert fabrikam.label_dark_100 == "oklch(72% 0.16 50)"
-      assert fabrikam.label_dark_200 == "oklch(72% 0.16 50)"
+      legacy = ScopeColor.derive(50, 0.16)
+      assert legacy.label_light_100 == "oklch(55% 0.16 50)"
+      assert legacy.label_light_200 == "oklch(52.5% 0.16 50)"
+      assert legacy.label_dark_100 == "oklch(72% 0.16 50)"
+      assert legacy.label_dark_200 == "oklch(72% 0.16 50)"
 
       cyan = ScopeColor.derive(200, 0.15)
       assert cyan.label_light_100 == "oklch(50% 0.15 200)"
@@ -505,7 +505,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
     test "every dark edge IS the fill: a 72% fill already clears 3:1 on both dark grounds",
          %{sweep: cells} do
       # Walking from the fill, as the label does, stops at once in dark.
-      # This is the same convention that makes fabrikam's dark label its fill
+      # This is the same convention that makes legacy's dark label its fill
       # (see the moduledoc), and it makes the dark edge the full-saturation
       # fill at 5.9-10.0:1. Pinned so a change to the walk has to say so.
       dark = Enum.filter(cells, &(&1.theme == :dark))
@@ -560,13 +560,14 @@ defmodule Platform.Tenancy.ScopeColorTest do
     end
 
     test "the solved edges are pinned, so a change to the solver has to explain itself" do
-      fabrikam = ScopeColor.derive(50, 0.16)
+      legacy = ScopeColor.derive(50, 0.16)
 
-      assert {fabrikam.edge_light_100, fabrikam.edge_light_200, fabrikam.edge_dark_100, fabrikam.edge_dark_200} ==
+      assert {legacy.edge_light_100, legacy.edge_light_200, legacy.edge_dark_100,
+              legacy.edge_dark_200} ==
                {"oklch(68% 0.16 50)", "oklch(65% 0.16 50)", "oklch(72% 0.16 50)",
                 "oklch(72% 0.16 50)"}
 
-      assert {fabrikam.edge_hover_light_100, fabrikam.edge_hover_light_200} ==
+      assert {legacy.edge_hover_light_100, legacy.edge_hover_light_200} ==
                {"oklch(67.5% 0.16 50)", "oklch(64.5% 0.16 50)"}
 
       cyan = ScopeColor.derive(200, 0.15)
@@ -672,7 +673,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
       # half step between already holds. Stage 5 moves the six onto this
       # path; these are the values it will ship.
       design = %{
-        "fabrikam" => {{72, 0.16, 50}, 65.0},
+        "legacy" => {{72, 0.16, 50}, 65.0},
         "soylent" => {{65, 0.20, 295}, 65.0},
         "wayne-tech" => {{68, 0.15, 240}, 63.0},
         "sxi" => {{70, 0.15, 162}, 61.0},
@@ -686,7 +687,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
         end
 
       assert solved == %{
-               "fabrikam" => 65.0,
+               "legacy" => 65.0,
                "soylent" => 65.0,
                "wayne-tech" => 63.0,
                "sxi" => 61.5,
@@ -706,7 +707,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
     #
     # {slug, hue, chroma, fill L, shipped light label L, shipped dark label L}
     @shipped [
-      {"fabrikam", 50, 0.16, 0.72, 55.0, 72.0},
+      {"legacy", 50, 0.16, 0.72, 55.0, 72.0},
       {"soylent", 295, 0.20, 0.65, 55.0, 67.0},
       {"wayne-tech", 240, 0.15, 0.68, 52.0, 68.0},
       {"sxi", 162, 0.15, 0.70, 51.0, 70.0},
@@ -747,7 +748,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
              ]
     end
 
-    test "fabrikam reproduces its shipped fill and pair exactly" do
+    test "legacy reproduces its shipped fill and pair exactly" do
       ramp = ScopeColor.derive(50, 0.16, 0.72)
 
       assert ramp.fill == "oklch(72% 0.16 50)"
@@ -784,7 +785,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
     # text on white"), which is also WHY the fill is never used as a light
     # label.
     @recorded [
-      {"oklch(72% 0.16 50)", 2.61, "fabrikam"},
+      {"oklch(72% 0.16 50)", 2.61, "legacy"},
       {"oklch(65% 0.20 295)", 3.50, "soylent"},
       {"oklch(68% 0.15 240)", 2.83, "wayne-tech"},
       {"oklch(80% 0.16 95)", 1.87, "paragon"},

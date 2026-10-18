@@ -33,7 +33,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
     } do
       remembered = agent("Historian")
       other = agent("Scribe")
-      participants = [other, remembered, user("Rowan")]
+      participants = [other, remembered, user("Alex")]
 
       ActiveAgentStore.set_active(space_id, remembered.id)
       ActiveAgentStore.clear_active(space_id)
@@ -54,7 +54,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
       assert ActiveAgentStore.get_last_agent(space_id) == deleted.id
 
       # Roster no longer contains the deleted agent — arming it would be a ghost.
-      assert ActiveAgentHooks.resolve_armable(space_id, [survivor, user("Rowan")]) ==
+      assert ActiveAgentHooks.resolve_armable(space_id, [survivor, user("Alex")]) ==
                {:ok, survivor.id}
     end
 
@@ -84,7 +84,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
     test "exactly one agent participant arms it", %{space_id: space_id} do
       only = agent("Only")
 
-      assert ActiveAgentHooks.resolve_armable(space_id, [user("Rowan"), only, user("Ada")]) ==
+      assert ActiveAgentHooks.resolve_armable(space_id, [user("Alex"), only, user("Ada")]) ==
                {:ok, only.id}
     end
 
@@ -97,12 +97,12 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
 
   describe "resolve_armable/2 — rule 3 (:none)" do
     test "two agents and no history returns :none", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, [agent("A"), agent("B"), user("Rowan")]) ==
+      assert ActiveAgentHooks.resolve_armable(space_id, [agent("A"), agent("B"), user("Alex")]) ==
                :none
     end
 
     test "zero agents returns :none", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, [user("Rowan"), user("Ada")]) == :none
+      assert ActiveAgentHooks.resolve_armable(space_id, [user("Alex"), user("Ada")]) == :none
     end
 
     test "an empty roster returns :none", %{space_id: space_id} do

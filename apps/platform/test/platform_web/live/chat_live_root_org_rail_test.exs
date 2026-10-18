@@ -9,17 +9,17 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   default bucket (where an `org_id: nil` channel lands) is the root org's
   `name` too. Both are exercised here through the rendered page:
 
-    (a) a fresh install whose root is `Root Org` renders no /fabrikam/i anywhere,
+    (a) a fresh install whose root is `Root Org` renders no /legacy/i anywhere,
         and an unscoped channel sits under `Root Org` (visible in the rail,
         and in the hidden drawer when hidden);
-    (b) an install whose root is literally `Fabrikam` (Rowan's install shape) still
-        renders a `Fabrikam` section from DATA, beside the tenant sections, each
+    (b) an install whose root is literally `Legacy` (Alex's install shape) still
+        renders a `Legacy` section from DATA, beside the tenant sections, each
         holding its own channels, with the root's dot and header pill.
 
   The test database's root row is the neutral `acme|Acme` fixture (task
   01a116de stage 4). Both cases rename it INSIDE the sandbox transaction,
   which rolls back: (a) to a fresh install's `root|Root Org`, (b) to the
-  legacy `fabrikam|Fabrikam` shape Rowan's installs carry, on purpose. No real
+  legacy `legacy|Legacy` shape Alex's installs carry, on purpose. No real
   install's rows are touched.
   """
 
@@ -117,24 +117,24 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
     Tenancy.get_root_org()
   end
 
-  # Turn the test database's root row into Rowan's legacy install shape (a
-  # root literally `fabrikam|Fabrikam`, pinned by ROOT_ORG_SLUG), inside the
+  # Turn the test database's root row into Alex's legacy install shape (a
+  # root literally `legacy|Legacy`, pinned by ROOT_ORG_SLUG), inside the
   # sandbox. This is an on-purpose legacy fixture: the rail must render
   # that root from DATA exactly as it renders any other.
-  defp make_legacy_fabrikam_root! do
+  defp make_legacy_legacy_root! do
     root = Tenancy.get_root_org()
 
     {1, _} =
       Repo.update_all(from(o in Org, where: o.id == ^root.id),
-        set: [slug: "fabrikam", name: "Fabrikam"]
+        set: [slug: "legacy", name: "Legacy"]
       )
 
     Repo.update_all(from(s in Section, where: s.org_id == ^root.id),
-      set: [name: nil, color: "fabrikam"]
+      set: [name: nil, color: "legacy"]
     )
 
     previous = Application.get_env(:platform, :root_org_slug)
-    Application.put_env(:platform, :root_org_slug, "fabrikam")
+    Application.put_env(:platform, :root_org_slug, "legacy")
 
     on_exit(fn ->
       if previous,
@@ -146,7 +146,7 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   end
 
   describe "(a) a fresh root named Root Org" do
-    test "renders the rail with no /fabrikam/i anywhere and files an unscoped channel under Root Org",
+    test "renders the rail with no /legacy/i anywhere and files an unscoped channel under Root Org",
          %{conn: conn} do
       root = make_fresh_root!()
       assert {root.slug, root.name} == {"root", "Root Org"}
@@ -166,7 +166,8 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
         |> init_test_session(current_user_id: user.id)
         |> live_following_redirect()
 
-      refute html =~ ~r/fabrikam/i, "the page carries a compiled org name"
+      refute html =~ ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()}/i,
+             "the page carries a compiled org name"
 
       assert "Root Org" in section_labels(html)
 
@@ -198,13 +199,13 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
     end
   end
 
-  describe "(b) a root that is literally Fabrikam, from data" do
-    test "renders Soylent and Fabrikam sections, each with its own channels", %{conn: conn} do
-      fabrikam = make_legacy_fabrikam_root!()
+  describe "(b) a root that is literally Legacy, from data" do
+    test "renders Soylent and Legacy sections, each with its own channels", %{conn: conn} do
+      legacy = make_legacy_legacy_root!()
       soylent = Tenancy.get_org_by_slug!("soylent")
-      assert {fabrikam.slug, fabrikam.name} == {"fabrikam", "Fabrikam"}
+      assert {legacy.slug, legacy.name} == {"legacy", "Legacy"}
 
-      fabrikam_channel = create_channel("fabrikam-general", fabrikam.id)
+      legacy_channel = create_channel("legacy-general", legacy.id)
       soylent_channel = create_channel("soylent-general", soylent.id)
       unscoped = create_channel("unscoped-thing", nil)
 
@@ -214,40 +215,40 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
         conn
         |> init_test_session(current_user_id: user.id)
         |> live_following_redirect(
-          "/chat/" <> PlatformWeb.ChatLive.space_nav_target(fabrikam_channel)
+          "/chat/" <> PlatformWeb.ChatLive.space_nav_target(legacy_channel)
         )
 
       labels = section_labels(html)
-      assert "Fabrikam" in labels
+      assert "Legacy" in labels
       assert "Soylent" in labels
 
       sidebar = desktop_sidebar(html)
-      fabrikam_section = section_html(sidebar, "Fabrikam")
+      legacy_section = section_html(sidebar, "Legacy")
       soylent_section = section_html(sidebar, "Soylent")
 
-      assert fabrikam_section =~ ~s(data-space-id="#{fabrikam_channel.id}")
-      assert fabrikam_section =~ ~s(data-space-id="#{unscoped.id}")
-      refute fabrikam_section =~ ~s(data-space-id="#{soylent_channel.id}")
+      assert legacy_section =~ ~s(data-space-id="#{legacy_channel.id}")
+      assert legacy_section =~ ~s(data-space-id="#{unscoped.id}")
+      refute legacy_section =~ ~s(data-space-id="#{soylent_channel.id}")
 
       assert soylent_section =~ ~s(data-space-id="#{soylent_channel.id}")
-      refute soylent_section =~ ~s(data-space-id="#{fabrikam_channel.id}")
+      refute soylent_section =~ ~s(data-space-id="#{legacy_channel.id}")
 
       # The root's dot is coloured from its row through `data-scope`, with
       # no compiled class.
-      assert fabrikam_section =~
-               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="fabrikam"/
+      assert legacy_section =~
+               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="legacy"/
 
-      refute html =~ "bg-fabrikam-dot"
+      refute html =~ "bg-legacy-dot"
 
-      # The chat header pill for the open Fabrikam channel still renders, named
+      # The chat header pill for the open Legacy channel still renders, named
       # and keyed from the row.
       pill =
         html
         |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-scope="fabrikam"] .scope-pill-label))
+        |> LazyHTML.query(~s([data-scope="legacy"] .scope-pill-label))
         |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
 
-      assert "Fabrikam" in pill
+      assert "Legacy" in pill
     end
   end
 

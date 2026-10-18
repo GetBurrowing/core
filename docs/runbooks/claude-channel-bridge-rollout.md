@@ -164,7 +164,7 @@ each `mcpServers` entry pointing at that path spawns its own `bun`:
 ps -eo pid,etime,args | grep -F '<checkout>/src/index.ts' | grep -v grep
 ```
 
-On the hive box on 2026-07-27 this was **four** live processes with uptimes of
+On the build-host box on 2026-07-27 this was **four** live processes with uptimes of
 19d, 19d, 16d and 2d19h. Restart fewer than all of them and the survivors keep
 running the pre-fix build after a successful pull — the report then shows a
 mix of `proven` and `unproven` rows for what looks like one machine, which is
@@ -192,14 +192,14 @@ bin/platform eval 'Mix.Tasks.Platform.RuntimeWakeReport.report()'
 The row for the restarted runtime should read `proven`. For the underlying row:
 
 ```elixir
-Platform.Federation.get_runtime_by_runtime_id("rowan-claude-agent-1")
+Platform.Federation.get_runtime_by_runtime_id("alex-claude-agent-1")
 ```
 
 Two things about that call, both of which have bitten this rollout already:
 
 - **It is `get_runtime_by_runtime_id/1`, not `get_runtime/1`.** `get_runtime/1`
   is `Repo.get(AgentRuntime, id)` on the **primary key**, which is a UUIDv7. Pass
-  it a human-readable runtime id like `"rowan-claude-agent-1"` and you get a cast
+  it a human-readable runtime id like `"alex-claude-agent-1"` and you get a cast
   error, not the row — which reads like the runtime is missing.
 - **The row has no `last_seen_at`.** The `agent_runtimes` schema carries
   `last_connected_at`; `last_seen_at` exists only in

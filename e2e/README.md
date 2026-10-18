@@ -47,7 +47,7 @@ don't touch the host camera/mic; synthetic tracks carry a spinning color wheel
 
 ## Tips
 
-- Set `BASE_URL=http://dev-host:4000` to run against a different host.
+- Set `BASE_URL=http://build-host:4000` to run against a different host.
 - Failure traces land in `test-results/`; open the `.zip` with
   `npx playwright show-trace <path>` for step-by-step DOM + network replay.
 
@@ -64,7 +64,7 @@ the capture, run:
 
 ```bash
 e2e/scripts/measure-meeting-layout.sh \
-  --base-url http://192.0.2.200:4046 \
+  --base-url http://192.0.2.10:4046 \
   --surface meetings|quickmeet \
   --viewport 1280x800|390x844
 ```
@@ -89,9 +89,9 @@ INCOMPLETE REVIEW and should be sent back.**
 | 3 | **rig fault** — `/assets/js/app.js` did not return 200 |
 | 4 | **rig fault** — the spec crashed/timed out and produced no measurements |
 
-Exit **3** is the one to know. The hive→moon rsync runs `--delete` and
-`priv/static` does not exist on hive, so any source edit wipes the built assets
-on moon; the page then renders with **no tiles at all**, which reads exactly
+Exit **3** is the one to know. The build-host→test-host rsync runs `--delete` and
+`priv/static` does not exist on build-host, so any source edit wipes the built assets
+on test-host; the page then renders with **no tiles at all**, which reads exactly
 like the feature being missing and would turn every assertion red for a reason
 that has nothing to do with layout. `mix assets.build` exits 1 on
 `mix esbuild excalidraw` while still writing a serving bundle, so its exit code

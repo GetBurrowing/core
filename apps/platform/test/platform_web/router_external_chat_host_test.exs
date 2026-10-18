@@ -104,9 +104,9 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
                resolve("GET", "/chat/x", "localhost")
     end
 
-    test "the chat host matches any chat.<domain> prefix (prod chat.example.com etc.)" do
+    test "the chat host matches any chat.<domain> prefix (prod chat.example.org etc.)" do
       assert {:live, PlatformWeb.ChatLive, :external_chat} =
-               resolve("GET", "/chat", "chat.example.com")
+               resolve("GET", "/chat", "chat.example.org")
 
       assert {:live, PlatformWeb.ChatLive, :external_chat} =
                resolve("GET", "/chat", "chat.example.test")

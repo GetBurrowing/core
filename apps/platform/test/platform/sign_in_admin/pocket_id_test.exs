@@ -3,7 +3,7 @@ defmodule Platform.SignInAdmin.PocketIdTest do
   Task 01a113ea stage 1: the pocket-id admin client. Every request goes to
   the `Req.Test` stub named `Platform.SignInAdmin.PocketId`
   (`config/test.exs`). Response shapes mirror what pocket-id v2.18.0 returned
-  live on moon during this stage (create 201, duplicate username/email 409
+  live on test-host during this stage (create 201, duplicate username/email 409
   with `details.property`, one-time token 201 `{"token": ...}`, delete 204,
   missing user 404).
   """

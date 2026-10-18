@@ -427,7 +427,7 @@ test.describe("chat reactions", () => {
       // #reaction-picker. Since #944 (task 019e0814) `#reaction-picker` is
       // always mounted and the server drives `data-open`, so "never opened"
       // reads as `data-open="false"`; a `toHaveCount(0)` here fails on every
-      // run (observed 1 vs 0 on dev-on-moon, task 01a13aac).
+      // run (observed 1 vs 0 on dev-on-test-host, task 01a13aac).
       await expect(bob.page.locator("#reaction-picker")).toHaveAttribute("data-open", "false")
     } finally {
       await alice.context.close()

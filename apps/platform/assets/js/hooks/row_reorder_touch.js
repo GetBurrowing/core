@@ -11,7 +11,7 @@
 // pointer capture, phantom-drag teardown, search guard) lives in
 // lib/long_press_drag.js — shared with SectionReorderTouch.
 //
-// WITHIN-SECTION ONLY, enforced by CLAMPING (Marlowe decision 2026-07-06 +
+// WITHIN-SECTION ONLY, enforced by CLAMPING (design decision 2026-07-06 +
 // designer rec 12): the candidate slot rubber-bands at the section's
 // first/last position and nothing ever renders in another section;
 // prevention over snap-back-plus-toast. The server's `channel_moved`

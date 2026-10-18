@@ -1,0 +1,13 @@
+{
+  "description": "The SAME prompt body as off_topic_default, with the ONE variable the harness used to hardcode: {{correction_exemplars}}. This arm renders eight real recorded producer removals through IntentClassifier.format_correction_exemplars/1 — the function the live classifier calls — instead of the `(no prior corrections)` sentinel every published run has silently used.",
+  "why_this_exists": "In production the classifier calls IntentCorrections.exemplars_for_meeting/2, an unfiltered ORDER BY inserted_at DESC LIMIT 10 over the org's corrections. That table is, by its own invariant, a record of the classifier being WRONG. So a live org with a used producer rail ships up to ten mostly-negative exemplars into every classification, and no eval run has ever rendered one. This config is the arm that does.",
+  "not_measurable_yet": "There is NO cassette for this config and one cannot be recorded: the classifier endpoint was unreachable (curl exits 28, connection timeout). Changing the exemplar block changes the rendered prompt, hence every cassette key, so replaying off_topic_default's cassette against this config would be scoring the model's answers to a DIFFERENT prompt. The harness refuses that: the run stops with a 174-row cassette miss. What IS measurable offline is the prompt itself — `mix platform.intent_eval.prompt --config off_topic_default --diff off_topic_default_prod_exemplars` prints both renderings and both fingerprints.",
+  "prompt_source": {"inline_file": "priv/intent_eval/prompts/off_topic_default.txt"},
+  "correction_exemplars": {"file": "exemplars/recorded_removals_8.jsonl"},
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

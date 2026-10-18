@@ -42,7 +42,7 @@ defmodule Platform.Tasks.PlanEngineManualGateRulingTest do
         items: [%{label: "Desktop view"}]
       })
 
-    {:ok, _item} = ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
+    {:ok, _item} = ReviewRequests.reject_item(hd(request.items).id, "alex", "Needs work")
 
     # Precondition: the ruling really is on the validation row before the reopen.
     rejected = Repo.get!(Validation, ctx.validation.id)
@@ -83,7 +83,7 @@ defmodule Platform.Tasks.PlanEngineManualGateRulingTest do
           items: [%{label: "Desktop view"}]
         })
 
-      {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "rowan", feedback)
+      {:ok, _} = ReviewRequests.reject_item(hd(request.items).id, "alex", feedback)
       assert {:ok, _} = PlanEngine.reopen_manual_approval(ctx.validation.id)
     end
 

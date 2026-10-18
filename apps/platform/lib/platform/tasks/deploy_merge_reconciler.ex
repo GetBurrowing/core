@@ -11,7 +11,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   Verified 2026-07-27 and again 2026-07-31 via `gh api repos/<r>/hooks`:
   `Startup-Suite/core` has two active webhooks (one being
-  `https://suite.example.com/api/webhooks/github`, events
+  `https://app.example.com/api/webhooks/github`, events
   `check_suite`, `pull_request`, `workflow_run`).
   `Startup-Suite/openclaw-suite-channel` and
   `Startup-Suite/claude-code-suite-channel` have ZERO webhooks installed.
@@ -31,7 +31,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   provenance, and evidence that read identically would erase the distinction.
 
   Both, equally, mean MERGED — not SHIPPED. Measured 2026-07-31: task
-  019fa609 reached `done` at 12:09 CDT on the merge of PR #640, while moon
+  019fa609 reached `done` at 12:09 CDT on the merge of PR #640, while the production host
   was still serving PR #639's image from 10:43. `pr_merged` is a merge
   observation. Deploy completion is a separate fact that this module does not
   claim to have.

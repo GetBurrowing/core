@@ -656,7 +656,7 @@
            in the accessibility tree. The desktop band, where keyboard use is
            likeliest, keeps DOM order equal to painted order.
 
-           MEASURED after this move (task 01a0e091 stage 1; dev-on-moon, CDP
+           MEASURED after this move (task 01a0e091 stage 1; dev-on-test-rig, CDP
            getBoundingClientRect, dark, sidebar expanded at 224px, pre-join so
            Join shows, live + rec + transcribing all on; pills 90.25 / 75.42 /
            87.92px at every lg width). Left track = right track width.
@@ -1136,7 +1136,7 @@
 
            Do NOT re-add `flex-shrink-0`, and do not solve a future
            top-bar squeeze by hiding the drawer toggle or the mute
-           badge: per Marlowe's `persistent-controls-over-reveal` ruling
+           badge: per the designer's `persistent-controls-over-reveal` ruling
            (task 019f340a) controls stay visible and get disabled at
            boundaries rather than hidden, and a control that disappears
            as a direct consequence of being used is the worst case that
@@ -1321,7 +1321,7 @@
              So: do not "fix" a future top-bar squeeze by making this
              badge conditional on width. Hiding the mute indicator on
              the viewport most likely to be a phone is precisely the
-             reveal-over-persistence pattern Marlowe's 019f340a ruling
+             reveal-over-persistence pattern the designer's 019f340a ruling
              bans, and it would put the state back out of sight for the
              viewer waiting on a silenced agent.
 
@@ -1462,7 +1462,7 @@
       <div class="relative flex min-h-0 flex-1">
         <%!-- Persistent local self-view PARKING SLOT (task 019e42f6 v2).
            v1 rendered this as a visible bottom-right picture-in-picture
-           tile, which Rowan rejected: the self-video free-floated over the
+           tile, which the operator rejected: the self-video free-floated over the
            gallery and broke the grid layout. v2 keeps the SAME stable,
            never-unmounted node (`id="meeting-local-self-view"`,
            `phx-update="ignore"`, `data-role="local-self-view"`) — the
@@ -1664,7 +1664,7 @@
               </p>
               <%!-- Task 01a0d3cd stage 3: the `.intents_collapse` bar (task
                  01a0693e put it here, "rides WITH the cards") is REMOVED
-                 from this desktop left-rail placement — Harper's "lose the
+                 from this desktop left-rail placement — the product lead's "lose the
                  Intents area on the left side" was confirmed live against
                  exactly this producer-console strip (lightning icon,
                  "Producer" chip, target-role links, confidence readout —

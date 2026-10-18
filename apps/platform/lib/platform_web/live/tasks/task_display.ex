@@ -188,9 +188,19 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
 
   def project_deploy_targets(_), do: []
 
-  def deploy_target_label("hive_production"), do: "Hive Production"
+  # Product-defined targets keep their exact spelling. Every other target is
+  # an install's own name (project deploy_config data), humanised from the
+  # value itself: `acme_production` -> `Acme Production` (task 01a14b9e).
   def deploy_target_label("github_pr"), do: "GitHub PR"
   def deploy_target_label("google_drive"), do: "Google Drive"
+
+  def deploy_target_label(other) when is_binary(other) do
+    case String.split(other, "_", trim: true) do
+      [] -> other
+      words -> Enum.map_join(words, " ", &String.capitalize/1)
+    end
+  end
+
   def deploy_target_label(other), do: other
 
   def deletable_task?(%Task{} = task), do: Task.deletable?(task)

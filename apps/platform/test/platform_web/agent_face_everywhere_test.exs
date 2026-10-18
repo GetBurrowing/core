@@ -533,7 +533,7 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
     # split the component apart to stop: it gave agents two initials over the
     # seeded human palette under `data-avatar-kind="human"`.
     #
-    # The port of Harper's Ask mockup (shared in Suite's Meeting System
+    # The port of Sam's Ask mockup (shared in Suite's Meeting System
     # space) draws every agent as its `.av` circle with ONE initial, with or
     # without a stored avatar, so this surface no longer goes through
     # `assert_agent_face/3`.

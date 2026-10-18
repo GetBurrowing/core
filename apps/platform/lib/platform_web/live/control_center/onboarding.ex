@@ -328,7 +328,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             name="federate[runtime_id]"
             value={@federate_form[:runtime_id].value || ""}
             class="input input-bordered w-full"
-            placeholder="e.g. rowan-home-openclaw"
+            placeholder="e.g. alex-home-openclaw"
             autofocus
           />
         </label>
@@ -341,7 +341,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             name="federate[display_name]"
             value={@federate_form[:display_name].value || ""}
             class="input input-bordered w-full"
-            placeholder="Rowan's OpenClaw"
+            placeholder="Alex's OpenClaw"
           />
         </label>
         <label class="form-control">

@@ -6,7 +6,7 @@ defmodule Platform.SignInAdminTest do
   pocket-id is a small stateful fake behind the `Req.Test` stub named
   `Platform.SignInAdmin.PocketId` (`config/test.exs`), so a create is visible
   to a later list, a delete to a later get. Response shapes follow what
-  pocket-id v2.18.0 returned live on moon in stage 1 (create 201, duplicate
+  pocket-id v2.18.0 returned live on test-host in stage 1 (create 201, duplicate
   email 409 with `details.property`, token 201 `{"token": ...}`, delete 204,
   missing user 404). Every request is recorded to the test process, so
   "zero requests" is an assertion and not an assumption.

@@ -34,8 +34,11 @@ the stable surface for it.
 
 - **Docker Desktop or OrbStack**, installed and running. Installing either
   needs the Mac owner's admin password.
-- **A Docker Hub read credential** for Burrow's private images
-  (`example/suite-core`, `suite-files-service`, `suite-memory-service`).
+- **The Docker Hub namespace** Burrow's images are published under, and a
+  read credential for its private images (`<namespace>/suite-core`,
+  `suite-files-service`, `suite-memory-service`). The namespace is the
+  manifest's required `[images] image_namespace` (`setup init
+  --image-namespace`); there is no default.
   Anonymous pulls return 401. You supply it as a docker `config.json` with an
   inline `auths["https://index.docker.io/v1/"].auth`. Whether these images
   become public is an open product decision, not something this CLI decides.
@@ -67,7 +70,8 @@ Stock macOS python3 is 3.9, which has no `tomllib`.
 ```sh
 S=deployment/installer/mac/suite-install
 $S setup init --from deployment/examples/mac-lite.install.toml \
-   --name mysuite --domain suite.example.com --auth-host auth-suite.example.com
+   --name mysuite --domain suite.example.com --auth-host auth-suite.example.com \
+   --image-namespace <namespace>
 $S setup status --json
 ```
 

@@ -96,7 +96,7 @@ const MeetingClient = {
     // ── Reconnect survival (task 019e4b3e stage 1) ──────────────────────
     // The live LiveKit Room object only exists inside this hook instance.
     // Phoenix LiveView fires destroyed()/mounted() on a 1006 abnormal
-    // socket close (Rowan's console: publish track -> "LiveView not
+    // socket close (an operator console: publish track -> "LiveView not
     // connected" -> code:1006 -> "disconnect from room"). If destroyed()
     // disconnects the room, the media session dies and the camera never
     // re-engages. So: a genuine page exit (pagehide/beforeunload) is the
@@ -151,7 +151,7 @@ const MeetingClient = {
   },
 
   // v4 case-3 fix: Phoenix LiveView calls reconnected() on the hook after
-  // its socket reconnects (Rowan's 1006 blip). On a pure socket reconnect
+  // its socket reconnects (a 1006 close blip). On a pure socket reconnect
   // the `#meeting-client` element is re-patched by morphdom from
   // server-rendered HTML that carries NO `data-room-state` (it's a
   // JS-owned attribute), so the breadcrumb the reviewer asserts gets
@@ -885,7 +885,7 @@ const MeetingClient = {
 
     // Adopt instead of disconnect-then-reconnect when we already hold a
     // connected room (task 019e4b3e stage 1) — avoids the
-    // publish->disconnect->republish thrash seen in Rowan's console.
+    // publish->disconnect->republish thrash seen in an operator console.
     //
     // ...but only when it is the SAME room (task 01a06925 stage 2). The
     // Room is pinned on window across LiveView navigation, so a tab that
@@ -1086,7 +1086,7 @@ const MeetingClient = {
   // `#meeting-client` element and dispatches a `livekit:state` DOM
   // CustomEvent carrying the local publishing booleans. The legacy
   // `livekit:room-connected`/`-disconnected` events stay (back-compat with
-  // meeting_room.js). Rowan debugs from the Safari console, so a one-line
+  // meeting_room.js). The operator debugs from the Safari console, so a one-line
   // console.info breadcrumb is left on each transition.
   _emitState(state, room) {
     if (this.el && this.el.dataset) this.el.dataset.roomState = state
@@ -1130,7 +1130,7 @@ const MeetingClient = {
   // reconnect or remount-adopt (stage 3). Intent lives on the
   // `#meeting-client` dataset (data-camera-enabled / data-mic-enabled),
   // which the server controls — reading it is reconnect-safe and does not
-  // depend on a fresh LV push (Rowan's exact error was "unable to push hook
+  // depend on a fresh LV push (the operator's exact error was "unable to push hook
   // event. LiveView not connected").
   //
   // `intent` (optional, task 01a07410 stage 4) overrides the dataset read:

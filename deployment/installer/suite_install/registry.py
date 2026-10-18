@@ -34,9 +34,9 @@ admin API with it.
 Target-only containers (cloudflared, the tailscale sidecars) are added by
 ``enabled_containers`` from the manifest's ``[access]`` table.
 
-Container names mirror the live moon quadlets so that a rendered stack and an
-operator's mental model of moon use the same names. Default image refs mirror
-the moon quadlets read on 2026-09-25 (task 01a0d69d stage 2).
+Container names mirror the live reference-install quadlets so that a rendered stack and an
+operator's mental model of that install use the same names. Default image refs mirror
+the reference-install quadlets read on 2026-09-25 (task 01a0d69d stage 2).
 """
 
 import base64
@@ -86,7 +86,44 @@ ACCESS_CONTAINERS = {
 # `full_machine` adds none: its agent host is a service on the HOST, rendered
 # by the target layer (templates.py + agents.py).
 AGENT_HOST = "agent-host"
-AGENT_HOST_IMAGE = "docker.io/example/suite-agent-host:latest"
+AGENT_HOST_IMAGE_NAME = "suite-agent-host:latest"
+
+
+# ---------------------------------------------------------------------------
+# Where the suite-* images come from (task 01a14b9e).
+# ---------------------------------------------------------------------------
+
+# Every suite-* image is docker.io/<image_namespace>/<name>. `image_namespace`
+# is a REQUIRED manifest input ([images] image_namespace) with no default:
+# CI publishes under the repo's DOCKERHUB_NAMESPACE variable, and a default
+# here would name one publisher. validate.py refuses a manifest without it;
+# hub_image raises if an unvalidated one gets this far.
+IMAGE_NAMESPACE_INPUT = "images.image_namespace"
+
+
+class ImageNamespaceMissing(ValueError):
+    """A render reached an image default with no images.image_namespace."""
+
+
+def image_namespace(manifest):
+    namespace = manifest["images"]["image_namespace"]
+    if not namespace:
+        raise ImageNamespaceMissing(
+            f"{IMAGE_NAMESPACE_INPUT} is required and has no default: the Docker Hub "
+            "namespace the suite-* images are pulled from"
+        )
+    return namespace
+
+
+def hub_image(manifest, name):
+    """``docker.io/<image_namespace>/<name>``, e.g. ``suite-files-service:latest``."""
+    return f"docker.io/{image_namespace(manifest)}/{name}"
+
+
+def agent_host_image(manifest):
+    """The agent-host image's default ref for this install."""
+    return hub_image(manifest, AGENT_HOST_IMAGE_NAME)
+
 
 # `[auth] mode` -> container it adds (None: the identity provider is external).
 AUTH_CONTAINERS = {
@@ -115,7 +152,7 @@ MODULE_CORE_ENV = {
     "play": {"GAME_STREAM_ENABLED": "true"},
 }
 
-CORE_IMAGE_REPO = "docker.io/example/suite-core"
+CORE_IMAGE_NAME = "suite-core"
 
 # Module set -> the image flavour tag CI publishes for it
 # (.github/workflows/ci.yml, `build-and-push`). One release host is built per
@@ -140,9 +177,14 @@ assert set(IMAGE_FLAVOURS) == set(_subsets(MODULES)), (
 )
 
 
+def core_image_repo(manifest):
+    """``docker.io/<image_namespace>/suite-core``."""
+    return hub_image(manifest, CORE_IMAGE_NAME)
+
+
 def core_image(ctx):
     """The core image for the install's module set, e.g. ``suite-core:play``."""
-    return f"{CORE_IMAGE_REPO}:{IMAGE_FLAVOURS[frozenset(ctx.m['install']['modules'])]}"
+    return f"{core_image_repo(ctx.m)}:{IMAGE_FLAVOURS[frozenset(ctx.m['install']['modules'])]}"
 
 
 ALL_CONTAINERS = tuple(
@@ -203,8 +245,8 @@ def enabled_containers(manifest):
 # install's own root) over it; without that, core's OIDC discovery to
 # https://auth.<primary> fails.
 # Measured 2026-09-25 with `find / -path '*castore*' -name '*.pem'` inside the
-# throwaway container castore-01a0d69d on moon, image
-# docker.io/example/suite-core:latest, image id sha256:42600a534f02b6f5...,
+# throwaway container castore-01a0d69d on the test host, image
+# suite-core:latest, image id sha256:42600a534f02b6f5...,
 # repo digests sha256:843a721c0dc11992... and sha256:a59c99b6a090aa05...
 # (castore 1.0.17). The path carries the castore VERSION, so a castore bump in
 # core moves it. The single-host CA-bundle script fails loudly (never silently)
@@ -212,7 +254,7 @@ def enabled_containers(manifest):
 CASTORE_PATH = "/app/lib/castore-1.0.17/priv/cacerts.pem"
 
 # The embeddings model. Must stay Qwen3-Embedding-0.6B f16: a different model
-# silently invalidates every stored vector (moon embeddings.container header).
+# silently invalidates every stored vector (the reference install's embeddings.container header).
 EMBEDDINGS_MODEL_FILE = "Qwen3-Embedding-0.6B-f16.gguf"
 
 POSTGRES_USER = "core_platform"
@@ -289,7 +331,7 @@ SECRETS = {
             "ENCRYPTION_KEY",
             _urlsafe(32),
             "pocket-id v2 ENCRYPTION_KEY (at-rest key for its database; "
-            "the same env name hive's pocket-id runs with)",
+            "the same env name the reference install's pocket-id runs with)",
         ),
         Secret(
             "OIDC_CLIENT_SECRET",
@@ -587,7 +629,7 @@ def _memory_mounts(ctx):
 _MEMORY_INIT_SQL = """\
 -- memory-service database (registry service: memory-service).
 -- Runs once, on an EMPTY core-postgres data volume. A fresh postgres has none of
--- this; moon's did because its data was restored from hive.
+-- this; the reference install's did because its data was restored from another host.
 \\getenv memory_db_password MEMORY_DB_PASSWORD
 CREATE ROLE memory LOGIN PASSWORD :'memory_db_password';
 CREATE DATABASE memory OWNER memory;
@@ -789,7 +831,7 @@ def _transcriber_env(ctx):
         # (meeting-transcriber src/meeting_transcriber/config.py).
         "STT_BASE_URL": endpoint["base_url"],
         "STT_MODEL": ctx.m["meetings"]["stt_model"] or "whisper-1",
-        # Non-secret values mirror hive's running transcriber (read 2026-09-25).
+        # Non-secret values mirror the workstation's running transcriber (read 2026-09-25).
         "ROOM_PATTERN": "space-*",
         "IDLE_TIMEOUT_S": "300",
         "EMPTY_GRACE_S": "20",
@@ -858,7 +900,7 @@ SERVICES = {
             # The flavour of the install's `install.modules` (ADR 0055):
             # `suite-core:core` with none, `suite-core:play` with Play. Never
             # `latest`, which is a moving tag kept for the hand-maintained
-            # moon quadlets (deployment/schema/install-modules.md).
+            # reference-install quadlets (deployment/schema/install-modules.md).
             core_image,
             private_image=True,
             env=_core_env,
@@ -907,7 +949,7 @@ SERVICES = {
         ),
         Service(
             "files-service",
-            "docker.io/example/suite-files-service:latest",
+            lambda ctx: hub_image(ctx.m, "suite-files-service:latest"),
             private_image=True,
             env=lambda ctx: {
                 "PORT": "8200",
@@ -924,7 +966,7 @@ SERVICES = {
         ),
         Service(
             "memory-service",
-            "docker.io/example/suite-memory-service:latest",
+            lambda ctx: hub_image(ctx.m, "suite-memory-service:latest"),
             private_image=True,
             env=_memory_env,
             injects=lambda ctx: {
@@ -951,7 +993,7 @@ SERVICES = {
         Service(
             "embeddings",
             "ghcr.io/ggml-org/llama.cpp:server",
-            # Flags copied from core-ops targets/moon-production/quadlets/
+            # Flags copied from the reference install's production quadlets'
             # embeddings.container Exec= (measured 2026-09-24, task 01a0d403).
             command=[
                 "-m",
@@ -1002,7 +1044,7 @@ SERVICES = {
         ),
         Service(
             TRANSCRIBER,
-            "docker.io/example/suite-meeting-transcriber:latest",
+            lambda ctx: hub_image(ctx.m, "suite-meeting-transcriber:latest"),
             private_image=True,
             env=_transcriber_env,
             injects=lambda ctx: {
@@ -1031,7 +1073,7 @@ SERVICES = {
         # AGENT_HOST_TOKEN is owned by core-platform's secrets.
         Service(
             AGENT_HOST,
-            AGENT_HOST_IMAGE,
+            lambda ctx: agent_host_image(ctx.m),
             private_image=True,
             env=_agent_host_env,
             # Persistent homes; users are re-created over them on image update.

@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-20  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Extends:** ADR 0008 (Chat Backend Architecture)  
 
 ---

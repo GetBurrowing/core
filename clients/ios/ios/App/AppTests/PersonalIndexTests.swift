@@ -132,9 +132,9 @@ final class PersonalIndexTests: XCTestCase {
         case "/api/app/people":
             let directory = request.url?.query == "scope=directory"
             if directory && noDirectory.contains(host) { return (404, Data(#"{"error":"not_found"}"#.utf8)) }
-            var people = [#"{"id":"\#(daltonID)","kind":"user","name":"Dalton \#(tag)","org_names":["Fabrikam"]}"#]
+            var people = [#"{"id":"\#(daltonID)","kind":"user","name":"Dalton \#(tag)","org_names":["Legacy"]}"#]
             if directory {
-                people.append(#"{"id":"\#(tag == "A" ? priyaID : priyaIDOnB)","kind":"user","name":"Priya \#(tag)","org_names":["Fabrikam"]}"#)
+                people.append(#"{"id":"\#(tag == "A" ? priyaID : priyaIDOnB)","kind":"user","name":"Priya \#(tag)","org_names":["Legacy"]}"#)
                 people.append(#"{"id":"\#(helperID)","kind":"agent","name":"Burrow Helper \#(tag)","org_names":[]}"#)
             }
             return (200, Data(#"{"people":[\#(people.joined(separator: ","))]}"#.utf8))
@@ -142,7 +142,7 @@ final class PersonalIndexTests: XCTestCase {
             return (
                 200,
                 Data(
-                    #"{"spaces":[{"id":"5a000000-0000-4000-8000-000000000001","name":"general","kind":"channel","path_segment":"g","agents":[],"org":{"id":"o","name":"Fabrikam \#(tag)"}}]}"#
+                    #"{"spaces":[{"id":"5a000000-0000-4000-8000-000000000001","name":"general","kind":"channel","path_segment":"g","agents":[],"org":{"id":"o","name":"Legacy \#(tag)"}}]}"#
                         .utf8)
             )
         case "/api/app/agents":
@@ -369,8 +369,8 @@ final class PersonalIndexTests: XCTestCase {
 
     // MARK: Round 8, bug A: a name on two installs is asked about
 
-    /// Rowan's iPad, signed in to prod and suite-exp: "Message Harper" went to
-    /// suite-exp's Harper, the first of the two indexed Jordans Siri found,
+    /// Alex's iPad, signed in to prod and suite-exp: "Message Sam" went to
+    /// suite-exp's Sam, the first of the two indexed Jordans Siri found,
     /// handed to Burrow as a resolved entity and used as is.
     @available(iOS 27, *)
     private func jordans() {
@@ -380,15 +380,15 @@ final class PersonalIndexTests: XCTestCase {
             guard request.url?.path == "/api/app/people" else { return (404, Data()) }
             let people =
                 request.url?.host == self.a
-                ? #"[{"id":"\#(self.jordanOnA)","kind":"user","name":"Harper","org_names":["Exp"]},"#
+                ? #"[{"id":"\#(self.samOnA)","kind":"user","name":"Sam","org_names":["Exp"]},"#
                     + #"{"id":"\#(self.inesOnA)","kind":"user","name":"Ines Alvarez","org_names":["Exp"]}]"#
-                : #"[{"id":"\#(self.jordanOnB)","kind":"user","name":"Harper Parker","org_names":["Fabrikam"]}]"#
+                : #"[{"id":"\#(self.samOnB)","kind":"user","name":"Sam Moreno","org_names":["Legacy"]}]"#
             return (200, Data(#"{"people":\#(people)}"#.utf8))
         }
     }
 
-    private let jordanOnA = "70000000-0000-4000-8000-00000000000a"
-    private let jordanOnB = "70000000-0000-4000-8000-00000000000b"
+    private let samOnA = "70000000-0000-4000-8000-00000000000a"
+    private let samOnB = "70000000-0000-4000-8000-00000000000b"
     private let inesOnA = "1e000000-0000-4000-8000-00000000000a"
 
     @available(iOS 27, *)
@@ -401,20 +401,20 @@ final class PersonalIndexTests: XCTestCase {
         jordans()
         defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
         var asked: (String, [String])?
-        let target = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Harper"))
+        let target = try await MessageDestination.messagePerson(entity(samOnA, on: a, name: "Sam"))
             .resolvedBurrowDestination(site: "test") { name, people in
                 asked = (name, people.map(\.id))
                 return people[1]
             }
-        XCTAssertEqual(asked?.0, "Harper")
+        XCTAssertEqual(asked?.0, "Sam")
         XCTAssertEqual(
-            asked?.1, [EntityRef(host: a, uuid: jordanOnA).id, EntityRef(host: b, uuid: jordanOnB).id],
+            asked?.1, [EntityRef(host: a, uuid: samOnA).id, EntityRef(host: b, uuid: samOnB).id],
             "Siri's pick first, then the namesake on the other install")
-        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: jordanOnB).id, "the person chosen is the one messaged")
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: samOnB).id, "the person chosen is the one messaged")
 
-        // The other way round: Siri picked Harper Parker; A's Harper answers too.
+        // The other way round: Siri picked Sam Moreno; A's Sam answers too.
         var askedAgain = false
-        _ = try await MessageDestination.messagePeople([entity(jordanOnB, on: b, name: "Harper Parker")])
+        _ = try await MessageDestination.messagePeople([entity(samOnB, on: b, name: "Sam Moreno")])
             .resolvedBurrowDestination(site: "test") { _, people in
                 askedAgain = true
                 return people[0]
@@ -422,9 +422,9 @@ final class PersonalIndexTests: XCTestCase {
         XCTAssertTrue(askedAgain)
 
         // A Shortcut that scoped the send to one install is not asked.
-        let scoped = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Harper"))
+        let scoped = try await MessageDestination.messagePerson(entity(samOnA, on: a, name: "Sam"))
             .resolvedBurrowDestination(site: "test", confirmsInstall: false, choose: noChoice)
-        XCTAssertEqual(scoped.entityID, EntityRef(host: a, uuid: jordanOnA).id)
+        XCTAssertEqual(scoped.entityID, EntityRef(host: a, uuid: samOnA).id)
     }
 
     func testAPersonWhoseNameIsUniqueAcrossInstallsIsNotAskedAbout() async throws {
@@ -442,14 +442,14 @@ final class PersonalIndexTests: XCTestCase {
         jordans()
         defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
         // Only A's people are in this process's cache.
-        PeopleCache.shared.remember([entity(jordanOnA, on: a, name: "Harper")])
+        PeopleCache.shared.remember([entity(samOnA, on: a, name: "Sam")])
         var asked: [String] = []
-        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Harper")])
+        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Sam")])
             .resolvedBurrowDestination(site: "test") { _, people in
                 asked = people.map(\.name)
                 return people[0]
             }
-        XCTAssertEqual(asked, ["Harper", "Harper Parker"])
+        XCTAssertEqual(asked, ["Sam", "Sam Moreno"])
     }
 
     // MARK: Round 8, bug B: a removed install's entities leave Spotlight by id

@@ -22,8 +22,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateDeployingTemplateRetireKnownFlakes
   seeded row, so the descriptor edit alone reaches no existing install.
   This migration writes `default_content_for_slug/1` over the row.
 
-  Checked before overwriting (read-only, 2026-10-14): the live row on fabrikam
-  (`core_platform`, updated 2026-10-11 06:18:09Z) and milv (`milv_platform`,
+  Checked before overwriting (read-only, 2026-10-14): the live row on install A
+  (`core_platform`, updated 2026-10-11 06:18:09Z) and install B (`installb_platform`,
   updated 2026-10-11 06:18:19Z) are identical (4966 chars, same md5) and
   equal the pre-edit branch descriptor with `task_ack_preamble` expanded.
   Neither carries a hand edit the branch lacks; the only change this writes

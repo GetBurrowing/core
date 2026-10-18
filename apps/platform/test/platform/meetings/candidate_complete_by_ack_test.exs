@@ -264,7 +264,7 @@ defmodule Platform.Meetings.CandidateCompleteByAckTest do
       assert candidate.acts_at, "the mirrored candidate was never armed"
       assert candidate.state == :shaping
 
-      {:ok, done} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :completed)
+      {:ok, done} = IntentQueue.ack(meeting.id, row.id, "higgins.test-host", :completed)
       assert done.status == :completed
 
       assert [task] = tasks_for_candidate(candidate.id)

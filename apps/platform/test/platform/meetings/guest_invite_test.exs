@@ -281,7 +281,7 @@ defmodule Platform.Meetings.GuestInviteTest do
 
     test "sign_with_default_expiry/2 uses ~24h expiry" do
       before_ts = future_ts(0)
-      token = GuestInvite.sign_with_default_expiry("weekly-sync", "Guest Rowan")
+      token = GuestInvite.sign_with_default_expiry("weekly-sync", "Guest Alex")
       after_ts = future_ts(0)
 
       assert {:ok, payload} = GuestInvite.verify(token)

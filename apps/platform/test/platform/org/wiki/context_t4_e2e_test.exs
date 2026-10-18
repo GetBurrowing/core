@@ -242,7 +242,7 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # T5 worktree merged T4 HEAD on top of `main`, picking up three
     # tenancy migrations that landed on main after T4 branched
     # (20260519134626_add_preferences_to_users,
-    #  20260519160000_refine_acme_admin_membership_by_email_domain,
+    #  20260519160000_refine_root_admin_membership_by_email_domain,
     #  20260519220000_add_roles_locked_at_to_org_memberships). The T5
     # stage-3 rename of 20260519220000 → 20260519220500 to resolve a
     # timestamp collision is also counted here. None of these are T4

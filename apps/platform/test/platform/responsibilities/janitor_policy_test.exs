@@ -4,11 +4,11 @@ defmodule Platform.Responsibilities.JanitorPolicyTest do
   metadata, and overlap safety of `Platform.Responsibilities.Janitor`
   (task `019fa1ac-6685` stage 2).
 
-  Every test here fails against unfixed code. Measured on moon: this file
+  Every test here fails against unfixed code. Measured on test_host: this file
   run on the stage-1 tip 65129051 fails 14/14, because
   `Platform.Responsibilities.Janitor` does not exist there.
 
-  ## Mutation probes (measured on moon, this file only)
+  ## Mutation probes (measured on test-host, this file only)
 
     * `lock("FOR UPDATE SKIP LOCKED")` deleted: the overlap test fails and
       nothing else does. Claim B blocks on the row locks A's writes hold;

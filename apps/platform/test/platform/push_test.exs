@@ -358,7 +358,7 @@ defmodule Platform.PushTest do
   describe "external_safe_preview/1 (Stage 1)" do
     test "returns the fixed generic map regardless of input" do
       assert Push.external_safe_preview(%{
-               title: "Rowan Ellis in Suite",
+               title: "Avery Rivera in Suite",
                body: "internal roadmap: shipping the Acme deal Friday",
                url: "/chat"
              }) == %{
@@ -371,13 +371,13 @@ defmodule Platform.PushTest do
     test "drops every sensitive string from a chat-shaped payload" do
       preview =
         Push.external_safe_preview(%{
-          title: "Rowan Ellis in Suite",
+          title: "Avery Rivera in Suite",
           body: "internal roadmap: shipping the Acme deal Friday",
           url: "/chat"
         })
 
       values = preview |> Map.values() |> Enum.join(" ")
-      refute values =~ "Rowan Ellis"
+      refute values =~ "Avery Rivera"
       refute values =~ "internal roadmap"
       refute values =~ "Acme"
     end
@@ -407,7 +407,7 @@ defmodule Platform.PushTest do
       participant = add_user_participant(space.id, user)
 
       payload = %{
-        title: "Rowan Ellis in Suite",
+        title: "Avery Rivera in Suite",
         body: "internal roadmap: shipping the Acme deal Friday",
         url: "/chat"
       }
@@ -441,7 +441,7 @@ defmodule Platform.PushTest do
       participant = add_user_participant(space.id, user)
 
       payload = %{
-        title: "Rowan Ellis in Suite",
+        title: "Avery Rivera in Suite",
         body: "internal roadmap: shipping the Acme deal Friday",
         url: "/chat"
       }
@@ -463,7 +463,7 @@ defmodule Platform.PushTest do
           joined_at: DateTime.utc_now()
         })
 
-      payload = %{title: "Rowan Ellis in Suite", body: "x", url: "/chat"}
+      payload = %{title: "Avery Rivera in Suite", body: "x", url: "/chat"}
 
       assert Push.preview_for_recipient(participant.id, payload) == payload
       refute_received {:external_safe_preview, _, _}
@@ -771,12 +771,12 @@ defmodule Platform.PushTest do
     defp fcm_notification do
       Platform.Push.Notification.new(%{
         kind: "chat_mention",
-        title: "Harper in Design",
+        title: "Sam in Design",
         body: "secret plans",
         url: "/chat/design",
         space_id: Ecto.UUID.generate(),
         message_id: Ecto.UUID.generate(),
-        author_name: "Harper",
+        author_name: "Sam",
         space_name: "Design"
       })
     end

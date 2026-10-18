@@ -117,8 +117,8 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
     end
 
     test "a push for a space with no name names the install" do
-      assert dm_push_title("Harper") == "Harper in Burrow"
-      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Burrow"
+      assert dm_push_title("Sam") == "Sam in Burrow"
+      assert AttentionRouter.notification_title("Alex", :here) == "Alex @here in Burrow"
     end
   end
 
@@ -140,7 +140,7 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
       assert meta(html, "apple-mobile-web-app-title") == "Acme Ops"
       refute html =~ "Burrow</span>"
 
-      assert dm_push_title("Harper") == "Harper in Acme Ops"
+      assert dm_push_title("Sam") == "Sam in Acme Ops"
     end
   end
 

@@ -16,11 +16,11 @@ defmodule Mix.Tasks.Platform.IntentEval.Run do
 
   `--base-url <url>` moves only the network target of a `--record` run — the
   config, prompt and cassette keys are unchanged, so the recording replays
-  identically for everyone. Needed on moon, where the classifier runs on the
-  host network and the dev container reaches it as
-  `http://host.containers.internal:8085/v1` rather than the LAN address the
-  config names. The run manifest records the host contacted and flags the
-  override.
+  identically for everyone. Without the flag, `INTENT_EVAL_BASE_URL` does the
+  same; with neither, the config's own `base_url` (shipped as
+  `http://localhost:8085/v1`) is used. A dev container typically reaches a
+  host-network classifier as `http://host.containers.internal:8085/v1`. The
+  run manifest records the host contacted and flags the override.
 
   Without access to the classifier endpoint you can still `--replay` any
   committed cassette and reproduce every published number. You cannot

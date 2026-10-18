@@ -152,7 +152,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
         view
         |> form("#branding-identity-form", %{
           "branding" => %{
-            "app_name" => "Ellis Suite",
+            "app_name" => "Acme Workspace",
             "theme_color" => current.theme_color,
             "background_color" => current.background_color
           }
@@ -161,6 +161,11 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
 
       assert html =~ "currently 14"
       refute html =~ "should be at most"
+
+      # Task 01a14b9e stage 3: the worked example is a neutral name, cut by
+      # the same rule (11 visible characters, ellipsis included).
+      assert html =~
+               ~r/(&quot;|&#34;|")Acme Workspace(&quot;|&#34;|") is shown as (&quot;|&#34;|")Acme Works…(&quot;|&#34;|")\./u
     end
 
     test "a malformed colour renders inline instead of raising", %{conn: conn} do
@@ -257,6 +262,68 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       unchanged = Branding.get()
       assert unchanged.version == before.version
       assert serving?(unchanged)
+    end
+  end
+
+  describe "icon reset (task 01a14b9e stage 6)" do
+    test "no button while nothing is uploaded", %{conn: conn} do
+      {:ok, _view, html} = conn |> admin_conn() |> live(~p"/admin/branding")
+
+      refute html =~ ~s(data-role="branding-reset-icon")
+    end
+
+    test "the button resets the icon to the Burrow default, with a flash", %{conn: conn} do
+      admin = create_user!("admin")
+      conn = authenticated_conn(conn, admin)
+      {:ok, view, _html} = live(conn, ~p"/admin/branding")
+
+      upload_source(view, solid_png([200, 30, 40]), [])
+      uploaded = Branding.get()
+      assert serving?(uploaded)
+      html = render(view)
+      assert html =~ "/branding/#{uploaded.version}/icon_192"
+      assert html =~ "Reset icon to Burrow default"
+
+      result = view |> element(~s([data-role="branding-reset-icon"])) |> render_click()
+      assert {:error, {:redirect, %{to: "/admin/branding"}}} = result
+
+      reset = Branding.get()
+      assert reset.source_storage_key == nil
+      assert reset.version == nil
+      assert reset.derived == %{}
+      assert Branding.icon_url(:icon_192) == "/images/icon-192.png"
+
+      for key <- all_keys(uploaded),
+          do: refute(match?({:ok, _}, IconStorage.get(key)), "#{key} survived")
+
+      # the reloaded page shows the flash, previews the repo icons and has
+      # no reset button
+      {:ok, reloaded} = follow_redirect(result, conn)
+      html = html_response(reloaded, 200)
+      assert html =~ "Icon reset to the Burrow default."
+      assert html =~ "/images/icon-192.png"
+      refute html =~ "/branding/#{uploaded.version}/"
+      refute html =~ ~s(data-role="branding-reset-icon")
+    end
+
+    test "a reset_icon push from an actor who is no longer an admin is refused",
+         %{conn: conn} do
+      user = create_user!("admin")
+      {:ok, view, _html} = conn |> authenticated_conn(user) |> live(~p"/admin/branding")
+      upload_source(view, solid_png([200, 30, 40]), [])
+      uploaded = Branding.get()
+
+      {1, _} =
+        Repo.update_all(
+          from(m in OrgMembership, where: m.user_id == ^user.id),
+          set: [role: "member"]
+        )
+
+      html = render_click(view, "reset_icon", %{})
+
+      assert html =~ "have access to that page"
+      assert Branding.get().version == uploaded.version
+      assert serving?(Branding.get())
     end
   end
 

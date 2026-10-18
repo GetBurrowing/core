@@ -451,8 +451,8 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
   # ── Task 01a0dbd6 stage 4: the multiplayer roster, one case per state ─────
 
-  @harper %{peer_id: "p-harper", name: "Harper", user_id: "u1"}
-  @rowan %{peer_id: "p-rowan", name: "Rowan", user_id: "u2"}
+  @sam %{peer_id: "p-sam", name: "Sam", user_id: "u1"}
+  @alex %{peer_id: "p-alex", name: "Alex", user_id: "u2"}
 
   defp roster(slots, extra \\ %{}) do
     Map.merge(
@@ -505,7 +505,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "watching: opening renders as a spectator with 'Watching' and 'Join as player N'" do
-      html = render_multi(roster(%{0 => @harper}, %{spectators: 1, names: ["Ann"]}))
+      html = render_multi(roster(%{0 => @sam}, %{spectators: 1, names: ["Ann"]}))
 
       watch = one(html, "[data-gs-watch]")
       refute hidden?(watch)
@@ -523,7 +523,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "slots full: the design's line and no Join" do
-      html = render_multi(roster(%{0 => @harper, 1 => @rowan}, %{max_players: 2}))
+      html = render_multi(roster(%{0 => @sam, 1 => @alex}, %{max_players: 2}))
 
       assert text(one(html, "[data-gs-watch-line]")) ==
                "All 2 player slots are taken. You are watching."
@@ -531,7 +531,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       assert hidden?(one(html, "[data-gs-join]"))
 
       html4 =
-        render_multi(roster(%{0 => @harper, 1 => @rowan, 2 => @harper, 3 => @rowan}))
+        render_multi(roster(%{0 => @sam, 1 => @alex, 2 => @sam, 3 => @alex}))
 
       assert text(one(html4, "[data-gs-watch-line]")) ==
                "All 4 player slots are taken. You are watching."
@@ -539,8 +539,8 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
     test "the roster strip: P1-P4 chips in mono xs, names truncating, the you chip in primary" do
       html =
-        render_multi(roster(%{0 => @harper, 1 => @rowan}, %{spectators: 2, names: ["Ann", "Bo"]}),
-          peer_id: "p-rowan"
+        render_multi(roster(%{0 => @sam, 1 => @alex}, %{spectators: 2, names: ["Ann", "Bo"]}),
+          peer_id: "p-alex"
         )
 
       assert chip_states(html, "[data-gs-chips]") ==
@@ -548,7 +548,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
       [p1, p2, p3, _p4] = html |> doc() |> Floki.find("[data-gs-chips] [data-gs-chip]")
 
-      assert text(p1) == "P1 Harper"
+      assert text(p1) == "P1 Sam"
       assert text(p2) == "P2 You"
       assert text(p3) == "P3 open"
 
@@ -586,7 +586,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "player (you P2): Leave replaces End, no watching row" do
-      html = render_multi(roster(%{0 => @harper, 1 => @rowan}), peer_id: "p-rowan")
+      html = render_multi(roster(%{0 => @sam, 1 => @alex}), peer_id: "p-alex")
 
       leave = one(html, "[data-gs-leave]")
       refute hidden?(leave)
@@ -596,7 +596,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "two pads in one browser: both slots are yours" do
-      html = render_multi(roster(%{0 => @rowan, 1 => @rowan}), peer_id: "p-rowan")
+      html = render_multi(roster(%{0 => @alex, 1 => @alex}), peer_id: "p-alex")
 
       assert chip_states(html, "[data-gs-chips]") ==
                [{"0", "you"}, {"1", "you"}, {"2", "open"}, {"3", "open"}]
@@ -607,7 +607,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
     test "overflow: Take over per slot someone else holds, and End session for N people" do
       html =
-        render_multi(roster(%{0 => @harper, 1 => @rowan}, %{spectators: 1}), peer_id: "p-rowan")
+        render_multi(roster(%{0 => @sam, 1 => @alex}, %{spectators: 1}), peer_id: "p-alex")
 
       overflow = one(html, "[data-gs-overflow]")
       refute hidden?(overflow)
@@ -620,7 +620,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       assert hidden?(menu)
 
       items = Floki.find(menu, "[data-gs-take-items] [data-gs-take-over]")
-      assert Enum.map(items, &text/1) == ["Take over P1 from Harper"]
+      assert Enum.map(items, &text/1) == ["Take over P1 from Sam"]
       assert Enum.flat_map(items, &Floki.attribute(&1, "data-gs-take-over")) == ["0"]
 
       # The one-line confirm is in the markup, hidden until an item is picked.
@@ -632,7 +632,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       assert text(one(html, "[data-gs-end-session]")) ==
                "End session Ends the session for 3 people"
 
-      solo = render_multi(roster(%{0 => @rowan}), peer_id: "p-rowan")
+      solo = render_multi(roster(%{0 => @alex}), peer_id: "p-alex")
       assert text(one(solo, "[data-gs-end-line]")) == "Ends the session for 1 person"
       assert solo |> doc() |> Floki.find("[data-gs-take-items] [data-gs-take-over]") == []
     end
@@ -640,11 +640,11 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     test "375px: the strip is a single line that opens the full roster in a sheet" do
       html =
         render_multi(
-          roster(%{0 => @harper, 1 => @rowan, 2 => %{peer_id: "p3", name: "Cy", user_id: nil}}, %{
+          roster(%{0 => @sam, 1 => @alex, 2 => %{peer_id: "p3", name: "Cy", user_id: nil}}, %{
             spectators: 2,
             names: ["Ann", "Bo"]
           }),
-          peer_id: "p-rowan"
+          peer_id: "p-alex"
         )
 
       line = one(html, "[data-gs-roster-line]")
@@ -665,7 +665,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
       assert text(one(html, "[data-gs-sheet-watching]")) == "2 watching: Ann, Bo"
 
-      spectator = render_multi(roster(%{0 => @harper}, %{spectators: 1}))
+      spectator = render_multi(roster(%{0 => @sam}, %{spectators: 1}))
 
       assert text(one(spectator, "[data-gs-roster-line-text]")) ==
                "You are watching · 1 playing · 1 watching"
@@ -690,14 +690,14 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "the pad rows and the watching row are rendered for the hook to fill" do
-      html = render_multi(roster(%{0 => @rowan}), peer_id: "p-rowan")
+      html = render_multi(roster(%{0 => @alex}), peer_id: "p-alex")
       assert hidden?(one(html, "[data-gs-pads]"))
     end
 
     test "not running: no Leave, no overflow, no watching row" do
       html =
-        render_multi(roster(%{0 => @rowan}),
-          peer_id: "p-rowan",
+        render_multi(roster(%{0 => @alex}),
+          peer_id: "p-alex",
           status: status("ended", %{ended_reason: "Session ended"})
         )
 
@@ -708,7 +708,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
     end
 
     test "a v1 host (no multi) renders none of it and keeps End" do
-      html = render_multi(roster(%{0 => @rowan}, %{multi: false, max_players: 1}))
+      html = render_multi(roster(%{0 => @alex}, %{multi: false, max_players: 1}))
       assert hidden?(one(html, "[data-gs-roster]"))
       assert hidden?(one(html, "[data-gs-watch]"))
       assert hidden?(one(html, "[data-gs-leave]"))

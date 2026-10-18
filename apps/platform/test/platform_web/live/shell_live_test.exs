@@ -87,7 +87,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # constrain itself to the viewport and refuse to scroll
   # (`overflow-hidden`) so the bottom-tab nav stays functionally rooted on
   # mobile — without these, the body itself scrolls and drags the chrome
-  # out of view (Rowan's mobile review-request hotfix, supersedes the inner
+  # out of view (Alex's mobile review-request hotfix, supersedes the inner
   # `pb-` clearance from PR #331).
   #
   # CHANGED 2026-08-17, task 019ffdce. This guard used to assert the
@@ -180,7 +180,7 @@ defmodule PlatformWeb.ShellLiveTest do
   end
 
   # Shell main + inner-content-column min-h-0 regression. Take 2 of the
-  # PWA scroll lock (Rowan's report after #333 merged): #333 rooted the
+  # PWA scroll lock (Alex's report after #333 merged): #333 rooted the
   # OUTER shell chrome, but the inner content column and <main> were
   # still using default `min-height: auto` so a long inner panel could
   # blow past their flex-1 allocation and push the bottom-tab nav
@@ -1747,7 +1747,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # ---------------------------------------------------------------------
   # Mini-bar Leave durably stamps the participant row (task 019ee06b Stage 2)
   #
-  # Regression net for the bug Rowan reported: clicking the persistent
+  # Regression net for the bug Alex reported: clicking the persistent
   # meeting mini-bar's "Leave" from a page where MeetingHooks is NOT
   # attached (e.g. /tasks) used to broadcast the leave event but never
   # stamp the server-side `meeting_participants` row's `left_at`. The

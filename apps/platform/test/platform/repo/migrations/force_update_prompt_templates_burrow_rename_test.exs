@@ -141,8 +141,8 @@ defmodule Platform.Repo.Migrations.ForceUpdatePromptTemplatesBurrowRenameTest do
              Enum.sort(@edited_slugs)
   end
 
-  # Measured read-only 2026-10-17 22:30Z on core-platform, core-platform-milv
-  # and core-platform-milvlife (image revision 95040921), equal to md5 of the
+  # Measured read-only 2026-10-17 22:30Z on core-platform, core-platform-beta
+  # and core-platform-gamma (image revision 95040921), equal to md5 of the
   # origin/main 95040921 descriptor.
   for {slug, measured} <- [
         {"federation.preamble", "cd5c8e47b27fc6419cad360e956056b2"},

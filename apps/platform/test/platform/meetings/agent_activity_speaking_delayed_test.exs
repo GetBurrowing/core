@@ -567,7 +567,7 @@ defmodule Platform.Meetings.AgentActivitySpeakingDelayedTest do
     end
 
     # `:listening` is untouched by this stage and must stay that way. It is
-    # deliberately unreachable (canvas `01a05b11-54ff`, ratified by Harper
+    # deliberately unreachable (canvas `01a05b11-54ff`, ratified by Sam
     # 2026-09-03); restoring it would rebuild the always-on badge that
     # decision removed. `:speaking` and `:delayed` are not a route back in.
     test ":listening gained no producer here", %{meeting_id: meeting_id, agent_id: agent_id} do

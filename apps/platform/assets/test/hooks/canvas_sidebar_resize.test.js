@@ -305,7 +305,7 @@ describe("CanvasSidebarResize.mounted() — desktop", () => {
 
       expect(hook.el.style.width).toBe("500px")
       expect(ClientState.get("canvas_sidebar", "width")).toBe(500)
-      // Rowan's ClientState scheme collapses namespace+key into
+      // Alex's ClientState scheme collapses namespace+key into
       // `suite:<ns>:<key>` — verify the raw persisted key is what the wire
       // format promises.
       expect(storage.getItem("suite:canvas_sidebar:width")).toBe("500")
@@ -857,8 +857,8 @@ describe("CanvasSidebarResize.updated() — LiveView diff patch guard", () => {
   })
 })
 
-describe("CanvasSidebarResize — Rowan's regression scenario: compose_changed sequence", () => {
-  // Stage 3 dedicated regression guard for the exact scenario Rowan reported
+describe("CanvasSidebarResize — Alex's regression scenario: compose_changed sequence", () => {
+  // Stage 3 dedicated regression guard for the exact scenario Alex reported
   // in task 019f5cf6 v2: user drags the canvas sidebar wider, then types
   // into the chat composer — every keystroke fires `compose_changed`, which
   // triggers a parent re-render, which hands the aside to morphdom, which
@@ -867,7 +867,7 @@ describe("CanvasSidebarResize — Rowan's regression scenario: compose_changed s
   // fallback (384px) on every keystroke.
   //
   // Stage 2 (commit e252e50) wired `updated()` to re-apply the persisted
-  // width after every diff patch. The three cases below reproduce Rowan's
+  // width after every diff patch. The three cases below reproduce Alex's
   // exact workflow and lock in the fix against future regressions.
 
   beforeEach(() => {

@@ -14,7 +14,7 @@ defmodule Platform.CodeMode.Limits do
       counts executed wasm instructions, so it bounds CPU independently of
       the wall clock (a run that waits in host calls burns no fuel). Sized
       so a pure CPU loop exhausts its fuel at roughly the wall limit.
-      Measured on moon (x86_64, wasmtime 47 via Wasmex 0.15.1, cranelift
+      Measured on the test rig (x86_64, wasmtime 47 via Wasmex 0.15.1, cranelift
       `:speed`): 1e10 fuel in about 430 ms, i.e. about 2.3e7 per ms, and an
       empty JS `for` iteration costs about 510 fuel. 1.5e7 per ms puts a
       10 s budget's fuel at about 6.5 to 7.5 s of CPU there; a slower host reaches

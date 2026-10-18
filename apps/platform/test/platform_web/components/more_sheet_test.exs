@@ -44,7 +44,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{})
 
       # Working cluster keys visible to members per IconRail.canonical_destinations.
-      # (Memory tabs under Context per Marlowe 2026-05-18; not its own destination.)
+      # (Memory tabs under Context per Robin 2026-05-18; not its own destination.)
       # Prompts is root_only?:true as of 2026-05-20 — visible only to admins;
       # see acme-only assertion in the next test.
       for key <- ["skills", "context", "meetings"] do
@@ -97,8 +97,8 @@ defmodule PlatformWeb.Components.MoreSheetTest do
 
   describe "profile row" do
     test "renders the profile row when current_user is present" do
-      html = render_more_sheet(%{current_user: %{name: "Marlowe"}})
-      assert html =~ "Marlowe"
+      html = render_more_sheet(%{current_user: %{name: "Robin"}})
+      assert html =~ "Robin"
       assert html =~ "Sign out"
     end
 

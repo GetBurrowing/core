@@ -68,7 +68,7 @@ defmodule Platform.Chat.AttentionRouterEmailInboundTest do
           %{
             participant_type: "user",
             participant_id: Ecto.UUID.generate(),
-            display_name: "Rowan",
+            display_name: "Alex",
             joined_at: DateTime.utc_now()
           },
           attrs

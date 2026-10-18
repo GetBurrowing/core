@@ -2,7 +2,7 @@
 
 **Task:** `019df567-b7f9-7ec2` (1. Define editable-messages cross-phase contract)
 **Epic:** `019d1359-d3dd-7977-9150-05c7076b0b58` (Chat)
-**Status:** DRAFT — pending Marlowe review (especially Section f)
+**Status:** DRAFT — pending the design lead review (especially Section f)
 **Consumed by:** Tasks 2 (schema), 3 (PATCH endpoint), 4 (web UI / folded into Task 11 Stage 4-6), 5 (PWA UI / folded into Task 11), 6 (verification)
 **Source-of-truth references:**
 - Existing schema: `apps/platform/lib/platform/chat/message.ex`
@@ -337,11 +337,11 @@ The dialog is intentionally factual, not preachy. It states what's true about ag
 
 ---
 
-## Open decisions (need Marlowe / planner sign-off)
+## Open decisions (need the design lead / planner sign-off)
 
 | ID | Decision | Default proposed | Owner |
 |---|---|---|---|
-| ~~D-1~~ | ~~`frozen_by_*` FK target — `chat_participants.id` (proposed) vs. a new `agent_actions` table (task description's wording)~~ | **DECIDED 2026-05-11 (Marlowe):** use `chat_participants.id` — no `agent_actions` table exists today and the participant is sufficient for audit. | ✓ Done |
+| ~~D-1~~ | ~~`frozen_by_*` FK target — `chat_participants.id` (proposed) vs. a new `agent_actions` table (task description's wording)~~ | **DECIDED 2026-05-11 (the design lead):** use `chat_participants.id` — no `agent_actions` table exists today and the participant is sufficient for audit. | ✓ Done |
 | D-2 | API route prefix — `/api/messages/:id` (proposed) vs whatever existing convention `router.ex` shows | Verify at Task 3 execution and adopt the existing prefix | Task 3 implementer |
 | D-3 | Rate-limit backing store — add Hammer dep, or DIY windowed counter, or use existing infra | Verify at Task 3 execution; flag if existing infra found | Task 3 implementer |
 | D-4 | `GET /api/messages/:id/versions` endpoint — in Task 3 (proposed) or deferred to Task 6 | In Task 3 — keeps the edit + history scope together | Task 3 implementer |

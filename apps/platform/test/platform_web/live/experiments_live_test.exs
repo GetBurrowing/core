@@ -358,14 +358,18 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       # list page, the lifecycle note on the detail page.
       {:ok, _list_view, list_html} = live(member_conn(conn), ~p"/control/experiments")
       assert list_html =~ "Only root-org admins can change guardrails."
-      refute list_html =~ ~r/Fabrikam admins/i
+
+      refute list_html =~
+               ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} admins/i
 
       {:ok, view, _html} = live(member_conn(conn), ~p"/control/experiments/member-flash")
 
       # The lifecycle note lives on the detail page's promotions tab.
       html = render_hook(view, "select_tab", %{"tab" => "promotions"})
       assert html =~ "Only root-org admins can start, stop, conclude or promote an experiment."
-      refute html =~ ~r/Fabrikam admins/i
+
+      refute html =~
+               ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} admins/i
 
       for event <- [
             "show_create",
@@ -391,7 +395,9 @@ defmodule PlatformWeb.ExperimentsLiveTest do
         assert flashed =~ "Only root-org admins can change experiments.",
                "#{event} did not flash the root-org refusal"
 
-        refute flashed =~ ~r/Fabrikam admins/i, "#{event} flashed a compiled org name"
+        refute flashed =~
+                 ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} admins/i,
+               "#{event} flashed a compiled org name"
       end
     end
 

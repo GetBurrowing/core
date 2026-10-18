@@ -133,7 +133,7 @@ defmodule PlatformWeb.InboxLive do
   having handled it. The proxy is what failed. Once this surface is ruled a
   to-do list, reading and doing are different acts — plenty of items get opened,
   read, and left undone, and under the old rule those vanished from the only
-  place recording that they were outstanding. Harper's report ("I have to click
+  place recording that they were outstanding. The product lead's report ("I have to click
   each and every message to clear it out") is the same complaint from the other
   side: clicking was the ONLY clear, so clearing meant opening things you did
   not want to open.
@@ -321,7 +321,7 @@ defmodule PlatformWeb.InboxLive do
 
   # ── Bulk dismiss ───────────────────────────────────────────────────────
 
-  # Harper's ask, literally: clear a batch without opening each one.
+  # The product lead's ask, literally: clear a batch without opening each one.
   #
   # `dismiss_many/2` returns the ids it ACTUALLY changed, which is not always
   # every id asked for (a row dismissed on another tab in between is already

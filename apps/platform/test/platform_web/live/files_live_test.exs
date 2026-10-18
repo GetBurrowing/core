@@ -363,7 +363,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # Each branch is verified end-to-end: a file of the given content
     # type is seeded, the LV selects it, and we assert the correct
     # render mode element + its data-role marker is present. This is
-    # the contract Rowan's stage-5 revision pinned down ("you should be
+    # the contract Alex's stage-5 revision pinned down ("you should be
     # able to open and see the ingested file" — not a text excerpt).
 
     setup %{conn: conn} do
@@ -510,7 +510,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # which raises whenever any entry in the batch is still in
     # progress, and its `split_with` matched `{:ok, _}` instead of the
     # actual `{:created, _}` / `{:dedup, _}` shapes the callback
-    # returns. Regression here would surface as Marlowe's original bug:
+    # returns. Regression here would surface as Robin's original bug:
     # a false "N file(s) failed to upload" toast on happy paths (Bug
     # B), and — on bulk — a crash before any row lands (Bug A). The
     # fix drains per-entry via `consume_uploaded_entry/3` (singular)
@@ -1204,7 +1204,7 @@ defmodule PlatformWeb.FilesLiveTest do
     end
 
     test "names the actor who flipped the flag, absolute date once it's old" do
-      user = insert_user("Marlowe Quill")
+      user = insert_user("Robin Park")
 
       file = %Files.File{
         interactive_at: ~U[2026-08-15 12:00:00.000000Z],
@@ -1212,9 +1212,9 @@ defmodule PlatformWeb.FilesLiveTest do
       }
 
       assert PlatformWeb.FilesLive.interactive_attribution_text(file) ==
-               "Made interactive by Marlowe Quill · 15 Aug"
+               "Made interactive by Robin Park · 15 Aug"
 
-      assert PlatformWeb.FilesLive.interactive_uploader_name(file) == "Marlowe Quill"
+      assert PlatformWeb.FilesLive.interactive_uploader_name(file) == "Robin Park"
     end
 
     test "a file flagged seconds ago reads \"just now\"" do

@@ -886,7 +886,7 @@ test.describe("chat message density", () => {
    * dev user `Dev <Capitalized-slug>` (`auth_controller.ex`), which is
    * already a two-token name with a space between "Dev" and the rest —
    * exactly the shape the sponsor's report and stage 1's e2e_behavior case
-   * both use ("Harper Parker" / "any two-word name"). The bug is about
+   * both use ("Sam Moreno" / "any two-word name"). The bug is about
    * available width against reserved width, not about English word count,
    * so the ordinary login fixture reproduces it without a special seed.
    */
@@ -903,7 +903,7 @@ test.describe("chat message density", () => {
       // by the anti-vacuity mutation step below reproducing on-topic but a
       // control run against the FIX also going red for the wrong reason.
       // A short slug keeps the fixture in the same length class as the
-      // sponsor's report and stage 1's e2e_behavior case ("Harper Parker",
+      // sponsor's report and stage 1's e2e_behavior case ("Sam Moreno",
       // 13 chars): width + 6 base36 chars of the timestamp, ~9-12 chars,
       // still unique per test run without being long enough to wrap on its
       // own. The message body keeps the full `tag` for row filtering below.

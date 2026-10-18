@@ -70,7 +70,7 @@ feedback yourself from what you actually observed. That is the failure_feedback.
 
 ## How to review
 
-1. Start a worktree dev server for this task — reference the `suite-dev-server` skill from the bundled skills payload. The skill explains hive-only constraints and DB seeding.
+1. Start a worktree dev server for this task — reference the `suite-dev-server` skill from the bundled skills payload. The skill explains the dev-host constraints and DB seeding.
 2. For each pending validation in the list above:
    a. Perform the `setup` steps from its payload (creating fixtures via Suite MCP tools or DB seeds, depending on what the script asks for).
    b. Perform the `actions` against the running feature.

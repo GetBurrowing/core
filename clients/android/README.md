@@ -22,14 +22,14 @@ and widgets (stage 4).
 | `android/app/src/test/java/com/koboai/burrow/` | JVM unit tests. |
 | `android/app/src/main/res/` | Colour slots, vector icons, splash, Public Sans (`font/public_sans.ttf`, OFL in `licenses/`). |
 | `scripts/generate_assets.py` | Regenerates every icon, splash and status-bar drawable from the Burrow arch on main. |
-| `scripts/rig/` | The moon build and emulator rig. |
+| `scripts/rig/` | The test-host build and emulator rig. |
 | `scripts/e2e/fcm_stub.py` | The recording FCM stub (stage 1). |
 
 ### Kotlin sources
 
 | File | Mirrors (iOS) | Does |
 |---|---|---|
-| `InstallStore.kt` | `Shared/InstallStore.swift` | Install list and selection in SharedPreferences. Defaults `suite.example.com` (selected), `suite.example.com`, `suite.milv.life`; add by URL; a removed default stays removed. The app install id lives in a separate file excluded from backup. |
+| `InstallStore.kt` | `Shared/InstallStore.swift` | Install list and selection in SharedPreferences. No built-in installs: the person adds theirs by URL (a list made only of the old built-in hosts, with no bearer, is cleared once); a removed install stays removed. The app install id lives in a separate file excluded from backup. |
 | `KeystoreTokenStore.kt` | `Shared/KeychainTokenStore.swift` | The bearer per install host: AES-256-GCM under a non-exportable AndroidKeyStore key; ciphertext + IV in the private prefs file `burrow_bearer_tokens`, with the host as GCM associated data. Not `EncryptedSharedPreferences` (androidx.security-crypto is deprecated). |
 | `Pkce.kt`, `AuthSession.kt`, `AuthCallback.kt` | `App/AuthSession.swift` | PKCE S256, the Custom Tab sign-in and the `burrow://auth/callback` parser. |
 | `AppApiClient.kt` | `Shared/SuiteAPIClient.swift` | `/api/app/*` calls. The bearer is attached in one place, looked up by the host the request is for. |
@@ -44,18 +44,18 @@ and widgets (stage 4).
 | `MainActivity.kt`, `BurrowWebViewClient.kt` | `App/SuiteBridgeViewController.swift` | The shell: install lifecycle, policy, back, status bar. |
 | `InstallPickerView.kt`, `InstallProbe.kt` | `App/InstallPickerView.swift` | The install picker (Android Views), the iOS layout and copy. |
 
-## Rig (moon)
+## Rig (test-host)
 
-Android builds and the emulator run on **moon** (Linux, `/dev/kvm`), never on
-hive. Rock has no JDK and cannot build. Everything the rig creates is named
+Android builds and the emulator run on **test-host** (Linux, `/dev/kvm`), never on
+build-host. Mac-host has no JDK and cannot build. Everything the rig creates is named
 `burrow-android-<RIG_PREFIX>-*` (default prefix `01a10d8e`); it never touches
 another container.
 
 ```sh
-# from the dev box (rock): copy clients/android to moon
+# from the dev box (mac-host): copy clients/android to test-host
 clients/android/scripts/rig/rig.sh push
 
-# on moon (ssh dev@build-host.local), from /srv/dev/android-rig/01a10d8e:
+# on test-host (ssh deploy@test-host), from ~/android-rig/01a10d8e:
 clients/android/scripts/rig/rig.sh build-image      # image + SDK packages (once)
 clients/android/scripts/rig/rig.sh gradle testDebugUnitTest
 clients/android/scripts/rig/rig.sh gradle ktlintCheck lintDebug
@@ -178,7 +178,7 @@ handoff. An install no longer on the phone just brings the app forward.
 `fcm_stub.py` records, a `{"data": ...}` object, or the bare data):
 
 ```sh
-P=$(printf '%s' '{"data":{"kind":"chat_mention","title":"Harper in Ops","body":"@Marlowe ping","url":"/chat/ops?message=m1","space_id":"s1","message_id":"m1","install_host":"suite.example.com","author_name":"Harper","space_name":"Ops"}}' | base64 -w0)
+P=$(printf '%s' '{"data":{"kind":"chat_mention","title":"Alex in Ops","body":"@Sam ping","url":"/chat/ops?message=m1","space_id":"s1","message_id":"m1","install_host":"burrow.example.com","author_name":"Alex","space_name":"Ops"}}' | base64 -w0)
 rig.sh adb shell am broadcast -a com.koboai.burrow.debug.PUSH \
   -n com.koboai.burrow.debug/com.koboai.burrow.push.DebugPushReceiver --es payload "$P"
 ```
@@ -202,7 +202,7 @@ first summarised as "2 approvals", because the child just posted was not yet in
 Also, a child that is heads-up is shown outside its group until the heads-up
 ends, so a group looks ungrouped for a few seconds after an alert.
 
-**Mutation probes (stage 3, on moon).** Each mutant was applied to the moon
+**Mutation probes (stage 3, on test-host).** Each mutant was applied to the test-host
 copy and the named test class run; a no-op control edit stayed green. All
 killed: Open guard allowing `//host` or an absolute URL (PushPayloadTest);
 a non-2xx counted as registered, `outcome` mapping a failure to Registered, or
@@ -411,7 +411,7 @@ rebased: 01a116a1 (Switch install, `LaunchRouter`, `PickerBack`; on main as
 `Platform.Push.Notification`). The server half of this task adds only
 `space_kind` (FCM payload only; `redact/2` clears it).
 
-### Inline reply and voice, measured on moon (2026-10-07, task branch at 638bce35d)
+### Inline reply and voice, measured on test-host (2026-10-07, task branch at 638bce35d)
 
 Rig: own API 35 AVD, a dev server from the task branch on `https://10.0.2.2`
 (own CA, conscrypt apex bind, DNAT 443 to the server, Chrome SPKI flag, mock
@@ -576,7 +576,7 @@ live slab, so cyan keeps meaning "live". Swapping is a one-line change in
 
 ## Release
 
-`scripts/release.sh` runs from rock (it drives moon over ssh) or on moon
+`scripts/release.sh` runs from mac-host (it drives test-host over ssh) or on test-host
 itself:
 
 | Mode | Does | Needs |
@@ -585,8 +585,8 @@ itself:
 | `--signed` | Builds with `google-services.json` and signs with the UPLOAD key. Checks the AAB's signing-certificate SHA-256 against `upload.crt` and exits 4 on a mismatch. | the files below |
 | `--upload` | `--signed`, then `scripts/play_upload.py` to the internal track. `BURROW_PLAY_ARGS=--dry-run` runs every step except the commit, then deletes the edit. | plus the Play key |
 
-- **Secrets.** The script copies them into a `mktemp -d` dir on moon
-  (`/srv/dev/android-rig/release-secrets.*`, mode 700). A trap on EXIT,
+- **Secrets.** The script copies them into a `mktemp -d` dir on test-host
+  (`~/android-rig/release-secrets.*`, mode 700). A trap on EXIT,
   INT, TERM and HUP deletes that dir and the copied `google-services.json`.
   - The build reads the keystore and its password by PATH (`rig.sh`
     `RIG_SECRETS`; `app/build.gradle` reads `BURROW_UPLOAD_KEYSTORE` and
@@ -595,11 +595,11 @@ itself:
   - No script here creates a key. Releases are signed only with the existing
     upload key.
 - **versionCode.** It comes from the counter
-  `/srv/dev/.config/suite-android-build/versioncode` on moon (the last
+  `~/.config/suite-android-build/versioncode` on test-host (the last
   uploaded value, plus one). The counter advances ONLY after a committed
   upload. Every other mode builds the next value without consuming it.
-- **AAB location.** `~/Dev/build/burrow-android/` on rock and
-  `/srv/dev/android-rig/01a10d8e/out/` on moon.
+- **AAB location.** `~/Dev/build/burrow-android/` on mac-host and
+  `~/android-rig/01a10d8e/out/` on test-host.
 - **Local install test.** `rig.sh bundletool build-apks --local-testing ...`
   then `install-apks`. bundletool 1.18.3 is pinned by sha256 in `rig.sh`.
 - **Draft apps.** If the Play app is still a draft, `play_upload.py` retries
@@ -607,11 +607,11 @@ itself:
   the Console.
 - **First upload (stage 5, 2026-10-05).** versionCode 1 (v1.0) went to the
   internal track with status `completed`, and `edits.tracks.get` read it back.
-- **No CI job yet.** CI runners on moon are shared, so that is out of scope.
+- **No CI job yet.** CI runners on test-host are shared, so that is out of scope.
   A CI release would need the upload key as an encrypted secret.
 
 Tests:
-- `scripts/test_release.sh` runs on moon from the rig copy. It uses throwaway
+- `scripts/test_release.sh` runs on test-host from the rig copy. It uses throwaway
   openssl keys and its own counter, and checks:
   - `--upload` with no inputs exits 3 and names each missing path;
   - the `--local` assertions;
@@ -629,7 +629,7 @@ Tests:
 
 ## Human inputs
 
-On rock, in `~/private_keys/burrow-android/` (mode 600; paths only here):
+On mac-host, in `~/private_keys/burrow-android/` (mode 600; paths only here):
 
 | Input | Path / place | Status (2026-10-05) |
 |---|---|---|
@@ -639,15 +639,15 @@ On rock, in `~/private_keys/burrow-android/` (mode 600; paths only here):
 | Play Developer API key, service account `burrow-play-upload` (Admin in Play Console) | `burrow-e7850-6e4ab44521d9.json`; override with `BURROW_PLAY_KEY` | present |
 | FCM service-account key for the servers | Vault slugs `fcm-service-account` and `fcm-project-id` (`burrow-e7850`) on every install, set by Dalton | present |
 | Play Console app record | `com.koboai.burrow`, Play App Signing ON (Google holds the app signing key) | present |
-| Internal testing testers | Play Console > Testing > Internal testing: Rowan's Google account and harper.parker@example.com. The API manages testers only as Google Groups, so set them in the Console. | Rowan |
+| Internal testing testers | Play Console > Testing > Internal testing: the product owner's Google account and tester@example.com. The API manages testers only as Google Groups, so set them in the Console. | The product owner |
 
 ## Task-level e2e rig (for review)
 
-This rig runs on moon only, with no Firebase and no human inputs:
+This rig runs on test-host only, with no Firebase and no human inputs:
 
 1. A dev server from the task branch, in a podman container on network `dev`
    with a private DB. Configure `config :platform, :fcm, base_url:
-   "http://<moon>:<stub_port>", token_url: ...` and set
+   "http://<test-host>:<stub_port>", token_url: ...` and set
    `FCM_SERVICE_ACCOUNT_JSON` from `fcm_stub.py --make-key` (a throwaway key).
 2. `scripts/e2e/fcm_stub.py --record <file>`.
 3. A mock OIDC IdP as the dev server's issuer, so the Custom Tab completes the
@@ -669,7 +669,7 @@ Two gaps for whoever builds it:
 ## Firebase and signing
 
 `google-services.json` and the upload keystore are never committed
-(`.gitignore`). They live outside the repo on rock in
+(`.gitignore`). They live outside the repo on mac-host in
 `~/private_keys/burrow-android/`. `release.sh --signed/--upload` copies
 `google-services.json` into `android/app/` and its trap deletes it; without
 it the google-services plugin is not applied and there is no FirebaseApp.
@@ -678,6 +678,6 @@ The file lists only `com.koboai.burrow`, so the debug variant
 (`com.koboai.burrow.debug`) would fail the plugin's
 `processDebugGoogleServices`. `app/build.gradle` disables that task unless the
 file names the debug package: a debug build then has no Firebase config and
-registers with `DebugTokenSource`. Checked on moon (stage 3) with the real file
+registers with `DebugTokenSource`. Checked on test-host (stage 3) with the real file
 present: `processReleaseGoogleServices` ran and wrote `google_app_id`;
 `processDebugGoogleServices` was SKIPPED.

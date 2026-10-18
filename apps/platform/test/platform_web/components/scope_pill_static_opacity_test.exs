@@ -13,8 +13,8 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
   `:compact`) on the non-clickable `<span>`, and `opacity` composites the
   whole chip as a group: the LABEL is pulled toward the page ground along
   with the fill, in the same proportion, so the AA-tuned label token stops
-  being AA the moment it is painted. **That opacity is Marlowe-approved
-  (2026-05-18)** and recorded as such in `ScopePill`'s moduledoc. Marlowe's
+  being AA the moment it is painted. **That opacity is Robin-approved
+  (2026-05-18)** and recorded as such in `ScopePill`'s moduledoc. Robin's
   2026-09-13 ruling authorised moving the six shipped pills' COLOURS; it
   said nothing about this opacity. **The ruling is open, and it is hers.**
   This stage measured the cost and left the treatment alone.
@@ -89,7 +89,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
                     __DIR__
                   )
 
-  @six ~w(fabrikam soylent wayne_tech sxi paragon cyberdyne)
+  @six ~w(legacy soylent wayne_tech sxi paragon cyberdyne)
   @surfaces ["base-100", "base-200"]
   @sizes [:default, :compact]
   @aa 4.5
@@ -105,7 +105,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
   # has moved means the opacity or a colour token moved, and the fix is to
   # find out which and record why.
   @static_light %{
-    "fabrikam" => {2.2100, 2.8291, 2.2136, 2.8330},
+    "legacy" => {2.2100, 2.8291, 2.2136, 2.8330},
     "soylent" => {2.1286, 2.7146, 2.1560, 2.7646},
     "wayne_tech" => {2.1876, 2.7714, 2.1967, 2.8059},
     "sxi" => {2.2112, 2.7966, 2.1796, 2.7919},
@@ -114,7 +114,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
   }
 
   @static_dark %{
-    "fabrikam" => {2.6036, 3.4314, 2.7700, 3.8769},
+    "legacy" => {2.6036, 3.4314, 2.7700, 3.8769},
     "soylent" => {2.3206, 2.9620, 2.2979, 3.0999},
     "wayne_tech" => {2.4856, 3.2569, 2.6278, 3.6519},
     "sxi" => {2.6812, 3.5254, 2.8727, 4.0319},
@@ -146,7 +146,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
         assert measured == expected,
                "#{at}: label reads #{measured}:1 against its tint, pinned at #{expected}:1.\n" <>
                  "Either a --scope-* token moved, or the chip's opacity did. " <>
-                 "The opacity is Marlowe-approved (2026-05-18) and the ruling on it is " <>
+                 "The opacity is Robin-approved (2026-05-18) and the ruling on it is " <>
                  "still open: if it has been changed, say so in the change and re-pin " <>
                  "this table with the new figures. Do not edit the number alone."
       end
@@ -220,14 +220,16 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
     assigns = %{size: size}
 
     rendered_to_string(~H"""
-    <.scope_pill scope={:fabrikam} clickable={false} size={@size} />
+    <.scope_pill scope={:legacy} clickable={false} size={@size} />
     """)
   end
 
   # ── the emitted tokens ────────────────────────────────────────────────
 
   defp entries do
-    for {slug, hue, chroma, lightness} <- migration().shipped(), slug in @six do
+    for {slug, hue, chroma, lightness} <-
+          Platform.Tenancy.HistoricalRootSlug.relabel(migration().shipped()),
+        slug in @six do
       %{slug: slug, label: slug, hue: hue, chroma: chroma, lightness: lightness}
     end
   end

@@ -29,7 +29,11 @@ defmodule Platform.Security.Scanners.DeployAudit do
        defined in the example but missing from secrets → finding.
        This is the check that would have caught the
        `MEETING_GUEST_SIGNING_KEY` boot crash (see memory
-       `reference_suite_prod_secrets`).
+       `reference_suite_prod_secrets`). The root has NO default: it
+       is the install's private ops checkout, set through
+       `DEPLOY_AUDIT_CORE_OPS_ROOT` (runtime.exs). Unset, the probe is
+       `{:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}` (see
+       `env_var_probe/0`) and contributes no findings.
     4. Best-effort TLS expiry probe against
        `deploy_audit_tls_root` (default `/etc/letsencrypt/live`).
        Flags certs expiring within 30 days. Skips silently on dev
@@ -50,7 +54,7 @@ defmodule Platform.Security.Scanners.DeployAudit do
 
   @default_traefik_root "~/docker/traefik3/rules"
   @default_containers_root "~/.config/containers/systemd"
-  @default_core_ops_root "/srv/dev/core-ops"
+  @core_ops_root_env "DEPLOY_AUDIT_CORE_OPS_ROOT"
   @default_tls_root "/etc/letsencrypt/live"
   @default_tls_expiry_warning_days 30
 
@@ -524,8 +528,29 @@ defmodule Platform.Security.Scanners.DeployAudit do
 
   @doc false
   def env_var_findings do
-    root = expand(deploy_config(:deploy_audit_core_ops_root, @default_core_ops_root))
+    case env_var_probe() do
+      {:ok, findings} -> findings
+      {:not_configured, _env} -> []
+    end
+  end
 
+  @doc """
+  The env-diff probe with its configuration state named.
+
+  Returns `{:not_configured, "DEPLOY_AUDIT_CORE_OPS_ROOT"}` when
+  `deploy_audit_core_ops_root` is unset or blank (there is no code
+  default), `{:ok, []}` when the configured root does not exist, and
+  `{:ok, findings}` otherwise.
+  """
+  @spec env_var_probe() :: {:ok, [map()]} | {:not_configured, String.t()}
+  def env_var_probe do
+    case deploy_config(:deploy_audit_core_ops_root, nil) do
+      root when is_binary(root) and root != "" -> {:ok, env_var_findings_at(expand(root))}
+      _ -> {:not_configured, @core_ops_root_env}
+    end
+  end
+
+  defp env_var_findings_at(root) do
     if File.dir?(root) do
       root
       |> Path.join("targets/*/env/*.env.example")

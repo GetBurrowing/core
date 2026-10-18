@@ -112,7 +112,7 @@ def test_handoff_tool_calls_send_media_with_pinned_space_id():
     # the wrapper always attaches base64-encoded content as the attachment
     # -- task 01a0d4a0 stage 5: a local temp file path (the old approach)
     # is unreadable by Core once the worker and Core run on different
-    # hosts, which is exactly what Dalton's live moon run hit (:enoent).
+    # hosts, which is exactly what Dalton's live test-host run hit (:enoent).
     assert call_args["filename"] == "response.md"
     assert base64.b64decode(call_args["file_base64"]).decode("utf-8") == "here is the long answer"
     assert "file_path" not in call_args

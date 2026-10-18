@@ -27,7 +27,7 @@ android {
         applicationId "com.koboai.burrow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // release.sh passes the next value of the counter on moon; 1 for dev builds.
+        // release.sh passes the next value of the counter on the test rig; 1 for dev builds.
         versionCode((project.findProperty("burrowVersionCode") ?: "1") as Integer)
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

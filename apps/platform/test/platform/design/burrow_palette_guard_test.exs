@@ -4,7 +4,7 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   `apps/platform/assets/css/app.css`, and asserts every text/content pairing it
   produces clears WCAG AA.
 
-  Source: Harper's 2026-10-05 "minimal recolor" spec. The values below were
+  Source: Sam's 2026-10-05 "minimal recolor" spec. The values below were
   extracted from the spec's compiled light and dark mock stylesheets and match
   them, with three recorded deviations, all made for contrast:
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Burrow Android rig: Gradle builds and a headless KVM emulator in podman on
-# moon (task 01a10d8e). Hive is excluded; rock has no JDK. See
-# clients/android/README.md, "Rig".
+# a Linux rig host with /dev/kvm (task 01a10d8e). A workstation without KVM
+# or a JDK cannot be the rig. See clients/android/README.md, "Rig".
 #
-#   rig.sh push                  (dev box) rsync clients/android to moon
+# REQUIRED, with no default: RIG_ROOT (the rig's work root on the rig host);
+# RIG_HOST (ssh target of the rig, user@host) for `push`.
+#
+#   rig.sh push                  (dev box) rsync clients/android to RIG_HOST
 #   rig.sh build-image           build the image, install the SDK packages
 #   rig.sh gradle <args>         ./gradlew <args> in clients/android/android
 #   rig.sh emulator-up <api>     boot a headless emulator (35 or 32)
@@ -12,7 +15,7 @@
 #   rig.sh bundletool <args>     the pinned bundletool jar (fetched once,
 #                                sha256-checked, cached on the Gradle volume)
 #
-# RIG_SECRETS=<dir on moon> mounts that dir read-only at /secrets in the
+# RIG_SECRETS=<dir on the rig> mounts that dir read-only at /secrets in the
 # gradle container and sets BURROW_UPLOAD_KEYSTORE /
 # BURROW_UPLOAD_PASSWORD_FILE to the files in it (PATHS, never values;
 # scripts/release.sh). RIG_GRADLE_PROPS="-Pa=b ..." adds Gradle properties.
@@ -30,8 +33,7 @@ NAME="burrow-android-${PREFIX}"
 IMAGE="localhost/burrow-android-rig:latest"
 SDK_VOLUME="burrow-android-sdk"
 GRADLE_VOLUME="burrow-android-gradle"
-MOON="${RIG_HOST:-dev@build-host.local}"
-RIG_ROOT="${RIG_ROOT:-/srv/dev/android-rig}"
+[ -n "${RIG_ROOT:-}" ] || { echo "rig: RIG_ROOT is required (no default); see the header" >&2; exit 2; }
 WORK="${RIG_ROOT}/${PREFIX}"
 EMU_CONTAINER="${NAME}-emu"
 # Off the default 5554/5037 so a rig never collides with another adb/emulator;
@@ -49,8 +51,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "rig: $*" >&2; exit 1; }
 
-require_moon() {
-  [ -e /dev/kvm ] || die "no /dev/kvm here; run this on moon (ssh ${MOON})"
+require_rig() {
+  [ -e /dev/kvm ] || die "no /dev/kvm here; run this on the rig host (ssh ${RIG_HOST:-<RIG_HOST>})"
   command -v podman >/dev/null || die "podman not found"
 }
 
@@ -84,20 +86,21 @@ run_in_image() {
 }
 
 cmd_push() {
-  # Runs on the dev box (rock). Copies clients/android without build output
+  # Runs on the dev box. Copies clients/android without build output
   # or node_modules; `gradle` installs node_modules inside the container.
+  [ -n "${RIG_HOST:-}" ] || die "RIG_HOST is required for push (no default): the rig's ssh target, user@host"
   local src
   src="$(cd "${here}/../.." && pwd)"
-  ssh "${MOON}" "mkdir -p '${WORK}/clients/android'"
+  ssh "${RIG_HOST}" "mkdir -p '${WORK}/clients/android'"
   rsync -a --delete \
     --exclude node_modules/ --exclude '.gradle/' --exclude 'build/' \
     --exclude '.idea/' --exclude 'local.properties' --exclude '*.iml' \
-    "${src}/" "${MOON}:${WORK}/clients/android/"
-  echo "rig: pushed ${src} -> ${MOON}:${WORK}/clients/android"
+    "${src}/" "${RIG_HOST}:${WORK}/clients/android/"
+  echo "rig: pushed ${src} -> ${RIG_HOST}:${WORK}/clients/android"
 }
 
 cmd_build_image() {
-  require_moon
+  require_rig
   podman build -t "${IMAGE}" -f "${here}/Containerfile" "${here}"
   podman volume exists "${SDK_VOLUME}" || podman volume create "${SDK_VOLUME}" >/dev/null
   podman volume exists "${GRADLE_VOLUME}" || podman volume create "${GRADLE_VOLUME}" >/dev/null
@@ -112,7 +115,7 @@ cmd_build_image() {
 }
 
 cmd_gradle() {
-  require_moon
+  require_rig
   [ -d "${WORK}/clients/android/android" ] || die "nothing at ${WORK}/clients/android; run 'rig.sh push' from the dev box"
   run_in_image gradle bash -c '
     set -euo pipefail
@@ -129,7 +132,7 @@ cmd_gradle() {
 }
 
 cmd_bundletool() {
-  require_moon
+  require_rig
   mkdir -p "${WORK}"
   run_in_image bt bash -c '
     set -euo pipefail
@@ -150,7 +153,7 @@ cmd_bundletool() {
 avd_name() { echo "burrow_${PREFIX}_api$1"; }
 
 cmd_emulator_up() {
-  require_moon
+  require_rig
   local api="${1:-35}"
   case "${api}" in 35|32) ;; *) die "api must be 35 or 32" ;; esac
   local avd
@@ -198,7 +201,7 @@ cmd_emulator_up() {
 }
 
 cmd_emulator_down() {
-  require_moon
+  require_rig
   if podman container exists "${EMU_CONTAINER}"; then
     podman rm -f "${EMU_CONTAINER}" >/dev/null
     echo "rig: removed ${EMU_CONTAINER}"
@@ -208,7 +211,7 @@ cmd_emulator_down() {
 }
 
 cmd_adb() {
-  require_moon
+  require_rig
   podman container exists "${EMU_CONTAINER}" || die "no emulator; run emulator-up first"
   podman exec -i "${EMU_CONTAINER}" adb -s "emulator-${EMU_PORT}" "$@"
 }
@@ -222,5 +225,5 @@ case "${sub}" in
   emulator-down) cmd_emulator_down ;;
   adb) cmd_adb "$@" ;;
   bundletool) cmd_bundletool "$@" ;;
-  *) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

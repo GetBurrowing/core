@@ -199,7 +199,7 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
     test "a member lands in the pre-join lobby, NOT straight in the call",
          %{conn: conn, ext: ext, meeting: meeting} do
-      # Task 01a09415, Harper's #4 divergence: a member used to be
+      # Task 01a09415, Sam's #4 divergence: a member used to be
       # auto-joined straight into the call with no camera preview, while a
       # guest got the prejoin lobby. A member now gets the SAME lobby. The
       # socket must NOT be `:in_meeting` on mount, and the lobby's

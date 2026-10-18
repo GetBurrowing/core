@@ -1,8 +1,8 @@
-# Finding — 3-dot menu "Edit message" deadclick (Marlowe user report 2026-05-12)
+# Finding — 3-dot menu "Edit message" deadclick (the design lead user report 2026-05-12)
 
-**Reported by:** Marlowe Quill, in #marlowe-playspace, 2026-05-12 ~22:55 UTC.
+**Reported by:** the design lead, in #design-playspace, 2026-05-12 ~22:55 UTC.
 **Symptom:** "When I click three-dots on a message and click 'edit message,' it looks like a deadclick."
-**Marlowe's testable hypothesis:** "There may be a significant delay between when a User requests to edit a message, and the message becomes editable."
+**The design lead's testable hypothesis:** "There may be a significant delay between when a User requests to edit a message, and the message becomes editable."
 
 This finding is part of Task 6 Stage 1 recon — verifying the **render contract (Section d)**. The 3-dot path is documented in the contract as the **PWA pattern** (Task 5's surface); the hover-pencil is the web pattern (Task 4's surface). Both should converge on the same inline editor.
 
@@ -52,19 +52,19 @@ So the static path predicts: instant edit + instant sheet unmount + instant edit
 
 `editing_message_id` is a top-level LV assign, not part of any stream. Phoenix LiveView's diff algorithm will detect that `editing_message_id` changed and re-evaluate every stream item whose template references it. For a channel with 50+ messages, that diff is large and the wire payload + DOM patch take perceptible time.
 
-**Why it'd look like a deadclick on mobile:** the diff might take 200–600 ms over a typical mobile WS link. Marlowe clicks, nothing visibly happens for a beat, then the editor swaps in. If she's tapped Edit a second time mid-delay, the second tap may land on a different control or the now-closed sheet, looking like nothing happened.
+**Why it'd look like a deadclick on mobile:** the diff might take 200–600 ms over a typical mobile WS link. The design lead clicks, nothing visibly happens for a beat, then the editor swaps in. If she's tapped Edit a second time mid-delay, the second tap may land on a different control or the now-closed sheet, looking like nothing happened.
 
 **Fix shape (if confirmed):** move `editing_message_id` into the stream's per-item assign by passing it through `chat_message.ex`'s attr more efficiently — or use `JS.toggle_class` / `JS.set_attribute` to flip a CSS state client-side instead of a server-roundtrip diff.
 
 ### H2 — Editor renders below the fold (LIKELY on mobile)
 
-The 3-dot sheet covers the bottom of the viewport. When it closes, the user's eye is on the sheet's last position, but the editor appeared above (in the message row that was below the sheet before the open). On a phone, the editor can be entirely off-screen when the sheet closes — Marlowe sees the sheet close and "nothing happens" because she'd need to scroll to find the new editor.
+The 3-dot sheet covers the bottom of the viewport. When it closes, the user's eye is on the sheet's last position, but the editor appeared above (in the message row that was below the sheet before the open). On a phone, the editor can be entirely off-screen when the sheet closes — the design lead sees the sheet close and "nothing happens" because she'd need to scroll to find the new editor.
 
 **Fix shape:** `scrollIntoView({block: 'center'})` on the editor's textarea inside the `MessageEditor` `mounted()` hook. Trivial.
 
 ### H3 — JS.push chain timing: `close_message_actions` wins (UNLIKELY but possible)
 
-Both pushes are dispatched. If `close_message_actions` arrives at the server first (network-frame ordering), then `editing_message_id` would be set AFTER `open_message_actions_id` was cleared, meaning the sheet unmount and the editor mount happen in the same diff. Visually this should still work, but if there's a stream-key mismatch (`editing_message_id` is a UUID string, `@msg.id` is also a UUID string — should match), the editor wouldn't render and Marlowe would see the sheet close and nothing else.
+Both pushes are dispatched. If `close_message_actions` arrives at the server first (network-frame ordering), then `editing_message_id` would be set AFTER `open_message_actions_id` was cleared, meaning the sheet unmount and the editor mount happen in the same diff. Visually this should still work, but if there's a stream-key mismatch (`editing_message_id` is a UUID string, `@msg.id` is also a UUID string — should match), the editor wouldn't render and the design lead would see the sheet close and nothing else.
 
 **Fix shape (if confirmed):** explicitly serialize: have the sheet's Edit button push only `edit_message_clicked` (no chain), and have the LV handler set BOTH `editing_message_id` and clear `open_message_actions_id` in the same `assign` call. One round-trip instead of two.
 
@@ -78,17 +78,17 @@ However: if someone refactored the sheet to `data-open`-toggle later, this WOULD
 
 ## What I tried for live measurement (and why I stopped)
 
-Goal: time `editClickedAt → editorVisibleAt` on Marlowe's live dev server.
+Goal: time `editClickedAt → editorVisibleAt` on the design lead's live dev server.
 
-1. Attempted `chromium.connectOverCDP("http://127.0.0.1:9222")` to attach to Marlowe's existing Chrome — **timed out** at the browser-level WS handshake.
+1. Attempted `chromium.connectOverCDP("http://127.0.0.1:9222")` to attach to the design lead's existing Chrome — **timed out** at the browser-level WS handshake.
 2. Pivoted to fresh `chromium.launch()` headless — hit Playwright-version-vs-installed-chromium mismatch (cache had 1217, code wanted 1223). Fixed by moving the script into `~/saru-tools/` to resolve the local `playwright@1.59` install. Then:
 3. Hit `net::ERR_CONNECTION_REFUSED` on `127.0.0.1:4008` — dev server on 4008 had died between earlier-observed-Chrome-tab and my test. Port 4004 was alive but returned 500 on `/dev/login`; couldn't get a clean login.
 
-Rather than burn another 20+ minutes restarting a fresh server, I'm filing this static-analysis finding and recommending a one-liner Marlowe can paste into her DevTools console (next section) to capture the actual click-to-editor-visible latency in her live environment. Stage 5's Playwright spec will codify the measurement properly once a known-good dev server is running.
+Rather than burn another 20+ minutes restarting a fresh server, I'm filing this static-analysis finding and recommending a one-liner the design lead can paste into her DevTools console (next section) to capture the actual click-to-editor-visible latency in her live environment. Stage 5's Playwright spec will codify the measurement properly once a known-good dev server is running.
 
 ---
 
-## Diagnostic snippet Marlowe can paste
+## Diagnostic snippet the design lead can paste
 
 Open DevTools console on the chat page, paste this, then click 3-dot → Edit message:
 
@@ -122,23 +122,23 @@ The console logs will show:
 - `Edit click captured at <ms>` immediately on the click
 - `edit-click → editor: <N> ms` once the editor's textarea appears
 
-If `N > 500ms` consistently, H1 (full-stream re-render) is confirmed. If `N` is small but Marlowe still says "deadclick," H2 (editor below the fold) is the cause.
+If `N > 500ms` consistently, H1 (full-stream re-render) is confirmed. If `N` is small but the design lead still says "deadclick," H2 (editor below the fold) is the cause.
 
 ---
 
 ## Recommended call
 
 This finding is **Stage 1 output** — it documents the gap, doesn't fix it. The fix belongs in either:
-- A new Suite Task (if Marlowe wants to address it before announcing editable messages), or
+- A new Suite Task (if the design lead wants to address it before announcing editable messages), or
 - The Stage 4 manual_approval gate of Task 11 (Chat reimagining), which already owns the editable-messages UI.
 
 I lean toward filing a new task — keeps Task 6's scope as verification, not bug-fixing. **Stage 2 onward should proceed regardless**; the bug doesn't block the API/realtime/permission tests from running.
 
 ---
 
-## UPDATE 2026-05-12 (post Marlowe desktop repro)
+## UPDATE 2026-05-12 (post the design lead desktop repro)
 
-**Marlowe tested on desktop and reports:**
+**The design lead tested on desktop and reports:**
 - Pencil → nothing happens
 - 3-dot → Edit message → sheet auto-closes, message stays uneditable
 - No other message becomes editable either
@@ -187,4 +187,4 @@ The `cancel_edit` handler at `chat_live.ex:246–251` needs the same treatment �
 
 The `apply_save_edit` path (used by save) always calls `stream_insert_message` because the message content itself changed and needed broadcasting. The `edit_message_clicked` path doesn't change the message — it just opens the UI — so the implementer didn't think to stream-insert. But the stream pattern requires re-insert ANY time we want a row's parent assigns to propagate.
 
-This is a one-line miss in the implementation. Production impact: **the feature is invisible to users on the canonical edit path.** Stage 2-5 verification would catch it (cross-client sync test in Stage 5 would fail loudly), but Stage 1's grep + Marlowe's manual report caught it sooner.
+This is a one-line miss in the implementation. Production impact: **the feature is invisible to users on the canonical edit path.** Stage 2-5 verification would catch it (cross-client sync test in Stage 5 would fail loudly), but Stage 1's grep + the design lead's manual report caught it sooner.

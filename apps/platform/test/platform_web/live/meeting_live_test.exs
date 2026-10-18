@@ -1058,7 +1058,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # The marker (and the pane-id) live on the wrapping `<div>` around
       # the `live_render` of the embedded ChatLive, not on the embed's
       # own root. Co-locating both attributes on a single element keeps
-      # the future-Rowan grep pivot intact.
+      # the future-Alex grep pivot intact.
       assert html =~
                ~r/data-intent-panel-host="true"[^>]*data-pane="meeting-chat-panel"|data-pane="meeting-chat-panel"[^>]*data-intent-panel-host="true"/
     end
@@ -6502,10 +6502,10 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "staging then unstaging a member writes no invite", %{conn: conn, project: project} do
-      invitee = seed_invitee("Marlowe Sun", "marlowe.sun@example.com")
+      invitee = seed_invitee("Robin Sun", "robin.sun@example.com")
 
       view = open_create_sheet(conn)
-      search_invites(view, "Marlowe Sun")
+      search_invites(view, "Robin Sun")
 
       view
       |> element(~s([data-role="meeting-invite-candidate"][data-user-id="#{invitee.id}"]))
@@ -8567,7 +8567,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # participant_rail/1`'s hold-to-talk gate leans on: `agent_id_of/1`
     # there reads `%{participant_type: "agent", participant_id: id}` and
     # requires `id` to be binary, or the per-agent Ask/hold-to-talk
-    # control silently disappears for that row (Harper's "I still don't
+    # control silently disappears for that row (Blake's "I still don't
     # see the ASK button" report). This is the ONE function that produces
     # `participant_type: "agent"` for a live meeting roster row
     # (`build_meeting_participants/1` maps every row through it), so if
@@ -9135,7 +9135,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html = render(view)
 
       # The SVG path from shell.html.heex:253 — mirroring the shell CC
-      # button so the visual language stays consistent (Rowan's hero
+      # button so the visual language stays consistent (Alex's hero
       # icons-only rule). No emoji anywhere in the caption UI.
       assert html =~ "M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5z"
     end
@@ -9670,7 +9670,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, view, html} =
         conn
-        |> with_meet_host("meet.example.com")
+        |> with_meet_host("meet.example.org")
         |> live("/#{meeting.slug}/#{token}")
 
       assigns = :sys.get_state(view.pid).socket.assigns
@@ -10421,7 +10421,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _} =
         IntentQueue.transition(meeting.id, row.id, :dispatch_failed, %{
           dispatch_failure_reason: :no_runtime,
-          subagent_id: "higgins.moon"
+          subagent_id: "higgins.test-host"
         })
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
@@ -10431,7 +10431,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html = render_click(view, "toggle_intents_expanded", %{})
 
       assert html =~ ~s(data-role="intents-expanded")
-      assert html =~ "higgins.moon"
+      assert html =~ "higgins.test-host"
       assert html =~ "no_runtime"
     end
 
@@ -10887,7 +10887,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {agent, _runtime} = create_linked_agent!()
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "running_intent"})
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
-      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.test-host", :working)
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_hook(view, "meeting_viewport", %{"below" => true})
@@ -10911,7 +10911,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert {:ok, %{status: :acked}} = IntentQueue.get(meeting.id, row.id)
 
       # The ack resolves it.
-      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :cancel_honored)
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.test-host", :cancel_honored)
 
       html = render(view)
       assert html =~ ~s(data-intent-status="cancelled")
@@ -11033,7 +11033,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       {:ok, row} = enqueue_intent(meeting, %{classified_intent: "live_wrong_label"})
       {:ok, _} = force_status(meeting, row, :dispatched, %{target_agent_id: agent.id})
-      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.moon", :working)
+      {:ok, _} = IntentQueue.ack(meeting.id, row.id, "higgins.test-host", :working)
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_hook(view, "meeting_viewport", %{"below" => true})
@@ -11054,7 +11054,7 @@ defmodule PlatformWeb.MeetingLiveTest do
                        event: "intent_cancelled",
                        payload: %{
                          intent_id: cancelled_id,
-                         subagent_id: "higgins.moon",
+                         subagent_id: "higgins.test-host",
                          reason: :wrong_intent,
                          corrected_intent: "schedule_review",
                          corrected_target_agent_id: nil
@@ -11576,7 +11576,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "the canvas tile occupies the same cell geometry as a face tile, whatever it contains",
          %{conn: conn, meeting: meeting, space: space} do
-      # Rowan rejected the first build partly because content dictated the
+      # Alex rejected the first build partly because content dictated the
       # tile's size: a tall canvas grew its cell and pushed a neighbouring
       # face tile out of line. Two canvases are rendered here — a one-liner
       # and a 200-block monster — and the assertion is that the tile's

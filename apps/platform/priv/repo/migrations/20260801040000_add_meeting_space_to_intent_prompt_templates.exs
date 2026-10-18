@@ -59,7 +59,7 @@ defmodule Platform.Repo.Migrations.AddMeetingSpaceToIntentPromptTemplates do
   `signal.metadata.space_id` — disagreeing with the prompt about where
   results go.
 
-  Rowan asked for this directly in DM; there is no task behind it. The
+  The operator asked for this directly in DM; there is no task behind it. The
   sibling half of the same change is `Router.put_dispatch_space/2` +
   `AgentResponder.dispatch_space_id/1`, which invite the recipient INTO
   the space these bodies name.

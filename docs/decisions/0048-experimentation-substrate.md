@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-08-09
-**Author:** Rowan Ellis / Brosnan
+**Author:** the product owner / Brosnan
 **Related:** ADR-0046 (Design and Architecture Phases in the Planning Lifecycle — the planning lifecycle these experiments perturb), ADR-0025 (Task Router / dispatch — dispatch is the unit at which a prompt variant is delivered), ADR-0005 (Event Stream — where promotion events are recorded)
 
 ---

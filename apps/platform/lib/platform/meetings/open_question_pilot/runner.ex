@@ -58,13 +58,22 @@ defmodule Platform.Meetings.OpenQuestionPilot.Runner do
     reflection_cap: 40,
     selection_cap: 120,
     seed: 20_260_929,
-    base_url: "http://192.0.2.200:8085/v1",
+    base_url: "http://localhost:8085/v1",
     model: "classifier",
     timeout_ms: 120_000
   ]
 
-  @doc "The defaults the Mix task falls back to."
-  def defaults, do: @defaults
+  @doc """
+  The defaults the Mix task falls back to. `INTENT_EVAL_BASE_URL`, when set
+  and not blank, replaces the shipped `base_url` (the same variable the
+  intent-eval harness reads, `Platform.Meetings.IntentEval.Harness`).
+  """
+  def defaults do
+    case Platform.Meetings.IntentEval.Harness.env_base_url() do
+      nil -> @defaults
+      url -> Keyword.put(@defaults, :base_url, url)
+    end
+  end
 
   @doc "The feedback a privacy violation carries."
   def privacy_feedback, do: @privacy_feedback
@@ -81,7 +90,7 @@ defmodule Platform.Meetings.OpenQuestionPilot.Runner do
   """
   @spec run(keyword()) :: map()
   def run(opts) do
-    opts = Keyword.merge(@defaults, opts)
+    opts = Keyword.merge(defaults(), opts)
     out_dir = Keyword.fetch!(opts, :out_dir)
     live = Keyword.get(opts, :live_module, Platform.Agents.Providers.Ollama)
     File.mkdir_p!(Path.join(out_dir, "cassettes"))

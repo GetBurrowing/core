@@ -51,7 +51,7 @@ describe("buildSections", () => {
     expect(sections[1].slug).toBe("smileys-emotion")
   })
 
-  // The set is static and system-wide — Marlowe's no-personalisation decision —
+  // The set is static and system-wide — Robin's no-personalisation decision —
   // so a label implying it learned from this user would be a lie.
   it("labels the first section Common, never a recency claim", () => {
     const [first] = buildSections(EMOJI, CATEGORIES)

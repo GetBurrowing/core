@@ -1000,7 +1000,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # `prior_chunks` is the sliding window of the previous N transcript
   # chunks for this room, newest-first, EXCLUDING the current chunk.
   # It's a prompt-render input only — it is NOT part of the dedupe key
-  # (Rowan's idempotency requirement: same utterance dedupes regardless
+  # (the operator's idempotency requirement: same utterance dedupes regardless
   # of surrounding conversation).
   @doc false
   @spec classify_and_enqueue(map(), map(), [map()], map()) :: :ok
@@ -1496,7 +1496,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # Per-agent hold-to-talk: the human pressed a specific agent's row, so
   # the target is already decided and rides in on the press window. It
   # wins over both a name the transcriber happened to catch and the
-  # configured default — pressing Octavius and then saying "Rowan" still
+  # configured default — pressing Octavius and then saying "Alex" still
   # reaches Octavius, which is what holding Octavius's row means. Only an
   # untargeted press (no agent on the window) falls through to resolving
   # the target from the words.
@@ -2014,7 +2014,7 @@ defmodule Platform.Meetings.IntentClassifier do
       {:null_role, :off_roster_addressee} ->
         emit_addressee_nulled(room_id, intent, target_role)
 
-        # RULING (task 01a08fde, 2026-09-11, Rowan: gate). An ask
+        # RULING (task 01a08fde, 2026-09-11, the operator: gate). An ask
         # aimed at someone who is not on the roster is still that
         # ask: migration 20260902140000 (body lines 128-135, 218)
         # tells the model to KEEP the intent and answer

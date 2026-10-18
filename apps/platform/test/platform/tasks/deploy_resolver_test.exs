@@ -11,7 +11,7 @@ defmodule Platform.Tasks.DeployResolverTest do
     "name" => "production",
     "type" => "docker_compose",
     "config" => %{
-      "host" => "dev@192.0.2.234",
+      "host" => "queen@192.0.2.234",
       "stack_path" => "~/docker/stacks/my-app",
       "image_registry" => "ghcr.io/org/repo",
       "watchtower" => true
@@ -45,7 +45,7 @@ defmodule Platform.Tasks.DeployResolverTest do
       project = create_project()
       assert {:ok, target} = DeployResolver.resolve(project, "production")
       assert target["type"] == "docker_compose"
-      assert target["config"]["host"] == "dev@192.0.2.234"
+      assert target["config"]["host"] == "queen@192.0.2.234"
     end
 
     test "resolves a second target" do
@@ -107,7 +107,7 @@ defmodule Platform.Tasks.DeployResolverTest do
 
       assert item_map["deploy.target.name"] == "production"
       assert item_map["deploy.target.type"] == "docker_compose"
-      assert item_map["deploy.target.config.host"] == "dev@192.0.2.234"
+      assert item_map["deploy.target.config.host"] == "queen@192.0.2.234"
       assert item_map["deploy.target.config.stack_path"] == "~/docker/stacks/my-app"
       assert item_map["deploy.target.config.image_registry"] == "ghcr.io/org/repo"
       assert item_map["deploy.target.config.watchtower"] == "true"
@@ -147,7 +147,7 @@ defmodule Platform.Tasks.DeployResolverTest do
 
       assert env["DEPLOY_TARGET_NAME"] == "production"
       assert env["DEPLOY_TARGET_TYPE"] == "docker_compose"
-      assert env["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert env["DEPLOY_HOST"] == "queen@192.0.2.234"
       assert env["DEPLOY_STACK_PATH"] == "~/docker/stacks/my-app"
       assert env["DEPLOY_IMAGE_REGISTRY"] == "ghcr.io/org/repo"
       assert env["DEPLOY_WATCHTOWER"] == "true"
@@ -172,14 +172,14 @@ defmodule Platform.Tasks.DeployResolverTest do
       env = DeployResolver.to_env(@docker_target, lease)
 
       # Deploy vars present
-      assert env["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert env["DEPLOY_HOST"] == "queen@192.0.2.234"
       # Lease vars merged
       assert env["EXTRA_VAR"] == "secret"
     end
 
     test "without lease, no extra vars" do
       env = DeployResolver.to_env(@docker_target, nil)
-      assert env["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert env["DEPLOY_HOST"] == "queen@192.0.2.234"
       refute Map.has_key?(env, "GITHUB_TOKEN")
     end
   end
@@ -195,7 +195,7 @@ defmodule Platform.Tasks.DeployResolverTest do
       assert lease.run_id == "run-123"
 
       env = CredentialLease.to_env(lease)
-      assert env["DEPLOY_HOST"] == "dev@192.0.2.234"
+      assert env["DEPLOY_HOST"] == "queen@192.0.2.234"
       assert env["DEPLOY_STACK_PATH"] == "~/docker/stacks/my-app"
       assert env["DEPLOY_TARGET_NAME"] == "production"
     end
@@ -232,7 +232,7 @@ defmodule Platform.Tasks.DeployResolverTest do
 
       assert item_map["deploy.target.name"] == "production"
       assert item_map["deploy.target.type"] == "docker_compose"
-      assert item_map["deploy.target.config.host"] == "dev@192.0.2.234"
+      assert item_map["deploy.target.config.host"] == "queen@192.0.2.234"
     end
 
     test "hydrate_for_run without deploy_target does not push deploy items" do

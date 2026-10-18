@@ -149,7 +149,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingAttendanceFollowupTest do
     test "a well-shaped followups list still returns {:error, :not_implemented}" do
       payload = %{
         "followups" => [
-          "Harper: We agreed X and Y — do you still want to own the vendor call?",
+          "Sam: We agreed X and Y — do you still want to own the vendor call?",
           "Alex: The RFP timeline shifted to Q3 — does that still work?"
         ]
       }

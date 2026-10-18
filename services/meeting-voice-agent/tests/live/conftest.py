@@ -11,7 +11,7 @@ def clean_mva_env():
     test observes — correct for tests that assert on config defaults. It is
     wrong here: these tests are opt-in (`pytest -m live_infra`) specifically
     BECAUSE they need real ambient config (`MVA_MCP_BASE_URL`,
-    `MVA_MCP_AUTH_TOKEN`, or overridden wave/moon URLs) to point at whatever
+    `MVA_MCP_AUTH_TOKEN`, or overridden wave/test-host URLs) to point at whatever
     is actually live. Wiping it would make every live test look unreachable
     regardless of what the operator configured. A no-op fixture of the same
     name shadows the outer one for this directory (pytest fixture resolution:

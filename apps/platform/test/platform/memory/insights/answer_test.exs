@@ -52,7 +52,7 @@ defmodule Platform.Memory.Insights.AnswerTest do
       question = question!(person, action: %{"target" => "org/page/hosts.md"})
 
       assert {:ok, %Insight{state: "done"} = done} =
-               Insights.answer(question.id, Scope.for_user(person), "  Rowan owns it.  ",
+               Insights.answer(question.id, Scope.for_user(person), "  Alex owns it.  ",
                  canvas_id: canvas_id
                )
 
@@ -64,13 +64,13 @@ defmodule Platform.Memory.Insights.AnswerTest do
       assert done.artefact_ref == "journal:#{entry.id}"
 
       assert entry.content =~
-               "Answer to: Who owns the staging host now? - Rowan owns it. " <>
+               "Answer to: Who owns the staging host now? - Alex owns it. " <>
                  "(source: briefing canvas #{canvas_id}; " <>
                  "evidence: journal:org/journal/2026-10-17.md#L4)"
 
       # The question names a page, so the Historian gets a correction block.
       assert entry.content =~ ~s(<correction target="org/page/hosts.md">)
-      assert entry.content =~ "Answer: Rowan owns it.\n</correction>"
+      assert entry.content =~ "Answer: Alex owns it.\n</correction>"
     end
 
     test "an untargeted answer carries no correction block, and an answer cannot open a tag" do
@@ -108,7 +108,7 @@ defmodule Platform.Memory.Insights.AnswerTest do
         set: [expires_at: DateTime.add(DateTime.utc_now(), -60, :second)]
       )
 
-      assert {:error, :expired} = Insights.answer(question.id, Scope.for_user(person), "Rowan.")
+      assert {:error, :expired} = Insights.answer(question.id, Scope.for_user(person), "Alex.")
       assert journal_entries() == []
     end
   end
@@ -141,7 +141,7 @@ defmodule Platform.Memory.Insights.AnswerTest do
                CanvasDocument.get_node(document, "question-" <> key)
 
       # Add to briefing lands on the SAME day's canvas.
-      line = insight!(addressee: addressee, body: "Deploys moved to moon.")
+      line = insight!(addressee: addressee, body: "Deploys moved to host-b.")
       assert {:ok, _} = Insights.act(line.id, Scope.for_user(actor))
       assert [%Briefing{items: items}] = Repo.all(Briefing)
       assert map_size(items) == 2

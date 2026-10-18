@@ -86,7 +86,7 @@ defmodule PlatformWeb.LiveAuthTest do
 
     test "tolerates a display-name string in :current_user (legacy shape)" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :current_user, "Marlowe Quill")
+      socket = Phoenix.Component.assign(socket, :current_user, "Robin Park")
 
       {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket)
 
@@ -155,7 +155,7 @@ defmodule PlatformWeb.LiveAuthTest do
           :default,
           %{},
           %{},
-          Phoenix.Component.assign(socket, :current_user, "Marlowe")
+          Phoenix.Component.assign(socket, :current_user, "Robin")
         )
 
       assert anon.assigns.access_scope == %Scope{}

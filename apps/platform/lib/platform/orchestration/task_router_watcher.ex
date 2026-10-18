@@ -539,7 +539,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   rollup-merge finalizer records the `merged_into_rollup_at` stamp AND
   every review-stage validation is `passed`. If the finalizer's async
   transition was dropped (dead broadcast, missed retry, etc.), the
-  task sits at `in_review` forever and Rowan surfaces "why is this
+  task sits at `in_review` forever and the operator surfaces "why is this
   stalled" hours later. This sweep is the safety net: every reconcile
   tick (5 min) we walk stack members at `in_review` with a merge
   stamp that have been idle for `@in_review_stall_debounce_minutes`,

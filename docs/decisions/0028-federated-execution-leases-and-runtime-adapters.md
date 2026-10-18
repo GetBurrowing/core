@@ -3,7 +3,7 @@
 **Status:** Proposed  
 **Date:** 2026-03-24  
 **Related:** ADR 0011 (Execution Runners), ADR 0013 (Attention Routing), ADR 0014 (Agent Federation and External Runtimes), ADR 0018 (Tasks Persistent Model and Plan Engine), ADR 0025 (Task Router and Execution Orchestration), ADR 0026 (Task Execution Spaces)  
-**Deciders:** Rowan Ellis
+**Deciders:** the product owner
 
 ---
 

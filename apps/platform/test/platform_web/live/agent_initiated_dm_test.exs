@@ -3,7 +3,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
   An agent opening a DM with a human (task 01a04ad4), and the three rules that
   must survive it.
 
-  Harper asked for this verbatim: *"I want you and any other agent to be able
+  Sam asked for this verbatim: *"I want you and any other agent to be able
   to DM me at anytime, for anything, especially if there is something YOU
   ACTUALLY NEED."* Measured at `ead7ddb2`, an agent could not, by three
   independent mechanisms: `tool_definitions/0` carried no DM tool at all
@@ -197,7 +197,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
   describe "an agent opening a DM with a human" do
     test "the human's rail shows it and the message body renders in their client", %{conn: conn} do
       agent = insert_agent(%{name: "Higgins Prime"})
-      human = insert_user(name: "Harper Parker")
+      human = insert_user(name: "Sam Moreno")
       body = "I need a call on the deploy target before I can finish this."
 
       assert {:ok, %{space_id: space_id, message_id: message_id}} =

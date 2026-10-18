@@ -9,6 +9,7 @@ must be able to FAIL is shown failing once (a negative control), so a PASS
 here means the check discriminated.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -60,7 +61,10 @@ class Base(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def init(self):
-        code, text = run_proof(self.env, "init", "--zone", "example.com", "--dir", self.dir)
+        code, text = run_proof(
+            self.env, "init", "--zone", "example.com", "--image-namespace", "example",
+            "--dir", self.dir,
+        )  # fmt: skip
         self.assertEqual(code, 0, text)
         return json.loads(text)
 
@@ -99,10 +103,29 @@ class InitTest(Base):
             ),
         )
         self.assertIs(m["services"]["meetings"], False)
+        # Task 01a14b9e: no default namespace or core pin; init takes them.
+        self.assertEqual(m["images"]["image_namespace"], "example")
+        self.assertNotIn("core-platform", m["images"].get("refs", {}))
+
+    def test_init_pins_the_core_image_only_when_asked(self):
+        code, text = run_proof(
+            self.env, "init", "--zone", "example.com", "--image-namespace", "acme",
+            "--core-image", "docker.io/acme/suite-core:core-0123456", "--dir", self.dir,
+        )  # fmt: skip
+        self.assertEqual(code, 0, text)
+        m = load(os.path.join(self.dir, "install.toml"))
+        self.assertEqual(m["images"]["image_namespace"], "acme")
         self.assertEqual(
-            m["images"]["refs"]["core-platform"],
-            "docker.io/example/suite-core:feat-01a0d6ab-multiarch",
+            m["images"]["refs"]["core-platform"], "docker.io/acme/suite-core:core-0123456"
         )
+
+    def test_init_without_an_image_namespace_refuses_naming_it(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+            run_proof(self.env, "init", "--zone", "example.com", "--dir", self.dir)
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("the following arguments are required: --image-namespace", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "install.toml")))
 
     def test_default_init_keeps_the_hosted_openai_endpoints(self):
         # Positive control for the override test below: without flags the
@@ -120,6 +143,8 @@ class InitTest(Base):
             "init",
             "--zone",
             "example.com",
+            "--image-namespace",
+            "example",
             "--dir",
             self.dir,
             "--embed-url",
@@ -145,8 +170,9 @@ class InitTest(Base):
 
     def test_no_transcription_drops_the_stt_endpoint_reference(self):
         code, text = run_proof(
-            self.env, "init", "--zone", "example.com", "--dir", self.dir, "--no-transcription"
-        )
+            self.env, "init", "--zone", "example.com", "--image-namespace", "example",
+            "--dir", self.dir, "--no-transcription",
+        )  # fmt: skip
         self.assertEqual(code, 0, text)
         m = load(os.path.join(self.dir, "install.toml"))
         self.assertIs(m["meetings"]["transcription"], False)

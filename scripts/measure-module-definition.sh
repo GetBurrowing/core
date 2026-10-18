@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Measure cold `mix compile` wall time of apps/platform per Elixir
-# `module_definition` variant (task 01a0fd73). MOON ONLY.
+# `module_definition` variant (task 01a0fd73). TEST-RIG HOST ONLY:
+# it refuses to run unless `hostname -s` equals RIG_HOST.
 #
 #   scripts/measure-module-definition.sh <mirror-ref> [variants...]
 #
@@ -17,7 +18,7 @@
 # row's exit_code non-zero and it is excluded from the medians.
 #
 # METHOD
-#   * The ref is cloned once from the moon mirror; `mix deps.get` runs ONCE.
+#   * The ref is cloned once from the test rig's mirror; `mix deps.get` runs ONCE.
 #     The hex/mix cache is copied once from $RIG_DIR/cache and reused by every
 #     run, and no deps.get runs between timed runs, so deps are constant.
 #   * Every run is a fresh container that removes apps/platform/_build, rebuilds
@@ -27,7 +28,7 @@
 #     MIX_ENV=test mix compile`
 #     with `date +%s%N` (the slim image has no /usr/bin/time).
 #   * Rounds are INTERLEAVED: odd rounds run the variants in the given order,
-#     even rounds in reverse (c,i / i,c / c,i), so drift in moon's shared load
+#     even rounds in reverse (c,i / i,c / c,i), so drift in the rig's shared load
 #     does not land on one variant.
 #   * CPU pinning uses `taskset -c $CPUS`, inherited by podman/crun, exactly as
 #     core-test.sh does. `podman run --cpuset-cpus` does NOT work here: the
@@ -37,12 +38,13 @@
 #     guard against a variant that "won" by compiling less: it must be equal
 #     across variants.
 #
-# Environment:
+# Environment (RIG_HOST, RIG_DIR and MIRROR are REQUIRED, with no default):
+#   RIG_HOST    short host name of the test rig; the script runs only there
 #   RUNS        rounds per variant (default 3)
 #   CPUS        CPU list (default 0-5,8-13, core-test.sh's CORE_TEST_CPUS default)
 #   IMAGE       default localhost/core-test:1.20.4-otp-28-slim-cc
-#   RIG_DIR     default /srv/dev/rigs/elixir-1.20.4-01a0fd73 (clone, cache, TSV, log)
-#   MIRROR      default /srv/dev/mirrors/core.git
+#   RIG_DIR     rig work dir (clone, cache, TSV, log)
+#   MIRROR      bare mirror of core on the rig
 #   CTR_PREFIX  default core-test-task_01a0fd73-f6b1-7001-8749-ba0fc4d4ef84-measure
 #   WARM_CHECK=1  after the last run, compile the OTHER variant on the warm
 #               _build and report whether Mix recompiled anything.
@@ -53,7 +55,7 @@
 # Exit: 0 measurement completed (failed runs are DATA) | 2 precondition error.
 set -uo pipefail
 
-usage() { sed -n '2,50p' "$0"; exit 2; }
+usage() { sed -n '2,55p' "$0"; exit 2; }
 [ $# -ge 1 ] || usage
 REF="$1"; shift
 VARIANTS=("$@")
@@ -62,15 +64,16 @@ VARIANTS=("$@")
 RUNS="${RUNS:-3}"
 CPUS="${CPUS:-0-5,8-13}"
 IMAGE="${IMAGE:-localhost/core-test:1.20.4-otp-28-slim-cc}"
-RIG_DIR="${RIG_DIR:-/srv/dev/rigs/elixir-1.20.4-01a0fd73}"
-MIRROR="${MIRROR:-/srv/dev/mirrors/core.git}"
 CTR_PREFIX="${CTR_PREFIX:-core-test-task_01a0fd73-f6b1-7001-8749-ba0fc4d4ef84-measure}"
 
 log() { echo "$(date -u '+%FT%TZ') [measure-module-definition $$] $*"; }
 die() { log "ERROR: $*" >&2; exit 2; }
 
-if [ "$(hostname -s)" != "moon" ]; then
-    echo "measure-module-definition.sh runs BEAM and must only run on moon (found host $(hostname -s))" >&2
+for v in RIG_HOST RIG_DIR MIRROR; do
+    [ -n "${!v:-}" ] || die "$v is required (no default); see the header"
+done
+if [ "$(hostname -s)" != "$RIG_HOST" ]; then
+    echo "measure-module-definition.sh runs BEAM and must only run on the test rig $RIG_HOST (found host $(hostname -s))" >&2
     exit 2
 fi
 case "$RUNS" in ''|*[!0-9]*|0) die "RUNS must be a positive integer, got '$RUNS'" ;; esac

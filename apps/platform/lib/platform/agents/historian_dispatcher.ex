@@ -1185,7 +1185,7 @@ defmodule Platform.Agents.HistorianDispatcher do
               # live pings. Without this, every named participant in the last
               # 24h of chat activity received a `:multi_mention` notification
               # into Higgins's system space on every Historian pass (surfaced
-              # 2026-07-10 by Rowan noticing Dalton was receiving Historian
+              # 2026-07-10 by the operator noticing Dalton was receiving Historian
               # dispatches meant for Higgins).
               # See `Platform.Chat.AttentionRouter.mention_scan_enabled?/1`.
               # `role_scoped_dispatch` binds this instruction to the holder of

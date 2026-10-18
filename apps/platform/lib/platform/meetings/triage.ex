@@ -639,7 +639,7 @@ defmodule Platform.Meetings.Triage do
   # Count non-deleted tasks in this project whose `metadata["source"]`
   # equals the configured source string. This is the baseline the cap
   # gates against — filed-under-cap tasks pick up `needs_promotion:
-  # true` so Rowan can review the backlog burst without letting it grow
+  # true` so the operator can review the backlog burst without letting it grow
   # unbounded.
   defp existing_triage_count(project_id, source) do
     Repo.aggregate(

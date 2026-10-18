@@ -32,7 +32,7 @@ carrying the reason, `x-github-event`, `x-github-delivery`, and `repo_url`.
 Checked against prod, not assumed:
 
 - GitHub hook `602961215` on `Startup-Suite/core` posts to
-  `https://suite.example.com/api/webhooks/github`, `content_type: json`,
+  `https://burrow.example.com/api/webhooks/github`, `content_type: json`,
   events `check_suite`, `pull_request`, `workflow_run`, and **has a secret set**
   (`gh api repos/Startup-Suite/core/hooks/602961215` shows `"secret":"********"`;
   the value is not readable through the API). Every real delivery is already
@@ -52,8 +52,8 @@ auto-merge, no changelog rows.
 
 ### The one piece of good news
 
-`GITHUB_WEBHOOK_SECRET` is **already provisioned** on moon — a 64-hex value in
-`/srv/dev/core-ops/secrets/moon-production/platform.secrets.env`, already
+`GITHUB_WEBHOOK_SECRET` is **already provisioned** on test-host — a 64-hex value in
+`~/core-ops/secrets/test-host-production/platform.secrets.env`, already
 injected into the running `core-platform` container's environment. The
 deployed release simply never read it.
 
@@ -101,10 +101,10 @@ open('/tmp/payload.json','w',encoding='utf-8').write(
     json.dumps(d['request']['payload'], separators=(',',':'), ensure_ascii=False))
 "
 
-# 3. HMAC it with the prod secret, on moon, without ever printing the secret.
-cat /tmp/payload.json | ssh dev@build-host.local "
+# 3. HMAC it with the prod secret, on test-host, without ever printing the secret.
+cat /tmp/payload.json | ssh deploy@test-host "
   SEC=\$(awk -F= '/^GITHUB_WEBHOOK_SECRET=/{print substr(\$0,23)}' \
-    /srv/dev/core-ops/secrets/moon-production/platform.secrets.env)
+    ~/core-ops/secrets/test-host-production/platform.secrets.env)
   openssl dgst -sha256 -hmac \"\$SEC\" -hex | tail -1"
 ```
 
@@ -114,9 +114,9 @@ The hex from step 3 must equal the `expect:` value from step 2 (minus its
 If it matches: **no cutover is required.** Deploy, then run Step 2.
 If it does not match: run Step 1 before or with the merge.
 
-> Access note: use `ssh dev@build-host.local`, not the `ssh hive` alias the LiveKit
-> runbook uses. `hive` resolves to the same machine as user `queen`, which has
-> no `podman` on `PATH` and cannot read `/srv/dev/core-ops`.
+> Access note: use `ssh deploy@test-host`, not the `ssh build-host` alias the LiveKit
+> runbook uses. `build-host` resolves to the same machine as a different user, which has
+> no `podman` on `PATH` and cannot read `~/core-ops`.
 
 ## Step 1 — Cutover / rotation
 
@@ -141,11 +141,11 @@ GitHub catches up.
 NEW=$(openssl rand -hex 32)   # store in the ops vault before going further
 ```
 
-1. **Pin the current value into the project row.** On moon, with `OLD` being
+1. **Pin the current value into the project row.** On test-host, with `OLD` being
    whatever `GITHUB_WEBHOOK_SECRET` is today:
 
    ```bash
-   ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc '
+   ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc '
      project = Platform.Repo.get_by(Platform.Tasks.Project,
        repo_url: \"https://github.com/Startup-Suite/core\")
      {:ok, _} = Platform.Tasks.update_project(project, %{
@@ -155,17 +155,17 @@ NEW=$(openssl rand -hex 32)   # store in the ops vault before going further
 
 2. **Set the new value in the env file** —
    `GITHUB_WEBHOOK_SECRET=$NEW` in
-   `/srv/dev/core-ops/secrets/moon-production/platform.secrets.env` —
+   `~/core-ops/secrets/test-host-production/platform.secrets.env` —
    and restart:
 
    ```bash
-   ssh dev@build-host.local "systemctl --user restart core-platform"
+   ssh deploy@test-host "systemctl --user restart core-platform"
    ```
 
 3. **Verify the BEAM holds a secret** (prints `true`, never the value):
 
    ```bash
-   ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc '
+   ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc '
      IO.puts(is_binary(Application.get_env(:platform, :github_webhook_secret)))'"
    ```
 
@@ -176,7 +176,7 @@ NEW=$(openssl rand -hex 32)   # store in the ops vault before going further
    ```bash
    gh api --method PATCH repos/Startup-Suite/core/hooks/602961215 \
      -f 'config[secret]='"$NEW" \
-     -f 'config[url]=https://suite.example.com/api/webhooks/github' \
+     -f 'config[url]=https://burrow.example.com/api/webhooks/github' \
      -f 'config[content_type]=json'
    ```
 
@@ -186,7 +186,7 @@ NEW=$(openssl rand -hex 32)   # store in the ops vault before going further
 5. **Confirm** with Step 2, then **remove the parked old value**:
 
    ```bash
-   ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc '
+   ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc '
      project = Platform.Repo.get_by(Platform.Tasks.Project,
        repo_url: \"https://github.com/Startup-Suite/core\")
      {:ok, _} = Platform.Tasks.update_project(project, %{
@@ -229,7 +229,7 @@ Expected:
 - **No** `[Webhook] Rejecting GitHub webhook` warning in the log.
 
 ```bash
-ssh dev@build-host.local "podman logs --since 5m core-platform 2>&1 | grep '\[Webhook\]'"
+ssh deploy@test-host "podman logs --since 5m core-platform 2>&1 | grep '\[Webhook\]'"
 ```
 
 A `[Webhook] Evaluated ci_passed validation … as passed` line appears only when
@@ -253,7 +253,7 @@ set at all on the GitHub side.
 ## Step 3 — Rollback valve (read this before using it)
 
 ```bash
-ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc \
+ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc \
   'Application.put_env(:platform, :github_webhook_signature_required, false)'"
 ```
 
@@ -272,9 +272,9 @@ Rules for using it:
 - Turn it back on **in the same session**, not "later today":
 
   ```bash
-  ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc \
+  ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc \
     'Application.put_env(:platform, :github_webhook_signature_required, true)'"
-  ssh dev@build-host.local "podman exec core-platform /app/bin/platform rpc \
+  ssh deploy@test-host "podman exec core-platform /app/bin/platform rpc \
     'IO.puts(Application.get_env(:platform, :github_webhook_signature_required))'"
   # expected: true
   ```
@@ -284,7 +284,7 @@ Rules for using it:
   That line is the alarm; if it is in the log, the door is open:
 
   ```bash
-  ssh dev@build-host.local "podman logs --since 15m core-platform 2>&1 | grep 'passing through'"
+  ssh deploy@test-host "podman logs --since 15m core-platform 2>&1 | grep 'passing through'"
   ```
 
 - The override is in-BEAM only. A restart reverts to the `config.exs` default
@@ -329,8 +329,8 @@ possessing one of the secrets.
   (`true`).
 - `apps/platform/config/runtime.exs` — `GITHUB_WEBHOOK_SECRET` wiring.
 - `deployment/templates/platform.secrets.env.example` — documents the key; real
-  values live in the private ops repo on moon.
+  values live in the private ops repo on test-host.
 - [`livekit_key_rotation.md`](livekit_key_rotation.md) — the sibling procedure
   for `/api/webhooks/livekit`. Its dual-accept gap is real; note that its
-  `ssh hive podman …` invocations do not work as written from the current host
+  `ssh build-host podman …` invocations do not work as written from the current host
   layout (see the access note in Step 0).

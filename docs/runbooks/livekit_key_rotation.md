@@ -45,21 +45,21 @@ Until that lands, use the flag-off interim path documented here.
 The flag lives in `apps/platform/config/config.exs`
 (`:livekit_webhook_signature_required, true`) and is read at runtime via
 `Application.get_env/3`. Override it by writing a small runtime override
-into the running BEAM. On moon:
+into the running BEAM. On test-host:
 
 ```bash
 # Confirm the container is running with the pre-rotation secret.
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc 'IO.puts(Application.get_env(:platform, :livekit_webhook_signature_required))'
 # expected: true
 
 # Flip the flag off (in-BEAM, no restart).
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc \
   'Application.put_env(:platform, :livekit_webhook_signature_required, false)'
 
 # Confirm the override took.
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc 'IO.puts(Application.get_env(:platform, :livekit_webhook_signature_required))'
 # expected: false
 ```
@@ -80,18 +80,18 @@ the override is live.
 
 Update the ops vault entries to promote `LIVEKIT_API_KEY_PENDING` /
 `LIVEKIT_API_SECRET_PENDING` to `LIVEKIT_API_KEY` /
-`LIVEKIT_API_SECRET`. Rotate the podman env file on moon, then bounce
+`LIVEKIT_API_SECRET`. Rotate the podman env file on test-host, then bounce
 the container:
 
 ```bash
-ssh hive systemctl --user restart core-platform
+ssh build-host systemctl --user restart core-platform
 ```
 
 Wait for the container to be healthy (`podman ps` shows `healthy` in
 the STATUS column, ~10s):
 
 ```bash
-ssh hive podman ps --filter name=core-platform \
+ssh build-host podman ps --filter name=core-platform \
   --format '{{.Names}} {{.Status}}'
 ```
 
@@ -101,12 +101,12 @@ the new secret loaded — signatures match.
 ### 4. Re-enable the flag
 
 ```bash
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc \
   'Application.put_env(:platform, :livekit_webhook_signature_required, true)'
 
 # Confirm.
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc 'IO.puts(Application.get_env(:platform, :livekit_webhook_signature_required))'
 # expected: true
 ```
@@ -170,7 +170,7 @@ selected, dashboard rotation half-completed):
 
 ```bash
 # 1. Flip the flag off (buys quiet during rollback).
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc \
   'Application.put_env(:platform, :livekit_webhook_signature_required, false)'
 
@@ -179,10 +179,10 @@ ssh hive podman exec core-platform \
 #    "OUT" to `_PREVIOUS` before step 3 above.)
 
 # 3. Bounce.
-ssh hive systemctl --user restart core-platform
+ssh build-host systemctl --user restart core-platform
 
 # 4. Confirm healthy, then re-enable the flag.
-ssh hive podman exec core-platform \
+ssh build-host podman exec core-platform \
   /app/bin/platform rpc \
   'Application.put_env(:platform, :livekit_webhook_signature_required, true)'
 ```

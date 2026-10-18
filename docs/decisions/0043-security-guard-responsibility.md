@@ -25,7 +25,7 @@ human, not by any automation.
   should have been Tailscale-only.
 
 All four have the same remediation shape: a periodic scan that files a task
-against Rowan (or a designated project) when a finding matches a known rubric.
+against the product owner (or a designated project) when a finding matches a known rubric.
 None of them fits an ad-hoc LLM dispatch — they are deterministic pattern
 matches and file reads. They want a scheduled sweeper, a stable rubric, and
 tight dedup so the task board isn't buried.
@@ -68,7 +68,7 @@ The Sweeper's tick, for each key, first calls
 `security_guard` role has been assigned — the Sweeper emits an unfilled-
 responsibility telemetry event, logs a placeholder line, and returns without
 invoking any scanner. Zero side effects. This is the load-bearing contract:
-the security bundle SHIPS by default but does NOTHING until Rowan (or an
+the security bundle SHIPS by default but does NOTHING until the product owner (or an
 admin) explicitly assigns the role to an agent. Behaviour identical to every
 other role in the platform's roster (Decision 2 from the M4 stack).
 
@@ -121,7 +121,7 @@ schedules itself accordingly.
 - Uniform admin-UI surface: Control Center → Roles lists Security Guard
   next to Historian and Meeting Scribe.
 - Progressive-enhancement default is safe: shipping the bundle turned on
-  by default files zero tasks until an agent is assigned. Rowan can flip
+  by default files zero tasks until an agent is assigned. The product owner can flip
   the switch when he has an agent to answer for it.
 - Deterministic runtime keeps token spend at zero for the platform-owned
   scans. Findings flow into the same task pipeline as everything else.

@@ -117,7 +117,10 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       # The brand chip names the install's app from the branding row, not a
       # compiled product name (task 01a116de stage 3).
       assert html =~ ~s(alt="#{Platform.Branding.app_name()}")
-      refute html =~ ~s(alt="Fabrikam")
+
+      refute html =~
+               ~r/alt="#{Platform.Regression.InstallIdentityScanner.published_org_token()}"/i
+
       assert html =~ ~s(data-role="external-identity")
       assert html =~ ext.name
       assert html =~ ~p"/auth/logout"
@@ -374,7 +377,10 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
       # Brand + identity + logout move into the overlay header (chrome-less layout).
       assert overlay =~ ~s(alt="#{Platform.Branding.app_name()}")
-      refute overlay =~ ~s(alt="Fabrikam")
+
+      refute overlay =~
+               ~r/alt="#{Platform.Regression.InstallIdentityScanner.published_org_token()}"/i
+
       assert overlay =~ ext.name
       assert overlay =~ ~p"/auth/logout"
       assert overlay =~ "New conversation"

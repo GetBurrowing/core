@@ -66,20 +66,20 @@ defmodule Platform.Tasks.ReviewRequestsReadTest do
 
       [desktop, mobile] = Enum.sort_by(request.items, & &1.label)
 
-      {:ok, _} = ReviewRequests.approve_item(desktop.id, "rowan")
-      {:ok, _} = ReviewRequests.reject_item(mobile.id, "rowan", "FAB overlaps the bottom nav")
+      {:ok, _} = ReviewRequests.approve_item(desktop.id, "alex")
+      {:ok, _} = ReviewRequests.reject_item(mobile.id, "alex", "FAB overlaps the bottom nav")
 
       assert {:ok, fetched} = ReviewRequests.fetch_request_with_items(request.id)
 
       by_label = Map.new(fetched.items, &{&1.label, &1})
 
       assert by_label["Desktop view"].status == "approved"
-      assert by_label["Desktop view"].reviewed_by == "rowan"
+      assert by_label["Desktop view"].reviewed_by == "alex"
       assert by_label["Desktop view"].reviewed_at
 
       assert by_label["Mobile nav"].status == "needs_revision"
       assert by_label["Mobile nav"].feedback == "FAB overlaps the bottom nav"
-      assert by_label["Mobile nav"].reviewed_by == "rowan"
+      assert by_label["Mobile nav"].reviewed_by == "alex"
       assert by_label["Mobile nav"].reviewed_at
     end
 
@@ -130,7 +130,7 @@ defmodule Platform.Tasks.ReviewRequestsReadTest do
     test "orders ruled items ahead of undispositioned ones", ctx do
       request = create_request(ctx, ["Ruled", "Untouched"])
       ruled = Enum.find(request.items, &(&1.label == "Ruled"))
-      {:ok, _} = ReviewRequests.approve_item(ruled.id, "rowan")
+      {:ok, _} = ReviewRequests.approve_item(ruled.id, "alex")
 
       assert ["Ruled", "Untouched"] =
                ctx.task.id |> ReviewRequests.list_items_for_task() |> Enum.map(& &1.label)

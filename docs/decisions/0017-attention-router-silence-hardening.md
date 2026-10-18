@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-03-20  
 **Related:** ADR 0013 (Attention Routing and Channel Policy), ADR 0014 (Agent Federation)  
-**Deciders:** Rowan Ellis  
+**Deciders:** the product owner  
 
 ## Context
 

@@ -43,7 +43,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
     * the recipient decides what to create or change, and does it with
       its own tools.
 
-  Per Rowan's ruling on the classifier (task `019fb90f-36e3`): the
+  Per the operator's ruling on the classifier (task `019fb90f-36e3`): the
   classifier is a cheap model and is *"not to be trusted"* to pick the
   operation. Its only job is to notice that an utterance is about
   commitments. Nothing in this handler's output contract asks it to do

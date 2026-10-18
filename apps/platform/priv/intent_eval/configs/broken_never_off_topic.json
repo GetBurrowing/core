@@ -1,0 +1,11 @@
+{
+  "description": "DELIBERATELY BROKEN negative-control config (task 01a03fbb stage 5). Not a candidate configuration; never promote to prompt_templates. See priv/intent_eval/prompts/broken_never_off_topic.txt for what it instructs and why.",
+  "prompt_source": {"inline_file": "priv/intent_eval/prompts/broken_never_off_topic.txt"},
+  "prompt_provenance": "Authored for stage 5 as a negative control. It has no production ancestor and is not a reconstruction of one: its only job is to score badly, so that a harness which scores it well can be recognised as broken.",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

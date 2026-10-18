@@ -397,7 +397,7 @@ defmodule Platform.Federation.ToolSurface do
           runtime_ids: %{
             type: "array",
             required: false,
-            description: "Only these runtime_ids (the slug, e.g. \"rowan-coder\"). Omit for all.",
+            description: "Only these runtime_ids (the slug, e.g. \"alex-coder\"). Omit for all.",
             schema: %{type: "array", items: %{type: "string"}}
           },
           fields: %{
@@ -1031,7 +1031,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "org_memory_recently_edited",
         description:
-          "List the K most recent org-memory edit events. Useful for understanding what shape of content Rowan / a human editor prefers to keep. Read-only wrapper over `Platform.MemoryFeedback.list_recent/1` scoped to `feedback_kind: \"edit\"` rows.",
+          "List the K most recent org-memory edit events. Useful for understanding what shape of content a human editor prefers to keep. Read-only wrapper over `Platform.MemoryFeedback.list_recent/1` scoped to `feedback_kind: \"edit\"` rows.",
         parameters: %{
           path_prefix: %{
             type: "string",
@@ -1130,7 +1130,7 @@ defmodule Platform.Federation.ToolSurface do
   # EXCLUDING task/plan/review either way) could still call
   # `mail_draft_create` — see
   # `mix platform.seed_meeting_voice_agent`'s `tool_profile` moduledoc and
-  # Dalton's live moon run (rollup space 01a0b5bf). Existing runtimes that
+  # a live test run (rollup space 01a0b5bf). Existing runtimes that
   # already relied on getting mail via `messaging` are preserved by the
   # `mail` bundle backfill migration
   # (`priv/repo/migrations/20260924180000_agent_runtime_mail_bundle.exs`),
@@ -2515,7 +2515,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "Opaque handle identifying the subagent working this stage — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 chars. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned."
+              "Opaque handle identifying the subagent working this stage — the runtime slug (e.g. `agent-1.host-a`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 chars. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned."
           }
         },
         returns:
@@ -3301,7 +3301,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
+              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `agent-1.host-a`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
           },
           status: %{
             type: "string",
@@ -3817,7 +3817,7 @@ defmodule Platform.Federation.ToolSurface do
             "it is filed only after three distinct attempts to get past the problem, a read of " <>
             "org memory for prior art, and a named smallest action that would unblock you plus " <>
             "who performs it. All of those are required params and the call is refused (nothing " <>
-            "recorded) when any is missing or short. `category` is one of `infra` (moon, " <>
+            "recorded) when any is missing or short. `category` is one of `infra` (test rig, " <>
             "containers, deps, ssh, CI runners), `product` (the feature cannot be built as " <>
             "specified) or `decision` (a person must choose between named options). Infra " <>
             "blockers are the infra agent's job: `category: \"infra\"` with `needs_human: true` " <>
@@ -3855,7 +3855,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "The smallest single action that would unblock you AND who performs it, e.g. \"Rowan picks option A or B\"."
+              "The smallest single action that would unblock you AND who performs it, e.g. \"a human picks option A or B\"."
           },
           category: %{
             type: "string",
@@ -10273,7 +10273,7 @@ defmodule Platform.Federation.ToolSurface do
   # (task 019f6c73) rather than warn-and-drift: any in-flight dispatch that
   # skips the param fails its next ack immediately rather than silently drifting
   # into a 90-minute no-ack stall. No format policing beyond presence + byte cap
-  # so both openclaw runtime slugs (e.g. `higgins.moon`) and Claude Code
+  # so both openclaw runtime slugs (e.g. `agent-1.host-a`) and Claude Code
   # Task-tool agentIds (e.g. `afd767f1e0cc81633`) fit through the same gate.
   defp validate_subagent_id(nil) do
     {:error,
@@ -10325,7 +10325,7 @@ defmodule Platform.Federation.ToolSurface do
        error: "subagent_id must be a string",
        recoverable: true,
        suggestion:
-         "Pass the spawn call's returned agent id as a plain string (e.g. `higgins.moon` or `afd767f1e0cc81633`)."
+         "Pass the spawn call's returned agent id as a plain string (e.g. `agent-1.host-a` or `afd767f1e0cc81633`)."
      }}
   end
 

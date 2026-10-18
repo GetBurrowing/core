@@ -8,12 +8,12 @@ defmodule Platform.Repo.Migrations.AddChatSpacesOrgSlugUniqueIndex do
 
   Post-ADR-0042 (`20260618181114_adr_0042_org_project_topology.exs`), the three
   tenant default channels were renamed to `slug = 'general'`. Combined with the
-  pre-existing Fabrikam General channel and Paragon's General, the `chat_spaces`
+  pre-existing Acme General channel and Paragon's General, the `chat_spaces`
   table now contains five rows sharing `slug = 'general'`, each with a
   different `org_id`. `Platform.Chat.get_space_by_slug/1` used `order_by inserted_at
-  asc; limit 1` and consistently returned the Fabrikam row, so a Soylent member
+  asc; limit 1` and consistently returned the Acme row, so a Soylent member
   clicking the Soylent-section "General" sidebar entry would always land in
-  Fabrikam's General — the bug this stage fixes.
+  Acme's General — the bug this stage fixes.
 
   The partial unique index enforces "one slug per org" at the DB level so any
   future regression that tries to insert a second `(org_id, slug)` collision

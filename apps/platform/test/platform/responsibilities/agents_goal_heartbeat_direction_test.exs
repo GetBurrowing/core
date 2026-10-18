@@ -20,7 +20,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatDirectionTest do
   @one [%{agent_id: "id-a", name: "A"}]
 
   describe "goal_direction/1" do
-    test "milv's live growth goal is :grow" do
+    test "beta's live growth goal is :grow" do
       assert Handler.goal_direction(
                "Grow the job-board backlog: keep it populated with new opportunities that " <>
                  "match the expected criteria defined in the project org memory."

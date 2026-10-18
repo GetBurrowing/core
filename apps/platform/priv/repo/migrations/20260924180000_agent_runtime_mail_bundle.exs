@@ -7,7 +7,7 @@ defmodule Platform.Repo.Migrations.AgentRuntimeMailBundle do
   `allowed_bundles` is deliberately scoped to `space messaging context_read
   memory` and explicitly excludes task/plan/review — could still call
   `mail_draft_create`, a prod write tool it was never meant to reach
-  (Dalton's live moon run, rollup space 01a0b5bf).
+  (a live test run, rollup space 01a0b5bf).
 
   The fix splits mail drafting into its own `mail` bundle. This migration
   backfills `mail` onto every EXISTING runtime that already has `messaging`,

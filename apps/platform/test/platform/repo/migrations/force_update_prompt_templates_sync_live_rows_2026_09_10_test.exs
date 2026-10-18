@@ -75,7 +75,7 @@ defmodule Platform.Repo.Migrations.ForceUpdatePromptTemplatesSyncLiveRows2026091
     default = PromptTemplates.default_content_for_slug("dispatch.planning")
     assert String.ends_with?(default, "\n")
 
-    # The milv row: same text, no trailing newline.
+    # The beta row: same text, no trailing newline.
     {:ok, drifted} =
       PromptTemplates.update_template(template, %{content: String.trim_trailing(default, "\n")})
 

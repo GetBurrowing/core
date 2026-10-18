@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-08-17 — see "Status resolution and corrections")
 **Date:** 2026-04-15
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0016 (Control Center LiveView Modularization), ADR 0020 (Chat Rich Content Rendering), ADR 0022 (DM Unread Badge), ADR 0030 (Meetings — LiveKit Voice/Video)
 
 ---

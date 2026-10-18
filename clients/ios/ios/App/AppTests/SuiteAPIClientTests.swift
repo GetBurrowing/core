@@ -13,7 +13,7 @@ final class SuiteAPIClientTests: XCTestCase {
 
     private func spacesJSON() -> Data {
         Data("""
-        {"spaces":[{"id":"s1","name":"Internal Fabrikam SXI","slug":"sxi","kind":"channel",
+        {"spaces":[{"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel",
           "agents":[{"id":"a1","name":"Saru","slug":"saru"}]}]}
         """.utf8)
     }
@@ -21,7 +21,7 @@ final class SuiteAPIClientTests: XCTestCase {
     // MARK: Not signed in: no network
 
     func testMissingTokenGivesNotSignedInWithNoRequest() {
-        let install = Install(host: "suite.example.com")
+        let install = Install(host: "suite.example.net")
         let defaultsName = "ShareSheetModelTests.\(UUID().uuidString)"
         defer { UserDefaults().removePersistentDomain(forName: defaultsName) }
         let model = ShareSheetModel(install: install, client: client([:]), lastSpace: UserDefaults(suiteName: defaultsName))
@@ -40,7 +40,7 @@ final class SuiteAPIClientTests: XCTestCase {
     }
 
     func testNoSelectedInstallIsNotSignedIn() {
-        let model = ShareSheetModel(install: nil, client: client(["suite.example.com": "tok"]))
+        let model = ShareSheetModel(install: nil, client: client(["suite.example.net": "tok"]))
         model.start()
         XCTAssertEqual(model.phase, .notSignedIn)
         XCTAssertEqual(StubURLProtocol.requests.count, 0)
@@ -197,7 +197,7 @@ final class SuiteAPIClientTests: XCTestCase {
 
         let closed = expectation(description: "closed")
         model.send { closed.fulfill() }
-        waitFor { model.phase == .sent(spaceName: "Internal Fabrikam SXI") }
+        waitFor { model.phase == .sent(spaceName: "Internal Legacy SXI") }
         wait(for: [closed], timeout: ShareSheetModel.sentDwell + 2)
 
         let post = StubURLProtocol.requests.last

@@ -43,7 +43,7 @@ Please try:
 
 Known gaps in this build:
 - Native calls are audio only. There is no video, no screen share and no live captions in the native call, and Open full meeting does not add them (it keeps chat and canvases). Native video, screen-share viewing, camera and captions are a follow-up.
-- iPad: Burrow asks for Local Network access only to reach a server on your own network (LAN); for suite.example.com and other internet servers you can decline it.
+- iPad: Burrow asks for Local Network access only to reach a server on your own network (LAN); for burrow.example.com and other internet servers you can decline it.
 - PushToTalk (walkie-talkie style talk) is not built; it is a separate follow-up.
 - No custom ringtone or call-screen icon yet; the system defaults are used.
 - Not built: native game streaming, Apple Watch.
@@ -72,7 +72,7 @@ Known gaps in this build:
 First internal build of Burrow, the Suite iPhone app: the Suite web app in a native shell, with native push, a share sheet and widgets.
 
 Please try:
-1. Pick an install. The first screen lists suite.example.com (default), suite.example.com and suite.milv.life. Pick yours and check the choice is remembered after quitting the app.
+1. Pick an install. The first screen lists the built-in installs. Pick yours and check the choice is remembered after quitting the app.
 2. Log in. Sign-in opens in a system sheet (passkey or password), then returns you to Burrow already signed in.
 3. Mention push. Have someone @-mention you, then lock the phone. Long-press the notification: Reply should post your answer without opening the app, and Open should land on that message.
 4. Review and plan push. A review request or a plan awaiting you should arrive as a notification whose Open lands on it.

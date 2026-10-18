@@ -499,7 +499,7 @@ defmodule Platform.Federation.TaskAttrs do
   `:update` only behind the `:existing_phase_assignees` opt, keyed off
   the merged map). The precondition inspects
   the execution + review slots
-  (never planning) because auto-approve exists to save Rowan the click on
+  (never planning) because auto-approve exists to save the operator the click on
   the plan-review gate that runs immediately AFTER planning, and the
   execution + review agents are the ones actually dispatched.
 

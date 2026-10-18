@@ -8,7 +8,7 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
   so the block has to carry every org such a member can see, not just the
   orgs they belong to. Built from the Tasks rail's narrower list, the block
   left this member's SXI chip with no fill, no dot and a text-coloured ring,
-  while an admin (Marlowe, on every dev server) saw it coloured.
+  while an admin (Robin, on every dev server) saw it coloured.
   """
   use PlatformWeb.ConnCase, async: false
 

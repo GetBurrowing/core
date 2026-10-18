@@ -255,7 +255,7 @@ defmodule Platform.Federation.ToolDocWireTest do
   # `valid_bundles/0` omits `files`, so the changeset refuses a grant set that
   # covers the whole surface. Prod carries such rows anyway. Going through the
   # changeset here would silently shrink this file's denominator to 96 tools.
-  # Rowan accepted the temporary Play C/K/N owner-cap exception.
+  # Alex accepted the temporary Play C/K/N owner-cap exception.
   defp servable_definitions do
     Enum.reject(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_session_"))
   end

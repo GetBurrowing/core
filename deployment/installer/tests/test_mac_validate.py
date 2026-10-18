@@ -27,10 +27,12 @@ REPO = os.path.dirname(os.path.dirname(INSTALLER))
 EXAMPLES = os.path.join(REPO, "deployment", "examples")
 MAC = os.path.join(EXAMPLES, "mac.install.toml")
 MAC_LITE = os.path.join(EXAMPLES, "mac-lite.install.toml")
-SINGLE_HOST = os.path.join(EXAMPLES, "moon-equivalent.install.toml")
+SINGLE_HOST = os.path.join(EXAMPLES, "single-host.install.toml")
 MAC_FIXTURES = os.path.join(HERE, "fixtures", "mac")
 
 sys.path.insert(0, INSTALLER)
+
+from identity_terms import identity_hits
 
 from suite_install import registry
 from suite_install.__main__ import main
@@ -131,7 +133,10 @@ class MacExampleTest(PositiveControlMixin, unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 text = handle.read().lower()
             with self.subTest(example=os.path.basename(path)):
-                for word in ("ellis", "fabrikam", "192.168.", "10.0.", "sk-", "node_ip ="):
+                # Identity terms go through the shared digest rule (task 01a14b9e
+                # stage 5), so this file does not spell them.
+                self.assertEqual(identity_hits(text), [])
+                for word in ("192.168.", "10.0.", "sk-", "node_ip ="):
                     self.assertNotIn(word, text)
                 self.assertIn('primary = "suite.example.test"', text)
 
@@ -355,6 +360,7 @@ class MacRuleTest(PositiveControlMixin, unittest.TestCase):
             'schema_version = 1\n[install]\nname = "x"\ntarget = "mac"\n'
             '[domain]\nprimary = "x.example.com"\n'
             '[access]\ntunnel_token_ref = "TUNNEL_TOKEN"\n'
+            '[images]\nimage_namespace = "example"\n'
         )
         errors, normalized = validate(raw)
         self.assertEqual(errors, [])

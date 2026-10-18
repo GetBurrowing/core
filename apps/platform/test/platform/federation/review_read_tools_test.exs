@@ -139,7 +139,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
     [item] = request.items
 
     {:ok, ruled} =
-      ReviewRequests.reject_item(item.id, "rowan", "FAB overlaps the bottom nav at 375px")
+      ReviewRequests.reject_item(item.id, "alex", "FAB overlaps the bottom nav at 375px")
 
     %{
       acme: acme,
@@ -224,7 +224,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
       assert item.label == "Mobile nav"
       assert item.status == "needs_revision"
       assert item.feedback == "FAB overlaps the bottom nav at 375px"
-      assert item.reviewed_by == "rowan"
+      assert item.reviewed_by == "alex"
       assert item.reviewed_at
       assert item.canvas_id == "canvas-123"
       assert item.content == "Mobile screenshot"

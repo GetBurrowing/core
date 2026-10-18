@@ -77,17 +77,17 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
 
   defp page_edit!(attrs \\ %{}) do
     key = "org/page/insight-tab-#{n()}.md"
-    {:ok, _page} = Wiki.upsert_page(key, %{content: "Deploys go to hive every night."})
+    {:ok, _page} = Wiki.upsert_page(key, %{content: "Deploys go to host-a every night."})
 
     insight!(
       Map.merge(
         %{
           action_type: "page_edit",
-          body: "The runbook still says hive. <old>go to hive</old><new>go to moon</new>",
+          body: "The runbook still says host-a. <old>go to host-a</old><new>go to host-b</new>",
           source_ref: "page:#{key}",
           action: %{
             "target" => key,
-            "hunks" => [%{"old" => "go to hive", "new" => "go to moon"}]
+            "hunks" => [%{"old" => "go to host-a", "new" => "go to host-b"}]
           }
         },
         Map.new(attrs)
@@ -376,7 +376,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
       question =
         insight!(action_type: "question", addressee: addressee, body: "Who owns staging?")
 
-      briefing = insight!(addressee: addressee, body: "Deploys moved to moon.")
+      briefing = insight!(addressee: addressee, body: "Deploys moved to host-b.")
       task = insight!(action_type: "task", addressee: addressee, body: "Rotate the deploy key.")
       call = needs_call_briefing!(addressee)
 
@@ -422,13 +422,13 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
       assert has_element?(
                view,
                ~s(#insight-row-#{edit.id} [data-role="insight-diff-removed"]),
-               "- go to hive"
+               "- go to host-a"
              )
 
       assert has_element?(
                view,
                ~s(#insight-row-#{edit.id} [data-role="insight-diff-added"]),
-               "+ go to moon"
+               "+ go to host-b"
              )
 
       assert has_element?(
@@ -457,7 +457,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
       |> element(~s(#insight-row-#{insight.id} [data-role="insight-primary"]))
       |> render_click()
 
-      assert Wiki.get_page(key).content == "Deploys go to moon every night."
+      assert Wiki.get_page(key).content == "Deploys go to host-b every night."
       assert %Insight{state: "done"} = Repo.get!(Insight, insight.id)
 
       # The watcher did nothing; the PubSub broadcast refreshed its tab.
@@ -551,7 +551,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
       refute has_element?(member_view, ~s(#insight-row-#{call.id} [data-role="insight-primary"]))
 
       # Control: a delivered reversible briefing still leaves the tab.
-      line = insight!(addressee: member, body: "Deploys moved to moon this week.")
+      line = insight!(addressee: member, body: "Deploys moved to host-b this week.")
       assert {:ok, %{items: 1}} = Disseminator.run(notifications_module: PushRecorder)
       assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, line.id)
       refute has_element?(tab!(conn, admin), ~s(#insight-row-#{line.id}))

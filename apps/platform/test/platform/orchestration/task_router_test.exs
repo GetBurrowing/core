@@ -1781,7 +1781,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # :dispatch)` — so a single call drains each of them completely.
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
-      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "alex")
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
@@ -1819,7 +1819,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
       {:ok, _} =
-        Platform.Tasks.ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
+        Platform.Tasks.ReviewRequests.reject_item(hd(request.items).id, "alex", "Needs work")
 
       # Expect a fresh dispatch (task_assigned) after rejection. This one keeps
       # a BLOCKING receive rather than a barrier: the `:failed` branch of the
@@ -2125,7 +2125,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       assert TaskRouter.current_status(task.id).status == :waiting_human
 
-      {:ok, _approved} = Tasks.approve_plan(pending_plan, "rowan")
+      {:ok, _approved} = Tasks.approve_plan(pending_plan, "alex")
 
       # Resumption chain: `approve_plan/3` -> `apply_dispatch_gate/1` moves the
       # task to `in_progress` in-transaction -> post-commit
@@ -3340,7 +3340,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # `approve_item/2` broadcasts `{:review_request_resolved, :passed}` from
       # this process, and that handler does not re-dispatch, so the status
       # read below is a complete barrier for it.
-      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "alex")
 
       assert TaskRouter.current_status(task.id).status == :running
 
@@ -3780,7 +3780,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
   # Stage-scoped blocker handling (task 019f6791 stage 3)
   # ────────────────────────────────────────────────────────────────────
   #
-  # Regression coverage for the router-level leak Rowan observed on
+  # Regression coverage for the router-level leak Alex observed on
   # task 019f6380: a `blocked` lease created against a prior stage was
   # rehydrating the router into `:waiting_human` on stage transition and
   # on boot, silently gating downstream dispatches. The fix threads

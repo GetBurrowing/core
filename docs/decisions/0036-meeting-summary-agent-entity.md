@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-04-16
-**Deciders:** Rowan
+**Deciders:** the product owner
 **Related:** ADR 0030 (Meetings — LiveKit Voice/Video), ADR 0034 (MCP endpoint & capability bundles), existing `Platform.Agents` schema
 
 ---
@@ -14,7 +14,7 @@ Meeting transcripts are summarized by `Platform.Meetings.Summarizer`. As of this
 ```yaml
 summary:
   provider: ollama            # anthropic | openai | ollama | none
-  base_url: http://build-host.local:11434/v1
+  base_url: http://test-host:11434/v1
   model: gemma4:e4b
   max_tokens: 2048
   temperature: 0.3

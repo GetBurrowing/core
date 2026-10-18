@@ -276,7 +276,7 @@ defmodule Platform.Meetings.Candidates do
   Record a chunk the moment it is HEARD, before the classifier answers.
 
   This is the pre-classification half of `create_or_attach/1` (task
-  01a04a7f). It writes the row Harper asked for — a card that appears
+  01a04a7f). It writes the row the product lead asked for — a card that appears
   as soon as something is said, with no title yet — and returns:
 
     * `{:ok, skeleton}` — a new unclassified row was written, or the one
@@ -2213,7 +2213,7 @@ defmodule Platform.Meetings.Candidates do
   This is the ack mirror's `:completed` arm, moved here from
   `Platform.Meetings.IntentQueue.Server.close_ack/4` because it now
   WRITES a deliverable, and a deliverable is minted in exactly one
-  module. The decision it implements (Harper, 2026-09-03): an agent that
+  module. The decision it implements (product decision, 2026-09-03): an agent that
   finishes an armed task-rail candidate before its 30-second countdown
   fires does not cancel the task, it closes it. The task board is the
   log of what the meeting decided, and a decision that got acted on

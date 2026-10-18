@@ -173,7 +173,7 @@ defmodule Platform.Responsibilities.GroundingSnapshotTest do
     #{if has_qa?, do: "- Staging deploy of the console must wait for QA sign-off.", else: ""}
 
     ### Action Items
-    - **Harper**: draft the investor talking points by lunch.
+    - **Sam**: draft the investor talking points by lunch.
     - **Mira**: send the investor note this afternoon and own the staging-promotion call.
     - **Alex**: chase down the #{if has_telemetry?, do: "telemetry pipeline regression", else: "console rollout"}.
     """
@@ -224,7 +224,7 @@ defmodule Platform.Responsibilities.GroundingSnapshotTest do
     - Staging deploys of the #{project} console must wait for QA sign-off.
 
     ### Action Items
-    - **Harper Park**: draft #{project} investor talking points by
+    - **Sam Park**: draft #{project} investor talking points by
       lunch ("#{project} reliability over investor optics").
     - **#{person}**: send the investor note this afternoon; owns
       #{project} staging-promotion calls.

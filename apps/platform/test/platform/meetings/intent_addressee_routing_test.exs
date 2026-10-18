@@ -4,7 +4,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
   SAME row to everything downstream of `IntentClassifier.decide/1`.
 
   Stage 1 made the addressee gate stop demoting: an ask aimed at someone
-  off the roster (`"Harper, can you write that up?"`) now keeps its
+  off the roster (`"Sam, can you write that up?"`) now keeps its
   intent and takes `target_role: "null"` — the same string
   `normalise_target_role/1` writes when the model itself answers the JSON
   literal `null` for an unaddressed ask (`"Can somebody please write that
@@ -56,7 +56,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
   alias Platform.Repo
   alias Platform.Roles
 
-  @off_roster "Harper, can you write that up?"
+  @off_roster "Sam, can you write that up?"
   # Six tokens, so `content_bearing?/1` keeps it on word count alone and
   # the model-null twin cannot be dropped before the model is asked.
   @unaddressed "Can somebody please write that up?"
@@ -67,7 +67,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
 
   @responsibility_key "meetings.intent_classify"
 
-  # The roster `decide/1` is handed directly in blocks 1 and 2. Harper is
+  # The roster `decide/1` is handed directly in blocks 1 and 2. Sam is
   # not on it; the scribe is, so a gate-nulled row cannot be explained by
   # an empty roster rejecting everything.
   @roster [
@@ -117,7 +117,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
           if role == "user", do: Map.get(message, :content) || Map.get(message, "content")
         end)
 
-      if String.contains?(shown, "Harper") do
+      if String.contains?(shown, "Sam") do
         Platform.Meetings.IntentAddresseeRoutingTest.OffRosterProvider.chat(
           credentials,
           messages,
@@ -253,7 +253,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
   # Seeds the roster the booted classifier renders and the gate judges
   # against: `resolve_prompt/6` reads `Roles.assigned_agents/0`, which
   # joins role_assignments to agents. The scribe is ON the roster, under
-  # a name that is not Harper, so `target_agent_id == nil` below is the
+  # a name that is not Sam, so `target_agent_id == nil` below is the
   # sentinel's doing and not an unassigned role's.
   defp seed_roster! do
     classifier_agent = create_agent!("intent-agent-routing", "Classifier")
@@ -265,7 +265,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
 
     roster = Roles.assigned_agents()
     assert Enum.any?(roster, &(&1.role_key == "meeting_scribe" and &1.agent_name == "Dalton"))
-    refute Enum.any?(roster, &(&1.agent_name == "Harper" or &1.agent_slug == "harper"))
+    refute Enum.any?(roster, &(&1.agent_name == "Sam" or &1.agent_slug == "sam"))
 
     scribe
   end
@@ -341,7 +341,7 @@ defmodule Platform.Meetings.IntentAddresseeRoutingTest do
       assert is_nil(gated.target_agent_slug)
       assert is_nil(gated.demoted_from)
       assert is_binary(gated.chunk_excerpt) and gated.chunk_excerpt != ""
-      assert gated.chunk_excerpt =~ "Harper"
+      assert gated.chunk_excerpt =~ "Sam"
       assert gated.confidence == 0.9
 
       # The scribe IS assigned — so nil above is the sentinel resolving

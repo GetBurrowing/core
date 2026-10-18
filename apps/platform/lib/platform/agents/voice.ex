@@ -7,7 +7,7 @@ defmodule Platform.Agents.Voice do
 
   ## The seam is a value, not a vendor
 
-  Harper asked for ElevenLabs "but also a different provider if we want", so
+  The product lead asked for ElevenLabs "but also a different provider if we want", so
   nothing here names a vendor except as a string in `known_providers/0`.
   Selection lives in `agents.voice_config`, a jsonb map mirroring
   `agents.model_config`:

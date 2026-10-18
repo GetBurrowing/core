@@ -126,7 +126,7 @@ defmodule Platform.Meetings.MeetingScopeTest do
 
     # THIS IS A RECORD OF AN OPEN INCONSISTENCY, NOT A DESIRED CONTRACT.
     #
-    # `Tenancy.visibility/1` bypasses on root membership at ANY role (Rowan's
+    # `Tenancy.visibility/1` bypasses on root membership at ANY role (Alex's
     # 2026-08-05 sub-orgs ruling), and `Tasks.list_projects_for_user/2` took
     # that wider rule. This function bypasses on root ADMIN, so the two
     # surfaces answer differently for the same viewer — the shape every OIDC

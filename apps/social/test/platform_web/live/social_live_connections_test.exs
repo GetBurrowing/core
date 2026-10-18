@@ -30,17 +30,17 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
         status: "reauth_needed"
       })
 
-    {:ok, fabrikam} =
+    {:ok, legacy} =
       Social.create_profile(ctx.org_id, %{
-        name: "Fabrikam #{unique()}",
+        name: "Legacy #{unique()}",
         space_id: channel!(ctx.org_id).id,
         approver_user_ids: [ctx.h1.id]
       })
 
-    {:ok, fabrikam_account} =
-      Social.create_account(ctx.org_id, fabrikam, %{platform: "youtube", handle: "Fabrikam channel"})
+    {:ok, legacy_account} =
+      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy channel"})
 
-    Map.merge(ctx, %{d: d, r: r, fabrikam: fabrikam, fabrikam_account: fabrikam_account})
+    Map.merge(ctx, %{d: d, r: r, legacy: legacy, legacy_account: legacy_account})
   end
 
   defp open(conn, user, tab \\ "connections") do
@@ -255,10 +255,10 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     child = open(conn, ctx.h1)
     assert has_element?(child, row(ctx.a))
 
-    child |> form("#social-profile-switcher", %{profile_id: ctx.fabrikam.id}) |> render_change()
+    child |> form("#social-profile-switcher", %{profile_id: ctx.legacy.id}) |> render_change()
     refute has_element?(child, row(ctx.a))
     refute has_element?(child, row(ctx.d))
-    assert has_element?(child, row(ctx.fabrikam_account), "Fabrikam channel")
+    assert has_element?(child, row(ctx.legacy_account), "Legacy channel")
 
     {:ok, empty} =
       Social.create_profile(ctx.org_id, %{

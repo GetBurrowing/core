@@ -343,7 +343,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     caption(hook, { id: "a", text: "the rail collapses to forty four", final: true })
     expect(captionLineCount(hook)).toBe(1) // reachability: a line was drawn
 
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     // Crossing STALL_AFTER_MS alone is only the CANDIDATE (task 01a0cf5c
     // stage 2) — the bar must not have said anything yet.
@@ -410,7 +410,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
   // must be SUSTAINED for the full stall window. Bursts do not accumulate.
   it("does not let short speech bursts accumulate into a stall", () => {
     for (let i = 0; i < 5; i++) {
-      speaking(hook, ["user:harper"])
+      speaking(hook, ["user:sam"])
       vi.advanceTimersByTime(STALL_AFTER_MS - 2000)
       speaking(hook, [])
       vi.advanceTimersByTime(1000)
@@ -422,7 +422,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
   // Direction control for case 1: with captions still flowing under the
   // same continuous speech, the notice must never appear.
   it("stays quiet while captions keep arriving under continuous speech", () => {
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     for (let i = 0; i < 6; i++) {
       vi.advanceTimersByTime(STALL_AFTER_MS - 2000)
@@ -437,7 +437,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
   // ── CASE 3 — recovery ───────────────────────────────────────────────
   it("clears the stall the moment a caption arrives, without the pre-stall line", () => {
     caption(hook, { id: "a", text: "pre-stall utterance", final: true })
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
     vi.advanceTimersByTime(STALL_AFTER_MS + STALL_CONFIRM_MS + 1)
     expect(stalled(hook)).toBe(true) // reachability
 
@@ -512,7 +512,7 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
 })
 
 describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (task 01a0cf5c)", () => {
-  // Diagnosis (stage 1) for the production incident where Harper saw the
+  // Diagnosis (stage 1) for the production incident where Sam saw the
   // literal STALL_COPY live. Working hypothesis (backend confirmation was
   // unreachable from that environment — see task 01a0cf5c stage 1 notes):
   // the `meeting-transcriber` worker was alive but slower than the old
@@ -552,7 +552,7 @@ describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (tas
   // landing at ~8s, must not trip the false STALLED state a genuinely
   // dead pipeline would.
   it("does not falsely stall when a caption is merely delayed to ~8s, not dead", () => {
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     // ~8s, sustained speech, nothing yet. Below the new STALL_AFTER_MS
     // (12000ms) on its own, so the candidate timer has not even fired —
@@ -576,7 +576,7 @@ describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (tas
   // the notice — "sustained across a confirmation re-check", not "a
   // single timeout crossing", is the rule now.
   it("a caption landing during the confirmation window cancels the candidate stall", () => {
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     vi.advanceTimersByTime(STALL_AFTER_MS + 1)
     expect(stalled(hook)).toBe(false) // candidate only, not yet confirmed
@@ -599,7 +599,7 @@ describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (tas
   // still has to surface, eventually, as the stalled notice — and the
   // stall signal must still fire so the incident is recorded.
   it("still raises the stall when speech continues indefinitely and no caption ever arrives", () => {
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     // Far past any reasonable "still working" grace period, sustained
     // the whole time, with nothing ever arriving.
@@ -629,7 +629,7 @@ describe("MeetingCaptions — slow-but-alive vs. genuinely-dead transcriber (tas
   // would be caught here even though the single-jump case above could not
   // see it.
   it("does not re-fire the stall signal on every tick while the outage continues", () => {
-    speaking(hook, ["user:harper"])
+    speaking(hook, ["user:sam"])
 
     const episodeMs = STALL_AFTER_MS + STALL_CONFIRM_MS
     let elapsed = 0

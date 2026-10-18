@@ -10,7 +10,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateReviewE2eTemplateBrowserSessionChe
   an e2e case behind a login is currently unmeasurable), and by PR #1012, which
   shipped a UI fix that a LiveView test could not see.
 
-  On 2026-09-11 the row was patched directly in the fabrikam database via
+  On 2026-09-11 the row was patched directly in the install A database via
   `prompt_template_update` (17:39:05Z) to add one instruction: before any
   browser-driven verdict, record the final URL and page title, and treat an
   identity-provider URL or a "Sign in" title as `could_not_evaluate` with the
@@ -21,13 +21,13 @@ defmodule Platform.Repo.Migrations.ForceUpdateReviewE2eTemplateBrowserSessionChe
   THIS MIGRATION IS THE DELIVERABLE, not the descriptor edit. `seed_defaults/0`
   is INSERT-only, so a descriptor-only change reaches no existing deployment,
   and a row edit alone reaches only the one install it was typed against. Both
-  halves were true here at once: fabrikam held the new body (6703 chars) while milv
+  halves were true here at once: install A held the new body (6703 chars) while install B
   still held the old one (5996 chars), and the two would have stayed divergent
   indefinitely because nothing compares them.
 
-  Verified before writing, so this is not a blind overwrite: the fabrikam body is a
-  strict superset of the milv body — `diff` reports nine added lines and ZERO
-  lines present only on milv. No operator text is lost on either install. (That
+  Verified before writing, so this is not a blind overwrite: the install A body is a
+  strict superset of the install B body — `diff` reports nine added lines and ZERO
+  lines present only on install B. No operator text is lost on either install. (That
   check is the one `20260812230100` skips by design when it accepts overwriting
   an operator edit; here it was cheap, so it was done rather than assumed.)
 

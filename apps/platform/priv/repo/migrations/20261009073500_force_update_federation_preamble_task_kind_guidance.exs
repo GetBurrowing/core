@@ -7,8 +7,8 @@ defmodule Platform.Repo.Migrations.ForceUpdateFederationPreambleTaskKindGuidance
 
   The prompt row wins over the source fallback and seed_defaults/0 is
   insert-only, so an attribute edit alone would never reach existing installs.
-  Before this migration was authored, the fabrikam and milv live rows were read on
-  moon: both had length 12910, md5 1e85554dd9d6a713de1aabb3f4244156,
+  Before this migration was authored, the install A and install B live rows were read on
+  the production host: both had length 12910, md5 1e85554dd9d6a713de1aabb3f4244156,
   updated_by agent, and neither contained the new heading. There was therefore
   no divergent human edit to preserve. Content comes from the descriptor so
   the deployed row and fallback remain identical. down/0 is intentionally a

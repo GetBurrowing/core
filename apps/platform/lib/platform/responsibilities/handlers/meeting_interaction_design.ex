@@ -42,7 +42,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingInteractionDesign do
     * the recipient decides what to create or change, and does it with
       its own tools.
 
-  Per Rowan's ruling on the classifier (task `019fb90f-36e3`): the
+  Per the operator's ruling on the classifier (task `019fb90f-36e3`): the
   classifier is a cheap model and is *"not to be trusted"* to pick the
   operation. Its only job is to notice that an utterance is about how
   something behaves. Nothing in this handler's output contract asks it
@@ -52,7 +52,7 @@ defmodule Platform.Responsibilities.Handlers.MeetingInteractionDesign do
 
   ## Namespace vs. owner
 
-  The key is `meetings.*` and the bundle is the **designer's**. Per Rowan
+  The key is `meetings.*` and the bundle is the **designer's**. Per the operator
   (2026-07-31): the namespace records where the work originates, the
   bundle records who does it. `Platform.Meetings.IntentRouting` carries
   both so they cannot drift apart silently.

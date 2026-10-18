@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-03-19  
-**Deciders:** Rowan, Zip  
+**Deciders:** the product owner, Zip  
 **Related:** ADR 0014 (Agent Federation), ADR 0007 (Agent Runtime)  
 
 ---

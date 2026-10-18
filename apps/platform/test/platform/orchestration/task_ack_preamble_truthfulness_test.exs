@@ -8,7 +8,7 @@ defmodule Platform.Orchestration.TaskAckPreambleTruthfulnessTest do
   "presence forces spawn-before-ack ordering". It does not: the server checks
   only that the id is a present, non-blank string of at most 128 bytes. It
   holds no record of client-side spawns and cannot correlate the id with one.
-  Measured on moon prod (4,039 `execution.acked` rows), the stored ids include
+  Measured on test-host prod (4,039 `execution.acked` rows), the stored ids include
   UUIDs, session ids and freeform labels alongside real Agent-tool ids.
 
   What is asserted:

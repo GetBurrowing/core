@@ -133,7 +133,7 @@ def build_meeting_chat_handoff_tool(
     provided" when neither `file_paths`/`file_path` NOR `file_base64` is
     set, even though `content` is independently accepted as the posted
     message's text — this tool has no content-only mode. Round 3 of
-    Dalton's live moon run confirmed writing a LOCAL temp file and passing
+    a live test run confirmed writing a LOCAL temp file and passing
     its path (the previous approach here) fails with `:enoent` in real
     deployment: this worker and Core run in different containers on
     different hosts, so a path this process can read means nothing to

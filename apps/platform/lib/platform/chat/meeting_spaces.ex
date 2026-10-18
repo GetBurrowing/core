@@ -14,7 +14,7 @@ defmodule Platform.Chat.MeetingSpaces do
   This module does not change what gets created or what `list_spaces/1`
   returns; it only gives the picker a way to group what it already has.
 
-  Harper Parker' ruling: "Keep them but collapse them until we need to do
+  The product lead's ruling: "Keep them but collapse them until we need to do
   something better" — a browsing problem, not a data problem, and a
   deliberate holding pattern.
 

@@ -115,7 +115,7 @@ if Process.whereis(Platform.Repo) do
   end)
 end
 
-# Restore the four legacy Fabrikam-brand tenant orgs (+ resync `channel_sections`
+# Restore the four legacy Legacy-brand tenant orgs (+ resync `channel_sections`
 # positions to match) for THIS TEST RUN ONLY (task 01a068f6 stage 2).
 # `20260519143620_seed_root_orgs.exs` no longer seeds them — a fresh
 # PRODUCTION install must not come up owned by one customer's org structure,
@@ -127,7 +127,7 @@ end
 # fallback, and a downstream migration (`20260618181114_adr_0042_org_project_topology`)
 # only tolerates their absence, it doesn't restore them. Seeding here — once,
 # for real (the pool is still in `:auto` mode; the `:manual` switch is right
-# below) — keeps that coverage green without putting Fabrikam's brand back into
+# below) — keeps that coverage green without putting Legacy's brand back into
 # a migration a fresh install actually runs. Raw SQL, `ON CONFLICT DO
 # NOTHING`: the exact shape `SeedRootOrgs` used, just relocated out of
 # `priv/repo/migrations` into test-only setup.
@@ -194,7 +194,7 @@ if Process.whereis(Platform.Repo) do
 
   # `20260921190000_add_color_lightness_to_orgs.exs` (and
   # `20260911220000_add_color_to_orgs.exs` before it) pin the shipped
-  # hue/chroma/lightness for fabrikam/soylent/wayne_tech/sxi/paragon/cyberdyne —
+  # hue/chroma/lightness for legacy/soylent/wayne_tech/sxi/paragon/cyberdyne —
   # but they ran during `mix ecto.migrate`, BEFORE the tenant orgs seeded
   # just above existed, so their no-op-on-missing-slug tolerance (by
   # design — see that migration's own test) means soylent/wayne_tech/sxi/
