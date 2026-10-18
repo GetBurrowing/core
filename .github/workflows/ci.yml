@@ -100,6 +100,19 @@ jobs:
         working-directory: apps/platform
 
     steps:
+      # BEFORE checkout, so actions/checkout finds git and makes a real
+      # repository. Without git it falls back to a REST download with no
+      # .git, and the install-identity guard
+      # (test/platform/regression/install_identity_guard_test.exs), which
+      # scans `git ls-files`, fails by design. The workspace does not exist
+      # yet, hence the working directory.
+      - name: Install system packages
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          update-ca-certificates
+
       - uses: actions/checkout@v5
 
       # Across EVERY migrations path: core's and each build-time module's
@@ -139,12 +152,6 @@ jobs:
             exit 1
           fi
           sh scripts/test/surface_budget_check_test.sh
-
-      - name: Install system packages
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git
-          update-ca-certificates
 
       - name: Install Hex and Rebar
         run: |
@@ -713,10 +720,11 @@ jobs:
         # container job the expression is the HOST path, which the container
         # does not have.
         run: |
-          export SUITE_EXTENSIONS_JS="$GITHUB_WORKSPACE/apps/suite_release/assets/generated/extensions.js"
+          export BURROW_EXTENSIONS_JS="$GITHUB_WORKSPACE/apps/suite_release/assets/generated/extensions.js"
+          export SUITE_EXTENSIONS_JS="$BURROW_EXTENSIONS_JS"
           npm ci
           if ! node --test test/no_excalidraw_in_app_bundle_test.mjs test/no_emoji_data_in_app_bundle_test.mjs; then
-            echo "::error::a bundle guard failed on the WITH-Play app.js (SUITE_EXTENSIONS_JS=$SUITE_EXTENSIONS_JS)."
+            echo "::error::a bundle guard failed on the WITH-Play app.js (BURROW_EXTENSIONS_JS=$BURROW_EXTENSIONS_JS)."
             exit 1
           fi
 

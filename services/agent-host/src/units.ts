@@ -43,11 +43,14 @@ export function templateUnit(runner: string[]): string {
     "[Service]",
     "Type=simple",
     `EnvironmentFile=${ENV_DIR}/%i.env`,
+    "Environment=BURROW_AGENT_ID=%i",
     "Environment=SUITE_AGENT_ID=%i",
+    `Environment=BURROW_AGENT_SESSION=${SESSION}`,
     `Environment=SUITE_AGENT_SESSION=${SESSION}`,
     // Nobody can type into a native agent's pane: suite-cli marks Claude
     // Code's first-run onboarding done before launch (hasCompletedOnboarding,
     // read from the 2.1.295 binary), so theme / security notes never appear.
+    "Environment=BURROW_UNATTENDED=1",
     "Environment=SUITE_UNATTENDED=1",
     // The CLIs are pinned by the install (versions.env) and live in /usr/local,
     // which no agent may write: an auto-update could only fail, noisily.

@@ -6,7 +6,8 @@ Design (mirrors test_render.py):
 - Every class renders BOTH mac examples first (positive control).
 - Goldens golden/mac/ and golden/mac-lite/ are compared whole-file after
   secret values are replaced with ``<secret:NAME>``. Regenerate with
-  ``SUITE_INSTALL_UPDATE_GOLDEN=1`` and review the diff.
+  ``BURROW_INSTALL_UPDATE_GOLDEN=1`` (legacy ``SUITE_INSTALL_UPDATE_GOLDEN=1``)
+  and review the diff.
 - media_reach = "lan" detects the machine's LAN address at render time; the
   detector is replaced here by a documentation address (RFC 5737) so renders
   are deterministic and no real address reaches a golden.
@@ -38,7 +39,7 @@ GOLDEN = os.path.join(HERE, "golden")
 
 sys.path.insert(0, INSTALLER)
 
-from suite_install import registry
+from suite_install import envcompat, registry
 from suite_install.__main__ import main
 from suite_install.manifest import load
 from suite_install.render import RenderError, build, plan, render
@@ -139,7 +140,7 @@ class MacGoldenTest(PositiveControlMixin, unittest.TestCase):
     def check_golden(self, case):
         redacted = mac_build(manifest_from(GOLDEN_CASES[case])).redacted()
         golden_dir = os.path.join(GOLDEN, case)
-        if os.environ.get("SUITE_INSTALL_UPDATE_GOLDEN") == "1":
+        if envcompat.get("BURROW_INSTALL_UPDATE_GOLDEN", "SUITE_INSTALL_UPDATE_GOLDEN") == "1":
             shutil.rmtree(golden_dir, ignore_errors=True)
             for rel, text in redacted.items():
                 path = os.path.join(golden_dir, rel)

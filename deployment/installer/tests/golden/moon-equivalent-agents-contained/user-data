@@ -140,6 +140,7 @@ write_files:
             - "agent-host.env"
           environment:
             AGENT_HOST_PROFILE: "contained"
+            BURROW_CORE_URL: "http://core-platform:4000"
             SUITE_CORE_URL: "http://core-platform:4000"
           volumes:
             - "agent-homes:/home"

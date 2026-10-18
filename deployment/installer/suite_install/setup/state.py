@@ -20,6 +20,7 @@ import json
 import os
 import tempfile
 
+from .. import envcompat
 from .. import render as render_mod
 from ..manifest import ManifestLoadError, load
 from ..validate import validate
@@ -55,12 +56,14 @@ def default_root():
 
 
 def resolve_dir(explicit=None, environ=None):
-    """``--dir``, else ``$SUITE_INSTALL_DIR``, else the single install under ~/suite."""
+    """``--dir``, else ``$BURROW_INSTALL_DIR`` (legacy ``$SUITE_INSTALL_DIR``),
+    else the single install under ~/suite."""
     environ = os.environ if environ is None else environ
     if explicit:
         return os.path.abspath(os.path.expanduser(explicit))
-    if environ.get("SUITE_INSTALL_DIR"):
-        return os.path.abspath(os.path.expanduser(environ["SUITE_INSTALL_DIR"]))
+    env_dir = envcompat.get("BURROW_INSTALL_DIR", "SUITE_INSTALL_DIR", environ=environ)
+    if env_dir:
+        return os.path.abspath(os.path.expanduser(env_dir))
     root = default_root()
     found = []
     if os.path.isdir(root):
@@ -79,7 +82,7 @@ def resolve_dir(explicit=None, environ=None):
     raise SetupError(
         "install_dir_ambiguous",
         f"{len(found)} installs under {root}",
-        "pass --dir <install dir> (or set SUITE_INSTALL_DIR)",
+        "pass --dir <install dir> (or set BURROW_INSTALL_DIR)",
         exit_code=2,
     )
 

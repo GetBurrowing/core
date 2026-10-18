@@ -15,10 +15,17 @@ set -eu
 versions="${1:?usage: install-tools.sh <versions.env>}"
 # shellcheck disable=SC1090
 . "$versions"
-for name in NODE_VERSION BUN_VERSION CLAUDE_CODE_VERSION CODEX_VERSION SUITE_CLI_REF; do
+for name in NODE_VERSION BUN_VERSION CLAUDE_CODE_VERSION CODEX_VERSION; do
 	eval "value=\${$name:-}"
 	[ -n "$value" ] || { echo "install-tools: $name is not set in $versions" >&2; exit 1; }
 done
+# suite-cli's pin: BURROW_CLI_REF, else the legacy SUITE_CLI_REF. Blank is unset.
+cli_ref="$(printf '%s' "${BURROW_CLI_REF:-}" | tr -d '[:space:]')"
+if [ -z "$cli_ref" ]; then
+	cli_ref="$(printf '%s' "${SUITE_CLI_REF:-}" | tr -d '[:space:]')"
+	[ -n "$cli_ref" ] || { echo "install-tools: BURROW_CLI_REF (or legacy SUITE_CLI_REF) is not set in $versions" >&2; exit 1; }
+	echo "deprecated: SUITE_CLI_REF is set; rename it to BURROW_CLI_REF" >&2
+fi
 
 case "$(uname -m)" in
 x86_64) node_arch=x64 ;;
@@ -59,10 +66,11 @@ npm install --global --no-fund --no-audit --loglevel=error \
 # suite-cli, from the pinned commit. Its installer asks before replacing an
 # existing install, so remove the old entrypoint first; stdin is /dev/null so
 # no prompt can ever block a boot.
-curl -fsSL "https://raw.githubusercontent.com/Startup-Suite/suite-cli/$SUITE_CLI_REF/install.sh" \
+curl -fsSL "https://raw.githubusercontent.com/Startup-Suite/suite-cli/$cli_ref/install.sh" \
 	-o "$tmp/suite-install.sh"
 rm -f /usr/local/bin/suite
-PATH="/usr/local/bin:$PATH" SUITE_CLI_REF="$SUITE_CLI_REF" XDG_BIN_HOME=/usr/local/bin \
+# suite-cli 969c6f7 reads only SUITE_CLI_REF, so pass both names.
+PATH="/usr/local/bin:$PATH" BURROW_CLI_REF="$cli_ref" SUITE_CLI_REF="$cli_ref" XDG_BIN_HOME=/usr/local/bin \
 	XDG_DATA_HOME=/usr/local/share sh "$tmp/suite-install.sh" </dev/null >/dev/null
 chmod -R a+rX /usr/local/share/suite
 

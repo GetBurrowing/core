@@ -13,8 +13,8 @@ existing OpenClaw install you may already have running for production work.
 ## Prerequisites
 
 - A Suite dev server is reachable. Use `suite-dev-server` to start one and note
-  the port — call it `SUITE_PORT` below. The example assumes
-  `http://localhost:$SUITE_PORT`.
+  the port — call it `BURROW_PORT` below. The example assumes
+  `http://localhost:$BURROW_PORT`.
 - Node.js 20+ and `npm` on `PATH`. (`asdf plugin add nodejs && asdf install nodejs 20`
   or your platform's package manager.)
 - `curl` and `jq` for the verification step.
@@ -53,7 +53,7 @@ openclaw --state-dir "$OPENCLAW_STATE_DIR" config set gateway.port "$OPENCLAW_GA
 The Suite admin UI lets you create an agent and a runtime row, mint a bearer
 token, and download the credentials. With the Suite dev server running:
 
-1. Visit `http://localhost:$SUITE_PORT/dev/login` and log in as the dev user.
+1. Visit `http://localhost:$BURROW_PORT/dev/login` and log in as the dev user.
 2. Navigate to **Admin -> Agents**.
 3. Click **New agent**. Pick a slug (e.g. `dev-zip`), a display name, and the
    bundle list — the safe minimum for federation work is:
@@ -69,15 +69,15 @@ token, and download the credentials. With the Suite dev server running:
 You'll end up with three values to plug into OpenClaw:
 
 ```
-SUITE_AGENT_SLUG=dev-zip
-SUITE_RUNTIME_ID=dev-zip-rt
-SUITE_TOKEN=<paste>
+BURROW_AGENT_SLUG=dev-zip
+BURROW_RUNTIME_ID=dev-zip-rt
+BURROW_TOKEN=<paste>
 ```
 
 Save the token to a file so you can refer to it without re-printing:
 
 ```bash
-printf '%s\n' "$SUITE_TOKEN" > "$OPENCLAW_STATE_DIR/dev-zip.token"
+printf '%s\n' "$BURROW_TOKEN" > "$OPENCLAW_STATE_DIR/dev-zip.token"
 chmod 600 "$OPENCLAW_STATE_DIR/dev-zip.token"
 ```
 
@@ -96,16 +96,16 @@ Configure the channel account, MCP server, and agent persona via
 gateway start).
 
 ```bash
-SUITE_PORT=4001                       # whatever your suite-dev-server printed
-SUITE_WS=ws://localhost:$SUITE_PORT/runtime/ws
-SUITE_MCP=http://localhost:$SUITE_PORT/mcp
+BURROW_PORT=4001                       # whatever your suite-dev-server printed
+BURROW_WS=ws://localhost:$BURROW_PORT/runtime/ws
+BURROW_MCP=http://localhost:$BURROW_PORT/mcp
 SLUG=dev-zip
 TOKEN="$(cat "$OPENCLAW_STATE_DIR/$SLUG.token")"
 
 # (a) channel account — the WebSocket runtime the plugin connects to.
 openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
   "channels.startup-suite.accounts.$SLUG" --strict-json "{
-    \"url\": \"$SUITE_WS\",
+    \"url\": \"$BURROW_WS\",
     \"runtimeId\": \"${SLUG}-rt\",
     \"token\": \"$TOKEN\",
     \"autoJoinSpaces\": [],
@@ -115,7 +115,7 @@ openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
 # (b) MCP server — the Suite's tool-call endpoint, scoped to this agent.
 openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
   "mcp.servers.suite-$SLUG" --strict-json "{
-    \"url\": \"$SUITE_MCP\",
+    \"url\": \"$BURROW_MCP\",
     \"transport\": \"streamable-http\",
     \"headers\": { \"Authorization\": \"Bearer $TOKEN\" }
   }"
@@ -157,16 +157,16 @@ tail -f "$OPENCLAW_STATE_DIR/logs/gateway.log"
 Within a few seconds you should see:
 
 ```
-[suite-client] Connecting to ws://localhost:<SUITE_PORT>/runtime/ws
+[suite-client] Connecting to ws://localhost:<BURROW_PORT>/runtime/ws
 [suite-client] Joined runtime:dev-zip-rt
 ```
 
 Confirm the Suite side sees it via the Suite MCP `federation_status` tool:
 
 ```bash
-SUITE_TOKEN="$(cat "$OPENCLAW_STATE_DIR/dev-zip.token")"
-curl -sS "$SUITE_MCP" \
-  -H "Authorization: Bearer $SUITE_TOKEN" \
+BURROW_TOKEN="$(cat "$OPENCLAW_STATE_DIR/dev-zip.token")"
+curl -sS "$BURROW_MCP" \
+  -H "Authorization: Bearer $BURROW_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"federation_status","arguments":{}}}' \
   | jq -r '.result.content[0].text | fromjson | .runtimes[] | "\(.runtime_id) online=\(.online)"'
@@ -192,11 +192,15 @@ agent + runtime, or directly via the Suite MCP / DB.
 ## Helper script
 
 `scripts/setup-isolated-gateway.sh` chains steps 1, 3, and 4 — install OpenClaw
-into the sandbox, wire the plugin from already-exported env vars (`SUITE_PORT`,
-`SUITE_AGENT_SLUG`, `SUITE_RUNTIME_ID`, `SUITE_TOKEN`,
+into the sandbox, wire the plugin from already-exported env vars (`BURROW_PORT`,
+`BURROW_AGENT_SLUG`, `BURROW_RUNTIME_ID`, `BURROW_TOKEN`,
 `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_STATE_DIR`), start the gateway, and verify
 the WebSocket + MCP path. Step 2 (creating the Suite agent + runtime + bearer)
 remains a manual UI flow because it's a security boundary.
+
+The helper still accepts the legacy `SUITE_PORT`, `SUITE_AGENT_SLUG`,
+`SUITE_RUNTIME_ID` and `SUITE_TOKEN` names and prints one deprecation line per
+legacy name it falls back to.
 
 ## Common failures
 

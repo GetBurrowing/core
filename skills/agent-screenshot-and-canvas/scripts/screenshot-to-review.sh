@@ -3,9 +3,9 @@
 # Suite attachment, embed it in a new canvas, and file a review request.
 #
 # Required env:
-#   SUITE_URL        e.g. http://localhost:4001
-#   SUITE_TOKEN      bearer for Suite MCP
-#   SUITE_SPACE_ID   uuid of the chat space the canvas lives in
+#   BURROW_URL       e.g. http://localhost:4001
+#   BURROW_TOKEN     bearer for Suite MCP
+#   BURROW_SPACE_ID  uuid of the chat space the canvas lives in
 #   VALIDATION_ID    uuid of the validation gate to file evidence against
 #   TARGET_URL       URL to screenshot
 #   LABEL            human-readable label for the review item
@@ -15,11 +15,31 @@
 #   SHOT_PATH        default /tmp/agent-shot-<pid>.png
 #   CDP_NAVIGATE     path to cdp_navigate.py (default: sibling of this script,
 #                    or skills/agent-chrome-cdp/scripts/cdp_navigate.py)
+#
+# The legacy SUITE_URL, SUITE_TOKEN and SUITE_SPACE_ID names still work and
+# print a deprecation line on stderr.
 set -euo pipefail
 
-: "${SUITE_URL:?must export SUITE_URL}"
-: "${SUITE_TOKEN:?must export SUITE_TOKEN}"
-: "${SUITE_SPACE_ID:?must export SUITE_SPACE_ID}"
+# compat BURROW_NAME LEGACY_NAME: set and export the BURROW_ variable from
+# itself, else from the legacy name with one deprecation line on stderr. An
+# empty value counts as unset; when both are set the BURROW_ value wins.
+compat() {
+  burrow=$1 suite=$2
+  eval "b=\${$burrow:-} s=\${$suite:-}"
+  if [ -z "$b" ]; then
+    if [ -z "$s" ]; then
+      echo "must export $burrow (or legacy $suite)" >&2
+      exit 1
+    fi
+    echo "deprecated: $suite is set; rename it to $burrow" >&2
+    eval "$burrow=\$s"
+  fi
+  export "${burrow?}"
+}
+
+compat BURROW_URL SUITE_URL
+compat BURROW_TOKEN SUITE_TOKEN
+compat BURROW_SPACE_ID SUITE_SPACE_ID
 : "${VALIDATION_ID:?must export VALIDATION_ID}"
 : "${TARGET_URL:?must export TARGET_URL}"
 : "${LABEL:?must export LABEL}"
@@ -43,8 +63,8 @@ echo "Captured $SHOT_PATH ($SIZE bytes)" >&2
 
 mcp_call() {
   local name="$1" args_json="$2"
-  curl -sS "$SUITE_URL/mcp" \
-    -H "Authorization: Bearer $SUITE_TOKEN" \
+  curl -sS "$BURROW_URL/mcp" \
+    -H "Authorization: Bearer $BURROW_TOKEN" \
     -H 'Content-Type: application/json' \
     -d "$(jq -n --arg name "$name" --argjson args "$args_json" \
             '{ jsonrpc: "2.0", id: 1, method: "tools/call",
@@ -73,7 +93,7 @@ esac
 
 # 4. Create the canvas
 CANVAS_JSON="$(mcp_call canvas.create "$(jq -n \
-  --arg space "$SUITE_SPACE_ID" \
+  --arg space "$BURROW_SPACE_ID" \
   --arg src "$ATTACHMENT_URL" \
   --arg alt "$LABEL" \
   '{ space_id: $space, kind: "evidence", title: "Screenshot evidence",

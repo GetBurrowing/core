@@ -267,6 +267,7 @@ class FullMachineTest(unittest.TestCase):
             sorted(p.split("=")[0] for p in pins),
             [
                 "BUN_VERSION",
+                "BURROW_CLI_REF",
                 "CLAUDE_CODE_VERSION",
                 "CODEX_VERSION",
                 "NODE_VERSION",
@@ -287,7 +288,11 @@ class FullMachineTest(unittest.TestCase):
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", text)
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", self.rendered.files["secrets.env"][0])
         self.assertIn("AGENT_HOST_PROFILE=full_machine\n", text)
-        self.assertIn("SUITE_CORE_URL=https://suite-01a0d69d.test\n", text)
+        self.assertIn(
+            "BURROW_CORE_URL=https://suite-01a0d69d.test\n"
+            "SUITE_CORE_URL=https://suite-01a0d69d.test\n",
+            text,
+        )
         # Only that: no other secret of the install reaches the host daemon.
         others = [v for k, v in self.rendered.generated.items() if k != "AGENT_HOST_TOKEN"]
         self.assertTrue(others)
@@ -369,7 +374,10 @@ class ContainedTest(unittest.TestCase):
         self.assertIn(
             'AGENT_HOST_CORE_URL: "http://core-platform:4000"', self.services["core-platform"]
         )
-        self.assertIn('SUITE_CORE_URL: "http://core-platform:4000"', self.services["agent-host"])
+        block = self.services["agent-host"]
+        self.assertIn('BURROW_CORE_URL: "http://core-platform:4000"', block)
+        self.assertIn('SUITE_CORE_URL: "http://core-platform:4000"', block)
+        self.assertLess(block.index("BURROW_CORE_URL"), block.index("SUITE_CORE_URL"))
         self.assertIn('AGENT_HOST_PROFILE: "contained"', self.services["agent-host"])
 
     def test_agent_host_runs_systemd_with_persistent_homes(self):

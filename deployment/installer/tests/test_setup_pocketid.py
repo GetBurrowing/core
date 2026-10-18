@@ -4,10 +4,12 @@ Two classes run the SAME assertions:
 
 - ``PocketIdFakeTest`` against the http.server fake (always runs);
 - ``PocketIdRealTest`` against a REAL pocket-id v2 container, skipped unless
-  ``SUITE_INSTALL_TEST_POCKETID_URL`` and ``SUITE_INSTALL_TEST_POCKETID_KEY``
-  are set. For stage 4 it ran against the throwaway container
-  ``pocketid-01a0d6ab`` (ghcr.io/pocket-id/pocket-id:v2, sqlite, bound to
-  127.0.0.1 on moon, reached from hive through an ssh -L forward).
+  ``BURROW_INSTALL_TEST_POCKETID_URL`` and ``BURROW_INSTALL_TEST_POCKETID_KEY``
+  are set (legacy ``SUITE_INSTALL_TEST_POCKETID_URL`` and
+  ``SUITE_INSTALL_TEST_POCKETID_KEY`` are still read). For stage 4 it ran
+  against the throwaway container ``pocketid-01a0d6ab``
+  (ghcr.io/pocket-id/pocket-id:v2, sqlite, bound to 127.0.0.1 on moon,
+  reached from hive through an ssh -L forward).
 
 Running ``pocket-id`` + ``oidc-client`` twice must leave exactly one admin
 user, one client ``suite-core`` whose callback is the literal URL, PKCE on,
@@ -36,6 +38,7 @@ from setup_fakes import (
     run_cli,
 )
 
+from suite_install import envcompat
 from suite_install.setup import cli, pocketid
 from suite_install.setup.host import Result
 from suite_install.setup.state import Install
@@ -216,15 +219,18 @@ class PocketIdFakeV216Test(PocketIdCases, unittest.TestCase):
         self.assertNotIn("DELETE", [m for m, _p in self.fake.requests])
 
 
+REAL_POCKETID_URL = envcompat.get("BURROW_INSTALL_TEST_POCKETID_URL", "SUITE_INSTALL_TEST_POCKETID_URL")
+REAL_POCKETID_KEY = envcompat.get("BURROW_INSTALL_TEST_POCKETID_KEY", "SUITE_INSTALL_TEST_POCKETID_KEY")
+
+
 @unittest.skipUnless(
-    os.environ.get("SUITE_INSTALL_TEST_POCKETID_URL")
-    and os.environ.get("SUITE_INSTALL_TEST_POCKETID_KEY"),
-    "set SUITE_INSTALL_TEST_POCKETID_URL and _KEY to run against a real pocket-id v2",
+    REAL_POCKETID_URL and REAL_POCKETID_KEY,
+    "set BURROW_INSTALL_TEST_POCKETID_URL and BURROW_INSTALL_TEST_POCKETID_KEY to run against a real pocket-id v2",
 )
 class PocketIdRealTest(PocketIdCases, unittest.TestCase):
     def setUp(self):
-        self.url = os.environ["SUITE_INSTALL_TEST_POCKETID_URL"]
-        self.key = os.environ["SUITE_INSTALL_TEST_POCKETID_KEY"]
+        self.url = REAL_POCKETID_URL
+        self.key = REAL_POCKETID_KEY
         super().setUp()
         # Each run on a real container starts from no suite-core client.
         status, _ = self.api.call("GET", "/api/oidc/clients/suite-core", allow=(404,))

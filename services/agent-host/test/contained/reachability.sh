@@ -23,7 +23,7 @@ set -uo pipefail
 IMG="${1:?usage: reachability.sh <agent-host image> [strict|true|none]}"
 MODE="${2:-strict}"
 ID=01a10322-s3
-SUITE_NET="suite-$ID"
+BURROW_NET="suite-$ID"
 AGENTS_NET="agents-$ID"
 PG="pg-$ID"
 CORE="core-$ID"
@@ -39,7 +39,7 @@ inventory() {
 cleanup() {
   inventory "before teardown"
   podman rm -f -t 0 "$AH" "$CORE" "$PG" >/dev/null 2>&1 || true
-  podman network rm "$SUITE_NET" "$AGENTS_NET" >/dev/null 2>&1 || true
+  podman network rm "$BURROW_NET" "$AGENTS_NET" >/dev/null 2>&1 || true
   inventory "after teardown"
 }
 trap cleanup EXIT
@@ -50,7 +50,7 @@ expect() { # expect <name> <want: ok|refused> <rc>
   if [ "$got" = "$2" ]; then echo "PASS $1: $got"; else echo "FAIL $1: got $got, want $2"; fail=1; fi
 }
 
-podman network create "$SUITE_NET" >/dev/null
+podman network create "$BURROW_NET" >/dev/null
 case "$MODE" in
 strict | true) podman network create --opt "isolate=$MODE" "$AGENTS_NET" >/dev/null ;;
 none) podman network create "$AGENTS_NET" >/dev/null ;;
@@ -59,14 +59,14 @@ esac
 
 # The password is generated here and never printed.
 PGPW="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-podman run -d --name "$PG" --network "$SUITE_NET:alias=core-postgres" \
+podman run -d --name "$PG" --network "$BURROW_NET:alias=core-postgres" \
   -e POSTGRES_PASSWORD="$PGPW" docker.io/library/postgres:16-alpine >/dev/null
 podman run -d --name "$CORE" \
-  --network "$SUITE_NET:alias=core-platform" --network "$AGENTS_NET:alias=core-platform" \
+  --network "$BURROW_NET:alias=core-platform" --network "$AGENTS_NET:alias=core-platform" \
   docker.io/library/python:3.12-slim python3 -m http.server 4000 >/dev/null
 TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
 podman run -d --name "$AH" --systemd=always --network "$AGENTS_NET" \
-  -e AGENT_HOST_TOKEN="$TOKEN" -e SUITE_CORE_URL=http://core-platform:4000 "$IMG" >/dev/null
+  -e AGENT_HOST_TOKEN="$TOKEN" -e BURROW_CORE_URL=http://core-platform:4000 -e SUITE_CORE_URL=http://core-platform:4000 "$IMG" >/dev/null
 
 for _ in $(seq 1 60); do
   state="$(podman exec "$AH" systemctl is-system-running 2>/dev/null || true)"
@@ -79,9 +79,9 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-PG_IP="$(podman inspect "$PG" --format "{{(index .NetworkSettings.Networks \"$SUITE_NET\").IPAddress}}")"
-CORE_SUITE_IP="$(podman inspect "$CORE" --format "{{(index .NetworkSettings.Networks \"$SUITE_NET\").IPAddress}}")"
-echo "core-postgres stand-in at $PG_IP on $SUITE_NET; agents network isolate: $MODE"
+PG_IP="$(podman inspect "$PG" --format "{{(index .NetworkSettings.Networks \"$BURROW_NET\").IPAddress}}")"
+CORE_SUITE_IP="$(podman inspect "$CORE" --format "{{(index .NetworkSettings.Networks \"$BURROW_NET\").IPAddress}}")"
+echo "core-postgres stand-in at $PG_IP on $BURROW_NET; agents network isolate: $MODE"
 
 tcp_from_core() { podman exec "$CORE" python3 -c "import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 3)" "$1" "$2" >/dev/null 2>&1; }
 tcp_from_ah() { podman exec "$AH" timeout 4 bash -c "</dev/tcp/$1/$2" >/dev/null 2>&1; }
@@ -100,9 +100,9 @@ tcp_from_ah "$CORE_SUITE_IP" 4000; expect "agent-host -> core-platform's suite-n
 
 # The daemon got its env through systemd (PassEnvironment), names only.
 pid="$(podman exec "$AH" systemctl show -p MainPID --value suite-agent-host.service)"
-names="$(podman exec "$AH" sh -c "tr '\\0' '\\n' < /proc/$pid/environ | cut -d= -f1 | grep -E '^(AGENT_HOST_TOKEN|AGENT_HOST_PROFILE|SUITE_CORE_URL)\$' | sort | tr '\\n' ' '")"
+names="$(podman exec "$AH" sh -c "tr '\\0' '\\n' < /proc/$pid/environ | cut -d= -f1 | grep -E '^(AGENT_HOST_TOKEN|AGENT_HOST_PROFILE|BURROW_CORE_URL|SUITE_CORE_URL)\$' | sort | tr '\\n' ' '")"
 echo "agent-host daemon env names: $names"
-[ "$names" = "AGENT_HOST_PROFILE AGENT_HOST_TOKEN SUITE_CORE_URL " ]; expect "daemon received its three env names" ok $?
+[ "$names" = "AGENT_HOST_PROFILE AGENT_HOST_TOKEN BURROW_CORE_URL SUITE_CORE_URL " ]; expect "daemon received its four env names" ok $?
 podman exec "$AH" journalctl -u suite-agent-host --no-pager -o cat | grep -m1 'dialling' || true
 podman exec "$AH" journalctl -u suite-agent-host --no-pager -o cat | grep -q 'as profile contained'; expect "daemon reports profile contained" ok $?
 

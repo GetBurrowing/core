@@ -5,15 +5,26 @@ import XCTest
 /// Evidence only, not an assertion suite: renders the share sheet and the
 /// widgets with ImageRenderer to PNGs for the stage evidence canvas. The
 /// share sheet and widgets are hard to drive headlessly on a simulator.
-/// Run with the Render scheme and `TEST_RUNNER_SUITE_RENDER_DIR=<dir>`.
+/// Run with the Render scheme and `TEST_RUNNER_BURROW_RENDER_DIR=<dir>`
+/// (the legacy `TEST_RUNNER_SUITE_RENDER_DIR` still works).
 @MainActor
 final class ExtensionRenderTests: XCTestCase {
     private var outDir: URL!
+    /// setUp runs per test; the legacy-name line prints once per process.
+    private static var warnedLegacyRenderDir = false
     private let now = Date()
 
     override func setUpWithError() throws {
-        let dir = ProcessInfo.processInfo.environment["SUITE_RENDER_DIR"]
-        try XCTSkipIf(dir == nil, "SUITE_RENDER_DIR not set")
+        let environment = ProcessInfo.processInfo.environment
+        var dir = environment["BURROW_RENDER_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        if dir == nil, let legacy = environment["SUITE_RENDER_DIR"], !legacy.isEmpty {
+            if !Self.warnedLegacyRenderDir {
+                Self.warnedLegacyRenderDir = true
+                NSLog("deprecated: SUITE_RENDER_DIR is set; rename it to BURROW_RENDER_DIR")
+            }
+            dir = legacy
+        }
+        try XCTSkipIf(dir == nil, "BURROW_RENDER_DIR not set")
         outDir = URL(fileURLWithPath: dir!)
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     }

@@ -2,7 +2,7 @@
  * Suite's agent host: runs this install's native agents and takes its orders
  * from core (task 01a10322 stage 2).
  *
- * It dials OUT to `${SUITE_CORE_URL}/agent-host/websocket` with
+ * It dials OUT to `${BURROW_CORE_URL}/agent-host/websocket` with
  * `AGENT_HOST_TOKEN`, reconnecting with backoff, and core pushes commands.
  * Core is never given a way into this machine: no container-runtime socket and
  * no D-Bus is shared with it.
@@ -12,11 +12,13 @@
  * creates users and units. Each agent runs as its own user.
  *
  * Environment:
- *   SUITE_CORE_URL       core's base URL, e.g. http://core-platform:4000
+ *   BURROW_CORE_URL      core's base URL, e.g. http://core-platform:4000
+ *                        (legacy SUITE_CORE_URL is still read, with a deprecation line)
  *   AGENT_HOST_TOKEN     the install's shared agent-host secret
  *   AGENT_HOST_PROFILE   "full_machine" | "contained", reported to core as is
  */
 import { resolve } from "node:path";
+import { readEnv } from "./env.ts";
 import { SecretRegistry, liveRunner } from "./exec.ts";
 import { Host, WATCH_MS } from "./host.ts";
 import { PhoenixChannel, agentHostUrl, bunSocket } from "./phoenix.ts";
@@ -32,8 +34,17 @@ function required(name: string): string {
   return v.trim();
 }
 
+function coreUrlFromEnv(): string {
+  const v = readEnv("BURROW_CORE_URL", "SUITE_CORE_URL");
+  if (v === undefined) {
+    console.error("agent-host: BURROW_CORE_URL (or legacy SUITE_CORE_URL) is not set");
+    process.exit(2);
+  }
+  return v.trim();
+}
+
 if (import.meta.main) {
-  const coreUrl = required("SUITE_CORE_URL");
+  const coreUrl = coreUrlFromEnv();
   const token = required("AGENT_HOST_TOKEN");
   const profile = process.env.AGENT_HOST_PROFILE?.trim() ?? "";
   if (!PROFILES.has(profile)) {

@@ -229,19 +229,38 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     }
 
     #if DEBUG
-        /// DEBUG measurement (stage 3): `SUITE_MEETING_PROBE_URL` /
+        /// DEBUG measurement (stage 3): `BURROW_MEETING_PROBE_URL` /
         /// `_TOKEN` / `_ROOM` in the launch environment connect a native call
-        /// straight to a LiveKit server, skipping sign-in. Never logged.
+        /// straight to a LiveKit server, skipping sign-in. Values are never
+        /// logged. The legacy SUITE_ spellings of these names still work.
         private func startMeetingProbe() -> Bool {
-            let env = ProcessInfo.processInfo.environment
-            guard let url = env["SUITE_MEETING_PROBE_URL"], let credential = env["SUITE_MEETING_PROBE_TOKEN"] else {
+            guard let url = env("BURROW_MEETING_PROBE_URL", "SUITE_MEETING_PROBE_URL"),
+                let credential = env("BURROW_MEETING_PROBE_TOKEN", "SUITE_MEETING_PROBE_TOKEN")
+            else {
                 return false
             }
             CallController.shared.startProbe(
-                url: url, token: credential, roomName: env["SUITE_MEETING_PROBE_ROOM"] ?? "probe",
-                meetingName: env["SUITE_MEETING_PROBE_NAME"] ?? "Design review",
-                useCallKit: env["SUITE_MEETING_PROBE_CALLKIT"] != "0")
+                url: url, token: credential,
+                roomName: env("BURROW_MEETING_PROBE_ROOM", "SUITE_MEETING_PROBE_ROOM") ?? "probe",
+                meetingName: env("BURROW_MEETING_PROBE_NAME", "SUITE_MEETING_PROBE_NAME") ?? "Design review",
+                useCallKit: env("BURROW_MEETING_PROBE_CALLKIT", "SUITE_MEETING_PROBE_CALLKIT") != "0")
             return true
+        }
+
+        /// Legacy names already reported, so each warns once per process.
+        private static var warnedLegacyEnv = Set<String>()
+
+        /// The launch-environment value of `burrow`, else of the legacy
+        /// `suite` name with one deprecation line. Empty counts as unset.
+        /// Logs the names only, never the value.
+        private func env(_ burrow: String, _ suite: String) -> String? {
+            let environment = ProcessInfo.processInfo.environment
+            if let value = environment[burrow], !value.isEmpty { return value }
+            guard let value = environment[suite], !value.isEmpty else { return nil }
+            if Self.warnedLegacyEnv.insert(suite).inserted {
+                NSLog("deprecated: %@ is set; rename it to %@", suite, burrow)
+            }
+            return value
         }
     #endif
 

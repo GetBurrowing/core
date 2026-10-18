@@ -1567,8 +1567,8 @@
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				INFOPLIST_FILE = App/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
-				SUITE_APS_ENVIRONMENT = development;
-				SUITE_PUSH_ENVIRONMENT = sandbox;
+				BURROW_APS_ENVIRONMENT = development;
+				BURROW_PUSH_ENVIRONMENT = sandbox;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Debug;
@@ -1686,8 +1686,8 @@
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				INFOPLIST_FILE = App/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
-				SUITE_APS_ENVIRONMENT = production;
-				SUITE_PUSH_ENVIRONMENT = production;
+				BURROW_APS_ENVIRONMENT = production;
+				BURROW_PUSH_ENVIRONMENT = production;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Release;

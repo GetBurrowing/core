@@ -10,8 +10,11 @@ StartLimitBurst=5
 [Service]
 Type=simple
 EnvironmentFile=/etc/suite-agents/%i.env
+Environment=BURROW_AGENT_ID=%i
 Environment=SUITE_AGENT_ID=%i
+Environment=BURROW_AGENT_SESSION=suite-agent
 Environment=SUITE_AGENT_SESSION=suite-agent
+Environment=BURROW_UNATTENDED=1
 Environment=SUITE_UNATTENDED=1
 Environment=DISABLE_AUTOUPDATER=1
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt

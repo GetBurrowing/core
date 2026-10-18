@@ -62,14 +62,17 @@ uses `cdp_navigate.py` from that skill to capture, then makes three Suite MCP
 calls via `curl`.
 
 ```bash
-SUITE_URL=http://localhost:4001 \
-SUITE_TOKEN=<bearer> \
-SUITE_SPACE_ID=<uuid> \
+BURROW_URL=http://localhost:4001 \
+BURROW_TOKEN=<bearer> \
+BURROW_SPACE_ID=<uuid> \
 VALIDATION_ID=<uuid> \
 TARGET_URL=http://localhost:4001/tasks \
 LABEL="Tasks page renders without error" \
 skills/agent-screenshot-and-canvas/scripts/screenshot-to-review.sh
 ```
+
+The legacy `SUITE_URL`, `SUITE_TOKEN` and `SUITE_SPACE_ID` names still work;
+the script prints one deprecation line per legacy name it falls back to.
 
 What the script does, end to end:
 
@@ -107,8 +110,8 @@ page.screenshot(path="/tmp/shot.png", full_page=True)
 ```bash
 SIZE=$(wc -c < /tmp/shot.png | tr -d ' ')
 
-curl -sS "$SUITE_URL/mcp" \
-  -H "Authorization: Bearer $SUITE_TOKEN" \
+curl -sS "$BURROW_URL/mcp" \
+  -H "Authorization: Bearer $BURROW_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg size "$SIZE" '
     { jsonrpc: "2.0", id: 1, method: "tools/call",
@@ -140,11 +143,11 @@ Add any `upload_headers` from step 2 verbatim. Confirm 200/204.
 ### Step 4: create the canvas
 
 ```bash
-curl -sS "$SUITE_URL/mcp" \
-  -H "Authorization: Bearer $SUITE_TOKEN" \
+curl -sS "$BURROW_URL/mcp" \
+  -H "Authorization: Bearer $BURROW_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n \
-        --arg space "$SUITE_SPACE_ID" \
+        --arg space "$BURROW_SPACE_ID" \
         --arg src "$ATTACHMENT_URL" \
         --arg alt "$LABEL" '
     { jsonrpc: "2.0", id: 2, method: "tools/call",
@@ -184,8 +187,8 @@ If you'd rather extend an existing canvas, use `canvas.patch` with the
 ### Step 5: file the review request
 
 ```bash
-curl -sS "$SUITE_URL/mcp" \
-  -H "Authorization: Bearer $SUITE_TOKEN" \
+curl -sS "$BURROW_URL/mcp" \
+  -H "Authorization: Bearer $BURROW_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n \
         --arg vid "$VALIDATION_ID" \

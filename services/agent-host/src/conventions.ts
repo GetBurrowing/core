@@ -29,7 +29,7 @@ import type { Runner } from "./exec.ts";
 import type { AgentUser } from "./users.ts";
 
 /** Where install-tools.sh installs suite-cli's library (XDG_DATA_HOME=/usr/local/share). */
-export const SUITE_CLI_LIB = "/usr/local/share/suite/cli";
+export const BURROW_CLI_LIB = "/usr/local/share/suite/cli";
 
 /** The agent's user-level memory file, relative to its home. */
 export const USER_MEMORY = ".claude/CLAUDE.md";
@@ -60,7 +60,7 @@ export const FALLBACK = [
  * suite-cli's `SUITE_CONVENTIONS`, or null when `lib` has no loadable
  * `src/claude_md.ts` exporting a non-empty string.
  */
-export async function loadSuiteConventions(lib: string = SUITE_CLI_LIB): Promise<string | null> {
+export async function loadSuiteConventions(lib: string = BURROW_CLI_LIB): Promise<string | null> {
   try {
     const mod = (await import(join(lib, "src", "claude_md.ts"))) as { SUITE_CONVENTIONS?: unknown };
     const text = mod.SUITE_CONVENTIONS;
@@ -103,8 +103,8 @@ export async function writeUserMemory(runner: Runner, user: AgentUser, content: 
 if (import.meta.main && process.argv.includes("--check")) {
   const text = await loadSuiteConventions();
   if (text === null || !text.includes("suite_reply")) {
-    console.error(`conventions: could not load SUITE_CONVENTIONS from ${SUITE_CLI_LIB}/src/claude_md.ts`);
+    console.error(`conventions: could not load SUITE_CONVENTIONS from ${BURROW_CLI_LIB}/src/claude_md.ts`);
     process.exit(1);
   }
-  console.error(`conventions: ${text.length} characters from ${SUITE_CLI_LIB}`);
+  console.error(`conventions: ${text.length} characters from ${BURROW_CLI_LIB}`);
 }

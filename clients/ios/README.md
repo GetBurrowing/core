@@ -32,7 +32,7 @@ JS name `SuiteNative`). A v2 meetings plugin registers beside it in
 | `ios/App/App/NavigationPolicy.swift` | Install host stays in view, every other host opens in Safari |
 | `ios/App/AppTests` | XCTest unit tests (the App scheme) |
 | `ios/App/EvidenceUITests` | Screenshot driver (the Evidence scheme), not an assertion suite |
-| `ios/App/ExtensionRenderTests` | Renders the share sheet and widgets to PNGs (the Render scheme, `TEST_RUNNER_SUITE_RENDER_DIR=<dir>`), not an assertion suite |
+| `ios/App/ExtensionRenderTests` | Renders the share sheet and widgets to PNGs (the Render scheme, `TEST_RUNNER_BURROW_RENDER_DIR=<dir>`; the legacy `TEST_RUNNER_SUITE_RENDER_DIR` still works), not an assertion suite |
 | `scripts/generate_assets.py` | Regenerates colour sets and the launch mark (from the committed icons) |
 | `scripts/testflight.sh`, `scripts/set_testflight_notes.py`, `ExportOptions.plist`, `WHATSNEW.md` | TestFlight build, see TestFlight below |
 

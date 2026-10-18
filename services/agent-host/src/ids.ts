@@ -96,4 +96,24 @@ export function isAgentEnvName(value: unknown): value is string {
   return typeof value === "string" && ENV_NAME.test(value) && !RESERVED_ENV.has(value);
 }
 
-const RESERVED_ENV = new Set(["HOME", "USER", "PATH", "SHELL", "TMUX", "TMUX_TMPDIR", "SUITE_AGENT_ID", "LD_PRELOAD", "LD_LIBRARY_PATH"]);
+// The unit sets AGENT_ID, AGENT_SESSION and UNATTENDED in both spellings, and
+// systemd lets EnvironmentFile= override Environment=, so an owner-supplied
+// entry would win: a BURROW_ one for every BURROW-first reader, a SUITE_ one
+// for every reader still on the old name (suite-cli, the plugins). Reserve
+// all six.
+const RESERVED_ENV = new Set([
+  "HOME",
+  "USER",
+  "PATH",
+  "SHELL",
+  "TMUX",
+  "TMUX_TMPDIR",
+  "BURROW_AGENT_ID",
+  "SUITE_AGENT_ID",
+  "BURROW_AGENT_SESSION",
+  "SUITE_AGENT_SESSION",
+  "BURROW_UNATTENDED",
+  "SUITE_UNATTENDED",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+]);

@@ -2,7 +2,7 @@
 
 Runs a Suite install's native agents (core task 01a10322). TypeScript on bun.
 
-- It dials **out** to core at `${SUITE_CORE_URL}/agent-host/websocket` and
+- It dials **out** to core at `${BURROW_CORE_URL}/agent-host/websocket` and
   presents `AGENT_HOST_TOKEN` in the `x-agent-host-token` header. Core pushes
   commands down that channel. Core is never given a container-runtime socket
   or the host's D-Bus.
@@ -28,7 +28,8 @@ Runs a Suite install's native agents (core task 01a10322). TypeScript on bun.
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
 
-Environment: `SUITE_CORE_URL`, `AGENT_HOST_TOKEN`, and `AGENT_HOST_PROFILE`
+Environment: `BURROW_CORE_URL` (the legacy `SUITE_CORE_URL` is still read, with a
+deprecation line), `AGENT_HOST_TOKEN`, and `AGENT_HOST_PROFILE`
 (`full_machine` or `contained`). The profile is reported to core as is, and
 core does not branch on it.
 

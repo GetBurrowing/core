@@ -54,7 +54,7 @@
 	<key>SuiteKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.kobo-ai.burrow.shared</string>
 	<key>SuitePushEnvironment</key>
-	<string>$(SUITE_PUSH_ENVIRONMENT)</string>
+	<string>$(BURROW_PUSH_ENVIRONMENT)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>PublicSans-Variable.ttf</string>

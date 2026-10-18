@@ -52,6 +52,7 @@ BUN_VERSION=1.4.2
 CLAUDE_CODE_VERSION=2.1.295
 CODEX_VERSION=0.162.0
 # suite-cli has no release tags; this is PR #33 at 0.8.0 (Startup-Suite/suite-cli 3f80728): re-pin to its merge commit.
+BURROW_CLI_REF=3f8072830bea22f45584d00a5b6611bee05a05f8
 SUITE_CLI_REF=3f8072830bea22f45584d00a5b6611bee05a05f8
 """
 
@@ -81,7 +82,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-PassEnvironment=SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
+PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
 EnvironmentFile=-/etc/suite-agent-host.env
 # Node and bun read only their bundled roots without this; the system bundle
 # carries an install's internal root CA once update-ca-certificates has run.
@@ -110,8 +111,11 @@ StartLimitBurst=5
 [Service]
 Type=simple
 EnvironmentFile=/etc/suite-agents/%i.env
+Environment=BURROW_AGENT_ID=%i
 Environment=SUITE_AGENT_ID=%i
+Environment=BURROW_AGENT_SESSION=suite-agent
 Environment=SUITE_AGENT_SESSION=suite-agent
+Environment=BURROW_UNATTENDED=1
 Environment=SUITE_UNATTENDED=1
 Environment=DISABLE_AUTOUPDATER=1
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
@@ -158,6 +162,7 @@ def host_env(plan, token):
         "# SECRET. Mode 0600, root. Read by suite-agent-host.service only.\n"
         "AGENT_HOST_PROFILE=full_machine\n"
         f"AGENT_HOST_TOKEN={token}\n"
+        f"BURROW_CORE_URL=https://{plan.primary}\n"
         f"SUITE_CORE_URL=https://{plan.primary}\n"
     )
 

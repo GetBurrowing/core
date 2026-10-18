@@ -520,6 +520,7 @@ AGENT_HOST_CORE_URL = "http://core-platform:4000"
 
 def _agent_host_env(ctx):
     return {
+        "BURROW_CORE_URL": AGENT_HOST_CORE_URL,
         "SUITE_CORE_URL": AGENT_HOST_CORE_URL,
         "AGENT_HOST_PROFILE": "contained",
         "AGENT_HOST_TOKEN": "{secret:AGENT_HOST_TOKEN}",

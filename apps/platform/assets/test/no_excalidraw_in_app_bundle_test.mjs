@@ -59,19 +59,38 @@ const DEPS = resolve(ASSETS, "..", "deps");
 // profile aliases `@extensions` to js/extensions/none.js, the empty hook
 // registry of the WITHOUT-modules build. A with-modules release host aliases
 // it to the entry `mix platform.extensions.assets` generates; set
-// SUITE_EXTENSIONS_JS to that file to run every assertion below against the
-// WITH-modules bundle, and SUITE_EXTENSION_LITERAL to a string the module's
+// BURROW_EXTENSIONS_JS to that file to run every assertion below against the
+// WITH-modules bundle, and BURROW_EXTENSION_LITERAL to a string the module's
 // hook is known to ship (the positive control for the absence check below).
-// Unset, this is the without-modules build and nothing else changes.
-const EXTENSIONS_JS = process.env.SUITE_EXTENSIONS_JS
-  ? resolve(process.env.SUITE_EXTENSIONS_JS)
-  : null;
+// The old names SUITE_EXTENSIONS_JS and SUITE_EXTENSION_LITERAL are still read
+// as fallbacks. Unset, this is the without-modules build and nothing else
+// changes.
+// Burrow rename (task 01a14b9e): BURROW_<NAME> first, SUITE_<NAME> fallback, "" counts
+// as unset, one stderr line per name per process on fallback. Both full
+// literals are named at the call site so the stage-5 text guard sees them.
+const warnedDeprecated = new Set();
+function compatEnv(burrow, suite) {
+  const value = process.env[burrow];
+  if (value) return value;
+  const old = process.env[suite];
+  if (old) {
+    if (!warnedDeprecated.has(suite)) {
+      warnedDeprecated.add(suite);
+      process.stderr.write(`deprecated: ${suite} is set; rename it to ${burrow}\n`);
+    }
+    return old;
+  }
+  return undefined;
+}
+const EXTENSIONS_ENV = compatEnv("BURROW_EXTENSIONS_JS", "SUITE_EXTENSIONS_JS");
+const EXTENSIONS_JS = EXTENSIONS_ENV ? resolve(EXTENSIONS_ENV) : null;
 
 // A string literal only Play's hook ships: the LiveView event its viewer
 // pushes to attach (apps/game_stream/assets/js/hooks/game_stream.js). It must
-// be absent from the without-modules bundle; SUITE_EXTENSION_LITERAL
-// overrides it for another module.
-const EXTENSION_LITERAL = process.env.SUITE_EXTENSION_LITERAL || "game_stream_attach";
+// be absent from the without-modules bundle; BURROW_EXTENSION_LITERAL
+// (fallback SUITE_EXTENSION_LITERAL) overrides it for another module.
+const EXTENSION_LITERAL =
+  compatEnv("BURROW_EXTENSION_LITERAL", "SUITE_EXTENSION_LITERAL") || "game_stream_attach";
 
 async function buildAppBundle() {
   const result = await build({

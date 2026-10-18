@@ -118,11 +118,11 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: primary
       configs:
         Debug:
-          SUITE_APS_ENVIRONMENT: development
-          SUITE_PUSH_ENVIRONMENT: sandbox
+          BURROW_APS_ENVIRONMENT: development
+          BURROW_PUSH_ENVIRONMENT: sandbox
         Release:
-          SUITE_APS_ENVIRONMENT: production
-          SUITE_PUSH_ENVIRONMENT: production
+          BURROW_APS_ENVIRONMENT: production
+          BURROW_PUSH_ENVIRONMENT: production
   # Share to Suite (task 01a10882 stage 4). Bearer from the shared
   # Keychain access group; never web-view cookies.
   ShareExtension:

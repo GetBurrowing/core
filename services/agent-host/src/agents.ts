@@ -109,6 +109,7 @@ export async function writeAsUser(runner: Runner, user: AgentUser, path: string,
 /** `KEY=value` lines for systemd's EnvironmentFile. Values are single-quoted. */
 export function renderEnvFile(agentId: string, env: Record<string, string>): string {
   const lines = ["# Managed by Suite's agent host. This agent's values only."];
+  lines.push(`BURROW_AGENT_ID=${agentId}`);
   lines.push(`SUITE_AGENT_ID=${agentId}`);
   for (const [k, v] of Object.entries(env)) {
     lines.push(`${k}='${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`);

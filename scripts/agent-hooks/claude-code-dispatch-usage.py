@@ -19,10 +19,13 @@ What it counts, from the transcript only:
     and nothing is sent.
 
 Environment (read, never echoed):
-  SUITE_RUNTIME_TOKEN   runtime bearer token (required to send)
-  SUITE_BASE_URL        e.g. https://suite.example.com (required to send)
-  SUITE_AGENT_ID        the agent's UUID (strongly recommended: DispatchMetrics
+  BURROW_RUNTIME_TOKEN  runtime bearer token (required to send)
+  BURROW_BASE_URL       e.g. https://suite.example.com (required to send)
+  BURROW_AGENT_ID       the agent's UUID (strongly recommended: DispatchMetrics
                         only counts a report whose agent_id matches the dispatch)
+  The legacy names SUITE_RUNTIME_TOKEN, SUITE_BASE_URL and SUITE_AGENT_ID are
+  still read when the BURROW_ name is unset or empty, with one deprecation
+  line per name on stderr (task 01a14b9e).
   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET   optional Cloudflare Access pair
 
 The hook never fails the session: every error path exits 0 with a one-line
@@ -37,6 +40,8 @@ Installing it (settings.json hooks) is stage 4's job.
 
 import json
 import os
+import contextlib
+import io
 import re
 import sys
 import tempfile
@@ -55,6 +60,28 @@ STAGE_PATTERNS = [
 ]
 HARNESS = "claude-code"
 TIMEOUT_SECONDS = 10
+
+_DEPRECATION_WARNED = set()
+
+
+def _env(env, burrow, suite):
+    """Read ``burrow`` from ``env``, else the legacy ``suite`` name.
+
+    Burrow rename (task 01a14b9e): an empty string counts as unset, and
+    falling back to the legacy name writes one deprecation line per name per
+    process to stderr. Call sites name both full literals; never build a name
+    from a suffix.
+    """
+    value = env.get(burrow)
+    if value:
+        return value
+    value = env.get(suite)
+    if value:
+        if suite not in _DEPRECATION_WARNED:
+            _DEPRECATION_WARNED.add(suite)
+            sys.stderr.write("deprecated: %s is set; rename it to %s\n" % (suite, burrow))
+        return value
+    return None
 
 
 def read_lines(path):
@@ -190,17 +217,17 @@ def build_payload(summary, hook, env):
         "tool_calls": summary["tool_names"],
         "metadata": metadata,
     }
-    agent_id = env.get("SUITE_AGENT_ID")
+    agent_id = _env(env, "BURROW_AGENT_ID", "SUITE_AGENT_ID")
     if agent_id:
         payload["agent_id"] = agent_id
     return payload
 
 
 def post(payload, env):
-    token = env.get("SUITE_RUNTIME_TOKEN")
-    base = env.get("SUITE_BASE_URL")
+    token = _env(env, "BURROW_RUNTIME_TOKEN", "SUITE_RUNTIME_TOKEN")
+    base = _env(env, "BURROW_BASE_URL", "SUITE_BASE_URL")
     if not token or not base:
-        return "skipped: SUITE_RUNTIME_TOKEN or SUITE_BASE_URL unset"
+        return "skipped: BURROW_RUNTIME_TOKEN or BURROW_BASE_URL unset"
     headers = {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + token,
@@ -249,6 +276,79 @@ def run(stdin_text, env, dry_run=False):
     return post(payload, env)
 
 
+def _capture_env(env, burrow, suite):
+    """Run ``_env`` from a clean warn-once set, returning (value, stderr)."""
+    _DEPRECATION_WARNED.clear()
+    buffer = io.StringIO()
+    with contextlib.redirect_stderr(buffer):
+        value = _env(env, burrow, suite)
+    return value, buffer.getvalue()
+
+
+def env_self_test(failures):
+    """BURROW_ names first, SUITE_ fallback. Returns the number of checks."""
+    names = [
+        ("BURROW_RUNTIME_TOKEN", "SUITE_RUNTIME_TOKEN"),
+        ("BURROW_BASE_URL", "SUITE_BASE_URL"),
+        ("BURROW_AGENT_ID", "SUITE_AGENT_ID"),
+    ]
+    checks = 0
+    for burrow, suite in names:
+        # BURROW only: used, no line.
+        value, err = _capture_env({burrow: "new"}, burrow, suite)
+        if value != "new" or err:
+            failures.append("%s only: got %r with stderr %r" % (burrow, value, err))
+        # Both set: BURROW wins, no line.
+        value, err = _capture_env({burrow: "new", suite: "old"}, burrow, suite)
+        if value != "new" or err:
+            failures.append("%s and %s: got %r with stderr %r" % (burrow, suite, value, err))
+        # SUITE only: used, exactly one deprecation line.
+        value, err = _capture_env({suite: "old"}, burrow, suite)
+        want = "deprecated: %s is set; rename it to %s\n" % (suite, burrow)
+        if value != "old" or err != want:
+            failures.append("%s only: got %r with stderr %r" % (suite, value, err))
+        # Empty BURROW counts as unset: SUITE used, one line.
+        value, err = _capture_env({burrow: "", suite: "old"}, burrow, suite)
+        if value != "old" or err != want:
+            failures.append("%s empty: got %r with stderr %r" % (burrow, value, err))
+        checks += 4
+
+    # Warn once per name per process: a second SUITE-only read prints nothing.
+    _DEPRECATION_WARNED.clear()
+    buffer = io.StringIO()
+    with contextlib.redirect_stderr(buffer):
+        for _ in range(3):
+            _env({"SUITE_BASE_URL": "old"}, "BURROW_BASE_URL", "SUITE_BASE_URL")
+    if buffer.getvalue().count("deprecated:") != 1:
+        failures.append("SUITE_BASE_URL warned %d times, want 1" % buffer.getvalue().count("deprecated:"))
+    checks += 1
+
+    # The payload path end to end: SUITE-only env still yields the agent id,
+    # BURROW wins when both are set. post() is never reached (dry run).
+    here = os.path.dirname(os.path.abspath(__file__))
+    fixture = os.path.join(here, "fixtures", "claude-code-transcript.jsonl")
+    hook = json.dumps({"session_id": "s", "agent_id": "sub-1", "transcript_path": fixture})
+    _DEPRECATION_WARNED.clear()
+    buffer = io.StringIO()
+    with contextlib.redirect_stderr(buffer):
+        legacy = json.loads(run(hook, {"SUITE_AGENT_ID": "legacy-agent"}, dry_run=True))
+        both = json.loads(run(hook, {"BURROW_AGENT_ID": "new-agent", "SUITE_AGENT_ID": "legacy-agent"}, dry_run=True))
+    if legacy.get("agent_id") != "legacy-agent":
+        failures.append("SUITE_AGENT_ID fallback not used: %r" % legacy.get("agent_id"))
+    if both.get("agent_id") != "new-agent":
+        failures.append("BURROW_AGENT_ID did not win: %r" % both.get("agent_id"))
+    if buffer.getvalue() != "deprecated: SUITE_AGENT_ID is set; rename it to BURROW_AGENT_ID\n":
+        failures.append("payload path stderr: %r" % buffer.getvalue())
+    checks += 3
+
+    # The skip message names the BURROW_ names.
+    if post({}, {}) != "skipped: BURROW_RUNTIME_TOKEN or BURROW_BASE_URL unset":
+        failures.append("skip message: %r" % post({}, {}))
+    checks += 1
+    _DEPRECATION_WARNED.clear()
+    return checks
+
+
 def self_test():
     here = os.path.dirname(os.path.abspath(__file__))
     fixture = os.path.join(here, "fixtures", "claude-code-transcript.jsonl")
@@ -274,7 +374,7 @@ def self_test():
     failures = ["%s: got %r, want %r" % (k, summary.get(k), v) for k, v in expected.items() if summary.get(k) != v]
 
     sentinel_token = "tok-SENTINEL-must-not-appear"
-    env = {"SUITE_RUNTIME_TOKEN": sentinel_token, "SUITE_AGENT_ID": "019dc658-b64c-7deb-bad7-c34d86924e32"}
+    env = {"BURROW_RUNTIME_TOKEN": sentinel_token, "BURROW_AGENT_ID": "019dc658-b64c-7deb-bad7-c34d86924e32"}
     hook = json.dumps({"session_id": "s", "agent_id": "sub-1", "transcript_path": fixture})
     dry = run(hook, env, dry_run=True)
     if sentinel_token in dry:
@@ -291,7 +391,7 @@ def self_test():
     }:
         failures.append("metadata: got %r" % payload["metadata"])
     if payload.get("agent_id") != "019dc658-b64c-7deb-bad7-c34d86924e32":
-        failures.append("agent_id not taken from SUITE_AGENT_ID")
+        failures.append("agent_id not taken from BURROW_AGENT_ID")
     if payload.get("session_key") != "fixture-session-0001:sub-1":
         failures.append("session_key: got %r" % payload.get("session_key"))
 
@@ -307,11 +407,13 @@ def self_test():
     if not no_task.startswith("skipped: not a Suite dispatch"):
         failures.append("a transcript without a task id was not skipped: %r" % no_task)
 
+    env_checks = env_self_test(failures)
+
     if failures:
         for failure in failures:
             print("FAIL " + failure)
         return 1
-    print("SELF-TEST OK (%d checks)" % (len(expected) + 5))
+    print("SELF-TEST OK (%d checks)" % (len(expected) + 5 + env_checks))
     return 0
 
 
