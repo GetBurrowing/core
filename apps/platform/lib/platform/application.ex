@@ -252,6 +252,8 @@ defmodule Platform.Application do
       |> maybe_add_container_purger()
       |> maybe_add_file_purger()
       |> maybe_add_prototype_purger()
+      |> maybe_add_insight_purger()
+      |> maybe_add_insight_disseminator()
       |> maybe_add_catalog_emitter()
       |> maybe_add_deploy_merge_reconciler()
       |> maybe_add_canvas_search_backfill()
@@ -533,6 +535,32 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_prototype_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Prototypes.Purger)
+    else
+      children
+    end
+  end
+
+  # InsightPurger (task 01a13867 stage 1): hourly hard-delete of every
+  # memory_insights row past expires_at, whatever its state. Never touches
+  # memory_insight_verdicts. Needs Repo. Disabled in config/test.exs — tests
+  # call `sweep/1` directly inside the sandbox.
+  defp maybe_add_insight_purger(children) do
+    if Application.get_env(:platform, :start_insight_purger, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Memory.Insights.Purger)
+    else
+      children
+    end
+  end
+
+  # InsightDisseminator (task 01a13867 stage 3): daily 07:00 America/Chicago
+  # delivery of dreaming insights as a briefing canvas, beside the purger.
+  # Needs Repo. Disabled in config/test.exs — tests call `run/1` directly
+  # inside the sandbox.
+  defp maybe_add_insight_disseminator(children) do
+    if Application.get_env(:platform, :start_insight_disseminator, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Memory.Insights.Disseminator)
     else
       children
     end

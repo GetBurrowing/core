@@ -17,7 +17,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   State lives here; the pane modules are stateless function components.
 
   Stage 6 adds a tab strip across the top of the main pane —
-  `@view_mode :: :pages | :journal | :search | :proposals` swaps the
+  `@view_mode :: :pages | :journal | :search | :insights` swaps the
   main-pane render only. The left tree stays mounted on every tab; the
   right pane renders only on `:pages` (the grid collapses to two
   columns on the other tabs, giving the feed / results / table the
@@ -35,16 +35,17 @@ defmodule PlatformWeb.OrgMemoryLive do
   (the same gate path agents use; swappable in tests via the
   `:org_memory_tool_surface` app env).
 
-  Proposals tab (task 019f70e9 stage 4 + stage-8 fix):
-  `PlatformWeb.OrgMemoryLive.ProposalsPane` — pending
-  `Platform.Memory.MemoryProposal` rows the Historian's dreaming
-  synthesis proposed, awaiting Rowan's approve / reject decisions.
-  Approve delegates to `Platform.Memory.Proposals.queue_promotion/1`
-  which runs the concrete promotion pipeline (append body to target
-  wiki page, strip source `<synthesis-proposal>` block from journal,
-  record audit event). Reject captures optional feedback that seeds
-  the next dreaming run's few-shot exemplars per
-  `Platform.Memory.Proposals.rejected_exemplars/1`.
+  Insights tab (task 01a13867 stage 5, renamed from Proposals):
+  `PlatformWeb.OrgMemoryLive.InsightsPane` — open
+  `Platform.Memory.Insight` rows from dreaming, each rendered as the
+  artefact its button produces. The handlers `insight_act`,
+  `insight_edit`, `insight_reroute`, `insight_reject`, `insight_dismiss`
+  and `insight_revert` each LOAD THE USER AGAIN and build a fresh
+  `Platform.Access.Scope` for the click (`click_scope/1`), then call
+  `Platform.Memory.Insights`, which decides on that scope alone: the
+  rendered buttons are presentation, not the check. The tab subscribes to
+  `Platform.Memory.Insights.topic/0` and reloads on every change, so a
+  second session sees an insight leave as soon as someone acts on it.
 
   Agent gate (design lock §6): the `"save_page"` handler fails closed
   when `current_user` is shaped like a `Platform.Agents.Agent` — UI
@@ -60,15 +61,21 @@ defmodule PlatformWeb.OrgMemoryLive do
   write again as `{:error, :product_owned}` (the stage-2 backstop).
 
   Routes: `/org_memory` (`:index`), `/org_memory/:file_key` (`:show`),
-  and `/memory/proposals` (`:proposals`, direct entry to the proposals
-  tab). Legacy `/org-context*` paths 301-redirect in `PageController`.
+  and `/memory/insights` (`:insights`, direct entry to the Insights tab).
+  `/memory/proposals` (`:proposals`) redirects to `/memory/insights`, so
+  links in old journals and notifications still land. Legacy
+  `/org-context*` paths 301-redirect in `PageController`.
   """
 
   use PlatformWeb, :live_view
 
+  alias Platform.Access.Scope
   alias Platform.Accounts
   alias Platform.Agents.Agent
-  alias Platform.Memory.Proposals
+  alias Platform.Memory.Insights
+  alias Platform.Memory.Insights.Routing
+  alias Platform.Memory.Insights.Settings, as: InsightSettings
+  alias Platform.Memory.Insights.Tier
   alias Platform.Memory.JournalSweep
   alias Platform.Org.Context
   alias Platform.Org.Wiki
@@ -79,16 +86,18 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
   alias PlatformWeb.OrgMemoryLive.ProductDocs
-  alias PlatformWeb.OrgMemoryLive.ProposalsPane
+  alias PlatformWeb.OrgMemoryLive.InsightsPane
   alias PlatformWeb.OrgMemoryLive.RightPane
   alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @journal_days_back 14
   @journal_limit 100
-  @tabs ~w(pages journal search proposals)
+  @tabs ~w(pages journal search insights)
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(Platform.PubSub, Insights.topic())
+
     pages = Wiki.list_pages(page_access_opts(socket))
     {tree, burrow_docs} = build_trees(pages)
 
@@ -127,21 +136,36 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:search_degraded, false)
      |> assign(:search_dead_channels, [])
      |> assign(:search_results_revealed, false)
-     |> assign(:proposals_pending_count, count_pending_proposals())
-     |> assign(:show_reject_form_for, nil)
      |> assign(:tree_drawer_open, false)
-     |> assign(:expanded_diffs, MapSet.new())
-     |> assign(:expanded_proposals, MapSet.new())
-     |> assign(:proposals, [])}
+     |> assign(:insights_open_count, count_open_insights())
+     |> assign(:insights, [])
+     |> assign(:insights_done, [])
+     |> assign(:insight_handle_ids, MapSet.new())
+     |> assign(:insight_dissemination_on, false)
+     |> assign(:insight_admin?, false)
+     |> assign(:insight_receives?, true)
+     |> assign(:insight_filter_type, "all")
+     |> assign(:insight_filter_confidence, "any")
+     |> assign(:insight_reject_for, nil)
+     |> assign(:insight_reroute_for, nil)
+     |> assign(:insight_edit_for, nil)
+     |> assign(:insight_people, [])
+     |> assign(:insight_names, %{})}
   end
 
-  # Live_action-based route entry: `/memory/proposals` mounts with
-  # `socket.assigns.live_action == :proposals`. Preload the pending
-  # stream and switch view_mode BEFORE any first render so users land
-  # directly on the proposals tab without a client-side switch.
+  # `/memory/proposals` is the retired Proposals tab's address: links to it
+  # live on in journals and notifications, so it lands on the Insights tab.
+  # On the dead render `push_navigate/2` answers with a redirect.
   @impl true
   def handle_params(_params, _url, %{assigns: %{live_action: :proposals}} = socket) do
-    {:noreply, load_proposals_tab(socket)}
+    {:noreply, push_navigate(socket, to: ~p"/memory/insights", replace: true)}
+  end
+
+  # Live_action-based route entry: `/memory/insights` mounts with
+  # `socket.assigns.live_action == :insights`. Load the tab BEFORE the
+  # first render so users land on it without a client-side switch.
+  def handle_params(_params, _url, %{assigns: %{live_action: :insights}} = socket) do
+    {:noreply, load_insights_tab(socket)}
   end
 
   @impl true
@@ -179,8 +203,8 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   # Journal deep link (task 01a1170a stage 2):
   # `/org_memory?tab=journal&date=<iso>[&ns=<namespace>]`. This is the
-  # href the proposals table's Source cell points at, so it must survive
-  # a full page load from another route — `open_result_journal` is a
+  # href the retired Proposals table's Source cell pointed at, and old
+  # links still carry it, so it must survive a full page load from another route — `open_result_journal` is a
   # phx-click event with no URL and cannot. An invalid or missing date
   # opens the Journal tab unfocused (no crash, no flash); an `ns` outside
   # `org` / `project/<id>` / `space/<id>` falls back to the default.
@@ -284,7 +308,7 @@ defmodule PlatformWeb.OrgMemoryLive do
     socket =
       case view_mode do
         :journal -> load_journal(socket)
-        :proposals -> load_proposals_tab(socket)
+        :insights -> load_insights_tab(socket)
         _ -> socket
       end
 
@@ -457,109 +481,143 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> load_journal()}
   end
 
-  # ── Events: proposals (stage 4) ─────────────────────────────────────────
+  # ── Events: insights (task 01a13867 stage 5) ────────────────────────────
 
-  # Approve → `Proposals.approve/2` flips status + `Proposals.queue_promotion/1`
-  # runs the concrete promotion pipeline: appends the body to the target
-  # wiki page, strips the source `<synthesis-proposal>` block from the
-  # journal ONLY when the journal is page-backed (entry-only journals are
-  # append-only, so the block is retained there), and records a
-  # `platform.memory.proposal_promoted` audit row whose
-  # `journal_block_disposition` says which happened (task 019f70e9
-  # stage-8 fix; task 01a1170a stage 3).
-  #
-  # If promotion fails after approve succeeded, the row stays approved
-  # (the approve is durable) but a flash error is surfaced so Rowan can
-  # retry or investigate. The pending list is re-fetched — cheap because
-  # `list_pending/1` is bounded to 50 rows and Rowan's typical inbox is
-  # single-digit.
+  # Every handler below builds its scope from a FRESH read of the user
+  # (`click_scope/1`) and lets `Platform.Memory.Insights` decide on it. The
+  # buttons a row renders are presentation: a forged event for an insight
+  # the viewer may not handle is refused there, not here.
   @impl true
-  def handle_event("approve_proposal", %{"id" => id}, socket) do
-    case Proposals.get(id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Proposal not found — it may have been expired.")}
-
-      proposal ->
-        case Proposals.approve(proposal) do
-          {:ok, approved} ->
-            case Proposals.queue_promotion(approved) do
-              :ok ->
-                {:noreply,
-                 socket
-                 |> load_proposals_tab()
-                 |> put_flash(:info, "Approved — promoted to page.")}
-
-              {:error, reason} ->
-                {:noreply,
-                 socket
-                 |> load_proposals_tab()
-                 |> put_flash(
-                   :error,
-                   "Approved, but promotion failed: #{inspect(reason)}. Row remains approved; check logs to retry."
-                 )}
-            end
-
-          {:error, changeset} ->
-            {:noreply, put_flash(socket, :error, changeset_error_message(changeset))}
-        end
-    end
+  def handle_event("insight_act", %{"id" => id}, socket) do
+    with_click_scope(socket, fn scope ->
+      case Insights.act(id, scope) do
+        {:ok, %{state: "done"}} -> {:info, "Done."}
+        {:ok, insight} -> {:info, "Sent to #{addressee_label(insight)}'s briefing."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
   end
 
-  # The id arrives as `"_id"`, not `"id"`. Both reject forms (the desktop
-  # `proposals_pane` table row and the `mobile_shell` card) carry it in a hidden
-  # input, and an input named `id` overrides the DOM id of its own form element —
-  # so the wire key is prefixed. Only this clause reads it; the sibling
-  # `phx-value-id` events (`show_reject_form`, `cancel_reject`,
-  # `approve_proposal`) are unaffected and still match `"id"`.
-  @impl true
-  def handle_event("reject_proposal", %{"_id" => id} = params, socket) do
-    feedback = params |> Map.get("feedback", "") |> String.trim()
-    feedback = if feedback == "", do: nil, else: feedback
+  def handle_event("insight_show_reject", %{"id" => id}, socket) do
+    {:noreply, socket |> close_insight_forms() |> assign(:insight_reject_for, id)}
+  end
 
-    case Proposals.get(id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Proposal not found — it may have been expired.")}
+  def handle_event("insight_show_reroute", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> close_insight_forms()
+     |> assign(:insight_reroute_for, id)
+     |> assign(:insight_people, reroute_people(id))}
+  end
 
-      proposal ->
-        case Proposals.reject(proposal, feedback) do
-          {:ok, _rejected} ->
+  def handle_event("insight_show_edit", %{"id" => id}, socket) do
+    {:noreply, socket |> close_insight_forms() |> assign(:insight_edit_for, id)}
+  end
+
+  def handle_event("insight_cancel_form", _params, socket) do
+    {:noreply, close_insight_forms(socket)}
+  end
+
+  # The id arrives as `"_id"`: an input named `id` would override its form
+  # element's DOM id.
+  def handle_event("insight_reject", %{"_id" => id} = params, socket) do
+    with_click_scope(socket, fn scope ->
+      case Insights.reject_as(id, scope, Map.get(params, "reason")) do
+        {:ok, _} -> {:info, "Rejected. Your reason will teach the next dreaming run."}
+        {:error, :blank} -> {:error, "Say why this is wrong. The reason is required."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
+  end
+
+  def handle_event("insight_reroute", %{"_id" => id} = params, socket) do
+    with_click_scope(socket, fn scope ->
+      case Insights.reroute(id, scope, Map.get(params, "addressee") || "") do
+        {:ok, insight} -> {:info, "Rerouted to #{addressee_label(insight)}."}
+        {:error, :not_found} -> {:error, "Choose a person to send this to."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
+  end
+
+  def handle_event("insight_edit", %{"_id" => id} = params, socket) do
+    attrs =
+      %{}
+      |> put_present("body", params["body"])
+      |> put_hunks(params["hunks"])
+
+    with_click_scope(socket, fn scope ->
+      case Insights.edit(id, scope, attrs) do
+        {:ok, _} -> {:info, "Saved."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
+  end
+
+  def handle_event("insight_dismiss", %{"id" => id}, socket) do
+    with_click_scope(socket, fn scope ->
+      case Insights.dismiss(id, scope) do
+        {:ok, _} -> {:info, "Dismissed."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
+  end
+
+  def handle_event("insight_revert", %{"id" => id}, socket) do
+    with_click_scope(socket, fn scope ->
+      case Insights.revert(id, scope) do
+        {:ok, _} -> {:info, "Reverted. The page is back as it was."}
+        {:error, reason} -> {:error, insight_error(reason)}
+      end
+    end)
+  end
+
+  def handle_event("insight_filter", params, socket) do
+    type =
+      if params["type"] in ~w(all page_edit question briefing task),
+        do: params["type"],
+        else: "all"
+
+    confidence = if params["confidence"] in ~w(any high), do: params["confidence"], else: "any"
+
+    {:noreply,
+     socket
+     |> assign(:insight_filter_type, type)
+     |> assign(:insight_filter_confidence, confidence)
+     |> load_insights_tab()}
+  end
+
+  # The personal opt-out ("Insight briefings and questions"). It writes only
+  # the signed-in user's own preference, read from the session id.
+  def handle_event("insight_toggle_delivery", params, socket) do
+    receive? = List.wrap(params["receive"]) |> List.last() == "true"
+
+    case socket.assigns[:current_user_id] do
+      user_id when is_binary(user_id) ->
+        case Accounts.update_user_preference(
+               user_id,
+               Accounts.insight_delivery_opt_out_key(),
+               not receive?
+             ) do
+          {:ok, _} ->
             {:noreply,
              socket
-             |> load_proposals_tab()
-             |> put_flash(:info, "Rejected — feedback captured for the next dreaming run.")}
+             |> assign(:insight_receives?, receive?)
+             |> put_flash(
+               :info,
+               if(receive?,
+                 do: "You will receive insight briefings and questions.",
+                 else: "You will not receive insight briefings or questions."
+               )
+             )}
 
-          {:error, changeset} ->
-            {:noreply, put_flash(socket, :error, changeset_error_message(changeset))}
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not save your preference.")}
         end
+
+      _ ->
+        {:noreply, socket}
     end
-  end
-
-  @impl true
-  def handle_event("show_reject_form", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :show_reject_form_for, id)}
-  end
-
-  @impl true
-  def handle_event("cancel_reject", _params, socket) do
-    {:noreply, assign(socket, :show_reject_form_for, nil)}
-  end
-
-  # Toggle the "show full diff" expansion of a long proposal body
-  # (task 019f9282 mobile, task 01a1170a desktop). Server-held so it
-  # survives LiveView patches (unlike a client-only checkbox). Both the
-  # mobile card and the desktop panel row read this assign through
-  # `ProposalBody.proposal_diff/1`.
-  @impl true
-  def handle_event("toggle_proposal_diff", %{"id" => id}, socket) do
-    {:noreply, update(socket, :expanded_diffs, &toggle_member(&1, id))}
-  end
-
-  # Desktop (task 01a1170a): open / close a proposal's panel row. Many
-  # rows can be open at once. `load_proposals_tab/1` deliberately does not
-  # reset this set, so approving row A leaves row B open.
-  @impl true
-  def handle_event("toggle_proposal_row", %{"id" => id}, socket) do
-    {:noreply, update(socket, :expanded_proposals, &toggle_member(&1, id))}
   end
 
   # ── Events: editing ─────────────────────────────────────────────────────
@@ -792,10 +850,28 @@ defmodule PlatformWeb.OrgMemoryLive do
     end
   end
 
+  # ── PubSub: insights (task 01a13867 stage 5) ────────────────────────────
+
+  # Any change to any insight reloads the tab (or just its count when the
+  # tab is not open). A list bounded to 50 rows; reloading is cheap.
+  @impl true
+  def handle_info({:memory_insights, _event, _payload}, socket) do
+    socket =
+      if socket.assigns.view_mode == :insights,
+        do: load_insights_tab(socket),
+        else: assign(socket, :insights_open_count, count_open_insights())
+
+    {:noreply, socket}
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
   # ── Rendering ───────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :insights_pane, insights_pane_assigns(assigns))
+
     ~H"""
     <div class="h-full overflow-hidden">
       <%!-- Desktop three-pane grid — unchanged, guarded behind
@@ -819,7 +895,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         />
 
         <div class="flex min-h-0 flex-col overflow-hidden">
-          <.tab_strip view_mode={@view_mode} proposals_pending_count={@proposals_pending_count} />
+          <.tab_strip view_mode={@view_mode} insights_open_count={@insights_open_count} />
 
           <%= case @view_mode do %>
             <% :journal -> %>
@@ -844,13 +920,8 @@ defmodule PlatformWeb.OrgMemoryLive do
                 results_revealed={@search_results_revealed}
                 burrow_docs={@burrow_docs}
               />
-            <% :proposals -> %>
-              <ProposalsPane.proposals_pane
-                proposals={@proposals}
-                show_reject_form_for={@show_reject_form_for}
-                expanded_proposals={@expanded_proposals}
-                expanded_diffs={@expanded_diffs}
-              />
+            <% :insights -> %>
+              <InsightsPane.insights_pane surface={:desktop} {@insights_pane} />
             <% :pages -> %>
               <%= if @creating do %>
                 <.create_panel
@@ -891,7 +962,7 @@ defmodule PlatformWeb.OrgMemoryLive do
       <%!-- Mobile branch (`lg:hidden`) — task 019f9282. --%>
       <MobileShell.mobile_shell
         view_mode={@view_mode}
-        proposals_pending_count={@proposals_pending_count}
+        insights_open_count={@insights_open_count}
         tree_drawer_open={@tree_drawer_open}
         namespace_tree={@namespace_tree}
         expanded_prefixes={@expanded_prefixes}
@@ -920,9 +991,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         search_degraded={@search_degraded}
         search_dead_channels={@search_dead_channels}
         search_results_revealed={@search_results_revealed}
-        proposals={@proposals}
-        show_reject_form_for={@show_reject_form_for}
-        expanded_diffs={@expanded_diffs}
+        insights_pane={@insights_pane}
       >
         <:create_panel>
           <.create_panel
@@ -939,7 +1008,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   # ── Tab strip (stage 6) ─────────────────────────────────────────────────
 
   attr(:view_mode, :atom, required: true)
-  attr(:proposals_pending_count, :integer, default: 0)
+  attr(:insights_open_count, :integer, default: 0)
 
   defp tab_strip(assigns) do
     ~H"""
@@ -954,7 +1023,7 @@ defmodule PlatformWeb.OrgMemoryLive do
             {"pages", "Pages"},
             {"journal", "Journal"},
             {"search", "Search"},
-            {"proposals", "Proposals"}
+            {"insights", "Insights"}
           ]
         }
         phx-click="switch_tab"
@@ -973,11 +1042,11 @@ defmodule PlatformWeb.OrgMemoryLive do
       >
         {label}
         <span
-          :if={tab == "proposals" and @proposals_pending_count > 0}
-          class="badge badge-warning badge-xs"
-          data-role="proposals-tab-count"
+          :if={tab == "insights" and @insights_open_count > 0}
+          class="badge badge-neutral badge-xs"
+          data-role="insights-tab-count"
         >
-          {@proposals_pending_count}
+          {@insights_open_count}
         </span>
       </button>
     </div>
@@ -1168,35 +1237,186 @@ defmodule PlatformWeb.OrgMemoryLive do
   defp view_mode_for("pages"), do: :pages
   defp view_mode_for("journal"), do: :journal
   defp view_mode_for("search"), do: :search
-  defp view_mode_for("proposals"), do: :proposals
+  defp view_mode_for("insights"), do: :insights
 
-  # Load the pending proposals + refresh the pending count.
-  # `workspace_id: nil` == "no filter" per `Proposals.list_pending/1`
-  # docs — the /memory/proposals view is org-scoped, so this matches
-  # the desired shape.
+  # Load the Insights tab: open insights (filtered), the "Already done" rows
+  # while dissemination is on, and which rows the viewer may press buttons
+  # on. Re-run on every PubSub change and after every click, so a second
+  # session sees an insight leave as soon as someone acts on it.
   #
-  # Does NOT reset `expanded_proposals` / `expanded_diffs`: a reload after
-  # approving row A must leave row B open. Ids of rows that left the
-  # pending list linger in the sets harmlessly (nothing renders for them).
-  defp load_proposals_tab(socket) do
-    pending = Proposals.list_pending(workspace_id: nil)
+  # An insight that was delivered (its briefing line or question is already
+  # in someone's briefing) is not on the open list: the recipient's answer
+  # settles it, and asking again would deliver it twice. A `needs_call`
+  # insight is the exception (task 01a13867 stage 6): the briefing only
+  # points an admin at this tab, so it stays here whatever `delivered_at`
+  # says. See `tab_insights/1`.
+  defp load_insights_tab(socket) do
+    now = DateTime.utc_now()
+    settings = InsightSettings.get()
+    scope = click_scope(socket)
+    actionable = tab_insights(Insights.list_open(workspace_id: nil, now: now))
+    shown = Enum.filter(actionable, &insight_filter?(&1, socket.assigns))
+    done = if settings.dissemination_enabled, do: Insights.list_done(now: now), else: []
+
+    handle_ids =
+      case scope do
+        %Scope{} = scope ->
+          shown |> Enum.filter(&Insights.may_handle?(&1, scope)) |> MapSet.new(& &1.id)
+
+        nil ->
+          MapSet.new()
+      end
+
+    names = Routing.names(Enum.map(shown, & &1.addressee_user_id))
 
     socket
-    |> assign(:view_mode, :proposals)
-    |> assign(:proposals_pending_count, length(pending))
-    |> assign(:show_reject_form_for, nil)
-    |> assign(:proposals, pending)
+    |> assign(:view_mode, :insights)
+    |> assign(:insights_open_count, length(actionable))
+    |> assign(:insights, shown)
+    |> assign(:insights_done, done)
+    |> assign(:insight_handle_ids, handle_ids)
+    |> assign(:insight_dissemination_on, settings.dissemination_enabled)
+    |> assign(:insight_admin?, scope != nil and Platform.Access.authorize_install(scope) == :ok)
+    |> assign(
+      :insight_receives?,
+      not Accounts.insight_delivery_opted_out?(socket.assigns[:current_user_id])
+    )
+    |> assign(:insight_names, names)
   end
 
-  defp toggle_member(set, id) do
-    if MapSet.member?(set, id), do: MapSet.delete(set, id), else: MapSet.put(set, id)
+  defp insight_filter?(insight, assigns) do
+    (assigns.insight_filter_type == "all" or insight.action_type == assigns.insight_filter_type) and
+      (assigns.insight_filter_confidence == "any" or insight.confidence == "high")
   end
 
-  # Cheap count for the tab-strip badge — surfaces on every tab so
-  # users see "you have proposals pending" without switching to the
-  # tab. `workspace_id: nil` matches `load_proposals_tab/1`'s scope.
-  defp count_pending_proposals do
-    length(Proposals.list_pending(workspace_id: nil))
+  defp insights_pane_assigns(assigns) do
+    %{
+      insights: assigns.insights,
+      done: assigns.insights_done,
+      dissemination_on: assigns.insight_dissemination_on,
+      admin?: assigns.insight_admin?,
+      receives?: assigns.insight_receives?,
+      handle_ids: assigns.insight_handle_ids,
+      filter_type: assigns.insight_filter_type,
+      filter_confidence: assigns.insight_filter_confidence,
+      reject_for: assigns.insight_reject_for,
+      reroute_for: assigns.insight_reroute_for,
+      edit_for: assigns.insight_edit_for,
+      people: assigns.insight_people,
+      names: assigns.insight_names
+    }
+  end
+
+  # A fresh scope for one click: the user is READ AGAIN, never taken from
+  # mount, so a membership or role change made since mount applies to the
+  # very next click. nil when the session names no user.
+  defp click_scope(socket) do
+    with user_id when is_binary(user_id) <- socket.assigns[:current_user_id],
+         %Platform.Accounts.User{} = user <- Accounts.get_user(user_id) do
+      Scope.for_user(user)
+    else
+      _ -> nil
+    end
+  end
+
+  defp with_click_scope(socket, fun) do
+    socket =
+      case click_scope(socket) do
+        nil ->
+          put_flash(socket, :error, "Sign in to act on insights.")
+
+        scope ->
+          case fun.(scope) do
+            {:info, message} -> socket |> close_insight_forms() |> put_flash(:info, message)
+            {:error, message} -> put_flash(socket, :error, message)
+          end
+      end
+
+    {:noreply, load_insights_tab(socket)}
+  end
+
+  defp close_insight_forms(socket) do
+    socket
+    |> assign(:insight_reject_for, nil)
+    |> assign(:insight_reroute_for, nil)
+    |> assign(:insight_edit_for, nil)
+  end
+
+  defp reroute_people(id) do
+    case Insights.get(id) do
+      %{} = insight -> Routing.candidates(Tier.org_id(insight))
+      nil -> []
+    end
+  end
+
+  defp addressee_label(%{addressee_user_id: id}) when is_binary(id),
+    do: Map.get(Routing.names([id]), id, "the addressee")
+
+  defp addressee_label(_insight), do: "the addressee"
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value) when is_binary(value), do: Map.put(map, key, value)
+  defp put_present(map, _key, _value), do: map
+
+  # Edit form hunks arrive as `%{"0" => %{"old" => _, "new" => _}, ...}`.
+  defp put_hunks(map, hunks) when is_map(hunks) do
+    list =
+      hunks
+      |> Enum.sort_by(fn {index, _} -> String.to_integer(index) end)
+      |> Enum.map(fn {_index, %{"old" => old, "new" => new}} -> %{"old" => old, "new" => new} end)
+
+    Map.put(map, "hunks", list)
+  rescue
+    _ -> map
+  end
+
+  defp put_hunks(map, _hunks), do: map
+
+  defp insight_error(:expired), do: "This insight has expired. Nothing was done."
+
+  defp insight_error(:unauthorized),
+    do: "You cannot act on this insight. An install admin decides it."
+
+  defp insight_error(:stale),
+    do: "The page changed since this edit was written. Nothing was applied."
+
+  defp insight_error(:not_open), do: "Someone already handled this insight."
+  defp insight_error(:not_found), do: "The page or project this insight names was not found."
+  defp insight_error(:no_addressee), do: "No one to send this to. Reroute it first."
+
+  defp insight_error(:opted_out),
+    do: "The addressee has turned off insight briefings and questions."
+
+  defp insight_error(:no_agent),
+    do: "No agent holds the dreaming responsibility, so there is no briefing to deliver to."
+
+  defp insight_error(:not_revertible), do: "This edit can no longer be reverted."
+  defp insight_error(:not_supported), do: "This insight has no action to run."
+  defp insight_error(:invalid), do: "This insight is malformed. Reject it with a reason."
+  defp insight_error(%Ecto.Changeset{} = changeset), do: changeset_error_message(changeset)
+  defp insight_error(other), do: "Could not do that: #{inspect(other)}"
+
+  # Cheap count for the tab-strip badge: open insights that still need
+  # someone on this tab (the same rows `load_insights_tab/1` lists).
+  defp count_open_insights do
+    Insights.list_open(workspace_id: nil) |> tab_insights() |> length()
+  end
+
+  # The open insights the tab lists: every undelivered one, plus every
+  # delivered one that needs a call. The Digest routes by the tier it
+  # re-classifies at delivery (`Tier.classify/1`), not the stored one, so a
+  # delivered row is re-classified the same way and, when it needs a call,
+  # carries that tier for the row's warning styling and button gate.
+  defp tab_insights(open) do
+    Enum.flat_map(open, fn
+      %{delivered_at: nil} = insight ->
+        [insight]
+
+      insight ->
+        if insight.tier == "needs_call" or Tier.classify(insight) == :needs_call,
+          do: [%{insight | tier: "needs_call"}],
+          else: []
+    end)
   end
 
   # Reload the journal feed: recent entries for the active namespace,

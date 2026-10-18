@@ -1,10 +1,16 @@
 defmodule Platform.Memory.JournalSweep do
   @moduledoc """
-  Post-append `<synthesis-proposal>` sweep for journal writes.
+  Post-append `<synthesis-insight>` sweep for journal writes.
+
+  Since task 01a13867 stage 1 this ingests insights via
+  `Platform.Memory.Insights.ingest_from_journal/3`; `<synthesis-proposal>`
+  blocks are no longer ingested. The history below is why the sweep exists
+  at all, and it applies unchanged to insights.
 
   ## Why this module exists
 
-  Proposals reach `/memory/proposals` through
+  Proposals reached the retired `/memory/proposals` tab (now
+  `/memory/insights`, task 01a13867 stage 5) through the since-deleted
   `Platform.Memory.Proposals.ingest_from_journal/3`. Page-shaped writes
   get there via the hook inside
   `Platform.Org.Context.upsert_context_file/3` — that is the path the
@@ -29,22 +35,22 @@ defmodule Platform.Memory.JournalSweep do
     * `PlatformWeb.OrgMemoryLive.View` — the `/org_memory` journal pane
 
   Any future journal writer that can carry agent- or human-authored
-  prose must call this too, or its proposals will vanish the same way.
+  prose must call this too, or its insights will vanish the same way.
   """
 
   require Logger
 
-  alias Platform.Memory.Proposals
+  alias Platform.Memory.Insights
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.WikiJournalEntry
 
   @doc """
-  Sweep a freshly appended entry for `<synthesis-proposal>` blocks.
+  Sweep a freshly appended entry for `<synthesis-insight>` blocks.
 
   Always returns `:ok`. Runs outside the insert, so a parser bug or a
-  proposals-side constraint failure can never turn a durable append into
-  an error — the journal is the source of truth and proposals are a
-  derived review surface. Ingestion is idempotent on
+  insights-side constraint failure can never turn a durable append into
+  an error — the journal is the source of truth and insights are a
+  derived surface. Ingestion is idempotent on
   `(workspace_id, block_hash)`, so sweeping the same body twice inserts
   each block once.
   """
@@ -52,11 +58,11 @@ defmodule Platform.Memory.JournalSweep do
   def sweep(%WikiJournalEntry{} = entry, namespace) when is_binary(namespace) do
     file_key = Journal.virtual_file_key(namespace, entry.date)
 
-    if Proposals.journal_path?(file_key) do
-      case Proposals.ingest_from_journal(entry.workspace_id, file_key, entry.content) do
+    if Insights.journal_path?(file_key) do
+      case Insights.ingest_from_journal(entry.workspace_id, file_key, entry.content) do
         {:ok, count} when count > 0 ->
           Logger.debug(
-            "[memory.proposals] ingested #{count} block(s) from #{file_key} " <>
+            "[memory.insights] ingested #{count} block(s) from #{file_key} " <>
               "(entry_id=#{entry.id} workspace_id=#{inspect(entry.workspace_id)})"
           )
 
@@ -71,7 +77,7 @@ defmodule Platform.Memory.JournalSweep do
   rescue
     e ->
       Logger.error(
-        "[memory.proposals] journal sweep crashed for entry_id=#{entry.id}: " <>
+        "[memory.insights] journal sweep crashed for entry_id=#{entry.id}: " <>
           Exception.message(e)
       )
 

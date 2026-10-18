@@ -514,6 +514,27 @@ defmodule Platform.Accounts do
     end
   end
 
+  @insight_delivery_opt_out_key "insight_delivery_opt_out"
+
+  @doc """
+  The `users.preferences` key a person's insight-delivery opt-out is stored
+  under (task 01a13867 stage 3). Set it with `update_user_preference/3`.
+  """
+  @spec insight_delivery_opt_out_key() :: String.t()
+  def insight_delivery_opt_out_key, do: @insight_delivery_opt_out_key
+
+  @doc """
+  True when the user has opted out of insight delivery: no daily briefing,
+  no question, nothing from `Platform.Memory.Insights.Disseminator`. Only a
+  literal `true` opts out; an unknown user or a missing key is `false`.
+  """
+  @spec insight_delivery_opted_out?(binary() | nil) :: boolean()
+  def insight_delivery_opted_out?(user_id) when is_binary(user_id) do
+    Map.get(get_user_preferences(user_id), @insight_delivery_opt_out_key) == true
+  end
+
+  def insight_delivery_opted_out?(_user_id), do: false
+
   # ── Hidden channels (chat sidebar v3 Stage 1) ──────────────────────────
   #
   # Stored as `preferences["hidden_channel_ids"] = ["<uuid>", ...]`. The

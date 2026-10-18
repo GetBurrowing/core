@@ -88,6 +88,7 @@ defmodule PlatformWeb.RouterMeetGuestPlacementTest do
             {"/admin/prompts", "admin", "prompts"},
             {"/admin/federation", "admin", "federation"},
             {"/memory/proposals", "memory", "proposals"},
+            {"/memory/insights", "memory", "insights"},
             {"/org_memory/sometoken", "org_memory", "sometoken"}
           ] do
         assert %{

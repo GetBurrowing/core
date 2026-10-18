@@ -9,10 +9,10 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     * **App-bar** (`~h-11`) — a left menu icon (`open_tree_drawer`) and a
       right contextual icon (Pages tab → `show_create`). No module title;
       the segmented control below is the identity.
-    * **Segmented tabs** — Pages / Journal / Search / Proposals, reusing
+    * **Segmented tabs** — Pages / Journal / Search / Insights, reusing
       the parent's `switch_tab` / `phx-value-tab` events + `@view_mode`.
-      Active `btn-primary`, inactive `btn-ghost`, each ≥44px. Proposals
-      carries the pending-count `badge-warning`.
+      Active `btn-primary`, inactive `btn-ghost`, each ≥44px. Insights
+      carries the open-count badge (task 01a13867 stage 5).
     * **Scroll body** — one `overflow-y-auto` column whose bottom clears
       the app-wide bottom nav via `--bottom-nav-height`.
 
@@ -21,13 +21,15 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   The mobile branch renders in the SAME DOM as the desktop grid (CSS
   `lg:hidden` / `hidden lg:grid` toggle visibility, not presence), so it
   MUST NOT reuse the desktop pane components verbatim: their hard-coded
-  element ids (`org-memory-journal-form`, `org-memory-proposals-table`,
+  element ids (`org-memory-journal-form`,
   `org-memory-editor`, …) would appear twice and duplicate ids are
   undefined behavior in LiveView. Stage 1 therefore renders a read-only
   mobile Pages viewer plus id-safe section landings for Journal / Search
-  / Proposals; later stages (3–5) replace those landings with the
+  / Insights; later stages (3–5) replace those landings with the
   mobile-specific composer / cards / search-facet renders (each with
-  mobile-scoped ids).
+  mobile-scoped ids). The Insights tab renders the same rows as desktop
+  through `PlatformWeb.OrgMemoryLive.InsightsPane` with `surface={:mobile}`,
+  which prefixes every DOM id with `m-`.
 
   Burrow Docs (task 01a10a44 stage 5): the drawer carries the Burrow Docs
   section with its spine (44px rows); a Burrow page's path chip reads
@@ -52,19 +54,19 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   alias Phoenix.LiveView.JS
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.ProductDocs
-  alias PlatformWeb.OrgMemoryLive.ProposalBody
+  alias PlatformWeb.OrgMemoryLive.InsightsPane
   alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @tabs [
     {"pages", "Pages"},
     {"journal", "Journal"},
     {"search", "Search"},
-    {"proposals", "Proposals"}
+    {"insights", "Insights"}
   ]
 
   # ── Chrome ────────────────────────────────────────────────────────────
   attr(:view_mode, :atom, required: true)
-  attr(:proposals_pending_count, :integer, default: 0)
+  attr(:insights_open_count, :integer, default: 0)
   attr(:tree_drawer_open, :boolean, default: false)
 
   # ── Namespace tree (drawer + path chip) ─────────────────────────────────
@@ -102,10 +104,11 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   attr(:search_dead_channels, :list, default: [])
   attr(:search_results_revealed, :boolean, default: false)
 
-  # ── Proposals tab ─────────────────────────────────────────────────────
-  attr(:proposals, :list, default: [])
-  attr(:show_reject_form_for, :any, default: nil)
-  attr(:expanded_diffs, :any, default: nil)
+  # ── Insights tab ──────────────────────────────────────────────────────
+  attr(:insights_pane, :map,
+    default: %{insights: []},
+    doc: "the InsightsPane assigns the parent builds (surface excluded)"
+  )
 
   slot(:create_panel, doc: "desktop create panel, rendered on the Pages tab when @creating")
 
@@ -152,29 +155,29 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
           role="tab"
           aria-selected={to_string(Atom.to_string(@view_mode) == tab)}
           class={[
-            "btn min-h-11 flex-1 gap-1.5 border-none",
+            "btn min-h-11 flex-1 gap-1 border-none px-2",
             if(Atom.to_string(@view_mode) == tab, do: "btn-primary", else: "btn-ghost")
           ]}
         >
           {label}
           <span
-            :if={tab == "proposals" and @proposals_pending_count > 0}
-            class="badge badge-warning badge-sm"
-            data-role="mobile-proposals-count"
+            :if={tab == "insights" and @insights_open_count > 0}
+            class="badge badge-neutral badge-sm"
+            data-role="mobile-insights-count"
           >
-            {@proposals_pending_count}
+            {@insights_open_count}
           </span>
         </button>
       </div>
 
       <%!-- Namespace path chip — the signature breadcrumb. JetBrains Mono,
            horizontal-scroll; tapping any segment (or the chip) opens the
-           tree drawer. Present on Pages / Journal / Proposals; ABSENT on
+           tree drawer. Present on Pages / Journal / Insights; ABSENT on
            Search (which swaps in the search input + facets in stage 5). --%>
       <% chip_doc = ProductDocs.find(@burrow_docs, @page) %>
       <% segments = chip_segments(@page, @journal_namespace, chip_doc) %>
       <div
-        :if={@view_mode in [:pages, :journal, :proposals]}
+        :if={@view_mode in [:pages, :journal, :insights]}
         class={[
           "flex shrink-0 items-stretch overflow-x-auto border-b border-edge bg-base-100 px-2 text-sm",
           if(chip_doc, do: "font-sans", else: "font-mono")
@@ -242,12 +245,8 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               results_revealed={@search_results_revealed}
               burrow_docs={@burrow_docs}
             />
-          <% :proposals -> %>
-            <.mobile_proposals
-              proposals={@proposals}
-              show_reject_form_for={@show_reject_form_for}
-              expanded_diffs={@expanded_diffs}
-            />
+          <% :insights -> %>
+            <InsightsPane.insights_pane surface={:mobile} {@insights_pane} />
         <% end %>
       </div>
 
@@ -646,147 +645,6 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       true -> Calendar.strftime(date, "%A, %b %-d")
     end
   end
-
-  # ── Proposals (mobile) ──────────────────────────────────────────────────
-
-  attr(:proposals, :list, default: [])
-  attr(:show_reject_form_for, :any, default: nil)
-  attr(:expanded_diffs, :any, default: nil)
-
-  defp mobile_proposals(assigns) do
-    assigns = assign(assigns, :expanded_diffs, assigns.expanded_diffs || MapSet.new())
-
-    ~H"""
-    <div class="flex min-h-0 flex-1 flex-col" data-role="mobile-proposals">
-      <%= if @proposals == [] do %>
-        <div
-          class="flex flex-1 items-center justify-center px-6 py-16"
-          data-role="mobile-proposals-empty"
-        >
-          <div class="max-w-xs rounded-xl border border-edge bg-base-100 p-6 text-center">
-            <span class="hero-sparkles mx-auto mb-3 block size-12 text-base-content/30"></span>
-            <h3 class="text-base font-medium text-base-content/70">
-              Nothing to review — the Historian's dreaming is quiet.
-            </h3>
-            <p class="mt-2 text-sm text-base-content/40">
-              Rejected + expired proposals remain in the DB for post-hoc analysis
-              but don't appear here.
-            </p>
-          </div>
-        </div>
-      <% else %>
-        <div class="space-y-3 px-3 py-3">
-          <div
-            :for={proposal <- @proposals}
-            data-mobile-proposal-id={proposal.id}
-            class="rounded-xl border border-edge bg-base-100 p-3"
-          >
-            <%!-- category + confidence badges + age --%>
-            <div class="mb-2 flex flex-wrap items-center gap-1.5">
-              <span class={["badge badge-sm", category_badge_class(proposal.category)]}>
-                {proposal.category}
-              </span>
-              <span class={["badge badge-sm", confidence_badge_class(proposal.confidence)]}>
-                {proposal.confidence}
-              </span>
-              <span class="ml-auto font-mono text-xs text-base-content/40">
-                {format_relative(proposal.inserted_at)}
-              </span>
-            </div>
-
-            <%!-- target page key the body promotes into --%>
-            <div class="mb-2 flex items-center gap-1 text-xs text-base-content/50">
-              <.icon name="hero-arrow-down-tray" class="size-3.5 shrink-0" />
-              <span class="min-w-0 truncate font-mono">{ProposalBody.target_key(proposal)}</span>
-            </div>
-
-            <%!-- Additive diff. Long PROSE lines WRAP (whitespace-pre-wrap
-                 + break-words) so the proposal is readable vertically, not
-                 hidden behind horizontal scroll; the page stays at 375px.
-                 overflow-x-auto is only a fallback for genuinely unbreakable
-                 tokens. A generous height shows most proposals in full; a
-                 truly long one clamps with a >=44px "Show full diff"
-                 tap-to-expand (server-held, never silently truncated).
-                 Shared with the desktop panel via ProposalBody. --%>
-            <ProposalBody.proposal_diff
-              proposal={proposal}
-              surface={:mobile}
-              expanded?={MapSet.member?(@expanded_diffs, proposal.id)}
-              line_prefix="+ "
-            />
-
-            <%!-- footer: Reject / Apply (>=44px) --%>
-            <div class="mt-3 flex gap-2">
-              <button
-                phx-click="show_reject_form"
-                phx-value-id={proposal.id}
-                class="btn btn-ghost btn-sm min-h-11 flex-1 gap-1"
-              >
-                <.icon name="hero-x-mark" class="size-4" /> Reject
-              </button>
-              <button
-                phx-click="approve_proposal"
-                phx-value-id={proposal.id}
-                class="btn btn-primary btn-sm min-h-11 flex-1 gap-1"
-              >
-                <.icon name="hero-check" class="size-4" /> Apply
-              </button>
-            </div>
-
-            <%!-- inline reject feedback, expands within the card --%>
-            <form
-              :if={@show_reject_form_for == proposal.id}
-              id={"m-proposal-reject-form-#{proposal.id}"}
-              phx-submit="reject_proposal"
-              class="mt-3 rounded-lg border border-warning/40 bg-warning/5 p-2"
-              data-role="mobile-reject-form"
-            >
-              <%!-- `name="_id"` — see the desktop pane: name="id" on an input
-                   overrides the form element's DOM id. --%>
-              <input type="hidden" name="_id" value={proposal.id} />
-              <label class="mb-1 block text-xs font-medium text-base-content/70">
-                Why reject? Feedback trains the next dreaming run.
-              </label>
-              <textarea
-                name="feedback"
-                rows="2"
-                placeholder="Optional feedback…"
-                class="textarea textarea-bordered w-full text-sm"
-              ></textarea>
-              <div class="mt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  phx-click="cancel_reject"
-                  phx-value-id={proposal.id}
-                  class="btn btn-ghost btn-sm min-h-11"
-                >
-                  Cancel
-                </button>
-                <button type="submit" class="btn btn-warning btn-sm min-h-11">
-                  Submit
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      <% end %>
-    </div>
-    """
-  end
-
-  # Category / confidence badge tone — mirrors ProposalsPane's helpers.
-  defp category_badge_class("emerging-risk"), do: "badge-warning"
-  defp category_badge_class("stale-fact-candidate-retirement"), do: "badge-warning"
-  defp category_badge_class("strategic-insight"), do: "badge-info"
-  defp category_badge_class("recurring-theme"), do: "badge-info"
-  defp category_badge_class("cross-project-pattern"), do: "badge-neutral"
-  defp category_badge_class("unresolved-question"), do: "badge-neutral"
-  defp category_badge_class(_), do: "badge-ghost"
-
-  defp confidence_badge_class("high"), do: "badge-success"
-  defp confidence_badge_class("medium"), do: "badge-warning"
-  defp confidence_badge_class("low"), do: "badge-ghost"
-  defp confidence_badge_class(_), do: "badge-ghost"
 
   # ── Search (mobile) ─────────────────────────────────────────────────────
 

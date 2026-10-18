@@ -480,8 +480,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/meetings/triage.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a03fda — `build_reconciliation/1` guards the meeting-candidate reconciliation query. `:meeting_id` has always been an OPTIONAL passthrough on `file_tasks_from_canvas/2`, enriched by the triage-officer runtime and forwarded straight into telemetry, so it has never had to be a real id — `triage_test.exs` passes the literal \"mtg-stage4\". Without the guard that string reaches a `:binary_id` WHERE and raises Ecto.Query.CastError mid-batch. An unusable id reconciles nothing, which is the pre-01a03fda behaviour"},
     # ── Memory ─────────────────────────────────────────────────────────
-    {"platform/memory/proposals.ex", :get, "MemoryProposal", 1, :safe_internal,
-     "Proposals.get/1 checks Platform.UUID.valid?/1 on the phx-value-id LiveView param before Repo.get"},
+    {"platform/memory/insights/briefings.ex", :get_by, "Briefing", 1, :safe_internal,
+     "task 01a13867 stage 4: `get_by_canvas/1` looks up `canvas_id:` with the id of a canvas row the caller already loaded (canvas_hooks.ex `insight_card_action/5` passes the clicked `%Canvas{}.id` from `find/2`), behind this file's Platform.UUID.valid?/1 guard; the briefing's insight id is then read out of that row's `items`, never from the click"},
+    {"platform/memory/insights/disseminator.ex", :get, "Canvas", 1, :safe_internal,
+     "task 01a13867 stage 3: `previous_entries/1` reads `%Briefing{canvas_id: ...}`, a uuid column the disseminator itself wrote from the canvas `create_canvas_with_message/3` returned; nothing outside the server supplies it"},
+    {"platform/memory/insights/disseminator.ex", :get_by, "Briefing", 1, :safe_internal,
+     "task 01a13867 stage 3: `deliver/6` looks up `(user_id, digest_date)` with a user id that is a key of `Digest.select/2`'s map, i.e. a `memory_insights.addressee_user_id` or an `org_memberships.user_id` uuid column value, and a `Date` computed by `local_date/1`"},
+    {"platform/memory/insights.ex", :get, "Insight", 1, :safe_internal,
+     "Insights.get/1 (task 01a13867 stage 1) checks Platform.UUID.valid?/1 on the LiveView / canvas param before Repo.get, mirroring Proposals.get/1"},
     {"platform/memory/telemetry_handler.ex", :get, "Platform.Org.WikiJournalEntry", 1,
      :safe_internal,
      "`metadata.memory_entry_id` comes off the telemetry event `Org.Wiki` emits with the PK it just inserted"},
@@ -889,8 +895,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a0008c stage 2 — `card_path?/2`'s guard on the project_id it is about to INTERPOLATE INTO A REGEX, not into a query. This is the same predicate protecting a different failure mode, which is why it is recorded rather than waved through: `card_path_regex/1` interpolates it into `~r/^project\\/<project_id>\\/page\\/files\\/…/` to decide whether a wiki file_key belongs to this project's card prefix, and the cataloger is a background emitter with NO authorization above it (`Wiki.upsert_page/3` never consults `Wiki.Routing`; the `:historian_required` gate lives at the MCP surface a server-side emitter never crosses). A non-UUID project_id reaching that interpolation makes the gate answer for a pattern nobody wrote — `Regex.escape/1` stops metacharacters, but the guard is what stops a caller-shaped fragment from being treated as a legitimate project scope at all. The module performs no `Repo.get/2` of its own: it reads through `Files.list_catalogable_files/2`, `Files.get_file/1` and `Tasks.get_project/1`, each of which carries its own classified guard"},
     {"platform/files/supersession.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a0008c stage 5 — `rule_claim/3`'s guard on the claimant id it reads out of a card's FRONTMATTER before handing it to `Files.get_file/1`. Frontmatter is a parsed YAML map on a wiki page: the cataloger writes a real `platform_files.id` there, but the same page is writable through `Wiki.upsert_page/3`, which performs no authorization at all, so the value is agent-reachable and cannot be treated as internal. `Files.get_file/1` carries its own classified guard, so this one is belt-and-braces at the boundary rather than the only rail — it is what makes a malformed claimant id return the `{:error, :no_card}` the caller already handles instead of relying on the callee's guard to fold it into a nil this function would then have to re-interpret"},
-    {"platform/memory/proposals.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "Proposals.get/1's guard on the phx-value-id LiveView param from org_memory_live/view.ex:358,393"},
+    {"platform/memory/insights.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "Insights.get/1's guard on the insight id a LiveView or canvas action supplies (task 01a13867 stage 1). 1 -> 2 at task 01a13867 stage 2: `ingest_org_id/1` guards the `project/<id>/` segment of the journal path before `where: p.id == ^project_id` (this file's `@repo_one_counts` entry); a non-UUID segment falls back to the root org"},
+    {"platform/memory/insights/briefings.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a13867 stage 4: `get_by_canvas/1` checks the canvas id with Platform.UUID.valid?/1 before `Repo.get_by(Briefing, canvas_id: ...)`; the only caller passes a loaded canvas row's id, and the guard keeps any other caller's malformed id a nil rather than a CastError"},
+    {"platform/memory/insights/grounding.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "task 01a13867 stage 2: the `task:<uuid>` and `message:<uuid>` source refs and `author_user/1`'s author id are each checked with Platform.UUID.valid?/1 before their `where: x.id == ^id`. The refs are parsed out of a dreaming agent's `source` attribute and the author id is a page's `updated_by` or a journal entry's `authored_by`, so all three are agent-reachable; a malformed id is ungrounded / unresolved, never a CastError"},
+    {"platform/memory/insights/routing.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "task 01a13867 stage 2: `addressee/1` (an agent-written `addressee` attribute or a Reroute input) and `task_sponsor/1` (a `task:<uuid>` source ref) check Platform.UUID.valid?/1 before `where: u.id == ^value` / the task `Repo.one` (this file's `@repo_one_counts` entry); a malformed value falls through to the next rung. Stage 5: `names/1` filters its ids with the same guard before `where: u.id in ^ids`, so a malformed id is left out of the name map"},
+    {"platform/memory/insights/tier.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a13867 stage 2: `internal_member?/2` checks the insight's `addressee_user_id` with Platform.UUID.valid?/1 before the membership query; the column is a uuid, but `classify/1` also takes plain maps, so the guard keeps a malformed id a `:needs_call` rather than a CastError"},
     {"platform/orchestration/prompt_templates.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "get_template/1's conservative guard — no in-repo caller pins this id's provenance"},
     {"platform/org/context.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1349,6 +1363,21 @@ defmodule Platform.RepoLookupBoundaryTest do
     # as this file's `:platform_uuid_guard` entry. A malformed id is a 404.
     "platform/meetings/ringing.ex" => 1,
     "platform/memory_feedback.ex" => 1,
+    # Task 01a13867 stage 2. Triaged by hand. insights.ex: `ingest_org_id/1`
+    # pins `p.id == ^project_id` behind Platform.UUID.valid?/1 (this file's
+    # `:platform_uuid_guard` entry). grounding.ex: `agent_owner/1` pins
+    # `r.agent_id`, reached with an id `author_user/1` has already guarded or
+    # one read off an `agents.id` row. routing.ex: the email lookup pins a
+    # lower-cased email and the slug lookup an agent slug (no id, no cast);
+    # `task_sponsor/1` pins `t.id` behind Platform.UUID.valid?/1.
+    "platform/memory/insights.ex" => 1,
+    "platform/memory/insights/grounding.ex" => 1,
+    "platform/memory/insights/routing.ex" => 3,
+    # Task 01a13867 stage 3. disseminator.ex: `participant/3` pins the DM's
+    # `space_id` (a `chat_spaces.id` from `find_or_create_dm/3`), an agent id
+    # off `Roles.assignee_for/1`'s `%Agent{}` and a user id from
+    # `Digest.select/2` (uuid column values); no boundary input reaches it.
+    "platform/memory/insights/disseminator.ex" => 1,
     # Task 01a10db6: 0 -> 5 in the iOS App Intents entity layer. Triaged by
     # hand: `fetch_own_approval/2` pins `i.id == ^item_id` behind
     # `Platform.UUID.valid?/1`; `user_participant/2` pins `space.id` off a

@@ -262,6 +262,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # Task 01a1316b-4e46 stage 1 — prototype version retention. Same shape as
     # the file purger. Tests call `Platform.Prototypes.Purger.sweep/1` directly.
     :start_prototype_purger,
+    # task 01a13867 stage 1: hourly hard-delete of expired memory_insights.
+    :start_insight_purger,
+    # task 01a13867 stage 3: daily insight briefing delivery. Tests call
+    # `Platform.Memory.Insights.Disseminator.run/1` directly.
+    :start_insight_disseminator,
     # Task 019fb978 stage 2 — the declarative TaskRouter watcher. This entry
     # is the audit test working exactly as designed: adding the gate to
     # application.ex failed this assertion on the first full-suite run, which

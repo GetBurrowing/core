@@ -69,7 +69,11 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a114a8 stage 4: whether a task's dispatches are told to work
     # through suite_run. Enrolment is a task_cohort on agent_id.
     Platform.Experiments.Surfaces.CodeMode,
-    Platform.Experiments.Surfaces.AgentToolProfile
+    Platform.Experiments.Surfaces.AgentToolProfile,
+    # Task 01a13867 stage 1: the dreaming run's insight-synthesis directive
+    # and dissemination threshold. The control is no directive and
+    # min_confidence "high"; nothing is seeded.
+    Platform.Experiments.Surfaces.InsightSynthesis
   ]
 
   @prompt_surface "dispatch.prompt"

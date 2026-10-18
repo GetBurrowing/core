@@ -31,16 +31,16 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
   `org/page/*` file_keys. It writes ONLY to today's org journal path
   (`org/journal/YYYY-MM-DD.md`), for two reasons:
 
-    1. Page mutations from a dreaming run must go through the
-       proposal-review pipeline (acceptance criterion 2) — Rowan
-       approves or rejects each `<synthesis-proposal>` at
-       `/memory/proposals` before it becomes durable page content.
+    1. Page mutations from a dreaming run are emitted as
+       `<synthesis-insight action="page_edit">` blocks, never written
+       directly; acting on one is a separate, attributed step.
 
     2. The `Platform.Org.Context.upsert_context_file/3` write hook
-       sweeps journal paths for `<synthesis-proposal>` blocks and
-       hands them to `Platform.Memory.Proposals.ingest_from_journal/3`
-       automatically — so writing the LLM output to the journal is
-       exactly the path that materialises pending proposals.
+       sweeps journal paths for `<synthesis-insight>` blocks and
+       hands them to `Platform.Memory.Insights.ingest_from_journal/3`
+       automatically (task 01a13867 stage 1; it used to ingest
+       `<synthesis-proposal>` blocks) — so writing the LLM output to the
+       journal is exactly the path that materialises open insights.
 
   ## Design choice: deterministic maintenance dispatch (not LLM-parsed)
 
@@ -70,14 +70,15 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
   The written journal body has two sections appended by this handler:
 
-  1. The raw LLM synthesis output (contains `<synthesis-proposal>`
-     blocks that the sweep hook will ingest into the `memory_proposals`
+  1. The raw LLM synthesis output (contains `<synthesis-insight>`
+     blocks that the sweep hook will ingest into the `memory_insights`
      table).
 
   2. An "auto-applied maintenance" section counting link_repair /
      format_normalize / retired_cleanup ops + failures. Human-readable
-     and stable across dreaming runs so `/memory/proposals` reviewers
-     can spot when maintenance activity spiked.
+     and stable across dreaming runs so whoever reads the journal (or the
+     `/memory/insights` tab, task 01a13867 stage 5) can spot when
+     maintenance activity spiked.
 
   Both sections are written in one `upsert_file/1` call so the write is
   atomic — the sweep hook sees the complete body or none of it.
@@ -88,7 +89,7 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
   alias Platform.Memory.Integrity
   alias Platform.Memory.MaintenanceSubagent
-  alias Platform.Memory.Proposals, as: MemoryProposals
+  alias Platform.Memory.Insights
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Responsibilities.ContextProviders
   alias Platform.Responsibilities.Responsibility
@@ -218,44 +219,18 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
   # ── Internals ──────────────────────────────────────────────────────────────
 
-  # Render prior rejected proposals as a bulleted list of `{body, feedback}`
-  # pairs for the legacy `default_prompt_template` path. Mirrors
-  # `Platform.Agents.HistorianDispatcher.render_rejected_exemplars/1` so the
-  # two dreaming render paths surface the same few-shot exemplars to the
-  # model.
+  # Render prior verdicts (rejections and flags, with their reasons) for the
+  # `{{rejected_exemplars}}` placeholder, followed by the
+  # `memory.insight_synthesis` experiment directive for today's run (empty
+  # for the control arm). Shares `Insights.render_exemplars/1` and
+  # `Insights.directive_block/2` with
+  # `Platform.Agents.HistorianDispatcher` so the two dreaming render paths
+  # surface the same exemplars and the same arm to the model. The placeholder
+  # name is kept: the template variables are owned elsewhere.
   @spec render_rejected_exemplars(keyword()) :: String.t()
   defp render_rejected_exemplars(opts) do
-    exemplars =
-      try do
-        MemoryProposals.rejected_exemplars(opts)
-      rescue
-        error ->
-          Logger.warning(
-            "[memory.dreaming] Proposals.rejected_exemplars/1 raised: " <>
-              Exception.message(error)
-          )
-
-          []
-      end
-
-    case exemplars do
-      [] ->
-        "(no prior rejections in the recent window)"
-
-      rows ->
-        rows
-        |> Enum.map(fn %{body: body, feedback: feedback, category: category} ->
-          feedback_line =
-            case feedback do
-              nil -> ""
-              "" -> ""
-              text -> "\n  - Rowan's feedback: #{text}"
-            end
-
-          "- [#{category}] #{body}#{feedback_line}"
-        end)
-        |> Enum.join("\n")
-    end
+    Insights.render_exemplars(opts) <>
+      Insights.directive_block(Keyword.get(opts, :workspace_id), Date.utc_today())
   end
 
   defp extract_body(%{"memory_body" => text}) when is_binary(text) and text != "",
@@ -345,8 +320,8 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
     - retired_cleanup:  #{rc_ok} succeeded, #{rc_err} failed
 
     Detailed per-op audit rows are on the `platform.memory.maintenance.*` event
-    stream. This summary is journal-scoped — Rowan's `/memory/proposals` view
-    surfaces the counts alongside pending synthesis proposals.
+    stream. This summary is journal-scoped: it sits in the journal beside the
+    day's synthesis insights, which surface on `/memory/insights`.
     """
   end
 

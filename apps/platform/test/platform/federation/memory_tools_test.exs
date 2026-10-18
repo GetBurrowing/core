@@ -22,7 +22,7 @@ defmodule Platform.Federation.MemoryToolsTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Federation.ToolSurface
-  alias Platform.Memory.MemoryProposal
+  alias Platform.Memory.Insight
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.{WikiJournalEntry, WikiPage}
@@ -33,7 +33,8 @@ defmodule Platform.Federation.MemoryToolsTest do
   setup do
     Repo.delete_all(WikiPage)
     Repo.delete_all(WikiJournalEntry)
-    Repo.delete_all(MemoryProposal)
+    Repo.delete_all("memory_proposals")
+    Repo.delete_all(Insight)
 
     historian = create_agent("historian", assign_historian?: true)
     plain = create_agent("plain")
@@ -264,19 +265,23 @@ defmodule Platform.Federation.MemoryToolsTest do
       assert hd(entries).content == "Field note."
     end
 
-    test "a synthesis-proposal block in the body reaches /memory/proposals",
+    test "a synthesis-insight block in the body is ingested as an insight",
          %{historian: h} do
       # Regression guard. A dreaming run is only authorised to write to
-      # today's journal, and it emits `<synthesis-proposal>` blocks there
-      # via this tool. Before the JournalSweep call in
-      # `do_memory_create/5`, those blocks were persisted as journal prose
-      # and never ingested — the proposals page stayed empty while the
-      # agent reported having filed them.
+      # today's journal, and it emits its blocks there via this tool.
+      # Before the JournalSweep call in `do_memory_create/5`, those blocks
+      # were persisted as journal prose and never ingested. Since task
+      # 01a13867 stage 1 the blocks are `<synthesis-insight>`, and a
+      # `<synthesis-proposal>` block is no longer ingested at all.
       body = """
       Dreaming pass.
 
-      <synthesis-proposal category="emerging-risk" confidence="high" evidence="org/journal/2026-05-20.md">
+      <synthesis-insight action="question" confidence="high" evidence="org/journal/2026-05-20.md">
       Blocks written through memory_create must be ingested.
+      </synthesis-insight>
+
+      <synthesis-proposal category="emerging-risk" confidence="high" evidence="e">
+      A legacy proposal block is ignored.
       </synthesis-proposal>
       """
 
@@ -287,19 +292,20 @@ defmodule Platform.Federation.MemoryToolsTest do
                  context(h)
                )
 
-      assert [proposal] = Repo.all(MemoryProposal)
-      assert proposal.category == "emerging-risk"
-      assert proposal.confidence == "high"
-      assert proposal.body == "Blocks written through memory_create must be ingested."
-      assert proposal.journal_path == "org/journal/2026-05-20.md"
-      assert proposal.status == "pending"
+      assert [insight] = Repo.all(Insight)
+      assert insight.action_type == "question"
+      assert insight.confidence == "high"
+      assert insight.body == "Blocks written through memory_create must be ingested."
+      assert insight.journal_path == "org/journal/2026-05-20.md"
+      assert insight.state == "open"
+      assert Repo.aggregate("memory_proposals", :count) == 0
     end
 
-    test "a page write is not swept for proposals", %{historian: h} do
+    test "a page write is not swept for insights", %{historian: h} do
       body = """
-      <synthesis-proposal category="emerging-risk" confidence="high" evidence="e">
-      Pages are not a proposal surface.
-      </synthesis-proposal>
+      <synthesis-insight action="briefing" confidence="high" evidence="e">
+      Pages are not an insight surface.
+      </synthesis-insight>
       """
 
       assert {:ok, _result} =
@@ -309,7 +315,7 @@ defmodule Platform.Federation.MemoryToolsTest do
                  context(h)
                )
 
-      assert [] = Repo.all(MemoryProposal)
+      assert [] = Repo.all(Insight)
     end
 
     test "namespace is preserved from the path", %{historian: h} do

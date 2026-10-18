@@ -21,7 +21,7 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
   use Platform.DataCase, async: false
 
   alias Platform.Audit
-  alias Platform.Memory.MemoryProposal
+  alias Platform.Memory.Insight
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Wiki
   alias Platform.Org.WikiPage
@@ -30,7 +30,8 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
   alias Platform.Responsibilities.Responsibility
 
   setup do
-    Repo.delete_all(MemoryProposal)
+    Repo.delete_all("memory_proposals")
+    Repo.delete_all(Insight)
     Repo.delete_all(WikiPage)
     Repo.delete_all(Platform.MemoryFeedback.Entry)
     :ok
@@ -202,16 +203,16 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
   # ── Maintenance fan-out + proposal ingestion ─────────────────────────
 
   describe "handle_output/3 — synthesis + maintenance side effects" do
-    test "synthesis-proposal blocks in LLM output land in memory_proposals via sweep hook" do
+    test "synthesis-insight blocks in LLM output land in memory_insights via sweep hook" do
       body =
         """
         # Today's synthesis
 
-        <synthesis-proposal category="cross-project-pattern" confidence="medium" evidence="Suite + Orion both adopting the same brand-token vocabulary this week">
-        Both Suite and Orion are converging on a semantic-token
+        <synthesis-insight action="briefing" confidence="medium" evidence="two projects adopting the same brand-token vocabulary this week">
+        Two projects are converging on a semantic-token
         vocabulary for brand palette references — worth naming so
         neither project reinvents it.
-        </synthesis-proposal>
+        </synthesis-insight>
         """
 
       assert :ok =
@@ -222,11 +223,13 @@ defmodule Platform.Responsibilities.Handlers.DreamingTest do
                )
 
       # The sweep hook fired inside `upsert_context_file/3`'s post-write
-      # tap and materialised the proposal row.
-      [proposal] = Repo.all(MemoryProposal)
-      assert proposal.status == "pending"
-      assert proposal.category == "cross-project-pattern"
-      assert proposal.journal_path == todays_journal()
+      # tap and materialised the insight row (task 01a13867 stage 1).
+      [insight] = Repo.all(Insight)
+      assert insight.state == "open"
+      assert insight.action_type == "briefing"
+      assert insight.journal_path == todays_journal()
+      assert insight.run_id == Platform.Memory.Insights.run_id(nil, Date.utc_today())
+      assert Repo.aggregate("memory_proposals", :count) == 0
     end
 
     test "maintenance fan-out runs off Integrity.scan output and records audit rows" do

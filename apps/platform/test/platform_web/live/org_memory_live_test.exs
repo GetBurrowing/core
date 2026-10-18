@@ -34,8 +34,6 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
-  alias Platform.Memory.MemoryProposal
-  alias Platform.Memory.Proposals
   alias Platform.MemoryFeedback.Entry, as: FeedbackEntry
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
@@ -1324,226 +1322,61 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     end
   end
 
-  # ── Proposals tab (stage 4 — task 019f70e9) ─────────────────────────────
-
-  describe "proposals tab & /memory/proposals route (stage 4)" do
+  # ── Insights tab (task 01a13867 stage 5, renamed from Proposals) ───────
+  #
+  # The tab's own behaviour (rows, refusals, live refresh) is in
+  # `org_memory_live_insights_test.exs`; these cases pin how it sits in the
+  # three-pane shell, as the Proposals cases here did.
+  describe "insights tab & /memory/insights route (01a13867 stage 5)" do
     setup %{conn: conn} do
-      Repo.delete_all(MemoryProposal)
+      Repo.delete_all(Platform.Memory.Insight)
       Repo.delete_all(WikiPage)
 
       {:ok, conn: authenticated_conn(conn, create_user!())}
     end
 
-    defp insert_proposal!(attrs) do
-      base_body = Map.get(attrs, :body, "Some proposal body")
-
-      %MemoryProposal{}
-      |> MemoryProposal.changeset(
-        Map.merge(
-          %{
-            journal_path: "org/journal/2026-07-17.md",
-            block_hash:
-              :crypto.hash(:sha256, base_body <> Ecto.UUID.generate())
-              |> Base.encode16(case: :lower),
-            category: "recurring-theme",
-            confidence: "high",
-            body: base_body,
-            evidence: "Rowan flagged pricing anchors drifting 3x this week."
-          },
-          Map.drop(attrs, [:body])
-        )
-      )
-      |> Repo.insert!()
-    end
-
-    test "GET /memory/proposals mounts OrgMemoryLive with the proposals tab selected",
+    test "GET /memory/insights mounts OrgMemoryLive with the Insights tab selected",
          %{conn: conn} do
-      insert_proposal!(%{category: "recurring-theme", confidence: "high", body: "Body A"})
+      insight = Platform.InsightFixtures.insight!(body: "Body A")
 
-      {:ok, view, html} = live(conn, "/memory/proposals")
+      {:ok, view, _html} = live(conn, "/memory/insights")
 
       assert view.module == PlatformWeb.OrgMemoryLive
-      # Tab strip shows Proposals as the selected tab.
+
       assert has_element?(
                view,
-               ~s([data-role="tab-strip"] button[data-tab="proposals"][aria-selected="true"])
+               ~s([data-role="tab-strip"] button[data-tab="insights"][aria-selected="true"])
              )
 
-      # Pane rendered — table + row present.
-      assert has_element?(view, ~s([data-role="proposals-pane"]))
-      assert has_element?(view, ~s([data-role="proposals-table"]))
-      # Right-pane collapsed off :proposals.
+      assert has_element?(view, ~s([data-role="insights-pane"][data-surface="desktop"]))
+      assert has_element?(view, ~s(#insight-row-#{insight.id}), "Body A")
+      # Right pane collapsed off :insights.
       refute has_element?(view, ~s([data-role="backlinks"]))
-      # Category + confidence badges surface.
-      assert html =~ "recurring-theme"
-      assert html =~ "high"
     end
 
-    test "renders 3 pending rows + tab-strip count badge; hides badge at 0",
-         %{conn: conn} do
-      _p1 = insert_proposal!(%{category: "strategic-insight", confidence: "medium", body: "B1"})
-      _p2 = insert_proposal!(%{category: "emerging-risk", confidence: "low", body: "B2"})
-      _p3 = insert_proposal!(%{category: "cross-project-pattern", confidence: "high", body: "B3"})
+    test "the tab-strip count shows open insights and hides at 0", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory")
+      refute has_element?(view, ~s([data-role="insights-tab-count"]))
 
-      {:ok, view, html} = live(conn, "/memory/proposals")
+      for i <- 1..3, do: Platform.InsightFixtures.insight!(body: "Open #{i}")
 
-      # Three data-proposal-id rows in the stream tbody.
-      assert length(Regex.scan(~r/data-proposal-id="/, html)) == 3
-
-      # Count badge shows "3" in the tab strip.
-      assert has_element?(view, ~s([data-role="proposals-tab-count"]), "3")
-
-      # Header "N pending" pill visible.
-      assert render(view) =~ "3 pending"
+      {:ok, view, _html} = live(conn, "/org_memory")
+      assert has_element?(view, ~s([data-role="insights-tab-count"]), "3")
+      assert has_element?(view, ~s([data-role="mobile-insights-count"]), "3")
     end
 
-    test "approve_proposal → status:approved + row removed from stream",
-         %{conn: conn} do
-      proposal = insert_proposal!(%{category: "recurring-theme", body: "To approve"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      assert has_element?(view, ~s([data-proposal-id="#{proposal.id}"]))
-
-      render_click(view, "approve_proposal", %{"id" => proposal.id})
-
-      # DB row flipped.
-      assert %MemoryProposal{status: "approved"} = Repo.get(MemoryProposal, proposal.id)
-
-      # Row is gone from the stream (client-side stream_delete drops the node).
-      html = render(view)
-      refute html =~ ~s(data-proposal-id="#{proposal.id}")
-
-      # Flash confirms.
-      assert html =~ "Approved"
-    end
-
-    test "reject_proposal → status:rejected + feedback captured",
-         %{conn: conn} do
-      proposal = insert_proposal!(%{category: "unresolved-question", body: "To reject"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      # Open the inline reject form.
-      render_click(view, "show_reject_form", %{"id" => proposal.id})
-      assert has_element?(view, ~s([data-role="reject-form-row"]))
-
-      # The id travels in a hidden input named `_id`, NOT `id` — an input named
-      # `id` overrides the DOM id of its own form element (LiveView warns about
-      # it at compile time). Assert the wire key rather than supplying it here,
-      # so the proposal can only be resolved by the value the FORM rendered.
-      assert has_element?(
-               view,
-               ~s(#proposal-reject-form-#{proposal.id} input[type="hidden"][name="_id"][value="#{proposal.id}"])
-             )
-
-      refute has_element?(
-               view,
-               ~s(#proposal-reject-form-#{proposal.id} input[name="id"])
-             )
-
-      # Submit the form with feedback text only; the id comes off the hidden
-      # input the template rendered.
-      view
-      |> form("#proposal-reject-form-#{proposal.id}", %{
-        "feedback" => "Already captured in org/page/pricing.md — not novel."
-      })
-      |> render_submit()
-
-      row = Repo.get(MemoryProposal, proposal.id)
-      assert row.status == "rejected"
-      assert row.feedback == "Already captured in org/page/pricing.md — not novel."
-
-      # Row dropped from stream + form collapsed.
-      html = render(view)
-      refute html =~ ~s(data-proposal-id="#{proposal.id}")
-      refute html =~ ~s(id="proposal-reject-form-#{proposal.id}")
-    end
-
-    test "cancel_reject collapses the inline expansion row without touching DB",
-         %{conn: conn} do
-      proposal = insert_proposal!(%{body: "To keep pending"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      render_click(view, "show_reject_form", %{"id" => proposal.id})
-      assert has_element?(view, ~s([data-role="reject-form-row"]))
-
-      render_click(view, "cancel_reject", %{"id" => proposal.id})
-      refute has_element?(view, ~s([data-role="reject-form-row"]))
-
-      # Row still in the stream + still pending in DB.
-      assert has_element?(view, ~s([data-proposal-id="#{proposal.id}"]))
-      assert %MemoryProposal{status: "pending"} = Repo.get(MemoryProposal, proposal.id)
-    end
-
-    test "expired proposals do not appear in the list", %{conn: conn} do
-      _fresh = insert_proposal!(%{evidence: "Fresh-evidence-marker", body: "Fresh"})
-
-      # Insert an expired one (expires_at in the past). Evidence
-      # differs from the fresh row so we can test presence/absence in
-      # the rendered HTML (evidence IS surfaced in the table; body is
-      # not — body promotes to page content in stage 8).
-      _expired =
-        insert_proposal!(%{
-          evidence: "Stale-evidence-marker",
-          body: "Stale",
-          expires_at: DateTime.add(DateTime.utc_now(), -1, :day)
-        })
-
-      {:ok, _view, html} = live(conn, "/memory/proposals")
-
-      assert html =~ "Fresh-evidence-marker"
-      refute html =~ "Stale-evidence-marker"
-
-      # Sanity: `list_pending/1` agrees (the LiveView query source).
-      assert [%{body: "Fresh"}] = Proposals.list_pending(workspace_id: nil)
-    end
-
-    test "empty pending state renders the friendly card + no count badge",
-         %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      assert has_element?(view, ~s([data-role="proposals-empty-state"]))
-      # The apostrophe HTML-encodes to `&#39;` so we match on the
-      # apostrophe-free suffix.
-      assert render(view) =~ "dreaming is quiet"
-
-      # No count badge in the tab strip when count == 0.
-      refute has_element?(view, ~s([data-role="proposals-tab-count"]))
-      # No table rendered at all.
-      refute has_element?(view, ~s([data-role="proposals-table"]))
-    end
-
-    test "evidence column has the truncate class and title fallback for hover-reveal",
-         %{conn: conn} do
-      long_evidence =
-        "Very long evidence: Rowan noted three times this week that the pricing anchors keep " <>
-          "drifting between quotes, causing SXI members to ask for clarification. Similar drift " <>
-          "observed on the Orion proposal last month."
-
-      insert_proposal!(%{evidence: long_evidence, body: "Long-evidence proposal"})
-
-      {:ok, view, html} = live(conn, "/memory/proposals")
-
-      # Evidence cell has truncate class so mobile viewports collapse it.
-      assert has_element?(view, ~s(td[data-role="evidence-cell"].truncate))
-      # And the full text is preserved in the title attribute for hover reveal.
-      assert html =~ Phoenix.HTML.html_escape(long_evidence) |> Phoenix.HTML.safe_to_string()
-    end
-
-    test "switch_tab preserves the tree + selection when landing on :proposals",
+    test "switch_tab preserves the tree + selection when landing on :insights",
          %{conn: conn} do
       {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
-      insert_proposal!(%{body: "Toggleable"})
+      Platform.InsightFixtures.insight!(body: "Toggleable")
 
       {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
-      view |> element(~s([data-role="tab-strip"] button[data-tab="proposals"])) |> render_click()
+      view |> element(~s([data-role="tab-strip"] button[data-tab="insights"])) |> render_click()
 
       assert has_element?(
                view,
-               ~s([data-role="tab-strip"] button[data-tab="proposals"][aria-selected="true"])
+               ~s([data-role="tab-strip"] button[data-tab="insights"][aria-selected="true"])
              )
 
       # Tree survives the tab switch.
@@ -1553,250 +1386,14 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       view |> element(~s([data-role="tab-strip"] button[data-tab="pages"])) |> render_click()
       assert has_element?(view, "h1", "org/page/identity.md")
     end
-
-    # ── Desktop expandable panel row (task 01a1170a stage 1) ──────────────
-
-    defp query_html(view, selector) do
-      view |> render() |> LazyHTML.from_document() |> LazyHTML.query(selector)
-    end
-
-    defp node_texts(nodes), do: Enum.map(nodes, &String.trim(LazyHTML.text(&1)))
-
-    test "chevron opens a panel with the target path and the body as diff lines, and closes it",
-         %{conn: conn} do
-      proposal =
-        insert_proposal!(%{
-          body: "+ new line\n- old line",
-          target_page_key: "org/page/expand-target.md"
-        })
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      refute has_element?(view, "#proposal-panel-#{proposal.id}")
-      refute has_element?(view, ~s([data-role="proposal-panel"]))
-
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      assert has_element?(view, ~s(#proposal-panel-#{proposal.id}[data-role="proposal-panel"]))
-
-      lines =
-        query_html(view, ~s([data-role="proposals-table"] [data-role="proposal-diff-line"]))
-
-      assert Enum.count(lines) == 2
-
-      assert node_texts(LazyHTML.query(lines, ~s([data-role="proposal-diff-gutter"]))) == [
-               "+",
-               "+"
-             ]
-
-      # Untrimmed on purpose: the text span is whitespace-pre-wrap, so any
-      # template whitespace around the expression would render as blank lines.
-      assert Enum.map(
-               LazyHTML.query(lines, ~s([data-role="proposal-diff-text"])),
-               &LazyHTML.text/1
-             ) == [
-               "+ new line",
-               "- old line"
-             ]
-
-      assert has_element?(
-               view,
-               ~s(#proposal-panel-#{proposal.id} [data-role="proposal-target"]),
-               "org/page/expand-target.md"
-             )
-
-      # Full, untruncated evidence lives in the panel. Compared untrimmed: the
-      # paragraph is whitespace-pre-wrap, so template whitespace would show.
-      assert [evidence] =
-               view
-               |> query_html(~s(#proposal-panel-#{proposal.id} [data-role="proposal-evidence"]))
-               |> Enum.map(&LazyHTML.text/1)
-
-      assert evidence == "Rowan flagged pricing anchors drifting 3x this week."
-
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      refute has_element?(view, "#proposal-panel-#{proposal.id}")
-      refute has_element?(view, ~s([data-role="proposal-diff-line"]))
-    end
-
-    test "two rows can be open at once", %{conn: conn} do
-      a = insert_proposal!(%{body: "Body A"})
-      b = insert_proposal!(%{body: "Body B"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      render_click(view, "toggle_proposal_row", %{"id" => a.id})
-      render_click(view, "toggle_proposal_row", %{"id" => b.id})
-
-      assert has_element?(view, "#proposal-panel-#{a.id}")
-      assert has_element?(view, "#proposal-panel-#{b.id}")
-    end
-
-    test "approving one open row leaves another open row open", %{conn: conn} do
-      a = insert_proposal!(%{body: "Body A"})
-      b = insert_proposal!(%{body: "Body B"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      render_click(view, "toggle_proposal_row", %{"id" => a.id})
-      render_click(view, "toggle_proposal_row", %{"id" => b.id})
-
-      view
-      |> element(~s(#proposal-panel-#{a.id} button[phx-click="approve_proposal"]))
-      |> render_click()
-
-      refute has_element?(view, "#proposal-panel-#{a.id}")
-      assert has_element?(view, "#proposal-panel-#{b.id}")
-    end
-
-    test "the chevron's aria-expanded tracks the panel and aria-controls names it",
-         %{conn: conn} do
-      proposal = insert_proposal!(%{body: "Aria body"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-
-      chevron = ~s(#proposal-row-#{proposal.id} button[phx-click="toggle_proposal_row"])
-
-      assert has_element?(
-               view,
-               chevron <>
-                 ~s([aria-expanded="false"][aria-controls="proposal-panel-#{proposal.id}"])
-             )
-
-      view |> element(chevron) |> render_click()
-      assert has_element?(view, chevron <> ~s([aria-expanded="true"]))
-
-      view |> element(chevron) |> render_click()
-      assert has_element?(view, chevron <> ~s([aria-expanded="false"]))
-    end
-
-    test "a blank body renders the empty note and keeps Approve", %{conn: conn} do
-      # The changeset's validate_required rejects a whitespace-only body, so
-      # this shape can only arrive by a direct write (the column is NOT NULL,
-      # not non-blank). Insert a valid row, then blank the body underneath it.
-      proposal = insert_proposal!(%{body: "about to be blanked"})
-
-      {1, _} =
-        Repo.update_all(from(p in MemoryProposal, where: p.id == ^proposal.id),
-          set: [body: "   "]
-        )
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      assert has_element?(view, "#proposal-panel-#{proposal.id}", "No body on this proposal")
-      refute has_element?(view, ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff"]))
-
-      assert has_element?(
-               view,
-               ~s(#proposal-panel-#{proposal.id} button[phx-click="approve_proposal"]),
-               "Approve"
-             )
-    end
-
-    test "rejecting from an open panel swaps its action bar for the form, no second row",
-         %{conn: conn} do
-      proposal = insert_proposal!(%{body: "Reject from panel"})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      view
-      |> element(~s(#proposal-panel-#{proposal.id} button[phx-click="show_reject_form"]))
-      |> render_click()
-
-      assert has_element?(
-               view,
-               ~s(#proposal-panel-#{proposal.id} #proposal-reject-form-#{proposal.id})
-             )
-
-      refute has_element?(view, "#proposal-reject-row-#{proposal.id}")
-
-      refute has_element?(
-               view,
-               ~s(#proposal-panel-#{proposal.id} [data-role="proposal-panel-actions"])
-             )
-    end
-
-    test "a long body clamps behind Show full diff on desktop", %{conn: conn} do
-      body = Enum.map_join(1..13, "\n", &"line #{&1}")
-      proposal = insert_proposal!(%{body: body})
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      toggle =
-        ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff-toggle"][phx-click="toggle_proposal_diff"])
-
-      assert has_element?(view, toggle, "Show full diff")
-      view |> element(toggle) |> render_click()
-      assert has_element?(view, toggle, "Show less")
-    end
-
-    # Task 01a1170a stage 4: at 1280px the auto-layout table measured 919px
-    # in an 800px pane (a project Source label and the 96ch panel set its
-    # width). table-fixed makes the header widths the layout; every other
-    # column truncates; the panel is capped at the cell width.
-    test "the table is fixed-layout so no cell content can widen it past the pane",
-         %{conn: conn} do
-      proposal =
-        insert_proposal!(%{
-          body: Enum.map_join(1..13, "\n", &"line #{&1}"),
-          journal_path: "project/01a1207e-0000-7000-8000-000000000000/journal/2026-10-06.md"
-        })
-
-      {:ok, view, _html} = live(conn, "/memory/proposals")
-      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
-
-      assert has_element?(view, ~s(table#org-memory-proposals-table.table-fixed.w-full))
-
-      # Opaque sticky header: a translucent one let diff lines show through.
-      assert has_element?(view, ~s(#org-memory-proposals-table thead.sticky.bg-base-200))
-      refute has_element?(view, ~s(#org-memory-proposals-table thead[class*="bg-base-200/"]))
-
-      widths =
-        view
-        |> query_html("#org-memory-proposals-table thead th")
-        |> Enum.map(fn th ->
-          th
-          |> LazyHTML.attribute("class")
-          |> hd()
-          |> String.split()
-          |> Enum.find(&String.starts_with?(&1, "w-"))
-        end)
-
-      # Evidence (4th) is the only flexible column.
-      assert widths == ["w-10", "w-40", "w-28", nil, "w-36", "w-20", "w-28"]
-
-      row = "#proposal-row-#{proposal.id}"
-      assert has_element?(view, ~s(#{row} td[data-role="proposal-source"].truncate))
-
-      assert has_element?(
-               view,
-               ~s(#{row} td[data-role="proposal-source"][title="project/01a1207e-0000-7000-8000-000000000000/journal/2026-10-06.md"])
-             )
-
-      assert has_element?(view, ~s(#{row} td[data-role="evidence-cell"].truncate))
-
-      # Panel content is capped at the cell (pane) width, not just 96ch.
-      assert has_element?(
-               view,
-               ~s|#proposal-panel-#{proposal.id} td > div.min-w-0[class~="max-w-[min(96ch,100%)]"]|
-             )
-
-      # Show full diff uses text-secondary (AA on the open-row ground in both
-      # themes), not text-interactive (4.20:1 on light #F2F2F2).
-      toggle = ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff-toggle"])
-      assert has_element?(view, toggle <> ".text-secondary")
-      refute has_element?(view, toggle <> ".text-interactive")
-    end
   end
 
-  # Task 01a1170a stage 2: the proposals table's Source link points at the
-  # Journal tab focused on the proposal's day, not at `/org_memory/<path>`
-  # (journal days have no org_wiki_pages row, so that was "Page not found").
-  describe "Source link → Journal tab focused on that date (01a1170a stage 2)" do
+  # Task 01a1170a stage 2: the retired proposals table's Source link pointed
+  # at the Journal tab focused on the proposal's day, not at
+  # `/org_memory/<path>` (journal days have no org_wiki_pages row, so that
+  # was "Page not found"). The table went with task 01a13867 stage 5. The
+  # deep link itself stays a route, so these cases follow the URL directly.
+  describe "Journal deep link focused on a date (01a1170a stage 2)" do
     # 2026-09-01 is outside the 14-day `list_recent` window for any run on
     # or after 2026-09-16, so following the link exercises the
     # `get_for_date` merge in `load_journal/1`. (The plan named
@@ -1805,37 +1402,21 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     @source_date ~D[2026-09-01]
 
     setup %{conn: conn} do
-      Repo.delete_all(MemoryProposal)
       Repo.delete_all(WikiPage)
 
       {:ok, conn: authenticated_conn(conn, create_user!())}
-    end
-
-    defp source_hrefs(html) do
-      html
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s([data-role="proposals-table"] [data-role="proposal-source"] a))
-      |> LazyHTML.attribute("href")
     end
 
     test "the focus date really is outside the recent window" do
       assert Date.diff(Date.utc_today(), @source_date) > 14
     end
 
-    test "org source: literal href, and following it renders that day's entry",
+    test "an org deep link renders that day's entry",
          %{conn: conn} do
       {:ok, _} =
         Journal.append(%{content: "source entry marker 7f3a", date: @source_date},
           namespace: "org"
         )
-
-      insert_proposal!(%{journal_path: "org/journal/2026-09-01.md"})
-
-      {:ok, _view, html} = live(conn, "/memory/proposals")
-
-      assert source_hrefs(html) == [
-               "/org_memory?tab=journal&date=2026-09-01#journal-day-2026-09-01"
-             ]
 
       {:ok, view, html} = live(conn, "/org_memory?tab=journal&date=2026-09-01")
 
@@ -1844,7 +1425,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       refute html =~ "Page not found"
     end
 
-    test "project source: href carries the encoded ns and lands on the project entry only",
+    test "a project deep link carries the encoded ns and lands on the project entry only",
          %{conn: conn} do
       project_id = Ecto.UUID.generate()
       ns = "project/#{project_id}"
@@ -1859,59 +1440,12 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
           namespace: "org"
         )
 
-      insert_proposal!(%{journal_path: "project/#{project_id}/journal/2026-09-01.md"})
-
-      {:ok, _view, html} = live(conn, "/memory/proposals")
-
-      assert source_hrefs(html) == [
-               "/org_memory?tab=journal&date=2026-09-01&ns=project%2F#{project_id}" <>
-                 "#journal-day-2026-09-01"
-             ]
-
       {:ok, view, html} =
         live(conn, "/org_memory?tab=journal&date=2026-09-01&ns=project%2F#{project_id}")
 
       assert has_element?(view, "#journal-day-2026-09-01")
       assert html =~ "project entry marker b21e"
       refute html =~ "org entry marker c904"
-    end
-
-    test "an unparsable journal_path renders the label as plain text with no link",
-         %{conn: conn} do
-      insert_proposal!(%{journal_path: "org/page/not-a-journal.md"})
-
-      {:ok, view, html} = live(conn, "/memory/proposals")
-
-      assert has_element?(view, ~s([data-role="proposal-source"]), "org/page/not-a-journal.md")
-      assert source_hrefs(html) == []
-    end
-
-    test "a nil journal_path renders — with no <a> in the cell" do
-      # journal_path is NOT NULL in the table, so the nil case is rendered
-      # from an in-memory struct.
-      proposal = %MemoryProposal{
-        id: Ecto.UUID.generate(),
-        journal_path: nil,
-        category: "recurring-theme",
-        confidence: "high",
-        body: "Body",
-        evidence: nil,
-        inserted_at: DateTime.utc_now()
-      }
-
-      html =
-        render_component(&PlatformWeb.OrgMemoryLive.ProposalsPane.proposals_pane/1,
-          proposals: [proposal]
-        )
-
-      cell =
-        html
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-role="proposal-source"]))
-
-      assert LazyHTML.text(cell) |> String.trim() == "—"
-      assert source_hrefs(html) == []
-      assert PlatformWeb.OrgMemoryLive.ProposalsPane.source_href(nil) == nil
     end
 
     test "an invalid date mounts on the Journal tab without crashing", %{conn: conn} do
@@ -1924,23 +1458,6 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       assert has_element?(view, ~s([data-role="journal-pane"]))
       refute html =~ "Page not found"
-    end
-
-    test "regression: no href in the proposals table starts with /org_memory/org/journal/",
-         %{conn: conn} do
-      insert_proposal!(%{journal_path: "org/journal/2026-09-01.md"})
-      insert_proposal!(%{journal_path: "org/journal/2026-07-17.md"})
-
-      {:ok, _view, html} = live(conn, "/memory/proposals")
-
-      hrefs =
-        html
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-role="proposals-table"] a))
-        |> LazyHTML.attribute("href")
-
-      assert length(source_hrefs(html)) == 2
-      refute Enum.any?(hrefs, &String.starts_with?(&1, "/org_memory/org/journal/"))
     end
 
     test "switch_tab clears the ns override so the journal follows the tree again",

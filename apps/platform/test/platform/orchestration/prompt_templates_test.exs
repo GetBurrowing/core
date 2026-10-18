@@ -3357,21 +3357,72 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert Enum.any?(dispatch_rows, &(&1.content =~ "{{skills_reference}}"))
     end
 
-    test "dreaming template body specifies the six synthesis-proposal categories" do
+    test "dreaming template body specifies the insight grammar and its four action types" do
+      # Task 01a13867 stage 1: proposals became insights.
       content = PromptTemplates.default_content_for_slug("historian.dreaming")
 
-      for category <-
-            ~w(recurring-theme cross-project-pattern emerging-risk stale-fact-candidate-retirement strategic-insight unresolved-question) do
-        assert content =~ category,
-               "historian.dreaming must document the '#{category}' category"
+      for action <- ~w(page_edit briefing question task) do
+        assert content =~ "`#{action}`",
+               "historian.dreaming must document the '#{action}' action"
       end
 
       # The block grammar itself must be reproduced verbatim so the
-      # model emits parseable proposals.
-      assert content =~ "<synthesis-proposal"
-      assert content =~ "</synthesis-proposal>"
-      assert content =~ "confidence"
+      # model emits parseable insights.
+      assert content =~ "<synthesis-insight"
+      assert content =~ "</synthesis-insight>"
+      assert content =~ "<old>" and content =~ "<new>"
+      assert content =~ ~s(confidence="high|medium|low")
       assert content =~ "evidence"
+
+      refute content =~ "<synthesis-proposal",
+             "the dreaming prompt must no longer ask for proposals: they are not ingested"
+    end
+
+    test "dreaming template body states the grounding rule for page edits" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      assert content =~ "Grounding rule"
+
+      for prefix <- ~w(page: journal: task: message: query:) do
+        assert content =~ "`#{prefix}", "grounding rule must list the #{prefix} ref form"
+      end
+
+      assert content =~ "downgraded to a `question`"
+    end
+
+    test "dreaming template body names no person and no install" do
+      content = PromptTemplates.default_content_for_slug("historian.dreaming")
+
+      for word <- [~r/\bRyan\b/, ~r/\bSuite\b/, ~r/fabrikam/i, ~r/\bmoon\b/, ~r/\bhive\b/] do
+        refute content =~ word, "dreaming template must not carry #{inspect(word)}"
+      end
+    end
+
+    test "both dreaming slugs carry exactly what the force-update migration writes" do
+      migration =
+        Path.expand(
+          "../../../priv/repo/migrations/20261018000200_force_update_dreaming_prompt_insights.exs",
+          __DIR__
+        )
+
+      module = Platform.Repo.Migrations.ForceUpdateDreamingPromptInsights
+      unless Code.ensure_loaded?(module), do: Code.require_file(migration)
+
+      pre_change = apply(module, :pre_change_md5, [])
+      assert Map.keys(pre_change) |> Enum.sort() == @dreaming_slugs |> Enum.sort()
+
+      for slug <- @dreaming_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+        md5 = :crypto.hash(:md5, content) |> Base.encode16(case: :lower)
+
+        # The migration writes `default_content_for_slug/1`. Had the
+        # descriptor not changed, the guard's equality skip would make the
+        # migration a no-op on every install.
+        refute md5 == pre_change[slug],
+               "#{slug}: the descriptor still equals the pre-change body the migration replaces"
+
+        assert content == PromptTemplates.default_content_for_slug("historian.dreaming")
+      end
     end
 
     test "dreaming template body specifies the three MaintenanceSubagent spawn functions" do
@@ -3392,14 +3443,13 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "dreaming template must state the subagent-per-op discipline"
     end
 
-    test "dreaming template body forbids direct page writes and routes approvals through /memory/proposals" do
+    test "dreaming template body forbids direct page writes and names no approval page" do
       content = PromptTemplates.default_content_for_slug("historian.dreaming")
 
       # The whole point of the pipeline: no direct page writes from
-      # dreaming. Rowan approves at /memory/proposals or the change
-      # doesn't land.
-      assert content =~ "/memory/proposals",
-             "dreaming template must reference the /memory/proposals approval surface"
+      # dreaming. A page change is a page_edit insight, acted on later.
+      refute content =~ "/memory/proposals",
+             "dreaming template must not route approvals through /memory/proposals"
 
       assert content =~ "NEVER write directly to page" or
                content =~ "never write directly to page" or
@@ -3428,7 +3478,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       # The section header contextualises the exemplars so the model
       # knows how to interpret them.
-      assert content =~ "Rejected proposals" or content =~ "rejected proposals",
+      assert content =~ "Rejected or flagged insights",
              "dreaming template must caption the rejected-exemplars section"
     end
 

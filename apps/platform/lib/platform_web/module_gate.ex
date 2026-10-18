@@ -34,6 +34,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.AdminOrgsLive => {:admin, nil},
     PlatformWeb.AdminBrandingLive => {:admin, nil},
     PlatformWeb.AdminPrototypesLive => {:admin, nil},
+    PlatformWeb.AdminInsightsLive => {:admin, nil},
     PlatformWeb.AdminVaultLive => {:admin, nil},
     PlatformWeb.AdminPromptsLive => {:prompts, "prompts.manage"},
     PlatformWeb.AdminFederationLive => {:admin, nil},

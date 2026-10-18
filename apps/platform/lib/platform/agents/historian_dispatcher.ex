@@ -1129,8 +1129,9 @@ defmodule Platform.Agents.HistorianDispatcher do
 
     # Dreaming templates (`historian.dreaming` + legacy `memory.dreaming.v1`)
     # carry a `{{rejected_exemplars}}` placeholder that must be pre-rendered
-    # from `Platform.Memory.Proposals.rejected_exemplars/1` so the model
-    # sees prior rejections as few-shot calibration. Other templates never
+    # from `Platform.Memory.Insights.exemplars/1` (task 01a13867 stage 1) so
+    # the model sees prior rejections and flags, with reasons, as few-shot
+    # calibration. Other templates never
     # reference the key — `interpolate/2` treats unreferenced keys as
     # no-ops, so the extra assign is safe to include unconditionally, but
     # the DB read is only worth doing on dreaming dispatches.
@@ -1272,48 +1273,21 @@ defmodule Platform.Agents.HistorianDispatcher do
 
   defp dreaming_template?(_), do: false
 
-  # Render prior rejected proposals as a bulleted list of `{body, feedback}`
-  # pairs — the few-shot exemplars the dreaming prompt consumes via the
-  # `{{rejected_exemplars}}` placeholder. Bounded to 3 exemplars per prompt
-  # (matches the default in `Platform.Memory.Proposals.rejected_exemplars/1`).
+  # Render prior insight verdicts (rejections and flags, each with its
+  # reason) for the `{{rejected_exemplars}}` placeholder, then append the
+  # `memory.insight_synthesis` experiment directive for today's dreaming run
+  # (empty for the control arm). Task 01a13867 stage 1. Both halves live in
+  # `Platform.Memory.Insights` so this path and
+  # `Platform.Responsibilities.Handlers.Dreaming` cannot drift; both are
+  # total (a failed read renders the empty-window placeholder and no
+  # directive), so a dreaming dispatch never fails because of them.
   #
-  # The database read is best-effort: a failed lookup (bad workspace scope,
-  # Repo unavailable during boot) renders as the empty-window placeholder
-  # so a dreaming dispatch never fails hard because the exemplars couldn't
-  # be assembled.
+  # Called fully qualified, not aliased: the T6 scope guard forbids this
+  # module aliasing `Platform.Memory`.
   @spec render_rejected_exemplars(keyword()) :: String.t()
   defp render_rejected_exemplars(opts) do
-    exemplars =
-      try do
-        Platform.Memory.Proposals.rejected_exemplars(opts)
-      rescue
-        error ->
-          Logger.warning(
-            "[HistorianDispatcher] Proposals.rejected_exemplars/1 raised: " <>
-              Exception.message(error)
-          )
-
-          []
-      end
-
-    case exemplars do
-      [] ->
-        "(no prior rejections in the recent window)"
-
-      rows ->
-        rows
-        |> Enum.map(fn %{body: body, feedback: feedback, category: category} ->
-          feedback_line =
-            case feedback do
-              nil -> ""
-              "" -> ""
-              text -> "\n  - Rowan's feedback: #{text}"
-            end
-
-          "- [#{category}] #{body}#{feedback_line}"
-        end)
-        |> Enum.join("\n")
-    end
+    Platform.Memory.Insights.render_exemplars(opts) <>
+      Platform.Memory.Insights.directive_block(Keyword.get(opts, :workspace_id), Date.utc_today())
   end
 
   @spec render_deleted_paths_notice() :: String.t()

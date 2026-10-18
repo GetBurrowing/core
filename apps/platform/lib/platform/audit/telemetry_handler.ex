@@ -368,8 +368,8 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :access, :grant_changed]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
-    # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9
-    # stage-8 fix) records that event via `Platform.Audit.record/1`
+    # here. The since-retired `Platform.Memory.Proposals.queue_promotion/1`
+    # (task 019f70e9 stage-8 fix; deleted by task 01a13867 stage 5) recorded that event via `Platform.Audit.record/1`
     # directly so it lands regardless of whether this handler is
     # attached in the caller's runtime — mirrors how
     # `Platform.Memory.MaintenanceSubagent` writes its per-op audit

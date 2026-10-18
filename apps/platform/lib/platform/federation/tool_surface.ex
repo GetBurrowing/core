@@ -14262,10 +14262,10 @@ defmodule Platform.Federation.ToolSurface do
 
     case Journal.append(attrs, namespace: class.namespace) do
       {:ok, entry} ->
-        # Journal.append/2 is Memory-agnostic by design, so the proposal
-        # sweep is explicit here — without it, `<synthesis-proposal>`
+        # Journal.append/2 is Memory-agnostic by design, so the insight
+        # sweep is explicit here — without it, `<synthesis-insight>`
         # blocks an agent writes during a dreaming run never reach
-        # `/memory/proposals`.
+        # `/memory/insights`.
         JournalSweep.sweep(entry, class.namespace)
 
         {:ok,

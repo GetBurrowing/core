@@ -64,6 +64,11 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
   # page's LiveComponents pass their `@myself`.
   attr :event_target, :any, default: nil
 
+  # The canvas the form belongs to, sent as `canvas-id` with the submit so a
+  # form on an inline canvas (no `active_canvas`) still routes to its canvas,
+  # as `action_row` does for clicks. nil renders no attribute.
+  attr :canvas_id, :string, default: nil
+
   def render(assigns) do
     props = assigns.node["props"] || %{}
     fields = List.wrap(props["fields"])
@@ -82,6 +87,7 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
       ]}
       phx-submit="canvas_form_submit"
       phx-target={@event_target}
+      phx-value-canvas-id={@canvas_id}
       phx-value-node-id={@node_id}
     >
       <p

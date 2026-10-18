@@ -14,7 +14,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
 
   Behaviours covered: segmented tab switches, path chip present per tab /
   ABSENT on Search, tree drawer open + close-on-select, the Pages details
-  accordion, the append-only journal composer, the proposals cards, the
+  accordion, the append-only journal composer, the Insights rows, the
   search input + facet chips (dispatch through the `:org_memory_tool_surface`
   seam), and the desktop-guard.
   """
@@ -24,7 +24,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
-  alias Platform.Memory.MemoryProposal
+  alias Platform.Memory.Insight
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
   alias Platform.Org.WikiPage
@@ -100,21 +100,6 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
     :ok
   end
 
-  defp insert_proposal! do
-    %MemoryProposal{}
-    |> MemoryProposal.changeset(%{
-      journal_path: "org/journal/#{Date.to_iso8601(Date.utc_today())}.md",
-      block_hash: "mobile-#{System.unique_integer([:positive])}",
-      category: "recurring-theme",
-      confidence: "high",
-      evidence: "seen thrice",
-      body: "A long proposal body " <> String.duplicate("that wraps across many words ", 30),
-      target_page_key: "org/page/memory.md",
-      status: "pending"
-    })
-    |> Repo.insert!()
-  end
-
   defp mount_page(conn) do
     seed_pages!()
     live(authed(conn), "/org_memory/org/page/identity.md")
@@ -132,7 +117,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
                ~s([data-role="mobile-menu-button"][phx-click="open_tree_drawer"])
              )
 
-      for tab <- ~w(pages journal search proposals) do
+      for tab <- ~w(pages journal search insights) do
         assert has_element?(view, ~s([data-role="mobile-tabs"] button[data-mobile-tab="#{tab}"]))
       end
 
@@ -165,7 +150,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
              )
     end
 
-    test "present on Journal and Proposals, ABSENT on Search", %{conn: conn} do
+    test "present on Journal and Insights, ABSENT on Search", %{conn: conn} do
       {:ok, view, _html} = mount_page(conn)
 
       view |> element(~s([data-mobile-tab="journal"])) |> render_click()
@@ -175,7 +160,7 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
       refute has_element?(view, ~s([data-role="mobile-path-chip"]))
       assert has_element?(view, ~s([data-role="mobile-search"]))
 
-      view |> element(~s([data-mobile-tab="proposals"])) |> render_click()
+      view |> element(~s([data-mobile-tab="insights"])) |> render_click()
       assert has_element?(view, ~s([data-role="mobile-path-chip"]))
     end
   end
@@ -230,139 +215,68 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
     end
   end
 
-  describe "proposals cards" do
-    test "renders a stacked card (not the desktop table) with a diff + Reject/Apply", %{
-      conn: conn
-    } do
-      seed_pages!()
-      proposal = insert_proposal!()
-
-      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
-
-      assert has_element?(view, ~s([data-role="mobile-proposals"]))
-      assert has_element?(view, ~s([data-mobile-proposal-id="#{proposal.id}"]))
-      assert has_element?(view, ~s([data-role="mobile-proposal-diff"]))
-
-      assert has_element?(
-               view,
-               ~s([data-role="mobile-proposals"] button[phx-click="approve_proposal"])
-             )
-
-      assert has_element?(
-               view,
-               ~s([data-role="mobile-proposals"] button[phx-click="show_reject_form"])
-             )
-
-      # a long body gets the Show-full-diff tap-to-expand
-      assert has_element?(
-               view,
-               ~s([data-role="mobile-diff-toggle"][phx-click="toggle_proposal_diff"])
-             )
+  # Task 01a13867 stage 5: the mobile Insights tab renders the SAME rows as
+  # desktop (`InsightsPane` with `surface={:mobile}`), with `m-`-prefixed
+  # ids so the two branches never share a DOM id.
+  describe "insights rows (mobile)" do
+    setup do
+      Repo.delete_all(Insight)
+      :ok
     end
 
-    test "the mobile reject form resolves the proposal by its hidden `_id` input", %{conn: conn} do
+    test "renders the row with its preview and one primary named for the action, all >=44px",
+         %{conn: conn} do
       seed_pages!()
-      proposal = insert_proposal!()
+      addressee = Platform.InsightFixtures.person!()
 
-      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
+      insight =
+        Platform.InsightFixtures.insight!(
+          action_type: "question",
+          addressee: addressee,
+          body: "Who owns the staging bucket?"
+        )
 
-      # Open the inline reject form inside the card.
-      render_click(view, "show_reject_form", %{"id" => proposal.id})
-      assert has_element?(view, ~s([data-role="mobile-reject-form"]))
+      {:ok, view, _html} = live(authed(conn), "/memory/insights")
 
-      # `_id`, not `id`: an input named `id` overrides the DOM id of its own
-      # form element. The value under test is the one the TEMPLATE rendered —
-      # the submission below supplies only the feedback.
+      row = ~s([data-role="mobile-body"] #m-insight-row-#{insight.id})
+      assert has_element?(view, row)
+      assert has_element?(view, row <> ~s( [data-role="insight-type-label"]), "QUESTION")
+      assert has_element?(view, row <> ~s( [data-role="insight-expiry"]), "d left")
+      assert has_element?(view, row <> ~s( [data-role="insight-preview-to"]), addressee.name)
+
       assert has_element?(
                view,
-               ~s(#m-proposal-reject-form-#{proposal.id} input[type="hidden"][name="_id"][value="#{proposal.id}"])
+               row <> ~s( [data-role="insight-primary"].btn-primary.min-h-11),
+               "Ask"
              )
 
-      refute has_element?(
-               view,
-               ~s(#m-proposal-reject-form-#{proposal.id} input[name="id"])
-             )
+      for role <- ~w(insight-reject insight-reroute-button insight-edit-button insight-dismiss) do
+        assert has_element?(view, row <> ~s( [data-role="#{role}"].min-h-11))
+      end
+
+      # The desktop row is the same insight under its own id.
+      assert has_element?(view, ~s(#insight-row-#{insight.id}))
+    end
+
+    test "the mobile reject form is id-prefixed and needs a reason", %{conn: conn} do
+      seed_pages!()
+      insight = Platform.InsightFixtures.insight!(body: "Deploys moved to moon.")
+
+      {:ok, view, _html} = live(authed(conn), "/memory/insights")
 
       view
-      |> form("#m-proposal-reject-form-#{proposal.id}", %{
-        "feedback" => "Superseded by the pricing page."
-      })
+      |> element(~s(#m-insight-row-#{insight.id} [data-role="insight-reject"]))
+      |> render_click()
+
+      assert has_element?(view, ~s(#m-insight-reject-form-#{insight.id} textarea[name="reason"]))
+      assert has_element?(view, ~s(#insight-reject-form-#{insight.id}))
+
+      view
+      |> form("#m-insight-reject-form-#{insight.id}", %{"reason" => "Not true."})
       |> render_submit()
 
-      row = Repo.get(MemoryProposal, proposal.id)
-      assert row.status == "rejected"
-      assert row.feedback == "Superseded by the pricing page."
-
-      # Card dropped and the form collapsed.
-      html = render(view)
-      refute html =~ ~s(data-mobile-proposal-id="#{proposal.id}")
-      refute html =~ ~s(id="m-proposal-reject-form-#{proposal.id}")
-    end
-
-    # Task 01a1170a stage 1: the diff now renders through the shared
-    # `ProposalBody.proposal_diff/1`. Everything on mobile stays as it was
-    # except the line colour (base-content on a success band, replacing the
-    # AA-failing `text-success` text), which these tests deliberately do not pin.
-    test "REGRESSION: the shared diff keeps the mobile \"+ \" prefix on every line", %{
-      conn: conn
-    } do
-      seed_pages!()
-
-      %MemoryProposal{}
-      |> MemoryProposal.changeset(%{
-        journal_path: "org/journal/#{Date.to_iso8601(Date.utc_today())}.md",
-        block_hash: "mobile-short-#{System.unique_integer([:positive])}",
-        category: "recurring-theme",
-        confidence: "high",
-        evidence: "seen twice",
-        body: "+ new line\n- old line",
-        target_page_key: "org/page/memory.md",
-        status: "pending"
-      })
-      |> Repo.insert!()
-
-      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
-
-      diff = ~s([data-role="mobile-proposals"] [data-role="mobile-proposal-diff"])
-      html = view |> element(diff) |> render()
-
-      assert html =~ "+ + new line"
-      assert html =~ "+ - old line"
-
-      # Each line's text is exactly its content, untrimmed: the diff is
-      # whitespace-pre-wrap, so template newlines/indent inside the line
-      # element would paint tinted blank rows on the success band.
-      lines =
-        view
-        |> render()
-        |> LazyHTML.from_document()
-        |> LazyHTML.query(~s([data-role="mobile-proposal-diff-line"]))
-        |> Enum.map(&LazyHTML.text/1)
-
-      assert lines == ["+ + new line", "+ - old line"]
-
-      # A two-line body is short: no clamp, no toggle.
-      refute has_element?(view, ~s([data-role="mobile-diff-toggle"]))
-    end
-
-    test "REGRESSION: a long body still clamps behind the 44px Show full diff toggle", %{
-      conn: conn
-    } do
-      seed_pages!()
-      proposal = insert_proposal!()
-
-      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
-
-      toggle = ~s([data-role="mobile-diff-toggle"][phx-click="toggle_proposal_diff"])
-      assert has_element?(view, toggle, "Show full diff")
-      assert has_element?(view, toggle <> ".min-h-11")
-      assert has_element?(view, ~s([data-role="mobile-proposal-diff"].max-h-64))
-
-      view |> element(toggle) |> render_click()
-
-      assert has_element?(view, toggle, "Show less")
-      refute has_element?(view, ~s([data-role="mobile-proposal-diff"].max-h-64))
-      assert has_element?(view, ~s([data-mobile-proposal-id="#{proposal.id}"]))
+      assert %Insight{state: "dismissed"} = Repo.get!(Insight, insight.id)
+      refute has_element?(view, ~s(#m-insight-row-#{insight.id}))
     end
   end
 

@@ -757,7 +757,7 @@ defmodule PlatformWeb.Router do
   # `/chat/:space_slug`, `/tasks/:task_id`, `/files/:project_id`,
   # `/skills/:slug`, `/meetings/:slug`, `/control/:agent_slug`,
   # `/canvases/:id`, `/admin/{recovery,users,prompts,federation}`,
-  # `/memory/proposals`, `/org_memory/*file_key`. Guest invite URLs are
+  # `/memory/proposals` (now also `/memory/insights`), `/org_memory/*file_key`. Guest invite URLs are
   # minted ABSOLUTE, stored, and emailed (`Platform.Meetings`), so those
   # were dead links against invites already in people's inboxes — not a
   # hypothetical. Hence: above the default scope.
@@ -899,10 +899,13 @@ defmodule PlatformWeb.Router do
       live("/control/experiments/:slug", ExperimentsLive, :show)
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
-      # Task 019f70e9 stage 4 — direct entry to the proposals tab.
-      # `live_action == :proposals` mounts the same OrgMemoryLive and
-      # `handle_params/3` switches view_mode + preloads the pending
-      # stream before first render.
+      # Task 01a13867 stage 5 — direct entry to the Insights tab (renamed
+      # from Proposals). `live_action == :insights` mounts the same
+      # OrgMemoryLive and `handle_params/3` loads the tab before first render.
+      live("/memory/insights", OrgMemoryLive, :insights)
+      # The retired Proposals tab's address (task 019f70e9 stage 4). Old
+      # journals and notifications link here, so `handle_params/3`
+      # redirects it to `/memory/insights` rather than 404ing.
       live("/memory/proposals", OrgMemoryLive, :proposals)
       # Glob route: path-style file_keys (`org/identity.md`) span multiple
       # segments, so `:show` must match `/org_memory/*file_key`.
@@ -1004,6 +1007,10 @@ defmodule PlatformWeb.Router do
       # install-wide for the same reason as branding. `Settings.update/2`
       # re-checks root admin on the write.
       live("/admin/prototypes", AdminPrototypesLive, :index)
+      # Task 01a13867 stage 5: whether dreaming insights leave the Insights
+      # tab (dissemination), install-wide for the same reason as prototypes.
+      # `Platform.Memory.Insights.Settings.update/2` re-checks root admin.
+      live("/admin/insights", AdminInsightsLive, :index)
       # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
       # `Platform.Vault.Shared` re-checks the actor on every call, so this
       # live_session's gate is not load-bearing alone.

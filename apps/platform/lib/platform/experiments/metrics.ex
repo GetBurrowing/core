@@ -118,6 +118,17 @@ defmodule Platform.Experiments.Metrics do
           "per plan, over the plans of a variant's subjects.",
       direction: :lower_is_better
     },
+    # Task 01a13867 stage 1, for the `memory.insight_synthesis` surface.
+    # Counts dreaming-run subjects, not tasks, and each judged insight once
+    # under its worst label (see the module).
+    "insight_acceptance_rate" => %{
+      module: Platform.Experiments.Metrics.InsightAcceptanceRate,
+      label: "Insight acceptance rate",
+      description:
+        "Share of judged insights acted on and not later flagged " <>
+          "(accepted / (accepted + rejected + flagged)), over a variant's dreaming runs.",
+      direction: :higher_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

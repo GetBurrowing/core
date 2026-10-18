@@ -252,6 +252,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "dispatch.prompt",
                  "mail.draft.generator",
                  "meetings.open_question_classifier",
+                 "memory.insight_synthesis",
                  "planner.stage_budget"
                ]
     end

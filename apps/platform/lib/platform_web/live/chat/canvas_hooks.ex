@@ -631,9 +631,14 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         "node_id" => node_id,
         "values" => values
       })
-    end
 
-    {:halt, socket}
+      # Route recognized form node ids inline (task 01a13867 stage 4: the
+      # insight briefing's flag-reason and answer forms). Anything else keeps
+      # the emit-only contract above.
+      handle_canvas_form(node_id, values, canvas, socket)
+    else
+      _ -> {:halt, socket}
+    end
   end
 
   defp handle_event("canvas_node_focus", %{"node-id" => node_id} = params, socket) do
@@ -1107,10 +1112,98 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_canvas_action_value("access_choose:" <> key, canvas, socket),
     do: access_card_action("access_choose", key, canvas, socket)
 
+  # Task 01a13867 stage 4: the daily insight briefing. The value carries a
+  # NODE KEY only; the clicked canvas's `memory_briefings` row says which
+  # insight that key is, and whose briefing it is.
+  defp handle_canvas_action_value("insight_ok:" <> key, canvas, socket),
+    do: insight_card_action(:looks_right, key, nil, canvas, socket)
+
+  defp handle_canvas_action_value("insight_flag:" <> key, canvas, socket),
+    do: insight_card_action(:open_flag, key, nil, canvas, socket)
+
   # Unrecognized action values: keep the generic emit-only contract.
   # Agent-side subscribers still see the click via the CanvasServer.emit_event
   # broadcast above.
   defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
+
+  defp handle_canvas_form("insight_flag_reason:" <> key, values, canvas, socket),
+    do: insight_card_action(:flag, key, form_value(values, "reason"), canvas, socket)
+
+  defp handle_canvas_form("insight_answer:" <> key, values, canvas, socket),
+    do: insight_card_action(:answer, key, form_value(values, "answer"), canvas, socket)
+
+  defp handle_canvas_form(_node_id, _values, _canvas, socket), do: {:halt, socket}
+
+  defp form_value(%{} = values, name) do
+    case Map.get(values, name) do
+      value when is_binary(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp form_value(_values, _name), do: nil
+
+  # AUTHORITY mirrors `access_card_action/4`: the briefing row is looked up
+  # by the CLICKED canvas's id, the insight id comes from that row (never
+  # from the action value), the clicker is re-loaded and their scope rebuilt
+  # on every click, and only the person the briefing was delivered to may
+  # act on it.
+  defp insight_card_action(action, key, input, canvas, socket) do
+    alias Platform.Access.Scope
+    alias Platform.Memory.Briefing
+    alias Platform.Memory.Insights
+    alias Platform.Memory.Insights.Briefings
+
+    with %Briefing{} = briefing <- Briefings.get_by_canvas(canvas.id),
+         user_id when is_binary(user_id) <- current_user_id(socket) || :no_user,
+         %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(user_id) || :no_user,
+         true <- user.id == briefing.user_id || :not_recipient,
+         insight_id when is_binary(insight_id) <-
+           Briefings.insight_id(briefing, key) || :not_on_briefing do
+      human = Scope.for_user(user)
+
+      result =
+        case action do
+          :looks_right ->
+            Insights.looks_right(insight_id, human)
+
+          :open_flag ->
+            with {:ok, _live} <- Insights.Actions.fetch_live(insight_id, DateTime.utc_now()) do
+              Briefings.open_flag_form(briefing, key)
+            end
+
+          :flag ->
+            Insights.flag(insight_id, input, scope: human)
+
+          :answer ->
+            Insights.answer(insight_id, human, input, canvas_id: canvas.id)
+        end
+
+      case result do
+        :ok -> {:halt, socket}
+        {:ok, _} -> {:halt, put_flash(socket, :info, insight_card_message(action))}
+        {:error, reason} -> {:halt, put_flash(socket, :error, insight_card_error(reason))}
+      end
+    else
+      nil -> {:halt, put_flash(socket, :error, "This card is not a briefing.")}
+      :not_recipient -> {:halt, put_flash(socket, :error, "This briefing is not yours.")}
+      :not_on_briefing -> {:halt, put_flash(socket, :error, "This item is not on this briefing.")}
+      _ -> {:halt, put_flash(socket, :error, "Sign in as a person to use this briefing.")}
+    end
+  end
+
+  defp insight_card_message(:looks_right), do: "Thanks. Marked as right."
+  defp insight_card_message(:flag), do: "Flagged. Your reason will teach dreaming."
+  defp insight_card_message(:answer), do: "Answer saved to the journal."
+  defp insight_card_message(_action), do: "Done."
+
+  defp insight_card_error(:expired), do: "This item expired. Nothing was changed."
+  defp insight_card_error(:not_open), do: "This item was already handled."
+  defp insight_card_error(:blank), do: "Write an answer first."
+  defp insight_card_error(:not_found), do: "This item was already handled."
+  defp insight_card_error(:unauthorized), do: "You cannot act on this item."
+  defp insight_card_error(%Ecto.Changeset{}), do: "Give a reason to flag this."
+  defp insight_card_error(_reason), do: "That did not work. Nothing was changed."
 
   defp access_card_action(action, key, canvas, socket) do
     alias Platform.Access.{Proposal, Proposals, Scope}
@@ -1435,6 +1528,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
        when value in ["access_apply", "access_cancel", "access_undo"], do: nil
 
   defp flash_for(%{"name" => "action", "value" => "access_choose:" <> _}), do: nil
+
+  # The insight briefing's clicks and forms (task 01a13867 stage 4) also flash
+  # their own receipt or refusal.
+  defp flash_for(%{"name" => "action", "value" => "insight_" <> _}), do: nil
+  defp flash_for(%{"name" => "submitted", "node_id" => "insight_" <> _}), do: nil
 
   defp flash_for(%{"name" => "action", "node_id" => id, "value" => v}),
     do: "Canvas action: #{id} → #{inspect(v)}"

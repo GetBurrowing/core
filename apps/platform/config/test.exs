@@ -233,6 +233,14 @@ config :platform, :start_file_purger, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_prototype_purger, false
 
+# InsightPurger (task 01a13867 stage 1): tests call `sweep/1` directly
+# inside the DataCase sandbox instead of racing a global hourly ticker.
+config :platform, :start_insight_purger, false
+
+# InsightDisseminator (task 01a13867 stage 3): tests call `run/1` directly
+# inside the DataCase sandbox instead of racing a global daily ticker.
+config :platform, :start_insight_disseminator, false
+
 # CatalogEmitter (task 01a0008c stage 3): a globally-booted instance would
 # subscribe to `[:platform, :files, :ingested, :stop]` for the whole suite
 # and then run Repo queries from a process that owns no sandbox
@@ -541,7 +549,15 @@ config :platform,
        # `:product_docs` opt, which only `Platform.Org.BurrowDocs` does.
        # `upsert_file` gains an optional opts arg so the opt can reach the
        # guard. Every non-burrow write behaves exactly as before.
-       "a926871b1756230f72ac1ca399b58bc914edb238f92bd770349a6cf2fd2d9238"
+       #
+       # Bumped again by task 01a13867 stage 1 (Insights): the journal sweep
+       # hook now calls `Platform.Memory.Insights.ingest_from_journal/3`
+       # instead of `Proposals.ingest_from_journal/3`, so `<synthesis-insight>`
+       # blocks are ingested and `<synthesis-proposal>` blocks no longer are.
+       # Alias, two calls, one renamed private fn and their comments; the
+       # hook still runs outside the write transaction. T5 still retires
+       # this module.
+       "efb597fd9b981c7c36fa163ed360dc9fee2d8b2ba8b92ca7fe464e83df41aba1"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

@@ -372,7 +372,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
     @main_kinds_tool_schemas_digest_on "d5525de283443869efe51122adc1649e78e95da27bab2b2adc1deee59855878d"
-    @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
+    # Task 01a13867 adds the core metric insight_acceptance_rate to the catalog.
+    @main_metrics_catalog_digest "3a5e4c9bd2a90f895185dea9a79084f151e73f9cb4eebd9ec42a2cb8500a260a"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_rail [
@@ -389,7 +390,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :meetings,
       :admin
     ]
-    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
+    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
     # main's ORDER: dispatch.prompt, mail.draft.generator, planner.stage_budget,
     # chat.context_summary, game_stream.encoder_preset, game_stream.roster,
     # meetings.open_question_classifier. The stage appends extension surfaces
@@ -403,8 +404,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # new, so both pins gain it the same way game_stream.touch was added.
     # Task 01a114a8 stage 4 adds dispatch.code_mode, a core surface appended
     # after dispatch.product_docs_preamble, so it too precedes the Play keys.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a13867 adds memory.insight_synthesis, a core surface appended
+    # after agents.tool_profile, so it precedes the Play keys as well; it also
+    # adds the core metric insight_acceptance_rate.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
