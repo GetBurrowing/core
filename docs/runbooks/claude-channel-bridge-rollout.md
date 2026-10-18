@@ -10,7 +10,7 @@ arrived with a full body" — are all wrong here, each for a different reason.
 
 ## Context — what actually broke
 
-Suite emits attentions down three paths, and they do not share an envelope:
+Burrow emits attentions down three paths, and they do not share an envelope:
 
 | Emitter | Body lives at | `message` key present? |
 | --- | --- | --- |
@@ -225,7 +225,7 @@ fixture tests nothing about them. What we hand over instead is:
 1. **An observable scoreboard.** `mix platform.runtime_wake_report` makes each
    runtime's true state visible from the server the moment it reconnects. No
    access to the machine required.
-2. **This runbook**, posted to the owner in Suite.
+2. **This runbook**, posted to the owner in Burrow.
 
 That is coverage. Claiming the runtime is fixed because we sent someone a
 message is not.

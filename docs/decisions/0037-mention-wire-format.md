@@ -45,7 +45,7 @@ Pass `participants_map` into `ContentRenderer.render_message/2` and build an alt
 
 Slack/Discord-style. Stable across renames, unambiguous.
 
-**Rejected** because Suite's codebase leans on `Message.content` being readable. Attention routing, search indexing, exports, audit review, and developer inspection all benefit from raw text legibility. `<@usr_01H…>` scattered through every message is a large tax for a benefit (rename stability) that Suite's users rarely trigger in practice.
+**Rejected** because Burrow's codebase leans on `Message.content` being readable. Attention routing, search indexing, exports, audit review, and developer inspection all benefit from raw text legibility. `<@usr_01H…>` scattered through every message is a large tax for a benefit (rename stability) that Burrow's users rarely trigger in practice.
 
 ### 4. Hybrid `@[Name:id]`
 

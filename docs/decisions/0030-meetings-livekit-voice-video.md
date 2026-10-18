@@ -6,7 +6,7 @@
 
 ## Context
 
-Suite currently has text-based chat with spaces (channels, DMs, execution spaces). Users and agents communicate exclusively through messages. There is no real-time voice or video capability.
+Burrow currently has text-based chat with spaces (channels, DMs, execution spaces). Users and agents communicate exclusively through messages. There is no real-time voice or video capability.
 
 Discord-style persistent voice/video channels are a natural extension: users drop in and out of a voice room associated with a space, see who's connected, and optionally share video or screens. Agents should also be able to join calls, enabling voice-driven interaction alongside the existing text channel.
 
@@ -18,17 +18,17 @@ Discord-style persistent voice/video channels are a natural extension: users dro
 - **LiveKit Egress** available for recording
 - **LiveKit MCP** at `http://192.0.2.234:8090/mcp/` for room management
 
-The infrastructure exists. This decision is about how Suite consumes it.
+The infrastructure exists. This decision is about how Burrow consumes it.
 
 ## Decision
 
-### Architecture: Suite as LiveKit client, not media server
+### Architecture: Burrow as LiveKit client, not media server
 
-Suite generates LiveKit access tokens and manages room lifecycle. LiveKit handles all media transport (WebRTC, SFU, simulcast, ICE/STUN/TURN). This mirrors how Discord, Slack, and Teams separate chat servers from media servers.
+Burrow generates LiveKit access tokens and manages room lifecycle. LiveKit handles all media transport (WebRTC, SFU, simulcast, ICE/STUN/TURN). This mirrors how Discord, Slack, and Teams separate chat servers from media servers.
 
 ```
 ┌──────────────────────────────────┐     ┌─────────────────────┐
-│         Suite Platform           │     │      LiveKit SFU     │
+│         Burrow Platform          │     │      LiveKit SFU     │
 │                                  │     │                      │
 │  Meetings context                │     │  Rooms               │
 │  ├─ create/destroy rooms ───────────►  │  ├─ media routing    │
@@ -99,7 +99,7 @@ LIVEKIT_WEBHOOK_SECRET=<secret>  # optional, for room/participant event webhooks
 
 ### Token generation
 
-Suite generates short-lived LiveKit JWTs signed with the API secret. Tokens are scoped to a specific room name, participant identity (user/agent UUID), permissions (publish audio/video, subscribe, screen share), and a 6-hour TTL.
+Burrow generates short-lived LiveKit JWTs signed with the API secret. Tokens are scoped to a specific room name, participant identity (user/agent UUID), permissions (publish audio/video, subscribe, screen share), and a 6-hour TTL.
 
 The `livekit` Elixir hex package provides `Livekit.AccessToken` for this.
 
@@ -126,7 +126,7 @@ Persistent audio across navigation via a root-level `MeetingBarLive` component i
 
 ### Agent integration
 
-Agents join via the existing LiveKit Agents SDK (Python). Suite generates an agent token and dispatches a `meeting_join` signal to the agent runtime. The agent connects, listens via STT, responds via TTS.
+Agents join via the existing LiveKit Agents SDK (Python). Burrow generates an agent token and dispatches a `meeting_join` signal to the agent runtime. The agent connects, listens via STT, responds via TTS.
 
 How a seated agent hears the room is specified in [docs/contracts/meeting-transcript-frame.md](../contracts/meeting-transcript-frame.md): every final transcript segment is pushed to the agent's brain runtime as a `meeting_transcript` frame, never to the voice worker. The same document covers the reply budget that `Platform.Meetings.say/4` enforces before any `meeting_say` reaches a voice worker.
 
@@ -173,5 +173,5 @@ How a seated agent hears the room is specified in [docs/contracts/meeting-transc
 - Do not embed LiveKit configuration in the public repo — env vars only
 - All rooms must be created through `Platform.Meetings` — no direct LiveKit API calls from clients
 - Do not store API secrets in the database
-- Participant identity must map to Suite user/agent UUIDs — no anonymous participants
-- Recording files must be access-controlled through Suite
+- Participant identity must map to Burrow user/agent UUIDs — no anonymous participants
+- Recording files must be access-controlled through Burrow

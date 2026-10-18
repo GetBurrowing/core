@@ -1,13 +1,13 @@
 defmodule Platform.Files.ServiceClient do
   @moduledoc """
-  HTTP client for the Startup Suite [files-service](https://github.com/Startup-Suite/files-service).
+  HTTP client for the Burrow [files-service](https://github.com/Startup-Suite/files-service).
 
   Per ADR (files extraction split-out, 2026-06-19) binary-format text
   extraction (PDF, DOCX, OCR'd images) is delegated to a separate Python
   microservice rather than shelling out to `pdftotext` / `pandoc` /
   `tesseract` inside the Elixir release. This keeps the BEAM image lean
   and lets extraction tooling iterate independently from the platform
-  monolith — same pattern as `Platform.Memory.Providers.StartupSuite` and
+  monolith — same pattern as `Platform.Memory.Providers.MemoryService` and
   the `memory-service` repo.
 
   The service exposes a single extraction endpoint:

@@ -1,4 +1,4 @@
-# ADR 0057: Prototypes on Suite: Sealed Hosting, Multiplayer Canvas Rooms, Pluggable Script Engine
+# ADR 0057: Prototypes on Burrow: Sealed Hosting, Multiplayer Canvas Rooms, Pluggable Script Engine
 
 - **Status:** Proposed
 - **Date:** 2026-10-12
@@ -15,9 +15,9 @@
 
 ## Context
 
-Agents and people want to publish full clickable prototypes inside Suite, not on a public
+Agents and people want to publish full clickable prototypes inside Burrow, not on a public
 `*.trycloudflare.com` tunnel, and later to let those prototypes hold data and run logic. It has
-to be a standard Suite feature that works on a fresh single-host install.
+to be a standard Burrow feature that works on a fresh single-host install.
 
 The thesis, from Rowan, 2026-10-12: **"multiplayer by default. That's our differentiator."**
 Every prototype and every scripted canvas is shared and live for all viewers, with no opt-in.
@@ -60,7 +60,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
   header, so `frame-ancestors 'self'` stays. The same sandbox applies to top-level opens.
 - **Per-request auth is a signed grant, not the cookie.** Requests from an opaque-origin frame
   are cross-site for `SameSite=Lax` and carry no session. The entry request is a navigation the
-  Suite page starts, so it does carry the session. After an org-membership check, it 302s to
+  Burrow page starts, so it does carry the session. After an org-membership check, it 302s to
   `/proto/:id/:version/g/<grant>/...`. The grant is a short-lived `Phoenix.Token` bound to user,
   prototype and version. Every grant request re-checks that user's membership. Non-members,
   unknown ids and unknown paths get 404.
@@ -69,7 +69,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
   cannot tell who holds it.
 - **Honest limit: this is not exfiltration-proof.** CSP3 has no `navigate-to`, so script in a
   bundle can navigate its own frame to an outside URL carrying whatever the bundle can see. The
-  guarantee is **no Suite cookies, no Suite DOM and no Suite API reachable from the bundle**,
+  guarantee is **no Burrow cookies, no Burrow DOM and no Burrow API reachable from the bundle**,
   NOT "no exfiltration". The comment at `file_blob_controller.ex:123-125` ("has no exfiltration
   path") overstates this for the single-file frame too, and should be corrected when that file
   is next touched.
@@ -92,7 +92,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
   stays pure. A client-sent ref is overwritten or stripped.
 - **A scripted embed carries no srcdoc anywhere.** `embed_canvas_scale.js` copies the wrapper's
   `data-srcdoc` into the iframe (`updated()` and the expand view), and srcdoc takes precedence
-  over src. A scripted node with `data-srcdoc` would run its script under the Suite page's own
+  over src. A scripted node with `data-srcdoc` would run its script under the Burrow page's own
   CSP, with network, and bypass the seal entirely. No `data-srcdoc`, no srcdoc attribute, and no
   fallback to srcdoc when the ref is missing.
 
@@ -133,7 +133,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
   change). Reasons: it is already built and mutation-tested, agents write JS well, and it leaves
   one sandbox to secure.
 - **Crash risk, corrected.** The design record's "QuickJS could segfault the whole BEAM" is true
-  of raw native QuickJS, but not of what Suite ships. Suite runs QuickJS-ng compiled to wasm
+  of raw native QuickJS, but not of what Burrow ships. Burrow runs QuickJS-ng compiled to wasm
   under wasmtime, so a guest bug traps in the sandbox. A small residual risk remains in wasmtime
   itself, which is a Rust NIF.
 - **Luerl is kept open behind the behaviour**, for what it uniquely gives: state as an Erlang
@@ -173,7 +173,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
 
 - `PROTOTYPE_HOST` and the installer prompt for it.
 - Room wiring on task-page canvas surfaces.
-- Live Suite read views (approved `data.query` views).
+- Live Burrow read views (approved `data.query` views).
 - The Luerl engine.
 - Luerl or JS as a general policy engine (router rules, triage filters).
 - Write bindings, behind the confused-deputy gate in Decision 4.
@@ -200,7 +200,7 @@ Premises, measured on origin/main `ea0137bee`, 2026-10-12:
 
 - **IEx over MCP for agent-built backends.** Rejected: remote code execution, auth minting,
   `:erlang.halt`.
-- **Scripts in srcdoc.** Rejected: the frame inherits the Suite page's CSP and network.
+- **Scripts in srcdoc.** Rejected: the frame inherits the Burrow page's CSP and network.
 - **Wildcard or per-prototype subdomains.** Rejected: they need DNS-provider API keys for
   wildcard certs.
 - **A separate prototype host as the default.** Rejected: one more DNS record rules out bare-IP

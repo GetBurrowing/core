@@ -134,7 +134,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerFeedbackTest do
     for {phase, render} <- dispatches() do
       prompt = render.()
       refute prompt =~ "feedback_submit", "#{phase} advertised a tool the agent cannot call"
-      refute prompt =~ "Reporting a defect in Suite itself"
+      refute prompt =~ "Reporting a defect in Burrow itself"
       refute prompt =~ "{{feedback_guidance}}"
     end
   end

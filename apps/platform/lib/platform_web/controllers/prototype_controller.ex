@@ -8,7 +8,7 @@ defmodule PlatformWeb.PrototypeController do
     * `GET /proto/:id/latest/*path` — session-authenticated. 302 to the
       numbered version, so the version is always visible in the URL.
     * `GET /proto/:id/:version/*path` — the ENTRY. Session-authenticated: it
-      is a navigation the Suite page starts (an iframe `src` or the Open
+      is a navigation the Burrow page starts (an iframe `src` or the Open
       button), so the session cookie is sent. After the membership check it
       302s to the grant URL below. With no path it lands on the version's
       `entry_path`.
@@ -29,7 +29,7 @@ defmodule PlatformWeb.PrototypeController do
 
     * The sandbox CSP is APPENDED to what `put_secure_browser_headers` set
       (`base-uri 'self'; frame-ancestors 'self'`), exactly as
-      `PlatformWeb.FileBlobController` does, so only Suite pages can frame a
+      `PlatformWeb.FileBlobController` does, so only Burrow pages can frame a
       bundle. `sandbox allow-scripts` with no `allow-same-origin` gives the
       document an opaque origin; `'self'` admits the bundle's own files as
       script, style, image, media and font sources. The spike measured that
@@ -63,7 +63,7 @@ defmodule PlatformWeb.PrototypeController do
 
   ## Honest limits
 
-    * The guarantee is no Suite cookies, no Suite DOM and no Suite API
+    * The guarantee is no Burrow cookies, no Burrow DOM and no Burrow API
       reachable from a bundle. It is NOT zero exfiltration: CSP3 has no
       `navigate-to`, so script in the frame can navigate its own frame to an
       outside URL carrying whatever the user typed into the bundle.

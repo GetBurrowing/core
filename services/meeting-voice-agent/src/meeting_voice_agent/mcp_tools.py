@@ -45,7 +45,7 @@ from livekit.agents.llm.tool_context import ToolError, get_raw_function_info, is
 from meeting_voice_agent.config import McpConfig
 
 # Mirrors `Platform.Meetings.@app_room_name_regex` exactly: a LiveKit room
-# backing a Suite chat space is always named "space-<uuid>". Do not diverge
+# backing a Burrow chat space is always named "space-<uuid>". Do not diverge
 # from that pattern — it is the one existing mechanism this stage reuses to
 # find "which chat space is this meeting" without any new Core plumbing.
 _SPACE_ROOM_NAME_RE = re.compile(
@@ -82,7 +82,7 @@ def build_mcp_server(config: McpConfig) -> MCPServerHTTP:
 
 
 def build_mcp_toolset(config: McpConfig, *, mcp_server: MCPServerHTTP | None = None) -> MCPToolset:
-    """The full Suite tool surface this runtime is allowed to see, as a livekit Toolset.
+    """The full Burrow tool surface this runtime is allowed to see, as a livekit Toolset.
 
     `mcp_server` can be injected (tests do this with a fake) instead of built
     from `config`.
@@ -96,7 +96,7 @@ def find_raw_tool(toolset: MCPToolset, name: str):
 
     Public (not just an internal helper for `build_meeting_chat_handoff_tool`)
     because live integration tests need the same lookup to call other real
-    Suite tools directly — see `tests/live/test_mcp_live.py`.
+    Burrow tools directly — see `tests/live/test_mcp_live.py`.
     """
     for tool in toolset.tools:
         if is_raw_function_tool(tool) and get_raw_function_info(tool).name == name:

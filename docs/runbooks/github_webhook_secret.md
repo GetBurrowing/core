@@ -38,7 +38,7 @@ Checked against prod, not assumed:
   the value is not readable through the API). Every real delivery is already
   signed.
 - **No** prod project row carries `deploy_config["webhook_secret"]` — Startup
-  Suite's `deploy_config` holds only `default_deploy_target`,
+  Burrow's `deploy_config` holds only `default_deploy_target`,
   `default_strategy`, `deploy_targets`; Soylent' is `%{}`.
 - The deployed release has both `Application.get_env(:platform,
   :github_webhook_secret)` and `:github_webhook_signature_required` at `nil` —

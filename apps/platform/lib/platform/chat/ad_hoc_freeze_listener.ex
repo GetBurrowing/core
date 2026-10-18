@@ -17,7 +17,7 @@ defmodule Platform.Chat.AdHocFreezeListener do
 
   ## Scope split (D-6)
 
-  The emitter side — state-changing-tool detection in the Suite MCP
+  The emitter side — state-changing-tool detection in the Burrow MCP
   dispatcher / agent runtime — is OUT OF SCOPE for this task and filed
   separately. Without an emitter wired up, this listener sits idle in
   production: no message ever fires `:agent_first_state_op` because

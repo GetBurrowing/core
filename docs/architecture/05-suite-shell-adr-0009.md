@@ -1,4 +1,4 @@
-# Suite Shell Architecture — ADR 0009
+# Burrow Shell Architecture — ADR 0009
 
 Persistent navigation shell wrapping all LiveView surfaces. Auth-gated live_session, sidebar nav, top bar, slot-based content rendering.
 
@@ -19,7 +19,7 @@ graph TB
     HealthRoute["GET /health<br/>200 — no auth, for healthcheck"]
   end
 
-  subgraph ShellLayout["Suite Shell Layout"]
+  subgraph ShellLayout["Burrow Shell Layout"]
     ShellHeex["shell.html.heex"]
     TopBar["Top bar<br/>workspace name · user pill<br/>agent status indicators"]
     Sidebar["Sidebar nav<br/>Chat · Control Center<br/>(future: Tasks, Experiments)"]

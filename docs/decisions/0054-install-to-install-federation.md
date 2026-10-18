@@ -9,7 +9,7 @@
 
 ## Context
 
-On 2026-09-25 Rowan decided that every customer gets their own owned Suite install. Multi-org
+On 2026-09-25 Rowan decided that every customer gets their own owned Burrow install. Multi-org
 inside one install is not a customer isolation boundary (ADR 0053 records this). Owned
 installs still need to collaborate: two businesses, or a family and a contractor, each on their
 own install, want one shared space.
@@ -224,7 +224,7 @@ Remote content is untrusted outside text, like inbound email. The ingest mirrors
 
 - The author is a **local system participant**, one per (peer, remote author). Its display
   name is the sanitised remote name plus `(via <peer>)`, with mention tokens escaped.
-- The body is wrapped with `ExternalContent.wrap/2` (a `federation: "Suite peer"` source
+- The body is wrapped with `ExternalContent.wrap/2` (a `federation: "Burrow peer"` source
   label is added), capped at 32 KB, and then passed through `ExternalContent.escape_mentions/1`.
   That rewrites every at-sign followed by an opening square bracket to a fullwidth at-sign.
 - Metadata carries `"source" => "federation_inbound"` and `"skip_mention_scan" => true`.
@@ -281,7 +281,7 @@ new branch in AttentionRouter, not a fall-through.
   every connected node, and nodes form a full mesh by default. It is right for clustering nodes
   inside one install and wrong between installs owned by different people.
 - **Matrix itself.** It would mean operating a second homeserver next to every install, and
-  Suite's task, stage and agent model does not map onto Matrix rooms and events. The room
+  Burrow's task, stage and agent model does not map onto Matrix rooms and events. The room
   model's owner-authoritative idea is borrowed; the system is not.
 - **ActivityPub.** It is built for public social push. HTTP-signature profiles vary loosely
   between implementations, and it has no notion of owner-authoritative private state.

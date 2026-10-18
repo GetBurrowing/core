@@ -97,7 +97,7 @@ defmodule PlatformWeb.MeetingAgentController do
   # ── Private ──────────────────────────────────────────────────────────────
 
   # Payload-level guard: reject segments for room names that don't
-  # resolve to a real Suite chat space (task 019f3312 stage 1). The
+  # resolve to a real Burrow chat space (task 019f3312 stage 1). The
   # bearer-token check upstream is necessary but not sufficient — an
   # attacker with the shared token could still POST fabricated
   # `space-<random-uuid>` names, so gate on `Meetings.legit_room?/1`

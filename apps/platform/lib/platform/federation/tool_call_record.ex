@@ -6,11 +6,11 @@ defmodule Platform.Federation.ToolCallRecord do
   The row records WHICH tool ran, how it ended and who it is attributed to.
   It has no column for arguments, results or script text, and none may be
   added: the ledger's privacy property is that there is nowhere to put them.
-  A `suite_run` row (stage 2) carries `script_sha256` and `script_bytes`: a
+  A `burrow_run` row (stage 2) carries `script_sha256` and `script_bytes`: a
   fingerprint and a size, from which the script cannot be recovered. Its
   `id` is the run's `run_id`, which its inner calls carry as `parent_run_id`.
 
-  `error_kind` (task 01a115b5 stage 1) is set only on a `suite_run` row whose
+  `error_kind` (task 01a115b5 stage 1) is set only on a `burrow_run` row whose
   run failed (`status: "error"`). It is one of
   `Platform.CodeMode.Run.error_kinds/0`, an enumerated kind, never the
   error message: the changeset refuses any other value.

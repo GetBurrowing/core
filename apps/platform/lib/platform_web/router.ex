@@ -812,7 +812,7 @@ defmodule PlatformWeb.Router do
     get("/proto/:id/:version/g/:grant/*path", PrototypeController, :serve)
   end
 
-  # Entry and latest: navigations a Suite page starts, so the session is sent.
+  # Entry and latest: navigations a Burrow page starts, so the session is sent.
   # `latest` is declared above `:version` so it is not parsed as a number.
   scope "/", PlatformWeb do
     pipe_through([:proto_browser, :require_auth, :enforce_external_scope, :require_app_surface])

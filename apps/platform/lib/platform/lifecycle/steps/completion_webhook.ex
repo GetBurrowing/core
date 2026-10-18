@@ -182,7 +182,7 @@ defmodule Platform.Lifecycle.Steps.CompletionWebhook do
 
   # Injectable client read from app env, mirroring
   # `Platform.ExternalAgents.req_client/0` and
-  # `Platform.Memory.Providers.StartupSuite.req_client/0`. Tests stub with
+  # `Platform.Memory.Providers.MemoryService.req_client/0`. Tests stub with
   # `Req.Test`; nothing here hardcodes a client, so the step is testable
   # without a network.
   defp req_client do

@@ -14,7 +14,7 @@
  * with that key, which is where Claude Code itself sends it. 401 is
  * `rejected`; a 2xx is `ok`; anything else, including no key, is `unknown`.
  *
- * Scope, stated as scope: this checks the Suite-mediated API-key path and
+ * Scope, stated as scope: this checks the Burrow-mediated API-key path and
  * nothing else. A subscription login (Claude Code's own OAuth credentials)
  * is never read, sent or checked here: that login is the person's, through
  * Anthropic's own flow.

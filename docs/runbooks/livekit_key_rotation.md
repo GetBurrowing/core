@@ -40,7 +40,7 @@ Until that lands, use the flag-off interim path documented here.
   `LIVEKIT_API_KEY_PENDING` / `LIVEKIT_API_SECRET_PENDING`. Do **not**
   delete the old key yet.
 
-### 2. Disable webhook signature enforcement on Suite prod
+### 2. Disable webhook signature enforcement on Burrow prod
 
 The flag lives in `apps/platform/config/config.exs`
 (`:livekit_webhook_signature_required, true`) and is read at runtime via

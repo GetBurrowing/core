@@ -26,7 +26,7 @@ defmodule PlatformWeb.MCPController do
   alias Platform.Federation.ToolDoc
 
   @protocol_version "2025-06-18"
-  @server_name "startup-suite"
+  @server_name "burrow"
   @server_version "0.1.0"
 
   def handle(conn, %{"jsonrpc" => "2.0", "method" => method} = body) do
@@ -93,7 +93,7 @@ defmodule PlatformWeb.MCPController do
     # Capability is decided before arguments are looked at. The refusal
     # framing stays HERE: a JSON-RPC -32001 error, not a tool result.
     # A tool call is turn activity for the no-reply watchdog (task 01a10322
-    # stage 7): a native agent working through Suite's tools is not silent.
+    # stage 7): a native agent working through Burrow's tools is not silent.
     Platform.Chat.ReplyFailure.Watchdog.activity(Map.get(runtime, :agent_id))
 
     case ToolCall.invoke(name, args, runtime) do
@@ -303,7 +303,7 @@ defmodule PlatformWeb.MCPController do
   # is what the fix above set out to do.
   #
   # The envelope and the JSON-safe projection live in
-  # `Platform.Federation.Jsonable` (task 01a114a8 stage 2), so `suite_run`'s
+  # `Platform.Federation.Jsonable` (task 01a114a8 stage 2), so `burrow_run`'s
   # inner calls hand a script exactly what this transport hands a client.
   defp error_envelope(reason), do: Jsonable.error_envelope(reason)
 end

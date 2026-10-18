@@ -245,6 +245,27 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
     end
   end
 
+  describe "the script global (task 01a14b9e-50a4 stage 1)" do
+    test "burrow.call patches as suite.call does, and suite === burrow in a handler",
+         %{space: space, canvas: canvas} do
+      user = create_user!()
+      add_user!(space.id, user.id)
+      {"Original", before} = served(canvas.id)
+
+      call =
+        "(ctx.set('same', suite === burrow), burrow.call('canvas_patch', {operations: #{@rename}}))"
+
+      assert {:ok, ops, []} = run(probe(call), canvas, user_actor(user))
+
+      assert %{"ok" => true, "same" => true, "data" => %{"canvas_id" => id, "revision" => rev}} =
+               values(ops)
+
+      assert id == canvas.id
+      assert {"Rewritten", ^rev} = served(canvas.id)
+      assert rev > before
+    end
+  end
+
   describe "canvas_patch as an agent principal" do
     setup %{space: space} do
       agent = insert_agent!()
@@ -314,6 +335,8 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
             "suite.call('tasks.create', {title: 'x'})",
             "suite.call('chat.post_message', {content: 'x'})",
             "suite.call('suite_run', {script: '1'})",
+            "burrow.call('burrow_run', {script: '1'})",
+            "burrow.call('tasks.create', {title: 'x'})",
             "store.set('k', 1)",
             "suite.call('canvas_create', {})"
           ] do

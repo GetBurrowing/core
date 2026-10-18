@@ -1,32 +1,37 @@
 defmodule Platform.Federation.ToolAliases do
   @moduledoc """
-  Hidden, execute-only aliases for the 17 tool names that used to be dotted
-  (task 01a14a7f stage 3).
+  Hidden, execute-only aliases for 19 retired tool names: the 17 that used
+  to be dotted (task 01a14a7f stage 3) and the 2 code-mode tools that used to
+  carry the product's earlier name, `suite_run` and `suite_run_describe`, now
+  `burrow_run` and `burrow_run_describe` (task 01a14b9e-50a4 stage 1).
 
   Core listed `skill.list`, `canvas.create`, `attachment.upload_start` and 14
   more with a dot while every other tool used an underscore. They are now
   listed by their underscore name only. The old name still CALLS: it is
   resolved here, at `Platform.Federation.ToolCall.invoke/4`, before
   authorization, so `/mcp` `tools/call`, the runtime socket's `tool_call` and
-  `suite_run` inner calls all accept it, and it needs exactly the grant its
-  underscore name needs, never more.
+  `burrow_run` inner calls all accept it, and it needs exactly the grant its
+  canonical name needs, never more.
 
   An alias is never LISTED: `tools/list`, `ToolAuthorization.deny_reason/1`'s
-  catalogue and `suite_run_describe` read tool definitions, and no definition
+  catalogue and `burrow_run_describe` read tool definitions, and no definition
   carries an alias name. Code mode binds the alias name too
   (`Platform.CodeMode.Bindings.tool_names/1`), so a script written against
-  `suite.canvas.create(...)` keeps working.
+  `suite.canvas.create(...)` keeps working (the script global `suite` is the
+  same object as `burrow`). A nested run is refused under EITHER run name
+  (`Platform.CodeMode.Bindings`).
 
   ## Removing the aliases
 
-  A dotted call is countable two ways. The `dispatch_tool_calls` ledger row
+  A legacy call is countable two ways. The `dispatch_tool_calls` ledger row
   records the name the caller SENT in `tool`, and every resolved alias emits
   `[:platform, :federation, :legacy_tool_name]` with
   `%{legacy: name, canonical: canonical, runtime_id: id}` metadata. Removal is
   a separate task, gated on this reading zero across every install:
 
       SELECT tool, runtime_id, count(*) FROM dispatch_tool_calls
-      WHERE tool LIKE '%.%' AND inserted_at > $since GROUP BY 1, 2;
+      WHERE (tool LIKE '%.%' OR tool IN ('suite_run','suite_run_describe'))
+        AND inserted_at > $since GROUP BY 1, 2;
   """
 
   @aliases %{
@@ -46,12 +51,14 @@ defmodule Platform.Federation.ToolAliases do
     "prototype.versions" => "prototype_versions",
     "skill.get" => "skill_get",
     "skill.list" => "skill_list",
-    "skill.upsert" => "skill_upsert"
+    "skill.upsert" => "skill_upsert",
+    "suite_run" => "burrow_run",
+    "suite_run_describe" => "burrow_run_describe"
   }
 
   @legacy_event [:platform, :federation, :legacy_tool_name]
 
-  @doc "Legacy (dotted) name => canonical (underscore) name."
+  @doc "Legacy name => canonical name."
   @spec aliases() :: %{String.t() => String.t()}
   def aliases, do: @aliases
 

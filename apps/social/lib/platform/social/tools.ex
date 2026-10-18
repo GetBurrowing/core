@@ -388,7 +388,7 @@ defmodule Platform.Social.Tools do
       :source_not_in_project,
       "the source video and transcript must be files in the profile's project",
       true,
-      "Upload them to the profile's project in Suite Files and pass those ids."
+      "Upload them to the profile's project in Burrow Files and pass those ids."
     )
   end
 
@@ -417,7 +417,7 @@ defmodule Platform.Social.Tools do
   defp error_envelope({:error, :field_not_allowed, fields}) do
     err(
       :field_not_allowed,
-      "field not allowed: #{Enum.join(fields, ", ")}. Approval, publishing and rejection fields are written by Suite, never by an agent. " <>
+      "field not allowed: #{Enum.join(fields, ", ")}. Approval, publishing and rejection fields are written by Burrow, never by an agent. " <>
         @human,
       true,
       "Drop #{Enum.join(fields, ", ")} and retry."
@@ -516,7 +516,7 @@ defmodule Platform.Social.Tools do
   defp unknown_tool(tool) do
     err(
       :unknown_tool,
-      "Unknown tool: #{tool}. There is no publish or approve tool: a human approves in Suite and the platform publishes.",
+      "Unknown tool: #{tool}. There is no publish or approve tool: a human approves in Burrow and the platform publishes.",
       false,
       "The social tools are #{Enum.join(ToolDefinitions.names(), ", ")}."
     )

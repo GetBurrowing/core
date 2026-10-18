@@ -3,13 +3,13 @@ defmodule PlatformWeb.Components.InheritancePill do
   Inheritance-provenance pill — labels a value with where it came from in
   the org hierarchy: inherited from a parent, defined here, or overridden.
 
-  Part of the Suite scope-provenance system (sibling to `ScopePill` and
+  Part of the Burrow scope-provenance system (sibling to `ScopePill` and
   `IconRail`). Lives on the `ui-foundation-primitives` stack alongside
   other low-level chrome.
 
   ## Purpose
 
-  Many Suite surfaces show values (skills, context, memory, prompts) that
+  Many Burrow surfaces show values (skills, context, memory, prompts) that
   may be defined at the root org level and inherited by tenant orgs, or
   defined locally on a tenant. This pill is the affordance that tells the
   user which case they're looking at — and (for root-org admins) the click

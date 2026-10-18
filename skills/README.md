@@ -1,8 +1,8 @@
 # Skills
 
 This directory contains **filesystem skills** intended to be picked up by federated
-agents that participate in the Suite task lifecycle. Each skill is a self-contained
-folder describing a specific capability — running a local Suite, driving a browser,
+agents that participate in the Burrow task lifecycle. Each skill is a self-contained
+folder describing a specific capability — running a local Burrow install, driving a browser,
 posting evidence into a canvas — with the helper scripts that capability needs.
 
 These are platform-agnostic. They assume only what a contributor of the open-source
@@ -26,13 +26,13 @@ Make it concrete enough that an agent can decide whether the skill applies.
 
 ## How agents pick these up
 
-Two channel plugins federate Claude-style agents into Suite spaces:
+Two channel plugins federate Claude-style agents into Burrow spaces:
 
 - `Startup-Suite/openclaw-suite-channel` — bridges OpenClaw agent runtimes.
 - `Startup-Suite/claude-code-suite-channel` — bridges Claude Code sessions.
 
 When an agent is dispatched on a task, the plugin assembles a context payload and
-includes a `skills` listing. Today that listing comes from the Suite-side
+includes a `skills` listing. Today that listing comes from the Burrow-side
 `Tasks.skill_*` table; the plugins can be extended to also surface filesystem skills
 from this directory so the same capabilities are available to any host running the
 plugin. (Tracked as a follow-up audit task.)
@@ -53,7 +53,7 @@ plugin. (Tracked as a follow-up audit task.)
 
 | Skill | Purpose |
 |---|---|
-| `suite-dev-server` | Start a local Suite Phoenix dev server from any worktree, for in-review validation and screenshots. |
-| `openclaw-isolated-gateway` | Run a sandboxed OpenClaw gateway that talks to a local Suite without touching your primary OpenClaw install. |
+| `suite-dev-server` | Start a local Burrow Phoenix dev server from any worktree, for in-review validation and screenshots. |
+| `openclaw-isolated-gateway` | Run a sandboxed OpenClaw gateway that talks to a local Burrow install without touching your primary OpenClaw install. |
 | `agent-chrome-cdp` | Set up a dedicated Chrome with remote debugging so agents can drive web UIs. |
-| `agent-screenshot-and-canvas` | Capture a screenshot and post it as evidence into a Suite canvas + review request. |
+| `agent-screenshot-and-canvas` | Capture a screenshot and post it as evidence into a Burrow canvas + review request. |

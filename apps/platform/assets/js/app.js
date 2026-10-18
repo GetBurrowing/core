@@ -268,7 +268,7 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
 
   navigator.modelContext.registerTool({
     name: "send_message",
-    description: "Send a chat message in the currently active Suite chat space. The message will appear from the authenticated user.",
+    description: "Send a chat message in the currently active Burrow chat space. The message will appear from the authenticated user.",
     input: { type: "object", properties: { text: { type: "string", description: "The message content to send" } }, required: ["text"] },
     async execute({ text }) {
       if (typeof text !== "string") return errorResult("Error: text must be a string");
@@ -387,7 +387,7 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
   // so this drops out of prod bundles even if WEBMCP_ENABLED=true is set.
   if (process.env.NODE_ENV === "development") {
     console.log(
-      "[WebMCP] Suite tools registered:",
+      "[WebMCP] Burrow tools registered:",
       ["send_message", "navigate_space", "get_page_state", "search_messages", "create_canvas", "list_spaces", "toggle_thread"].join(", ")
     );
   }

@@ -182,7 +182,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
     user = render_instruction(context)
 
     system =
-      "You are the Architect on the Suite weekly tech-debt sweep path (ADR-0044). " <>
+      "You are the Architect on the Burrow weekly tech-debt sweep path (ADR-0044). " <>
         "You file at most #{@max_followups} follow-up tasks per sweep. Each follow-up must " <>
         "cite a specific PR number, task id, or ADR number — never a vague concern. " <>
         "Outputs land as backlog tasks with `metadata.filed_by = \"architect_cron_sweep\"`."

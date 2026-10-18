@@ -1,4 +1,4 @@
-defmodule Platform.Memory.Providers.StartupSuiteTest.SlowPlug do
+defmodule Platform.Memory.Providers.MemoryServiceTest.SlowPlug do
   @moduledoc """
   A real HTTP endpoint that stalls before answering like memory-service.
 
@@ -31,10 +31,10 @@ defmodule Platform.Memory.Providers.StartupSuiteTest.SlowPlug do
   end
 end
 
-defmodule Platform.Memory.Providers.StartupSuiteTest do
+defmodule Platform.Memory.Providers.MemoryServiceTest do
   use ExUnit.Case, async: true
 
-  alias Platform.Memory.Providers.StartupSuite
+  alias Platform.Memory.Providers.MemoryService
 
   setup do
     {:ok, _} = Application.ensure_all_started(:req)
@@ -74,7 +74,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         %{id: "b", content: "yo", date: "2026-04-16"}
       ]
 
-      assert {:ok, 2} = StartupSuite.ingest(entries, config())
+      assert {:ok, 2} = MemoryService.ingest(entries, config())
 
       assert_receive {:req, conn}
       assert conn.request_path == "/ingest"
@@ -102,7 +102,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         %{id: "j1", content: "journal content", memory_type: "journal", date: "2026-05-19"}
       ]
 
-      assert {:ok, 2} = StartupSuite.ingest(entries, config())
+      assert {:ok, 2} = MemoryService.ingest(entries, config())
 
       assert_receive {:req, conn}
       {:ok, body, _conn} = Plug.Conn.read_body(conn)
@@ -123,7 +123,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
       end)
 
       assert {:error, {:http, 500, %{"detail" => "boom"}}} =
-               StartupSuite.ingest([%{id: "a", content: "x", date: "2026-04-16"}], config())
+               MemoryService.ingest([%{id: "a", content: "x", date: "2026-04-16"}], config())
     end
   end
 
@@ -143,7 +143,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
       end)
 
       assert {:ok, hits} =
-               StartupSuite.search(
+               MemoryService.search(
                  "what did we decide",
                  [workspace_id: "ws-1", memory_type: "decision", limit: 5],
                  config(api_key: "sekret")
@@ -181,7 +181,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         })
       end)
 
-      assert {:ok, hits} = StartupSuite.search("q", [], config())
+      assert {:ok, hits} = MemoryService.search("q", [], config())
       assert hits == [%{entry_id: "01foo", score: 0.87, memory_type: "journal"}]
     end
 
@@ -190,7 +190,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         Req.Test.json(conn, %{"results" => [%{"entry_id" => "01foo", "score" => 0.5}]})
       end)
 
-      assert {:ok, [hit]} = StartupSuite.search("q", [], config())
+      assert {:ok, [hit]} = MemoryService.search("q", [], config())
       refute Map.has_key?(hit, :memory_type)
       assert hit == %{entry_id: "01foo", score: 0.5}
     end
@@ -205,7 +205,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         })
       end)
 
-      assert {:ok, hits} = StartupSuite.search("q", [], config())
+      assert {:ok, hits} = MemoryService.search("q", [], config())
       assert hits == [%{entry_id: "01empty", score: 0.5}, %{entry_id: "01null", score: 0.4}]
       refute Enum.any?(hits, &Map.has_key?(&1, :memory_type))
     end
@@ -220,7 +220,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
       end)
 
       assert {:ok, []} =
-               StartupSuite.search("q", [workspace_id: nil, memory_type: ""], config())
+               MemoryService.search("q", [workspace_id: nil, memory_type: ""], config())
     end
   end
 
@@ -236,7 +236,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         Req.Test.json(conn, %{"deleted" => 2})
       end)
 
-      assert {:ok, 2} = StartupSuite.delete(["a", "b"], config())
+      assert {:ok, 2} = MemoryService.delete(["a", "b"], config())
     end
   end
 
@@ -247,7 +247,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         Req.Test.json(conn, %{"status" => "ok", "model_loaded" => true})
       end)
 
-      assert :ok = StartupSuite.health(config())
+      assert :ok = MemoryService.health(config())
     end
 
     test "returns {:error, {:service_status, other}} when loading" do
@@ -255,7 +255,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         Req.Test.json(conn, %{"status" => "loading", "model_loaded" => false})
       end)
 
-      assert {:error, {:service_status, "loading"}} = StartupSuite.health(config())
+      assert {:error, {:service_status, "loading"}} = MemoryService.health(config())
     end
   end
 
@@ -284,10 +284,10 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
 
     defp timeouts_for(config) do
       install_capture()
-      assert {:ok, 1} = StartupSuite.ingest([%{id: "a", content: "x"}], config)
-      assert {:ok, []} = StartupSuite.search("q", [], config)
-      assert {:ok, 1} = StartupSuite.delete(["a"], config)
-      assert :ok = StartupSuite.health(config)
+      assert {:ok, 1} = MemoryService.ingest([%{id: "a", content: "x"}], config)
+      assert {:ok, []} = MemoryService.search("q", [], config)
+      assert {:ok, 1} = MemoryService.delete(["a"], config)
+      assert :ok = MemoryService.health(config)
 
       assert_receive {:receive_timeout, "/ingest", ingest}
       assert_receive {:receive_timeout, "/search", search}
@@ -341,10 +341,10 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
       base_url = start_slow_server(%{"/ingest" => 1_000, "/search" => 10_000})
       config = [base_url: base_url, timeout: 200, ingest_timeout: 30_000]
 
-      assert {:ok, 1} = StartupSuite.ingest([%{id: "a", content: "x"}], config)
+      assert {:ok, 1} = MemoryService.ingest([%{id: "a", content: "x"}], config)
 
       assert {:error, %Req.TransportError{reason: :timeout}} =
-               StartupSuite.search("q", [], config)
+               MemoryService.search("q", [], config)
     end
   end
 
@@ -354,7 +354,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
     # shutdown_timeout 0: teardown does not wait out a stalled handler.
     start_supervised!(
       {Bandit,
-       plug: {Platform.Memory.Providers.StartupSuiteTest.SlowPlug, sleep_ms: sleep_ms_by_path},
+       plug: {Platform.Memory.Providers.MemoryServiceTest.SlowPlug, sleep_ms: sleep_ms_by_path},
        scheme: :http,
        ip: {127, 0, 0, 1},
        port: port,

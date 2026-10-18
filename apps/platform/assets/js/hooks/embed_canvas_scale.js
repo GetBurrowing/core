@@ -26,7 +26,7 @@
  * `data-srcdoc`; its iframe is `<iframe src=... sandbox="allow-scripts">`
  * served under the sealed prototype CSP. In that mode this hook NEVER reads
  * or writes `srcdoc`: `srcdoc` wins over `src`, so writing script-bearing
- * HTML into it would run the script under the Suite page's CSP instead of
+ * HTML into it would run the script under the Burrow page's CSP instead of
  * the sealed one. `updated()` moves `iframe.src` when the version changes,
  * and the expand overlay frames the same `src` with the same sandbox. The
  * mode is fixed at mount (the server gives each mode its own wrapper id, so

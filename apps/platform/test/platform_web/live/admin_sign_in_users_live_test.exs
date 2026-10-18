@@ -546,7 +546,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       view |> element("#table-user-#{pending.id} [data-role=open-remove]") |> render_click()
       html = render(view)
       assert html =~ "Remove #{pending.name}?"
-      assert html =~ "Their messages, tasks and files stay in Suite under their name."
+      assert html =~ "Their messages, tasks and files stay in Burrow under their name."
       refute html =~ "Type"
 
       view |> element("[data-role=confirm-remove]") |> render_click()

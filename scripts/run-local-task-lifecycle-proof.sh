@@ -189,7 +189,7 @@ else
 fi
 
 if ! wait_for_log_line "$GATEWAY_LOG" 'Joined runtime:' 90; then
-  log "Gateway did not report a Suite runtime join. See $GATEWAY_LOG"
+  log "Gateway did not report a Burrow runtime join. See $GATEWAY_LOG"
   exit 1
 fi
 

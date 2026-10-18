@@ -5,20 +5,20 @@
  * THE REPORT (Rowan, 2026-10-14). On an iPad, in the installed Burrow iOS app
  * (Capacitor wrapping a WKWebView), a fast drag inside a fullscreen prototype
  * drops it out of fullscreen. He also sees a prominent X in the upper-left
- * corner. Suite renders no top-left X: the bar's close button is on the right.
+ * corner. The web app renders no top-left X: the bar's close button is on the right.
  *
- * THE HYPOTHESIS UNDER TEST. Suite has no drag exit of its own. Capacitor
+ * THE HYPOTHESIS UNDER TEST. The web app has no drag exit of its own. Capacitor
  * 8.5.2 turns on `isElementFullscreenEnabled` in the WKWebView, so inside
  * Burrow `document.fullscreenEnabled` is true and the PrototypeFullscreen
  * hook takes the NATIVE path (requestFullscreen). WebKit's own fullscreen UI
  * then owns the screen: the top-left system X and a drag-to-dismiss gesture.
  * A fast drag dismisses, `fullscreenchange` fires, and the hook's sync pushes
- * `fullscreen on=false`, which turns Suite's state off too.
+ * `fullscreen on=false`, which turns the web app's state off too.
  *
  * WHAT CAN AND CANNOT BE REPRODUCED OFF-DEVICE. Linux WebKit has no UIKit
  * fullscreen controller and no dismiss gesture. So this spec reproduces the
  * PRECONDITION (which path the hook selects in each context) and the CHAIN
- * (a system exit while native turns Suite's state off), with Burrow's page
+ * (a system exit while native turns the web app's state off), with Burrow's page
  * marker INJECTED exactly as Capacitor injects it (`window.Capacitor`, main
  * frame only, before any page script), and with the installed PWA emulated
  * through `display-mode: standalone` + `navigator.standalone`. The injection
@@ -48,7 +48,7 @@
  *          (Burrow Android): native, unchanged.
  *   GREEN-OVERLAY webkit-iphone with the API stubbed exactly as v1's spec
  *          does: the full drag set must not exit. This is the discriminator:
- *          if a drag exits here, Suite has a drag exit path of its own.
+ *          if a drag exits here, the web app has a drag exit path of its own.
  *   MARKER CONTROL  RED-1's exact setup with the marker removed must take the
  *          native path (GREEN-BOTH-1's verdict). It and RED-1 differ by the
  *          marker alone, so a flip between them is what shows the verdict
@@ -57,7 +57,7 @@
  *          it, "no drag exits" could mean the instruments cannot see an exit.
  *          MEASURED: in WebKit a press inside the iframe moves keyboard focus
  *          into the frame, and a real Escape then lands in the prototype, not
- *          in Suite's window listener (`[escape-trace]`). The control moves
+ *          in the web app's window listener (`[escape-trace]`). The control moves
  *          focus back to a parent control mid-drag before the real key press.
  *
  * THE DRAG SET (every drag must move the iframe's counter above 0):
@@ -849,7 +849,7 @@ test.describe("prototype fullscreen under a drag (Burrow iOS, installed PWA)", (
     expect.soft(s.popoverOpen, "installed PWA: the root is not in the top layer").toBe(true)
   })
 
-  test("RED-4 webkit-ipad + Burrow marker: a system exit mid-drag leaves Suite fullscreen", async ({
+  test("RED-4 webkit-ipad + Burrow marker: a system exit mid-drag leaves the web app fullscreen", async ({
     page,
   }, testInfo) => {
     test.skip(project(testInfo) !== "webkit-ipad", "webkit-ipad only")
@@ -883,7 +883,7 @@ test.describe("prototype fullscreen under a drag (Burrow iOS, installed PWA)", (
       fullscreenElement: s.fullscreenElement,
     })
     expect.soft(m.pressed, "RED-4: the drag never reached the prototype").toBeGreaterThan(0)
-    expect.soft(s.fs, "RED-4: a system fullscreen exit mid-drag took Suite out of fullscreen").toBe("true")
+    expect.soft(s.fs, "RED-4: a system fullscreen exit mid-drag took the web app out of fullscreen").toBe("true")
   })
 
   test("MARKER CONTROL webkit-ipad: RED-1's setup without the marker goes native", async ({
@@ -962,7 +962,7 @@ test.describe("prototype fullscreen under a drag (Burrow iOS, installed PWA)", (
       const active = await page.evaluate(() => document.activeElement?.tagName ?? "(none)")
       // MEASURED (unfixed tree, Linux WebKit): a press inside the iframe moves
       // focus INTO the frame, so a real Escape lands in the prototype
-      // (frameKeydowns 1, parentKeydowns 0) and never reaches Suite's
+      // (frameKeydowns 1, parentKeydowns 0) and never reaches the web app's
       // phx-window-keydown. That is a property of focus, not of the drag; the
       // control is about whether the instruments can see an exit, so the
       // parent takes focus back (the finger/button stays down) and the key is
@@ -1112,7 +1112,7 @@ test.describe("prototype fullscreen under a drag (Burrow iOS, installed PWA)", (
       expect.soft(closed.popoverOpen, `${v.name}: the top layer survived the X`).toBe(false)
       // Re-enter; Escape exits on the first press. Focus stays on the bar
       // button after the tap (no press inside the frame), so the key reaches
-      // Suite's phx-window-keydown; logged to show it.
+      // the web app's phx-window-keydown; logged to show it.
       await tapFullscreen(page, testInfo)
       const active = await page.evaluate(() => {
         const a = document.activeElement as HTMLElement | null

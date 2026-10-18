@@ -1,8 +1,8 @@
 defmodule Platform.CodeMode.SandboxAdversarialTest do
   @moduledoc """
-  Task 01a114a8 stage 2: what an adversarial `suite_run` script can and
+  Task 01a114a8 stage 2: what an adversarial `burrow_run` script can and
   cannot do. Scripts run through `Platform.CodeMode.Run.execute/3`, the
-  path `suite_run` takes after `ToolCall.invoke/4` has authorized the outer
+  path `burrow_run` takes after `ToolCall.invoke/4` has authorized the outer
   call, so every inner call goes through `ToolCall.invoke/4` for real.
 
   Mutation targets (each must turn a test here red; see the stage report):
@@ -89,11 +89,20 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
       assert [%ToolCallRecord{tool: "task_update", status: "denied"}] = inner_rows(body.run_id)
     end
 
-    test "a nested suite_run is refused and ledgered as denied", %{runtime: runtime} do
+    test "a nested burrow_run is refused and ledgered as denied", %{runtime: runtime} do
+      body = run(runtime, "burrow.burrow_run({script: '1'})")
+
+      assert %{ok: false, error: %{kind: "forbidden", message: message}} = body
+      assert message =~ "burrow_run cannot be called from inside burrow_run"
+      assert [%ToolCallRecord{tool: "burrow_run", status: "denied"}] = inner_rows(body.run_id)
+    end
+
+    test "a nested run under the legacy name suite_run is refused the same way",
+         %{runtime: runtime} do
       body = run(runtime, "suite.suite_run({script: '1'})")
 
       assert %{ok: false, error: %{kind: "forbidden", message: message}} = body
-      assert message =~ "suite_run cannot be called from inside suite_run"
+      assert message =~ "suite_run cannot be called from inside burrow_run"
       assert [%ToolCallRecord{tool: "suite_run", status: "denied"}] = inner_rows(body.run_id)
     end
 
@@ -195,11 +204,11 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
   end
 
   describe "the module" do
-    test "imports EXACTLY suite.host_call and five wasi functions" do
+    test "imports EXACTLY burrow.host_call and five wasi functions" do
       {:ok, {_engine, module}} = Runtime.compiled()
 
       assert Wasmex.Module.imports(module) == %{
-               "suite" => %{
+               "burrow" => %{
                  "host_call" => {:fn, [:i32, :i32, :i32, :i32, :i32, :i32], [:i32]}
                },
                "wasi_snapshot_preview1" => %{
@@ -223,10 +232,10 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
       bytes = File.read!(Runtime.wasm_path())
 
       assert :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower) ==
-               "97b3e1f68dd8d51e2cfdb36adb77574647339fdb0ab77727caf60af7caf9303a"
+               "0aafebd10bd889e34afd544595d041d6998af9f5a2c2277e80e16c33cb510792"
 
       assert Runtime.wasm_sha256() ==
-               "97b3e1f68dd8d51e2cfdb36adb77574647339fdb0ab77727caf60af7caf9303a"
+               "0aafebd10bd889e34afd544595d041d6998af9f5a2c2277e80e16c33cb510792"
     end
   end
 
@@ -245,10 +254,17 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
     {:ok, _project} = Tasks.create_project(%{name: "CM #{u()}", org_id: org_id})
 
     script = """
-    try { suite.task_get({task_id: '#{Ecto.UUID.generate()}'}); 'no error' }
-    catch (e) { [e.name, e.kind] }
+    const id = '#{Ecto.UUID.generate()}';
+    const viaBurrow = (() => { try { burrow.task_get({task_id: id}); return 'no error' }
+      catch (e) { return [e.name, e.kind] } })();
+    const viaSuite = (() => { try { suite.task_get({task_id: id}); return 'no error' }
+      catch (e) { return [e.name, e.kind] } })();
+    [viaBurrow, viaSuite, suite === burrow]
     """
 
-    assert %{ok: true, result: ["SuiteError", "tool_error"]} = run(runtime, script)
+    assert %{
+             ok: true,
+             result: [["BurrowError", "tool_error"], ["BurrowError", "tool_error"], true]
+           } = run(runtime, script)
   end
 end

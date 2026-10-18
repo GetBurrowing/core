@@ -393,7 +393,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert after_revision == revision + 10
     end
 
-    test "tasks.create, suite_run and $store.* are forbidden / binding_not_registered, with no side effect",
+    test "tasks.create, burrow_run, suite_run and $store.* are forbidden / binding_not_registered, with no side effect",
          ctx do
       count = fn ->
         {Repo.aggregate(Platform.Tasks.Task, :count), Repo.aggregate(ToolCallRecord, :count),
@@ -405,6 +405,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       for {name, source} <- [
             {"mk", "(e, ctx) => suite.call('tasks.create', {title: 'x'})"},
             {"nest", "(e, ctx) => suite.call('suite_run', {code: '1 + 1'})"},
+            {"nestb", "(e, ctx) => burrow.call('burrow_run', {code: '1 + 1'})"},
             {"put", "(e, ctx) => suite.call('$store.set', {key: 'k', value: 1})"},
             {"store", "(e, ctx) => store.set('k', 1)"},
             {"post", "(e, ctx) => suite.call('chat.post_message', {content: 'x'})"}

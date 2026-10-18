@@ -31,7 +31,7 @@ defmodule Platform.Security.Scanners.CodeAudit do
       `.ex` files.
     * `code_audit_patterns_path` — override the rubric location
       per-test; defaults to `PatternLoader.default_path/0`.
-    * `Platform.Security.project_id` — the Suite project findings
+    * `Platform.Security.project_id` — the Burrow project findings
       land in. Missing → warn + `{:ok, 0}`.
     * `code_audit_ignore_relative_prefixes` — list of relative-path
       prefixes to skip when walking. Defaults to

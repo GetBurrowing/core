@@ -784,8 +784,8 @@ defmodule Platform.ExtensionsTest do
       {"experiment_promote", "experiments"},
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
-      {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"},
+      {"burrow_run", "code_mode"},
+      {"burrow_run_describe", "code_mode"},
       {"prototype_publish", "prototype"},
       {"prototype_versions", "prototype"},
       {"prototype_rollback", "prototype"}
@@ -870,9 +870,23 @@ defmodule Platform.ExtensionsTest do
     # every description that cites one, including the image kind's `src`
     # schema text (so the tool-schemas digest moves and the summaries digest
     # does not). Measured on moon at the stage's branch (ac42fe5e).
-    @main_tool_digest_off "f9b0226dafb2ccbccf27abfc7e5a6f0c895aa944f862bbe54e31ac9b09cb6b07"
-    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
-    @main_kinds_tool_schemas_digest_off "565358119f017f2789edb4515a51ddbc89452309fdfa9c392b566a8e3d6fc81e"
+    #
+    # Re-pinned by task 01a14b9e-50a4 stage 1: `suite_run` / `suite_run_describe`
+    # became `burrow_run` / `burrow_run_describe` (names, primer and
+    # describe text), "Suite" became "Burrow" in tool_surface.ex's tool
+    # descriptions, and code_mode_report's text names burrow_run. Bundles are
+    # unchanged. Measured on moon at the stage's branch (8cefc9fc).
+    #
+    # Re-pinned by task 01a14b9e-50a4 stage 2: product-name copy "Suite"
+    # became "Burrow" in tool descriptions outside tool_surface.ex (canvas
+    # tools' sharing boundary, experiment, mail-draft and prototype tools)
+    # and in the canvas kind descriptions and the embed kind's `scripts`
+    # schema text ("no Burrow cookies"), so the summaries and tool-schemas
+    # digests move too. Names and bundles unchanged. Measured on moon at the
+    # stage's branch (512cdde0, 1a46cef5).
+    @main_tool_digest_off "63ca056ab51ae9f8e663738d6c8584a314d8f3060770b1867ad82a145a3bc941"
+    @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
+    @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)

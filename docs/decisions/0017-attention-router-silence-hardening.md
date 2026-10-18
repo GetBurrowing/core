@@ -7,7 +7,7 @@
 
 ## Context
 
-After deploying the attention routing system (ADR 0013) and federated agents (ADR 0014), the following issues surfaced in production use of Suite chat:
+After deploying the attention routing system (ADR 0013) and federated agents (ADR 0014), the following issues surfaced in production use of Burrow chat:
 
 1. **Accidental silencing.** The NLP silence detection patterns included common words like `stop`, `leave`, `enough`, `quiet`, and `silence`. Normal conversation ("stop what you're doing", "I have enough context", "leave those files alone") triggered silence without the user realizing it.
 
@@ -18,7 +18,7 @@ After deploying the attention routing system (ADR 0013) and federated agents (AD
 4. **Silence button inoperable for federated agents.** The `toggle_agent_silence` event handler relied on `agent_presence.agent.id` from `WorkspaceBootstrap.status()`, which is only populated for built-in/workspace agents. For federated agents (`runtime_type: "external"`), `agent_presence.agent` was nil, causing the handler to fall through to a no-op. The button appeared clickable but did nothing.
 
 Combined, these bugs created a scenario where:
-- A user talks to a federated agent in Suite chat
+- A user talks to a federated agent in Burrow chat
 - Normal conversation accidentally triggers silence (e.g. "stop and help me with X")
 - The agent goes silent with no timeout
 - The silence button in the UI doesn't work for federated agents

@@ -2,7 +2,7 @@
   "name": "core-e2e",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end browser tests for Startup Suite core. Run against a local dev server.",
+  "description": "End-to-end browser tests for Burrow core. Run against a local dev server.",
   "scripts": {
     "install-browsers": "playwright install chromium chromium-headless-shell webkit",
     "test": "playwright test",

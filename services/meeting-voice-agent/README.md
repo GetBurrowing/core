@@ -56,7 +56,7 @@ that registration — see "MCP tool surface" below.
   an agent foreign key, so the worker lands on the agent's own invite row
   instead of becoming an extra "Unknown participant". It is also the key
   MeetingLive uses for agent tiles. `agent:<slug>` would match neither. The
-  agent is never inferred from `MVA_WORKER_AGENT_NAME`, because several Suite
+  agent is never inferred from `MVA_WORKER_AGENT_NAME`, because several
   agents can share one worker name. When `agent_identity` is missing (an
   older Core, or a manually started job), `accept_arguments` returns `{}`
   and the SDK default identity `agent-<job id>` is kept. That is the
@@ -126,7 +126,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   per-tool-name).
 - **MCP base URL must be the public host, and it is required.**
   `MVA_MCP_BASE_URL` has no default (task 01a116de): any default would name
-  one particular Suite install, so an unset or empty value fails config
+  one particular Burrow install, so an unset or empty value fails config
   loading with an error naming the variable. Set it to your deployment's
   public MCP URL (e.g. `https://suite.example.com/mcp`), not an in-cluster
   `:4000` URL — Dalton's moon run found the service pointed at the latter,

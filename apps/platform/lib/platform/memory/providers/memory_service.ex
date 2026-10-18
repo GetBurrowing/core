@@ -1,6 +1,6 @@
-defmodule Platform.Memory.Providers.StartupSuite do
+defmodule Platform.Memory.Providers.MemoryService do
   @moduledoc """
-  HTTP client for the Startup Suite [memory-service](https://github.com/Startup-Suite/memory-service).
+  HTTP client for the Burrow [memory-service](https://github.com/Startup-Suite/memory-service).
 
   Implements the `Platform.Memory.Provider` behaviour by calling the
   service's OpenAI-shaped REST surface:

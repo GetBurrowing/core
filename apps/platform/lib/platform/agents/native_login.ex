@@ -14,12 +14,12 @@ defmodule Platform.Agents.NativeLogin do
 
   Anthropic's Claude Code terms say developers "may not collect, store, or
   intermediate Claude.ai credentials or session tokens", and that sign-in must
-  complete through Anthropic's own flow. A Suite field that took the pasted
-  code and relayed it to the agent's pane would be exactly that. So Suite
+  complete through Anthropic's own flow. A Burrow field that took the pasted
+  code and relayed it to the agent's pane would be exactly that. So Burrow
   OFFERS NO SUBSCRIPTION LOGIN: the detail pane says it is not available yet,
   and the way in is an Anthropic API key.
 
-  **No Suite surface accepts a Claude login code.** There is no paste field,
+  **No Burrow surface accepts a Claude login code.** There is no paste field,
   no event that takes one, and nothing in core, the agent host or suite-cli
   that types into an agent's pane. `api_key_shape/1` refuses anything that is
   not shaped like an Anthropic API key, so a login code cannot be stored as

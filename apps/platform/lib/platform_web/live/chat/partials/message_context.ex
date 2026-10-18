@@ -231,7 +231,7 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
           data-role="message-context-summary-source"
           class="message-context-label mt-2 text-xs"
         >
-          Summarised by Suite from the messages before this one that you can see.
+          Summarised by Burrow from the messages before this one that you can see.
         </p>
       </section>
     </div>

@@ -8,7 +8,7 @@
 
 ## Context
 
-The Startup Suite needs to run AI agent tasks reliably and reproducibly.  A
+Burrow needs to run AI agent tasks reliably and reproducibly.  A
 runner (local process, Docker container, or remote worker) needs a structured
 way to:
 

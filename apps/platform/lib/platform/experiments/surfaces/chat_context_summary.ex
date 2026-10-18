@@ -13,7 +13,7 @@ defmodule Platform.Experiments.Surfaces.ChatContextSummary do
 
   ## Path
 
-  `:draft`: the output is read by a person inside Suite and is never sent
+  `:draft`: the output is read by a person inside Burrow and is never sent
   anywhere. It is not `:dispatch` either; nothing is resolved at a dispatch.
 
   ## Payload

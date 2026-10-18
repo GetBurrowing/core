@@ -3213,7 +3213,7 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, assign(socket, :whiteboard_remote_version, nil)}
   end
 
-  # ── Export the board into a Suite canvas (task 019fcfcf stage 5) ─────────
+  # ── Export the board into a Burrow canvas (task 019fcfcf stage 5) ─────────
   #
   # Three server events, because the bytes and the authority live in
   # different places: only the browser can render the board, and only the
@@ -9272,7 +9272,7 @@ defmodule PlatformWeb.MeetingLive do
   to the `@current_participant`-driven behavior.
 
   Guest surface (`@chrome_mode == :none and @state == :in_meeting`): the
-  guest has no `Chat.Participant` row (they are not a Suite user), but
+  guest has no `Chat.Participant` row (they are not a Burrow user), but
   they DO carry a LiveKit identity + display name from
   `mint_guest_join_bundle/2`. Return a synthetic participant map keyed
   on the LiveKit identity so the persistent `#meeting-local-self-view`

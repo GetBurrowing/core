@@ -349,7 +349,7 @@ defmodule Platform.Federation.ExperimentTools do
       %{
         name: "dispatch_metrics_list",
         description:
-          "List per-dispatch measurements, newest first: Suite tool calls the dispatch made, client-reported turns, tokens and local tool calls, wall time and outcome. A dispatch is an execution.acked event (unit_source ack), else a started stage with no ack (stage_row), else a lease row (lease).",
+          "List per-dispatch measurements, newest first: Burrow tool calls the dispatch made, client-reported turns, tokens and local tool calls, wall time and outcome. A dispatch is an execution.acked event (unit_source ack), else a started stage with no ack (stage_row), else a lease row (lease).",
         parameters: %{
           agent_id: %{type: "string", required: false, description: "Filter by agent UUID."},
           task_id: %{type: "string", required: false, description: "Filter by task UUID."},
@@ -370,14 +370,14 @@ defmodule Platform.Federation.ExperimentTools do
         returns:
           "%{dispatches: [%{dispatch_id, unit_source, task_id, stage_id, runtime_id, agent_id, subagent_id, started_at, ended_at, wall_ms, lease_ids, suite_tool_calls, inner_tool_calls, suite_run_calls, tool_calls_denied, tool_calls_error, client_reports, client_turns, client_tool_calls, client_wall_ms, client_tokens_in, client_tokens_out, client_cache_read_tokens, client_cache_write_tokens, client_harness, stage_status, validations, re_dispatch_count}], count, limit, total, has_more, coverage: [%{agent_id, dispatches, by_unit_source}], attribution_coverage: [%{agent_id, tool_calls, attributed, pct, by_rung}]} — `total` is the number of dispatches matching the filters, independent of `limit`; `has_more` is true exactly when matching dispatches exist beyond this page. client_* fields are null, never 0, when the client reported nothing.",
         limitations:
-          "Server-side counts cover Suite MCP tool calls only, and a call whose attribution is `unattributed` counts toward no dispatch. Local tools, turns and tokens are client self-report: the usage-events endpoint does not bind agent_id to the sending runtime. stage_row wall time starts at stages.started_at, earlier than the ack clock. A tenant-pinned agent sees only its own org's tasks.",
+          "Server-side counts cover Burrow MCP tool calls only, and a call whose attribution is `unattributed` counts toward no dispatch. Local tools, turns and tokens are client self-report: the usage-events endpoint does not bind agent_id to the sending runtime. stage_row wall time starts at stages.started_at, earlier than the ack clock. A tenant-pinned agent sees only its own org's tasks.",
         when_to_use:
           "To measure what a dispatch cost and how it ended, per agent, and to read how much of it is measurable (coverage, attribution_coverage)."
       },
       %{
         name: "code_mode_report",
         description:
-          "Per-agent report for an experiment on the dispatch.code_mode surface: one row per dispatched agent and arm, with dispatch counts, usage metrics, suite_run adoption (treatment) or violations (control), and how much of the agent is measurable.",
+          "Per-agent report for an experiment on the dispatch.code_mode surface: one row per dispatched agent and arm, with dispatch counts, usage metrics, burrow_run adoption (treatment) or violations (control), and how much of the agent is measurable.",
         parameters: %{
           experiment_id: %{
             type: "string",
@@ -390,7 +390,7 @@ defmodule Platform.Federation.ExperimentTools do
         limitations:
           "Only for dispatch.code_mode experiments (code wrong_surface otherwise). Planning dispatches are not counted. client_* metrics are client self-report. attribution_pct covers the agent's model-issued tool calls on every task since the first assignment, so both arms of one agent carry the same figure. No arm is compared with another.",
         when_to_use:
-          "To read the code-mode experiment per agent: whether an agent's data is usable (coverage) before reading its figures, and whether the control arm is calling suite_run."
+          "To read the code-mode experiment per agent: whether an agent's data is usable (coverage) before reading its figures, and whether the control arm is calling burrow_run (under either name: suite_run is its legacy alias)."
       }
     ]
   end

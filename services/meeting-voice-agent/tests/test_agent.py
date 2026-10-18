@@ -288,7 +288,7 @@ def test_accept_arguments_falls_back_when_agent_identity_is_not_agent_prefixed()
 
 
 def test_accept_arguments_never_derives_the_identity_from_the_worker_name(monkeypatch):
-    # Several Suite agents can share one worker name, so only the dispatch
+    # Several agents can share one worker name, so only the dispatch
     # metadata may name the agent.
     monkeypatch.setenv("MVA_WORKER_AGENT_NAME", "meeting-voice-agent")
     metadata = {k: v for k, v in FULL_METADATA.items() if k != "agent_identity"}

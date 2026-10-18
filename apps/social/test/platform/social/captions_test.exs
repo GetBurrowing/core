@@ -2,7 +2,7 @@ defmodule Platform.Social.CaptionsTest do
   @moduledoc """
   The caption and end-card ASS scripts (Social 5/7) against design canvas
   01a140fc-14a9: safe zone, two-line cap, highlight, frame-0 caption,
-  speaker label on change only, brand overrides, no Suite token colour.
+  speaker label on change only, brand overrides, no Burrow token colour.
   Reads the script text, not pixels.
   """
   use ExUnit.Case, async: true

@@ -10,7 +10,7 @@ an `AgentConfig` (or a value pulled from one) as an argument.
 Every value has a documented default so the service is runnable out of the
 box against moon/wave's currently-known addresses, but every one of those
 defaults is expected to be overridden per-deployment via env vars. The one
-exception is `MVA_MCP_BASE_URL`, the Suite install this agent talks to: it has
+exception is `MVA_MCP_BASE_URL`, the Burrow install this agent talks to: it has
 no default, because any default would name one particular install, and an
 empty or unset value raises `ConfigError`. See README.md for the full list.
 """
@@ -279,10 +279,10 @@ class McpConfig:
             # than silently re-POSTing — so the *URL* has to be right, not
             # the client's redirect handling (Dalton's moon run, rollup
             # space 01a0b5bf). Required, with no default: a default would
-            # name one particular Suite install (task 01a116de).
+            # name one particular Burrow install (task 01a116de).
             base_url=_env_required_str(
                 "MVA_MCP_BASE_URL",
-                "set it to this deployment's public Suite MCP URL, "
+                "set it to this deployment's public Burrow MCP URL, "
                 "e.g. https://suite.example.com/mcp",
             ),
             auth_token=_env_str("MVA_MCP_AUTH_TOKEN", ""),

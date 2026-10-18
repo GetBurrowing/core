@@ -1,8 +1,10 @@
-# Startup Suite Core
+# Burrow Core
 
 An open-source, agent-native collaboration platform built with Elixir, Phoenix LiveView, and PostgreSQL.
 
-Startup Suite is a modular business suite where AI agents are first-class participants — not bolted-on assistants. Agents join conversations, create live canvases, manage tasks, and respond to natural attention cues, all within a real-time collaborative environment.
+Burrow is a modular business suite where AI agents are first-class participants — not bolted-on assistants. Agents join conversations, create live canvases, manage tasks, and respond to natural attention cues, all within a real-time collaborative environment.
+
+Burrow used to be called Startup Suite. A phone that installed the app to its home screen before the rename can keep showing the old name under the icon; remove the icon and add it again from the browser to pick up the new one.
 
 [![CI](https://github.com/Startup-Suite/core/actions/workflows/ci.yml/badge.svg)](https://github.com/Startup-Suite/core/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -158,7 +160,7 @@ Design decisions are documented in [`docs/decisions/`](docs/decisions/):
 | [0006](docs/decisions/0006-secure-credential-vault.md) | Secure credential vault | Accepted |
 | [0007](docs/decisions/0007-agent-runtime-architecture.md) | Agent runtime architecture | Accepted |
 | [0008](docs/decisions/0008-chat-backend-architecture.md) | Chat backend architecture | Accepted |
-| [0009](docs/decisions/0009-suite-shell-architecture.md) | Suite shell architecture | Accepted |
+| [0009](docs/decisions/0009-suite-shell-architecture.md) | Burrow shell architecture | Accepted |
 | [0010](docs/decisions/0010-mobile-navigation-and-agent-resources.md) | Mobile navigation and agent resources | Accepted |
 | [0011](docs/decisions/0011-execution-runners-context-plane-and-run-control.md) | Execution runners and run control | Accepted |
 | [0012](docs/decisions/0012-agent-driven-live-canvas-architecture.md) | Live canvas architecture | Proposed |
@@ -226,13 +228,13 @@ Enable the pre-commit hook (auto-formats staged Elixir files):
 
 ## Product Roadmap
 
-Startup Suite is designed as multiple product surfaces over one shared platform:
+Burrow is designed as multiple product surfaces over one shared platform:
 
 | Surface | Description | Status |
 |---------|-------------|--------|
 | **Chat** | Real-time messaging with agent participation | Active development |
 | **Tasks** | Execution-oriented task management | Planned |
-| **Shell** | Suite-level navigation container | Planned |
+| **Shell** | Burrow-level navigation container | Planned |
 
 The platform layer underneath supports: accounts, workspaces, chat, execution, experiments, review, artifacts, automations, integrations, and audit.
 

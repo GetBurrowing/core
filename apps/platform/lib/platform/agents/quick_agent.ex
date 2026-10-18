@@ -64,7 +64,7 @@ defmodule Platform.Agents.QuickAgent do
       |> Enum.join("\n\n---\n\n")
 
     """
-    You are an AI agent running on the Startup Suite platform.
+    You are an AI agent running on the Burrow platform.
     Your identity and instructions are defined by the following workspace files:
 
     #{files}

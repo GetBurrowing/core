@@ -133,7 +133,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
           <p class="text-sm text-base-content/60">
             Prototypes are clickable HTML bundles that agents and people publish with
             <code class="font-mono text-xs">prototype_publish</code>
-            or the New canvas form, served sealed (no network, no Suite access) to members of
+            or the New canvas form, served sealed (no network, no Burrow access) to members of
             the prototype's org. These settings apply to every org on this install.
           </p>
 

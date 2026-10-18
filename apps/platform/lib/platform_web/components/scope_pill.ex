@@ -3,12 +3,12 @@ defmodule PlatformWeb.Components.ScopePill do
   Scope-provenance pill — labels an item with the org-scope it belongs to,
   and optionally where it was propagated to.
 
-  Part of the Suite scope-provenance system (sibling to icon-rail). Lives on
+  Part of the Burrow scope-provenance system (sibling to icon-rail). Lives on
   the `ui-foundation-primitives` stack alongside other low-level chrome.
 
   ## Purpose
 
-  Suite is a Linear-style unified workspace (one view, filterable) — NOT a
+  Burrow is a Linear-style unified workspace (one view, filterable) — NOT a
   Discord-style org switcher. root-org admins see ALL orgs at once; the scope
   pill is the filter affordance.
 

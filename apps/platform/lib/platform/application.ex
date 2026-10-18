@@ -117,13 +117,13 @@ defmodule Platform.Application do
            Platform.Federation.Peers.Boot,
            # Task supervisor for parallel agent dispatch (ADR 0027)
            {Task.Supervisor, name: Platform.TaskSupervisor},
-           # Code mode (task 01a114a8 stage 2): suite_run's concurrency slots
+           # Code mode (task 01a114a8 stage 2): burrow_run's concurrency slots
            # and its ephemeral ETS store (NonceCache shape). No DB, no
            # PubSub; both must exist before the Endpoint takes a tools/call.
            Platform.CodeMode.Slots,
            # Canvas handlers' own slot pool (task 01a1316b-aab0 stage 1):
            # the same module under a second name, so a busy canvas can never
-           # take an agent's suite_run slot or the reverse.
+           # take an agent's burrow_run slot or the reverse.
            Supervisor.child_spec(
              {Platform.CodeMode.Slots, name: Platform.Canvas.ScriptEngine.Slots},
              id: Platform.Canvas.ScriptEngine.Slots

@@ -36,9 +36,9 @@ defmodule Platform.Social.TransportParityTest do
 
   @granted ~w(federation space context_read messaging review canvas task plan memory skill attachment social)
 
-  @sentence "A human approves this in Suite and the platform publishes it; agents cannot approve or publish."
+  @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  @deny "There is no publish or approve tool: a human approves in Suite and the platform publishes."
+  @deny "There is no publish or approve tool: a human approves in Burrow and the platform publishes."
 
   setup do
     owner =

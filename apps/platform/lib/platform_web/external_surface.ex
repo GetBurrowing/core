@@ -4,7 +4,7 @@ defmodule PlatformWeb.ExternalSurface do
 
   Three surfaces share one Phoenix endpoint, distinguished only by the request
   hostname: the external CHAT host (`chat.<domain>`, task 019f9257), the guest
-  MEET host (`MEET_HOST`), and the primary Suite APP host. Authorization
+  MEET host (`MEET_HOST`), and the primary Burrow APP host. Authorization
   decisions that depend on "which surface" must read that answer from HERE
   rather than re-deriving it from `conn.host` at each call site — two
   derivations that drift are two different fences.

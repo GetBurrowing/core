@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Claude Code SubagentStop / Stop hook: report one dispatch's usage to Suite.
+"""Claude Code SubagentStop / Stop hook: report one dispatch's usage to Burrow.
 
 Task 01a114a8 stage 1. Reads the transcript JSONL named by the hook payload
-on stdin, summarises it, and POSTs one row to Suite's
+on stdin, summarises it, and POSTs one row to Burrow's
 `/api/internal/usage-events`, which feeds
 `Platform.Orchestration.DispatchMetrics`.
 
@@ -10,12 +10,12 @@ What it counts, from the transcript only:
   * turns: distinct assistant message ids. One API response can be split
     across several JSONL lines that share an id, so lines are not turns.
   * client tool calls: distinct `tool_use` block ids, ALL tools (Bash, Read,
-    Suite MCP tools, ...). Tool NAMES are reported; tool inputs never are.
+    Burrow MCP tools, ...). Tool NAMES are reported; tool inputs never are.
   * tokens: usage input / output / cache-read / cache-creation, summed once
     per assistant message id.
   * wall_ms: first to last line timestamp.
   * task_id / stage_id: UUIDs labelled as such in the FIRST user message
-    (the dispatch brief). No task id means this was not a Suite dispatch,
+    (the dispatch brief). No task id means this was not a Burrow dispatch,
     and nothing is sent.
 
 Environment (read, never echoed):
@@ -269,7 +269,7 @@ def run(stdin_text, env, dry_run=False):
         return "skipped: no transcript"
     summary = summarise(read_lines(path))
     if not summary["task_id"]:
-        return "skipped: not a Suite dispatch (no task id in the first user message)"
+        return "skipped: not a Burrow dispatch (no task id in the first user message)"
     payload = build_payload(summary, hook, env)
     if dry_run:
         return json.dumps(payload, sort_keys=True)
@@ -404,7 +404,7 @@ def self_test():
         no_task = run(json.dumps({"transcript_path": no_task_path}), env)
     finally:
         os.unlink(no_task_path)
-    if not no_task.startswith("skipped: not a Suite dispatch"):
+    if not no_task.startswith("skipped: not a Burrow dispatch"):
         failures.append("a transcript without a task id was not skipped: %r" % no_task)
 
     env_checks = env_self_test(failures)

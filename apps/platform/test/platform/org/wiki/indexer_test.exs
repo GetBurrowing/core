@@ -557,7 +557,7 @@ defmodule Platform.Org.Wiki.IndexerTest do
       # the timeout floor, so the only thing standing between a 5s timeout
       # and a resend within the window is the ingest timeout itself.
       Application.put_env(:platform, :memory_service,
-        provider: Platform.Memory.Providers.StartupSuite,
+        provider: Platform.Memory.Providers.MemoryService,
         base_url: "http://127.0.0.1:#{port}"
       )
 

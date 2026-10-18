@@ -8,7 +8,7 @@
 
 ## 1. Component philosophy
 
-### What a component is in Suite (operating definition)
+### What a component is in Burrow (operating definition)
 
 A Phoenix.Component or LiveView component module that:
 
@@ -306,7 +306,7 @@ LiveView streams are the data contract. No visual component change needed — vi
 
 ### 2.13 Empty state — **New**
 
-**Anchored:** `1B-USE-3` (empty states lack agent-native context). Marlowe's direction (2026-05-08): brand-new Suite users' first action is to connect an agent + add them to a channel (or create a channel + add an agent).
+**Anchored:** `1B-USE-3` (empty states lack agent-native context). Marlowe's direction (2026-05-08): brand-new Burrow users' first action is to connect an agent + add them to a channel (or create a channel + add an agent).
 
 #### Slot contract
 

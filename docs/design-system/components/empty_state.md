@@ -211,7 +211,7 @@ CSS rules land in `app.css` (proposed):
 ```heex
 <.empty_state variant={:conversational}>
   <:system_message>— no spaces yet —</:system_message>
-  <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
+  <:body>Welcome to Burrow. To get started, create a space or connect your agent.</:body>
   <:chips label="+ Create a space" event="new_channel_open" />
   <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
 </.empty_state>
@@ -302,7 +302,7 @@ Existing inline pattern (e.g. `chat_live.html.heex:54-55`):
 ```heex
 <.empty_state variant={:conversational}>
   <:system_message>— no spaces yet —</:system_message>
-  <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
+  <:body>Welcome to Burrow. To get started, create a space or connect your agent.</:body>
   <:chips label="+ Create a space" event="new_channel_open" />
   <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
 </.empty_state>

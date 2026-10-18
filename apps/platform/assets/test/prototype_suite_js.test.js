@@ -73,6 +73,17 @@ describe("suite.js start-up", () => {
     expect(suite.state.get("count")).toBe(7)
   })
 
+  it("binds window.burrow as the same object as window.suite (task 01a14b9e-50a4 stage 1)", async () => {
+    const { suite, frame, fromParent } = boot()
+    expect(frame.burrow).toBeDefined()
+    expect(frame.burrow === frame.suite).toBe(true)
+
+    fromParent(snapshot(1, { n: 2 }))
+    await expect(frame.burrow.ready).resolves.toBe(suite)
+    expect(frame.burrow.state.get("n")).toBe(2)
+    expect(frame.suite.state.get("n")).toBe(2)
+  })
+
   it("ignores messages from any source other than the parent", () => {
     const { suite, frame } = boot()
     frame.dispatch("message", { source: fakeTarget(), data: snapshot(1, { count: 99 }) })

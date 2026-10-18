@@ -14,7 +14,7 @@ defmodule Platform.Federation.PrototypeTools do
   sandbox boundary is stated in `description`.
   """
 
-  @boundary "Bundles are served at /proto/<id>/<version>/ on this install, only to members of the prototype's org (anyone else gets 404), inside a sandbox: no allow-same-origin, so the document has an opaque origin and cannot read Suite cookies, the Suite page or the Suite API; connect-src 'none' (no fetch/XHR/WebSocket); form-action 'none'; scripts, styles, images and fonts load only from the bundle's own files (plus inline and data:). Script can still navigate its own frame to an outside URL, so this is not exfiltration-proof. Viewers get a short-lived grant URL that works as a bearer link to that one version."
+  @boundary "Bundles are served at /proto/<id>/<version>/ on this install, only to members of the prototype's org (anyone else gets 404), inside a sandbox: no allow-same-origin, so the document has an opaque origin and cannot read Burrow cookies, the Burrow page or the Burrow API; connect-src 'none' (no fetch/XHR/WebSocket); form-action 'none'; scripts, styles, images and fonts load only from the bundle's own files (plus inline and data:). Script can still navigate its own frame to an outside URL, so this is not exfiltration-proof. Viewers get a short-lived grant URL that works as a bearer link to that one version."
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -71,7 +71,7 @@ defmodule Platform.Federation.PrototypeTools do
         limitations:
           "Refused with a code and nothing written when: publishing is off for the install (prototypes_disabled), the install policy does not admit you (publish_not_allowed), more files than the cap (too_many_files), uncompressed size over the cap including a zip whose real size exceeds what it declares (bundle_too_large), a path that is absolute, has ../ or ./ segments, a backslash, NUL, ':', '?' or '#' (invalid_path), a symlink zip entry (symlink_entry), ZIP64/encrypted/non-deflate zips (unsupported_zip), or no index.html/entry_path (missing_entry). A tenant agent may only publish into its own org.",
         when_to_use:
-          "To share a clickable prototype with an org inside Suite instead of on a public tunnel."
+          "To share a clickable prototype with an org inside Burrow instead of on a public tunnel."
       },
       %{
         name: "prototype_versions",

@@ -1,9 +1,9 @@
 /**
  * AppBadge — mirrors the unread-inbox count onto the two markers a browser
- * will actually show the user when Suite is not the focused window
+ * will actually show the user when Burrow is not the focused window
  * (task 019ffb7b stage 6).
  *
- * Two surfaces, because no single one covers both ways Suite is run:
+ * Two surfaces, because no single one covers both ways Burrow is run:
  *
  *   1. Installed window (docked or not) — `navigator.setAppBadge(count)`
  *      paints the count on the app icon in the Dock / taskbar; zero calls

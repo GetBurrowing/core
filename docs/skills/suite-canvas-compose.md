@@ -1,6 +1,6 @@
-# Suite Canvas Compose
+# Burrow Canvas Compose
 
-Compose, update, and inspect Startup Suite canvases — the shared, space-scoped, live collaboration surface. Use this skill any time you need to present structured, interactive, or visual content inside a Suite chat space instead of (or alongside) plain messages.
+Compose, update, and inspect Burrow canvases — the shared, space-scoped, live collaboration surface. Use this skill any time you need to present structured, interactive, or visual content inside a Burrow chat space instead of (or alongside) plain messages.
 
 ## When to use a canvas
 

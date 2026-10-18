@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Poll a local Suite Phoenix dev server until /dev/login responds.
+# Poll a local Burrow Phoenix dev server until /dev/login responds.
 #
 # Usage: wait-for-server.sh <port>
 # Exits 0 on success, 1 on timeout. Up to 60 s, polling every 2 s.

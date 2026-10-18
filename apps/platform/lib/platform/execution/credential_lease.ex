@@ -197,7 +197,7 @@ defmodule Platform.Execution.CredentialLease do
       Keyword.get(opts, :author_name) ||
         Keyword.get(config, :author_name) ||
         System.get_env("GIT_AUTHOR_NAME") ||
-        "Suite Runner"
+        "Burrow Runner"
 
     author_email =
       Keyword.get(opts, :author_email) ||

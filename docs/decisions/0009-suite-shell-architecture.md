@@ -1,4 +1,4 @@
-# ADR 0009: Suite Shell Architecture
+# ADR 0009: Burrow Shell Architecture
 
 **Status:** Accepted  
 **Date:** 2026-03-14  
@@ -28,7 +28,7 @@ Build a **persistent navigation shell** as a Phoenix LiveView root layout that w
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  ⚡ Suite          [status indicators]    [user]    │  ← top bar
+│  ⚡ Burrow         [status indicators]    [user]    │  ← top bar
 ├──────┬──────────────────────────────────────────────┤
 │      │                                              │
 │  Nav │   Surface (Chat / Control Center / ...)      │

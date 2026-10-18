@@ -1,6 +1,6 @@
 # agent-host
 
-Runs a Suite install's native agents (core task 01a10322). TypeScript on bun.
+Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
 
 - It dials **out** to core at `${BURROW_CORE_URL}/agent-host/websocket` and
   presents `AGENT_HOST_TOKEN` in the `x-agent-host-token` header. Core pushes
@@ -18,13 +18,13 @@ Runs a Suite install's native agents (core task 01a10322). TypeScript on bun.
   agent with sudo can read every other agent's home, env file and tokens.
 - This daemon never types into an agent's pane and never handles a Claude
   login code. It relays what suite-cli's status file reports: that a login is
-  needed. Suite does not offer a Claude subscription login (it would need the
+  needed. Burrow does not offer a Claude subscription login (it would need the
   person's code relayed into the CLI, which Anthropic's terms forbid); a
-  native agent logs in with an Anthropic API key a manager saves in Suite,
+  native agent logs in with an Anthropic API key a manager saves in Burrow,
   which reaches ONLY that agent's 0600 env file as `ANTHROPIC_API_KEY`
   (stage 6). suite-cli answers Claude Code's "use this API key?" prompt for
   that key only.
-- `agent.pane` returns the agent's recent pane text for Suite's read-only
+- `agent.pane` returns the agent's recent pane text for Burrow's read-only
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
 

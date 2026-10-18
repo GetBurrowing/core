@@ -274,7 +274,7 @@ def tunnel(ctx, token):
                 "name": host,
                 "content": target,
                 "proxied": True,
-                "comment": f"Suite install {manifest['install']['name']} (setup tunnel)",
+                "comment": f"Burrow install {manifest['install']['name']} (setup tunnel)",
             },
         )
         dns[host] = "created"

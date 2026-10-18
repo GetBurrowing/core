@@ -32,7 +32,7 @@ defmodule Platform.Design.PreplanStep do
   `0046-design-and-architecture-phases-in-planning.md § Per-step outcome`
   defines `complete` as "dispatch returned AND output was
   captured". At fire time only the first half has happened: the deployed
-  designer is a Suite agent, reached through `dispatch_native/4`, so its output
+  designer is a Burrow agent, reached through `dispatch_native/4`, so its output
   arrives minutes later as an attached canvas. Recording `complete` on a
   successful dispatch would make every subsequent timeout indistinguishable
   from a success — the precise conflation this ADR exists to close.
@@ -77,7 +77,7 @@ defmodule Platform.Design.PreplanStep do
   minutes, which records `failed`. `decline/3` is the missing exit.
 
   Stage 2 exposed it to designers as the `task_design_decline` MCP tool — a
-  plain Elixir function is not an exit for a runtime that reaches Suite only
+  plain Elixir function is not an exit for a runtime that reaches Burrow only
   through `Platform.Federation.ToolSurface` — and threaded the caller identity
   in as `:declined_by` so the two designer exits attribute their author
   identically.

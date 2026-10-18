@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
   @moduledoc """
-  The brand-new-user "Welcome to Suite" empty state vs archived channels
+  The brand-new-user "Welcome to Burrow" empty state vs archived channels
   (task 019f4eaa).
 
   Marlowe, walking the review: after archiving her orgs, the chat sidebar showed
@@ -26,7 +26,7 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
-  @welcome "Welcome to Suite."
+  @welcome "Welcome to Burrow."
 
   defp admin_conn(conn) do
     n = System.unique_integer([:positive])

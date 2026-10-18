@@ -7,7 +7,7 @@ defmodule Platform.Security.LlmEnrichment do
   `FindingFiler` insert path. Each scanner emits a raw finding with
   a static title + description; this module optionally rewrites the
   finding with an LLM-refined summary, priority, and remediation
-  checklist before the finding lands as a Suite task.
+  checklist before the finding lands as a Burrow task.
 
   ## Progressive-enhancement contract
 
@@ -309,7 +309,7 @@ defmodule Platform.Security.LlmEnrichment do
       })
 
     # NOTE (case-3 review fix, 2026-07): title now carries the LLM's
-    # `summary` verbatim so the FindingFiler-emitted Suite task lands
+    # `summary` verbatim so the FindingFiler-emitted Burrow task lands
     # with a human-legible headline instead of the scanner's static
     # "CVE X in Y (severity: Z)" boilerplate. `fingerprint`,
     # `project_id`, and `metadata` (beyond the additive

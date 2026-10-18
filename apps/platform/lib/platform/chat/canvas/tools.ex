@@ -70,7 +70,7 @@ defmodule Platform.Chat.Canvas.Tools do
   # `phase_assignees` map. It says "an agent assigned to" rather than naming the
   # column, because the reader of this sentence is a model deciding whether to
   # paste a link, not a maintainer.
-  @sharing_boundary "Returned URLs are canonical Suite links, never share tokens. A link opens only " <>
+  @sharing_boundary "Returned URLs are canonical Burrow links, never share tokens. A link opens only " <>
                       "for a viewer who already holds a grant on the canvas: a participant of its " <>
                       "space, an AGENT assigned to a LIVE task the canvas is attached to, a member " <>
                       "of the org that owns such a task, or a member of the org that owns the space " <>

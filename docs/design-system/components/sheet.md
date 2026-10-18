@@ -309,7 +309,7 @@ CSS rules land in `app.css` (proposed addition to the `05-app-css-diff.md`):
   placement={:left}
   on_close="close_drawer"
 >
-  <:title>Suite</:title>
+  <:title>Burrow</:title>
   <%!-- channels list, DM list, settings link, etc. --%>
 </.sheet>
 ```

@@ -457,7 +457,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         <% else %>
           <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content/80">
             <span class="hero-lock-closed size-4 shrink-0 text-neutral" aria-hidden="true"></span>
-            Sealed: no network, no Suite access
+            Sealed: no network, no Burrow access
           </p>
         <% end %>
       </div>

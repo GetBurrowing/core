@@ -82,7 +82,7 @@ def declared(manifest):
     for ref, where in customer_refs(manifest).items():
         out[ref] = Input(ref, True, f"customer secret named by {where}")
     if manifest["auth"]["mode"] == "bundled-pocket-id":
-        out[ADMIN_EMAIL] = Input(ADMIN_EMAIL, False, "email of the first Suite admin")
+        out[ADMIN_EMAIL] = Input(ADMIN_EMAIL, False, "email of the first Burrow admin")
         out[ADMIN_USERNAME] = Input(
             ADMIN_USERNAME,
             False,

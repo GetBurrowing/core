@@ -5,9 +5,9 @@ Guest join links land on a distinct public hostname, supplied entirely by the
 `MEETING_GUEST_HOST` is unset or blank, guest-link generation is disabled rather than
 falling back to a guessed hostname. Requirements:
 
-- **DNS**: `<your-guest-host>` resolves to your Suite server's public IP
+- **DNS**: `<your-guest-host>` resolves to your Burrow server's public IP
 - **TLS**: your certificate covers `<your-guest-host>`
-- **Reverse proxy**: routes `<your-guest-host>` to Suite's port 4000 WITHOUT auth middleware —
+- **Reverse proxy**: routes `<your-guest-host>` to Burrow's port 4000 WITHOUT auth middleware —
   guest ingress authenticates via HMAC-signed invite tokens, not OIDC/session
 
 The exact reverse-proxy config depends on your platform (Traefik, nginx, Caddy, HAProxy).

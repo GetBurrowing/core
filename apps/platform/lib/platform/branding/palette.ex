@@ -26,7 +26,7 @@ defmodule Platform.Branding.Palette do
       cyan is never text.
     * `--color-primary-content` / `--color-accent-content` are chosen, not
       stepped: black or white, whichever reads better on the fill.
-    * `--color-base-content` is one of the two body-text colours Suite
+    * `--color-base-content` is one of the two body-text colours Burrow
       actually paints, `body_text/0`: today's light `--color-base-content`
       or today's dark one, whichever reads better on the surface.
     * `--focus-ring` is the theme-split slot from task 01a0833d (WCAG 2.2
@@ -54,11 +54,11 @@ defmodule Platform.Branding.Palette do
   in stage 2 decides what a fully-nil mode means; the honest reading is "emit
   nothing and let app.css stand".
 
-  ## Body text is Suite's own body text (decision, 2026-09-26)
+  ## Body text is Burrow's own body text (decision, 2026-09-26)
 
   Decided by the task owner, Brosnan, at stage 5 of task
   01a0dbee-f598-7001-b450-7890103f44c4: body text is chosen from the colours
-  Suite ACTUALLY uses for body text, never from an arbitrary colour no Suite
+  Burrow ACTUALLY uses for body text, never from an arbitrary colour no Burrow
   theme paints. The stored palette picks surface, action and accent only;
   body text is derived, and it should be the brand's text colour. So the two
   candidates are today's light and dark `--color-base-content`, read from
@@ -340,7 +340,7 @@ defmodule Platform.Branding.Palette do
   # cannot block; the check exists so a regression here would.
   defp fill_content_on(fill), do: better_of(@black, @white, fill)
 
-  # Body text on the surface: Suite's own light or dark base-content. Never
+  # Body text on the surface: Burrow's own light or dark base-content. Never
   # pure white; see the moduledoc for why that is the whole reason a block can
   # happen, and for the decision that fixed these two candidates.
   defp body_content_on(surface), do: better_of(@body_text.light, @body_text.dark, surface)

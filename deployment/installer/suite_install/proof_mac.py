@@ -1,4 +1,4 @@
-"""``suite-install proof <command>``: data-plane proof for a Suite install on a Mac.
+"""``suite-install proof <command>``: data-plane proof for a Burrow install on a Mac.
 
 Task 01a0d6ab stage 5. Run ON the Mac, against an install made by
 ``suite-install setup``. Every command prints ``key value`` lines and ends with

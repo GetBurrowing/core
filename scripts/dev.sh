@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Suite dev server with the env expected by local integrations.
+# Start the Burrow dev server with the env expected by local integrations.
 #
 # Usage:
 #   scripts/dev.sh                 # bind to localhost only

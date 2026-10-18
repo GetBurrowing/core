@@ -24,7 +24,7 @@
   width: var(--suite-sidebar-width, 224px);
 }
 
-/* Suite design system — Public Sans */
+/* Burrow design system — Public Sans */
 @import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap");
 
 /* See the Tailwind configuration guide for advanced usage
@@ -1061,7 +1061,7 @@ pre .makeup .sa { color: #79c0ff; }        /* string affix */
 .card[draggable="true"]:active {
   cursor: grabbing;
 }
-/* ── Suite design system — Custom utilities ──────────────────────── */
+/* ── Burrow design system — Custom utilities ──────────────────────── */
 
 /* Typography — re-skin Phase 1 (task 019f4f76).
    The previous `* { … !important }` rule force-locked Public Sans onto every
@@ -2016,7 +2016,7 @@ body, .font-suite {
    in-flow flex sibling; task 01a0419a v3 promoted it to all widths on
    Rowan's 2026-08-27 instruction, per canvas revision 37. There is no
    in-flow chip at any width now.
-   It is still NOT a floating action button in the Suite sense: Suite's FAB
+   It is still NOT a floating action button in the Burrow sense: Burrow's FAB
    offset (safe-area + 1.5rem + --bottom-nav-height, action_patterns.ex:232)
    lands in the same band as `.compose-pill-send`, so a corner FAB would put
    two cyan circles in one phone corner, one meaning send and one meaning
@@ -2529,7 +2529,7 @@ body, .font-suite {
   animation: chat-jump-chip-in 150ms cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* ── Suite design system — Pill-shaped Chat Input Bar ─────────────── */
+/* ── Burrow design system — Pill-shaped Chat Input Bar ─────────────── */
 .compose-input-area {
   padding: 12px 20px 16px;
 }
@@ -5349,7 +5349,7 @@ body, .font-suite {
    look borderline was measured at `env(safe-area-inset-bottom): 0`, which is
    what headless Chromium reports; at a real iPhone's 34px home indicator the
    strip tile collapses to 80x45 and the name is hidden at 120px exactly as
-   it was at 140px. Suite mobile is an installed PWA, so 34px is the ordinary
+   it was at 140px. Burrow mobile is an installed PWA, so 34px is the ordinary
    case. The strip's actual defect is the footer's fixed `h-[96px]` being
    CONSUMED by safe-area padding instead of extended by it; that is its own
    ticket and is deliberately not fixed here. */

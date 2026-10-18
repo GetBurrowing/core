@@ -19,7 +19,7 @@ defmodule Platform.SocialFixtures do
   end
 
   @doc """
-  The Suite brand's token colours (primary, secondary, accent, info, both
+  The Burrow brand's token colours (primary, secondary, accent, info, both
   themes), read from core's app.css, upcased. A customer's clip must carry
   none of them (design canvas 01a140fc-14a9, node subject).
   """

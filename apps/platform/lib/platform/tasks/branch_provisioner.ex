@@ -1,25 +1,25 @@
 defmodule Platform.Tasks.BranchProvisioner do
   @moduledoc """
-  Create the task branch Suite's deploy gates already expect to exist.
+  Create the task branch Burrow's deploy gates already expect to exist.
 
   `DeployStageBuilder.repo_validation/3` writes
   `StackDeployer.member_branch_for/1` onto every `pr_merged` gate's
   `evaluation_payload["branch"]`, and `MergeControl.build/1` asks GitHub
   about exactly that string. So the branch name is DERIVED from the task
-  id, and an executor that pushed to an invented name leaves Suite
+  id, and an executor that pushed to an invented name leaves Burrow
   looking for a branch nobody created — the gate reads "no open PR" while
-  the work sits on a branch Suite has never heard of.
+  the work sits on a branch Burrow has never heard of.
 
-  This module closes that gap from the Suite side: it creates
+  This module closes that gap from the Burrow side: it creates
   `task/<uuid>` up front, off the repository's default branch, so the
   name the gate watches exists before an executor ever runs.
 
   ## Derive, never report
 
   There is deliberately NO path where an executor reports the branch it
-  pushed and Suite overwrites the gate. That sounds like making reality
+  pushed and Burrow overwrites the gate. That sounds like making reality
   authoritative; it is the dangerous option — a confused agent that
-  pushed to the wrong branch would get Suite to merge the wrong branch.
+  pushed to the wrong branch would get Burrow to merge the wrong branch.
   Deriving from the task id is the safer design. This module ENFORCES
   that derivation, it does not replace it: the name comes from
   `StackDeployer.member_branch_for/1` and nothing else, so no fourth

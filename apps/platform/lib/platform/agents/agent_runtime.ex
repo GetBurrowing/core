@@ -3,7 +3,7 @@ defmodule Platform.Agents.AgentRuntime do
   Schema for the `agent_runtimes` table.
 
   Represents an external agent runtime (e.g. an OpenClaw instance) that
-  connects to the Suite collaboration plane via WebSocket.
+  connects to the Burrow collaboration plane via WebSocket.
   """
   use Ecto.Schema
   import Ecto.Changeset

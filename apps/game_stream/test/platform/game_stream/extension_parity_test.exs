@@ -264,8 +264,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"experiment_promote", "experiments"},
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
-      {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"},
+      {"burrow_run", "code_mode"},
+      {"burrow_run_describe", "code_mode"},
       {"prototype_publish", "prototype"},
       {"prototype_versions", "prototype"},
       {"prototype_rollback", "prototype"},
@@ -356,12 +356,22 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # cites one (the image kind's `src` text moves the kinds tool-schemas
     # digests; the summaries digests do not move). Measured on moon at the
     # stage's branch.
-    @main_tool_digest_off "2b6e1f033939cd6d0941e3d8c81de033e6c3bc4ce42b141ea3e484de5c6b7e92"
-    @main_tool_digest_on "c8c791c0c1b3e014e2c96b89b49fabb9257a745ec4d010223dd43a935d691a77"
-    @main_kinds_summaries_digest_off "c48e9187b0e70ff459441990471e3cd10f836d971c9e17d2676483807ce56c13"
-    @main_kinds_summaries_digest_on "d83fa1bfdaa3e2e3ceeb6064d253c0702675d24bafef4f59184565dc944d5284"
-    @main_kinds_tool_schemas_digest_off "aa8c8af136a38ba16a33a036b005e5b3fd5f639ed9c0ce6125c9a7727fd85348"
-    @main_kinds_tool_schemas_digest_on "dab0878cb64c677ec9ed5e5837c897f74b4e5d85a1992da6eace2db1772bec3b"
+    # Re-pinned by task 01a14b9e-50a4 (Burrow rename A2, deploy fix-forward):
+    # stage 1 renamed suite_run / suite_run_describe to burrow_run /
+    # burrow_run_describe and stages 1-2 changed "Suite" to "Burrow" in tool
+    # descriptions, canvas kind descriptions and the embed kind's schema text,
+    # so all six digests move. The metrics catalog digest is unchanged. All six
+    # measured on moon (elixir:1.20.4-otp-28-slim, CI's image) at the merge of
+    # main into the branch; the kinds-summaries off value equals what main CI
+    # printed for the unpinned branch. These are NOT equal to
+    # apps/platform/test/platform/extensions_test.exs's off pins, and were not
+    # on main either (c48e9187 here vs 26c07041 there).
+    @main_tool_digest_off "ac7c560b1e0681626893e09ca3ce5a2d93687b965b2ff2d04fcae2e237ec679d"
+    @main_tool_digest_on "85382db3a7667c1b9c3eb50cd95b4081952d97fc448a105ad369afd0d46c2f0b"
+    @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
+    @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
+    @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
+    @main_kinds_tool_schemas_digest_on "d5525de283443869efe51122adc1649e78e95da27bab2b2adc1deee59855878d"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access play)

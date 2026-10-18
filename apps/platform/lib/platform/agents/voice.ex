@@ -1,6 +1,6 @@
 defmodule Platform.Agents.Voice do
   @moduledoc """
-  What Suite knows about an agent's voice, and how that reaches the runtime.
+  What Burrow knows about an agent's voice, and how that reaches the runtime.
 
   Task 01a03f4f. Two pieces of per-agent state, plus the resolution that puts
   both into the `meeting_join` payload a voice worker consumes.
@@ -84,7 +84,7 @@ defmodule Platform.Agents.Voice do
 
   A closed list on purpose: a typo'd provider should fail the changeset at
   write time rather than reach the worker and fail there, where nobody in
-  Suite would see it.
+  Burrow would see it.
   """
   @spec known_providers() :: [String.t()]
   def known_providers, do: @known_providers

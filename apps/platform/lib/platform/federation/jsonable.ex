@@ -2,7 +2,7 @@ defmodule Platform.Federation.Jsonable do
   @moduledoc """
   The JSON-safe projection of a tool handler's data and the error envelope a
   refusal reaches a caller in. Extracted from `PlatformWeb.MCPController`
-  (task 01a114a8 stage 2) so that `suite_run`'s inner calls
+  (task 01a114a8 stage 2) so that `burrow_run`'s inner calls
   (`Platform.CodeMode.Bindings`) hand a script exactly what `/mcp` hands a
   client. The reasoning behind each clause is in `MCPController`'s comments
   above `error_content/1`.

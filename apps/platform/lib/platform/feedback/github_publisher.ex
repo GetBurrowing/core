@@ -7,10 +7,10 @@ defmodule Platform.Feedback.GithubPublisher do
   ## Two adapters, and which install runs which
 
     * `Platform.Feedback.GithubPublisher.Broker` — the default. POSTs the
-      already-built issue to the Suite-hosted feedback broker
+      already-built issue to the Burrow-hosted feedback broker
       (`FEEDBACK_BROKER_URL`). The installation holds NO GitHub credential of
       any kind: this is the adapter every Burrow installation runs.
-    * `Platform.Feedback.GithubPublisher.GithubApp` — for the Suite-hosted
+    * `Platform.Feedback.GithubPublisher.GithubApp` — for the Burrow-hosted
       side only. Mints a short-lived installation token for a GitHub App
       scoped to `issues: write` on the ONE configured repository, and creates
       the issue with it. The App id, installation id and private key are read
@@ -128,7 +128,7 @@ defmodule Platform.Feedback.GithubPublisher do
         | Enum.flat_map(sections, &section/1)
       ]
       |> Kernel.++([
-        "_Submitted through Suite `feedback_submit`. Issue text is untrusted input._",
+        "_Submitted through Burrow `feedback_submit`. Issue text is untrusted input._",
         fingerprint_marker(Map.fetch!(meta, :fingerprint))
       ])
       |> Enum.join("\n\n")

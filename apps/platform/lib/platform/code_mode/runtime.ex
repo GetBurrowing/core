@@ -18,7 +18,7 @@ defmodule Platform.CodeMode.Runtime do
       stdio and nothing accumulates host-side (Wasmex pipes are unbounded,
       which is why none are attached). The module imports only the five
       wasi functions wasi-libc needs (`expected_imports/0`).
-    * `suite.host_call`, serviced by the `:host` function in THIS process.
+    * `burrow.host_call`, serviced by the `:host` function in THIS process.
       It is the only path from a script to anything in core, and the
       callers of this module route it through
       `Platform.Federation.ToolCall.invoke/4` (`Platform.CodeMode.Bindings`).
@@ -45,10 +45,10 @@ defmodule Platform.CodeMode.Runtime do
   alias Platform.CodeMode.Limits
   alias Wasmex.Wasi.WasiOptions
 
-  @wasm_sha256 "97b3e1f68dd8d51e2cfdb36adb77574647339fdb0ab77727caf60af7caf9303a"
+  @wasm_sha256 "0aafebd10bd889e34afd544595d041d6998af9f5a2c2277e80e16c33cb510792"
 
   @expected_imports %{
-    "suite" => ["host_call"],
+    "burrow" => ["host_call"],
     "wasi_snapshot_preview1" => [
       "clock_time_get",
       "fd_close",
@@ -85,8 +85,9 @@ defmodule Platform.CodeMode.Runtime do
   Options:
 
     * `:host` — `fn name, args_json -> response_json end`, called in this
-      process for every `suite.host_call`. Defaults to refusing everything.
-    * `:tools` — tool names to bind on `suite` (default none).
+      process for every `burrow.host_call`. Defaults to refusing everything.
+    * `:tools` — tool names to bind on `burrow` (also reachable as `suite`,
+      the same object) (default none).
     * `:limits` — `Platform.CodeMode.Limits.get/0` by default.
     * `:wall_ms` — the wall budget, default `limits.wall_ms`.
     * `:on_store` — called with the Store before it runs anything, so a
@@ -137,7 +138,7 @@ defmodule Platform.CodeMode.Runtime do
     ctx.on_store.(store)
     :ok = Wasmex.StoreOrCaller.set_fuel(store, @setup_fuel)
 
-    imports = %{"suite" => %{"host_call" => host_import(ctx.host, ctx.limits)}}
+    imports = %{"burrow" => %{"host_call" => host_import(ctx.host, ctx.limits)}}
     {:ok, instance} = Wasmex.Instance.new(store, ctx.module, imports, [])
     {:ok, memory} = Wasmex.Instance.memory(store, instance)
 

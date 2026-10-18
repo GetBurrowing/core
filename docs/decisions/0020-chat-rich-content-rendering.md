@@ -21,7 +21,7 @@ several problems:
 2. **Images cannot be sent by agents.** When an agent generates a diagram,
    screenshot, or chart (e.g., a Mermaid-rendered PNG), there is no path to
    deliver it into the chat. The `message` tool on the OpenClaw side tried
-   to send an image via `filePath`/`media` parameters, but the Startup Suite
+   to send an image via `filePath`/`media` parameters, but the Burrow
    plugin has no image upload or inline media support. The only attachment
    path is user-initiated browser file uploads via LiveUpload.
 

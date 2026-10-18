@@ -54,7 +54,7 @@ interval, request expiry, retention) are reliability and policy config.
 - **Diagnostic report**: the artefact support reads: health, versions, error logs and
   redacted config. It is never called a "bundle" in this ADR, so the word "bundle" always means
   a capability bundle.
-- **Vendor**: the party that publishes Suite and offers support. **Vendor install**: the
+- **Vendor**: the party that publishes Burrow and offers support. **Vendor install**: the
   install its support staff and support agent work from. **Customer install**: the install
   being supported.
 - **Vendor-authored text**: any text whose content the vendor controls: a support agent's
@@ -429,7 +429,7 @@ and it can tell the customer to log in again. No support tool, remediation actio
 request or diagnostic field carries a login URL, a login code or a token.
 
 The paste-back relay in 01a10322's approved plan v2, stage 6, which passes a Claude login code
-typed into Suite to the agent's pane through suite-cli or agent-host, is incompatible with this
+typed into Burrow to the agent's pane through suite-cli or agent-host, is incompatible with this
 ADR and is being resolved in 01a10322 (decision pending).
 
 #### C.5 SSH keys in cloud-init

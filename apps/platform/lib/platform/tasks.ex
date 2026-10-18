@@ -2507,7 +2507,7 @@ defmodule Platform.Tasks do
   change: `deploy_config` is already `field(:deploy_config, :map, default: %{})`.
 
   The sole-entry inference addresses the v1 gap: real-world projects
-  (including the Suite dogfood project) configure the enumerated
+  (including the Burrow dogfood project) configure the enumerated
   `deploy_targets` list rather than the explicit `default_deploy_target`
   key. When the list has exactly one entry there is no ambiguity to
   resolve, so inheritance is safe. Multi-entry lists still fall through to
@@ -7120,7 +7120,7 @@ defmodule Platform.Tasks do
 
   Rationale (task 019f6380): the `require_approved_plan_for/3` gate
   exists to prevent agents from marking their own work complete
-  prematurely — an observed pathology in Suite's predecessor. That
+  prematurely — an observed pathology in Burrow's predecessor. That
   protection is meaningless when there's no agent in the loop and a
   human sponsor is confirming completion; forcing a plan in that case
   wastes tokens on a process the sponsor already knows is done.

@@ -34,7 +34,7 @@ defmodule Platform.Access.ToolPermissions do
               {"prompts.read", ~w(prompt_template_list)},
               {"prototypes.publish", ~w(prototype_publish prototype_rollback)},
               {"prototypes.read", ~w(prototype_versions)},
-              {"skills.read", ~w(skill_get skill_list suite_run suite_run_describe)},
+              {"skills.read", ~w(skill_get skill_list burrow_run burrow_run_describe)},
               {"skills.write", ~w(skill_upsert)},
               {"tasks.manage", ~w(plan_approve plan_reject)},
               {"tasks.read",
@@ -52,7 +52,7 @@ defmodule Platform.Access.ToolPermissions do
     "attachment" => ~w(attachment_upload_inline attachment_get_inline attachment_upload_start),
     "canvas" =>
       ~w(canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_restore),
-    "code_mode" => ~w(suite_run suite_run_describe),
+    "code_mode" => ~w(burrow_run burrow_run_describe),
     "context_read" =>
       ~w(space_get_context space_search_messages space_get_messages canvas_list canvas_get principal_search),
     "experiments" =>

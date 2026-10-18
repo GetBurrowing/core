@@ -9,6 +9,7 @@ defmodule Platform.Federation.ToolAuthorization do
   """
 
   alias Platform.Access.{Scope, ToolPermissions, Tools}
+  alias Platform.Federation.ToolAliases
   alias Platform.Federation.ToolSurface
 
   @doc """
@@ -106,10 +107,21 @@ defmodule Platform.Federation.ToolAuthorization do
     end
   end
 
+  # A hidden legacy alias (`Platform.Federation.ToolAliases`) is worded by
+  # its canonical name's reason: it needs exactly that grant, so a refused
+  # `suite_run` reads as the permission miss a refused `burrow_run` reads as,
+  # not as an unknown name (task 01a14b9e-50a4 stage 1). Wording only;
+  # `deny_reason/1` and `authorize/2` are unchanged. The sent name is kept.
   defp deny_message_for_reason(name) do
-    case deny_reason(name) do
+    {reason, permission_name} =
+      case ToolAliases.resolve(name) do
+        {:alias, canonical} -> {deny_reason(canonical), canonical}
+        :canonical -> {deny_reason(name), name}
+      end
+
+    case reason do
       :forbidden ->
-        permission = ToolPermissions.for_tool(name) || "undeclared"
+        permission = ToolPermissions.for_tool(permission_name) || "undeclared"
 
         "tool '#{name}' requires permission '#{permission}', which this agent does not hold or is capped at its owner"
 

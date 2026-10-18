@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.GithubPublisher.GithubApp do
   @moduledoc """
-  The Suite-hosted publisher (task 01a11ec3 stage 2): a least-privilege
+  The Burrow-hosted publisher (task 01a11ec3 stage 2): a least-privilege
   GitHub App. Never run this on a Burrow installation — those use
   `Platform.Feedback.GithubPublisher.Broker` and hold no GitHub credential.
 

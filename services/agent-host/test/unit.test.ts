@@ -454,7 +454,7 @@ describe("recent output (pane.ts)", () => {
   });
 });
 
-describe("no path from Suite into an agent's pane", () => {
+describe("no path from Burrow into an agent's pane", () => {
   const src = resolve(import.meta.dir, "../src");
   const files = readdirSync(src).filter((f) => f.endsWith(".ts"));
 
@@ -502,7 +502,7 @@ describe("the API key reaches only its own agent's env file", () => {
   });
 });
 
-describe("Suite's conventions load whatever the owner's CLAUDE.md says (stage 7 round 2, case 7008)", () => {
+describe("Burrow's conventions load whatever the owner's CLAUDE.md says (stage 7 round 2, case 7008)", () => {
   const user = { name: userName(A), uid: 1000, gid: 1000, home: `/home/${userName(A)}`, work: `/home/${userName(A)}/work`, runDir: runDir(A) };
 
   test("the user memory file is ~/.claude/CLAUDE.md: outside the work dir the owner's files are written into", () => {

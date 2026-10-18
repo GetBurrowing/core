@@ -49,7 +49,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentEvents do
   # ── Login (stage 6): an Anthropic API key, and nothing that takes a code ──
   #
   # There is deliberately no event here, or anywhere on this page, that
-  # accepts a Claude login code: relaying one to the agent would be Suite
+  # accepts a Claude login code: relaying one to the agent would be Burrow
   # intermediating a Claude login. See `Platform.Agents.NativeLogin`.
 
   def handle("native_api_key_save", %{"agent_id" => agent_id} = params, socket)

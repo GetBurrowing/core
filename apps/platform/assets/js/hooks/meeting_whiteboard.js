@@ -408,7 +408,7 @@ const MeetingWhiteboard = {
   //
   // TWO artefacts, always both:
   //
-  //   1. a rendered PNG — what a reader sees in the Suite canvas;
+  //   1. a rendered PNG — what a reader sees in the Burrow canvas;
   //   2. the authoritative `.excalidraw` scene JSON — what makes the board
   //      reopenable. Shipping only the PNG turns every whiteboard into a
   //      picture of a whiteboard the moment the meeting ends.

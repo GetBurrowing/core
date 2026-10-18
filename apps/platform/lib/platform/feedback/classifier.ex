@@ -13,7 +13,7 @@ defmodule Platform.Feedback.Classifier do
   ## The verdicts
 
   Exactly #{inspect(~w(accept_bug accept_positive_change duplicate insufficient_evidence irrelevant_support malicious_control_seeking))}.
-  Only the two `accept_*` verdicts can lead to a Suite task.
+  Only the two `accept_*` verdicts can lead to a Burrow task.
 
   ## Deterministic prescreen, before any model sees the text
 
@@ -130,7 +130,7 @@ defmodule Platform.Feedback.Classifier do
   @spec verdicts() :: [String.t()]
   def verdicts, do: @verdicts
 
-  @doc "The two verdicts that may lead to a Suite task."
+  @doc "The two verdicts that may lead to a Burrow task."
   @spec accept_verdicts() :: [String.t()]
   def accept_verdicts, do: @accept_verdicts
 

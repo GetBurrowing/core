@@ -331,7 +331,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
 
       # ADR-0046 member 5 stage 4 rewrote this slot: the architect is no
       # longer "additive", it holds a gate. The prefix moved with it.
-      assert system =~ "You are the Architect on the Suite plan-review path (ADR-0044"
+      assert system =~ "You are the Architect on the Burrow plan-review path (ADR-0044"
       assert system =~ "plan_architecture_verdict"
 
       # From the architecture.review_plan.v1 template body, rendered by
@@ -439,7 +439,7 @@ defmodule Platform.Responsibilities.ArchitectureDispatchTest do
       assert is_binary(system),
              "no system turn on the wire — build_prompt/1 never ran (legacy fallback)"
 
-      assert system =~ "You are the Architect on the Suite post-executor drift-audit path"
+      assert system =~ "You are the Architect on the Burrow post-executor drift-audit path"
 
       assert user =~ "A stage just transitioned to `passed`"
       assert user =~ ctx.stage.name

@@ -1,6 +1,6 @@
 """Service registry: the single source of what each manifest knob turns on.
 
-Every service a Suite install can run is declared here ONCE, independent of
+Every service a Burrow install can run is declared here ONCE, independent of
 any render target. An entry says which container the service is, which image
 it runs, the env it receives, the env and ``depends_on`` edges it INJECTS INTO
 OTHER services, the secrets it owns, the postgres init SQL it needs, its

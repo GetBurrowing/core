@@ -6,7 +6,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   ## What the login steps offer, and why there is no paste field
 
   The design canvas (01a10325-8f2d-7001-b858-b92639451ceb, "Login steps")
-  drew a subscription login whose last step the person finishes in Suite.
+  drew a subscription login whose last step the person finishes in Burrow.
   Claude Code's subscription login only finishes when its code is typed back
   into the CLI, and Anthropic's terms forbid a third party relaying that code.
   So the subscription row here says it is **not available yet**, and the way
@@ -93,7 +93,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
               </span>
             </p>
             <p class="mt-0.5 text-sm text-base-content/60">
-              Suite can't log an agent in to a Claude subscription yet.
+              Burrow can't log an agent in to a Claude subscription yet.
             </p>
           </div>
         </li>

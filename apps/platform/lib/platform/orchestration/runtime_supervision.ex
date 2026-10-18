@@ -3,7 +3,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   Persistence and normalization for federated runtime execution events.
 
   This is the first slice of the execution-lease contract from ADR 0028:
-  runtimes can publish normalized events and Suite records durable lease state
+  runtimes can publish normalized events and Burrow records durable lease state
   instead of inferring liveness from chat silence alone.
   """
 

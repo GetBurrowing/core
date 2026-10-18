@@ -21,7 +21,7 @@ defmodule Platform.Tasks.Task do
 
     * `reported_by` — the **reporter**: a free-form string capturing who filed
       the task originally. Historical only. Not a foreign key; the referenced
-      identity may not even be a Suite user. Never used for routing or
+      identity may not even be a Burrow user. Never used for routing or
       authority.
 
   Interchanging these has caused confusion in the past — e.g. treating the

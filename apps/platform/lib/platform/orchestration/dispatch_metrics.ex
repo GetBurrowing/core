@@ -1,7 +1,7 @@
 defmodule Platform.Orchestration.DispatchMetrics do
   @moduledoc """
   Per-dispatch measurements for the code-mode experiment (task 01a114a8
-  stage 1): Suite tool calls, client-reported turns, tokens and tool calls,
+  stage 1): Burrow tool calls, client-reported turns, tokens and tool calls,
   wall time and outcome. Read by the `dispatch_metrics_list` MCP tool
   (`experiments` bundle) and by stage 4's metric kind.
 
@@ -45,7 +45,7 @@ defmodule Platform.Orchestration.DispatchMetrics do
 
   ## What can and cannot be measured
 
-  **Server side (exact per call): Suite MCP tool calls only.** Every call
+  **Server side (exact per call): Burrow MCP tool calls only.** Every call
   through `Platform.Federation.ToolCall.invoke/4` writes a
   `dispatch_tool_calls` row. A call counts toward a dispatch when it has the
   dispatch's runtime_id and task_id, its stage_id is nil or equal, and it
@@ -55,9 +55,12 @@ defmodule Platform.Orchestration.DispatchMetrics do
   share per agent.
 
   `suite_tool_calls` counts model-issued calls (`parent_run_id IS NULL`),
-  `inner_tool_calls` counts calls made from inside a `suite_run` script
+  `inner_tool_calls` counts calls made from inside a `burrow_run` script
   (`parent_run_id NOT NULL`, stage 2), and `suite_run_calls` counts
-  `suite_run` calls.
+  `burrow_run` calls under EITHER name: the ledger records the name the
+  caller sent, and `suite_run` is still accepted as a hidden alias (task
+  01a14b9e-50a4 stage 1). The field keeps its name because experiment
+  results read it.
 
   **Client side (self-reported): local tools (Bash, Read, Grep), model
   turns and tokens never touch core.** They come only from
@@ -94,6 +97,10 @@ defmodule Platform.Orchestration.DispatchMetrics do
   @started_stage_statuses ~w(running passed failed skipped)
   @terminal_stage_statuses ~w(passed failed skipped)
   @unit_sources ~w(ack stage_row lease)
+  # The code-mode run tool's canonical name and its hidden legacy alias
+  # (task 01a14b9e-50a4 stage 1). Counting one name would silently halve the
+  # code-mode experiment's adoption metric while old clients send the other.
+  @run_tool_names ~w(burrow_run suite_run)
 
   @type filters :: %{
           optional(:agent_id) => String.t(),
@@ -569,7 +576,7 @@ defmodule Platform.Orchestration.DispatchMetrics do
         suite_tool_calls: Enum.count(unit_calls, &is_nil(&1.parent_run_id)),
         inner_tool_calls: Enum.count(unit_calls, &(not is_nil(&1.parent_run_id))),
         suite_run_calls:
-          Enum.count(unit_calls, &(is_nil(&1.parent_run_id) and &1.tool == "suite_run")),
+          Enum.count(unit_calls, &(is_nil(&1.parent_run_id) and &1.tool in @run_tool_names)),
         tool_calls_denied: Enum.count(unit_calls, &(&1.status == "denied")),
         tool_calls_error: Enum.count(unit_calls, &(&1.status == "error")),
         client_reports: length(reports),

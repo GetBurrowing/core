@@ -1,4 +1,4 @@
-# Installed by Suite's agent host packaging (core task 01a10322 stage 3).
+# Installed by Burrow's agent host packaging (core task 01a10322 stage 3).
 # Native agents do anything that needs root themselves, with this grant.
 # An install is ONE trust group: an agent with this grant can read every other
 # agent's home, env file and tokens. Per-agent users are not a security boundary.

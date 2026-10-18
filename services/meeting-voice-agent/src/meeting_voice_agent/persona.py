@@ -3,7 +3,7 @@
 Stage 1 kept this deliberately minimal (no Core-side registration, no MCP
 tool surface). Stage 3 wires the MCP tool surface built in
 `meeting_voice_agent.mcp_tools` in as `tools=` — this is the one place the
-persona's live Suite tool surface (real `space_get_context`, `send_media`,
+persona's live Burrow tool surface (real `space_get_context`, `send_media`,
 etc., plus the local `post_to_meeting_chat` hand-off wrapper) attaches to the
 `AgentSession`'s LLM. `tools` defaults to `None`/empty so existing callers
 (and stage-1's tests) that construct `MeetingVoiceAgent(config)` with no
@@ -39,7 +39,7 @@ def _instructions_with_space_context(base_instructions: str, space_id: str | Non
         return base_instructions
 
     return (
-        f"{base_instructions} This meeting's Suite space_id is {space_id} -- "
+        f"{base_instructions} This meeting's Burrow space_id is {space_id} -- "
         "pass this exact value whenever a tool parameter asks for a space_id "
         "(for example space_get_context or post_to_meeting_chat's underlying "
         "hand-off). Never guess it, search for it, or ask the room for it."

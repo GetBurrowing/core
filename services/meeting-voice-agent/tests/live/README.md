@@ -26,7 +26,7 @@ marked `@pytest.mark.live_infra` and excluded from the default `pytest` run
 - `test_mcp_live.py` — a running Core instance's `/mcp` endpoint
   (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN` — a real, active voice-runtime
   token, e.g. printed once by `mix platform.seed_meeting_voice_agent`).
-  Confirms the MCP tool-call path executes a REAL Suite tool
+  Confirms the MCP tool-call path executes a REAL Burrow tool
   (`space_create`, `space_get_context`) and that the `post_to_meeting_chat`
   hand-off tool posts into the derived chat space for real, readable back
   via `space_get_context`.

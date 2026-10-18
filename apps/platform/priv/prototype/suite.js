@@ -1,4 +1,4 @@
-// window.suite: the canvas room bridge, injected into every prototype HTML
+// window.burrow (also window.suite, the same object): the canvas room bridge, injected into every prototype HTML
 // file (task 01a1316b-84fa stage 2). ES2017, no imports. No network: it only
 // postMessages the parent page, whose CanvasRoomBridge hook relays it.
 (function (w) {
@@ -201,6 +201,9 @@
   })
 
   w.suite = suite
+  // window.burrow is the same object (task 01a14b9e-50a4 stage 1), so
+  // window.burrow === window.suite and either name drives one bridge.
+  w.burrow = suite
   if (!linked) markReady(suite)
   else {
     post({ type: "hello" })

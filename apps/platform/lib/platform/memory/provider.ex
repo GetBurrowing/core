@@ -4,8 +4,8 @@ defmodule Platform.Memory.Provider do
 
   A provider handles vector-based ingestion, search, and deletion of org
   memory entries against an external embedding/retrieval service. The
-  default implementation (`Platform.Memory.Providers.StartupSuite`) targets
-  the Startup Suite [memory-service](https://github.com/Startup-Suite/memory-service);
+  default implementation (`Platform.Memory.Providers.MemoryService`) targets
+  the Burrow [memory-service](https://github.com/Startup-Suite/memory-service);
   a `Noop` provider is used when no service is configured so the app still
   starts and `append_memory_entry` + keyword search keep working.
 

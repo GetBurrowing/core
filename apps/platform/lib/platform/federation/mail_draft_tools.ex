@@ -57,7 +57,7 @@ defmodule Platform.Federation.MailDraftTools do
           to_user_ids: %{
             type: "array",
             required: false,
-            description: "Recipient Suite user ids; expanded to their addresses at send time."
+            description: "Recipient Burrow user ids; expanded to their addresses at send time."
           },
           subject: %{type: "string", required: true, description: "Subject line."},
           body: %{

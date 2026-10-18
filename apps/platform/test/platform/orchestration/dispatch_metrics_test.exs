@@ -56,6 +56,9 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
       call!(ctx, at(2), nil, "task_get")
       call!(ctx, at(3), Ecto.UUID.generate(), "task_get")
       call!(ctx, at(4), nil, "suite_run")
+      # Task 01a14b9e-50a4 stage 1: the canonical name counts too. The ledger
+      # records the name the caller SENT, so both names are run calls.
+      call!(ctx, at(6), nil, "burrow_run")
       call!(ctx, at(40), nil, "task_get")
       call!(%{ctx | runtime: %{runtime_id: "someone-else"}}, at(5), nil, "task_get")
 
@@ -69,15 +72,15 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
       assert row.started_at == at(1)
       assert row.ended_at == at(30)
       assert row.wall_ms == 1_740_000
-      assert row.suite_tool_calls == 2
+      assert row.suite_tool_calls == 3
       assert row.inner_tool_calls == 1
-      assert row.suite_run_calls == 1
+      assert row.suite_run_calls == 2
       assert row.re_dispatch_count == 0
       assert row.stage_status == "passed"
       assert row.lease_ids == []
     end
 
-    test "a failed suite_run run, ledgered by the real path, is a tool_calls_error",
+    test "a failed burrow_run run, ledgered by the real path, is a tool_calls_error",
          ctx do
       # Task 01a115b5 stage 1. The row is written by ToolCall.invoke/4, not
       # inserted here, so the count reads the ledger's classification.
@@ -89,7 +92,7 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
 
       assert {:ok, %{ok: false, error: %{kind: "script_error"}, run_id: run_id}} =
                Platform.Federation.ToolCall.invoke(
-                 "suite_run",
+                 "burrow_run",
                  %{"script" => "nope()", "inputs" => %{"task_id" => ctx.task.id}},
                  ctx.runtime
                )

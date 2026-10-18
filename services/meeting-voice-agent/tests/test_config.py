@@ -25,7 +25,7 @@ def test_defaults_are_config_not_hardcoded_elsewhere():
 @pytest.mark.parametrize("value", [None, "", "   "])
 def test_mcp_base_url_is_required_and_names_the_var(monkeypatch, value):
     """Task 01a116de: MVA_MCP_BASE_URL has no default, because any default
-    would name one particular Suite install. Unset, empty and blank all raise
+    would name one particular Burrow install. Unset, empty and blank all raise
     a config error that names the variable."""
     if value is None:
         monkeypatch.delenv("MVA_MCP_BASE_URL", raising=False)

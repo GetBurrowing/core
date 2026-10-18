@@ -2860,7 +2860,7 @@ defmodule Platform.Tasks.StackDeployer do
     #{member_section}#{diff_section}
 
     ---
-    _Opened by Startup Suite stack deployer._
+    _Opened by Burrow stack deployer._
     """
     |> String.trim_trailing()
     |> Kernel.<>("\n")

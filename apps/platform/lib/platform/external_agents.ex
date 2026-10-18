@@ -281,7 +281,7 @@ defmodule Platform.ExternalAgents do
   The `Req` client is injectable via the
   `:external_agents_req_client` application env key. Mirrors the
   pattern in `Platform.Agents.Providers.Codex` and
-  `Platform.Memory.Providers.StartupSuite`. The Req.Test stubs and
+  `Platform.Memory.Providers.MemoryService`. The Req.Test stubs and
   the full test suite land in M5 stage 4.
   """
   @spec probe(Agent.t()) ::

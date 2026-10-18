@@ -1,7 +1,7 @@
 // Self-hosted asset path for `@excalidraw/excalidraw`.
 //
 // The package defaults `window.EXCALIDRAW_ASSET_PATH` to a public CDN for its
-// fonts and worker assets. Suite self-hosts them instead: the MIT-licensed
+// fonts and worker assets. Burrow self-hosts them instead: the MIT-licensed
 // bytes and the licence notice stay under our control, and the whiteboard
 // makes zero third-party requests.
 //

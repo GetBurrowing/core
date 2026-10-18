@@ -8,7 +8,7 @@ defmodule Platform.Social.Brand do
   arrive)"). Harper still owes HTC's colours, typeface, logo and end-card
   text; when they arrive they go into `social_profiles.brand` for the HTC
   profile, and no code changes. The clip carries the CUSTOMER's brand, so no
-  Suite token colour appears here.
+  Burrow token colour appears here.
 
   `resolve/1` merges a profile's `brand` map over `defaults/0`;
   `channel_url` defaults to the profile's `home_url`. Nothing outside

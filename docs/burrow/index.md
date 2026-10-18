@@ -26,6 +26,6 @@ Burrow Docs explain how Burrow works and ship with the product; your organizatio
 
 To read a topic, call `memory_view` with its path, or find it with `memory_search`.
 
-Some identifiers still carry the product's earlier name, Startup Suite (for example `suite_reply` and the `suite` CLI); they are current and correct.
+Burrow was called Startup Suite. Old names still work: `suite_run` and `suite_run_describe` (now `burrow_run`, `burrow_run_describe`), the code-mode script global `suite` (now `burrow`) and `window.suite` (now `window.burrow`). The `suite_reply` tools and the `suite` CLI keep their names.
 
 _Last verified at 837fba6e._

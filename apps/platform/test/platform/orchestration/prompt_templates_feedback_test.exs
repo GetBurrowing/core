@@ -24,7 +24,7 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
   alias Platform.Orchestration.PromptTemplates
 
   @placeholder "{{feedback_guidance}}"
-  @heading "Reporting a defect in Suite itself"
+  @heading "Reporting a defect in Burrow itself"
   @migration Platform.Repo.Migrations.AddFeedbackGuidancePlaceholderToPromptTemplates
   @migration_path Path.expand(
                     "../../../priv/repo/migrations/20261010140100_add_feedback_guidance_placeholder_to_prompt_templates.exs",

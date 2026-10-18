@@ -2,7 +2,7 @@ defmodule Platform.Canvas.ScriptEngine.JS do
   @moduledoc """
   The `"js"` canvas handler engine (task 01a1316b-aab0 stage 1), on
   `Platform.CodeMode.Runtime.run/3` directly. Not `Platform.CodeMode.Run`:
-  that is `suite_run`, bound to an `%AgentRuntime{}` and its tool surface. A
+  that is `burrow_run`, bound to an `%AgentRuntime{}` and its tool surface. A
   handler runs as whoever clicked, through `Platform.Canvas.ScriptEngine.Bindings`.
 
   ## A wrapper script, not a new wasm
@@ -29,7 +29,7 @@ defmodule Platform.Canvas.ScriptEngine.JS do
       in `Platform.Chat.CanvasRoom.Ops`'s wire shape.
     * `after(ms, handler, args)`, `every(ms, handler, args)`, `cancel(name)`
       — each pushes one timer effect for the room to apply.
-    * `patch(operations)` — `suite.call('canvas_patch', {operations})`,
+    * `patch(operations)` — `burrow.call('canvas_patch', {operations})`,
       synchronous, on the owning canvas.
 
   ## What the engine checks
@@ -98,7 +98,7 @@ defmodule Platform.Canvas.ScriptEngine.JS do
     after: (ms, handler, a) => effect({ type: 'after', ms, handler, args: args(a) }),
     every: (ms, handler, a) => effect({ type: 'every', ms, handler, args: args(a) }),
     cancel: (name) => effect({ type: 'cancel', name }),
-    patch: (operations) => suite.call('canvas_patch', { operations }),
+    patch: (operations) => burrow.call('canvas_patch', { operations }),
   });
   const fn = (0, eval)('"use strict";\\n(' + I.handler.source + '\\n)');
   if (typeof fn !== 'function') throw new TypeError('a handler must be a function expression');

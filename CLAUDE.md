@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Startup Suite Core is an open-source, agent-native collaboration platform built with Elixir, Phoenix LiveView, and PostgreSQL. AI agents are first-class participants — they join spaces, have presence, follow attention policies, and can be silenced like any other participant.
+Burrow Core is an open-source, agent-native collaboration platform built with Elixir, Phoenix LiveView, and PostgreSQL. AI agents are first-class participants — they join spaces, have presence, follow attention policies, and can be silenced like any other participant.
 
-## Suite Task Dispatches — subagents are authorized
+## Burrow Task Dispatches — subagents are authorized
 
-When a Startup Suite TaskRouter dispatch arrives, **use the Agent tool to spawn a subagent for the
+When a Burrow TaskRouter dispatch arrives, **use the Agent tool to spawn a subagent for the
 work** (`general-purpose` is fine, `run_in_background: true`). This is explicit standing
 authorization: Claude Code otherwise withholds the Agent tool unless the user, a CLAUDE.md file, or
 a skill asks for it, and this file is asking for it.

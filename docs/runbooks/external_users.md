@@ -5,17 +5,17 @@ is the first — and how an admin recovers, and later offboards, one.
 
 ## Context
 
-An external user is a **real OIDC account in Pocket-ID**, not a Suite-native
+An external user is a **real OIDC account in Pocket-ID**, not a Burrow-native
 login and not a magic-link guest. Their surface is deliberately narrow: the
 chat module only, scoped to an allowlist of spaces plus a per-org DM
-allowlist. Everything else in Suite is off-limits, and that scoping is
+allowlist. Everything else in Burrow is off-limits, and that scoping is
 enforced per-surface (see [What's enforced](#whats-enforced-pointer-to-the-security-suite)).
 
 The load-bearing invariant, honoring
-[ADR-0004](../decisions/0004-authentication-strategy.md): **Suite makes
-ZERO outbound calls to Pocket-ID.** Suite is a pure OIDC *token consumer* —
+[ADR-0004](../decisions/0004-authentication-strategy.md): **Burrow makes
+ZERO outbound calls to Pocket-ID.** Burrow is a pure OIDC *token consumer* —
 it reads the external group claim on login and nothing else. No account is
-created, mutated, or queried in the IdP by Suite. ADR-0004 is honored with
+created, mutated, or queried in the IdP by Burrow. ADR-0004 is honored with
 no amendment.
 
 The `chat.` external surface ships **dark**: the router carries the host-match
@@ -29,10 +29,10 @@ host-constrained.
 
 - Admin access to the **Pocket-ID** admin UI (to create the account and stamp
   the external group).
-- Suite admin access (to pre-stage the grant and to use the recovery queue at
+- Burrow admin access (to pre-stage the grant and to use the recovery queue at
   `/admin/external-logins`).
 - The value of `OIDC_EXTERNAL_GROUP` for this deployment — the Pocket-ID group
-  whose members Suite treats as external. Default: `"sxi-external"`.
+  whose members Burrow treats as external. Default: `"sxi-external"`.
   - Config default lives in `apps/platform/config/config.exs`
     (`external_group: "sxi-external"`); prod threads it via
     `OIDC_EXTERNAL_GROUP` in `apps/platform/config/runtime.exs`.
@@ -49,18 +49,18 @@ Create the account **in Pocket-ID** — through the admin UI or a signup-token
 link — and stamp the external **group claim** on it (the group whose value
 matches `OIDC_EXTERNAL_GROUP`, default `"sxi-external"`).
 
-This is the only step performed against the IdP, and Suite is not involved in
-it. **Suite makes ZERO outbound calls to Pocket-ID.** On login, Suite reads
+This is the only step performed against the IdP, and Burrow is not involved in
+it. **Burrow makes ZERO outbound calls to Pocket-ID.** On login, Burrow reads
 the group claim exactly once via `Platform.OIDC.external_claim?/1` (which
 compares the login's groups against `OIDC.external_group/0`) and decides
 admission from that. There is no code path in the auth stack that calls back
 out to Pocket-ID, pushes data to it, or provisions anything there.
 
-### 2. Pre-stage the grant (Suite-side state only)
+### 2. Pre-stage the grant (Burrow-side state only)
 
 Before — or independently of — the user's first login, pre-stage a
 `pending_external_grant` row so admission has something to apply. This is
-Suite-side state; it never touches Pocket-ID.
+Burrow-side state; it never touches Pocket-ID.
 
 Create it via `Platform.Tenancy.ExternalGrants.create_grant/1`
 (`apps/platform/lib/platform/tenancy/external_grants.ex`). The grant
@@ -119,7 +119,7 @@ Two operator-visible outcomes:
   `ExternalHoldingLive`) and sees no spaces — confirming fail-closed scoping.
 - **No outbound IdP call:** confirm by inspection — there is no Pocket-ID
   client call in the auth path; admission reads the claim and consults only
-  Suite-side state (`ExternalGrants` / `pending_external_grants`).
+  Burrow-side state (`ExternalGrants` / `pending_external_grants`).
 
 ---
 

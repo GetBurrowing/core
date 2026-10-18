@@ -47,7 +47,7 @@ from . import web
 from .state import SetupError
 
 CLIENT_ID = "suite-core"
-CLIENT_NAME = "Suite"
+CLIENT_NAME = "Burrow"
 # The one-time sign-in code's lifetime. It MUST stay above 15 minutes.
 # pocket-id v2.18.0 backend/internal/onetimeaccess/service.go:271-274 mints a
 # 6-character code when ttl <= 15m and a 12-character code otherwise. Its

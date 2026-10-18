@@ -74,7 +74,7 @@ defmodule PlatformWeb.Components.NotificationState do
     default: nil,
     values: [nil, :no_participant, :subscribe_failed],
     doc:
-      "WHY the browser granted permission and Suite still failed to store the " <>
+      "WHY the browser granted permission and Burrow still failed to store the " <>
         "subscription, or nil when it did not (task 019ffe52). Rides ALONGSIDE " <>
         ":push_permission for the same reason :auto_denied does: the permission " <>
         "is truthfully \"granted\", so the failure is a second fact, not a sixth " <>
@@ -95,7 +95,7 @@ defmodule PlatformWeb.Components.NotificationState do
       any button here would silently do nothing every time it was pressed.
       Never add one; the instruction line is the only thing that works. The
       row having nothing focusable is correct: there is nothing to do here.
-    * `granted` + `@registration_failed` — the browser said yes and Suite
+    * `granted` + `@registration_failed` — the browser said yes and Burrow
       failed to store the device (task 019ffe52). TWO variants, because the two
       ways to get here need opposite instructions. Neither has a button, for a
       close cousin of the reason above: the permission is already granted, so
@@ -292,7 +292,7 @@ defmodule PlatformWeb.Components.NotificationState do
       <div class="min-w-0 flex-1">
         <p class="text-sm">Notifications are off for this browser.</p>
         <p class="mt-1 text-xs text-base-content/60">
-          Turn them on to hear about mentions and replies when Suite is not open.
+          Turn them on to hear about mentions and replies when Burrow is not open.
         </p>
       </div>
       <button
@@ -322,7 +322,7 @@ defmodule PlatformWeb.Components.NotificationState do
         </p>
       </div>
       <div :if={not @auto_denied} class="min-w-0 flex-1">
-        <p class="text-sm">Your browser is blocking notifications from Suite.</p>
+        <p class="text-sm">Your browser is blocking notifications from Burrow.</p>
         <p class="mt-1 text-xs text-base-content/60">{denied_instruction(@browser)}</p>
         <p class="mt-1 text-xs text-base-content/60">
           If your computer is silencing the browser itself, no site setting will help.

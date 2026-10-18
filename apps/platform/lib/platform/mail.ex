@@ -567,7 +567,7 @@ defmodule Platform.Mail do
           account_id: account.id,
           sender_key: sender_key,
           to_addresses: [address],
-          subject: "Test email from Suite",
+          subject: "Test email from Burrow",
           body:
             "This is a test email sent from the Email module to check the account " <>
               "#{account.name}. No reply is needed.",

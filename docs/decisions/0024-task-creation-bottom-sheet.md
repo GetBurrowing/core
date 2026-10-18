@@ -6,7 +6,7 @@ Draft — pending Rowan's approval
 
 ## Context
 
-Suite has a kanban board but no way to create tasks. The existing Tasky system proved that structured task → plan → execute → validate pipelines work. Suite needs its own version, mobile-first, with tighter integration into the platform's chat, agents, and deploy infrastructure.
+Burrow has a kanban board but no way to create tasks. The existing Tasky system proved that structured task → plan → execute → validate pipelines work. Burrow needs its own version, mobile-first, with tighter integration into the platform's chat, agents, and deploy infrastructure.
 
 ## Decision
 

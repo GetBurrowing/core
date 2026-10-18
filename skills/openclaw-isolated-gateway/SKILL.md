@@ -1,18 +1,18 @@
 ---
 name: openclaw-isolated-gateway
-description: Stand up an isolated OpenClaw gateway against a local Suite dev server, on a non-default port and state directory so it doesn't collide with your primary OpenClaw install. Covers npm-global install, registering the local Suite as a federated agent runtime, installing and configuring the `startup-suite-channel-plugin`, verifying the WebSocket + MCP path, and clean teardown. Use when you want to exercise federation behavior end-to-end without touching production credentials or your day-to-day OpenClaw config.
+description: Stand up an isolated OpenClaw gateway against a local Burrow dev server, on a non-default port and state directory so it doesn't collide with your primary OpenClaw install. Covers npm-global install, registering the local Burrow as a federated agent runtime, installing and configuring the `startup-suite-channel-plugin`, verifying the WebSocket + MCP path, and clean teardown. Use when you want to exercise federation behavior end-to-end without touching production credentials or your day-to-day OpenClaw config.
 ---
 
 # OpenClaw Isolated Gateway
 
 This skill stands up a sandboxed [OpenClaw](https://www.npmjs.com/package/openclaw)
-gateway pointed at a Suite dev server (see `suite-dev-server`). It uses a
+gateway pointed at a Burrow dev server (see `suite-dev-server`). It uses a
 dedicated state directory and a non-default port so it cannot collide with any
 existing OpenClaw install you may already have running for production work.
 
 ## Prerequisites
 
-- A Suite dev server is reachable. Use `suite-dev-server` to start one and note
+- A Burrow dev server is reachable. Use `suite-dev-server` to start one and note
   the port — call it `BURROW_PORT` below. The example assumes
   `http://localhost:$BURROW_PORT`.
 - Node.js 20+ and `npm` on `PATH`. (`asdf plugin add nodejs && asdf install nodejs 20`
@@ -48,10 +48,10 @@ Set the gateway port:
 openclaw --state-dir "$OPENCLAW_STATE_DIR" config set gateway.port "$OPENCLAW_GATEWAY_PORT"
 ```
 
-## 2. Register the local Suite as a federated agent runtime
+## 2. Register the local Burrow install as a federated agent runtime
 
-The Suite admin UI lets you create an agent and a runtime row, mint a bearer
-token, and download the credentials. With the Suite dev server running:
+The Burrow admin UI lets you create an agent and a runtime row, mint a bearer
+token, and download the credentials. With the Burrow dev server running:
 
 1. Visit `http://localhost:$BURROW_PORT/dev/login` and log in as the dev user.
 2. Navigate to **Admin -> Agents**.
@@ -64,7 +64,7 @@ token, and download the credentials. With the Suite dev server running:
 
 4. After save, open the agent and click **New runtime**. Pick a runtime id
    (e.g. `dev-zip-rt`), choose **OpenClaw** as the runtime type, click
-   **Generate token**, and **copy the bearer immediately** — Suite shows it once.
+   **Generate token**, and **copy the bearer immediately** — Burrow shows it once.
 
 You'll end up with three values to plug into OpenClaw:
 
@@ -83,7 +83,7 @@ chmod 600 "$OPENCLAW_STATE_DIR/dev-zip.token"
 
 ## 3. Install and wire `startup-suite-channel-plugin`
 
-The plugin bridges OpenClaw's per-agent runtime to a Suite WebSocket. Install it
+The plugin bridges OpenClaw's per-agent runtime to a Burrow WebSocket. Install it
 into the sandbox:
 
 ```bash
@@ -112,7 +112,7 @@ openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
     \"useMcpTools\": true
   }"
 
-# (b) MCP server — the Suite's tool-call endpoint, scoped to this agent.
+# (b) MCP server — Burrow's tool-call endpoint, scoped to this agent.
 openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
   "mcp.servers.suite-$SLUG" --strict-json "{
     \"url\": \"$BURROW_MCP\",
@@ -134,7 +134,7 @@ openclaw --state-dir "$OPENCLAW_STATE_DIR" config set \
     }
   }"
 
-# (d) Routing binding — directs Suite traffic for this agent to the OpenClaw agent.
+# (d) Routing binding — directs Burrow traffic for this agent to the OpenClaw agent.
 openclaw --state-dir "$OPENCLAW_STATE_DIR" \
   agents bind --agent "$SLUG" --bind "startup-suite:$SLUG"
 ```
@@ -161,7 +161,7 @@ Within a few seconds you should see:
 [suite-client] Joined runtime:dev-zip-rt
 ```
 
-Confirm the Suite side sees it via the Suite MCP `federation_status` tool:
+Confirm the Burrow side sees it via the Burrow MCP `federation_status` tool:
 
 ```bash
 BURROW_TOKEN="$(cat "$OPENCLAW_STATE_DIR/dev-zip.token")"
@@ -174,7 +174,7 @@ curl -sS "$BURROW_MCP" \
 ```
 
 If `online=false`, check the gateway log first; the WebSocket path
-`/runtime/ws` is fixed in the Suite endpoint, so a 404 there means a typo in
+`/runtime/ws` is fixed in the Burrow endpoint, so a 404 there means a typo in
 `channels.startup-suite.accounts.<slug>.url`.
 
 ## 5. Cleanup
@@ -186,8 +186,8 @@ openclaw --state-dir "$OPENCLAW_STATE_DIR" gateway stop
 rm -rf "$OPENCLAW_STATE_DIR"
 ```
 
-If you also want to retire the Suite-side records, use the admin UI to delete the
-agent + runtime, or directly via the Suite MCP / DB.
+If you also want to retire the Burrow-side records, use the admin UI to delete the
+agent + runtime, or directly via the Burrow MCP / DB.
 
 ## Helper script
 
@@ -195,7 +195,7 @@ agent + runtime, or directly via the Suite MCP / DB.
 into the sandbox, wire the plugin from already-exported env vars (`BURROW_PORT`,
 `BURROW_AGENT_SLUG`, `BURROW_RUNTIME_ID`, `BURROW_TOKEN`,
 `OPENCLAW_GATEWAY_PORT`, `OPENCLAW_STATE_DIR`), start the gateway, and verify
-the WebSocket + MCP path. Step 2 (creating the Suite agent + runtime + bearer)
+the WebSocket + MCP path. Step 2 (creating the Burrow agent + runtime + bearer)
 remains a manual UI flow because it's a security boundary.
 
 The helper still accepts the legacy `SUITE_PORT`, `SUITE_AGENT_SLUG`,
@@ -208,5 +208,5 @@ legacy name it falls back to.
 |---|---|---|
 | `EADDRINUSE` on gateway start | Another OpenClaw instance owns `OPENCLAW_GATEWAY_PORT`. | Pick a different port and re-set `gateway.port`. |
 | `[suite-client] Connect failed (404)` | Wrong WebSocket path. | Must be `/runtime/ws`, not `/mcp`. |
-| `[suite-client] Connect failed (401)` | Bearer doesn't match a runtime row. | Re-mint the token in the Suite admin UI; update the channel account. |
-| `online=false` after a clean connect | Plugin connected then disconnected. | Tail the Suite dev-server log for the disconnect reason (often a bundle the runtime requested but isn't allowed). |
+| `[suite-client] Connect failed (401)` | Bearer doesn't match a runtime row. | Re-mint the token in the Burrow admin UI; update the channel account. |
+| `online=false` after a clean connect | Plugin connected then disconnected. | Tail the Burrow dev-server log for the disconnect reason (often a bundle the runtime requested but isn't allowed). |

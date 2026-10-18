@@ -1,12 +1,12 @@
 ---
 name: suite-dev-server
-description: Start and manage a local Startup Suite Phoenix dev server from any `core` worktree, cross-platform (macOS, Linux, Windows/WSL2). Provides toolchain install pointers (asdf-pinned Erlang/OTP 27 + Elixir 1.19), a generic Postgres 16 setup via `docker compose`, and helper scripts that pick a free port, run migrations, and start `mix phx.server` in the background. Use when an agent needs to run the exact code in its worktree on a free local port, validate a feature in the browser, and shut the server down cleanly.
+description: Start and manage a local Burrow Phoenix dev server from any `core` worktree, cross-platform (macOS, Linux, Windows/WSL2). Provides toolchain install pointers (asdf-pinned Erlang/OTP 27 + Elixir 1.19), a generic Postgres 16 setup via `docker compose`, and helper scripts that pick a free port, run migrations, and start `mix phx.server` in the background. Use when an agent needs to run the exact code in its worktree on a free local port, validate a feature in the browser, and shut the server down cleanly.
 ---
 
-# Suite Dev Server
+# Burrow Dev Server
 
 This skill describes how any contributor — or any federated agent on any host — can
-stand up a Startup Suite Phoenix dev server from a `core` worktree. It is the
+stand up a Burrow Phoenix dev server from a `core` worktree. It is the
 common path for in-review validation, screenshots, and browser proof.
 
 The skill ships three helper scripts under `scripts/`:
@@ -21,7 +21,7 @@ users should run the helpers from a WSL2 prompt.
 
 ## 1. Toolchain install (one-time)
 
-Suite is Elixir/Phoenix and targets **Erlang/OTP 27+** and **Elixir 1.19+**. The
+Burrow is Elixir/Phoenix and targets **Erlang/OTP 27+** and **Elixir 1.19+**. The
 recommended cross-platform installer is [asdf](https://asdf-vm.com/), which gives
 you a single `.tool-versions`-pinnable workflow on every host.
 
@@ -136,7 +136,7 @@ Use `scripts/start-server.sh` to pick a free port in `4001-4099`:
 ```bash
 PORT=$(skills/suite-dev-server/scripts/start-server.sh "$(pwd)")
 skills/suite-dev-server/scripts/wait-for-server.sh "$PORT"
-echo "Suite dev server: http://localhost:$PORT/dev/login"
+echo "Burrow dev server: http://localhost:$PORT/dev/login"
 # ... do the work ...
 skills/suite-dev-server/scripts/stop-server.sh "$PORT"
 ```

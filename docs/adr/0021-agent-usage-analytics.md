@@ -6,11 +6,11 @@
 
 ## Context
 
-We need visibility into agent usage — request volume, token consumption, model selection, cost, and latency. This is the first observability surface in Suite.
+We need visibility into agent usage — request volume, token consumption, model selection, cost, and latency. This is the first observability surface in Burrow.
 
 ## Decision
 
-### Phase 1: Suite-Side (this ADR)
+### Phase 1: Burrow-Side (this ADR)
 
 Build the data model, API endpoint, and LiveView dashboard. The plugin-side instrumentation (Phase 2) will follow as a separate PR.
 
@@ -87,17 +87,17 @@ Add a new tab/section within ControlCenterLive (or a sub-live-view) accessible a
 
 ### Phase 2: Plugin Instrumentation (separate PR)
 
-The OpenClaw plugin SDK already emits `DiagnosticUsageEvent` (`model.usage` type) via `onDiagnosticEvent`. The Suite plugin will:
+The OpenClaw plugin SDK already emits `DiagnosticUsageEvent` (`model.usage` type) via `onDiagnosticEvent`. The Burrow plugin will:
 
 1. Subscribe to `onDiagnosticEvent` during initialization
-2. On `model.usage` events, POST to Suite's `/api/internal/usage-events`
+2. On `model.usage` events, POST to Burrow's `/api/internal/usage-events`
 3. Include the space_id from the session context
 
 This is a ~30-line addition to the plugin's `index.ts`.
 
 ## Consequences
 
-- First analytics/observability surface in Suite
+- First analytics/observability surface in Burrow
 - Cost tracking enables data-driven decisions about model selection
 - Foundation for the trust-scoring system (Sage's intake refinement accuracy tracking needs similar instrumentation)
 - Phase 1 ships independently — dashboard works as soon as the first event hits the API

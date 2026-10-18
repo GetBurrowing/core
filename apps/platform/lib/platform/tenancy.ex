@@ -1556,7 +1556,7 @@ defmodule Platform.Tenancy do
 
   Until task 01a081c2 the domain was a literal compiled into this module, so
   one install's email addresses were automatically admins on any other
-  install of Suite. Renamed from `:admin_email_domain` (task 01a068f6 stage 1) to make
+  install of Burrow. Renamed from `:admin_email_domain` (task 01a068f6 stage 1) to make
   the "root org" scope explicit and to shed the config.exs-level install
   default that survived that first fix — a fresh install that never touched
   `ADMIN_EMAIL_DOMAIN` still auto-admined that install's addresses.

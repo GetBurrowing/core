@@ -191,7 +191,7 @@ defmodule Platform.Federation.Peers.IngestTest do
       assert message.content =~ ~r/\AShared from Remote by Pat\n\n/
       assert message.content =~ ExternalContent.warning()
       assert message.content =~ "<<<EXTERNAL_UNTRUSTED_CONTENT"
-      assert message.content =~ "Source: Suite peer"
+      assert message.content =~ "Source: Burrow peer"
       assert message.content =~ "hello from the other install"
 
       assert message.metadata["source"] == "federation_inbound"

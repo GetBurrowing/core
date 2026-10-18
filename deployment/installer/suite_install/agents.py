@@ -58,7 +58,7 @@ SUITE_CLI_REF=3f8072830bea22f45584d00a5b6611bee05a05f8
 
 # services/agent-host/packaging/sudoers-suite-agents, verbatim.
 SUDOERS = """\
-# Installed by Suite's agent host packaging (core task 01a10322 stage 3).
+# Installed by Burrow's agent host packaging (core task 01a10322 stage 3).
 # Native agents do anything that needs root themselves, with this grant.
 # An install is ONE trust group: an agent with this grant can read every other
 # agent's home, env file and tokens. Per-agent users are not a security boundary.
@@ -67,7 +67,7 @@ SUDOERS = """\
 
 # services/agent-host/packaging/suite-agent-host.service, verbatim.
 HOST_UNIT = """\
-# Suite's agent host (core task 01a10322). The same unit in both capability
+# Burrow's agent host (core task 01a10322). The same unit in both capability
 # profiles: on full_machine it is a host service, on contained it runs under
 # the agent-host container's systemd.
 #
@@ -76,7 +76,7 @@ HOST_UNIT = """\
 # which PassEnvironment hands through from systemd. The image sets
 # AGENT_HOST_PROFILE=contained; Environment/EnvironmentFile win over it.
 [Unit]
-Description=Suite agent host
+Description=Burrow agent host
 After=network-online.target
 Wants=network-online.target
 
@@ -99,10 +99,10 @@ WantedBy=multi-user.target
 # writes the same text on every start (src/units.ts templateUnit), so shipping
 # it here only means the unit exists before the first agent does.
 AGENT_TEMPLATE_UNIT = """\
-# Managed by Suite's agent host. One instance per native agent; %i is the agent id.
+# Managed by Burrow's agent host. One instance per native agent; %i is the agent id.
 # The per-agent drop-in in suite-agent@<id>.service.d/ sets User, Group and paths.
 [Unit]
-Description=Suite native agent %i
+Description=Burrow native agent %i
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -182,7 +182,7 @@ def setup_unit(plan):
     lines = [
         f"# {_header(plan)}",
         "[Unit]",
-        "Description=Install Suite's agent host and its pinned tools",
+        "Description=Install Burrow's agent host and its pinned tools",
         "Requires=docker.service",
         "After=docker.service network-online.target",
         "Wants=network-online.target",
@@ -216,7 +216,7 @@ update-ca-certificates >/dev/null
     return f"""\
 #!/bin/sh
 # {_header(plan)}
-# Installs Suite's agent host on THIS host (full_machine, task 01a10322).
+# Installs Burrow's agent host on THIS host (full_machine, task 01a10322).
 # Idempotent; run by {SETUP_UNIT_NAME} before {HOST_UNIT_NAME}.
 set -eu
 image='{image}'

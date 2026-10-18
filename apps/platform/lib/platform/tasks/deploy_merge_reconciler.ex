@@ -15,7 +15,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   `check_suite`, `pull_request`, `workflow_run`).
   `Startup-Suite/openclaw-suite-channel` and
   `Startup-Suite/claude-code-suite-channel` have ZERO webhooks installed.
-  Suite receives nothing whatsoever from the bridge repos.
+  Burrow receives nothing whatsoever from the bridge repos.
 
   So the per-repo gates convert a silent-completion bug into a silent-HANG
   bug: repo B's `pr_merged` sits pending forever because no
@@ -293,7 +293,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   The one predicate three call sites share: `ask/7`'s split between
   polling and `refuse/2`, `unrecorded_branch_gates/0`'s count, and
-  `mix suite.deploy.scope_gate`'s refusal to overwrite a fact that is
+  `mix burrow.deploy.scope_gate`'s refusal to overwrite a fact that is
   already written down.
 
   It is `present?/1` and not `Map.has_key?/2`. An absent `"branch"` key, a
@@ -331,7 +331,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   """
   @spec live_gate(term()) :: {:ok, map()} | {:error, atom()}
   def live_gate(validation_id) do
-    # The id here arrives from a COMMAND LINE (`mix suite.deploy.scope_gate`)
+    # The id here arrives from a COMMAND LINE (`mix burrow.deploy.scope_gate`)
     # and `why_not_live/1`'s `where: v.id == ^id` raises
     # `Ecto.Query.CastError` on a malformed value exactly as `Repo.get/2`
     # does, so it needs a guard — which is also what
@@ -404,7 +404,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
     Logger.info(
       "[deploy_merge_reconciler] #{count} pending pr_merged gate(s) record no deploy " <>
         "branch and are being refused rather than polled: #{Enum.join(ids, ", ")}. " <>
-        "Scope each with `mix suite.deploy.scope_gate <id> --repo-url <url> --branch " <>
+        "Scope each with `mix burrow.deploy.scope_gate <id> --repo-url <url> --branch " <>
         "<branch>`; when this count reaches zero the refusal branch can be deleted."
     )
 
@@ -536,7 +536,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   # (production 20:47Z 2026-07-31). So this clause can only be reached by a
   # gate minted between that deploy and this change landing.
   #
-  # The named remedy — `mix suite.deploy.scope_gate` — is minted by stage 4 of
+  # The named remedy — `mix burrow.deploy.scope_gate` — is minted by stage 4 of
   # this same plan and ships in the same change; it writes the missing
   # `"branch"` onto the payload without passing the gate, after which the next
   # sweep polls it normally.
@@ -546,7 +546,7 @@ defmodule Platform.Tasks.DeployMergeReconciler do
         "branch; refusing to derive one and leaving the gate pending — a derived branch " <>
         "cannot be checked by the runner or by GitHub, so a wrong one would pass this gate " <>
         "silently. Record it with " <>
-        "`mix suite.deploy.scope_gate #{validation.id} --repo-url <url> --branch <branch>`."
+        "`mix burrow.deploy.scope_gate #{validation.id} --repo-url <url> --branch <branch>`."
     )
 
     0

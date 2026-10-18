@@ -384,7 +384,7 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
                "The asker wants the task list."
 
       assert text_of(html, "#message-context-popover") =~
-               "Summarised by Suite from the messages before this one that you can see."
+               "Summarised by Burrow from the messages before this one that you can see."
 
       [ids] =
         html

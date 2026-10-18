@@ -2,13 +2,13 @@
 
 **Status:** Audit (current state, 2026-05-06)
 **Related:** [ADR 0034 — MCP Endpoint and Capability Bundles](../decisions/0034-mcp-endpoint-and-capability-bundles.md), [Federation Overview](./federation-overview.md)
-**Tracking task:** Suite task `019dfaea-df5e-79ed-a5f8-838961435302` — *Verify Claude-channel and OpenClaw federated agents have parity access to DB-shipped skills*. This file is the stage-1 (docs-only) deliverable; stage 2 backfills the bundle, stage 3 cleans up the OpenClaw legacy surface.
+**Tracking task:** Burrow task `019dfaea-df5e-79ed-a5f8-838961435302` — *Verify Claude-channel and OpenClaw federated agents have parity access to DB-shipped skills*. This file is the stage-1 (docs-only) deliverable; stage 2 backfills the bundle, stage 3 cleans up the OpenClaw legacy surface.
 
 ---
 
 ## TL;DR
 
-Suite ships three centrally-distributed skill tools (`skill_list`, `skill_get`, `skill_upsert`) over its `/mcp` endpoint. **No federated runtime can call them today**, regardless of which plugin it uses, because the `skill` capability bundle is missing from every existing `AgentRuntime.allowed_bundles` row and from the per-runtime default. The chokepoint is on the Suite side — neither the Claude-channel plugin nor the OpenClaw plugin needs a code change for the *built-in* path to start working once the bundle is granted. (The OpenClaw legacy `agentTools` path is a separate, additive cleanup.)
+Burrow ships three centrally-distributed skill tools (`skill_list`, `skill_get`, `skill_upsert`) over its `/mcp` endpoint. **No federated runtime can call them today**, regardless of which plugin it uses, because the `skill` capability bundle is missing from every existing `AgentRuntime.allowed_bundles` row and from the per-runtime default. The chokepoint is on the Burrow side — neither the Claude-channel plugin nor the OpenClaw plugin needs a code change for the *built-in* path to start working once the bundle is granted. (The OpenClaw legacy `agentTools` path is a separate, additive cleanup.)
 
 ---
 
@@ -74,7 +74,7 @@ This is worth tightening in a follow-up — either by adding bundle enforcement 
 
 ### Claude-channel — [`Startup-Suite/claude-code-suite-channel`](https://github.com/Startup-Suite/claude-code-suite-channel)
 
-A narrow chat-only Claude Code channels plugin. Surfaces four tools to the Claude session: `suite_reply`, `suite_reply_with_media`, `suite_reply_chunk`, `suite_typing`. **It does not proxy any Suite tool surface.** The README (lines 11–21) is explicit: full Suite tool access requires registering Suite's `/mcp` as a separate MCP server:
+A narrow chat-only Claude Code channels plugin. Surfaces four tools to the Claude session: `suite_reply`, `suite_reply_with_media`, `suite_reply_chunk`, `suite_typing`. **It does not proxy any Burrow tool surface.** The README (lines 11–21) is explicit: full Burrow tool access requires registering Burrow's `/mcp` as a separate MCP server:
 
 ```bash
 claude mcp add startup-suite --transport http https://<your-suite>/mcp \
@@ -87,7 +87,7 @@ So Claude reaches `skill.*` strictly via the **HTTP `/mcp`** transport — and i
 
 Two operating modes, controlled by per-account `useMcpTools` config (`src/plugin-state.ts`, `src/channel.ts` line 81):
 
-- **`useMcpTools: true`** — `agentTools` returns `[]` (`channel.ts` line 86). The agent talks to Suite `/mcp` directly, same path as Claude-channel. Same bundle gate applies.
+- **`useMcpTools: true`** — `agentTools` returns `[]` (`channel.ts` line 86). The agent talks to Burrow `/mcp` directly, same path as Claude-channel. Same bundle gate applies.
 - **`useMcpTools: false` (legacy)** — `agentTools` returns ~30 hardcoded tool definitions (`channel.ts` lines 87–~609), all of which `execute` by calling `suiteToolExecute(...)` over the runtime WebSocket (which bypasses bundle gating per §3). **None of the `skill.*` tools are in this legacy list** — no `suite_skill_list`, no `suite_skill_get`, no `suite_skill_upsert`. Operators on the legacy mode see no skill tools at all from this plugin.
 
 ---
@@ -96,7 +96,7 @@ Two operating modes, controlled by per-account `useMcpTools` config (`src/plugin
 
 Putting §2 + §3 + §4 together:
 
-| Plugin / mode                   | Transport to Suite | Bundle gate? | Hardcoded skill tools? | Net result            |
+| Plugin / mode                   | Transport to Burrow | Bundle gate? | Hardcoded skill tools? | Net result            |
 | ------------------------------- | ------------------ | ------------ | ---------------------- | --------------------- |
 | Claude-channel                  | HTTP `/mcp`        | Yes          | n/a                    | Locked out            |
 | OpenClaw, `useMcpTools: true`   | HTTP `/mcp`        | Yes          | n/a                    | Locked out            |
@@ -104,7 +104,7 @@ Putting §2 + §3 + §4 together:
 
 Every path is currently broken. The MCP-direct paths fail at the gate; the legacy WebSocket path has nothing to call.
 
-The fix has two parts, tracked under the same Suite task:
+The fix has two parts, tracked under the same Burrow task:
 
 - **Stage 2** — backfill `skill` into every existing runtime's `allowed_bundles` (and add it to the per-runtime default). Pattern: mirror [`20260419220000_agent_runtime_attachment_bundle.exs`](../../apps/platform/priv/repo/migrations/20260419220000_agent_runtime_attachment_bundle.exs). This unlocks both MCP-direct paths.
 - **Stage 3** — register the missing `suite_skill_*` shims in OpenClaw's legacy `agentTools` so operators on `useMcpTools: false` aren't second-class.
@@ -118,7 +118,7 @@ Once the stage-2 migration has been applied, two quick spot-checks confirm parit
 ### Claude-channel
 
 ```bash
-# In a Claude Code session that has the Suite MCP server configured:
+# In a Claude Code session that has the Burrow MCP server configured:
 # (the plugin install + `claude mcp add startup-suite ...` from §4)
 > /mcp                       # confirm "startup-suite" connected
 > Use skill_list to show me the registered skills.

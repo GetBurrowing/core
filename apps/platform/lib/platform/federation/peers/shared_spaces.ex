@@ -220,7 +220,7 @@ defmodule Platform.Federation.Peers.SharedSpaces do
   def peer_label(%Peer{base_url: url}) do
     case URI.parse(url || "") do
       %URI{host: host} when is_binary(host) -> ExternalContent.sanitize_line(host)
-      _ -> "a Suite peer"
+      _ -> "a Burrow peer"
     end
   end
 

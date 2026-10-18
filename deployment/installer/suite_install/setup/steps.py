@@ -54,7 +54,7 @@ LICENCES = (
 )
 FILEVAULT_TRUTH = (
     "With FileVault ON, a Mac that restarts after a power cut waits at the FileVault unlock "
-    "screen: no user session, so no Docker Desktop or OrbStack and no Suite, whatever "
+    "screen: no user session, so no Docker Desktop or OrbStack and no Burrow, whatever "
     "autorestart says. Unattended recovery needs FileVault OFF plus automatic login (System "
     "Settings, admin password). That is the owner's security trade-off; this CLI reports it "
     "and never changes it."

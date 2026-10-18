@@ -5,7 +5,7 @@ This document is the field-by-field reference for the **install manifest** defin
 [`platform-target-contract.md`](platform-target-contract.md), which it extends: that contract
 names the runtime values core-platform needs, and the manifest is what now produces them.
 
-One manifest describes **one Suite install for one customer**. It covers infrastructure only:
+One manifest describes **one Burrow install for one customer**. It covers infrastructure only:
 domain, TLS, service set, model endpoints, auth, backup, size, GPU and images. Per-install
 behaviour (orgs, agents, prompts, feature settings) stays in the admin panel.
 

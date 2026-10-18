@@ -75,7 +75,7 @@ def accept_arguments(metadata: dict) -> dict:
     `{}`. `req.accept()` then keeps the SDK default identity, which is exactly
     what the worker did before. A job is never rejected over its metadata.
 
-    The agent is never derived from `config.worker_agent_name`: several Suite
+    The agent is never derived from `config.worker_agent_name`: several
     agents can share one worker name, so only the dispatch metadata says which
     agent this job is for.
     """
@@ -110,7 +110,7 @@ async def request_fnc(req: JobRequest) -> None:
 
 
 def build_tool_surface(config: AgentConfig, room_name: str, *, space_id: str | None = None) -> list:
-    """The live Suite MCP tool surface plus the local chat hand-off wrapper.
+    """The live Burrow MCP tool surface plus the local chat hand-off wrapper.
 
     Split out from `entrypoint` so tests can build the same list without a
     real `JobContext`/room. `room_name` pins the hand-off tool to THIS

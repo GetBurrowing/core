@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Suite currently uses UUIDv4 for all primary keys (via Ecto's `:binary_id`). UUIDv4 is random — not sortable by time. This creates two problems:
+Burrow currently uses UUIDv4 for all primary keys (via Ecto's `:binary_id`). UUIDv4 is random — not sortable by time. This creates two problems:
 
 1. **Unread counts require timestamp joins.** We can't do `WHERE id > :last_read_id` because v4 UUIDs don't sort chronologically. The workaround is storing a `last_read_at` timestamp and joining on `inserted_at`, which is slower and more complex.
 

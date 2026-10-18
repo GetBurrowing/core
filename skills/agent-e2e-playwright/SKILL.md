@@ -1,6 +1,6 @@
 ---
 name: agent-e2e-playwright
-description: Run the `e2e/` Playwright suite against a freshly-started Suite dev server in any `core` worktree. Composes `suite-dev-server` (free-port server + migrations) with per-worktree asset builds and the version-pinned Playwright + Chromium under `e2e/node_modules`. Use when an agent needs browser-level proof — phx-click hooks firing, LiveView state transitions, JS-owned DOM subtrees — and the existing `e2e/README.md` doesn't apply because the worktree isn't running on port 4000.
+description: Run the `e2e/` Playwright suite against a freshly-started Burrow dev server in any `core` worktree. Composes `suite-dev-server` (free-port server + migrations) with per-worktree asset builds and the version-pinned Playwright + Chromium under `e2e/node_modules`. Use when an agent needs browser-level proof — phx-click hooks firing, LiveView state transitions, JS-owned DOM subtrees — and the existing `e2e/README.md` doesn't apply because the worktree isn't running on port 4000.
 ---
 
 # Agent e2e (Playwright)

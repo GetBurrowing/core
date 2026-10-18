@@ -1,4 +1,4 @@
-# Suite's agent host (core task 01a10322). The same unit in both capability
+# Burrow's agent host (core task 01a10322). The same unit in both capability
 # profiles: on full_machine it is a host service, on contained it runs under
 # the agent-host container's systemd.
 #
@@ -7,7 +7,7 @@
 # which PassEnvironment hands through from systemd. The image sets
 # AGENT_HOST_PROFILE=contained; Environment/EnvironmentFile win over it.
 [Unit]
-Description=Suite agent host
+Description=Burrow agent host
 After=network-online.target
 Wants=network-online.target
 

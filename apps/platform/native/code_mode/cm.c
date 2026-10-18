@@ -7,7 +7,7 @@
  * Exports:  cm_alloc(n) -> ptr
  *           cm_run(script, script_len, inputs, inputs_len, config, config_len) -> ptr
  *             ptr points at [u32 little-endian length][JSON result bytes]
- * Imports:  suite.host_call(name, name_len, args, args_len, out, out_cap) -> i32
+ * Imports:  burrow.host_call(name, name_len, args, args_len, out, out_cap) -> i32
  *             the host writes at most out_cap bytes of JSON at out and returns
  *             the count (negative on host failure). It is the ONLY way out of
  *             the sandbox besides the wasi_snapshot_preview1 functions wasi-libc
@@ -23,8 +23,8 @@
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
-__attribute__((import_module("suite"), import_name("host_call"))) int32_t
-suite_host_call(const char *name, int32_t name_len, const char *args, int32_t args_len,
+__attribute__((import_module("burrow"), import_name("host_call"))) int32_t
+burrow_host_call(const char *name, int32_t name_len, const char *args, int32_t args_len,
                 char *out, int32_t out_cap);
 
 /* Inner results are capped at 1 MB by the host; the envelope adds a little. */
@@ -33,7 +33,8 @@ suite_host_call(const char *name, int32_t name_len, const char *args, int32_t ar
 static char *g_out = NULL;
 
 /* The JS side of the bindings. Receives the native host call function and the
- * config; defines `suite`, `store`, `console` and `inputs` on globalThis and
+ * config; defines `burrow` (also bound as `suite`, the same object, so
+ * `suite === burrow`), `store`, `console` and `inputs` on globalThis and
  * returns the function that serialises the run's outcome. */
 static const char PRELUDE[] =
     "(function (g, hostCall, cfg, inputs) {\n"
@@ -48,7 +49,7 @@ static const char PRELUDE[] =
     "    if (logBytes + line.length > logCap) { logsTruncated = true; return; }\n"
     "    logBytes += line.length; logs.push(line); };\n"
     "  const fail = (r, name) => { const e = new Error(r.message || 'call failed');\n"
-    "    e.name = 'SuiteError'; e.kind = r.kind; e.tool = name;\n"
+    "    e.name = 'BurrowError'; e.kind = r.kind; e.tool = name;\n"
     "    if (r.code !== undefined) e.code = r.code;\n"
     "    if (r.details !== undefined) e.details = r.details; return e; };\n"
     "  const raw = (name, args) => {\n"
@@ -76,14 +77,14 @@ static const char PRELUDE[] =
     "      if (typeof p !== 'string' || Object.prototype.hasOwnProperty.call(t, p)) return Reflect.get(t, p);\n"
     "      if (inert.includes(p)) return undefined;\n"
     "      return (args) => raw(prefix + p, args); } }); };\n"
-    "  const suite = wrap(tree, '');\n"
+    "  const burrow = wrap(tree, '');\n"
     "  const store = {\n"
     "    get: (key) => raw('$store.get', { key }),\n"
     "    set: (key, value, opts) => raw('$store.set', { key, value, ttl: opts && opts.ttl }),\n"
     "    delete: (key) => raw('$store.delete', { key }) };\n"
     "  const def = (k, v) => Object.defineProperty(g, k, { value: v, writable: false,\n"
     "    enumerable: false, configurable: false });\n"
-    "  def('suite', suite); def('store', Object.freeze(store));\n"
+    "  def('burrow', burrow); def('suite', burrow); def('store', Object.freeze(store));\n"
     "  def('console', Object.freeze({ log, info: log, warn: log, error: log, debug: log }));\n"
     "  def('inputs', inputs);\n"
     "  const kinds = ['forbidden', 'call_limit'];\n"
@@ -124,7 +125,7 @@ static JSValue js_host_call(JSContext *ctx, JSValueConst this_val, int argc, JSV
         JS_FreeCString(ctx, name);
         return JS_EXCEPTION;
     }
-    n = suite_host_call(name, (int32_t)name_len, args, (int32_t)args_len, g_out, OUT_CAP);
+    n = burrow_host_call(name, (int32_t)name_len, args, (int32_t)args_len, g_out, OUT_CAP);
     JS_FreeCString(ctx, name);
     JS_FreeCString(ctx, args);
     if (n < 0 || n > OUT_CAP)
@@ -238,7 +239,7 @@ char *cm_run(const char *script, int32_t script_len, const char *inputs, int32_t
                 outcome = JS_NewError(ctx);
                 JS_SetPropertyStr(ctx, outcome, "message",
                                   JS_NewString(ctx, "the script awaited a promise that never "
-                                                    "settles (suite_run has no timers or I/O)"));
+                                                    "settles (burrow_run has no timers or I/O)"));
                 break;
             }
             JS_FreeValue(ctx, ret);

@@ -15,7 +15,7 @@ intimidating for new users and positions agent creation as a technical
 exercise rather than a simple decision.
 
 With federation (ADR 0014), there are now multiple ways an agent can arrive
-in Suite: created locally, federated from an external runtime, imported
+in Burrow: created locally, federated from an external runtime, imported
 from a workspace, or instantiated from a role template. The UI needs to
 surface these paths in order of ease, not technical complexity.
 
@@ -67,7 +67,7 @@ template just provides a smart starting point.
 
 ### 3. Federate flow
 
-1. User enters Suite WebSocket URL (pre-filled with current Suite instance)
+1. User enters Burrow WebSocket URL (pre-filled with current Burrow instance)
 2. User enters runtime_id and receives a pairing token
 3. Token is shown once with copy button and OpenClaw config snippet
 4. Connection instructions displayed
@@ -75,10 +75,10 @@ template just provides a smart starting point.
 
 ### 4. Import flow
 
-1. Suite reads the mounted OpenClaw workspace config (agents.list)
+1. Burrow reads the mounted OpenClaw workspace config (agents.list)
 2. Shows available agents with checkboxes
 3. User selects which to import
-4. Agents are created in Suite's database from the workspace definitions
+4. Agents are created in Burrow's database from the workspace definitions
 
 ### 5. Mobile-first UI
 

@@ -255,7 +255,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
   @spec build_prompt(map()) :: {:ok, %{system: String.t(), user: String.t()}}
   def build_prompt(context) when is_map(context) do
     system =
-      "You are the Designer on the Suite pre-plan design path (ADR-0046). " <>
+      "You are the Designer on the Burrow pre-plan design path (ADR-0046). " <>
         @scope_fence <>
         " Your direction is advisory: it does not block development and is expected to " <>
         "be iterated."

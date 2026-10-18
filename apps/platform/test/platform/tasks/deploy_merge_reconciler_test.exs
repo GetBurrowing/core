@@ -1994,7 +1994,7 @@ defmodule Platform.Tasks.DeployMergeReconcilerTickLogTest do
 
       assert log =~ "2 pending pr_merged gate(s) record no deploy branch"
       assert log =~ "019f-aaa, 019f-bbb"
-      assert log =~ "mix suite.deploy.scope_gate"
+      assert log =~ "mix burrow.deploy.scope_gate"
 
       # ONE line, not one per gate. The tick fires every five minutes for
       # every open gate, which is why `poll/5`'s miss sits at `debug`.

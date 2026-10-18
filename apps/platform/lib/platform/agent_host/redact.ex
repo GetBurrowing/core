@@ -1,6 +1,6 @@
 defmodule Platform.AgentHost.Redact do
   @moduledoc """
-  What a native agent's pane text must lose before Suite shows it as
+  What a native agent's pane text must lose before Burrow shows it as
   "Recent output" (task 01a10322 stage 6).
 
   The agent host already does this (`services/agent-host/src/pane.ts`, the
@@ -10,7 +10,7 @@ defmodule Platform.AgentHost.Redact do
     * **A login screen is withheld whole.** If any line shows Claude Code's
       login method chooser, sign-in URL or paste prompt, or its API-key
       confirmation, no line is shown and the result says `hidden: :login`.
-      Suite never displays a login URL, code or key from a pane.
+      Burrow never displays a login URL, code or key from a pane.
     * **Every other line is scrubbed** of anything shaped like a credential:
       `sk-ant-…` keys and tokens, the values of `ANTHROPIC_API_KEY`,
       `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_*`, OAuth `code` / `state`

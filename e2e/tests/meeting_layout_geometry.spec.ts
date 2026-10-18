@@ -825,7 +825,7 @@ const TILE_NAME = '[data-role="tile-name"]'
 const TILE_PROBE_ATTR = "data-safe-area-tile"
 const TILE_PROBE = `[${TILE_PROBE_ATTR}]`
 
-/** The iOS home-indicator inset. Suite mobile is an installed PWA, so this
+/** The iOS home-indicator inset. Burrow mobile is an installed PWA, so this
  *  is the ordinary case on a phone, not an edge one. */
 const INJECTED_INSET = 34
 

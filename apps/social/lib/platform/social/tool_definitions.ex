@@ -11,7 +11,7 @@ defmodule Platform.Social.ToolDefinitions do
   list posts (with why a human rejected one), propose clips, (Social 5/7)
   queue a clip's render and list clips with their render state, and (Social
   6/7) file a social task for an ask heard in a meeting or chat. Every description
-  carries `human_approves/0` verbatim. A human approves in Suite and the
+  carries `human_approves/0` verbatim. A human approves in Burrow and the
   platform publishes.
 
   ## Grantable, not a default grant
@@ -21,7 +21,7 @@ defmodule Platform.Social.ToolDefinitions do
   admin grants it per runtime, as data in its tool profile.
   """
 
-  @human_approves "A human approves this in Suite and the platform publishes it; agents cannot approve or publish."
+  @human_approves "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
             social_post_list social_clip_propose social_clip_render social_clip_list
@@ -40,7 +40,7 @@ defmodule Platform.Social.ToolDefinitions do
     media_file_ids: %{
       type: "array",
       required: false,
-      description: "Ids of files (Suite Files) in the profile's org to attach.",
+      description: "Ids of files (Burrow Files) in the profile's org to attach.",
       schema: %{type: "array", items: %{type: "string"}}
     },
     link_url: %{
@@ -189,7 +189,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_propose",
         description:
-          "Propose a clip candidate from one of a profile's episodes: EITHER a YouTube source_url OR a video plus its transcript already in Suite Files (source_file_id + transcript_file_id), start and end seconds, caption and speaker. It is created with status candidate; social_clip_render renders it. " <>
+          "Propose a clip candidate from one of a profile's episodes: EITHER a YouTube source_url OR a video plus its transcript already in Burrow Files (source_file_id + transcript_file_id), start and end seconds, caption and speaker. It is created with status candidate; social_clip_render renders it. " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -202,13 +202,13 @@ defmodule Platform.Social.ToolDefinitions do
           source_file_id: %{
             type: "string",
             required: false,
-            description: "Id of the episode video in Suite Files, in the profile's project."
+            description: "Id of the episode video in Burrow Files, in the profile's project."
           },
           transcript_file_id: %{
             type: "string",
             required: false,
             description:
-              "Id of the episode's transcript (VTT, SRT or JSON) in Suite Files, in the profile's project. Required with source_file_id."
+              "Id of the episode's transcript (VTT, SRT or JSON) in Burrow Files, in the profile's project. Required with source_file_id."
           },
           start_s: %{
             type: "number",
@@ -246,7 +246,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_render",
         description:
-          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Suite Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. Attach the render_file_id to a draft with social_draft_create. " <>
+          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Burrow Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. Attach the render_file_id to a draft with social_draft_create. " <>
             @human_approves,
         parameters: %{
           clip_id: %{type: "string", required: true, description: "The clip id."},

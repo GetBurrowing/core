@@ -21,7 +21,7 @@ defmodule Platform.Org.Wiki.Search do
 
   Every core ingest path stamps `memory_type` on the indexed payload and
   memory-service stores it `NOT NULL`. The tag arrives on a hit when the
-  service includes it in its `/search` response (the StartupSuite
+  service includes it in its `/search` response (the MemoryService
   provider passes a non-empty `memory_type` through and omits the key
   otherwise); older service builds return only `entry_id` + `score`, so
   those hits reach this module UNTAGGED. A tag, when present, is

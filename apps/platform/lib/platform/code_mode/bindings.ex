@@ -1,22 +1,24 @@
 defmodule Platform.CodeMode.Bindings do
   @moduledoc """
-  What a `suite_run` script can call, and how each call is carried out
+  What a `burrow_run` script can call, and how each call is carried out
   (task 01a114a8 stage 2).
 
   ## The surface is the runtime's own
 
-  `tool_names/1` is `ToolAuthorization.effective_tools/1` minus `suite_run`
+  `tool_names/1` is `ToolAuthorization.effective_tools/1` minus `burrow_run`
   itself: a script sees exactly the tools its runtime may call over `/mcp`
-  (an external principal's chat allowlist included), bound on `suite` by
-  name (`suite.canvas_create`, `suite.task_get`), plus the generic
-  `suite.call(name, args)`. The legacy dotted name of a held tool is bound
-  too and nests (`suite.canvas.create`, task 01a14a7f stage 3); it is never
-  listed by `suite_run_describe`.
+  (an external principal's chat allowlist included), bound on `burrow` by
+  name (`burrow.canvas_create`, `burrow.task_get`), plus the generic
+  `burrow.call(name, args)`. The global `suite` is the same object (task
+  01a14b9e-50a4 stage 1), so `suite === burrow` and a script written against
+  `suite.task_get` keeps working. The legacy name of a held tool is bound
+  too and a dotted one nests (`burrow.canvas.create`, task 01a14a7f stage 3);
+  it is never listed by `burrow_run_describe`.
 
   ## Every call is a federated tool call
 
   `host/1` builds the function `Platform.CodeMode.Runtime` calls for each
-  `suite.host_call`. A tool call:
+  `burrow.host_call`. A tool call:
 
     1. counts against `max_calls`; past it the call is refused with kind
        `call_limit` and the whole run ends `call_limit` even if the script
@@ -29,7 +31,8 @@ defmodule Platform.CodeMode.Bindings do
        gate, the handler and a ledger row. There is no second authorization
        path here to drift from the transports.
 
-  A nested `suite_run` is refused before `invoke/4` (and ledgered as denied).
+  A nested run is refused before `invoke/4` (and ledgered as denied), under
+  EITHER name: `burrow_run` or its legacy alias `suite_run`.
   `$store.get / set / delete` go to `Platform.CodeMode.Store`, are not tool
   calls and are not ledgered.
 
@@ -47,12 +50,12 @@ defmodule Platform.CodeMode.Bindings do
   alias Platform.Federation.ToolCall
   alias Platform.Federation.ToolCallLedger
 
-  @self_tools ~w(suite_run)
+  @self_tools ~w(burrow_run suite_run)
 
   @doc """
-  Names a script may call: the runtime's effective tools minus suite_run,
-  then the legacy dotted name of every one of them that has one (task
-  01a14a7f stage 3), so `suite.canvas.create(...)` keeps resolving. The
+  Names a script may call: the runtime's effective tools minus burrow_run,
+  then the legacy name of every one of them that has one (task 01a14a7f
+  stage 3), so `burrow.canvas.create(...)` keeps resolving. The
   prelude nests a dotted name; a call through it reaches `ToolCall.invoke/4`
   under that name, which resolves the alias and authorizes the canonical.
   """
@@ -110,7 +113,7 @@ defmodule Platform.CodeMode.Bindings do
   defp handle(name, _args_json, run) when name in @self_tools do
     :atomics.add(run.counter, 1, 1)
     record_denied(name, run)
-    fail("forbidden", "#{name} cannot be called from inside suite_run")
+    fail("forbidden", "#{name} cannot be called from inside burrow_run")
   end
 
   defp handle(name, args_json, run) do

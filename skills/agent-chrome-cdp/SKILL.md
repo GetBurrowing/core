@@ -1,6 +1,6 @@
 ---
 name: agent-chrome-cdp
-description: Set up a dedicated Chrome (or Chromium) instance with Chrome DevTools Protocol enabled on `127.0.0.1:9222`, so an agent can drive web UIs (Suite dev server, GitHub, dashboards) for navigation, screenshots, and DOM inspection. Covers cross-platform binary discovery, headless vs headed tradeoffs, a curl health check, a minimal Python CDP example, and how to keep the browser running across agent sessions via systemd / launchd / Task Scheduler.
+description: Set up a dedicated Chrome (or Chromium) instance with Chrome DevTools Protocol enabled on `127.0.0.1:9222`, so an agent can drive web UIs (Burrow dev server, GitHub, dashboards) for navigation, screenshots, and DOM inspection. Covers cross-platform binary discovery, headless vs headed tradeoffs, a curl health check, a minimal Python CDP example, and how to keep the browser running across agent sessions via systemd / launchd / Task Scheduler.
 ---
 
 # Agent Chrome (CDP)

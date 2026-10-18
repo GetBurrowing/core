@@ -1,12 +1,12 @@
 ---
 name: suite-install-mac
-description: Install a self-hosted Startup Suite on this Mac (Docker Desktop or OrbStack, reached through a Cloudflare tunnel) by driving the deterministic `suite-install setup` CLI. Use when the user asks to install, set up, resume, repair or check a Suite install on a Mac.
+description: Install Burrow, self-hosted, on this Mac (Docker Desktop or OrbStack, reached through a Cloudflare tunnel) by driving the deterministic `suite-install setup` CLI. Use when the user asks to install, set up, resume, repair or check a Burrow install on a Mac.
 ---
 
-# Install Suite on this Mac
+# Install Burrow on this Mac
 
 You drive one program, `suite-install`, which lives at
-`deployment/installer/mac/suite-install` in the Suite core checkout. Every
+`deployment/installer/mac/suite-install` in the Burrow core checkout. Every
 command prints ONE JSON document. The CLI holds all the logic: it decides what
 is done, what is next, and what it needs. This skill only adds conversation.
 Do nothing to the machine that the CLI does not do.
@@ -15,13 +15,13 @@ Do nothing to the machine that the CLI does not do.
 
 Open with an offer, in your own words, along these lines:
 
-> Want me to set up Suite on this Mac? I'll do the work. I need a few things
+> Want me to set up Burrow on this Mac? I'll do the work. I need a few things
 > from you along the way:
 > - a domain in a Cloudflare account you control (for example `example.com`);
 > - a Cloudflare API token with Zone:Read, DNS:Edit and Account: Cloudflare Tunnel:Edit;
-> - an OpenAI API key (Suite's memory search uses OpenAI embeddings);
-> - the Docker Hub read credential for Suite's images (a small JSON file; ask
->   whoever gave you access to Suite);
+> - an OpenAI API key (Burrow's memory search uses OpenAI embeddings);
+> - the Docker Hub read credential for Burrow's images (a small JSON file; ask
+>   whoever gave you access to Burrow);
 > - your email address, for the first admin account;
 > - at the end, about a minute to add a passkey in your browser.
 >
@@ -91,7 +91,7 @@ kept.
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard > My Profile > API Tokens > Create Token (custom): Zone:Read, DNS:Edit, Account: Cloudflare Tunnel:Edit. Then `suite-install setup secret CLOUDFLARE_API_TOKEN`. |
 | `OPENAI_API_KEY` | platform.openai.com > API keys. Then `suite-install setup secret OPENAI_API_KEY`. |
-| `REGISTRY_AUTH` | A docker `config.json` holding a Docker Hub read token for Suite's private images. The user gets it from whoever gave them access. Then `suite-install setup secret REGISTRY_AUTH` (paste the JSON), or save it 0600 and pass `--input REGISTRY_AUTH=@<path>`. |
+| `REGISTRY_AUTH` | A docker `config.json` holding a Docker Hub read token for Burrow's private images. The user gets it from whoever gave them access. Then `suite-install setup secret REGISTRY_AUTH` (paste the JSON), or save it 0600 and pass `--input REGISTRY_AUTH=@<path>`. |
 | `ADMIN_EMAIL` | Just ask. `--input ADMIN_EMAIL=<email>` |
 | `ADMIN_USERNAME` | Optional. The default is the part of the email before `@`. |
 
@@ -114,18 +114,18 @@ kept.
   The first run downloads several GB.
 - `suite-install setup run pocket-id`: enrols the admin's passkey. It opens a
   one-time sign-in link in the user's browser itself; you never see the link.
-  Tell the user: "A browser window opened, signed in to the Suite sign-in
+  Tell the user: "A browser window opened, signed in to the Burrow sign-in
   service. On the Account page, choose Add passkey and follow your Mac's
   prompt (Touch ID or your password). Tell me when it's done." Then re-run
   `suite-install setup run pocket-id`. It reports `done` once a passkey exists.
   If `browser_opened` is false, tell the user to open the link saved in the
   `login_link_file` path themselves. Do not open or read that file.
-- `suite-install setup run oidc-client`: connects Suite's sign-in to pocket-id.
+- `suite-install setup run oidc-client`: connects Burrow's sign-in to pocket-id.
 - `suite-install setup run keepalive`: advisory, and it never blocks the
   install. Relay each `human_steps` entry. The `sudo pmset` command needs the
   owner's password, so they run it, not you. Relay `power_failure_truth` word
   for word: with FileVault on, a power cut leaves the Mac waiting at the unlock
-  screen and Suite stays down until someone logs in. Turning FileVault off is
+  screen and Burrow stays down until someone logs in. Turning FileVault off is
   their security decision. Never suggest it as the default.
 - `suite-install setup run backup`: sets up the nightly database backup (03:15,
   kept 14 days, in `~/SuiteBackups`) and runs it once.
@@ -136,9 +136,9 @@ kept.
 
 ## Managing users after the install
 
-Suite admins add, disable and remove the people who can sign in at
+Burrow admins add, disable and remove the people who can sign in at
 `https://<domain>/admin/sign-in-users`. Each new person gets a one-time
-sign-in link (valid 30 minutes) that the admin passes on to them. Only Suite
+sign-in link (valid 30 minutes) that the admin passes on to them. Only Burrow
 admins see that page. If it cannot reach pocket-id, pocket-id's own admin
 screen at `https://<auth host>/settings/admin` is the fallback.
 

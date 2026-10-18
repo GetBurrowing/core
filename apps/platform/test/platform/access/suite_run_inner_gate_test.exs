@@ -27,7 +27,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
       })
 
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Before"})
-    allowed = "suite.task_update({task_id: '#{task.id}', title: 'Allowed'})"
+    allowed = "burrow.task_update({task_id: '#{task.id}', title: 'Allowed'})"
 
     assert {:ok, %{ok: true}} = Run.execute(runtime, allowed)
     assert Repo.reload!(task).title == "Allowed"
@@ -42,6 +42,9 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
            ] == -32001
 
     for script <- [
+          "burrow.task_update({task_id: '#{task.id}', title: 'Denied'})",
+          "burrow.call('task_update', {task_id: '#{task.id}', title: 'Denied'})",
+          # The legacy global (task 01a14b9e-50a4 stage 1) is the same object.
           "suite.task_update({task_id: '#{task.id}', title: 'Denied'})",
           "suite.call('task_update', {task_id: '#{task.id}', title: 'Denied'})"
         ] do
@@ -56,6 +59,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
 
     tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
     refute "task_update" in tools
-    assert "suite_run_describe" in tools
+    assert "burrow_run_describe" in tools
+    refute "suite_run_describe" in tools
   end
 end

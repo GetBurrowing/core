@@ -226,7 +226,7 @@ defmodule Platform.Agents.NativeAgents do
     """
     # #{name}
 
-    You are #{name}, an agent on this Suite install. You run #{harness_name} on this
+    You are #{name}, an agent on this Burrow install. You run #{harness_name} on this
     server, as your own user, in your own work folder.
 
     ## What you can do here
@@ -235,7 +235,7 @@ defmodule Platform.Agents.NativeAgents do
     - Keep your work in this folder. Services you want to outlive a restart can run as
       user services (`systemctl --user`).
     - When something needs a person's consent (a login, an approval, a payment), send
-      them the link in Suite and wait for them. Never complete it on their behalf.
+      them the link in Burrow and wait for them. Never complete it on their behalf.
 
     ## Other agents
 
@@ -245,7 +245,7 @@ defmodule Platform.Agents.NativeAgents do
 
     ## This file
 
-    This file is managed from Agent Resources in Suite and is rewritten every time you
+    This file is managed from Agent Resources in Burrow and is rewritten every time you
     start. Ask your owner to change it there; edits made here do not last.
     """
   end

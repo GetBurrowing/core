@@ -459,7 +459,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           <%!-- Inbound email provenance (task 01a0cf21 stage 3). An email is
              outside text posted by the "Email (external)" system participant,
              so it is labelled as such above the body rather than looking like
-             a Suite participant's own message. Values come from the message
+             a Burrow participant's own message. Values come from the message
              metadata `Platform.Mail.Inbound` stamped; HEEx escapes them. --%>
           <% email_meta = email_inbound_metadata(@msg) %>
           <div
@@ -483,7 +483,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           </div>
 
           <%!-- Peer-install provenance (task 01a0d90f stage 5). A message
-             from a shared space on another Suite install is outside text
+             from a shared space on another Burrow install is outside text
              posted by a "<name> (via <peer>)" system participant, so it is
              labelled as such above the body, as the mail block above is.
              Values come from the metadata `Platform.Federation.Peers.Ingest`
@@ -496,7 +496,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           >
             <span class="hero-globe-alt size-3.5 shrink-0" aria-hidden="true"></span>
             <span>
-              Shared from {federation_meta["peer_display_name"] || "a Suite peer"}, by {federation_meta[
+              Shared from {federation_meta["peer_display_name"] || "a Burrow peer"}, by {federation_meta[
                 "remote_author"
               ] || "an unknown author"}
             </span>

@@ -98,7 +98,7 @@ defmodule Platform.Responsibilities.Reachability do
 
     * `:broadcastable` — the broadcast at `agent_responder.ex:431` would
       fire. See the non-claim at the top of this moduledoc.
-      *Falsified by:* Suite's own logs showing no `[AgentResponder]
+      *Falsified by:* Burrow's own logs showing no `[AgentResponder]
       broadcasting system_event` line for the key over a window in which its
       trigger demonstrably fired. If that happens the classifier is modelling
       the wrong thing and nothing downstream should build on it.
@@ -181,7 +181,7 @@ defmodule Platform.Responsibilities.Reachability do
 
       Platform.Responsibilities.Reachability.report() |> IO.inspect(limit: :infinity)
 
-  Or the rendered form, which is what `mix suite.responsibility_reachability`
+  Or the rendered form, which is what `mix burrow.responsibility_reachability`
   prints:
 
       Platform.Responsibilities.Reachability.render()
@@ -259,7 +259,7 @@ defmodule Platform.Responsibilities.Reachability do
 
   @doc """
   Render `report/0` (or a supplied report) as the operator-facing string
-  `mix suite.responsibility_reachability` prints: a fixed-width table, a
+  `mix burrow.responsibility_reachability` prints: a fixed-width table, a
   class tally, and one machine-readable `REACH ...` line per row for
   copy-paste out of a release RPC console session.
 

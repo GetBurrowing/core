@@ -38,7 +38,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a13ae7 stage 4 (the section names the canvases block
     # in prose instead of quoting its heading): -30 bytes, predicted before
     # the run.
-    planning: {"de1cbe51221fb19eebb7eb69dd4ab93231083614b4fd923015a08d23058ce4c5", 29_566},
+    #
+    # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
+    # rename of the federation preamble: "Suite" -> "Burrow" twice): +2 bytes,
+    # exactly the descriptor's 13_506 -> 13_508. Every phase renders the
+    # preamble once, so in_progress and in_review move by the same +2.
+    planning: {"beec859da98f613c93f9df2b26fb536d40611c0c501c2ed9f5d8558c2952a379", 29_568},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.
@@ -46,8 +51,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a13ae7 stage 4 (the section names the canvases block
     # in prose instead of quoting its heading): -24 bytes, predicted before
     # the run; in_review unchanged.
-    in_progress: {"c19242ab5665beefe5681bb36585cb14c3e682a4693f8192d188b41265d52080", 17_262},
-    in_review: {"ffc318b1e8653d2e29a5c64c83c90964eac44353f1d1a7d87b7dd6a0350beb20", 19_140}
+    #
+    # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
+    # preamble): +2 bytes, as for planning.
+    in_progress: {"b2c2bf0dba6439c7011c7a2f834c99f66f0c023ba74128871a4baa1a19982460", 17_264},
+    # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
+    # preamble): +2 bytes, as for planning.
+    in_review: {"ac0cd2b4dc9319f22dbc7a02a13cc4080768a131d608db541624f658b531a933", 19_142}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>

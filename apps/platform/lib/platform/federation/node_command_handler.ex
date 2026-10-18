@@ -1,6 +1,6 @@
 defmodule Platform.Federation.NodeCommandHandler do
   @moduledoc """
-  Routes OpenClaw node.invoke.request commands to Suite subsystems.
+  Routes OpenClaw node.invoke.request commands to Burrow subsystems.
 
   **Canvas commands are deprecated** per ADR 0036. `canvas.present`,
   `canvas.navigate`, `canvas.hide`, `canvas.a2ui_push`, `canvas.a2ui_reset`

@@ -80,7 +80,7 @@ For a fuller local-only check, the repo also supports `mix precommit` (compile w
 
 ## Adding a migration
 
-Every migration under `apps/platform/priv/repo/migrations` with a version at or after `20260520000000` must carry a `@moduledoc` of at least 40 characters saying why it exists, and must cite the work that admitted it: a Suite task id (`019fba52`), an ADR number (`ADR-0033`), or a PR number (`#647`). The guard is `apps/platform/test/platform/org/wiki/context_t4_e2e_test.exs`, and its failure message restates all of this.
+Every migration under `apps/platform/priv/repo/migrations` with a version at or after `20260520000000` must carry a `@moduledoc` of at least 40 characters saying why it exists, and must cite the work that admitted it: a Burrow task id (`019fba52`), an ADR number (`ADR-0033`), or a PR number (`#647`). The guard is `apps/platform/test/platform/org/wiki/context_t4_e2e_test.exs`, and its failure message restates all of this.
 
 There is no list to append to and no count to bump. Admission is a property of the migration file itself, so two branches adding migrations on the same day touch only the files they each created.
 

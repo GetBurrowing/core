@@ -127,7 +127,7 @@ defmodule Platform.Branding.Presets do
       one).
 
   One special case of "no key": a row with no key and every colour nil IS the
-  Suite default (that is exactly what `Branding.reset_colors/1` writes), so it
+  Burrow default (that is exactly what `Branding.reset_colors/1` writes), so it
   is labelled with the default's name rather than "Custom".
 
   `current_values` is the shape `Branding.app_colors/1` returns. Hexes are

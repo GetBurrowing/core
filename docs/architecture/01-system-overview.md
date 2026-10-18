@@ -1,11 +1,11 @@
 # System Overview
 
-Top-level component map of Startup Suite Core — all platforms, runtimes, and external integrations.
+Top-level component map of Burrow Core — all platforms, runtimes, and external integrations.
 
 ```mermaid
 graph TB
   subgraph Client["Browser / Client"]
-    Shell["Suite Shell<br/>(LiveView layout)"]
+    Shell["Burrow Shell<br/>(LiveView layout)"]
     Chat["Chat Surface<br/>(ChatLive)"]
     Control["Control Center<br/>(ControlCenterLive)"]
   end

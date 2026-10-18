@@ -1,5 +1,5 @@
 /**
- * Suite's agent host: runs this install's native agents and takes its orders
+ * Burrow's agent host: runs this install's native agents and takes its orders
  * from core (task 01a10322 stage 2).
  *
  * It dials OUT to `${BURROW_CORE_URL}/agent-host/websocket` with

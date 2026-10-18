@@ -66,7 +66,7 @@
         <span class="hero-exclamation-circle size-5" aria-hidden="true"></span>
         <div class="flex-1 text-sm">
           <strong>Can't reach the sign-in service.</strong>
-          The list shows Suite users only. Sign-in status and actions come back when it does.
+          The list shows Burrow users only. Sign-in status and actions come back when it does.
         </div>
         <button type="button" class="btn btn-sm" phx-click="retry" data-role="retry">
           Try again
@@ -237,7 +237,7 @@
         class="flex flex-wrap items-center gap-3 text-sm text-base-content/70"
         data-role="empty-hint"
       >
-        Invite people to give them access to Suite.
+        Invite people to give them access to Burrow.
         <button type="button" class="btn btn-sm btn-primary" phx-click="open_invite">
           Invite user
         </button>
@@ -335,7 +335,7 @@
         />
       </div>
       <div>
-        <label class="label label-text text-xs font-medium" for="invite_role">Suite role</label>
+        <label class="label label-text text-xs font-medium" for="invite_role">Burrow role</label>
         <select id="invite_role" name="invite[role]" class="select select-bordered w-full">
           <option value="member" selected={@invite_values["role"] != "admin"}>Member</option>
           <option value="admin" selected={@invite_values["role"] == "admin"}>Admin</option>
@@ -446,7 +446,7 @@
     </:actions>
   </.sheet>
 
-  <%!-- Remove confirmation, soft variant: Suite data stays. No typed-name
+  <%!-- Remove confirmation, soft variant: Burrow data stays. No typed-name
        field. Error fill on the confirm button only. --%>
   <.sheet
     :if={@remove_target}
@@ -457,7 +457,7 @@
   >
     <:title>Remove {@remove_target.name}?</:title>
     <p class="text-sm text-base-content" data-role="remove-copy">
-      {@remove_target.name} will lose access to Suite and their passkeys will be deleted. Their messages, tasks and files stay in Suite under their name. You can invite them again later with the same email.
+      {@remove_target.name} will lose access to Burrow and their passkeys will be deleted. Their messages, tasks and files stay in Burrow under their name. You can invite them again later with the same email.
     </p>
     <:actions>
       <button type="button" class="btn btn-ghost" phx-click="close_remove">Cancel</button>

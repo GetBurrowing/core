@@ -34,7 +34,7 @@ defmodule PlatformWeb.CanvasLive do
   ## Every state has a way out
 
   The bar's rightmost control is a close `(x)`, and both denial states carry a
-  ghost link back to Suite. A pasted link opened in a fresh tab has no back
+  ghost link back to Burrow. A pasted link opened in a fresh tab has no back
   history, so a page with no exit is a dead end. Where the `(x)` goes depends
   on the grant the viewer resolved: see `assign_close_path/3`.
 

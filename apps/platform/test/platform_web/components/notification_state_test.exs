@@ -336,7 +336,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
 
     text = doc |> LazyHTML.query(~s([data-role="notification-state"])) |> LazyHTML.text()
     assert text =~ "Notifications are off for this browser."
-    assert text =~ "Turn them on to hear about mentions and replies when Suite is not open."
+    assert text =~ "Turn them on to hear about mentions and replies when Burrow is not open."
 
     [class] =
       doc
@@ -355,7 +355,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
     doc = row_doc("denied")
 
     text = doc |> LazyHTML.query(~s([data-role="notification-state"])) |> LazyHTML.text()
-    assert text =~ "Your browser is blocking notifications from Suite."
+    assert text =~ "Your browser is blocking notifications from Burrow."
     assert text =~ "Allow them in your browser's site settings for this page."
 
     # Guarded here as well as in the prompt/denied pair above. Putting an
@@ -572,14 +572,14 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       # must be gone: the generic one AND the browser-specific one.
       refute text =~ @generic_line
       refute text =~ "In Chrome,"
-      refute text =~ "Your browser is blocking notifications from Suite."
+      refute text =~ "Your browser is blocking notifications from Burrow."
     end
 
     test "without the flag the same permission renders the site-settings copy" do
       # The control for the test above: identical inputs but for the flag.
       text = row_text(row_doc("denied", user_agent: @chrome_ua))
 
-      assert text =~ "Your browser is blocking notifications from Suite."
+      assert text =~ "Your browser is blocking notifications from Burrow."
       assert text =~ "In Chrome,"
       refute text =~ "Your browser turned notifications down without asking you."
     end
@@ -704,7 +704,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
         doc = row_doc("denied", native_platform: platform, user_agent: @chrome_ua)
         assert count(doc, ~s([data-role="notification-state"])) == 1
         assert count(doc, "button") == 0, inspect(platform)
-        assert row_text(doc) =~ "Your browser is blocking notifications from Suite."
+        assert row_text(doc) =~ "Your browser is blocking notifications from Burrow."
       end
     end
   end

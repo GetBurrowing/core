@@ -79,7 +79,7 @@ Backfill on up-migration: for every existing `chat_messages` row, insert one `ch
 
 `PATCH /api/messages/:id` — author-only, returns the updated message envelope.
 
-Decision D-2 (default): mounted under `/api/` to match Suite's API conventions. If `apps/platform/lib/platform_web/router.ex` shows messages already under a different prefix (e.g., `/v1/`), follow the existing prefix; verify at execution time.
+Decision D-2 (default): mounted under `/api/` to match Burrow's API conventions. If `apps/platform/lib/platform_web/router.ex` shows messages already under a different prefix (e.g., `/v1/`), follow the existing prefix; verify at execution time.
 
 ### B.2 Request body
 
@@ -287,13 +287,13 @@ Freeze on the agent's first state-changing operation **outside its own session**
 - PR creation, comment, merge
 - Canvas creation / patch / restore (visible artifact)
 - External API mutation (any non-GET HTTP from a tool the agent invoked)
-- Suite-side state changes: task_update, validation_evaluate, review_request_create, etc.
+- Burrow-side state changes: task_update, validation_evaluate, review_request_create, etc.
 
 Operations that do NOT freeze (read-only / agent-internal):
 - File read, grep, list, glob, find
 - Web search / fetch (read-only)
 - LLM calls (the agent thinking)
-- Reading Suite state: task_get, plan_get, space_get_messages
+- Reading Burrow state: task_get, plan_get, space_get_messages
 
 ### F.3 Policy 3 — Agent self-edits not allowed
 
@@ -346,7 +346,7 @@ The dialog is intentionally factual, not preachy. It states what's true about ag
 | D-3 | Rate-limit backing store — add Hammer dep, or DIY windowed counter, or use existing infra | Verify at Task 3 execution; flag if existing infra found | Task 3 implementer |
 | D-4 | `GET /api/messages/:id/versions` endpoint — in Task 3 (proposed) or deferred to Task 6 | In Task 3 — keeps the edit + history scope together | Task 3 implementer |
 | D-5 | The "agent in active context" check (Policy 1) — where in the agent runtime does this filter live? | TBD by agent-runtime team; this contract only pins the rule, not the impl location | Agent platform team |
-| D-6 | "Ad-hoc directive" freeze trigger detection (Policy 2) — where does the runtime hook into tool-use to record the freeze event? | Suite MCP wrapper layer can intercept tool calls and emit a freeze record; alt is per-tool annotations | Agent platform team |
+| D-6 | "Ad-hoc directive" freeze trigger detection (Policy 2) — where does the runtime hook into tool-use to record the freeze event? | Burrow MCP wrapper layer can intercept tool calls and emit a freeze record; alt is per-tool annotations | Agent platform team |
 
 ---
 

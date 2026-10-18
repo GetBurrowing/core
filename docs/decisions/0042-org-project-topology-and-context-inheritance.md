@@ -8,7 +8,7 @@
 
 ## Context
 
-Suite has two parallel hierarchies in the schema that don't intersect:
+Burrow has two parallel hierarchies in the schema that don't intersect:
 
 1. **Orgs** (`orgs`): hierarchical via `parent_org_id`, with a partial unique index (`orgs_single_root`) enforcing **exactly one root**. Today: `Fabrikam` (root) → 4 tenant children (`Soylent`, `Wayne-Tech`, `SXI`, `Paragon`). Membership lives in `org_memberships(user_id, org_id, role)` with `role ∈ {admin, member}` and a `roles_locked_at` lock against the email-domain auto-promote rule (ADR-adjacent — see migration `20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`).
 

@@ -12,7 +12,7 @@ defmodule Platform.Chat.ReplyFailure.Watchdog do
       resumed its session, the pane read ready, and the dev channel dropped
       the message. No turn ran at all.
 
-  Both looked the same from Suite: "<Name> is thinking…" forever, no reply,
+  Both looked the same from Burrow: "<Name> is thinking…" forever, no reply,
   no notice. This is the one mechanism for both.
 
   ## What it does

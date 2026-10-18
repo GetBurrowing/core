@@ -344,7 +344,7 @@ defmodule Platform.ExternalAgentsTest do
 
   describe "probe/1" do
     # Mirrors the Req.Test stub pattern used in
-    # Platform.Memory.Providers.StartupSuiteTest and
+    # Platform.Memory.Providers.MemoryServiceTest and
     # Platform.Agents.Providers.CodexTest: register a named stub keyed
     # for this suite, point the injected Req client at it via
     # `Application.put_env/3`, and clear the env on exit.

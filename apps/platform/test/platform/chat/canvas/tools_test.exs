@@ -79,7 +79,7 @@ defmodule Platform.Chat.Canvas.ToolsTest do
     test "states that no share-token mechanism exists rather than pointing at one" do
       boundary = Tools.sharing_boundary()
 
-      assert boundary =~ "canonical Suite links, never share tokens"
+      assert boundary =~ "canonical Burrow links, never share tokens"
       assert boundary =~ "No share-token mechanism exists"
     end
 

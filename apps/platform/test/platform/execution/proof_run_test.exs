@@ -235,7 +235,7 @@ defmodule Platform.Execution.ProofRunTest do
       Application.put_env(:platform, :execution,
         github_credentials: [
           token: "test-token",
-          author_name: "Suite Runner",
+          author_name: "Burrow Runner",
           author_email: "runner@suite.local"
         ]
       )

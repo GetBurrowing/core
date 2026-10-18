@@ -141,7 +141,7 @@ defmodule PlatformWeb.ControlCenter.AgentCard do
 
   # Log in opens the agent's detail page, where the login steps live (stage
   # 6). It never links to the login page the host reported: that page ends in
-  # a code meant to be typed back into the CLI, which Suite must not relay,
+  # a code meant to be typed back into the CLI, which Burrow must not relay,
   # so it would be a dead end.
   defp row_action(%{view: %{action: :log_in}} = assigns) do
     ~H"""

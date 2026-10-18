@@ -1,7 +1,7 @@
 defmodule Platform.Experiments.Surfaces.CodeMode do
   @moduledoc """
   The `dispatch.code_mode` surface: whether a task's dispatches are told to
-  work through `suite_run` (one script calling many Suite tools) or through
+  work through `suite_run` (one script calling many Burrow tools) or through
   direct, one-at-a-time tool calls. Task 01a114a8 stage 4.
 
   ## What it varies, and what it does not
@@ -40,6 +40,19 @@ defmodule Platform.Experiments.Surfaces.CodeMode do
 
   The only target is `"dispatch.prompt_directive"` (`targets/0`). The payload
   is `%{"suite_run" => boolean}`; the control is `%{"suite_run" => false}`.
+
+  ## The legacy tool name in the directives, on purpose
+
+  The run tool is `burrow_run` now and `suite_run` is its hidden alias (task
+  01a14b9e-50a4 stage 1, `Platform.Federation.ToolAliases`). The payload key
+  `"suite_run"` stays because live experiment rows store it. The two
+  directives ALSO still say `suite_run` and "Suite tools", byte-identical:
+  measured read-only on 2026-10-17 at 21:01Z (both production installs on
+  image 95040921), one install had experiment `code-mode-2026-10` RUNNING on
+  this surface (the other had none), and changing an arm's text
+  mid-experiment would change the condition being measured. The alias keeps
+  the directives working. Rename them when no experiment on
+  `dispatch.code_mode` is running.
   """
 
   @behaviour Platform.Experiments.Surface

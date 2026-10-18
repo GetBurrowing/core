@@ -145,7 +145,7 @@ The audit found no explicit type scale; sizes are picked ad-hoc per HEEx via Tai
 
 **Why these choices:**
 
-- 9 levels covers Suite's surface variety without over-fragmenting (audited surfaces have at most 3 hierarchy levels visible per screen).
+- 9 levels covers Burrow's surface variety without over-fragmenting (audited surfaces have at most 3 hierarchy levels visible per screen).
 - `body-strong` and `small-strong` exist as paired weight-variants to avoid re-tokenizing weight per surface (e.g. button labels are `body-strong`, not a separate `button-label-bold` token).
 - Letter-spacing tightens at display sizes (perceptual default for large type), neutral at body, opens slightly at caption.
 - Mono via Tailwind's default mono stack — no new font import needed.
@@ -377,7 +377,7 @@ surfaces that need tap-to-filter use `:default`.
 
 ## 9. What's NOT in foundations
 
-- **Component-level tokens** (e.g. `--btn-padding-x` per-button-size). Adds complexity without payoff at this scale; the Tailwind utility classes mapping to scale tokens IS the component-level spec for Suite. If component-token scaffolding becomes a need later (e.g. a third-party theming layer), Phase 4 can promote.
+- **Component-level tokens** (e.g. `--btn-padding-x` per-button-size). Adds complexity without payoff at this scale; the Tailwind utility classes mapping to scale tokens IS the component-level spec for Burrow. If component-token scaffolding becomes a need later (e.g. a third-party theming layer), Phase 4 can promote.
 - **Animation timing tokens** (e.g. `--duration-fast`, `--duration-slow`). Deferred to `04-accessibility.md` as part of the motion rule, since the audit's only animation finding is `1B-A11Y-3` (`prefers-reduced-motion`), which gates *whether* animation runs more than how long it takes.
 - **Iconography weight tokens** beyond outline/solid. Heroicons doesn't expose a weight axis; a custom icon font would, but Phase 2 keeps the system on Heroicons.
 

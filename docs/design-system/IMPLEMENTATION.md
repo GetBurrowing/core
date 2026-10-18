@@ -12,7 +12,7 @@
 - **Effort** is "agent-hours assuming a focused agent with the design system docs and audit findings open." Add ~30-50% for human pair-programming.
 - **Files touched** uses `~/projects/core/...` paths.
 - **Anchors** cite the audit finding ID(s) that justify the work.
-- **Each item should be filed as its own Suite Task** under project `019d1357-cb08-7023-b165-fd19e9462316` once Marlowe approves this plan. Recommend NOT batching multiple items into one task — they'll have different validation gates.
+- **Each item should be filed as its own Burrow Task** under project `019d1357-cb08-7023-b165-fd19e9462316` once Marlowe approves this plan. Recommend NOT batching multiple items into one task — they'll have different validation gates.
 
 ---
 
@@ -212,16 +212,16 @@
 
 ## What's NOT in this plan
 
-- **Performance work** (lighthouse signals). Re-run lighthouse after step 1 lands and file findings as separate Suite Tasks if any new ones surface.
+- **Performance work** (lighthouse signals). Re-run lighthouse after step 1 lands and file findings as separate Burrow Tasks if any new ones surface.
 - **Desktop redesign of tasks / activity.** Mobile-first scope per the audit; desktop refresh is a follow-up phase.
 - **Marketing site / public landing pages.** Out of audit scope.
-- **i18n.** Voice doc is English-only. When Suite goes multilingual, `03-voice.md` becomes the source-of-truth for English voice; per-locale equivalents are separate work.
+- **i18n.** Voice doc is English-only. When Burrow goes multilingual, `03-voice.md` becomes the source-of-truth for English voice; per-locale equivalents are separate work.
 
 ---
 
-## Suite Tasks — recommend filing
+## Burrow Tasks — recommend filing
 
-Once Marlowe approves this implementation plan, recommend filing each numbered item above as its own Suite Task under project `019d1357-cb08-7023-b165-fd19e9462316`. Don't batch — each item has different validation needs (CSS-only items just need `lint_pass` + `test_pass`; component-rebuild items need `manual_approval` for visual verification).
+Once Marlowe approves this implementation plan, recommend filing each numbered item above as its own Burrow Task under project `019d1357-cb08-7023-b165-fd19e9462316`. Don't batch — each item has different validation needs (CSS-only items just need `lint_pass` + `test_pass`; component-rebuild items need `manual_approval` for visual verification).
 
 **Suggested task naming:**
 - "01: Land app.css design-system diff (contrast + focus + motion)"

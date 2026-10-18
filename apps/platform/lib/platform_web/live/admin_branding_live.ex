@@ -11,7 +11,7 @@ defmodule PlatformWeb.AdminBrandingLive do
 
   ## Admin panel, not org settings
 
-  An org in Suite is a CLIENT, not a deployment. One install serves many
+  An org in Burrow is a CLIENT, not a deployment. One install serves many
   orgs and they all get the same home-screen icon, so branding is an
   install-wide setting behind the root-admin tier — the same
   `live_session :admin` gate `/admin/orgs` and `/admin/users` sit behind.
@@ -69,7 +69,7 @@ defmodule PlatformWeb.AdminBrandingLive do
     * Each slot has a native colour swatch AND a typeable hex field in one
       form. `validate_colors` reads `_target` to take whichever changed. A
       value that does not parse leaves the last good colour in the draft and
-      shows an inline error; a blank value is "Suite default" (nil).
+      shows an inline error; a blank value is "Burrow default" (nil).
     * `Palette.checks/2` re-runs on every change. Save is disabled while any
       check blocks, with the reason written beside it. That is convenience:
       `Branding.update_colors/2` re-runs the same checks and refuses, and the
@@ -225,7 +225,7 @@ defmodule PlatformWeb.AdminBrandingLive do
 
   @doc """
   The colour a slot actually resolves to for display: the draft value, else
-  (accent) the action colour, else the Suite default. Always `#rrggbb`, so
+  (accent) the action colour, else the Burrow default. Always `#rrggbb`, so
   it is what a native `<input type="color">` can hold.
   """
   @spec resolved(map(), atom(), atom()) :: String.t()
@@ -239,7 +239,7 @@ defmodule PlatformWeb.AdminBrandingLive do
     end
   end
 
-  @doc "The placeholder a blank hex field shows: the Suite default, or 'same as action'."
+  @doc "The placeholder a blank hex field shows: the Burrow default, or 'same as action'."
   @spec placeholder(atom(), atom()) :: String.t()
   def placeholder(_mode, :accent), do: "same as action"
 
@@ -249,7 +249,7 @@ defmodule PlatformWeb.AdminBrandingLive do
   @doc """
   The inline `style` for a preset card: split diagonally between the preset's
   light and dark surfaces, with each half's action colour available as
-  `--swatch-light` / `--swatch-dark`. nil slots (Suite default) resolve
+  `--swatch-light` / `--swatch-dark`. nil slots (Burrow default) resolve
   through `resolved/3`, so no hex is spelled here.
   """
   @spec preset_style(Presets.t()) :: String.t()

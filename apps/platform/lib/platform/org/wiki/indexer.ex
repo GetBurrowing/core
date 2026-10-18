@@ -75,7 +75,7 @@ defmodule Platform.Org.Wiki.Indexer do
 
   The flush runs inside this GenServer, not in a Task, so corpora are
   dispatched one after another and a slow call delays the rest. With the
-  long ingest timeout (`Platform.Memory.Providers.StartupSuite`, 120s by
+  long ingest timeout (`Platform.Memory.Providers.MemoryService`, 120s by
   default) a slow page ingest makes the journal and delete corpora wait up
   to that long behind it. Before, they waited 5s per attempt, and the
   2026-09-25 incident repeated that 146 times; one long wait that succeeds

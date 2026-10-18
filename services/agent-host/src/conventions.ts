@@ -1,5 +1,5 @@
 /**
- * Suite's conventions, loaded for every native agent whatever its owner
+ * Burrow's conventions, loaded for every native agent whatever its owner
  * writes in CLAUDE.md (task 01a10322 stage 7, round 2).
  *
  * THE DEFECT. The owner edits an agent's work-dir CLAUDE.md in Agent files,
@@ -35,9 +35,9 @@ export const BURROW_CLI_LIB = "/usr/local/share/suite/cli";
 export const USER_MEMORY = ".claude/CLAUDE.md";
 
 export const HEADER = [
-  "# Startup Suite conventions",
+  "# Burrow conventions",
   "",
-  "Written by Suite's agent host every time this agent starts; edits here do not last.",
+  "Written by Burrow's agent host every time this agent starts; edits here do not last.",
   "Your owner's instructions for you are in ~/work/CLAUDE.md, managed from Agent",
   "Resources. These conventions apply whatever that file says.",
   "",
@@ -45,12 +45,12 @@ export const HEADER = [
 
 /**
  * Used only when suite-cli's text cannot be loaded. The one convention without
- * which a native agent fails silently: an answer that never reaches Suite.
+ * which a native agent fails silently: an answer that never reaches Burrow.
  */
 export const FALLBACK = [
   "## Always respond in channel",
   "",
-  "Every reply to a Suite message goes into the Suite channel with the `suite_reply`",
+  "Every reply to a Burrow message goes into the Burrow channel with the `suite_reply`",
   "tool, using the `space_id` from the inbound `<channel>` tag. A terminal-only answer",
   "is an answer nobody received.",
   "",

@@ -2,7 +2,7 @@ defmodule PlatformWeb.InboxLive do
   @moduledoc """
   The Inbox surface — the "My Notifications" landing page at `/inbox`.
 
-  It aggregates the things waiting on the viewer across Suite as a live,
+  It aggregates the things waiting on the viewer across Burrow as a live,
   sectioned, dismissable list, backed by `Platform.Inbox`:
 
     * **Awaiting your review** — `review_request_pending`, `task_plan_review`,

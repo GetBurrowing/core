@@ -1,10 +1,10 @@
 /**
- * An agent's recent pane text, for Suite's read-only "Recent output"
+ * An agent's recent pane text, for Burrow's read-only "Recent output"
  * disclosure (core task 01a10322 stage 6).
  *
  * READ ONLY. This captures the pane; nothing in this daemon ever types into
  * it. There is no command from core that carries keystrokes, and there must
- * not be: a Claude login code typed into Suite and relayed here would be Suite
+ * not be: a Claude login code typed into Burrow and relayed here would be Burrow
  * intermediating a Claude login, which Anthropic's terms forbid.
  *
  * WHAT IT WITHHOLDS. A pane that shows a Claude login screen (the method

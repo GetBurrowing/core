@@ -209,7 +209,7 @@ config :platform, Platform.Security.Sweeper,
   scanner_timeout_ms: :timer.seconds(60)
 
 # Security scanner runtime knobs (task 019f3e8e-4406 stages 3-4,
-# ADR-0043). `project_id` is the Suite project the scanners file
+# ADR-0043). `project_id` is the Burrow project the scanners file
 # their findings under — leave `nil` in dev and set an explicit
 # project UUID at deploy time. `cve_scan_stale_days` gates the
 # medium/low-severity long-tail rule from the task description.
@@ -328,7 +328,7 @@ config :esbuild,
   #
   # The three --alias flags drop `mermaid`, `cytoscape` and `katex`, which
   # Excalidraw depends on statically only for its mermaid-import feature that
-  # Suite does not surface. They cut the island from ~8.0 MB to ~4.7 MB.
+  # Burrow does not surface. They cut the island from ~8.0 MB to ~4.7 MB.
   #
   # --legal-comments=linked emits excalidraw_island.js.LEGAL.txt next to the
   # bundle, preserving the upstream MIT notices. See assets/THIRD_PARTY_NOTICES.md.
@@ -459,7 +459,7 @@ config :platform, :host_surface_enforcement, :on
 # Deliberately UNSET here: this file is the shared base every environment
 # (including a stranger's fresh production install) imports from, and
 # task 01a068f6 exists precisely because install-specific defaults living
-# here make every fresh Suite install come up implicitly owned by one
+# here make every fresh Burrow install come up implicitly owned by one
 # client's org — an install that never sets ROOT_ORG_ADMIN_EMAIL_DOMAIN must
 # get `nil` (nobody auto-admined), not a silently inherited domain. The test
 # environment pins this key in `config/test.exs` as a per-environment
@@ -467,7 +467,7 @@ config :platform, :host_surface_enforcement, :on
 #
 # Until task 01a081c2 the domain was a literal regex compiled into
 # tenancy.ex, which made one install's email addresses automatic admins on
-# somebody else's Suite. runtime.exs threads the per-install value
+# somebody else's Burrow install. runtime.exs threads the per-install value
 # via ROOT_ORG_ADMIN_EMAIL_DOMAIN, and a BLANK value there disables
 # auto-admin entirely even when dev/test pins a default above. See the
 # accessor's @doc for why blank must not fall back to an environment

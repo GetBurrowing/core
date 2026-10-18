@@ -297,7 +297,7 @@ def stack_unit(plan):
     lines = [
         f"# {HEADER.format(name=plan.name)}",
         "[Unit]",
-        f"Description=Suite stack ({plan.name})",
+        f"Description=Burrow stack ({plan.name})",
         "Requires=docker.service",
         "After=docker.service network-online.target",
         "Wants=network-online.target",

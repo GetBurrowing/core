@@ -1,4 +1,4 @@
-# Entity relationships — Suite domain
+# Entity relationships — Burrow domain
 
 **Visual reference for the design system.** This diagram pins the canonical entity vocabulary the design system speaks. It's the single picture that answers "when copy says `participant`, what data does that map to?" Cross-references `03-voice.md` for the user-facing terminology.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start a Suite Phoenix dev server in the background on a free port.
+# Start a Burrow Phoenix dev server in the background on a free port.
 #
 # Cross-platform (macOS / Linux / WSL2). Picks a port in 4001-4099 using whichever
 # of (ss, lsof, /dev/tcp) is available. Honors any DATABASE_URL or

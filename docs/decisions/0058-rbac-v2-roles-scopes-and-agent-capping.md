@@ -732,7 +732,7 @@ nothing in that file calls `ToolAuthorization`. **Ownerless agents are capped at
 - never `install.admin`, a module-admin permission, `access.manage` or `agents.manage_*`;
 - any agent-principal deny still applies.
 
-This is no behaviour change: an ownerless agent's Suite reach today is bounded by space
+This is no behaviour change: an ownerless agent's Burrow reach today is bounded by space
 participation, and that is inside `member`. Managing an ownerless agent needs `agents.manage_all`:
 - creating one;
 - releasing a responsibility pin it holds;

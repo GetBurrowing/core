@@ -61,9 +61,9 @@ Add a new message renderer in the chat UI for `action_card` message type. When a
 After approval, Pixel and Beacon need to have a back-and-forth conversation to clarify implementation details. This should happen out of the main channel to reduce noise. Harper should be able to observe but not be interrupted.
 
 ### Proposed Solution
-When `design_approved` fires, Suite automatically creates or reuses a DM space between the Pixel runtime and Beacon runtime. Their conversation happens there. Harper is added as a silent observer (presence without notification).
+When `design_approved` fires, Burrow automatically creates or reuses a DM space between the Pixel runtime and Beacon runtime. Their conversation happens there. Harper is added as a silent observer (presence without notification).
 
-**Suite changes needed:**
+**Burrow changes needed:**
 - `create_group_conversation/3` — extend to support agent-to-agent DMs (currently user-only)
 - New space kind: `"agent_dm"` — like `dm` but between agents
 - RuntimeChannel — dispatch `design_approved` event to Beacon as an attention event with space_id of the new DM
@@ -76,7 +76,7 @@ When `design_approved` fires, Suite automatically creates or reuses a DM space b
 
 ### Acceptance Criteria
 - [ ] Approval creates a DM space between Pixel and Beacon
-- [ ] Harper can view the DM space in Suite but doesn't get notified for each message
+- [ ] Harper can view the DM space in Burrow but doesn't get notified for each message
 - [ ] Beacon creates a fully-specced task when the DM conversation resolves
 - [ ] Task link is posted back in the original channel
 - [ ] DM space is reused for the same agent pair (not a new one per design)

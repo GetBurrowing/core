@@ -1,12 +1,12 @@
 # 03 — Voice
 
-**Phase 2 deliverable.** Copy guidance, button verbs, error messages, and Suite's agent-native empty-state pattern. Anchored to the naming drifts resolved by Marlowe (2026-05-08) + the empty-state direction Marlowe pinned during Phase 2 drafting (2026-05-09).
+**Phase 2 deliverable.** Copy guidance, button verbs, error messages, and Burrow's agent-native empty-state pattern. Anchored to the naming drifts resolved by Marlowe (2026-05-08) + the empty-state direction Marlowe pinned during Phase 2 drafting (2026-05-09).
 
 ---
 
 ## 1. Voice descriptors
 
-Suite's voice is **direct, specific, agent-aware, and warm-but-not-cute**. Three operating descriptors:
+Burrow's voice is **direct, specific, agent-aware, and warm-but-not-cute**. Three operating descriptors:
 
 | Descriptor                        | What it means                                                                                       | Anti-pattern                                                |
 |----------------------------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------------|
@@ -14,7 +14,7 @@ Suite's voice is **direct, specific, agent-aware, and warm-but-not-cute**. Three
 | **Specific**                      | Use the actor + the action by name. Don't hide behind passive voice.                                  | "An action will be performed."                                |
 | **Agent-aware**                   | When an agent is the subject of an action, name the agent role; when the human is, address them directly. | "Your task will be processed by an automated system."         |
 
-What Suite **avoids**: superlatives ("amazing!"), emoji-stuffing in copy, breezy banter that hides functionality, jargon without on-the-spot definition.
+What Burrow **avoids**: superlatives ("amazing!"), emoji-stuffing in copy, breezy banter that hides functionality, jargon without on-the-spot definition.
 
 ---
 
@@ -105,7 +105,7 @@ When the error is a transient network condition that the user will recover from:
 
 ## 5. Empty state pattern (anchored to `1B-USE-3` + Marlowe's 2026-05-09 direction)
 
-Every empty state has **three components**: what's empty, why it's empty in context, one **agent-mediated action** the user can take. Suite is agent-native — the empty state is precisely where an agent could fill the gap, and copy should reflect that.
+Every empty state has **three components**: what's empty, why it's empty in context, one **agent-mediated action** the user can take. Burrow is agent-native — the empty state is precisely where an agent could fill the gap, and copy should reflect that.
 
 ### 5.1 Brand-new user (no spaces yet)
 
@@ -208,7 +208,7 @@ Click/tap scrolls to and highlights the original. Tense is matter-of-fact; agent
 
 - **Marketing site / landing-page copy** — separate concern, not refined here.
 - **Email + push-notification copy** — Phase 4 follow-up; the patterns in this doc are starting templates for them.
-- **Copy localization / i18n** — out of scope. Suite ships English-only as of this audit; future i18n work consumes this doc as the source-of-truth for English then maps to localized voice docs per locale.
+- **Copy localization / i18n** — out of scope. Burrow ships English-only as of this audit; future i18n work consumes this doc as the source-of-truth for English then maps to localized voice docs per locale.
 - **Internal admin / debug surfaces** — Settings panels mapped to architecture concepts (`principal`, `workspace`, `runtime`) keep their domain terms. This doc covers user-facing copy.
 
 ---

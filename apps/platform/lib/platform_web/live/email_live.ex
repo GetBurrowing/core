@@ -59,7 +59,7 @@ defmodule PlatformWeb.EmailLive do
   ## Inbound mail is outside text
 
   A message body renders as escaped plain text only — no HTML, no markdown,
-  no mention parsing — under the label "External email — not from a Suite
+  no mention parsing — under the label "External email — not from a Burrow
   member". "Add to files" stores the body inside the untrusted-content
   wrapper (`Platform.Mail.Mailbox.render_markdown/2`).
 
@@ -1285,7 +1285,7 @@ defmodule PlatformWeb.EmailLive do
     do: "not email addresses: #{Enum.join(bad, ", ")}"
 
   defp draft_error_text({:unknown_recipient_user_ids, _}),
-    do: "a recipient is no longer a Suite user"
+    do: "a recipient is no longer a Burrow user"
 
   defp draft_error_text({:invalid, message}), do: message
   defp draft_error_text(%Ecto.Changeset{} = changeset), do: changeset_text(changeset)

@@ -53,9 +53,9 @@ defmodule PlatformWeb.Components.FilePreview do
   grants code execution inside an origin that still can't phone home.
 
   What THIS stage adds is the attribution bar above the frame, in
-  Suite's own DOM, never inside the `<iframe>`. That placement is the
+  Burrow's own DOM, never inside the `<iframe>`. That placement is the
   actual mitigation for the one thing the sandbox cannot stop: a framed
-  page that imitates Suite to phish whoever is clicking through it. A
+  page that imitates Burrow to phish whoever is clicking through it. A
   badge drawn inside the iframe is worthless against that — an
   imitation page simply paints its own copy over it — so the bar has to
   live on a surface the framed document cannot draw into, and it owns a
@@ -260,7 +260,7 @@ defmodule PlatformWeb.Components.FilePreview do
   # Attribution bar for a flagged (interactive) HTML preview (task
   # 01a06a20 stage 3).
   #
-  # Suite DOM, not iframe content — see the "Interactive prototypes"
+  # Burrow DOM, not iframe content — see the "Interactive prototypes"
   # moduledoc section for why that placement is the mitigation, not
   # decoration. Six token slots, no more: `base-200` ground, `base-300`
   # hairline, `base-content` filename, `neutral` attribution, `info` the

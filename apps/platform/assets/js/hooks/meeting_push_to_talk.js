@@ -8,7 +8,7 @@ import { getHold, beginHold, patchHold, clearHold, appendHoldText } from "./lib/
  *
  * ## The waveform reads the LOCAL track, because there is nowhere else
  *
- * The user's microphone never reaches Suite. It is published to the
+ * The user's microphone never reaches Burrow. It is published to the
  * LiveKit SFU and that is the end of it — there is no `getUserMedia`,
  * `MediaRecorder` or `AudioContext` anywhere else in this codebase, and
  * no server-side level to subscribe to. So the only honest source for a

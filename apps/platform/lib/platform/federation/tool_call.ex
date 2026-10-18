@@ -12,7 +12,7 @@ defmodule Platform.Federation.ToolCall do
 
   Both federation transports call it: `PlatformWeb.MCPController`
   (`tools/call`) and `PlatformWeb.RuntimeChannel` (`tool_call`). Stage 2's
-  `suite_run` inner calls call it too, with `parent_run_id:` set. One path
+  `burrow_run` inner calls call it too, with `parent_run_id:` set. One path
   means authorization is structural for every caller, not a copy each
   caller has to remember.
 
@@ -44,7 +44,7 @@ defmodule Platform.Federation.ToolCall do
   Every call, whether ok, error or denied, writes one `dispatch_tool_calls`
   row through `Platform.Federation.ToolCallLedger.record/1`. The row holds the
   tool NAME, status, duration, a size figure and the attribution. It never
-  holds argument values, result values or secrets. A `suite_run` whose run
+  holds argument values, result values or secrets. A `burrow_run` whose run
   failed is ledgered as `"error"` with an enumerated `error_kind` (see
   `classify/2`); its wire result is unchanged. The write never raises
   into the call and never changes its result (ADR-0048 posture). See
@@ -66,15 +66,15 @@ defmodule Platform.Federation.ToolCall do
 
   Options:
 
-    * `:parent_run_id` — the `suite_run` run this call is an inner call of
+    * `:parent_run_id` — the `burrow_run` run this call is an inner call of
       (stage 2). Absent for a model-issued call.
     * `:attribution_hints` — ids to attribute the call by when its own args
       carry no `task_id`, `stage_id` or `plan_id` (task 01a114a8 stage 4).
-      `suite_run` passes the ids from its `inputs` for every inner call. A
-      `suite_run` call itself is attributed by its `inputs` the same way.
+      `burrow_run` passes the ids from its `inputs` for every inner call. A
+      `burrow_run` call itself is attributed by its `inputs` the same way.
 
   Every call gets a fresh UUIDv7 that is both its ledger row's id and
-  `context.tool_call_id` for the handler. `suite_run` uses it as its
+  `context.tool_call_id` for the handler. `burrow_run` uses it as its
   `run_id`, so the run's own row and its inner calls' `parent_run_id` are
   the same value.
   """
@@ -180,25 +180,39 @@ defmodule Platform.Federation.ToolCall do
   The ledger `{status, error_kind}` for a call's outcome (task 01a115b5
   stage 1).
 
-  A failed `suite_run` run returns `{:ok, %{ok: false, error: %{kind: kind}}}`:
+  A failed `burrow_run` run returns `{:ok, %{ok: false, error: %{kind: kind}}}`:
   a successful CALL on the wire (MCP `isError: false`, a shape this module
   never changes) whose RUN failed. The ledger reads it as `"error"`, with
   `error_kind` set to `kind` when it is one of `Platform.CodeMode.Run.error_kinds/0`
   and nil otherwise, so the column never holds a free-text value. Only
-  `suite_run` is read this way; every other tool keeps `{:ok, _}` as `"ok"`.
+  `burrow_run` (sent under either name) is read this way; every other tool keeps `{:ok, _}` as `"ok"`.
   Every other outcome has a nil `error_kind`. The error message is never
   part of the result.
   """
   @spec classify(String.t(), :denied | result()) :: {String.t(), String.t() | nil}
-  def classify("suite_run", {:ok, %{ok: false, error: %{kind: kind}}}),
+  def classify(name, outcome), do: do_classify(canonical(name), outcome)
+
+  defp do_classify("burrow_run", {:ok, %{ok: false, error: %{kind: kind}}}),
     do: {"error", if(kind in Run.error_kinds(), do: kind)}
 
-  def classify(_name, :denied), do: {"denied", nil}
-  def classify(_name, {:ok, _data}), do: {"ok", nil}
-  def classify(_name, {:error, _reason}), do: {"error", nil}
+  defp do_classify(_name, :denied), do: {"denied", nil}
+  defp do_classify(_name, {:ok, _data}), do: {"ok", nil}
+  defp do_classify(_name, {:error, _reason}), do: {"error", nil}
+
+  # The name a ledger branch keys on: the canonical name, so a call that SENT
+  # the legacy `suite_run` (task 01a14b9e-50a4 stage 1) is classified,
+  # attributed and fingerprinted exactly as `burrow_run` is. The ledger's
+  # `tool` column still records the sent name (`record/7`). No telemetry
+  # here: `canonical_name/2` already emitted it for this call.
+  defp canonical(name) do
+    case ToolAliases.resolve(name) do
+      {:alias, canonical} -> canonical
+      :canonical -> name
+    end
+  end
 
   # The call's own ids win. Only when it names no task, stage or plan do the
-  # fallback ids apply: for `suite_run`, the ids in its `inputs`; for an
+  # fallback ids apply: for `burrow_run`, the ids in its `inputs`; for an
   # inner call, the ids its run passed as `:attribution_hints`. A call that
   # names its own task is never re-attributed to the run's.
   @task_keys ~w(task_id stage_id plan_id)
@@ -210,8 +224,8 @@ defmodule Platform.Federation.ToolCall do
       own
     else
       fallback =
-        case {name, Map.get(args, "inputs")} do
-          {"suite_run", %{} = inputs} -> ToolCallLedger.attribution_hints(inputs)
+        case {canonical(name), Map.get(args, "inputs")} do
+          {"burrow_run", %{} = inputs} -> ToolCallLedger.attribution_hints(inputs)
           _ -> Keyword.get(opts, :attribution_hints, %{})
         end
 
@@ -219,16 +233,18 @@ defmodule Platform.Federation.ToolCall do
     end
   end
 
-  # `suite_run` (stage 2): the sha256 and byte length of the script, never
+  # `burrow_run` (stage 2): the sha256 and byte length of the script, never
   # the script itself. Every other tool records neither.
-  defp script_fingerprint("suite_run", %{"script" => script}) when is_binary(script) do
+  defp script_fingerprint(name, args), do: do_script_fingerprint(canonical(name), args)
+
+  defp do_script_fingerprint("burrow_run", %{"script" => script}) when is_binary(script) do
     %{
       script_sha256: :crypto.hash(:sha256, script) |> Base.encode16(case: :lower),
       script_bytes: byte_size(script)
     }
   end
 
-  defp script_fingerprint(_name, _args), do: %{}
+  defp do_script_fingerprint(_name, _args), do: %{}
 
   # BEAM external term size: a cheap, allocation-free proxy for the result's
   # size. It is NOT the JSON byte count on the wire.

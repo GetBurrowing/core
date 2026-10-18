@@ -1,6 +1,6 @@
 defmodule Platform.CodeMode.DocsTest do
   @moduledoc """
-  Task 01a114a8 stage 3: `suite_run_describe` / `Platform.CodeMode.Docs`
+  Task 01a114a8 stage 3: `burrow_run_describe` / `Platform.CodeMode.Docs`
   declare exactly the caller's effective tools. The central case is
   negative: a runtime without the `plan` bundle is never shown a `plan_*`
   declaration, because docs that advertise an uncallable tool send a script
@@ -21,17 +21,17 @@ defmodule Platform.CodeMode.DocsTest do
   end
 
   # A declaration line for a top-level binding: `  plan_get(args...`.
-  # Only inside `declare const suite`, and not the generic `call`.
+  # Only inside `declare const burrow`, and not the generic `call`.
   defp declared(docs) do
-    [_preamble, suite] = String.split(docs, "declare const suite: {", parts: 2)
+    [_preamble, burrow] = String.split(docs, "declare const burrow: {", parts: 2)
 
     ~r/^  ([a-z_.]+)\(/m
-    |> Regex.scan(suite)
+    |> Regex.scan(burrow)
     |> Enum.map(&List.last/1)
     |> Enum.reject(&(&1 == "call"))
   end
 
-  defp indexed(docs), do: Regex.scan(~r/^suite\.([a-z_.]+)\(/m, docs) |> Enum.map(&List.last/1)
+  defp indexed(docs), do: Regex.scan(~r/^burrow\.([a-z_.]+)\(/m, docs) |> Enum.map(&List.last/1)
 
   describe "the effective surface, and nothing else" do
     test "a runtime without `plan` gets no plan_* tool in the index or the declarations",
@@ -67,16 +67,16 @@ defmodule Platform.CodeMode.DocsTest do
       assert declared(described.docs) == ["plan_get"]
     end
 
-    test "the index lists exactly the effective tools minus suite_run", %{agent: agent} do
+    test "the index lists exactly the effective tools minus burrow_run", %{agent: agent} do
       {runtime, _} = insert_runtime!(agent, bundles(["code_mode", "canvas"]))
 
-      expected = ToolAuthorization.tool_names(runtime) -- ["suite_run"]
+      expected = ToolAuthorization.tool_names(runtime) -- ["burrow_run"]
       {:ok, index} = Docs.describe(runtime, %{})
 
       assert Enum.sort(index.tools) == Enum.sort(expected)
       assert Enum.sort(indexed(index.docs)) == Enum.sort(expected)
-      refute "suite_run" in index.tools
-      assert "suite_run_describe" in index.tools
+      refute "burrow_run" in index.tools
+      assert "burrow_run_describe" in index.tools
     end
 
     test "an external principal's docs hold only chat tools" do
@@ -117,7 +117,7 @@ defmodule Platform.CodeMode.DocsTest do
     end
 
     # Task 01a14a7f stage 3: the canvas tools lost their dots. Their legacy
-    # dotted names are still BOUND (`suite.canvas.create`), but are never
+    # dotted names are still BOUND (`burrow.canvas.create`), but are never
     # described, so nothing nests under `canvas` any more.
     test "canvas tools render flat by their underscore names", %{runtime: runtime} do
       docs = Docs.render(runtime, bundle: "canvas")
@@ -168,7 +168,7 @@ defmodule Platform.CodeMode.DocsTest do
     # scalars: ~4,474 B, and it collapses task_get's `sponsor: {`; capping
     # indentation at depth 2: ~4,366 B). So, per the plan's fallback, the
     # ceiling is the measured value rounded up to the next 256 B, and both
-    # stay under 6,164 B (6,439 B tool-by-tool minus the 275 B suite_run
+    # stay under 6,164 B (6,439 B tool-by-tool minus the 275 B burrow_run
     # result).
     #
     # Re-measured by task 01a11ec3 stage 1, whose task item schema gained four
@@ -190,13 +190,13 @@ defmodule Platform.CodeMode.DocsTest do
       assert byte_size(described.docs) <= @docs_ceiling
 
       %{"result" => %{"content" => [%{"text" => text} | _]}} =
-        mcp_call(token, "suite_run_describe", %{"tools" => @three})
+        mcp_call(token, "burrow_run_describe", %{"tools" => @three})
 
       assert byte_size(text) <= @text_ceiling
       assert @text_ceiling < 6_164
 
       %{"result" => %{"content" => [%{"text" => full} | _]}} =
-        mcp_call(token, "suite_run_describe", %{"tools" => @three, "detail" => "full"})
+        mcp_call(token, "burrow_run_describe", %{"tools" => @three, "detail" => "full"})
 
       assert byte_size(full) > byte_size(text)
       assert Jason.decode!(full)["docs"] =~ "Limitations:"
@@ -267,19 +267,19 @@ defmodule Platform.CodeMode.DocsTest do
     end
   end
 
-  describe "suite_run_describe over /mcp" do
+  describe "burrow_run_describe over /mcp" do
     test "is in the code_mode bundle, conforms to its schema, and is ledgered", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
       tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
-      assert "suite_run_describe" in tools
+      assert "burrow_run_describe" in tools
 
       body =
-        mcp_call(token, "suite_run_describe", %{"tools" => ["federation_status", "plan_get"]})
+        mcp_call(token, "burrow_run_describe", %{"tools" => ["federation_status", "plan_get"]})
 
       json = result_json(body)
 
-      schema = ExJsonSchema.Schema.resolve(ReturnSchemas.for_tool("suite_run_describe"))
+      schema = ExJsonSchema.Schema.resolve(ReturnSchemas.for_tool("burrow_run_describe"))
       assert :ok = ExJsonSchema.Validator.validate(schema, json)
       assert json["tools"] == ["federation_status"]
       assert json["not_available"] == ["plan_get"]
@@ -287,18 +287,46 @@ defmodule Platform.CodeMode.DocsTest do
 
     test "a default runtime cannot call it", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, bundles([]))
-      assert mcp_call(token, "suite_run_describe", %{})["error"]["code"] == -32001
+      assert mcp_call(token, "burrow_run_describe", %{})["error"]["code"] == -32001
     end
   end
 
-  describe "the suite_run primer" do
+  describe "the global's name (task 01a14b9e-50a4 stage 1)" do
+    test "the index and the declarations name burrow and BurrowError, never suite",
+         %{agent: agent} do
+      {runtime, _} = insert_runtime!(agent, bundles(["code_mode", "task", "canvas"]))
+
+      {:ok, index} = Docs.describe(runtime, %{})
+      {:ok, described} = Docs.describe(runtime, %{"tools" => ["task_get", "canvas_create"]})
+
+      # Positive control: the docs are not empty, so "no `suite`" is not vacuous.
+      assert "task_get" in indexed(index.docs)
+      assert declared(described.docs) |> Enum.sort() == ["canvas_create", "task_get"]
+
+      assert described.docs =~ "declare const burrow: {"
+      assert described.docs =~ "interface BurrowError extends Error"
+      assert described.docs =~ "same result or BurrowError"
+      assert index.docs =~ "bound on `burrow`"
+
+      for docs <- [index.docs, described.docs] do
+        # The legacy global is never listed: no `suite.` call path, no
+        # `declare const suite`, no `SuiteError`, no "bound on `suite`".
+        refute docs =~ ~r/(^|[^A-Za-z_])suite\./m
+        refute docs =~ "const suite"
+        refute docs =~ "`suite`"
+        refute docs =~ "SuiteError"
+      end
+    end
+  end
+
+  describe "the burrow_run primer" do
     test "is ten lines naming bindings, sync calls, store, limits, error kinds and the describe tool" do
-      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "suite_run"))
+      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "burrow_run"))
       lines = String.split(tool.description, "\n")
 
       assert length(lines) == 10
       text = tool.description
-      assert text =~ "suite.task_get({task_id})"
+      assert text =~ "burrow.task_get({task_id})"
       assert text =~ "synchronous"
       assert text =~ "store.set(key, value, {ttl: seconds})"
       assert text =~ "50 tool calls"
@@ -306,7 +334,7 @@ defmodule Platform.CodeMode.DocsTest do
       assert text =~
                "timeout | memory | fuel | call_limit | output_limit | script_error | forbidden"
 
-      assert text =~ "suite_run_describe"
+      assert text =~ "burrow_run_describe"
     end
   end
 

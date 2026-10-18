@@ -120,12 +120,12 @@ class MacKeychain:
         """Ask the human for a value in a native hidden-input dialog."""
         self._require()
         message = (
-            f"Paste the value for {name} (Suite install {install_name}). "
+            f"Paste the value for {name} (Burrow install {install_name}). "
             "It is saved to your login Keychain and never shown to the agent."
         )
         script = (
             f"set r to display dialog {_applescript_string(message)} "
-            'default answer "" with hidden answer with title "Suite install" '
+            'default answer "" with hidden answer with title "Burrow install" '
             'buttons {"Cancel", "Save"} default button "Save" cancel button "Cancel"\n'
             "return text returned of r\n"
         )

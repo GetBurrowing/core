@@ -2613,7 +2613,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       assert prompt =~ "Do NOT rename the branch"
       assert prompt =~ "do NOT re-point it at another name"
-      assert prompt =~ "do NOT report a DIFFERENT branch back to Suite"
+      assert prompt =~ "do NOT report a DIFFERENT branch back to Burrow"
       assert prompt =~ "an executor-reported branch name is never authoritative"
     end
 
@@ -3546,7 +3546,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       Repository: #{@core_url}
       Base branch: main
 
-      1. Create a worktree TRACKING the branch Suite already created for this task:
+      1. Create a worktree TRACKING the branch Burrow already created for this task:
          ```
          git fetch origin
          # Preflight: if the worktree already exists, it MUST be on this task's branch.
@@ -3564,7 +3564,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
          - Push the branch: `git push -u origin task/task-1234abcd`
          - Do NOT open a PR yet — PR opening happens in the deploy phase
       4. NEVER work on ANOTHER task's branch. `origin/task/task-1234abcd` already exists — the `--track` form above FAILS LOUDLY if it does not, which is the signal to `report_blocker`, NOT to fall back to creating a branch from origin/main; reuse an existing worktree ONLY when its HEAD is `task/task-1234abcd`.
-      5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Suite. `task/task-1234abcd` is the only branch Suite will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Suite to merge the wrong place.
+      5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Burrow. `task/task-1234abcd` is the only branch Burrow will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Burrow to merge the wrong place.
       """
 
       assert git_workflow_section(prompt) == expected

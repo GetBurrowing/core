@@ -101,7 +101,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   4. **Submit** — call `review_request_create` with `validation_id` set to the `manual_approval` validation (NOT a `validation_evaluate` call — that's only for `test_pass` / `lint_pass`) and `items: [{label, canvas_id}]` pointing at the canvas from step 3. The review items appear inline on the task detail panel with approve/reject buttons. Items can mix `canvas_id` (visual) and `content` (text) — use `content` for tabular evidence, links, test summaries.
 
-  **Tool names**: every Suite MCP tool name uses underscores (`attachment_upload_start`, `canvas_create`), on the `/mcp` HTTP endpoint and through the Claude Code MCP wrapper alike, so a raw curl against `/mcp` uses the same name. The old dotted names (`attachment.upload_start`, `canvas.create`) still answer as hidden aliases but are no longer listed; do not write new calls with them.
+  **Tool names**: every Burrow MCP tool name uses underscores (`attachment_upload_start`, `canvas_create`), on the `/mcp` HTTP endpoint and through the Claude Code MCP wrapper alike, so a raw curl against `/mcp` uses the same name. The old dotted names (`attachment.upload_start`, `canvas.create`) still answer as hidden aliases but are no longer listed; do not write new calls with them.
 
   **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
   """
@@ -2310,13 +2310,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     case BranchFreshness.assess(repo_url, "task/" <> task_slug, default_branch) do
       {:stale_stub, behind} ->
         """
-           - Suite checked this branch before dispatching: `task/#{task_slug}` carries no commits on origin and is #{behind} behind `origin/#{default_branch}`. Suite only probed the remote — if your LOCAL branch already has commits origin does not (for example, this worktree survived a kill mid-stage), push them first, then SKIP the fast-forward below and continue with the stage: the "stale stub" premise did not hold for this branch, it already carries real work, and reconciling with `origin/#{default_branch}` is not this step's job. Do not reset. If an earlier stage of THIS task already merged, its work is NOT in this worktree — treat a missing file as a stale branch, not as evidence the thing was never built.
-             If your local branch has NO commits beyond what Suite already found on origin — nothing to push, a genuine stale stub — run:
+           - Burrow checked this branch before dispatching: `task/#{task_slug}` carries no commits on origin and is #{behind} behind `origin/#{default_branch}`. Burrow only probed the remote — if your LOCAL branch already has commits origin does not (for example, this worktree survived a kill mid-stage), push them first, then SKIP the fast-forward below and continue with the stage: the "stale stub" premise did not hold for this branch, it already carries real work, and reconciling with `origin/#{default_branch}` is not this step's job. Do not reset. If an earlier stage of THIS task already merged, its work is NOT in this worktree — treat a missing file as a stale branch, not as evidence the thing was never built.
+             If your local branch has NO commits beyond what Burrow already found on origin — nothing to push, a genuine stale stub — run:
              ```
              git merge --ff-only origin/#{default_branch}
              ```
              - Succeeded: continue. The fast-forward moved a branch that held nothing, so nothing was lost.
-             - Failed: STOP and `report_blocker`. A refusal means the branch DOES carry work, which contradicts what Suite measured. Do NOT `git reset --hard`, do NOT delete and re-cut the branch, and do NOT `--force` anything — those discard commits, which is precisely what `--ff-only` is here to prevent.
+             - Failed: STOP and `report_blocker`. A refusal means the branch DOES carry work, which contradicts what Burrow measured. Do NOT `git reset --hard`, do NOT delete and re-cut the branch, and do NOT `--force` anything — those discard commits, which is precisely what `--ff-only` is here to prevent.
         """
 
       _ ->
@@ -2325,7 +2325,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   # Task 01a001ac stage 4. The line above is a CONDITIONAL the deployer has to
-  # run itself; this one is an OBSERVATION Suite already made. When
+  # run itself; this one is an OBSERVATION Burrow already made. When
   # `BranchReconciler` finds a sibling ref under the same 8-hex prefix while
   # the recorded name is absent, the deploy prompt names BOTH branches rather
   # than leaving the deployer to discover the mismatch by running a command
@@ -2342,7 +2342,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp branch_mismatch_step(repo_url, task_slug, heading) do
     case BranchReconciler.reconcile(repo_url, "task/" <> task_slug) do
       {:mismatch, [found | _]} ->
-        "\n   - Suite recorded `task/#{task_slug}` but the remote carries `#{found}` in #{heading} — do not assume the recorded name. Confirm which ref actually holds this task's commits, name it explicitly in the PR body, and do not merge a branch you have not confirmed."
+        "\n   - Burrow recorded `task/#{task_slug}` but the remote carries `#{found}` in #{heading} — do not assume the recorded name. Confirm which ref actually holds this task's commits, name it explicitly in the PR body, and do not merge a branch you have not confirmed."
 
       _ ->
         ""
@@ -2791,7 +2791,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Base branch: #{default_branch}
     #{additional_repos_block(repos, task_slug, default_branch, :track)}\
 
-    1. Create a worktree TRACKING the branch Suite already created for this task:
+    1. Create a worktree TRACKING the branch Burrow already created for this task:
        ```
        git fetch origin
        # Preflight: if the worktree already exists, it MUST be on this task's branch.
@@ -2810,7 +2810,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
     4. NEVER work on ANOTHER task's branch. `origin/task/#{task_slug}` already exists — the `--track` form above FAILS LOUDLY if it does not, which is the signal to `report_blocker`, NOT to fall back to creating a branch from origin/#{default_branch}; reuse an existing worktree ONLY when its HEAD is `task/#{task_slug}`.
-    5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Suite. `task/#{task_slug}` is the only branch Suite will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Suite to merge the wrong place.
+    5. Do NOT rename the branch, do NOT re-point it at another name, and do NOT report a DIFFERENT branch back to Burrow. `task/#{task_slug}` is the only branch Burrow will merge; an executor-reported branch name is never authoritative, so pushing elsewhere and reporting it would get Burrow to merge the wrong place.
     """
   end
 
@@ -2906,7 +2906,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. Merge back into it via fast-forward on validation pass — do NOT open a per-member PR.
 
     ### STACK-MEMBER GIT WORKFLOW — when the rollup fast-forward is refused
-    Suite fast-forwards `task/#{task_slug}` into `origin/#{rollup_branch}` when your review validations pass. If that merge is refused as not fast-forwardable (`task_get` shows `paused_reason.kind == "rollup_diverged"`, or an `execution.blocked` event names this loop), a sibling landed on the rollup after you branched. Nothing retries this on its own. Recover in your worktree with exactly:
+    Burrow fast-forwards `task/#{task_slug}` into `origin/#{rollup_branch}` when your review validations pass. If that merge is refused as not fast-forwardable (`task_get` shows `paused_reason.kind == "rollup_diverged"`, or an `execution.blocked` event names this loop), a sibling landed on the rollup after you branched. Nothing retries this on its own. Recover in your worktree with exactly:
     ```
     git fetch origin && git rebase origin/#{rollup_branch} && git push --force-with-lease
     ```
@@ -2932,7 +2932,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Repository: #{primary_repo_url(repos)}
     Base branch: #{default_branch}
 
-    STOP — do not create a worktree or branch for this task. This task is a member of stack `#{membership.stack_id}` whose rollup branch `origin/#{rollup_branch}` has not been confirmed on origin (the stack's `rollup_branch_ready` stamp is absent). Your member branch `task/#{task_slug}` MUST be cut from `origin/#{rollup_branch}` and there is NO supported fallback: do NOT branch from `origin/#{default_branch}`, do NOT create `../worktrees/#{task_slug}` from any other parent, and do NOT plan to rebase onto the rollup later. Call `report_blocker` now (needs_human: true) naming stack `#{membership.stack_id}`, rollup branch `#{rollup_branch}` and the missing `rollup_branch_ready` stamp, then end your turn. Suite has filed the matching blocker (`kind: rollup_branch_missing`) for a human; once the stamp is present a redispatch of this task renders the normal rollup-parent workflow.
+    STOP — do not create a worktree or branch for this task. This task is a member of stack `#{membership.stack_id}` whose rollup branch `origin/#{rollup_branch}` has not been confirmed on origin (the stack's `rollup_branch_ready` stamp is absent). Your member branch `task/#{task_slug}` MUST be cut from `origin/#{rollup_branch}` and there is NO supported fallback: do NOT branch from `origin/#{default_branch}`, do NOT create `../worktrees/#{task_slug}` from any other parent, and do NOT plan to rebase onto the rollup later. Call `report_blocker` now (needs_human: true) naming stack `#{membership.stack_id}`, rollup branch `#{rollup_branch}` and the missing `rollup_branch_ready` stamp, then end your turn. Burrow has filed the matching blocker (`kind: rollup_branch_missing`) for a human; once the stamp is present a redispatch of this task renders the normal rollup-parent workflow.
 
     ## Task Stack Membership
     This task is a stack member (part of task stack `#{membership.stack_id}`).

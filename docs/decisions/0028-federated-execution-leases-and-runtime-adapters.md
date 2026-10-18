@@ -41,7 +41,7 @@ The child work can still be healthy while the TaskRouter sees only "no new evide
 
 ### The long-term problem
 
-The future Claude Code channel is not an OpenClaw deployment at all. It is another federated runtime. It may have its own worker/session model, but Suite cannot depend on OpenClaw-specific concepts like parent task sessions, ACP, or subagents.
+The future Claude Code channel is not an OpenClaw deployment at all. It is another federated runtime. It may have its own worker/session model, but Burrow cannot depend on OpenClaw-specific concepts like parent task sessions, ACP, or subagents.
 
 The orchestrator therefore needs a supervision primitive that is:
 - **runtime-neutral**
@@ -56,7 +56,7 @@ The orchestrator therefore needs a supervision primitive that is:
 
 ### Session-based supervision does not generalize
 
-OpenClaw has rich internal runtime constructs, but those are implementation details. If Suite supervision depends on them, federation is fake.
+OpenClaw has rich internal runtime constructs, but those are implementation details. If Burrow supervision depends on them, federation is fake.
 
 A non-OpenClaw runtime may have:
 - a single remote worker process
@@ -64,7 +64,7 @@ A non-OpenClaw runtime may have:
 - a queue-backed job runner
 - a proprietary session abstraction
 
-Suite must not care.
+Burrow must not care.
 
 ### Validation evidence is necessary but insufficient
 
@@ -81,7 +81,7 @@ Without another primitive, the router has to infer liveness from absence, which 
 
 ## Decision
 
-Introduce a **runtime-neutral execution lease contract** in Suite and make every federated runtime implement it through an adapter.
+Introduce a **runtime-neutral execution lease contract** in Burrow and make every federated runtime implement it through an adapter.
 
 ### Core idea
 
@@ -94,12 +94,12 @@ The TaskRouter supervises:
 
 ### Practical interpretation
 
-- **Suite owns truth** for assignment, lease state, and escalation policy
+- **Burrow owns truth** for assignment, lease state, and escalation policy
 - **Each runtime owns implementation details** for how work actually runs
 - **Execution spaces remain the human-visible timeline**, but they are no longer the only source of liveness information
 - **OpenClaw implements one runtime adapter**
 - **Claude Code channel implements another runtime adapter**
-- Both adapters emit the same external lifecycle signals back to Suite
+- Both adapters emit the same external lifecycle signals back to Burrow
 
 ---
 
@@ -115,7 +115,7 @@ Silence should mean silence, not "maybe delegated somewhere invisible."
 
 ### 3. Delegation is internal to the runtime
 
-If OpenClaw delegates from a parent task session to a coding agent, that is OpenClaw's business. Suite only needs the runtime to continue renewing its lease and publishing meaningful events.
+If OpenClaw delegates from a parent task session to a coding agent, that is OpenClaw's business. Burrow only needs the runtime to continue renewing its lease and publishing meaningful events.
 
 ### 4. Execution spaces are transparency layers, not authority
 
@@ -372,7 +372,7 @@ On `task_assigned` / reconnect / duplicate dispatch:
 - if the worker exists but local session died: attempt recovery, else emit failure/abandonment
 
 #### 3. Durable parent worker
-For OpenClaw, a durable task worker session is still useful as the local accountable actor, even though Suite does not know or care about it.
+For OpenClaw, a durable task worker session is still useful as the local accountable actor, even though Burrow does not know or care about it.
 
 That parent worker may delegate, but the adapter remains responsible for reporting coherent lease state.
 
@@ -419,7 +419,7 @@ That runtime may choose to represent a worker as:
 - a coding session
 - a queue-backed worker
 
-Suite should only require:
+Burrow should only require:
 - assignment acceptance or rejection
 - execution started
 - periodic heartbeat/progress while active
@@ -431,7 +431,7 @@ This is the key federation guarantee: OpenClaw and Claude Code do not need share
 
 ## API Surface
 
-Suite should expose a minimal runtime-facing API.
+Burrow should expose a minimal runtime-facing API.
 
 ### Required operations
 
@@ -531,7 +531,7 @@ No heartbeats arrive, lease expires, router escalates exactly once.
 
 This should be delivered in slices.
 
-### Slice 1: Suite contract and observability
+### Slice 1: Burrow contract and observability
 - add runtime assignment, execution lease, and runtime event models
 - add runtime event ingest API with idempotency
 - mirror runtime lifecycle events into execution spaces as machine log-only messages
@@ -556,7 +556,7 @@ This should be delivered in slices.
 
 ### Slice 5: Second runtime adoption
 - implement the same contract for the Claude Code channel or other federated runtime
-- verify no OpenClaw-specific assumptions remain in Suite supervision logic
+- verify no OpenClaw-specific assumptions remain in Burrow supervision logic
 
 ---
 
@@ -570,7 +570,7 @@ This should be delivered in slices.
 - execution spaces gain clearer machine-level transparency
 
 ### Costs
-- more persistent orchestration state in Suite
+- more persistent orchestration state in Burrow
 - more adapter complexity on the OpenClaw side
 - additional runtime API and idempotency requirements
 - more scenario testing than a simple prompt-based fix
@@ -586,7 +586,7 @@ This ADR does not define:
 - the exact wire protocol shape for every runtime transport
 - the exact UI for assignment/lease inspection in the control surface
 - the complete blocker taxonomy
-- whether OpenClaw local parent sessions are exposed in any Suite UI
+- whether OpenClaw local parent sessions are exposed in any Burrow UI
 
 Those are follow-on design tasks. The key decision here is where supervision truth lives and what contract federated runtimes must honor.
 
@@ -594,7 +594,7 @@ Those are follow-on design tasks. The key decision here is where supervision tru
 
 ## Summary
 
-Suite should supervise **runtime assignments and execution leases**, not runtime-specific session abstractions.
+Burrow should supervise **runtime assignments and execution leases**, not runtime-specific session abstractions.
 
 OpenClaw remains a rich local implementation with task sessions and child workers, but it must report through the same normalized contract that future non-OpenClaw runtimes will use.
 

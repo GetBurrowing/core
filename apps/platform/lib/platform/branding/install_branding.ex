@@ -55,7 +55,7 @@ defmodule Platform.Branding.InstallBranding do
     field(:derived, :map, default: %{})
     field(:version, :string)
 
-    # In-app theme colours, lowercase `#rrggbb`. nil = Suite default for that
+    # In-app theme colours, lowercase `#rrggbb`. nil = Burrow default for that
     # slot. See `colors_changeset/2`.
     field(:light_action, :string)
     field(:light_surface, :string)
@@ -91,7 +91,7 @@ defmodule Platform.Branding.InstallBranding do
 
   Each colour accepts `#RGB` or `#RRGGBB`, with or without the `#`, and is
   stored as lowercase `#rrggbb`. A blank value casts to nil, which means
-  "Suite default" for that slot; an accent left nil follows the action colour.
+  "Burrow default" for that slot; an accent left nil follows the action colour.
 
   The palette each mode would render is then checked with
   `Platform.Branding.Palette.checks/2`, and every `:block` becomes a changeset

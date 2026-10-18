@@ -12,7 +12,7 @@
  *   4. the unit drop-in;
  *   5. AS THAT UID: the agent's own files (CLAUDE.md, .claude/settings.json,
  *      ...) into its work dir, and a root-owned record of their versions;
- *   6. AS THAT UID: Suite's conventions as the agent's USER memory,
+ *   6. AS THAT UID: Burrow's conventions as the agent's USER memory,
  *      `~/.claude/CLAUDE.md` (conventions.ts), which the owner's files cannot
  *      replace;
  *   7. `systemctl restart suite-agent@<id>`.

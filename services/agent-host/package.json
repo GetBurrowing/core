@@ -1,7 +1,7 @@
 {
   "name": "suite-agent-host",
   "version": "0.1.0",
-  "description": "Runs a Suite install's native agents, each as its own OS user under systemd, and takes its orders from core over an outbound socket",
+  "description": "Runs a Burrow install's native agents, each as its own OS user under systemd, and takes its orders from core over an outbound socket",
   "license": "MIT",
   "type": "module",
   "private": true,

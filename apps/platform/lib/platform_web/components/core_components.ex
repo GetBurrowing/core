@@ -439,7 +439,7 @@ defmodule PlatformWeb.CoreComponents do
   so a user stuck on a subpage always has a self-serve way back up;
   the final segment is inert current-page text.
 
-  Honors the shell's Suite × shadcn re-skin tokens: the uppercase
+  Honors the shell's Burrow × shadcn re-skin tokens: the uppercase
   tracking-wider eyebrow grammar used across the admin headers, a muted
   `base-content` trail, `primary` on hover for the clickable ancestors,
   and a `hero-chevron-right` separator. Not a redesign — a light,

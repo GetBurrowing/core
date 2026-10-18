@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Capture a screenshot of TARGET_URL via the agent's CDP Chrome, upload it as a
-# Suite attachment, embed it in a new canvas, and file a review request.
+# Burrow attachment, embed it in a new canvas, and file a review request.
 #
 # Required env:
 #   BURROW_URL       e.g. http://localhost:4001

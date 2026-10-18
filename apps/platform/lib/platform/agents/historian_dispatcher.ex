@@ -841,7 +841,7 @@ defmodule Platform.Agents.HistorianDispatcher do
       {:ok, message} ->
         # Emit per-window telemetry BEFORE the cursor advance so an
         # advance failure still surfaces the intent to dispatch. Split
-        # numeric measurements from identifier metadata per Suite
+        # numeric measurements from identifier metadata per Burrow
         # convention (see `SystemEventScheduler.emit_telemetry/3`).
         # `resource_type`/`resource_id`/`action` come from `emit_telemetry`
         # — stage 2's audit bridge (task 019f5bc4) keys off them.

@@ -1,7 +1,7 @@
 defmodule Platform.Social.AgentDrafts do
   @moduledoc """
   The agent-safe write path into Social (task 01a140a9-4c70, Social 4/7):
-  what the `social` MCP tools call. A human approves in Suite and the
+  what the `social` MCP tools call. A human approves in Burrow and the
   platform publishes; nothing here approves or publishes.
 
   ## The ceiling is needs_approval

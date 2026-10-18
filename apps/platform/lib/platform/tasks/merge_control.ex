@@ -61,7 +61,7 @@ defmodule Platform.Tasks.MergeControl do
   @default_runner GhRunner
   @default_merger AutoMerger
 
-  @gh_unavailable_sentence "Cannot merge from Suite: the GitHub CLI is unavailable on the server."
+  @gh_unavailable_sentence "Cannot merge from Burrow: the GitHub CLI is unavailable on the server."
 
   @typedoc """
   The state band above the buttons. `tone` drives the colour token and
@@ -142,7 +142,7 @@ defmodule Platform.Tasks.MergeControl do
 
   `actor` is `%{id: user_id, org_id: org_id}` or `nil`. Every outcome,
   including a refusal, writes a `platform.tasks.merge_control` audit event
-  naming the user, the task, the STAGE and the branch. A Suite-performed
+  naming the user, the task, the STAGE and the branch. A Burrow-performed
   merge must not be indistinguishable from an auto-merger one, which is
   why the event records `"performed_by" => "merge_control"` — the same
   provenance discipline as `DeployMergeReconciler`'s `"observed_by"`.
@@ -283,7 +283,7 @@ defmodule Platform.Tasks.MergeControl do
   end
 
   # The audit row is the attribution. `performed_by: "merge_control"`
-  # separates a Suite-performed merge from an auto-merger one; without it
+  # separates a Burrow-performed merge from an auto-merger one; without it
   # the two are one undifferentiated merge in the trail.
   defp audit(task, control, actor, pr_number, result) do
     {outcome, detail} =
@@ -377,7 +377,7 @@ defmodule Platform.Tasks.MergeControl do
     %{
       tone: :error,
       headline: "GitHub could not be reached",
-      sentence: "Suite could not ask GitHub about this branch."
+      sentence: "Burrow could not ask GitHub about this branch."
     }
   end
 

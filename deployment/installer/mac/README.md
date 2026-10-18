@@ -1,6 +1,6 @@
-# Suite on a Mac: the setup CLI, and the same steps by hand
+# Burrow on a Mac: the setup CLI, and the same steps by hand
 
-This directory installs a self-hosted Startup Suite on a Mac running Docker
+This directory installs Burrow, self-hosted, on a Mac running Docker
 Desktop or OrbStack, reached from the internet through a Cloudflare tunnel.
 The tunnel means no port-forward and no public IP. It was built in task
 01a0d6ab stage 4, on top of the `mac` render target (ADR 0053, stage 3).
@@ -20,9 +20,9 @@ There are three layers, and each one uses only the layer below it:
 
 `suite` is already taken. It is the separate **suite-cli** (repo
 `Startup-Suite/suite-cli`, TypeScript on bun), which wires a Claude Code
-runtime to Suite (`suite init`, `suite claude`, `suite doctor`, `suite
-status`). That tool connects an *agent* to an existing Suite. This one
-*installs* a Suite, and it is Python in core because it drives core's install
+runtime to Burrow (`suite init`, `suite claude`, `suite doctor`, `suite
+status`). That tool connects an *agent* to an existing Burrow install. This one
+*installs* Burrow, and it is Python in core because it drives core's install
 renderer. The two are siblings; neither replaces the other. If suite-cli later
 grows `suite install`, it should exec `deployment/installer/mac/suite-install`
 and pass its JSON through unchanged, not re-implement the steps.
@@ -34,7 +34,7 @@ the stable surface for it.
 
 - **Docker Desktop or OrbStack**, installed and running. Installing either
   needs the Mac owner's admin password.
-- **A Docker Hub read credential** for Suite's private images
+- **A Docker Hub read credential** for Burrow's private images
   (`example/suite-core`, `suite-files-service`, `suite-memory-service`).
   Anonymous pulls return 401. You supply it as a docker `config.json` with an
   inline `auths["https://index.docker.io/v1/"].auth`. Whether these images
@@ -44,7 +44,7 @@ the stable surface for it.
 - **An OpenAI API key.** Memory search uses `text-embedding-3-small`, and
   meeting transcription uses `whisper-1` when meetings are on.
 
-### Licences (the runtime, not Suite)
+### Licences (the runtime, not Burrow)
 
 Docker Desktop is free for personal use, education, non-commercial open source
 and small businesses (fewer than 250 employees AND under $10M annual revenue).
@@ -56,7 +56,7 @@ not been tested. `setup run preflight` prints the same text.
 ## Quick start with an agent
 
 Load `deployment/installer/skill/SKILL.md` into your agent (Claude Code or
-any harness that reads Agent Skills) and ask it to set up Suite on this Mac.
+any harness that reads Agent Skills) and ask it to set up Burrow on this Mac.
 
 ## The steps, by hand
 
@@ -108,7 +108,7 @@ System Settings are the only steps that need the owner's password.
 
 With FileVault **on**, a Mac that restarts after a power cut waits at the
 FileVault unlock screen. There is no user session, so no Docker Desktop or
-OrbStack and no Suite, whatever `autorestart` says. Unattended recovery needs
+OrbStack and no Burrow, whatever `autorestart` says. Unattended recovery needs
 FileVault **off** plus automatic login (System Settings, admin password). That
 is the owner's security trade-off. The CLI reports it and never makes it.
 
@@ -181,8 +181,8 @@ window lasts from pocket-id's first answer to that call, not until a later step
 runs. If the call cannot be made within 120 s, `up` fails with
 `admin_not_created` and says so.
 
-Suite core calls pocket-id's admin API too, for its Users page
-(`/admin/sign-in-users`, Suite admins only; task 01a113ea). On every
+Burrow core calls pocket-id's admin API too, for its Users page
+(`/admin/sign-in-users`, Burrow admins only; task 01a113ea). On every
 bundled-pocket-id install the renderer gives core-platform three env vars:
 `POCKET_ID_ADMIN_ENABLED="true"` (the page's switch; only the exact string
 `true` turns it on), `POCKET_ID_ADMIN_URL=http://pocket-id:1411` (the same

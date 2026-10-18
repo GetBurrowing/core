@@ -2,7 +2,7 @@
 
 **Phase 2 deliverable.** The accessibility rules every component honors. Anchored to Phase 1 a11y findings; cross-references the focus, motion, and target-size specs from `02-components.md`.
 
-> **Scope reminder:** Suite intentionally locks `maximum-scale=1` because PWA zoom is not the iOS a11y path — Dynamic Type / system font scale is. **Do not propose viewport-meta changes.** This is a Kept decision.
+> **Scope reminder:** Burrow intentionally locks `maximum-scale=1` because PWA zoom is not the iOS a11y path — Dynamic Type / system font scale is. **Do not propose viewport-meta changes.** This is a Kept decision.
 
 ---
 
@@ -268,7 +268,7 @@ Phase 4 + future work: any new CSS keyframe or Tailwind animation utility MUST i
 
 ### 5.4 Rationale for severity Low
 
-WCAG 2.3.3 (Animation from Interactions) is AAA, not AA. There's no clean AA criterion covering user-triggered animations. Suite still honors the rule because: (a) motion-sensitive users are a real population, (b) the agent-native UX has constant motion (typing indicators) which exacerbates, (c) the cost of adding the gates is trivial.
+WCAG 2.3.3 (Animation from Interactions) is AAA, not AA. There's no clean AA criterion covering user-triggered animations. Burrow still honors the rule because: (a) motion-sensitive users are a real population, (b) the agent-native UX has constant motion (typing indicators) which exacerbates, (c) the cost of adding the gates is trivial.
 
 ---
 
@@ -303,7 +303,7 @@ Where the UI updates without user-initiated action (e.g. new message arrives, ag
 - `aria-live="polite"` for non-urgent (most cases — new message, save confirmation).
 - `aria-live="assertive"` for critical (errors that interrupt user flow). Use sparingly.
 
-Phase 4 audits where Suite currently fires LiveView updates without live-region wrapping. The chat surface specifically: incoming messages should announce sender + first 50 chars or so.
+Phase 4 audits where Burrow currently fires LiveView updates without live-region wrapping. The chat surface specifically: incoming messages should announce sender + first 50 chars or so.
 
 ### 7.2 Heading hierarchy
 

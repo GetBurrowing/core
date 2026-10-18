@@ -76,7 +76,7 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooksTest do
     html = stage(view, "r1", "quarterly-raw.mov", 1_153_433_600)
     flat = text(html)
 
-    assert flat =~ "quarterly-raw.mov is 1.2 GB. This Suite accepts files up to 1 GB."
+    assert flat =~ "quarterly-raw.mov is 1.2 GB. This Burrow install accepts files up to 1 GB."
     assert flat =~ "Up to 1 GB per file"
     assert html =~ ~s(data-too-large="true")
     # Error hue on the icon only; the words are base-content.

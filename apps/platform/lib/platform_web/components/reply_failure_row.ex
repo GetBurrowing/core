@@ -107,7 +107,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
   went silent with no cause anyone could name (stage 7 round 2, the no-reply
   watchdog) is fixed by a restart, which the install can do; "Open" named no
   fix. Deviation from the canvas's "Open Ada", recorded in the stage report.
-  A federated agent keeps "Open <Name>": Suite cannot restart it.
+  A federated agent keeps "Open <Name>": Burrow cannot restart it.
   """
   @spec action_label(String.t() | nil, String.t(), boolean()) :: String.t()
   def action_label(cause, name, true) when cause in ["needs_login", "stopped", "crashed"],

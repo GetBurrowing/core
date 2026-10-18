@@ -331,7 +331,7 @@ Read each row in this order:
      other agents', but its two arms are comparable with each other, because
      both use the same clock.
    - `attribution_pct` / `attribution_by_rung`: the share of the agent's
-     model-issued Suite calls since the first assignment that the ledger tied
+     model-issued Burrow calls since the first assignment that the ledger tied
      to a task. Unattributed calls count toward no dispatch, so a low figure
      means the agent's `suite_tool_calls` undercount. Both arms of one agent
      carry the same figure, because an unattributed call cannot be put in an

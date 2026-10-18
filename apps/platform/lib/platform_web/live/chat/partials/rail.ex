@@ -200,12 +200,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         <%!-- Brand-new-user empty state — surfaces when the user has no
            channels AND no DMs at all. The sub-org headers above still
            render (with their own empty-state hints), but a separate
-           top-level invite chip keeps the "Welcome to Suite" message
+           top-level invite chip keeps the "Welcome to Burrow" message
            from Stage 1 visible.
 
            `@archived_channels == []` is part of the test (task 019f4eaa):
            having archived channels is proof you are NOT a brand-new user, so
-           "Welcome to Suite. To get started, create a space" is simply wrong
+           "Welcome to Burrow. To get started, create a space" is simply wrong
            — it rendered directly above the ARCHIVED section, telling an admin
            who had just archived her orgs that she had never used the product.
            Org-archive made this trivial to hit: it empties every channel in

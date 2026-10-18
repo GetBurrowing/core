@@ -111,7 +111,7 @@ defmodule Platform.Responsibilities.NativeDispatchEnvelopeTest do
   # start of the user half is what makes the join itself observable: collapse
   # the "\n\n" separator, or drop the system turn from
   # `prompt_map_to_messages/2`, and one of the three goes red.
-  @system_half_opens "You are the Architect on the Suite plan-review path (ADR-0044, gated by ADR-0046)."
+  @system_half_opens "You are the Architect on the Burrow plan-review path (ADR-0044, gated by ADR-0046)."
   @system_half_closes "a number is not a reference the human reviewer can follow."
   @user_half_opens "You are the Architect. A plan has been submitted and **it is held at\n" <>
                      "`pending_review` until you answer.**"

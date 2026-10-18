@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-When using Suite as a PWA on iOS:
+When using Burrow as a PWA on iOS:
 
 1. **Input zoom**: Tapping the chat compose input triggers iOS Safari's auto-zoom because the font-size is below 16px. This changes the viewport scale, and the user must double-tap to reset. This is the single biggest friction point.
 

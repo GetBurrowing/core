@@ -6,7 +6,7 @@
 
 ## Context
 
-Suite needs to support parallel development tracks: one team works on `main` (production), another works on a long-lived feature branch (e.g. `feat/reskin`). Both tracks need:
+Burrow needs to support parallel development tracks: one team works on `main` (production), another works on a long-lived feature branch (e.g. `feat/reskin`). Both tracks need:
 
 - Independent task management on the same board
 - Agent-driven development with correct branch targeting

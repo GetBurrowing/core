@@ -181,7 +181,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <span class="hero-bolt h-8 w-8 text-purple-500" />
         <span class="text-sm font-semibold text-base-content">External Agent</span>
         <span class="text-xs text-base-content/55">
-          OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Suite-managed runtime.
+          OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Burrow-managed runtime.
         </span>
       </button>
     </div>
@@ -660,7 +660,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       <div class="mb-4 rounded-2xl border border-dashed border-purple-500/40 bg-purple-500/5 px-4 py-3">
         <p class="text-sm font-semibold text-base-content">External Agent · configure</p>
         <p class="mt-1 text-xs text-base-content/55">
-          Connect an OpenAI-compatible or Ollama-native endpoint. No Suite-managed runtime — Suite
+          Connect an OpenAI-compatible or Ollama-native endpoint. No Burrow-managed runtime — Burrow
           calls the model directly. Credentials are stored in
           <code class="rounded bg-base-200 px-1 py-0.5 font-mono text-[11px]">Platform.Vault</code>
           on submit (vault sub-form lands in stage 3).

@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
+defmodule Mix.Tasks.Burrow.Deploy.ScopeGateTest do
   @moduledoc """
   An operator supplies the facts a gate is missing; the RECONCILER still
   performs the observation.
@@ -42,7 +42,7 @@ defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
 
   import ExUnit.CaptureIO
 
-  alias Mix.Tasks.Suite.Deploy.ScopeGate
+  alias Mix.Tasks.Burrow.Deploy.ScopeGate
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.DeployMergeReconciler

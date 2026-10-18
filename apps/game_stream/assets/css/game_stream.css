@@ -24,7 +24,7 @@
 /* Touch (task 01a0fe45 stage 2). The hook sets data-gs-touch="on" on the
    video well only while this page's taps go to the game: a touch-enabled
    host, the copy holding the stream, a player, a live frame. Only the well
-   stops the page scrolling, so a swipe anywhere else in Suite, or on the well
+   stops the page scrolling, so a swipe anywhere else in Burrow, or on the well
    of a spectator or of a host without touch, still scrolls. */
 [data-gs-well][data-gs-touch="on"] {
   touch-action: none;

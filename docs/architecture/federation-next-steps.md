@@ -4,9 +4,9 @@ Post-Phase 1 work items for the federated agent experience.
 
 ---
 
-## 1. Federated Agent Presence in Suite UI
+## 1. Federated Agent Presence in Burrow UI
 
-Suite knows when a runtime's WebSocket is connected or disconnected. Surface this:
+Burrow knows when a runtime's WebSocket is connected or disconnected. Surface this:
 
 - **Chat sidebar**: show green/gray dot next to federated agent's name based on WebSocket connection state
 - **Chat header**: "Zip (connected)" vs "Zip (offline)" when in a space with a federated agent
@@ -17,12 +17,12 @@ Implementation: track connected runtime_ids in a Registry or ETS table in Runtim
 
 ---
 
-## 2. Error Visibility in Suite
+## 2. Error Visibility in Burrow
 
-When the federated agent encounters errors (401, 429, 503, timeouts), the channel plugin now sends a human-readable error message back to Suite. Extend this:
+When the federated agent encounters errors (401, 429, 503, timeouts), the channel plugin now sends a human-readable error message back to Burrow. Extend this:
 
 - **Visual treatment**: error replies should render differently from normal messages (warning styling, not a regular chat bubble)
-- **Structured error metadata**: RuntimeChannel should accept `{ type: "error", error_code: "rate_limited", message: "..." }` in addition to `{ type: "reply" }`, so Suite can style them appropriately
+- **Structured error metadata**: RuntimeChannel should accept `{ type: "error", error_code: "rate_limited", message: "..." }` in addition to `{ type: "reply" }`, so Burrow can style them appropriately
 - **Error aggregation**: track error counts per runtime in the Agent Resources detail view. If a runtime is consistently failing (e.g., 5 consecutive 429s), surface a banner: "This agent's model provider is rate-limiting requests"
 
 ---
@@ -31,7 +31,7 @@ When the federated agent encounters errors (401, 429, 503, timeouts), the channe
 
 When an agent has `runtime_type: "external"`, the Agent Resources detail view should NOT show:
 
-### Hide these (not configurable from Suite for federated agents):
+### Hide these (not configurable from Burrow for federated agents):
 - Model config (primary model, fallbacks) — controlled by the remote OpenClaw
 - Sandbox mode — controlled by the remote OpenClaw
 - Max concurrent — controlled by the remote OpenClaw
@@ -42,8 +42,8 @@ When an agent has `runtime_type: "external"`, the Agent Resources detail view sh
 - Vault credentials — credentials live on the remote OpenClaw
 - Sessions browser — sessions live on the remote OpenClaw
 
-### Show these (Suite-side concerns):
-- Agent name and display name (editable — this is how the agent appears in Suite)
+### Show these (Burrow-side concerns):
+- Agent name and display name (editable — this is how the agent appears in Burrow)
 - Connection status (online/offline, last connected, uptime)
 - Runtime ID and registration info
 - Trust level (viewer/participant/collaborator/admin)
@@ -78,7 +78,7 @@ Once the single-agent federation is solid:
 - Each runtime brings its own agent
 - The attention router's principal agent pattern (ADR 0013) determines who responds to unaddressed messages
 - Direct @mentions route to the specific agent's runtime
-- Agent capability discovery: runtimes declare what their agent can do (chat, canvas, tools) and Suite surfaces this in the UI
+- Agent capability discovery: runtimes declare what their agent can do (chat, canvas, tools) and Burrow surfaces this in the UI
 
 ---
 

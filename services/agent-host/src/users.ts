@@ -70,7 +70,7 @@ export async function ensureAgentUser(runner: Runner, agentId: string): Promise<
     const homeArgs = reuse ? ["--uid", String(owner), "--no-create-home"] : ["--create-home"];
     await must(
       runner,
-      ["useradd", ...homeArgs, "--home-dir", home, "--shell", "/bin/bash", "--gid", AGENTS_GROUP, "--comment", `Suite agent ${agentId}`, name],
+      ["useradd", ...homeArgs, "--home-dir", home, "--shell", "/bin/bash", "--gid", AGENTS_GROUP, "--comment", `Burrow agent ${agentId}`, name],
       "useradd",
     );
   }

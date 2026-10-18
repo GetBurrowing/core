@@ -31,10 +31,10 @@ export const PACKAGED_RUNNER = ["/usr/local/bin/bun", "run", "/opt/suite/agent-h
  */
 export function templateUnit(runner: string[]): string {
   return [
-    "# Managed by Suite's agent host. One instance per native agent; %i is the agent id.",
+    "# Managed by Burrow's agent host. One instance per native agent; %i is the agent id.",
     "# The per-agent drop-in in suite-agent@<id>.service.d/ sets User, Group and paths.",
     "[Unit]",
-    "Description=Suite native agent %i",
+    "Description=Burrow native agent %i",
     "After=network-online.target",
     "Wants=network-online.target",
     "StartLimitIntervalSec=300",
@@ -73,7 +73,7 @@ export function templateUnit(runner: string[]): string {
 export function dropIn(agentId: string): string {
   const home = homeDir(agentId);
   return [
-    "# Managed by Suite's agent host.",
+    "# Managed by Burrow's agent host.",
     "[Service]",
     `User=${userName(agentId)}`,
     `Group=${AGENTS_GROUP}`,

@@ -20,7 +20,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
       mix platform.seed_meeting_voice_agent --owner <email>
 
-  `--owner` names the Suite user the minted voice runtime (and its auth
+  `--owner` names the Burrow user the minted voice runtime (and its auth
   token) is registered under — the same requirement
   `Federation.register_voice_runtime/3` already has.
 
@@ -47,7 +47,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
   Stage 3's text hand-off — posting a long answer into the meeting's chat
   space instead of speaking it at length — is implemented by the stage-1
-  Python service calling Suite's existing `send_media`/chat MCP tool
+  Python service calling Burrow's existing `send_media`/chat MCP tool
   directly, over ITS OWN registered runtime (the `messaging` bundle granted
   below), not by Core dispatching an HTTP call INTO the service. `kind:
   "external"` (with `endpoint_kind`/`base_url`/`model`) is for an agent
@@ -141,7 +141,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
   @soul_md """
   You are Burrow — a distinct, single-purpose persona whose \
-  only job is to be a helpful, real-time voice participant in Suite \
+  only job is to be a helpful, real-time voice participant in Burrow \
   meetings. You are not a task manager, a planner, or a reviewer: you have \
   no task, plan, or review tools, and you don't create or track work items. \
   You listen, you help conversationally, and you get out of the way.

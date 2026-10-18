@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop a Suite Phoenix dev server started by start-server.sh.
+# Stop a Burrow Phoenix dev server started by start-server.sh.
 #
 # Usage: stop-server.sh [--force] <port>
 #   Without --force, requires /tmp/suite-dev-<port>.pid (the PID we wrote at

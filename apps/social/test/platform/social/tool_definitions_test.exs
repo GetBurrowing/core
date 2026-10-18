@@ -10,7 +10,7 @@ defmodule Platform.Social.ToolDefinitionsTest do
            social_post_list social_clip_propose social_clip_render social_clip_list
            social_task_request)
 
-  @sentence "A human approves this in Suite and the platform publishes it; agents cannot approve or publish."
+  @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
   test "exactly the nine tools, names() and definitions() agree" do
     assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@nine)
@@ -60,7 +60,7 @@ defmodule Platform.Social.ToolDefinitionsTest do
 
   test "deny_message names the missing publish/approve tool, and only for those names" do
     text =
-      "There is no publish or approve tool: a human approves in Suite and the platform publishes."
+      "There is no publish or approve tool: a human approves in Burrow and the platform publishes."
 
     assert Extension.deny_message("social_post_publish") == text
     assert Extension.deny_message("social_post_approve") == text

@@ -1,6 +1,6 @@
 defmodule Platform.CodeMode.Slots do
   @moduledoc """
-  Concurrency caps for `suite_run` (task 01a114a8 stage 2): at most
+  Concurrency caps for `burrow_run` (task 01a114a8 stage 2): at most
   `per_runtime_concurrency` runs per runtime and `global_concurrency` per
   node (`Platform.CodeMode.Limits`). A run over either cap is refused at
   once, never queued.
@@ -19,7 +19,7 @@ defmodule Platform.CodeMode.Slots do
   ## More than one pool
 
   `start_link/1` takes a `:name` (default `__MODULE__`, the agent pool every
-  `suite_run` uses). Each function below has a variant taking the server as
+  `burrow_run` uses). Each function below has a variant taking the server as
   its first argument, so a second pool shares this drain logic instead of
   re-implementing it. Canvas handlers (task 01a1316b-aab0 stage 1) run in
   their own pool, `Platform.Canvas.ScriptEngine.Slots`, keyed by canvas id

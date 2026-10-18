@@ -6,7 +6,7 @@
 
 ## Context
 
-ADR 0001 established the two-repo boundary and the high-level repository shape for Startup Suite Core.
+ADR 0001 established the two-repo boundary and the high-level repository shape for Burrow Core.
 
 The next decision is how to divide the shared Phoenix platform internally so that:
 
@@ -20,7 +20,7 @@ The goal is to define a stable internal language for the platform before impleme
 
 ## Decision
 
-We will model Startup Suite Core as **product surfaces** built on top of **shared platform domains**.
+We will model Burrow Core as **product surfaces** built on top of **shared platform domains**.
 
 ## Product surfaces
 

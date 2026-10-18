@@ -5,7 +5,7 @@ defmodule Platform.Social.TaskBridge do
   "post the episode to LinkedIn") becomes a task in the profile's project,
   assigned to the agent that heard it. That agent drafts the posts with the
   `social` tools, each draft carrying `task_id`. A human approves every post
-  in Suite and the platform publishes it; agents cannot approve or publish.
+  in Burrow and the platform publishes it; agents cannot approve or publish.
 
   ## Entry point decision
 
@@ -556,7 +556,7 @@ defmodule Platform.Social.TaskBridge do
     Platforms: #{Enum.join(filing.platforms, ", ")}
     Profile: #{filing.profile.name} (#{filing.profile.id})
 
-    #{hint} A human approves each post in Suite and the platform publishes it; agents cannot approve or publish.
+    #{hint} A human approves each post in Burrow and the platform publishes it; agents cannot approve or publish.
     """
   end
 

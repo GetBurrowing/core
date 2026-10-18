@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up an isolated OpenClaw gateway pointed at a local Suite dev server.
+# Set up an isolated OpenClaw gateway pointed at a local Burrow dev server.
 #
 # Reads the following env vars (export before running):
 #   OPENCLAW_STATE_DIR    e.g. $HOME/.openclaw-suite-dev

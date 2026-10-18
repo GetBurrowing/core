@@ -85,7 +85,7 @@ class SkillTest(unittest.TestCase):
 
     def test_offer_comes_first(self):
         body = self.text.split("---", 2)[2]
-        self.assertLess(body.index("Want me to set up Suite"), body.index("## Rules"))
+        self.assertLess(body.index("Want me to set up Burrow"), body.index("## Rules"))
 
 
 if __name__ == "__main__":

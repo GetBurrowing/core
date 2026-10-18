@@ -25,7 +25,7 @@ defmodule Platform.Social.Extension do
   @impl true
   def canvas_kinds, do: [Platform.Social.CanvasKinds.SocialPostCard]
 
-  @deny_publish_or_approve "There is no publish or approve tool: a human approves in Suite and the platform publishes."
+  @deny_publish_or_approve "There is no publish or approve tool: a human approves in Burrow and the platform publishes."
 
   # Grantable, NOT a default grant (like Play): an admin grants `social` per
   # runtime in its tool profile. Every `social_*` name is Social's, listed

@@ -8,7 +8,7 @@ defmodule Platform.Experiments.MetricKinds.DispatchUsage do
 
   ## Fields
 
-    * `suite_tool_calls` — model-issued Suite tool calls (server-side, exact).
+    * `suite_tool_calls` — model-issued Burrow tool calls (server-side, exact).
     * `client_turns`, `client_tokens_in`, `client_tokens_out` — client
       self-report from `agent_usage_events`. A dispatch with no report has
       nil here and is LEFT OUT of both the value and `n`; it is never read

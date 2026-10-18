@@ -1134,7 +1134,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       )
 
       assert design_metric(conn, "design-dispatch-usage") ==
-               "Median suite tool calls per dispatch"
+               "Median Burrow tool calls per dispatch"
     end
 
     test "a dispatch_usage spec with no agg reads as the default mean", %{conn: conn} do

@@ -6,7 +6,7 @@ defmodule Platform.Meetings.PressWindow do
   ## What this is NOT
 
   It is not a recorder, and nothing here touches audio. The user's
-  microphone never reaches Suite: `meeting_client.js`'s `_toggleMic`
+  microphone never reaches Burrow: `meeting_client.js`'s `_toggleMic`
   publishes to the LiveKit SFU via
   `room.localParticipant.setMicrophoneEnabled/1`, and there is no
   `getUserMedia`, `MediaRecorder` or `AudioContext` anywhere in

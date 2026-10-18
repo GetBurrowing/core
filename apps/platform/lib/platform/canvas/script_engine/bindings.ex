@@ -16,9 +16,10 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
   `registry/0` maps a binding name to its handler. v1 registers exactly one
   binding, `canvas_patch`, under two names: `canvas_patch` and its legacy
   dotted name `canvas.patch` (task 01a14a7f stage 3), because persisted
-  canvas scripts call `suite.call('canvas.patch', ...)`. A call through the
+  canvas scripts call `suite.call('canvas.patch', ...)` (`suite` is the same
+  object as `burrow`, task 01a14b9e-50a4 stage 1). A call through the
   dotted name emits `Platform.Federation.ToolAliases`' legacy-name telemetry.
-  Every other name (`tasks.create`, `chat.post_message`, `suite_run`,
+  Every other name (`tasks.create`, `chat.post_message`, `burrow_run`,
   `$store.*`, anything) is refused with kind `forbidden` and code
   `binding_not_registered`, before any argument is read.
 

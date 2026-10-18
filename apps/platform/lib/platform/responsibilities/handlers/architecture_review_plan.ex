@@ -115,7 +115,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   ## Native-vs-external dispatch
 
   The Router only calls `build_prompt/1` / `handle_output/3` for
-  `kind: "external"` agents. Native agents (Suite-internal) get an
+  `kind: "external"` agents. Native agents (Burrow-internal) get an
   AgentResponder signal and run their own attention prompt loop — the
   `context_provided` slots this handler declares are surfaced via the
   usual context bundler on the receiver side. Stage 3 tests exercise
@@ -313,7 +313,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
     constraints = Plan.architecture_constraints()
 
     system =
-      "You are the Architect on the Suite plan-review path (ADR-0044, gated by " <>
+      "You are the Architect on the Burrow plan-review path (ADR-0044, gated by " <>
         "ADR-0046). The plan is HELD at `pending_review` until you return a verdict, " <>
         "and you must return one: `pass` or `reject`, via `plan_architecture_verdict`. " <>
         "Reject ONLY for one of the #{length(constraints)} closed constraint values — " <>

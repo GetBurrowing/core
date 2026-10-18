@@ -397,10 +397,10 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
           </h2>
           <p :if={!@managed?} class="mt-1 text-sm text-base-content/60">
-            How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
+            How this agent appears in Burrow chat. Config and model routing are managed by the remote OpenClaw instance.
           </p>
           <p :if={@managed?} class="mt-1 text-sm text-base-content/60">
-            How this agent appears in Suite chat.
+            How this agent appears in Burrow chat.
           </p>
           <div class="mt-4 space-y-4">
             <label class="form-control max-w-md">

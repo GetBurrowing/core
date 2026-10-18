@@ -1,6 +1,6 @@
 ---
 name: agent-screenshot-and-canvas
-description: Capture a screenshot from the agent's CDP-attached Chrome, upload it as a Suite chat attachment, embed it in a Suite canvas, and submit a review request — the full four-tool chain (Page.captureScreenshot -> attachment.upload_start -> canvas.create -> review_request_create) currently used in dispatch prompts. Includes the tool-name underscore-vs-dot gotcha and the upload_inline corruption pitfall.
+description: Capture a screenshot from the agent's CDP-attached Chrome, upload it as a Burrow chat attachment, embed it in a Burrow canvas, and submit a review request — the full four-tool chain (Page.captureScreenshot -> attachment.upload_start -> canvas.create -> review_request_create) currently used in dispatch prompts. Includes the tool-name underscore-vs-dot gotcha and the upload_inline corruption pitfall.
 ---
 
 # Agent Screenshot + Canvas
@@ -9,8 +9,8 @@ This is the canonical evidence pipeline an agent uses to prove "I rendered the
 feature in a real browser, here's the picture." It chains four operations:
 
 1. **Capture** a PNG via the dedicated Chrome (`agent-chrome-cdp` skill).
-2. **Upload** the bytes to Suite's attachment store.
-3. **Embed** the resulting attachment in a Suite canvas.
+2. **Upload** the bytes to Burrow's attachment store.
+3. **Embed** the resulting attachment in a Burrow canvas.
 4. **Submit** a `review_request` referencing that canvas.
 
 There are two well-known footguns in the chain — read those first.
@@ -19,7 +19,7 @@ There are two well-known footguns in the chain — read those first.
 
 ### 1. Tool-name underscore vs dot
 
-The Suite MCP HTTP endpoint exposes tools with **dot-namespaced** names:
+The Burrow MCP HTTP endpoint exposes tools with **dot-namespaced** names:
 
 ```
 attachment.upload_start
@@ -58,7 +58,7 @@ small empty page screenshot is ~30 KB.
 
 `scripts/screenshot-to-review.sh` is the end-to-end recipe in <30 lines. It
 expects the agent's CDP Chrome to be running (`agent-chrome-cdp` skill). It
-uses `cdp_navigate.py` from that skill to capture, then makes three Suite MCP
+uses `cdp_navigate.py` from that skill to capture, then makes three Burrow MCP
 calls via `curl`.
 
 ```bash
@@ -255,6 +255,6 @@ before both is a false "feature missing" and has already cost review cycles.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Canvas renders a broken image | Used `upload_inline` for a >2 KB payload, or `src` doesn't start with `/chat/attachments/`. | Switch to `upload_start` + `curl PUT`; verify the `src` path. |
-| `attachment.upload_start` returns 413 | File exceeds Suite's max attachment size. | Compress/crop the screenshot before upload. |
+| `attachment.upload_start` returns 413 | File exceeds Burrow's max attachment size. | Compress/crop the screenshot before upload. |
 | `review_request_create` returns "validation not found" | Wrong validation id, or the validation belongs to a different task. | Re-fetch the validation list for the current task. |
 | MCP returns "tool not found" with the dotted name | Client uses underscore form. | Swap `attachment.upload_start` -> `attachment_upload_start` (or `mcp__startup-suite__attachment_upload_start`). |

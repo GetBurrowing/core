@@ -499,7 +499,7 @@ defmodule PlatformWeb.LivekitWebhookController do
 
   defp suppress_meeting_finished?(_), do: false
 
-  # LiveKit room names in Suite follow `space-<uuid>` — recover the space
+  # LiveKit room names in Burrow follow `space-<uuid>` — recover the space
   # UUID from the name so transcripts can be linked back to their space.
   defp space_id_from_room_name("space-" <> uuid) do
     if String.length(uuid) == 36, do: uuid, else: nil

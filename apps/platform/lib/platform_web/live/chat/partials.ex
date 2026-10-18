@@ -60,7 +60,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <.empty_state variant={:conversational}>
       <:system_message>— no spaces yet —</:system_message>
-      <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
+      <:body>Welcome to Burrow. To get started, create a space or connect your agent.</:body>
       <:chips label="+ Create a space" event="new_channel_open" />
       <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
     </.empty_state>
@@ -1130,7 +1130,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:limits, :map, required: true)
 
   # One row per staged large file. A file over the install's limit reads
-  # "(!) <name> is 1.1 GB. This Suite accepts files up to 1 GB." with the
+  # "(!) <name> is 1.1 GB. This Burrow install accepts files up to 1 GB." with the
   # error hue on the icon only (the token fails AA as small text), and never
   # uploads. Design canvas 01a120be-f336, "TOO LARGE".
   defp large_staged_rows(assigns) do
@@ -1148,7 +1148,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             <span title={file.name}>
               {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
             </span>
-            is {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}. This Suite accepts files up to {@limits &&
+            is {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}. This Burrow install accepts files up to {@limits &&
               @limits.label}.
           </span>
         <% else %>

@@ -25,7 +25,7 @@ defmodule Platform.MemoryTest do
 
     test "is true for a real provider module" do
       Application.put_env(:platform, :memory_service,
-        provider: Platform.Memory.Providers.StartupSuite
+        provider: Platform.Memory.Providers.MemoryService
       )
 
       assert Memory.enabled?()

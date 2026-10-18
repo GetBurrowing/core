@@ -216,7 +216,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   #     `do_join` runs inside `handle_params` on the mount, before any
   #     hook `pushEvent` can land (the hook mounts after first render),
   #     and the reviewer showed the dataset must be right BEFORE `_join`.
-  #   * The LiveKit participant's published state — Suite keeps no
+  #   * The LiveKit participant's published state — Burrow keeps no
   #     server-side mirror of track mute state; `media_states` pushes are
   #     the viewer's observation of OTHER participants and are never
   #     persisted (see `apply_media_states/2`).

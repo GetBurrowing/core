@@ -37,7 +37,7 @@ defmodule Platform.Branding.ThemeCss do
   The admin Branding page (stage 4) previews a DRAFT palette inside
   `data-theme="light"` / `"dark"` wrappers that carry `data-theme-preview`.
   Without the exclusion, a saved install theme would reach into a preview
-  whose draft mode is all Suite default and paint the saved colours there,
+  whose draft mode is all Burrow default and paint the saved colours there,
   because the preview's `data-theme` matches the same selector. The exclusion
   raises these two selectors to (0,2,0), which still beats daisyUI's own
   (0,1,0) theme selectors regardless of order and leaves the OS-dark
@@ -53,7 +53,7 @@ defmodule Platform.Branding.ThemeCss do
   declared here, because declaring them makes that mapping self-referential
   and every `border-edge` / `ring-focus-ring` falls back to currentColor.
   `--color-interactive` is declared outside the daisy blocks in `app.css`, so
-  it must be set here too or links keep the Suite cyan. Status tokens (info,
+  it must be set here too or links keep the Burrow cyan. Status tokens (info,
   success, warning, error) are NEVER emitted: they carry meaning, not brand.
 
   A mode with every slot nil emits no block, and a row with all six nil

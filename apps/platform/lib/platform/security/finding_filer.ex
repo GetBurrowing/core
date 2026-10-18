@@ -1,6 +1,6 @@
 defmodule Platform.Security.FindingFiler do
   @moduledoc """
-  Files security-scanner findings as Suite tasks (task
+  Files security-scanner findings as Burrow tasks (task
   `019f3e8e-4406` stage 5, ADR-0043).
 
   Two entrypoints, matching the two runtime shapes scanners have:
@@ -44,7 +44,7 @@ defmodule Platform.Security.FindingFiler do
     title: "Something bad in package",       # required — will be prefixed with [security:<key>]
     description: "markdown body",            # optional
     fingerprint: "cve:CVE-2024-1234:plug:1.14.0",  # required — dedup key
-    project_id: "<uuid>",                    # required — Suite project the task lands in
+    project_id: "<uuid>",                    # required — Burrow project the task lands in
     sponsor_user_id: "<uuid>"                # optional — falls back to configured sponsor / nil
   }
   ```
@@ -72,7 +72,7 @@ defmodule Platform.Security.FindingFiler do
   @default_digest_threshold 10
 
   @doc """
-  File a single finding as a Suite task.
+  File a single finding as a Burrow task.
 
   Returns `{:ok, %Task{}}` on insert, `{:error, :duplicate_fingerprint}`
   when a non-deleted task already carries the same

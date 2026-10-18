@@ -1,7 +1,7 @@
 defmodule Platform.Feedback.GithubPublisher.Broker do
   @moduledoc """
   The installation-side publisher (task 01a11ec3 stage 2): hands the built
-  issue to the Suite-hosted feedback broker, which holds the GitHub
+  issue to the Burrow-hosted feedback broker, which holds the GitHub
   credentials. This adapter carries NO credential — not a GitHub token, not
   an App key, not a broker secret — so there is nothing on a Burrow
   installation for a submission, a log or an error to leak.

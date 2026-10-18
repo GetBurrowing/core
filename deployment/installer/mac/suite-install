@@ -1,5 +1,5 @@
 #!/bin/bash
-# suite-install: run the Suite install CLI with a Python that has tomllib.
+# suite-install: run the Burrow install CLI with a Python that has tomllib.
 #
 #   suite-install setup status --json
 #   suite-install setup run preflight
@@ -13,7 +13,7 @@
 #
 # Named suite-install, not suite: `suite` is the separate suite-cli (TypeScript
 # on bun, repo Startup-Suite/suite-cli) that wires a Claude Code runtime to
-# Suite. See deployment/installer/mac/README.md.
+# Burrow. See deployment/installer/mac/README.md.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

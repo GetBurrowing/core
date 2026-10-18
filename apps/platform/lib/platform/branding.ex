@@ -213,7 +213,7 @@ defmodule Platform.Branding do
   end
 
   @doc """
-  Put every in-app colour back to the Suite default: the six colours and
+  Put every in-app colour back to the Burrow default: the six colours and
   `color_preset` all become nil. Root-admin only. Broadcasts.
   """
   @spec reset_colors(any()) ::

@@ -4,7 +4,7 @@
 
 ```mermaid
 graph TB
-    subgraph suite["Startup Suite (Public)"]
+    subgraph suite["Burrow (Public)"]
         direction TB
         ws_endpoint["/runtime/ws<br>WebSocket Endpoint"]
         
@@ -80,31 +80,31 @@ graph TB
 sequenceDiagram
     participant OC as OpenClaw<br>(behind NAT)
     participant Plugin as startup-suite-channel<br>plugin
-    participant Suite as Suite<br>/runtime/ws
+    participant Burrow as Burrow<br>/runtime/ws
     participant AR as Attention<br>Router
     participant CP as Context<br>Plane (ETS)
 
-    Note over OC,Suite: 1. Registration (once)
-    Plugin->>Suite: WSS connect + auth<br>{runtime_id, agent, capabilities}
-    Suite-->>Plugin: 201 {agent_participant_id, token, spaces}
-    Suite->>AR: Register external agent participant
+    Note over OC,Burrow: 1. Registration (once)
+    Plugin->>Burrow: WSS connect + auth<br>{runtime_id, agent, capabilities}
+    Burrow-->>Plugin: 201 {agent_participant_id, token, spaces}
+    Burrow->>AR: Register external agent participant
 
-    Note over OC,Suite: 2. Attention signal (per message)
+    Note over OC,Burrow: 2. Attention signal (per message)
     AR->>CP: Read space context, canvases, tasks
     CP-->>AR: Context bundle
-    AR->>Suite: Dispatch to runtime WebSocket
-    Suite->>Plugin: {type: "attention", signal, message, history, context, tools}
+    AR->>Burrow: Dispatch to runtime WebSocket
+    Burrow->>Plugin: {type: "attention", signal, message, history, context, tools}
     Plugin->>OC: Route as inbound message
 
-    Note over OC,Suite: 3. Agent response
+    Note over OC,Burrow: 3. Agent response
     OC->>Plugin: Agent reply
-    Plugin->>Suite: {type: "reply", space_id, content}
-    Suite->>AR: Post message as agent participant
+    Plugin->>Burrow: {type: "reply", space_id, content}
+    Burrow->>AR: Post message as agent participant
 
-    Note over OC,Suite: 4. Tool call (mid-response)
+    Note over OC,Burrow: 4. Tool call (mid-response)
     OC->>Plugin: Agent wants canvas_create
-    Plugin->>Suite: {type: "tool_call", tool, args}
-    Suite-->>Plugin: {type: "tool_result", result}
+    Plugin->>Burrow: {type: "tool_call", tool, args}
+    Burrow-->>Plugin: {type: "tool_result", result}
     Plugin->>OC: Feed result back to agent loop
 ```
 
@@ -155,7 +155,7 @@ flowchart TB
         p4["Structured errors<br>for self-correction"]
     end
 
-    subgraph tools["Suite Tool Surface"]
+    subgraph tools["Burrow Tool Surface"]
         direction TB
         cc["canvas_create<br>4 params, all required"]
         cu["canvas_update<br>2 params: id + patches"]

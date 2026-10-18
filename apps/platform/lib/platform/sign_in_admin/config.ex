@@ -1,7 +1,7 @@
 defmodule Platform.SignInAdmin.Config do
   @moduledoc """
   Switch and connection settings for the native sign-in users page, which
-  manages the install's bundled pocket-id users from Suite (task
+  manages the install's bundled pocket-id users from Burrow (task
   01a113ea-3ef4-7001-b3fc-5d0a1bafc5df).
 
   Every value is read at call time, never in a module attribute, so an

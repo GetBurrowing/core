@@ -9,7 +9,7 @@
 
 ## Context
 
-Suite's plan-engine coordinates Planner → Executor → Reviewer → Deployer for every task. Each actor operates on a single task's scope. Nothing in the current flow evaluates architectural coherence *across* tasks, *across* time, or against *previously-decided-then-forgotten* patterns.
+Burrow's plan-engine coordinates Planner → Executor → Reviewer → Deployer for every task. Each actor operates on a single task's scope. Nothing in the current flow evaluates architectural coherence *across* tasks, *across* time, or against *previously-decided-then-forgotten* patterns.
 
 Symptoms observed 2026-06 through 2026-07:
 

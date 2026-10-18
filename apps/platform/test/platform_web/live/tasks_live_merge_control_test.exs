@@ -283,7 +283,7 @@ defmodule PlatformWeb.TasksLiveMergeControlTest do
       html = open_panel(conn, task_with_live_deploy_gate!()) |> render()
 
       assert text_of(html, @band) =~
-               "Cannot merge from Suite: the GitHub CLI is unavailable on the server."
+               "Cannot merge from Burrow: the GitHub CLI is unavailable on the server."
 
       # Not a vanishing control and not a greyed-out one with no reason.
       assert count(html, @merge_button) == 1

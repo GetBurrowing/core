@@ -40,7 +40,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   `task/019fb90f` carries merged PR #648. A consumer that derives can
   therefore close one task's deploy gate on another task's merge, and neither
   GitHub nor `gh pr list --head` can see the collision because the ambiguity
-  is Suite-side. `StackDeployer` already paid for this once
+  is Burrow-side. `StackDeployer` already paid for this once
   (`stack_deployer.ex:1163-1193`: `fatal: couldn't find remote ref
   task/019f9b27`, four ADR-0046 members collapsing to `task/019f9b28`).
 

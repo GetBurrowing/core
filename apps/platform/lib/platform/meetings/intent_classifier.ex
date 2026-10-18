@@ -60,7 +60,7 @@ defmodule Platform.Meetings.IntentClassifier do
   Every DELIVERED chunk (post-merge) walks the guards in order:
 
     1. **Agent speaker** — the segment's `participant_identity` names a
-       Suite agent (`Platform.Meetings.agent_identity?/1`). Emits the
+       Burrow agent (`Platform.Meetings.agent_identity?/1`). Emits the
        `:skipped` event with `%{reason: :agent_speaker}`. Audio an agent
        speaks into a meeting is audio the VAD chunks and the STT
        transcribes, so an agent saying *"I'm adding this to a task and
@@ -2359,7 +2359,7 @@ defmodule Platform.Meetings.IntentClassifier do
 
   defp participant_identity(_), do: nil
 
-  # Returns the identity string when the chunk was authored by a Suite
+  # Returns the identity string when the chunk was authored by a Burrow
   # agent, `nil` otherwise — so the caller branches on presence rather
   # than on a boolean and gets the identity for telemetry for free.
   defp agent_speaker_identity(payload) do

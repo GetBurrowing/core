@@ -1,6 +1,6 @@
 defmodule Platform.CodeMode.Store do
   @moduledoc """
-  `store.get / set / delete` for `suite_run` scripts (task 01a114a8 stage 2).
+  `store.get / set / delete` for `burrow_run` scripts (task 01a114a8 stage 2).
 
   One ETS row per `{agent_id, scope, key}`, where `scope` is the run's
   `session` when it names one and its runtime_id otherwise, so two runs of

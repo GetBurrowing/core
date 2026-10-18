@@ -23,7 +23,7 @@ summary:
 
 This was a deliberately small step to get the summarizer off hardcoded Anthropic while leaving a clean path to a durable config surface. The YAML approach has two limitations worth addressing:
 
-1. **No UI** — operators have to edit a file and restart (or re-read on next summary) to switch providers. Not tenable for multi-tenant Suite deployments.
+1. **No UI** — operators have to edit a file and restart (or re-read on next summary) to switch providers. Not tenable for multi-tenant Burrow deployments.
 2. **Duplicates work already done by `Platform.Agents`** — the `agents` table already models configurable units of work (slug, workspace_id, model_config, tools_config, runtime_type, …). The summarizer is functionally an agent: input = transcript, output = summary, model/provider configured.
 
 ## Decision
@@ -67,7 +67,7 @@ Replace `Platform.Meetings.Config` with a lookup into the existing `agents` tabl
 
 ### Out of scope
 
-- Promoting the **meeting-transcriber** STT config (`STT_BASE_URL`, `STT_MODEL`) to an agent entity. That lives in the external Python worker's env and is governed by its deployment, not Suite's DB. A separate ADR would be needed if we wanted Suite-driven config push.
+- Promoting the **meeting-transcriber** STT config (`STT_BASE_URL`, `STT_MODEL`) to an agent entity. That lives in the external Python worker's env and is governed by its deployment, not Burrow's DB. A separate ADR would be needed if we wanted Burrow-driven config push.
 - Unifying with ADR 0034's MCP agent bundle system. The summarizer doesn't expose tools — it's a single-shot completion — so the bundle model doesn't apply.
 
 ## Sequence

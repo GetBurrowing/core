@@ -1555,7 +1555,7 @@ defmodule PlatformWeb.InboxLiveTest do
       render_hook(lv, "push_permission_state", %{"state" => "denied"})
 
       assert has_element?(lv, ~s([data-role="notification-state"][data-auto-denied="false"]))
-      assert render(lv) =~ "Your browser is blocking notifications from Suite."
+      assert render(lv) =~ "Your browser is blocking notifications from Burrow."
     end
 
     # Task 01a10d8e stage 6: the wiring the component tests cannot see. The

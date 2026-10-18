@@ -1,4 +1,4 @@
-# Suite's agent host, `contained` capability profile (core task 01a10322 stage 3).
+# Burrow's agent host, `contained` capability profile (core task 01a10322 stage 3).
 #
 # A SYSTEMD-INIT image: systemd is PID 1 (podman runs it in systemd mode), so
 # agents use the same `sudo systemctl`, `systemctl --user` and `crontab` as on

@@ -2,7 +2,7 @@ defmodule Platform.Feedback.Intake do
   @moduledoc """
   The constrained external-feedback intake (task 01a11ec3 stage 3).
 
-  One signed GitHub `issues` delivery in, at most one Suite task out. This is
+  One signed GitHub `issues` delivery in, at most one Burrow task out. This is
   a dedicated responsibility (`feedback.intake`,
   `Platform.Responsibilities.Handlers.FeedbackIntake`) and shares nothing with
   the janitor.

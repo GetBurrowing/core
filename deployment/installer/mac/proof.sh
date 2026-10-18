@@ -1,5 +1,5 @@
 #!/bin/bash
-# proof.sh: data-plane proof of a Suite install on this Mac (task 01a0d6ab
+# proof.sh: data-plane proof of a Burrow install on this Mac (task 01a0d6ab
 # stage 5). A thin door onto `suite-install proof`, which holds the logic
 # (suite_install/proof_mac.py) and its tests. Run it ON the Mac.
 #

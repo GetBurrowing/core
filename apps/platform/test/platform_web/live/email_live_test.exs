@@ -287,7 +287,7 @@ defmodule PlatformWeb.EmailLiveTest do
       assert has_element?(view, ~s([data-role="mail-message-detail"]))
 
       assert view |> element(~s([data-role="mail-external-label"])) |> render() =~
-               "External email — not from a Suite member"
+               "External email — not from a Burrow member"
 
       assert view |> element(~s([data-role="mail-message-id"])) |> render() =~
                message.message_id_header

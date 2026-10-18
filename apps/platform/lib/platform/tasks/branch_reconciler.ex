@@ -33,7 +33,7 @@ defmodule Platform.Tasks.BranchReconciler do
 
   The answer is a REPORT. There is deliberately no path where the found
   branch is adopted onto the gate: a confused agent that pushed to the
-  wrong branch would get Suite to merge that branch. The control refuses
+  wrong branch would get Burrow to merge that branch. The control refuses
   and says both names. Silence is what is forbidden, not refusal.
 
   Uses `Platform.Tasks.BranchProvisioner`'s runner so there is ONE GitHub

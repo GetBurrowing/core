@@ -23,12 +23,12 @@ In practice, that knowledge lives in hand-kept host files. Measured on 2026-09-2
   moon also runs `files-service`, `speaches` (cuda, on the host's NVIDIA GPU), `meeting-voice`
   and `wyoming-openai`, none of which core-ops tracks. The live core-platform quadlet sets
   `FILES_SERVICE_URL`; the tracked one has no such line. The only accurate description of a
-  full Suite install is the set of live quadlets on one machine.
+  full Burrow install is the set of live quadlets on one machine.
 
 That cannot scale to customer installs, and the product decision below means every customer
 gets one.
 
-**Product decision (Rowan, 2026-09-25).** Every customer gets their own owned Suite install.
+**Product decision (Rowan, 2026-09-25).** Every customer gets their own owned Burrow install.
 Hosting several customers as orgs inside one install is not an option, because multi-org
 isolation is not strong enough to sell across customers. ADR 0042's org hierarchy (one root
 org, tenant children) organises clients *within* an install. It is not a boundary between
@@ -161,7 +161,7 @@ deployment logic. Core Ops holds real instances only, such as a future moon mani
 
 ### Tradeoffs
 
-- Until moon is rendered from a manifest, there are two descriptions of a Suite install: the
+- Until moon is rendered from a manifest, there are two descriptions of a Burrow install: the
   manifest format, and moon's hand-kept quadlets. The quadlets have already drifted from
   core-ops.
 - `registry.py` restates part of core's env contract (`MEMORY_SERVICE_URL`,
@@ -487,7 +487,7 @@ RAM. Readings are `docker stats --no-stream`; "VM" is OrbStack's VM limit; "free
 | files-service | n/a | 42 MiB | 75 MiB |
 | pocket-id | n/a | 62 MiB | 67 MiB |
 | caddy + cloudflared | n/a | 62 MiB | 89 MiB |
-| **Suite total** | n/a | **703 MiB** | **785 MiB** |
+| **Burrow total** | n/a | **703 MiB** | **785 MiB** |
 | Pre-existing (nexus-neo4j, suite-dev-postgres) | 1038 MiB | 688 MiB | 691 MiB |
 
 ### Found by the proof and fixed
@@ -637,7 +637,7 @@ credentials are off limits. Procedure for a human on a logged-in Mac:
 2. Make an empty directory and install the skill there as a project skill:
    `mkdir -p .claude/skills/suite-install-mac && cp ~/suite-src/deployment/installer/skill/SKILL.md .claude/skills/suite-install-mac/`.
    Start `claude` in that directory. Type `MARKER-01a0d6ab-transcript` as the first message,
-   then `Install Suite on this Mac.` Answer only what the agent asks. Add the passkey in the
+   then `Install Burrow on this Mac.` Answer only what the agent asks. Add the passkey in the
    browser window it opens, then say so.
 3. When `verify` passes, exit. The transcript is the session file
    `~/.claude/projects/<cwd with / replaced by ->/<session-id>.jsonl` (newest file there).

@@ -6,7 +6,7 @@
 
 ## Context
 
-Startup Suite Core is being designed as a professional, collaborative, realtime-first business platform for small teams.
+Burrow Core is being designed as a professional, collaborative, realtime-first business platform for small teams.
 
 Several architectural decisions are already established:
 

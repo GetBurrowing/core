@@ -361,7 +361,7 @@ defmodule Platform.Meetings.CalendarFeedTest do
 
       assert Enum.at(pairs, 0) == {"BEGIN", "VCALENDAR"}
       assert {"VERSION", "2.0"} in pairs
-      assert {"PRODID", "-//Startup Suite//Meetings//EN"} in pairs
+      assert {"PRODID", "-//Burrow//Meetings//EN"} in pairs
       assert {"CALSCALE", "GREGORIAN"} in pairs
       assert {"TRANSP", "OPAQUE"} in pairs
 

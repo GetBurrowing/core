@@ -2,7 +2,7 @@ defmodule Platform.Tasks.ProofOfLife do
   @moduledoc """
   Smallest end-to-end proof flow for the Tasks + Execution epic.
 
-  This module bootstraps a Suite-native demo task, stores a minimal plan inside
+  This module bootstraps a Burrow-native demo task, stores a minimal plan inside
   task-scoped context, launches a local execution run against a durable git
   worktree, and verifies that the orchestration can produce a real repo change
   and push it to GitHub.
@@ -446,7 +446,7 @@ defmodule Platform.Tasks.ProofOfLife do
     %{
       "title" => "Proof-of-life task",
       "description" =>
-        "Suite-native proof run that launches a real execution flow, makes a deterministic repo change, verifies it, and pushes a branch.",
+        "Burrow-native proof run that launches a real execution flow, makes a deterministic repo change, verifies it, and pushes a branch.",
       "source" => "proof_of_life",
       "task_id" => task_id
     }
@@ -645,7 +645,7 @@ defmodule Platform.Tasks.ProofOfLife do
       "export GIT_CONFIG_GLOBAL=../.gitconfig",
       "cd git",
       "git config --global --add safe.directory \"$PWD\"",
-      "git config --global user.name #{shell_escape(Keyword.get(config, :author_name, "Suite Runner"))}",
+      "git config --global user.name #{shell_escape(Keyword.get(config, :author_name, "Burrow Runner"))}",
       "git config --global user.email #{shell_escape(Keyword.get(config, :author_email, "runner@suite.local"))}",
       maybe_set_push_remote(push_remote_url),
       heredoc_write(prompt_path, claude_prompt(run, branch, config, mode)),
@@ -709,7 +709,7 @@ defmodule Platform.Tasks.ProofOfLife do
     mode_label = Atom.to_string(mode)
 
     """
-    You are running inside a git worktree prepared by Startup Suite.
+    You are running inside a git worktree prepared by Burrow.
 
     Goal: prove that the platform can orchestrate a real agent subprocess that edits a repository, commits the change, and pushes the branch to GitHub.
 
@@ -749,7 +749,7 @@ defmodule Platform.Tasks.ProofOfLife do
       run_id: run_id,
       repo: Keyword.get(config, :repo_slug),
       github_token: Keyword.get(config, :github_token),
-      author_name: Keyword.get(config, :author_name, "Suite Runner"),
+      author_name: Keyword.get(config, :author_name, "Burrow Runner"),
       author_email: Keyword.get(config, :author_email, "runner@suite.local")
     ]
 

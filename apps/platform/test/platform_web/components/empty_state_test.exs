@@ -162,7 +162,7 @@ defmodule PlatformWeb.Components.EmptyStateTest do
       html =
         rendered_to_string(~H"""
         <.empty_state variant={:conversational}>
-          <:body>Welcome to Suite.</:body>
+          <:body>Welcome to Burrow.</:body>
         </.empty_state>
         """)
 
@@ -170,7 +170,7 @@ defmodule PlatformWeb.Components.EmptyStateTest do
       assert html =~ "empty-bot-bubble"
       assert html =~ "empty-bot-author"
       assert html =~ "Saru · suggested"
-      assert html =~ "Welcome to Suite."
+      assert html =~ "Welcome to Burrow."
     end
 
     test ":conversational with system_message slot renders the system pill" do

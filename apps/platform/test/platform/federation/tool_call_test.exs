@@ -199,20 +199,36 @@ defmodule Platform.Federation.ToolCallTest do
   # ── error_kind (task 01a115b5 stage 1) ────────────────────────────────
 
   describe "classify/2" do
-    test "a failed suite_run run is error with its enumerated kind" do
+    test "a failed burrow_run run is error with its enumerated kind" do
       assert ToolCall.classify(
-               "suite_run",
+               "burrow_run",
                {:ok, %{ok: false, error: %{kind: "fuel", message: "m"}}}
              ) == {"error", "fuel"}
     end
 
-    test "a suite_run kind outside the set is error with a nil kind, never free text" do
-      assert ToolCall.classify("suite_run", {:ok, %{ok: false, error: %{kind: "oops"}}}) ==
+    test "a burrow_run kind outside the set is error with a nil kind, never free text" do
+      assert ToolCall.classify("burrow_run", {:ok, %{ok: false, error: %{kind: "oops"}}}) ==
                {"error", nil}
     end
 
-    test "a successful suite_run run is ok with a nil kind" do
-      assert ToolCall.classify("suite_run", {:ok, %{ok: true, result: 1}}) == {"ok", nil}
+    test "a successful burrow_run run is ok with a nil kind" do
+      assert ToolCall.classify("burrow_run", {:ok, %{ok: true, result: 1}}) == {"ok", nil}
+    end
+
+    test "the legacy name suite_run classifies exactly as burrow_run (task 01a14b9e-50a4 stage 1)" do
+      for outcome <- [
+            {:ok, %{ok: false, error: %{kind: "fuel", message: "m"}}},
+            {:ok, %{ok: false, error: %{kind: "oops"}}},
+            {:ok, %{ok: true, result: 1}},
+            {:error, %{code: "missing_script"}},
+            :denied
+          ] do
+        assert ToolCall.classify("suite_run", outcome) == ToolCall.classify("burrow_run", outcome)
+      end
+
+      # Positive control: the run branch fires for both names.
+      assert ToolCall.classify("suite_run", {:ok, %{ok: false, error: %{kind: "fuel"}}}) ==
+               {"error", "fuel"}
     end
 
     test "any other tool returning ok:false stays ok with a nil kind" do
@@ -225,7 +241,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "errors and denials keep their status and carry no kind" do
-      assert ToolCall.classify("suite_run", {:error, %{code: "missing_script"}}) ==
+      assert ToolCall.classify("burrow_run", {:error, %{code: "missing_script"}}) ==
                {"error", nil}
 
       assert ToolCall.classify("task_get", :denied) == {"denied", nil}
@@ -234,7 +250,7 @@ defmodule Platform.Federation.ToolCallTest do
 
   describe "the error_kind column" do
     test "an error_kind outside the enumerated set is an invalid changeset" do
-      base = %{runtime_id: "rt", tool: "suite_run", status: "error", attribution: "unattributed"}
+      base = %{runtime_id: "rt", tool: "burrow_run", status: "error", attribution: "unattributed"}
 
       refute ToolCallRecord.changeset(Map.put(base, :error_kind, "oops")).valid?
       assert ToolCallRecord.changeset(Map.put(base, :error_kind, "timeout")).valid?
@@ -244,7 +260,7 @@ defmodule Platform.Federation.ToolCallTest do
       {runtime, _token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       ToolCallLedger.insert(%{
-        tool: "suite_run",
+        tool: "burrow_run",
         status: "error",
         error_kind: "memory",
         duration_ms: 1,
@@ -256,7 +272,7 @@ defmodule Platform.Federation.ToolCallTest do
       assert [%ToolCallRecord{status: "error", error_kind: "memory"}] = rows_for(runtime)
     end
 
-    test "a non-suite_run row over /mcp carries a nil error_kind", %{agent: agent, task: task} do
+    test "a non-burrow_run row over /mcp carries a nil error_kind", %{agent: agent, task: task} do
       {runtime, token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       mcp_call(token, "task_get", %{"task_id" => task.id})

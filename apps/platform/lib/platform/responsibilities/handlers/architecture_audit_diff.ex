@@ -95,7 +95,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
     %{
       key: "Stack rollup ship",
       note:
-        "Suite stacks ship as ONE rollup PR via `stack/<name>` branch, not per-member; flag any per-member `pr_merge` dispatch."
+        "Burrow stacks ship as ONE rollup PR via `stack/<name>` branch, not per-member; flag any per-member `pr_merge` dispatch."
     }
   ]
 
@@ -215,7 +215,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureAuditDiff do
     user = render_instruction(context)
 
     system =
-      "You are the Architect on the Suite post-executor drift-audit path (ADR-0044). " <>
+      "You are the Architect on the Burrow post-executor drift-audit path (ADR-0044). " <>
         "A stage just transitioned to `passed`; you are annotating what shipped versus " <>
         "what was planned. Your outputs are additive — you do NOT block the reviewer, " <>
         "and you do NOT rewrite the stage. Cite tasks by id, ADRs by number, and " <>

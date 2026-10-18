@@ -2,7 +2,7 @@
 
 Run: PYTHONPATH=deployment/installer python3 -m unittest discover -s deployment/installer/tests -v
 
-No Docker, no Mac and no Suite: every subprocess goes through the recording
+No Docker, no Mac and no Burrow: every subprocess goes through the recording
 FakeHost, ``bin/platform rpc`` is answered by a fake that plays core's side,
 and HTTP goes to an in-memory fake of the attachment routes. Each check that
 must be able to FAIL is shown failing once (a negative control), so a PASS

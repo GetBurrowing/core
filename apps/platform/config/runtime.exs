@@ -296,7 +296,7 @@ end
 
 proof_repo_path = System.get_env("PROOF_OF_LIFE_REPO_PATH", "/repos/core")
 proof_run_root = System.get_env("PROOF_OF_LIFE_RUN_ROOT", "/data/platform/execution-runs")
-proof_author_name = System.get_env("GIT_AUTHOR_NAME", "Suite Runner")
+proof_author_name = System.get_env("GIT_AUTHOR_NAME", "Burrow Runner")
 proof_author_email = System.get_env("GIT_AUTHOR_EMAIL", "runner@suite.local")
 proof_runner_image = System.get_env("PROOF_OF_LIFE_RUNNER_IMAGE", "suite-runner:dev")
 proof_host_run_root = System.get_env("PROOF_OF_LIFE_HOST_RUN_ROOT")
@@ -364,7 +364,7 @@ end
 # Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
 # adapter: `broker` (default; every Burrow installation) posts to
 # FEEDBACK_BROKER_URL and holds no GitHub secret at all; `github_app` is for
-# the Suite-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,
+# the Burrow-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,
 # FEEDBACK_GITHUB_APP_INSTALLATION_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY from
 # the process environment at call time — they are deliberately NOT copied
 # into application config here.
@@ -556,7 +556,7 @@ if config_env() == :prod do
 
   # MEET_HOST is a sibling domain (e.g. "meet.example.com") that serves the
   # guest-meeting entry surface. It's a distinct hostname from PHX_HOST so
-  # guests never see the primary Suite chrome, but LiveView WebSocket upgrades
+  # guests never see the primary Burrow chrome, but LiveView WebSocket upgrades
   # still terminate against the same Phoenix endpoint. Add it to check_origin
   # so the socket handshake accepts requests originating from that hostname.
   # Unset → no guest-meeting origin allowlisted; guest LiveView sockets from
@@ -574,7 +574,7 @@ if config_env() == :prod do
 
   # EXTRA_ORIGIN_APEXES is an optional comma-separated list of ADDITIONAL apex
   # domains (e.g. "example.org") that resolve to this same Phoenix endpoint.
-  # Suite is being served on a second apex in parallel with the PHX_HOST apex
+  # Burrow is being served on a second apex in parallel with the PHX_HOST apex
   # ahead of a later cutover: Traefik already routes suite./chat./meet.<apex>
   # there with a valid wildcard cert, but check_origin only allowlists the
   # PHX_HOST apex, so LiveView WebSocket handshakes from the second apex are
@@ -720,7 +720,7 @@ end
 
 # LiveKit agent name core dispatches the meeting transcriber as, on both the
 # JWT `roomConfig.agents` path and the CreateRoom body. The LiveKit server can
-# be shared by several Suite installs; each install needs its OWN transcriber
+# be shared by several Burrow installs; each install needs its OWN transcriber
 # worker (registered under its own agent name, posting segments to its own
 # `PERSIST_URL`), or one install's meetings are transcribed into another's.
 # Unset or blank keeps the default `"meeting-transcriber"`.
@@ -766,7 +766,7 @@ if deploy_skip_notice_space_id && deploy_skip_notice_repo do
 end
 
 # ── Memory service ────────────────────────────────────────────────────────────
-# Wires Platform.Memory to an external vector-search service (the Startup Suite
+# Wires Platform.Memory to an external vector-search service (the Burrow
 # memory-service by default). When MEMORY_SERVICE_URL is not set, the Noop
 # provider is used — append_memory_entry still writes to Postgres and
 # search_memory_entries falls back to substring match. See ADR 0033.
@@ -800,7 +800,7 @@ memory_service_ingest_timeout =
 
 if memory_service_url do
   config :platform, :memory_service,
-    provider: Platform.Memory.Providers.StartupSuite,
+    provider: Platform.Memory.Providers.MemoryService,
     base_url: memory_service_url,
     api_key: System.get_env("MEMORY_SERVICE_API_KEY"),
     timeout: memory_service_timeout,

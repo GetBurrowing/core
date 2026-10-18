@@ -4,7 +4,7 @@
 // classes to elements with `phx-click` / `phx-submit` while the round-trip is
 // in flight. What LV does NOT do:
 //
-//   1. Delay-before-show: most Suite operations resolve in < 100ms; flashing
+//   1. Delay-before-show: most Burrow operations resolve in < 100ms; flashing
 //      a spinner for those feels worse than no feedback at all.
 //   2. `aria-busy`: screen readers need an attribute, not a class, to announce
 //      the loading state.

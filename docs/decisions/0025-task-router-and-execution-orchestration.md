@@ -203,7 +203,7 @@ If an agent misses N consecutive heartbeats:
 
 1. Router marks assignment `:stalled`
 2. Broadcasts `{:task_stalled, task_id, assignee, reason}` to PubSub
-3. Suite chat surface posts a notification in the task's associated space
+3. Burrow chat surface posts a notification in the task's associated space
 4. Human can: reassign, unblock, or force-complete the stage
 
 After escalation, the router enters a slower polling mode (checks every 30 min) until a human intervenes.

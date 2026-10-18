@@ -5,7 +5,7 @@ defmodule Platform.Security.ExternalContent do
 
   A port of openclaw's `src/security/external-content.ts`. The behaviour is the
   same; the differences are Elixir idiom (codepoints instead of UTF-16 code
-  units) and one addition, `escape_mentions/1`, because Suite chat parses
+  units) and one addition, `escape_mentions/1`, because Burrow chat parses
   `@[Name]` tokens out of message content and openclaw has no such parser.
 
   ## What `wrap/2` produces
@@ -74,7 +74,7 @@ defmodule Platform.Security.ExternalContent do
     browser: "Browser",
     web_search: "Web Search",
     web_fetch: "Web Fetch",
-    federation: "Suite peer",
+    federation: "Burrow peer",
     unknown: "External"
   }
 
@@ -327,7 +327,7 @@ defmodule Platform.Security.ExternalContent do
   end
 
   @doc """
-  Make every `@[` in `content` inert for Suite's mention parser.
+  Make every `@[` in `content` inert for Burrow's mention parser.
 
   `Platform.Chat.AttentionRouter.extract_mention_tokens/1` matches the ASCII
   `@` followed by `[`; the fullwidth commercial at (U+FF20) reads the same to a

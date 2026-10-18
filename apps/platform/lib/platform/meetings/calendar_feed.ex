@@ -114,7 +114,7 @@ defmodule Platform.Meetings.CalendarFeed do
 
   alias Platform.Meetings.Meeting
 
-  @prodid "-//Startup Suite//Meetings//EN"
+  @prodid "-//Burrow//Meetings//EN"
   @uid_prefix "meeting-"
 
   # RFC 5545 §3.1: octets, excluding the line break. A continuation line

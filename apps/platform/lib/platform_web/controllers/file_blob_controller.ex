@@ -35,7 +35,7 @@ defmodule PlatformWeb.FileBlobController do
   request's `Sec-Fetch-Dest` header is `iframe`. A direct top-level hit on
   this route (address bar, a bare link) carries no such header and always
   gets bare `sandbox`, because a flagged file rendered full-page on the
-  Suite origin is a phishing surface (attacker-styled content behind a
+  Burrow origin is a phishing surface (attacker-styled content behind a
   suite.example.com URL), not an XSS one, and `allow-scripts` would make
   that surface active instead of inert.
 

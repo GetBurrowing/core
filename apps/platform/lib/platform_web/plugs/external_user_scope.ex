@@ -19,7 +19,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       a scoped `/chat/:slug`, and the read-only view-as page. View-as performs
       its own `access.manage` authorization and intersects resource listings
       with the viewer's scope.
-    * `:app` — the primary Suite host. UNCHANGED, byte for byte: same
+    * `:app` — the primary Burrow host. UNCHANGED, byte for byte: same
       clauses, same order, same reason strings as before the meet surface
       existed.
 

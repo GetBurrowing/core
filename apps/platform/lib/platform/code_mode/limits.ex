@@ -1,13 +1,13 @@
 defmodule Platform.CodeMode.Limits do
   @moduledoc """
-  The resource limits of one `suite_run` (task 01a114a8 stage 2).
+  The resource limits of one `burrow_run` (task 01a114a8 stage 2).
 
   Every value is configurable in app env under `config :platform,
   Platform.CodeMode, [...]`; `get/0` merges that over the defaults below and
   clamps what a caller may ask for.
 
     * `:wall_ms` (10 s) and `:max_wall_ms` (30 s): the wall-clock bound. A
-      `suite_run` may ask for a different `timeout_ms`, clamped to
+      `burrow_run` may ask for a different `timeout_ms`, clamped to
       `1..max_wall_ms`. Enforced natively: Wasmex interrupts the call at its
       deadline through wasmtime epoch interruption.
     * `:fuel_per_ms`: wasm fuel granted per millisecond of wall budget. Fuel

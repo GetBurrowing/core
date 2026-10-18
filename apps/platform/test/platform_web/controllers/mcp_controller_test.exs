@@ -82,7 +82,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
       assert body["jsonrpc"] == "2.0"
       assert body["id"] == 1
-      assert body["result"]["serverInfo"]["name"] == "startup-suite"
+      assert body["result"]["serverInfo"]["name"] == "burrow"
       assert is_binary(body["result"]["protocolVersion"])
       assert body["result"]["capabilities"]["tools"]
     end

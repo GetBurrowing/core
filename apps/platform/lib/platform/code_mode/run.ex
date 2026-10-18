@@ -1,9 +1,9 @@
 defmodule Platform.CodeMode.Run do
   @moduledoc """
-  `suite_run`: run an agent-written JavaScript program against the agent's
+  `burrow_run`: run an agent-written JavaScript program against the agent's
   own tool surface (task 01a114a8 stage 2, `code_mode` bundle).
 
-      suite_run {script, inputs?, session?, timeout_ms?}
+      burrow_run {script, inputs?, session?, timeout_ms?}
         -> {ok: true, result, logs, logs_truncated, calls, run_id, elapsed_ms}
          | {ok: false, error: {kind, message}, logs, calls, run_id, elapsed_ms}
 
@@ -12,8 +12,8 @@ defmodule Platform.CodeMode.Run do
 
   The script is QuickJS-ng global code with top-level `await`; its last
   expression is the result (a script that uses `return` is run as an async
-  function body instead). Tool calls are synchronous: `suite.task_get({...})`
-  returns the data or throws a `SuiteError` with `kind`, `code` and
+  function body instead). Tool calls are synchronous: `burrow.task_get({...})`
+  returns the data or throws a `BurrowError` with `kind`, `code` and
   `message`. There are no timers, no `fetch`, no modules and no filesystem.
 
   Pieces: `Platform.CodeMode.Runtime` (the wasm sandbox), `Bindings` (what a
@@ -23,7 +23,7 @@ defmodule Platform.CodeMode.Run do
   ## What is recorded
 
   The run's own ledger row (written by `ToolCall.invoke/4` for the outer
-  `suite_run` call) has the run's id, the script's sha256 and its byte
+  `burrow_run` call) has the run's id, the script's sha256 and its byte
   length; every inner call's row carries `parent_run_id = run_id`. The
   script, its inputs and its result are never persisted or logged. The one
   log line per run names the run id, runtime, outcome kind, call count and
@@ -51,7 +51,7 @@ defmodule Platform.CodeMode.Run do
   @spec error_kinds() :: [String.t()]
   def error_kinds, do: @error_kinds
 
-  @doc "The `suite_run` tool handler (`ToolSurface.execute/3`)."
+  @doc "The `burrow_run` tool handler (`ToolSurface.execute/3`)."
   @spec run_tool(map(), map()) :: {:ok, map()} | {:error, map()}
   def run_tool(args, context) do
     with {:ok, script} <- script_arg(args),
@@ -86,7 +86,7 @@ defmodule Platform.CodeMode.Run do
            error: busy_message(which, limits),
            code: "concurrency_limit",
            recoverable: true,
-           suggestion: "wait for a running suite_run to finish, then retry"
+           suggestion: "wait for a running burrow_run to finish, then retry"
          }}
     end
   end
@@ -135,7 +135,7 @@ defmodule Platform.CodeMode.Run do
     calls = Bindings.calls(counter)
 
     Logger.info(
-      "[CodeMode] suite_run run=#{run_id} runtime=#{runtime.runtime_id} " <>
+      "[CodeMode] burrow_run run=#{run_id} runtime=#{runtime.runtime_id} " <>
         "outcome=#{kind(outcome)} calls=#{calls} elapsed=#{elapsed}ms"
     )
 
@@ -176,7 +176,7 @@ defmodule Platform.CodeMode.Run do
       else: invalid("script_too_large", "a script may be #{@max_script_bytes} bytes")
   end
 
-  defp script_arg(_args), do: invalid("missing_script", "suite_run needs a non-empty `script`")
+  defp script_arg(_args), do: invalid("missing_script", "burrow_run needs a non-empty `script`")
 
   defp session_arg(%{"session" => session}) when is_binary(session) do
     if session != "" and byte_size(session) <= @max_session_bytes,
@@ -195,7 +195,7 @@ defmodule Platform.CodeMode.Run do
     end
   end
 
-  defp runtime_for(_context), do: invalid("unknown_runtime", "suite_run needs a calling runtime")
+  defp runtime_for(_context), do: invalid("unknown_runtime", "burrow_run needs a calling runtime")
 
   # Task 01a114a8 stage 4: the ids in `inputs` attribute every inner call
   # that names no task of its own. Only the id keys are read.
@@ -208,10 +208,10 @@ defmodule Platform.CodeMode.Run do
   defp store_scope(runtime, nil), do: "runtime:" <> runtime.runtime_id
 
   defp busy_message(:runtime_busy, limits),
-    do: "this runtime already has #{limits.per_runtime_concurrency} suite_run calls running"
+    do: "this runtime already has #{limits.per_runtime_concurrency} burrow_run calls running"
 
   defp busy_message(:node_busy, limits),
-    do: "the node already has #{limits.global_concurrency} suite_run calls running"
+    do: "the node already has #{limits.global_concurrency} burrow_run calls running"
 
   defp invalid(code, message),
     do: {:error, %{error: message, code: code, recoverable: true}}

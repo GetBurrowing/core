@@ -1,14 +1,16 @@
 defmodule Platform.CodeMode.Docs do
   @moduledoc """
-  TypeScript-style declarations of what a `suite_run` script can call
-  (task 01a114a8 stage 3), served by the `suite_run_describe` tool.
+  TypeScript-style declarations of what a `burrow_run` script can call
+  (task 01a114a8 stage 3), served by the `burrow_run_describe` tool.
 
   ## Built from the caller's EFFECTIVE tools, never the catalogue
 
-  The input is `ToolAuthorization.effective_tools/1` minus `suite_run` — the
-  set `Platform.CodeMode.Bindings` binds on `suite`, less the hidden legacy
-  dotted aliases it also binds (task 01a14a7f stage 3), which are never
-  described — so a runtime is never told about a tool it cannot call. A requested name outside that set
+  The input is `ToolAuthorization.effective_tools/1` minus `burrow_run` (and
+  its legacy name) — the set `Platform.CodeMode.Bindings` binds on `burrow`,
+  less the hidden legacy aliases it also binds (task 01a14a7f stage 3, task
+  01a14b9e-50a4 stage 1), which are never described. The declarations name
+  only `burrow` and `BurrowError`; the legacy global `suite` (the same object)
+  is never listed — so a runtime is never told about a tool it cannot call. A requested name outside that set
   is reported under `not_available` without saying whether it exists: the
   answer for "not granted" and "no such tool" is the same.
 
@@ -43,10 +45,10 @@ defmodule Platform.CodeMode.Docs do
 
   alias Platform.Federation.ToolAuthorization
 
-  @self_tools ~w(suite_run)
+  @self_tools ~w(burrow_run suite_run)
   @identifier ~r/^[A-Za-z_$][A-Za-z0-9_$]*$/
 
-  @doc "The `suite_run_describe` tool handler (`ToolSurface.execute/3`)."
+  @doc "The `burrow_run_describe` tool handler (`ToolSurface.execute/3`)."
   @spec run_tool(map(), map()) :: {:ok, map()} | {:error, map()}
   def run_tool(args, %{runtime_id: runtime_id}) when is_binary(runtime_id) do
     case Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
@@ -60,14 +62,14 @@ defmodule Platform.CodeMode.Docs do
   defp unknown_runtime do
     {:error,
      %{
-       error: "suite_run_describe needs a calling runtime",
+       error: "burrow_run_describe needs a calling runtime",
        code: "unknown_runtime",
        recoverable: false
      }}
   end
 
   @doc """
-  The `suite_run_describe` handler body: `{:ok, %{docs, tools, not_available,
+  The `burrow_run_describe` handler body: `{:ok, %{docs, tools, not_available,
   bundles}}` or a recoverable refusal for malformed arguments.
   """
   @spec describe(struct(), map()) :: {:ok, map()} | {:error, map()}
@@ -144,8 +146,8 @@ defmodule Platform.CodeMode.Docs do
 
   defp render_index(available) do
     header = [
-      "// #{length(available)} tools are bound on `suite` for this runtime.",
-      "// Call suite_run_describe({tools: [\"name\", ...]}) for their argument and return types."
+      "// #{length(available)} tools are bound on `burrow` for this runtime.",
+      "// Call burrow_run_describe({tools: [\"name\", ...]}) for their argument and return types."
     ]
 
     groups =
@@ -155,7 +157,7 @@ defmodule Platform.CodeMode.Docs do
       |> Enum.flat_map(fn {bundle, tools} ->
         ["", "// #{bundle}"] ++
           Enum.map(tools, fn tool ->
-            "suite.#{tool.name}(args)  // #{first_sentence(tool[:description])}"
+            "burrow.#{tool.name}(args)  // #{first_sentence(tool[:description])}"
           end)
       end)
 
@@ -181,14 +183,14 @@ defmodule Platform.CodeMode.Docs do
       tree
       |> render_members(1, detail)
       |> Kernel.++([
-        "  /** Call any tool you may call by name; same result or SuiteError as the direct binding. */",
+        "  /** Call any tool you may call by name; same result or BurrowError as the direct binding. */",
         "  call(name: string, args?: Record<string, unknown>): unknown;"
       ])
 
     Enum.join(
       [
         "/** Thrown by a binding; `kind`: forbidden | tool_error | result_too_large | invalid_args | call_limit | store_error. */",
-        "interface SuiteError extends Error { kind: string; code: string | null; message: string }",
+        "interface BurrowError extends Error { kind: string; code: string | null; message: string }",
         "",
         "declare const inputs: unknown;",
         "declare const store: {",
@@ -197,7 +199,7 @@ defmodule Platform.CodeMode.Docs do
         "  delete(key: string): true;",
         "};",
         "",
-        "declare const suite: {"
+        "declare const burrow: {"
       ] ++ members ++ ["};"],
       "\n"
     )
@@ -463,7 +465,7 @@ defmodule Platform.CodeMode.Docs do
   defp invalid(key, expected) do
     {:error,
      %{
-       error: "suite_run_describe: `#{key}` must be #{expected}",
+       error: "burrow_run_describe: `#{key}` must be #{expected}",
        code: "invalid_#{key}",
        recoverable: true,
        suggestion:

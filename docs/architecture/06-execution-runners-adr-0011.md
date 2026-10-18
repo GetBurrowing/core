@@ -234,7 +234,7 @@ with leased credentials and a GitHub proof-of-life push path (Stage 4).
 {:ok, lease} = Platform.Execution.CredentialLease.lease(:github,
   run_id: run.id,
   github_token: token,
-  author_name: "Suite Bot",
+  author_name: "Burrow Bot",
   author_email: "bot@suite.local"
 )
 

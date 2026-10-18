@@ -250,7 +250,7 @@ defmodule Platform.Federation.Peers.InstallIdentity do
     case Vault.put(slug, :keypair, private_key,
            scope: @vault_scope,
            provider: "suite-federation",
-           name: "Suite federation signing key #{kid}",
+           name: "Burrow federation signing key #{kid}",
            metadata: %{"kid" => kid, "fingerprint" => fingerprint, "alg" => @alg}
          ) do
       {:ok, _credential} ->
@@ -332,7 +332,7 @@ defmodule Platform.Federation.Peers.InstallIdentity do
   defp default_display_name do
     case URI.parse(Config.base_url()) do
       %URI{host: host} when is_binary(host) and host != "" -> host
-      _ -> "Suite install"
+      _ -> "Burrow install"
     end
   end
 

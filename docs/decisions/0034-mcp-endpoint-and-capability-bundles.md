@@ -9,7 +9,7 @@
 
 ## Context
 
-Today, federated agents discover and invoke Suite's 53-tool surface indirectly:
+Today, federated agents discover and invoke Burrow's 53-tool surface indirectly:
 
 - The `startup-suite-channel` OpenClaw plugin hardcodes 39 of the 53 tools as
   `agentTools` and proxies calls back to core over the runtime WebSocket.
@@ -38,7 +38,7 @@ by the existing federation token, with tools scoped by **capability bundles**.
 - **Auth:** `Authorization: Bearer <token>` verified against
   `AgentRuntime.auth_token_hash`. No new credential surface; the token a peer
   already has for federation is the MCP token.
-- **Tunnel topology:** One MCP endpoint per Suite instance. The bearer token
+- **Tunnel topology:** One MCP endpoint per Burrow instance. The bearer token
   identifies the runtime; peers expose a single Cloudflare-tunneled
   `/mcp` URL regardless of how many agents federate.
 - **Dispatch:** Handler delegates to the existing `Platform.Agents.ToolSurface`
@@ -98,7 +98,7 @@ subscribe to the full surface but want to keep context minimal.
 - New tools ship by deploying core alone.
 - Context cost scales with an agent's role, not the full surface.
 - Single auth story (federation token everywhere).
-- One tunnel per Suite instance, no per-agent exposure.
+- One tunnel per Burrow instance, no per-agent exposure.
 
 **Negative:**
 - `startup-suite-channel` plugin v0.3.x users must upgrade to stay in sync;

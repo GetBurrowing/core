@@ -6,7 +6,7 @@
 
 ## Context
 
-Startup Suite Core needs an authentication model from the beginning. Several options exist:
+Burrow Core needs an authentication model from the beginning. Several options exist:
 
 - roll a custom username/password system
 - delegate entirely to infrastructure-level authentication (reverse proxy auth headers)

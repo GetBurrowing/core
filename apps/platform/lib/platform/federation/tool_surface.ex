@@ -274,7 +274,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
 
-  # Task 01a114a8 stage 2: `suite_run`. Grantable, never a default
+  # Task 01a114a8 stage 2: `burrow_run`. Grantable, never a default
   # (AgentRuntime's @default_tool_profile does not list it).
   defp tools_for_bundle("code_mode"), do: tag(code_mode_tools(), "code_mode")
 
@@ -300,14 +300,14 @@ defmodule Platform.Federation.ToolSurface do
   defp code_mode_tools do
     [
       %{
-        name: "suite_run",
+        name: "burrow_run",
         # Task 01a114a8 stage 3: a ten-line primer, one fact per line, so a
         # model reads the contract before it writes its first script.
         description:
           Enum.join(
             [
-              "Run a short JavaScript program (QuickJS, ES2023) that calls your Suite tools and returns one JSON result, instead of making many tool calls one by one.",
-              "1. Bindings: every tool you can call is a function on `suite`: `suite.task_get({task_id})`; `suite.canvas_create({...})`; `suite.call(name, args)` takes any name.",
+              "Run a short JavaScript program (QuickJS, ES2023) that calls your Burrow tools and returns one JSON result, instead of making many tool calls one by one.",
+              "1. Bindings: every tool you can call is a function on `burrow` (also bound as `suite`, the same object): `burrow.task_get({task_id})`; `burrow.canvas_create({...})`; `burrow.call(name, args)` takes any name.",
               "2. Calls are synchronous: each returns the tool's data (the same JSON a direct call returns) or throws an Error with `kind`, `code` and `message`.",
               "3. Thrown kinds: forbidden | tool_error | result_too_large | invalid_args | call_limit | store_error.",
               "4. The last expression is the result (top-level `await` is allowed; a script that uses `return` runs as a function body). `inputs` is the JSON you pass.",
@@ -315,7 +315,7 @@ defmodule Platform.Federation.ToolSurface do
               "6. `store.get(key)`, `store.set(key, value, {ttl: seconds})`, `store.delete(key)`: JSON kept across runs of the same `session` (or runtime), 30 min by default, 6 h at most, ephemeral.",
               "7. Limits: 50 tool calls, 64 MB memory, a CPU budget, 10 s wall (timeout_ms up to 30 s), a 100 KB result, 1 MB per inner result, 2 concurrent runs per runtime.",
               "8. A failed run returns {ok: false, error: {kind, message}} with kind timeout | memory | fuel | call_limit | output_limit | script_error | forbidden.",
-              "9. Call suite_run_describe first: with no arguments it lists your tools; with {tools: [names]} it returns their TypeScript argument and return types."
+              "9. Call burrow_run_describe first: with no arguments it lists your tools; with {tools: [names]} it returns their TypeScript argument and return types."
             ],
             "\n"
           ),
@@ -342,14 +342,14 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "{ok: true, result, logs, logs_truncated, calls, run_id, elapsed_ms} or {ok: false, error: {kind, message}, calls, run_id, elapsed_ms}; kind is timeout | memory | fuel | call_limit | output_limit | script_error | forbidden",
         limitations:
-          "No network, filesystem, modules, timers or setTimeout: `fetch`, `require` and `import()` fail with script_error. 50 tool calls per run (past that the run ends call_limit), 64 MB of memory, a CPU (fuel) budget and a 10 s wall limit (timeout_ms up to 30 s), a result of at most 100 KB of JSON, 1 MB per inner result. At most 2 concurrent runs per runtime and 8 per node; a run over the cap is refused with code concurrency_limit, not queued. A script can only call the tools your runtime may call; suite_run cannot call itself. The script, inputs and result are never stored; the ledger keeps the script's sha256 and length.",
+          "No network, filesystem, modules, timers or setTimeout: `fetch`, `require` and `import()` fail with script_error. 50 tool calls per run (past that the run ends call_limit), 64 MB of memory, a CPU (fuel) budget and a 10 s wall limit (timeout_ms up to 30 s), a result of at most 100 KB of JSON, 1 MB per inner result. At most 2 concurrent runs per runtime and 8 per node; a run over the cap is refused with code concurrency_limit, not queued. A script can only call the tools your runtime may call; burrow_run cannot call itself. The script, inputs and result are never stored; the ledger keeps the script's sha256 and length.",
         when_to_use:
           "When an answer needs several dependent tool calls (list, then read each, then filter): one script returns the filtered result instead of every intermediate payload."
       },
       %{
-        name: "suite_run_describe",
+        name: "burrow_run_describe",
         description:
-          "TypeScript declarations of the tools a suite_run script can call: exactly your runtime's tools, no others. With no arguments, an index (one line per tool, grouped by bundle). With `tools` and/or `bundle`, declarations for those tools: argument types and return types (where the tool declares a return schema). Types only by default, with one summary line per tool; `detail: \"full\"` adds limitations and usage prose.",
+          "TypeScript declarations of the tools a burrow_run script can call: exactly your runtime's tools, no others. With no arguments, an index (one line per tool, grouped by bundle). With `tools` and/or `bundle`, declarations for those tools: argument types and return types (where the tool declares a return schema). Types only by default, with one summary line per tool; `detail: \"full\"` adds limitations and usage prose.",
         parameters: %{
           tools: %{
             type: "array",
@@ -370,13 +370,13 @@ defmodule Platform.Federation.ToolSurface do
             schema: %{type: "string", enum: ["summary", "full"]}
           }
         },
-        returns_schema: ReturnSchemas.for_tool("suite_run_describe"),
+        returns_schema: ReturnSchemas.for_tool("burrow_run_describe"),
         returns:
           "{docs, tools, not_available, bundles}: `docs` is the declaration text; `tools` the names it covers; `not_available` the requested names you cannot call; `bundles` your bundles.",
         limitations:
-          "A tool without a declared return schema is typed `unknown`, with its prose `Returns` in the doc comment. A name you cannot call is listed under `not_available` whether or not it exists. suite_run itself is never declared (a script cannot call it).",
+          "A tool without a declared return schema is typed `unknown`, with its prose `Returns` in the doc comment. A name you cannot call is listed under `not_available` whether or not it exists. burrow_run itself is never declared (a script cannot call it).",
         when_to_use:
-          "Before writing a suite_run script: read the index once, then fetch types for the few tools the script will call."
+          "Before writing a burrow_run script: read the index once, then fetch types for the few tools the script will call."
       }
     ]
   end
@@ -664,7 +664,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "file_add",
         description:
-          "Upload a file into a project's document store (ADR 0042). One tool, two branches — pass `data_base64` for the inline path (small bytes, capped at 25 MB) or pass `byte_size` alone for the presigned-upload path (large files up to 500 MB). Inline branch persists bytes, dedups against prior `(project_id, content_hash)` siblings, fires extract + Memory ingest async, and returns the file id with `state: \"ready\"`. Presigned branch reserves a `platform_files` row in `ingest_status: \"pending\"`, returns a host-relative `upload_url` (a `/chat/attachments/upload/<token>` path on this Suite host — prefix your base URL), and surfaces `state: \"pending\"`. POST the raw bytes (`Content-Type` matching `content_type`, e.g. `curl --data-binary @file -H 'Content-Type: application/pdf' <base_url><upload_url>`) before `expires_at`; the response is the same `state: \"ready\"` envelope as the inline branch (`id`, `byte_size`, `content_hash`, `deduplicated`), extract + Memory ingest run async, and the file becomes searchable once `file_list` shows `ingest_status: \"ingested\"`. Expired token 410, body over `max_bytes` 413, wrong content-type 400, second POST 409.",
+          "Upload a file into a project's document store (ADR 0042). One tool, two branches — pass `data_base64` for the inline path (small bytes, capped at 25 MB) or pass `byte_size` alone for the presigned-upload path (large files up to 500 MB). Inline branch persists bytes, dedups against prior `(project_id, content_hash)` siblings, fires extract + Memory ingest async, and returns the file id with `state: \"ready\"`. Presigned branch reserves a `platform_files` row in `ingest_status: \"pending\"`, returns a host-relative `upload_url` (a `/chat/attachments/upload/<token>` path on this Burrow host — prefix your base URL), and surfaces `state: \"pending\"`. POST the raw bytes (`Content-Type` matching `content_type`, e.g. `curl --data-binary @file -H 'Content-Type: application/pdf' <base_url><upload_url>`) before `expires_at`; the response is the same `state: \"ready\"` envelope as the inline branch (`id`, `byte_size`, `content_hash`, `deduplicated`), extract + Memory ingest run async, and the file becomes searchable once `file_list` shows `ingest_status: \"ingested\"`. Expired token 410, body over `max_bytes` 413, wrong content-type 400, second POST 409.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1155,7 +1155,7 @@ defmodule Platform.Federation.ToolSurface do
     %{
       name: "feedback_submit",
       description:
-        "Report a defect in Suite itself, or propose a concrete positive change to it, as one structured GitHub issue on the Startup-Suite feedback repository. Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
+        "Report a defect in Burrow itself, or propose a concrete positive change to it, as one structured GitHub issue on the Startup-Suite feedback repository. Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
       parameters: %{
         category: %{
           type: "string",
@@ -1172,13 +1172,13 @@ defmodule Platform.Federation.ToolSurface do
           type: "string",
           required: true,
           description:
-            "What Suite should do (for a positive_change: the behaviour you propose), at most #{Platform.Feedback.Submission.limits().expected_behavior} characters"
+            "What Burrow should do (for a positive_change: the behaviour you propose), at most #{Platform.Feedback.Submission.limits().expected_behavior} characters"
         },
         observed_behavior: %{
           type: "string",
           required: true,
           description:
-            "What Suite does today, at most #{Platform.Feedback.Submission.limits().observed_behavior} characters"
+            "What Burrow does today, at most #{Platform.Feedback.Submission.limits().observed_behavior} characters"
         },
         reproduction_steps: %{
           type: "string",
@@ -1190,7 +1190,7 @@ defmodule Platform.Federation.ToolSurface do
           type: "string",
           required: false,
           description:
-            "Suite version / build and runtime, at most #{Platform.Feedback.Submission.limits().version_environment} characters"
+            "Burrow version / build and runtime, at most #{Platform.Feedback.Submission.limits().version_environment} characters"
         },
         diagnostics: %{
           type: "object",
@@ -1204,7 +1204,7 @@ defmodule Platform.Federation.ToolSurface do
       limitations:
         "Exists only when this installation enables feedback (FEEDBACK_POLICY). Requires an identified agent. Lengths: per field as listed, #{Platform.Feedback.Submission.aggregate_limit()} characters in total. Rate-limited per agent and per installation; an identical submission returns the existing issue (status duplicate) and does not count against the limit. Publication goes through a server-side broker; no GitHub credential is held or returned here.",
       when_to_use:
-        "When you hit a reproducible defect in Suite (not in the task's own code) or have a specific improvement to Suite to propose. It never substitutes for finishing your stage."
+        "When you hit a reproducible defect in Burrow (not in the task's own code) or have a specific improvement to Burrow to propose. It never substitutes for finishing your stage."
     }
   end
 
@@ -1228,9 +1228,9 @@ defmodule Platform.Federation.ToolSurface do
     [
       %{
         name: "send_media",
-        description: "Send a message with one or more file attachments to a Suite space.",
+        description: "Send a message with one or more file attachments to a Burrow space.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
           file_paths: %{
             type: "array",
             required: false,
@@ -1270,9 +1270,9 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "react",
         description:
-          "React to a specific message in a Suite space with an emoji. Prefer this over a text reply for quick acknowledgements (👍 got it, ✅ done, 🎉 shipped). Idempotent — re-reacting with the same emoji returns success without duplicating.",
+          "React to a specific message in a Burrow space with an emoji. Prefer this over a text reply for quick acknowledgements (👍 got it, ✅ done, 🎉 shipped). Idempotent — re-reacting with the same emoji returns success without duplicating.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
           message_id: %{
             type: "string",
             required: true,
@@ -1419,7 +1419,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "space_create",
         description:
-          "Create a channel in a Suite org. This is the supported way for an agent to create a channel — the alternative (a raw `Platform.Chat.create_channel/1` RPC) has repeatedly written participant rows with a NULL `display_name`, which silently drops every `@[Name]` mention of the affected agent. This tool resolves a display name for every participant it adds, so it cannot reproduce that. The calling agent is added as a participant (attention_mode `mention`) so it can hear the channel it just made; the role-pinned Historian auto-joins as it does for any channel.",
+          "Create a channel in a Burrow org. This is the supported way for an agent to create a channel — the alternative (a raw `Platform.Chat.create_channel/1` RPC) has repeatedly written participant rows with a NULL `display_name`, which silently drops every `@[Name]` mention of the affected agent. This tool resolves a display name for every participant it adds, so it cannot reproduce that. The calling agent is added as a participant (attention_mode `mention`) so it can hear the channel it just made; the role-pinned Historian auto-joins as it does for any channel.",
         parameters: %{
           name: %{
             type: "string",
@@ -1459,7 +1459,7 @@ defmodule Platform.Federation.ToolSurface do
       },
       %{
         name: "space_list",
-        description: "List Suite spaces the agent is a member of.",
+        description: "List Burrow spaces the agent is a member of.",
         parameters: %{
           kind: %{
             type: "string",
@@ -1478,7 +1478,7 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "List the agent participants in a space with their IDs, slugs, and display names. Use this to resolve an agent by name before calling tools that require an `agent_id` (e.g. `space_leave`).",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"}
         },
         returns:
           "%{agents: [%{agent_id, slug, name, display_name, participant_id, joined_at}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of agents returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. Only active agent participants are returned (humans excluded, left agents excluded).",
@@ -1490,9 +1490,9 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "space_leave",
         description:
-          "Remove an agent from a Suite space. Defaults to removing the calling agent (self-leave). Pass `agent_id` to remove a different agent — for example if you were asked to evict another agent who shouldn't be present. Hard-delete: the participant row is removed. Message history stays attributed via author-identity snapshots on each message (ADR 0038). To return, a user needs to @-mention the agent in a new message.",
+          "Remove an agent from a Burrow space. Defaults to removing the calling agent (self-leave). Pass `agent_id` to remove a different agent — for example if you were asked to evict another agent who shouldn't be present. Hard-delete: the participant row is removed. Message history stays attributed via author-identity snapshots on each message (ADR 0038). To return, a user needs to @-mention the agent in a new message.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
           agent_id: %{
             type: "string",
             required: false,
@@ -1542,7 +1542,7 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Get the current context bundle for a space: recent activity summary, active canvases, other agents, and space metadata. Useful for orienting yourself in a space before acting.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"}
         },
         returns:
           "Context bundle with space metadata, active_canvases, other_agents, and recent_activity_summary",
@@ -1556,7 +1556,7 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Full-text search messages in a space. Returns up to 10 results ranked by relevance with highlighted excerpts.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
           query: %{
             type: "string",
             required: true,
@@ -1584,7 +1584,7 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "Get recent messages from a space, newest first. Supports cursor-based pagination.",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
           limit: %{
             type: "integer",
             required: false,
@@ -1614,7 +1614,7 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "List all canvases in a space with summary information (id, title, type, view_url, timestamps).",
         parameters: %{
-          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+          space_id: %{type: "string", required: true, description: "UUID of the Burrow space"}
         },
         returns:
           "%{canvases: [%{id, title, kind, view_url, inserted_at, updated_at}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of canvases returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
@@ -8016,10 +8016,10 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # Code mode (task 01a114a8 stage 2), `code_mode` bundle.
-  def execute("suite_run", args, context), do: Platform.CodeMode.Run.run_tool(args, context)
+  def execute("burrow_run", args, context), do: Platform.CodeMode.Run.run_tool(args, context)
 
   # Task 01a114a8 stage 3: binding docs from the caller's effective tools.
-  def execute("suite_run_describe", args, context),
+  def execute("burrow_run_describe", args, context),
     do: Platform.CodeMode.Docs.run_tool(args, context)
 
   # Per-dispatch measurements (task 01a114a8 stage 1), `experiments` bundle.
@@ -13257,7 +13257,7 @@ defmodule Platform.Federation.ToolSurface do
          code: :mail_disabled,
          recoverable: true,
          suggestion:
-           "This Suite install has not turned on the Email module (MAIL_ENABLED). Tell the person you are working with; do not retry until it is on."
+           "This Burrow install has not turned on the Email module (MAIL_ENABLED). Tell the person you are working with; do not retry until it is on."
        }}
     end
   end

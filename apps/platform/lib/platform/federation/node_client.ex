@@ -59,7 +59,7 @@ defmodule Platform.Federation.NodeClient do
       msg_id: 0,
       gateway_url: gateway_url(),
       token: System.get_env("OPENCLAW_GATEWAY_TOKEN", ""),
-      display_name: System.get_env("OPENCLAW_NODE_DISPLAY_NAME", "Startup Suite"),
+      display_name: System.get_env("OPENCLAW_NODE_DISPLAY_NAME", "Burrow"),
       agent_id: resolve_agent_id(),
       space_id: System.get_env("OPENCLAW_NODE_SPACE_ID")
     }

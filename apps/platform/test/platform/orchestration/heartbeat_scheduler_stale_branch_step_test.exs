@@ -88,7 +88,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
 
     test "tells a resumed worktree with unpushed local commits to push and skip the fast-forward",
          %{prompt: p} do
-      assert p =~ "Suite only probed the remote"
+      assert p =~ "Burrow only probed the remote"
       assert p =~ "push them first, then SKIP the fast-forward below and continue with the stage"
       assert p =~ "Do not reset"
     end
@@ -101,7 +101,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
       # an executor who just pushed local-only commits is told to skip it,
       # not to attempt and then report_blocker on refusal.
       assert p =~
-               "If your local branch has NO commits beyond what Suite already found on origin"
+               "If your local branch has NO commits beyond what Burrow already found on origin"
 
       assert p =~ "nothing to push, a genuine stale stub"
       assert p =~ "git merge --ff-only origin/main"

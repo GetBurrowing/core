@@ -29,7 +29,7 @@ function urlBase64ToUint8Array(base64String) {
 // window is only one of the two causes anyway.
 const AUTO_DENY_THRESHOLD_MS = 100;
 
-// The Suite iOS app (task 01a10882) runs this page inside a Capacitor web
+// The Burrow iOS app (task 01a10882) runs this page inside a Capacitor web
 // view. WKWebView has no usable Push API there, and the app delivers through
 // APNs instead, so on the native platform the hook hands the whole job to
 // the app's one native plugin, SuiteNative, and never touches pushManager.

@@ -1,9 +1,9 @@
 defmodule PlatformWeb.UserAccessLive do
   @moduledoc """
-  User Access — admin surface for managing Suite user membership.
+  User Access — admin surface for managing Burrow user membership.
 
   Today's scope (task 019f671f Stage 6): soft-archive / unarchive of
-  Suite users. Archived users are hidden from active pickers everywhere
+  Burrow users. Archived users are hidden from active pickers everywhere
   (task assignee, DM new-conversation — see
   `Accounts.list_users/1` default of `include_archived: false`) but
   historical attribution (past-authored messages, memory-entry authors,
@@ -16,7 +16,7 @@ defmodule PlatformWeb.UserAccessLive do
       user's own row AND the `handle_event("archive", ...)` handler
       short-circuits with a flash error if the id matches
       `current_user.id`. An admin who could archive themselves would
-      immediately lose access to this surface (and every other Suite
+      immediately lose access to this surface (and every other Burrow
       surface via the auth plug in Stage 5).
 
   root-admin-only gate is inherited from the `:admin` `live_session` in

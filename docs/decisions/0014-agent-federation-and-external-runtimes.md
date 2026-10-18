@@ -10,7 +10,7 @@
 
 ## Context
 
-Startup Suite currently operates as a single-tenant system: one deployment, one
+Burrow currently operates as a single-tenant system: one deployment, one
 built-in agent runtime (bootstrapped from an OpenClaw workspace), and users who
 interact through the web UI. This is sufficient for a solo operator or a small
 team sharing one agent.
@@ -23,13 +23,13 @@ Consider the scenario:
 
 - Rowan runs OpenClaw with an agent named Zip.
 - A coworker runs OpenClaw with an agent named Nova.
-- Both want to use Startup Suite as a shared collaboration surface.
+- Both want to use Burrow as a shared collaboration surface.
 - Rowan can @mention Nova. The coworker can @mention Zip.
 - Both agents follow the space's attention policy (ADR 0013).
 - Agents can delegate to each other through the shared space.
 
 This is not the "node" pattern (passive device endpoints). This is **agent
-federation** — Suite becomes a collaboration plane that multiple independent
+federation** — Burrow becomes a collaboration plane that multiple independent
 agent runtimes connect to.
 
 ---
@@ -38,21 +38,21 @@ agent runtimes connect to.
 
 We will introduce a **federated agent runtime model** that allows external
 agent runtimes (OpenClaw instances, or any conforming runtime) to register
-agents as participants in Suite spaces, receive attention signals, and post
+agents as participants in Burrow spaces, receive attention signals, and post
 responses through a standardized protocol.
 
 ---
 
 ## Decision Details
 
-### 1. Architecture: Suite as collaboration plane
+### 1. Architecture: Burrow as collaboration plane
 
-Suite's role changes from "app with a built-in agent" to "collaboration plane
+Burrow's role changes from "app with a built-in agent" to "collaboration plane
 that agent runtimes connect to."
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                 Startup Suite                    │
+│                 Burrow                           │
 │                                                  │
 │   Spaces ─── Participants ─── Attention Router   │
 │                    │                              │
@@ -73,13 +73,13 @@ are treated identically by the attention router and chat system.
 
 ### 2. Runtime registration
 
-An external runtime registers with Suite by establishing an authenticated
+An external runtime registers with Burrow by establishing an authenticated
 connection and declaring its agent identity.
 
 #### Registration handshake
 
 ```
-Runtime → Suite:  POST /api/runtimes/register
+Runtime → Burrow:  POST /api/runtimes/register
                   {
                     "runtime_id": "rowan-openclaw-home",
                     "agent": {
@@ -92,7 +92,7 @@ Runtime → Suite:  POST /api/runtimes/register
                     "callback_url": "wss://suite.example.com/runtime/ws"
                   }
 
-Suite → Runtime:  201 Created
+Burrow → Runtime:  201 Created
                   {
                     "runtime_id": "rowan-openclaw-home",
                     "agent_participant_id": "uuid-...",
@@ -102,8 +102,8 @@ Suite → Runtime:  201 Created
 ```
 
 After registration:
-- Suite creates (or reuses) an Agent record for the external agent
-- Suite can add the agent as a participant in spaces
+- Burrow creates (or reuses) an Agent record for the external agent
+- Burrow can add the agent as a participant in spaces
 - The runtime receives a session token for subsequent API/WebSocket calls
 
 #### Authentication
@@ -111,7 +111,7 @@ After registration:
 Runtimes authenticate via one of:
 - **API key** — simple shared secret, suitable for trusted environments
 - **OIDC** — runtime authenticates as a service principal via the same OIDC
-  provider Suite uses for users
+  provider Burrow uses for users
 - **Mutual TLS** — for high-security deployments
 
 The user who owns the runtime must authorize it first. A runtime cannot
@@ -120,16 +120,16 @@ self-register without the owning user's approval.
 ### 3. Transport: NAT-safe outbound WebSocket
 
 Most OpenClaw instances run behind NAT on home networks, laptops, and
-phones. Suite cannot reach them with webhooks or inbound connections.
+phones. Burrow cannot reach them with webhooks or inbound connections.
 
-The connection must be **outbound from OpenClaw to Suite**. OpenClaw
-initiates a persistent WebSocket to Suite's public endpoint. Suite pushes
+The connection must be **outbound from OpenClaw to Burrow**. OpenClaw
+initiates a persistent WebSocket to Burrow's public endpoint. Burrow pushes
 events down the established connection. This is the same pattern used by
 every messaging channel plugin (Telegram, Discord) — the client reaches
 out, the server pushes events down.
 
 ```
-OpenClaw (behind NAT) ──outbound WSS──► Suite (public)
+OpenClaw (behind NAT) ──outbound WSS──► Burrow (public)
                                             │
                      ◄── attention signals ──┘
                      ──► replies ────────────►
@@ -143,7 +143,7 @@ One persistent WebSocket, initiated by OpenClaw. Everything flows over it:
 messages, attention signals, tool calls and results, presence, typing
 indicators. No inbound connectivity required on the OpenClaw side.
 
-Suite exposes a `/runtime/ws` endpoint. The OpenClaw channel plugin
+Burrow exposes a `/runtime/ws` endpoint. The OpenClaw channel plugin
 connects to it and maintains the connection with automatic reconnection.
 
 #### Why not webhooks?
@@ -154,7 +154,7 @@ are not viable as the primary transport.
 
 #### Why not MCP as primary transport?
 
-MCP is fundamentally client→server (request-response). Suite needs to push
+MCP is fundamentally client→server (request-response). Burrow needs to push
 unsolicited attention signals to the runtime. MCP doesn't do push. Using
 MCP would require MCP for tools + a separate WebSocket for chat events +
 something else for presence. Three protocols doing what one WebSocket
@@ -162,24 +162,24 @@ handles.
 
 #### OpenClaw Channel Plugin (recommended integration)
 
-For OpenClaw runtimes, Suite is implemented as an **OpenClaw channel
+For OpenClaw runtimes, Burrow is implemented as an **OpenClaw channel
 plugin** — the same way Telegram or Discord work. The plugin:
 
-1. Connects to Suite's `/runtime/ws` as a registered runtime
+1. Connects to Burrow's `/runtime/ws` as a registered runtime
 2. Receives attention signals and maps them to OpenClaw's internal routing
-3. Posts OpenClaw responses back to Suite
-4. Translates Suite tool calls into the agent's tool execution loop
+3. Posts OpenClaw responses back to Burrow
+4. Translates Burrow tool calls into the agent's tool execution loop
 
-From the agent's perspective, Suite looks like "just another messaging
+From the agent's perspective, Burrow looks like "just another messaging
 surface." The attention routing, context management, and model selection
 all happen inside OpenClaw. Zero changes to the agent itself.
 
 ```
 OpenClaw (behind NAT)
-  └── startup-suite-channel plugin ──outbound WSS──► Suite /runtime/ws
+  └── startup-suite-channel plugin ──outbound WSS──► Burrow /runtime/ws
          │
          ├── Inbound: attention signals → OpenClaw message routing
-         ├── Outbound: agent replies → Suite message posting
+         ├── Outbound: agent replies → Burrow message posting
          └── Bidirectional: tool calls/results over same connection
 ```
 
@@ -192,7 +192,7 @@ context is a reliability hole.
 
 **Context is pushed into the attention signal, not fetched by the agent.**
 
-When Suite routes an attention signal to a runtime, it bundles the relevant
+When Burrow routes an attention signal to a runtime, it bundles the relevant
 context automatically:
 
 ```json
@@ -226,7 +226,7 @@ context automatically:
 }
 ```
 
-The agent **sees** the context without calling anything. Suite's attention
+The agent **sees** the context without calling anything. Burrow's attention
 router already has access to all this data (ETS context plane, database
 queries, participant state). Bundling it is mechanical work — the system
 should do it.
@@ -290,7 +290,7 @@ form (verbose descriptions regressed 16.67% of cases in research):
 | Usage guidelines | Yes | When to use this vs. other tools |
 | Examples | No | Skip — inflates tokens without helping |
 
-#### Suite's tool surface
+#### Burrow's tool surface
 
 ```
 canvas_create
@@ -339,7 +339,7 @@ tools are for writes only.
 
 #### Agent ownership
 
-Every external agent has an **owning user** in Suite. The owning user:
+Every external agent has an **owning user** in Burrow. The owning user:
 - Authorized the runtime to register
 - Controls which spaces the agent can join
 - Can revoke the runtime's access at any time
@@ -347,7 +347,7 @@ Every external agent has an **owning user** in Suite. The owning user:
 
 #### Agent identity persistence
 
-External agents get real Agent records in Suite's database, just like the
+External agents get real Agent records in Burrow's database, just like the
 built-in agent. Their participant records, attention state, message history,
 and canvas contributions persist regardless of whether the runtime is
 currently connected.
@@ -391,17 +391,17 @@ The principal agent can delegate to other agents in the space:
 ```
 User: @Zip can you review this PR?
 Zip:  I'll have Nova review it — she has the repo context.
-      [internally: Suite routes delegation to Nova's runtime]
+      [internally: Burrow routes delegation to Nova's runtime]
 Nova: I've reviewed PR #42. Here are my findings...
 ```
 
-Delegation happens through Suite's message system — Zip posts a message
+Delegation happens through Burrow's message system — Zip posts a message
 that @mentions Nova, which triggers Nova's attention signal. No special
 agent-to-agent API needed; it's just chat.
 
 ### 6. Shared context plane (ETS)
 
-Suite maintains a shared context plane backed by ETS, updated automatically
+Burrow maintains a shared context plane backed by ETS, updated automatically
 via telemetry events (message_posted, canvas_created, task_updated, etc.).
 
 ```elixir
@@ -431,7 +431,7 @@ deterministic ETS lookup.
 | Task status & assignments | Model selection & config |
 | Agent presence & capabilities | Tool execution internals |
 
-For real-time context push (not polling), Suite can send context-update
+For real-time context push (not polling), Burrow can send context-update
 events down the channel WebSocket unprompted. The channel plugin surfaces
 these as system events in the agent's session.
 
@@ -479,8 +479,8 @@ pattern):
 openclaw-startup-suite-channel/
 ├── index.ts          # Plugin registration
 ├── src/
-│   ├── suite-client.ts    # WebSocket client to Suite API
-│   ├── message-bridge.ts  # Translate Suite signals ↔ OpenClaw messages
+│   ├── suite-client.ts    # WebSocket client to Burrow API
+│   ├── message-bridge.ts  # Translate Burrow signals ↔ OpenClaw messages
 │   └── presence.ts        # Sync agent presence state
 ├── config.example.json
 ├── install.sh
@@ -502,9 +502,9 @@ Configuration in OpenClaw:
 }
 ```
 
-From the agent's perspective, messages from Suite look identical to messages
+From the agent's perspective, messages from Burrow look identical to messages
 from Telegram or Discord. The agent responds normally, and the plugin
-translates the response back to Suite.
+translates the response back to Burrow.
 
 ---
 
@@ -523,7 +523,7 @@ translates the response back to Suite.
 
 - Build `openclaw-startup-suite-channel` extension
 - Handle bidirectional message translation
-- Sync attention state (engaged, silenced) between Suite and OpenClaw
+- Sync attention state (engaged, silenced) between Burrow and OpenClaw
 - Handle reconnection and signal replay
 
 ### Phase 3: Multi-agent coordination
@@ -546,7 +546,7 @@ translates the response back to Suite.
 
 ### Positive
 
-- Suite becomes a true collaboration plane, not just a chat app with one agent
+- Burrow becomes a true collaboration plane, not just a chat app with one agent
 - Multiple people can bring their own agents to shared workspaces
 - OpenClaw's existing channel plugin architecture makes integration natural
 - Agents can specialize and delegate without tight coupling
@@ -570,26 +570,26 @@ translates the response back to Suite.
 
 ## Open Questions
 
-1. **How does Suite handle conflicting agent responses?** If two agents both
+1. **How does Burrow handle conflicting agent responses?** If two agents both
    respond to the same message (e.g., both are in collaborative mode), does
-   Suite deduplicate, sequence, or let both through? Current leaning: let
+   Burrow deduplicate, sequence, or let both through? Current leaning: let
    both through — the principal agent pattern (ADR 0013) should prevent
    this in most cases, and explicit @mentions are unambiguous.
 
-2. **Should the protocol be Suite-specific or generic?** A generic protocol
-   (like an "Agent Channel Protocol") could allow Suite to connect to runtimes
+2. **Should the protocol be Burrow-specific or generic?** A generic protocol
+   (like an "Agent Channel Protocol") could allow Burrow to connect to runtimes
    beyond OpenClaw. But premature generalization risks over-engineering.
-   Current leaning: Suite-specific v1, extract a generic protocol if demand
+   Current leaning: Burrow-specific v1, extract a generic protocol if demand
    emerges.
 
 3. **What happens to an agent's history when its runtime is revoked?** The
-   messages and canvases persist (they're in Suite's DB), but should the
+   messages and canvases persist (they're in Burrow's DB), but should the
    agent's participant record be anonymized or preserved? Current leaning:
    preserved — the work product belongs to the space, not the runtime.
 
 4. **How much context is too much in the attention signal?** Bundling space
    state, canvas summaries, tasks, and activity into every signal could
-   bloat tokens. Suite should have a context budget (e.g., 4K tokens) and
+   bloat tokens. Burrow should have a context budget (e.g., 4K tokens) and
    prioritize by relevance. The attention router already knows the signal
    reason — use it to select context.
 

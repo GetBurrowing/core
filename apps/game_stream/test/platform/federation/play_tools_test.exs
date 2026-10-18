@@ -44,6 +44,8 @@ defmodule Platform.Federation.PlayToolsTest do
   # `dispatch_metrics_list` after `experiment_promote` (task 01a114a8 stage 1).
   # 123 with `suite_run` (bundle `code_mode`) last (task 01a114a8 stage 2).
   # 124 with `suite_run_describe` after it (task 01a114a8 stage 3).
+  # Renamed burrow_run / burrow_run_describe in place by task 01a14b9e-50a4
+  # (Burrow rename A2, stage 1); the count and order are unchanged.
   # 125 with `code_mode_report` after `dispatch_metrics_list` (task 01a114a8
   # stage 4).
   # 126 with `janitor_hand_back` after `stack_assign_agents` (task
@@ -79,8 +81,8 @@ defmodule Platform.Federation.PlayToolsTest do
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
-    experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
-    suite_run_describe prototype_publish prototype_versions prototype_rollback
+    experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report burrow_run
+    burrow_run_describe prototype_publish prototype_versions prototype_rollback
     access_explain access_propose access_apply access_undo
   )
 

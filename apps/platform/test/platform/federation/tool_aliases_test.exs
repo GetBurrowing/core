@@ -2,7 +2,9 @@ defmodule Platform.Federation.ToolAliasesTest do
   @moduledoc """
   Task 01a14a7f stage 3: core's 17 formerly dotted tool names are listed by
   their underscore name only, and the dotted name still CALLS, through one
-  resolve at `ToolCall.invoke/4`.
+  resolve at `ToolCall.invoke/4`. Task 01a14b9e-50a4 stage 1 added the two
+  code-mode tools' earlier names, `suite_run` and `suite_run_describe`
+  (now `burrow_run` / `burrow_run_describe`), to the same table: 19.
 
   Anti-vacuity: delete one entry from `ToolAliases`' `@aliases` and that
   alias's parity test below fails (its dotted call is then refused as
@@ -59,8 +61,17 @@ defmodule Platform.Federation.ToolAliasesTest do
     "prototype.versions" => :equal,
     "skill.get" => :equal,
     "skill.list" => :equal,
-    "skill.upsert" => :shape
+    "skill.upsert" => :shape,
+    "suite_run" => :shape,
+    "suite_run_describe" => :equal
   }
+
+  # The two legacy names that are not a dot-to-underscore swap (task
+  # 01a14b9e-50a4 stage 1). Every other canonical name is the legacy name
+  # with its dot replaced.
+  @renamed %{"suite_run" => "burrow_run", "suite_run_describe" => "burrow_run_describe"}
+
+  defp canonical_of(legacy), do: Map.get(@renamed, legacy, String.replace(legacy, ".", "_"))
 
   setup do
     saved = Application.fetch_env(:platform, :feedback_policy)
@@ -285,6 +296,9 @@ defmodule Platform.Federation.ToolAliasesTest do
     fn _ -> %{} end
   end
 
+  defp args_for("suite_run", _ctx), do: fn _ -> %{"script" => "[1 + 1, suite === burrow]"} end
+  defp args_for("suite_run_describe", _ctx), do: fn _ -> %{"tools" => ["skill_list"]} end
+
   defp args_for("skill.upsert", _ctx) do
     fn turn ->
       %{"name" => "Alias skill #{turn}", "content" => "# #{turn}", "description" => "d"}
@@ -331,6 +345,27 @@ defmodule Platform.Federation.ToolAliasesTest do
     )
   end
 
+  defp runtime_with!(agent, modules, prefix) do
+    runtime =
+      %AgentRuntime{}
+      |> AgentRuntime.changeset(%{
+        runtime_id: "#{prefix}-#{System.unique_integer([:positive])}",
+        owner_user_id: root_admin!().id,
+        agent_id: agent.id,
+        status: "active"
+      })
+      |> Repo.insert!()
+
+    {:ok, _} =
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        modules,
+        RuntimeProfiles.translated_permissions(modules)
+      )
+
+    runtime
+  end
+
   defp shape({:ok, %{} = data}), do: {:ok, data |> Map.keys() |> Enum.sort()}
   defp shape({:error, %{} = data}), do: {:error, data |> Map.keys() |> Enum.sort()}
   defp shape(other), do: other
@@ -351,14 +386,22 @@ defmodule Platform.Federation.ToolAliasesTest do
   # ── the table itself ──────────────────────────────────────────────────
 
   describe "the alias table" do
-    test "holds the 17 measured names, each mapping dot to underscore" do
-      assert length(ToolAliases.legacy_names()) == 17
+    test "holds the 19 measured names: 17 dot-to-underscore, 2 suite-to-burrow" do
+      assert length(ToolAliases.legacy_names()) == 19
       assert Enum.sort(Map.keys(@parity)) == ToolAliases.legacy_names()
 
       for {legacy, canonical} <- ToolAliases.aliases() do
-        assert String.contains?(legacy, ".")
-        assert canonical == String.replace(legacy, ".", "_")
+        assert canonical == canonical_of(legacy)
+
+        if Map.has_key?(@renamed, legacy) do
+          refute String.contains?(legacy, ".")
+          assert String.starts_with?(canonical, "burrow_")
+        else
+          assert String.contains?(legacy, ".")
+        end
       end
+
+      assert ToolAliases.aliases() |> Map.take(Map.keys(@renamed)) == @renamed
     end
 
     test "resolve/1 maps a legacy name and leaves everything else alone" do
@@ -366,6 +409,9 @@ defmodule Platform.Federation.ToolAliasesTest do
       assert ToolAliases.resolve("skill_list") == :canonical
       assert ToolAliases.resolve("skill.lsit") == :canonical
       assert ToolAliases.resolve("canvas_update") == :canonical
+      assert ToolAliases.resolve("suite_run") == {:alias, "burrow_run"}
+      assert ToolAliases.resolve("suite_run_describe") == {:alias, "burrow_run_describe"}
+      assert ToolAliases.resolve("burrow_run") == :canonical
     end
   end
 
@@ -375,12 +421,16 @@ defmodule Platform.Federation.ToolAliasesTest do
     test "an all-bundle runtime is listed zero dotted names over HTTP", %{token: token} do
       # Positive control: there ARE dotted names to leak.
       assert ToolAliases.legacy_names() != []
-      assert Enum.all?(ToolAliases.legacy_names(), &String.contains?(&1, "."))
+      assert Enum.count(ToolAliases.legacy_names(), &String.contains?(&1, ".")) == 17
 
       names = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
 
       assert "skill_list" in names
       assert "feedback_submit" in names
+      assert "burrow_run" in names
+      assert "burrow_run_describe" in names
+      refute "suite_run" in names
+      refute "suite_run_describe" in names
       assert Enum.filter(names, &String.contains?(&1, ".")) == []
       assert Enum.filter(names, &(&1 in ToolAliases.legacy_names())) == []
     end
@@ -397,9 +447,9 @@ defmodule Platform.Federation.ToolAliasesTest do
     # failed.)
     for {legacy, _mode} <- Enum.sort(@parity) do
       @legacy legacy
-      @canonical String.replace(legacy, ".", "_")
+      @canonical Map.get(@renamed, legacy, String.replace(legacy, ".", "_"))
 
-      test "#{legacy} answers as #{String.replace(legacy, ".", "_")}, ledgered and counted as sent",
+      test "#{legacy} answers as #{Map.get(@renamed, legacy, String.replace(legacy, ".", "_"))}, ledgered and counted as sent",
            ctx do
         args = args_for(@legacy, ctx)
         before = ledger_tools(ctx.runtime)
@@ -447,6 +497,48 @@ defmodule Platform.Federation.ToolAliasesTest do
       assert {:error, :forbidden} = ToolCall.invoke("skill_list", %{}, runtime)
       assert {:error, :forbidden} = ToolCall.invoke("skill.list", %{}, runtime)
       assert ledger_tools(runtime) == ["skill_list", "skill.list"]
+    end
+
+    test "suite_run and suite_run_describe need exactly burrow_run's grant", %{agent: agent} do
+      narrow =
+        %AgentRuntime{}
+        |> AgentRuntime.changeset(%{
+          runtime_id: "alias-narrow-cm-#{System.unique_integer([:positive])}",
+          owner_user_id: root_admin!().id,
+          agent_id: agent.id,
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      {:ok, _} =
+        RuntimeProfiles.create_for_runtime(
+          narrow,
+          ["task"],
+          RuntimeProfiles.translated_permissions(["task"])
+        )
+
+      for name <- ~w(burrow_run suite_run burrow_run_describe suite_run_describe) do
+        assert {:error, :forbidden} = ToolCall.invoke(name, %{"script" => "1"}, narrow)
+      end
+
+      assert ledger_tools(narrow) ==
+               ~w(burrow_run suite_run burrow_run_describe suite_run_describe)
+
+      # One reason under both names: a refused legacy name reads as the
+      # permission miss its canonical name reads as, not as an unknown tool.
+      legacy = Platform.Federation.ToolAuthorization.deny_message("suite_run")
+      canonical = Platform.Federation.ToolAuthorization.deny_message("burrow_run")
+      assert canonical =~ "requires permission"
+      assert String.replace(legacy, "suite_run", "burrow_run") == canonical
+
+      # And with the grant, both names call.
+      granted = runtime_with!(agent, ["task", "code_mode"], "alias-granted-cm")
+
+      assert {:ok, %{ok: true, result: 1}} =
+               ToolCall.invoke("suite_run", %{"script" => "1"}, granted)
+
+      assert {:ok, %{ok: true, result: 1}} =
+               ToolCall.invoke("burrow_run", %{"script" => "1"}, granted)
     end
 
     test "an unknown dotted name is still unknown", %{runtime: runtime} do
@@ -533,12 +625,17 @@ defmodule Platform.Federation.ToolAliasesTest do
 
       assert {:ok, %{ok: true, result: [true, true]}} = Run.execute(ctx.runtime, script)
 
-      assert {:ok, index} = ToolCall.invoke("suite_run_describe", %{}, ctx.runtime)
+      assert {:ok, index} = ToolCall.invoke("burrow_run_describe", %{}, ctx.runtime)
       text = inspect(index)
       assert text =~ "canvas_describe"
+      assert text =~ "burrow_run_describe"
 
       for legacy <- ToolAliases.legacy_names() do
-        refute text =~ legacy, "suite_run_describe lists #{legacy}"
+        # Delimited by anything but an identifier character, so a listed
+        # `burrow.suite_run_describe(` would match while `suite_run_calls`
+        # (a metric field) would not.
+        refute text =~ ~r/(^|[^a-z_])#{Regex.escape(legacy)}($|[^a-z_])/,
+               "burrow_run_describe lists #{legacy}"
       end
     end
   end

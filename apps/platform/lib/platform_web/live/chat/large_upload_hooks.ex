@@ -214,7 +214,7 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
              socket,
              :error,
              "#{file.name} is #{UploadLimits.format_bytes(max(file.size, 0))}. " <>
-               "This Suite accepts files up to #{UploadLimits.label()}."
+               "This Burrow install accepts files up to #{UploadLimits.label()}."
            )}
 
         {:error, _reason} ->

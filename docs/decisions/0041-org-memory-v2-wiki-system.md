@@ -230,7 +230,7 @@ The Historian processes correction entries on its next pass and updates the targ
 
 ### Provider neutrality
 
-Non-Claude agents in Suite (other model providers) can still use the same tool surface — tools are just JSON. They will not have the trained behavior of always-list-on-start that Claude has. The orchestration prompt template for non-Claude agents will include explicit guidance equivalent to Anthropic's system prompt nudge.
+Non-Claude agents in Burrow (other model providers) can still use the same tool surface — tools are just JSON. They will not have the trained behavior of always-list-on-start that Claude has. The orchestration prompt template for non-Claude agents will include explicit guidance equivalent to Anthropic's system prompt nudge.
 
 ---
 
@@ -347,7 +347,7 @@ Mem0 (open source, May 2025 paper, ~26% LOCOMO accuracy gain over OpenAI's hoste
 
 Rejected because:
 - LOCOMO is point-recall-biased by construction; our use cases are 90% narrative (runbooks, decisions, lessons, identity).
-- Suite's value proposition is humans and agents in the same conversation. Humans read prose, not triples.
+- Burrow's value proposition is humans and agents in the same conversation. Humans read prose, not triples.
 - The shops building agent products for humans (Anthropic, Cursor, Devin) all bet prose; the shops building agent infra for other agents bet facts. We are the former.
 - Implementation cost is materially higher (fact extraction pipeline, graph storage, conflict resolution policy).
 

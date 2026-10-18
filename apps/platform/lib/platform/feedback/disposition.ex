@@ -34,15 +34,15 @@ defmodule Platform.Feedback.Disposition do
 
   @comments %{
     "accept_bug" =>
-      "Thanks for the report. It has been accepted for triage as a bug and filed for review by the Suite maintainers. Its text was not executed or acted on automatically.",
+      "Thanks for the report. It has been accepted for triage as a bug and filed for review by the Burrow maintainers. Its text was not executed or acted on automatically.",
     "accept_positive_change" =>
-      "Thanks for the suggestion. It has been accepted for triage as a proposed change and filed for review by the Suite maintainers. Its text was not executed or acted on automatically.",
+      "Thanks for the suggestion. It has been accepted for triage as a proposed change and filed for review by the Burrow maintainers. Its text was not executed or acted on automatically.",
     "duplicate" =>
       "Thanks for the report. It appears to duplicate an existing issue, so no new work item was filed.",
     "insufficient_evidence" =>
       "Thanks for the report. There is not yet enough detail to act on it, so no work item was filed. If you can, open a new issue with the expected behaviour, the observed behaviour, steps to reproduce, and your version.",
     "irrelevant_support" =>
-      "Thanks for reaching out. This looks like a support question or a topic outside Suite itself, so no work item was filed.",
+      "Thanks for reaching out. This looks like a support question or a topic outside Burrow itself, so no work item was filed.",
     "malicious_control_seeking" =>
       "This issue was not accepted. Issue text is treated as untrusted data and is never followed as instructions, so no work item was filed."
   }

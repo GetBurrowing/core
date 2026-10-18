@@ -1,11 +1,11 @@
 defmodule Platform.SignInAdmin do
   @moduledoc """
-  Manage the install's sign-in users (the bundled pocket-id) from Suite (task
+  Manage the install's sign-in users (the bundled pocket-id) from Burrow (task
   01a113ea-3ef4-7001-b3fc-5d0a1bafc5df).
 
   This context orchestrates two systems: pocket-id, through
-  `Platform.SignInAdmin.PocketId`, and Suite's own users, through
-  `Platform.Accounts` and `Platform.Tenancy`. **It never writes a Suite user
+  `Platform.SignInAdmin.PocketId`, and Burrow's own users, through
+  `Platform.Accounts` and `Platform.Tenancy`. **It never writes a Burrow user
   itself.** Every user row change goes through an Accounts function
   (`find_or_create_from_oidc/1`, `relink_oidc_identity/2`, `archive_user/2`,
   `unarchive_user/1`, `note_sign_in_link_expiry/2`) and every role change
@@ -35,7 +35,7 @@ defmodule Platform.SignInAdmin do
 
   ## How an invited user signs in later
 
-  Suite links an OIDC login to a user by `oidc_sub` only, and pocket-id's
+  Burrow links an OIDC login to a user by `oidc_sub` only, and pocket-id's
   `sub` is its user id. An invite creates (or adopts) the pocket-id user and
   then calls `Accounts.find_or_create_from_oidc/1` with that id as `sub`, the
   very call a first real login makes, so the later real login takes its
@@ -44,10 +44,10 @@ defmodule Platform.SignInAdmin do
   ## Remove is soft
 
   `remove/2` deletes the pocket-id identity (and its passkeys) and archives
-  the Suite user. The users row, and every message, task, file, memory entry
+  the Burrow user. The users row, and every message, task, file, memory entry
   and membership attributed to it, stays. A later invite of the same email
   takes the restore path: a new pocket-id identity relinked onto the SAME
-  Suite user id.
+  Burrow user id.
 
   ## Secrets
 
@@ -57,7 +57,7 @@ defmodule Platform.SignInAdmin do
       sign_in_admin.invite suite_user_id=<id> path=create
 
   The link is never logged and never stored. Only its expiry is, as the
-  Suite user's `sign_in_link_expires_at` (see below).
+  Burrow user's `sign_in_link_expires_at` (see below).
 
   ## Enable waits for every link this module minted to expire
 
@@ -111,14 +111,14 @@ defmodule Platform.SignInAdmin do
   # -- list -----------------------------------------------------------------
 
   @doc """
-  Every Suite user (archived included) joined to every pocket-id user on
+  Every Burrow user (archived included) joined to every pocket-id user on
   `oidc_sub == pocket_id.id`, each with a status:
 
     * `:disabled`: the pocket-id user is disabled;
     * `:pending`: the pocket-id user has no passkey yet;
     * `:active`: the pocket-id user has at least one passkey;
-    * `:no_identity`: a Suite user with no pocket-id user;
-    * `:not_in_suite`: a pocket-id user with no Suite row.
+    * `:no_identity`: a Burrow user with no pocket-id user;
+    * `:not_in_suite`: a pocket-id user with no Burrow row.
 
   Returns `{:error, :unreachable}` when pocket-id cannot be listed or any
   passkey count fails or times out: a partial table would show real users
@@ -182,27 +182,27 @@ defmodule Platform.SignInAdmin do
   # -- invite ---------------------------------------------------------------
 
   @doc """
-  Invite a person: give them a pocket-id identity and a Suite user, set their
-  Suite role, and mint a 30-minute sign-in link.
+  Invite a person: give them a pocket-id identity and a Burrow user, set their
+  Burrow role, and mint a 30-minute sign-in link.
 
   `attrs` carries `:email` (required), `:name` (optional; falls back to the
   email's local part) and `:role` (`:member` or `:admin`, or the same as a
   string).
 
-    * An ACTIVE Suite user with that email: `{:error, :already_exists}`.
-    * An ARCHIVED Suite user with that email (an earlier `remove/2`): the
+    * An ACTIVE Burrow user with that email: `{:error, :already_exists}`.
+    * An ARCHIVED Burrow user with that email (an earlier `remove/2`): the
       restore path. A new pocket-id user is created and relinked onto the
-      same Suite user id with `Accounts.relink_oidc_identity/2`.
+      same Burrow user id with `Accounts.relink_oidc_identity/2`.
     * Otherwise: adopt a pocket-id user that already has the email and no
-      Suite row, or create one; then `Accounts.find_or_create_from_oidc/1`
-      creates the Suite user and its root membership.
+      Burrow row, or create one; then `Accounts.find_or_create_from_oidc/1`
+      creates the Burrow user and its root membership.
 
   The role is then set with `Tenancy.promote_to_admin/2` or
   `Tenancy.revoke_admin/2`, which also lock it against the email-domain rule.
 
   If a step after this call CREATED a pocket-id user fails, that pocket-id
   user is deleted again; an adopted one never is. A failed role step also
-  archives the new Suite user (reason "invite failed"), so no
+  archives the new Burrow user (reason "invite failed"), so no
   half-provisioned active user is left and a re-invite takes the restore
   path.
   """
@@ -260,7 +260,7 @@ defmodule Platform.SignInAdmin do
     end
   end
 
-  # A Suite row already holding this sub would make the Accounts call take
+  # A Burrow row already holding this sub would make the Accounts call take
   # its UPDATE path and rewrite that person's email to the invitee's. Refuse
   # instead of re-pointing someone else's account.
   defp sub_unclaimed(identity, created?) do
@@ -334,7 +334,7 @@ defmodule Platform.SignInAdmin do
   @doc """
   Mint a fresh 30-minute sign-in link for a user. Refused for a user whose
   pocket-id identity is disabled (`:disabled`) or missing (`:no_identity`),
-  and for an archived Suite user (`:archived`), who could not complete a
+  and for an archived Burrow user (`:archived`), who could not complete a
   sign-in anyway.
   """
   @spec resend_link(actor(), term()) :: {:ok, Link.t()} | {:error, term()}
@@ -352,7 +352,7 @@ defmodule Platform.SignInAdmin do
 
   @doc """
   Disable a user's sign-in: pocket-id refuses them at token exchange,
-  passkey login and JWT, and the Suite user is archived (reason "sign-in
+  passkey login and JWT, and the Burrow user is archived (reason "sign-in
   disabled"), which drops any live session. Refuses the actor's own id with
   `{:error, :self}`.
   """
@@ -368,7 +368,7 @@ defmodule Platform.SignInAdmin do
   end
 
   @doc """
-  Re-enable a disabled user in pocket-id and unarchive the Suite user.
+  Re-enable a disabled user in pocket-id and unarchive the Burrow user.
 
   Refused with `{:error, {:sign_in_link_live, until}}`, before any pocket-id
   request, while a sign-in link this module minted for the user is still
@@ -377,7 +377,7 @@ defmodule Platform.SignInAdmin do
 
   `opts`:
 
-    * `undo: true`: skip that check, but only when the Suite user was
+    * `undo: true`: skip that check, but only when the Burrow user was
       archived with reason "sign-in disabled" less than 30 seconds ago. Undo
       means the Disable never happened, so the links it outlived are the ones
       the user held before. Outside that window it gets the same refusal.
@@ -404,7 +404,7 @@ defmodule Platform.SignInAdmin do
 
   @doc """
   Soft remove: delete the pocket-id identity and its passkeys, then archive
-  the Suite user (reason "sign-in removed"). The users row and everything
+  the Burrow user (reason "sign-in removed"). The users row and everything
   attributed to it stay. An identity pocket-id no longer has is treated as
   already deleted. Refuses the actor's own id with `{:error, :self}`.
   """
@@ -467,7 +467,7 @@ defmodule Platform.SignInAdmin do
   defp not_self(_actor, _user_id), do: :ok
 
   # The static API user is pocket-id's synthetic admin for the API key, not a
-  # person: a Suite row that somehow carries its id is never actionable.
+  # person: a Burrow row that somehow carries its id is never actionable.
   defp fetch_user(user_id) do
     static = PocketId.static_api_user_id()
 

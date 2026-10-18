@@ -16,7 +16,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
   ## Status chips (design stage 1, Saru)
 
-  All nine statuses render through Suite's `<.chip tone>` — not raw
+  All nine statuses render through Burrow's `<.chip tone>` — not raw
   daisyUI `badge-*` — so the bar stays on the approved soft-tint re-skin
   formula. Every chip pairs a hero-icon glyph with a JetBrains-Mono
   label: **colour is never the only signal**, so the bar reads for

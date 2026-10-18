@@ -45,7 +45,7 @@ defmodule Platform.Tasks.AutoMerger do
   it yet" — the gate stays pending. Observe by poll; authorize by
   delivery.
 
-  The consequence for a repository Suite receives no webhooks from
+  The consequence for a repository Burrow receives no webhooks from
   (verified 2026-07-31: `Startup-Suite/claude-code-suite-channel` and
   `Startup-Suite/openclaw-suite-channel` both have zero hooks installed)
   is therefore NOT an indefinite silent wait. Such a repo carries

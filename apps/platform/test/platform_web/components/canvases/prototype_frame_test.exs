@@ -424,7 +424,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
       refute has_element?(view, ~s([data-role="prototype-pin"]))
 
       view |> element(~s([data-role="prototype-menu-button"])) |> render_click()
-      assert render(view) =~ "Sealed: no network, no Suite access"
+      assert render(view) =~ "Sealed: no network, no Burrow access"
     end
   end
 

@@ -47,7 +47,7 @@ A subject removed from an experiment's denominator carries a recorded **reason**
 
 These experiments run on the planner and executor prompts that drive this stack's own development. That is deliberate — it is the highest-volume, highest-signal traffic we have, and refusing to experiment on it means never experimenting on anything.
 
-The mitigation is a **project/epic exclusion filter in the policy layer** — the same layer that decides eligibility and traffic split — built before it is needed rather than after. When a variant looks harmful, Suite-internal work can be excluded from it with a policy change, not a code change and not an emergency stop of the whole experiment.
+The mitigation is a **project/epic exclusion filter in the policy layer** — the same layer that decides eligibility and traffic split — built before it is needed rather than after. When a variant looks harmful, Burrow-internal work can be excluded from it with a policy change, not a code change and not an emergency stop of the whole experiment.
 
 **Failure mode prevented:** a variant that degrades planning quality degrades the planning of the work that would fix it, and the only available response is a panicked global stop. Improvising an exclusion mechanism under that pressure is how exclusions end up silent (violating Decision 3) and scattered across call sites.
 

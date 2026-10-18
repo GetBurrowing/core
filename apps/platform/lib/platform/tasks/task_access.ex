@@ -144,7 +144,7 @@ defmodule Platform.Tasks.TaskAccess do
   this task ships. Closing it means first deciding WHO should see which tasks
   (the whole board, only their own project, or only the tasks they are on),
   which changes what agents can do. That is a product decision, filed as its
-  own ticket rather than smuggled in behind a security fix: Suite task
+  own ticket rather than smuggled in behind a security fix: Burrow task
   `019fbe15-fa42-7486-a85c-1c4af5f1a504`, unassigned in the backlog with the
   question at the top.
 

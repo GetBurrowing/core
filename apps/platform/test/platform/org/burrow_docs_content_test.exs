@@ -55,8 +55,17 @@ defmodule Platform.Org.BurrowDocsContentTest do
     "code_review",
     # the prototype frame's JS API (apps/platform/priv/prototype/suite.js)
     # that runs a canvas handler (docs/burrow/canvases.md), not an MCP tool.
-    # It became tool-shaped with `suite_run_describe` making `suite` a prefix.
-    "suite.call"
+    # It is tool-shaped because `burrow_run` makes `burrow` a prefix. The
+    # legacy spelling `suite.call` stays listed: `window.suite` is the same
+    # object, so a page may still say it.
+    "burrow.call",
+    "suite.call",
+    # the hidden legacy names of `burrow_run` / `burrow_run_describe`
+    # (apps/platform/lib/platform/federation/tool_aliases.ex, task 01a14b9e-50a4
+    # stage 1). docs/burrow/index.md names them as still accepted; they are
+    # not listed tools, so the exact-name check would reject them.
+    "suite_run",
+    "suite_run_describe"
   ]
 
   # ── The tool-token shape rule ─────────────────────────────────────────────

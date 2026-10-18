@@ -50,7 +50,7 @@ defmodule Platform.Accounts do
   and the Admin section in the More sheet).
 
   Stub: returns `true` for every user today. Multi-tenant org membership lives
-  on a downstream stack (see TODO below); until that ships, all current Suite
+  on a downstream stack (see TODO below); until that ships, all current Burrow
   users are root-org admins per product decision (Marlowe, 2026-05-18).
   """
   # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c): replace with Platform.Tenancy.root_admin?/1
@@ -202,7 +202,7 @@ defmodule Platform.Accounts do
   the identity provider, with a new `sub`. Sign-in links a login to a user by
   `oidc_sub` only (`find_or_create_from_oidc/1`), so without this the
   returning person would land on a fresh row and lose the attribution of
-  everything they authored. Relinking keeps their Suite user id, so their
+  everything they authored. Relinking keeps their Burrow user id, so their
   messages, tasks and files stay theirs.
 
   Refuses a user that is not archived with `{:error, :not_archived}` and
@@ -235,7 +235,7 @@ defmodule Platform.Accounts do
 
   The stored value is `expires_at` rounded UP to the next whole second, plus
   a 5-second margin (task 01a11503): pocket-id keeps the token alive to a
-  later instant than Suite's own sample, so a truncated or exact copy could
+  later instant than Burrow's own sample, so a truncated or exact copy could
   let Enable through while the token still works.
 
   `Platform.SignInAdmin.enable/2` refuses while that value is in the future:
@@ -250,9 +250,9 @@ defmodule Platform.Accounts do
   """
   # Task 01a11503 (evidence canvas 01a11502-9e61-7001-8992-1be3e31eb59d):
   # a refused redeem restores pocket-id's token to a whole second that can sit
-  # after Suite's truncated copy, so Enable went through while the pre-Disable
+  # after Burrow's truncated copy, so Enable went through while the pre-Disable
   # link still worked. Rounding up closes the sub-second gap; the margin also
-  # absorbs clock skew between the Suite and pocket-id hosts.
+  # absorbs clock skew between the Burrow and pocket-id hosts.
   @sign_in_link_expiry_margin_seconds 5
 
   @spec note_sign_in_link_expiry(User.t(), DateTime.t()) ::

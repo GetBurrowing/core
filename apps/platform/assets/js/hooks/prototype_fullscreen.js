@@ -23,7 +23,7 @@
  * Burrow iOS `document.fullscreenEnabled` is true and requestFullscreen hands
  * the prototype to WebKit's own fullscreen UI. That UI brings a
  * drag-to-dismiss gesture and a top-left system X: a fast drag inside the
- * prototype dismisses it, `fullscreenchange` fires, and Suite's state turns
+ * prototype dismisses it, `fullscreenchange` fires, and Burrow's state turns
  * off. In an installed context there is no browser chrome for native
  * fullscreen to hide, so the overlay loses nothing. A Safari TAB keeps the
  * native path on purpose: it is the only way to hide the Safari toolbar, and
@@ -62,7 +62,7 @@
  * True where fullscreen should stay on the top-layer overlay even though the
  * Fullscreen API is present:
  *
- *   (a) Burrow iOS: the Capacitor marker Suite already reads in
+ *   (a) Burrow iOS: the Capacitor marker Burrow already reads in
  *       push_subscribe.js (`isNativePlatform()` and `getPlatform() === "ios"`).
  *       It holds for Burrow iPhone and iPad whatever the UA says, and is false
  *       for Burrow Android.

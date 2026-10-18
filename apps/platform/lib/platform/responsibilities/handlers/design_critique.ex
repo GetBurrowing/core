@@ -238,7 +238,7 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
   @spec build_prompt(map()) :: {:ok, %{system: String.t(), user: String.t()}}
   def build_prompt(context) when is_map(context) do
     system =
-      "You are Saru, the Designer on Suite. You are critiquing ONE design canvas. " <>
+      "You are Saru, the Designer on Burrow. You are critiquing ONE design canvas. " <>
         "Report only what you can see in the snapshot you were given — never invent a " <>
         "screen, a component or a colour that is not in it. Respond with a single JSON " <>
         ~s(object of the shape {"issues": [{"severity", "location", "issue", ) <>

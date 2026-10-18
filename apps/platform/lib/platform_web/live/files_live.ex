@@ -1286,7 +1286,7 @@ defmodule PlatformWeb.FilesLive do
   # feedback: "we need a way to view the file in app as well"). For
   # very large extractions we still cap at a generous ceiling so the
   # LV diff doesn't blow past the websocket frame size; in practice
-  # 200 KB is plenty for any DOCX / extracted-PDF body Suite ingests.
+  # 200 KB is plenty for any DOCX / extracted-PDF body Burrow ingests.
   defp load_text_excerpt(%Files.File{} = file) do
     case Files.fetch_extracted_text(file.id) do
       nil -> nil

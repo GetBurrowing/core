@@ -22,7 +22,7 @@ This is the same problem we solved for human collaboration: use a shared space. 
 - Native tool surface (canvas, task, task operations)
 - No new primitives required
 
-The insight: **task execution is a conversation between the TaskRouter and the assigned agent.** Suite already knows how to host conversations.
+The insight: **task execution is a conversation between the TaskRouter and the assigned agent.** Burrow already knows how to host conversations.
 
 ---
 
@@ -41,7 +41,7 @@ This creates a reliability problem (stalls are detected late) and an accountabil
 
 ## Decision
 
-For each task assignment, the TaskRouter creates (or reuses) a **dedicated Suite space** scoped to that task. This space serves as the execution channel: the agent streams its working commentary, the TaskRouter posts structured status events, and humans can observe or intervene at any time.
+For each task assignment, the TaskRouter creates (or reuses) a **dedicated Burrow space** scoped to that task. This space serves as the execution channel: the agent streams its working commentary, the TaskRouter posts structured status events, and humans can observe or intervene at any time.
 
 This space is called the **task execution space**.
 

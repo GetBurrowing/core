@@ -1,5 +1,5 @@
 #!/bin/bash
-# Suite install backup (task 01a0d6ab stage 4): pg_dump every database of the
+# Burrow install backup (task 01a0d6ab stage 4): pg_dump every database of the
 # bundled postgres into <backup dir>/<db>-<utc>.dump, check each dump with
 # `pg_restore --list`, keep the newest <keep> per database.
 #

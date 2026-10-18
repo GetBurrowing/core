@@ -217,7 +217,7 @@ From `IMPLEMENTATION.md` step 4:
 
 ## 6. What this spec does NOT cover
 
-- **Rich text / markdown editor.** Out of scope; Suite uses plain text in composers today. If a surface needs rich text, that's a separate component.
+- **Rich text / markdown editor.** Out of scope; Burrow uses plain text in composers today. If a surface needs rich text, that's a separate component.
 - **File-upload inputs** (`type="file"`). Existing `<.live_file_input>` handles uploads; not part of this consolidation.
 - **Date pickers.** Native `type="date"` is fine for now; a styled date picker is a future task.
 - **Combobox / autocomplete.** The existing mention-autocomplete in `chat_live.html.heex` is its own pattern; doesn't migrate to `<.input>`.

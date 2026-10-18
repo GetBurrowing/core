@@ -2951,7 +2951,7 @@ defmodule Platform.Meetings do
   This is the second-generation guard added for task 019f3312 (phantom
   meeting flood). The regex-only `app_registered_room?/1` accepts any
   well-formed `space-<uuid>` name — including UUIDs that were never
-  materialised as a Suite chat space. That leaves the webhook path
+  materialised as a Burrow chat space. That leaves the webhook path
   open to attacker-crafted names of the form `space-<random-uuid>` that
   match the regex but point at nothing. `legit_room?/1` closes that
   hole by requiring the space actually exists.
@@ -3138,7 +3138,7 @@ defmodule Platform.Meetings do
   @doc """
   Parse a LiveKit participant identity string into a typed FK tuple.
 
-  Suite mints identities as `"user:<uuid>"` (human joiners, see
+  Burrow mints identities as `"user:<uuid>"` (human joiners, see
   `MeetingHooks.do_join/1`), `"agent:<uuid>"` (agent runtime), and
   `"guest:<random-uuid>"` (guest ingress via `meet.example.com`
   — see `guest_livekit_token/2`). Returns `{:user, uuid}` /
@@ -3147,7 +3147,7 @@ defmodule Platform.Meetings do
   defensive validation style of `space_id_from_room_name/1` in the webhook
   controller.
 
-  Guest identities carry a randomly-minted UUID (not a Suite user or
+  Guest identities carry a randomly-minted UUID (not a Burrow user or
   agent FK) — the `{:guest, _}` tuple downstream yields a nil-FK
   participant row that dedupes by display_name, so the guest surfaces in
   the participant rail with the name from the JWT `name` claim without
@@ -3161,10 +3161,10 @@ defmodule Platform.Meetings do
   def parse_identity(_), do: :unknown
 
   @doc """
-  True when a LiveKit participant identity names a Suite AGENT.
+  True when a LiveKit participant identity names a Burrow AGENT.
 
   A deliberate PREFIX test, and deliberately NOT `parse_identity/1`.
-  Suite mints agent identities in two different shapes and only one of
+  Burrow mints agent identities in two different shapes and only one of
   them parses:
 
     * `generate_agent_token/3` mints `"agent:" <> agent.slug` — this is
@@ -3181,7 +3181,7 @@ defmodule Platform.Meetings do
   than as a `{:agent, _}` match at the call site.
 
   Answers `false` for a bare `"agent:"` with no suffix (that names
-  nobody), for `nil`, and for non-Suite prefixes such as
+  nobody), for `nil`, and for non-Burrow prefixes such as
   `"transcriber:"` or the bare `"meeting-transcriber"` dispatch name —
   those are out-of-repo workers, not agents, and unlike agents they
   never publish speech.
@@ -3629,7 +3629,7 @@ defmodule Platform.Meetings do
 
   # FK attrs map for a parsed identity — drives both insert attrs and the
   # match-key lookup. Guest identities carry a randomly-minted UUID (not a
-  # Suite FK) so the map is empty — the resulting participant row dedupes
+  # Burrow FK) so the map is empty — the resulting participant row dedupes
   # by display_name, matching the phone/SIP `:unknown` path.
   defp identity_fk({:user, uuid}), do: %{user_id: uuid}
   defp identity_fk({:agent, uuid}), do: %{agent_id: uuid}
@@ -3866,7 +3866,7 @@ defmodule Platform.Meetings do
   # That is WHY such a participant lands as a nil-FK row and has to be
   # matched by these strings at all; it is not evidence that no worker
   # joins with that prefix. `parse_identity/1` only governs the
-  # identities Suite itself mints (`user:` / `agent:` / `guest:`).
+  # identities Burrow itself mints (`user:` / `agent:` / `guest:`).
   #
   # `"meeting-transcriber"` is the literal the token/room-creation path
   # dispatches as `agentName` — a dispatch-rule name, which is not
@@ -3948,7 +3948,7 @@ defmodule Platform.Meetings do
   Accepts either a `meeting_participants` row or a LiveKit-participant
   shaped map (`:identity` and/or `:name` / `:display_name` keys).
 
-  A row carrying a `user_id` or `agent_id` FK is a human or a Suite agent
+  A row carrying a `user_id` or `agent_id` FK is a human or a Burrow agent
   by construction and is NEVER a transcriber, whatever its strings say.
   That FK guard is what makes "a human never loses their tile" structural
   rather than a property of the marker strings. It applies to this hide
@@ -4318,7 +4318,7 @@ defmodule Platform.Meetings do
 
     * `iss` — the LiveKit API key
     * `sub` / `identity` — `"guest:<random-uuid>"` (random per mint;
-      never a Suite user or agent FK)
+      never a Burrow user or agent FK)
     * `name` — `"<display_name> (guest)"` — the ` (guest)` suffix is an
       impersonation-guard mitigation that surfaces to every other
       participant's rail so an operator can eyeball guest vs member
@@ -6208,7 +6208,7 @@ defmodule Platform.Meetings do
         "agent_roster" => Map.get(context, :agent_roster, []),
         # Task 01a1117f stage 1: who the worker IS. Without these the worker
         # joins under the livekit-agents default identity `agent-<job id>`,
-        # which no Suite surface resolves, so Burrow rendered as "Unknown
+        # which no Burrow surface resolves, so Burrow rendered as "Unknown
         # participant" and its speech was attributed to `agent-AJ_…`.
         # `agent_identity` is the `agent:<uuid>` shape `parse_identity/1`
         # already casts to an agent FK and that MeetingLive keys agent tiles

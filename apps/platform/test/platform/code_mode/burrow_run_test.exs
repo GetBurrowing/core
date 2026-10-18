@@ -1,9 +1,13 @@
-defmodule Platform.CodeMode.SuiteRunTest do
+defmodule Platform.CodeMode.BurrowRunTest do
   @moduledoc """
-  Task 01a114a8 stage 2: `suite_run` over the real `/mcp` transport. The
+  Task 01a114a8 stage 2: `burrow_run` over the real `/mcp` transport. The
   outer call is authorized by `ToolCall.invoke/4` like any tool, the bundle
   is off by default, and the ledger holds the run's fingerprint (never its
   script, inputs or result) plus one row per inner call.
+
+  Task 01a14b9e-50a4 stage 1 renamed the tool from `suite_run` and the
+  script global from `suite`. The old tool name is a hidden alias and the old
+  global is the same object as `burrow`; "the legacy names" below pins both.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -33,28 +37,28 @@ defmodule Platform.CodeMode.SuiteRunTest do
       refute "code_mode" in AgentRuntime.default_tool_profile()
     end
 
-    test "a default runtime does not see suite_run and is refused -32001", %{agent: agent} do
+    test "a default runtime does not see burrow_run and is refused -32001", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, AgentRuntime.default_tool_profile())
 
       tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
-      refute "suite_run" in tools
+      refute "burrow_run" in tools
 
-      body = mcp_call(token, "suite_run", %{"script" => "1"})
+      body = mcp_call(token, "burrow_run", %{"script" => "1"})
       assert body["error"]["code"] == -32001
     end
 
-    test "a runtime granted code_mode sees suite_run", %{agent: agent} do
+    test "a runtime granted code_mode sees burrow_run", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
       tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
-      assert "suite_run" in tools
+      assert "burrow_run" in tools
     end
 
-    test "bindings are the runtime's effective tools minus suite_run, plus held legacy names",
+    test "bindings are the runtime's effective tools minus burrow_run, plus held legacy names",
          %{agent: agent} do
       {runtime, _token} = insert_runtime!(agent, bundles(["code_mode", "canvas"]))
 
-      expected = ToolAuthorization.tool_names(runtime) -- ["suite_run"]
+      expected = ToolAuthorization.tool_names(runtime) -- ["burrow_run"]
       assert "canvas_create" in expected
 
       # Task 01a14a7f stage 3: the dotted alias of every held tool is bound
@@ -66,15 +70,115 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
       assert "canvas.create" in legacy
       refute "prototype.publish" in legacy
+      # The run tool's own legacy name is never bound (burrow_run is not),
+      # the describe tool's is (burrow_run_describe is held).
+      refute "suite_run" in legacy
+      assert "suite_run_describe" in legacy
       assert Bindings.tool_names(runtime) == expected ++ legacy
 
-      {:ok, body} = Run.execute(runtime, "[typeof suite.canvas.create, typeof suite.suite_run]")
-      # suite_run is not BOUND; an unbound name still resolves to a caller
+      {:ok, body} =
+        Run.execute(runtime, "[typeof burrow.canvas.create, typeof burrow.burrow_run]")
+
+      # burrow_run is not BOUND; an unbound name still resolves to a caller
       # that the host refuses, so typeof is "function" for both.
       assert body.result == ["function", "function"]
 
-      {:ok, body} = Run.execute(runtime, "Object.keys(suite).includes('suite_run')")
+      {:ok, body} = Run.execute(runtime, "Object.keys(burrow).includes('burrow_run')")
       assert body.result == false
+    end
+  end
+
+  describe "the legacy names (task 01a14b9e-50a4 stage 1)" do
+    test "tools/list carries burrow_run and burrow_run_describe and neither suite name",
+         %{agent: agent} do
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
+      assert "burrow_run" in tools
+      assert "burrow_run_describe" in tools
+      refute "suite_run" in tools
+      refute "suite_run_describe" in tools
+    end
+
+    test "a suite_run call whose script uses suite.task_get AND burrow.task_get succeeds, suite === burrow",
+         %{agent: agent} do
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode", "task"]))
+
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Legacy #{u()}",
+          org_id: Platform.TenancyFixtures.acme_org_id()
+        })
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{project_id: project.id, title: "Legacy task #{u()}"})
+
+      script = """
+      const a = suite.task_get({task_id: inputs.task_id});
+      const b = burrow.task_get({task_id: inputs.task_id});
+      let name = null;
+      try { suite.call('task_get', {task_id: 'not-a-uuid'}); } catch (e) { name = e.name; }
+      [a.id === inputs.task_id, b.id === inputs.task_id, a.title === b.title, suite === burrow, name]
+      """
+
+      body =
+        mcp_call(token, "suite_run", %{"script" => script, "inputs" => %{"task_id" => task.id}})
+
+      assert %{
+               "ok" => true,
+               "result" => [true, true, true, true, "BurrowError"],
+               "run_id" => run_id
+             } =
+               result_json(body)
+
+      # The ledger records the name the caller SENT; the run is still
+      # fingerprinted and attributed by its inputs, as a burrow_run row is.
+      outer = Repo.get!(ToolCallRecord, run_id)
+      assert outer.tool == "suite_run"
+      assert outer.status == "ok"
+      assert outer.script_bytes == byte_size(script)
+      assert {outer.task_id, outer.attribution} == {task.id, "explicit_arg"}
+      assert ["task_get", "task_get", "task_get"] == Enum.map(inner_rows(run_id), & &1.tool)
+    end
+
+    test "suite_run_describe answers as burrow_run_describe", %{agent: agent} do
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      legacy = result_json(mcp_call(token, "suite_run_describe", %{}))
+      canonical = result_json(mcp_call(token, "burrow_run_describe", %{}))
+      assert legacy == canonical
+      assert legacy["docs"] =~ "burrow."
+    end
+
+    test "a nested run is refused under either name", %{agent: agent} do
+      {runtime, _token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      for name <- ~w(burrow_run suite_run) do
+        assert {:ok, %{ok: true, result: [kind, message]}} =
+                 Run.execute(runtime, """
+                 try { burrow.call('#{name}', {script: '1'}); ['none', ''] }
+                 catch (e) { [e.kind, e.message] }
+                 """)
+
+        assert kind == "forbidden"
+        assert message =~ "#{name} cannot be called from inside burrow_run"
+      end
+    end
+
+    test "a runtime without code_mode is refused under both names with one reason",
+         %{agent: agent} do
+      {_runtime, token} = insert_runtime!(agent, AgentRuntime.default_tool_profile())
+
+      legacy = mcp_call(token, "suite_run", %{"script" => "1"})
+      canonical = mcp_call(token, "burrow_run", %{"script" => "1"})
+
+      assert legacy["error"]["code"] == -32001
+      assert canonical["error"]["code"] == -32001
+
+      assert String.replace(legacy["error"]["message"], "suite_run", "burrow_run") ==
+               canonical["error"]["message"]
+
+      assert canonical["error"]["message"] =~ "requires permission"
     end
   end
 
@@ -86,13 +190,13 @@ defmodule Platform.CodeMode.SuiteRunTest do
       other = Ecto.UUID.generate()
 
       script = """
-      suite.federation_status({});
-      try { suite.task_get({task_id: inputs.other}); } catch (e) {}
+      burrow.federation_status({});
+      try { burrow.task_get({task_id: inputs.other}); } catch (e) {}
       1
       """
 
       body =
-        mcp_call(token, "suite_run", %{
+        mcp_call(token, "burrow_run", %{
           "script" => script,
           "inputs" => %{"task_id" => task_id, "other" => other}
         })
@@ -114,8 +218,8 @@ defmodule Platform.CodeMode.SuiteRunTest do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
       body =
-        mcp_call(token, "suite_run", %{
-          "script" => "suite.federation_status({}); 1",
+        mcp_call(token, "burrow_run", %{
+          "script" => "burrow.federation_status({}); 1",
           "inputs" => %{"task_id" => "not-a-uuid"}
         })
 
@@ -125,13 +229,13 @@ defmodule Platform.CodeMode.SuiteRunTest do
     end
   end
 
-  describe "POST /mcp tools/call suite_run" do
+  describe "POST /mcp tools/call burrow_run" do
     test "runs, returns the result, and ledgers the run and its inner calls", %{agent: agent} do
       {runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
       script = """
-      const a = suite.federation_status({});
-      const b = suite.call('federation_status', {});
+      const a = burrow.federation_status({});
+      const b = burrow.call('federation_status', {});
       console.log('two calls');
       ({n: inputs.n + 1, same: a.length === b.length})
       """
@@ -143,7 +247,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
       log =
         capture_log([level: :debug], fn ->
-          body = mcp_call(token, "suite_run", %{"script" => script, "inputs" => %{"n" => 41}})
+          body = mcp_call(token, "burrow_run", %{"script" => script, "inputs" => %{"n" => 41}})
           send(self(), {:body, body})
         end)
 
@@ -161,7 +265,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
       assert is_integer(result["elapsed_ms"])
 
       outer = Repo.get!(ToolCallRecord, run_id)
-      assert outer.tool == "suite_run"
+      assert outer.tool == "burrow_run"
       assert outer.status == "ok"
       assert outer.error_kind == nil
       assert outer.parent_run_id == nil
@@ -173,7 +277,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
       assert [%{tool: "federation_status"}, %{tool: "federation_status"}] = inner_rows(run_id)
 
-      assert log =~ "[CodeMode] suite_run run=#{run_id}"
+      assert log =~ "[CodeMode] burrow_run run=#{run_id}"
       refute log =~ "two calls"
       refute log =~ "federation_status({})"
     end
@@ -186,7 +290,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
       log =
         capture_log([level: :debug], fn ->
           body =
-            mcp_call(token, "suite_run", %{"script" => script, "inputs" => %{"key" => @sentinel}})
+            mcp_call(token, "burrow_run", %{"script" => script, "inputs" => %{"key" => @sentinel}})
 
           assert %{"ok" => true} = result_json(body)
         end)
@@ -201,7 +305,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
     test "a missing script is a recoverable tool error", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
-      body = mcp_call(token, "suite_run", %{"inputs" => %{}})
+      body = mcp_call(token, "burrow_run", %{"inputs" => %{}})
       assert body["result"]["isError"] == true
       assert %{"code" => "missing_script"} = result_json(body)
     end
@@ -209,7 +313,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
     test "a script error is a successful call with ok:false", %{agent: agent} do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
-      body = mcp_call(token, "suite_run", %{"script" => "nope()"})
+      body = mcp_call(token, "burrow_run", %{"script" => "nope()"})
       assert body["result"]["isError"] == false
       assert %{"ok" => false, "error" => %{"kind" => "script_error"}} = result_json(body)
     end
@@ -221,14 +325,14 @@ defmodule Platform.CodeMode.SuiteRunTest do
     } do
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
-      body = mcp_call(token, "suite_run", %{"script" => "nope()"})
+      body = mcp_call(token, "burrow_run", %{"script" => "nope()"})
       assert body["result"]["isError"] == false
 
       assert %{"ok" => false, "error" => %{"kind" => "script_error"}, "run_id" => run_id} =
                result_json(body)
 
       row = Repo.get!(ToolCallRecord, run_id)
-      assert row.tool == "suite_run"
+      assert row.tool == "burrow_run"
       assert row.status == "error"
       assert row.error_kind == "script_error"
       assert row.script_bytes == 6
@@ -246,8 +350,8 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
       {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
 
-      script = "for (let i = 0; i < 3; i++) suite.federation_status({})"
-      body = mcp_call(token, "suite_run", %{"script" => script})
+      script = "for (let i = 0; i < 3; i++) burrow.federation_status({})"
+      body = mcp_call(token, "burrow_run", %{"script" => script})
       assert body["result"]["isError"] == false
 
       assert %{"ok" => false, "error" => %{"kind" => "call_limit"}, "calls" => 2} =
@@ -269,7 +373,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
       log =
         capture_log([level: :debug], fn ->
           body =
-            mcp_call(token, "suite_run", %{"script" => "throw new Error('#{@sentinel}')"})
+            mcp_call(token, "burrow_run", %{"script" => "throw new Error('#{@sentinel}')"})
 
           send(self(), {:body, body})
         end)

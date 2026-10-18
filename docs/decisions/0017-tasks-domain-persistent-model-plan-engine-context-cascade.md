@@ -318,7 +318,7 @@ Subscribes to:
 
 ### Phase 5: Kanban Surface
 - `PlatformWeb.TasksLive` — kanban board with real-time updates
-- Wire into Suite shell at `/tasks` route
+- Wire into Burrow shell at `/tasks` route
 - Task detail panel with plan/stage/validation/artifact views
 
 ### Phase 6: Deploy Target Resolution
@@ -355,7 +355,7 @@ Subscribes to:
 
 - ADR 0002: Platform Domain Boundaries (Tasks surface vs Execution domain)
 - ADR 0005: Event Stream Architecture (audit telemetry for transitions)
-- ADR 0009: Suite Shell Architecture (kanban surface mounting)
+- ADR 0009: Burrow Shell Architecture (kanban surface mounting)
 - ADR 0011: Execution Runners (context plane, run control, artifacts)
 - `Platform.Tasks` — existing thin read-side module
 - `Platform.Context` — ETS context plane

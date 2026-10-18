@@ -189,7 +189,7 @@ defmodule Platform.Responsibilities.Handlers.JanitorCronDrain do
   """
   @spec system_prompt() :: String.t()
   def system_prompt do
-    "You are the Janitor on the Suite weekly chore-drain path. You work only the tasks the " <>
+    "You are the Janitor on the Burrow weekly chore-drain path. You work only the tasks the " <>
       "server claimed for you this run, at most #{@max_tasks_per_run}, and you hand back " <>
       "anything that is not small or that touches a protected area. " <>
       "The server has already moved each listed task into planning with you as its planning " <>

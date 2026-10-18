@@ -1,7 +1,7 @@
-# Suite design system — overview
+# Burrow design system — overview
 
 **Authored:** 2026-05-08 by saru-claude-clode for Marlowe's UI/UX audit + design system refinement.
-**Source-of-truth document for:** the visual + interaction conventions the Suite core platform follows. **Refined**, not invented — the existing system is DaisyUI 5 + Tailwind v4 + Public Sans on a Phoenix LiveView app, and this spec sharpens it rather than replacing it.
+**Source-of-truth document for:** the visual + interaction conventions the Burrow core platform follows. **Refined**, not invented — the existing system is DaisyUI 5 + Tailwind v4 + Public Sans on a Phoenix LiveView app, and this spec sharpens it rather than replacing it.
 
 > **Status:** Approved by Marlowe and committed to the repo 2026-06-01. After approval, Phase 3 produces mock variations against this system, then Phase 4 finalizes with HEEx component specs.
 
@@ -25,7 +25,7 @@ After Gate 3 (Marlowe picks variations), Phase 4 adds:
 2. **Every Refined or New decision cites a Phase 1 finding ID** by reference. No taste claims without reasoning. Phase 1 docs live at `audit/2026-05-08-ui-ux/01-inventory.md` and `02-audit.md`.
 3. **No code is modified in any phase.** Workflow ends at handoff specs. Phase 4's IMPLEMENTATION.md is the bridge to actual code work.
 4. **DaisyUI 5 + Public Sans + the agent-native voice** is the active system. We sharpen, don't invent. If brand intent is unclear in a specific surface, ask before proposing direction.
-5. **Suite intentionally locks `maximum-scale=1`.** iOS a11y is via Dynamic Type / font scale. Do not propose viewport-meta changes.
+5. **Burrow intentionally locks `maximum-scale=1`.** iOS a11y is via Dynamic Type / font scale. Do not propose viewport-meta changes.
 
 ## Pinned decisions (settled before Phase 2 drafting)
 

@@ -1,11 +1,11 @@
 defmodule Platform.Federation.ReturnSchemas do
   @moduledoc """
-  Typed return contracts (JSON Schema) for the tools a `suite_run` script
+  Typed return contracts (JSON Schema) for the tools a `burrow_run` script
   calls most (task 01a114a8 stage 3): the check-in triage path (`task_list`,
   `task_get`, `plan_get`, `stage_list`, `validation_list`,
   `execution_lease_list`, `runtime_event_list`, `federation_status`) and the
   Burrow meeting path (`space_get_messages`, `principal_search`,
-  `intent_ack`, `meeting_say`), plus `suite_run_describe` itself.
+  `intent_ack`, `meeting_say`), plus `burrow_run_describe` itself.
 
   A tool definition carries its schema under the optional `:returns_schema`
   key; `Platform.CodeMode.Docs` renders it as a TypeScript type and
@@ -35,7 +35,7 @@ defmodule Platform.Federation.ReturnSchemas do
 
   @tools ~w(task_list task_get plan_get stage_list validation_list execution_lease_list
             runtime_event_list federation_status space_get_messages principal_search
-            intent_ack meeting_say suite_run_describe)
+            intent_ack meeting_say burrow_run_describe)
 
   @doc "Names of the tools that carry a `returns_schema`."
   @spec tools() :: [String.t()]
@@ -170,7 +170,7 @@ defmodule Platform.Federation.ReturnSchemas do
     })
   end
 
-  def for_tool("suite_run_describe") do
+  def for_tool("burrow_run_describe") do
     closed(%{
       "docs" => string("TypeScript declarations for the requested tools"),
       "tools" => array(string()),

@@ -42,7 +42,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
   sends is replaced. Render frames `/proto/<id>/<version>/` with
   `sandbox="allow-scripts"` and nothing else, exactly as the `prototype`
   kind does, so the script runs under the serve route's sealed CSP: opaque
-  origin, no network, no Suite cookies, no access to the page around it.
+  origin, no network, no Burrow cookies, no access to the page around it.
 
   The scripted wrapper carries `data-scripted-src` and NO `data-srcdoc`: the
   `EmbedCanvasScale` hook writes `srcdoc` into its iframe on update, and
@@ -88,7 +88,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
           "type" => "boolean",
           "description" =>
             "Run the srcdoc's JavaScript (default false). Use for interactive mockups and " <>
-              "small widgets that need JS. Scripts run sealed: no network, no Suite cookies " <>
+              "small widgets that need JS. Scripts run sealed: no network, no Burrow cookies " <>
               "and no access to the surrounding page. Needs prototypes enabled by an admin " <>
               "(/admin/prototypes); otherwise the write is refused with prototypes_disabled."
         },

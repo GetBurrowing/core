@@ -1003,7 +1003,7 @@ defmodule PlatformWeb.ExperimentsLive do
   end
 
   @dispatch_field_labels %{
-    "suite_tool_calls" => "suite tool calls",
+    "suite_tool_calls" => "Burrow tool calls",
     "client_turns" => "client turns",
     "client_tokens_in" => "client input tokens",
     "client_tokens_out" => "client output tokens",

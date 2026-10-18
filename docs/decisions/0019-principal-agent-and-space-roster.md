@@ -163,7 +163,7 @@ proactively; the dot pulls them in.
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  ⚡ Suite       [Zip 🔴]               [Rowan]   │
+│  ⚡ Burrow      [Zip 🔴]               [Rowan]   │
 │                  ↑ composite dot                 │
 └─────────────────────────────────────────────────┘
 ```
@@ -304,7 +304,7 @@ RuntimeChannel) can serve as principal. The contract is:
   (same as today's `AgentResponder.dispatch/3`).
 - The external runtime can post replies via `RuntimeChannel.handle_in("reply", ...)`
   (already implemented).
-- The external runtime can call Suite tools via
+- The external runtime can call Burrow tools via
   `RuntimeChannel.handle_in("tool_call", ...)` (already implemented).
 - Presence is tracked via `RuntimePresence.track/1` on channel join and
   `RuntimePresence.untrack/1` on channel leave (already implemented).

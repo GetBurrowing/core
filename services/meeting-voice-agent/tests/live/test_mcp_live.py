@@ -1,4 +1,4 @@
-"""Live confirmation: the MCP tool-call path executes a REAL Suite tool
+"""Live confirmation: the MCP tool-call path executes a REAL Burrow tool
 against a running Core instance, and the chat hand-off tool really posts.
 
 Requires `MVA_MCP_BASE_URL` and `MVA_MCP_AUTH_TOKEN` — a real, active
@@ -56,7 +56,7 @@ def _unwrap(mcp_text_result) -> dict:
 
 def test_tool_call_executes_a_real_mcp_tool_and_returns_its_result():
     """`space_create` (the `space` bundle stage 2 granted) really creates a
-    Suite space and really returns it — this is the tool-call path this
+    Burrow space and really returns it — this is the tool-call path this
     stage wires, exercised against Core's real `Platform.Federation.ToolSurface`
     and `ToolAuthorization`, not a mock."""
     config = _config()

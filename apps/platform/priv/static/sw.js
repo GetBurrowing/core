@@ -1,4 +1,4 @@
-// Service worker for the Suite PWA.
+// Service worker for the Burrow PWA.
 //
 // Design: bypass-by-default, intercept-by-allowlist.
 //

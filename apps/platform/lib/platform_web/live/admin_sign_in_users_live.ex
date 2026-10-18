@@ -1,7 +1,7 @@
 defmodule PlatformWeb.AdminSignInUsersLive do
   @moduledoc """
   Admin · Users: manage the install's sign-in users (the bundled pocket-id)
-  from Suite (task 01a113ea-3ef4-7001-b3fc-5d0a1bafc5df, stage 3). The UI over
+  from Burrow (task 01a113ea-3ef4-7001-b3fc-5d0a1bafc5df, stage 3). The UI over
   `Platform.SignInAdmin`; design source is Saru's "Admin Users page" canvas.
 
   ## Gate, three places
@@ -190,7 +190,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
          |> assign(:invite_email_error, nil)
          |> assign(
            :invite_error,
-           "That sign-in account is already linked to another Suite user. Nothing was saved."
+           "That sign-in account is already linked to another Burrow user. Nothing was saved."
          )}
 
       {:error, _other} ->
@@ -337,7 +337,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     end
   end
 
-  # Suite rows render at once; pocket-id statuses arrive with the async load.
+  # Burrow rows render at once; pocket-id statuses arrive with the async load.
   defp assign_suite_rows(socket) do
     users = Accounts.list_users(include_archived: true)
     admins = MapSet.new(for u <- users, Tenancy.root_admin?(u), do: u.id)
@@ -461,7 +461,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     put_flash(socket, :error, message)
   end
 
-  # Task 01a114c1: Enable waits until every link Suite minted has expired.
+  # Task 01a114c1: Enable waits until every link Burrow minted has expired.
   defp link_live_message(name, until) do
     "A sign-in link sent before #{name} was disabled is valid until #{Calendar.strftime(until, "%H:%M")} UTC. Enable them after that."
   end
@@ -610,7 +610,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
         </span>
       <% :not_in_suite -> %>
         <span class="badge badge-ghost badge-sm" data-role="status-not-in-suite">
-          Not in Suite
+          Not in Burrow
         </span>
     <% end %>
     """

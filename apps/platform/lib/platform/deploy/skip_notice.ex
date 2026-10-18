@@ -12,7 +12,7 @@ defmodule Platform.Deploy.SkipNotice do
   `workflow_run.conclusion == "success"` and
   `workflow_run.head_branch == DEPLOY_HOOK_BRANCH` (default `main`) — see its
   `_should_trigger`. Any other conclusion is dropped there with a log line
-  nobody reads. The hook holds no Suite credential, but core already receives
+  nobody reads. The hook holds no Burrow credential, but core already receives
   the same `workflow_run` delivery at `/api/webhooks/github`, and can post
   through the space's system participant with no token at all.
 

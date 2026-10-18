@@ -1,4 +1,4 @@
-# ADR 0021: Startup Suite as an OpenClaw Node
+# ADR 0021: Burrow as an OpenClaw Node
 
 **Status:** Proposed  
 **Date:** 2026-03-20  
@@ -9,11 +9,11 @@
 
 ## Context
 
-The Startup Suite platform connects to OpenClaw via two mechanisms:
+Burrow connects to OpenClaw via two mechanisms:
 
 1. **RuntimeChannel** — a Phoenix WebSocket channel for agent federation
    (attention signals, replies, typing indicators, tool calls)
-2. **Suite-specific tools** — registered via `api.registerTool()` in the
+2. **Burrow-specific tools** — registered via `api.registerTool()` in the
    OpenClaw plugin (canvas_create, send_media, etc.)
 
 This architecture has hit friction:
@@ -32,8 +32,8 @@ This architecture has hit friction:
   inside the canvas — capabilities that would require many individual tools
   to replicate.
 - **Two parallel surfaces**: The OpenClaw `canvas` tool already exists and
-  targets nodes. If Suite registered as a node, agents could use the existing,
-  battle-tested canvas tool instead of custom Suite-specific tools.
+  targets nodes. If Burrow registered as a node, agents could use the existing,
+  battle-tested canvas tool instead of custom Burrow-specific tools.
 
 Meanwhile, OpenClaw's **node protocol** is mature and well-documented:
 
@@ -47,14 +47,14 @@ Meanwhile, OpenClaw's **node protocol** is mature and well-documented:
 
 ## Decision
 
-Startup Suite will register as an **OpenClaw node** in addition to its
-existing RuntimeChannel connection. The node connection exposes Suite's
+Burrow will register as an **OpenClaw node** in addition to its
+existing RuntimeChannel connection. The node connection exposes Burrow's
 canvas rendering surface through the standard OpenClaw node protocol.
 
 This gives agents the full OpenClaw canvas toolkit for free:
 
 ```
-Agent → canvas tool → Gateway → Node (Suite) → LiveView canvas rendering
+Agent → canvas tool → Gateway → Node (Burrow) → LiveView canvas rendering
 ```
 
 ---
@@ -63,10 +63,10 @@ Agent → canvas tool → Gateway → Node (Suite) → LiveView canvas rendering
 
 ### Dual Connection Model
 
-Suite maintains two WebSocket connections to the OpenClaw Gateway:
+Burrow maintains two WebSocket connections to the OpenClaw Gateway:
 
 ```
-Startup Suite Server
+Burrow Server
   ├─ RuntimeChannel connection (existing)
   │   └─ Agent federation: attention, replies, typing, tool calls
   │
@@ -81,27 +81,27 @@ rendering and interaction.
 
 ### Node Registration
 
-On startup, Suite connects to the OpenClaw Gateway WebSocket as a node:
+On startup, Burrow connects to the OpenClaw Gateway WebSocket as a node:
 
 ```
 WS connect → ws://<gateway>:18789
   role: "node"
   device_id: "suite-<instance-id>"
-  display_name: "Startup Suite"
+  display_name: "Burrow"
   platform: "suite"
   capabilities: ["canvas.present", "canvas.navigate", "canvas.eval",
                   "canvas.snapshot", "canvas.a2ui_push", "canvas.a2ui_reset"]
 ```
 
-The Gateway creates a device pairing request. Once approved, Suite appears
+The Gateway creates a device pairing request. Once approved, Burrow appears
 in `openclaw nodes status` as a paired node.
 
 ### Canvas Command Handler
 
-Suite implements a node command handler that translates OpenClaw canvas
+Burrow implements a node command handler that translates OpenClaw canvas
 commands into LiveView actions:
 
-| OpenClaw Command | Suite Action |
+| OpenClaw Command | Burrow Action |
 |---|---|
 | `canvas.present` | Create or show a canvas, navigate to URL |
 | `canvas.navigate` | Navigate an existing canvas to a new URL or content |
@@ -126,7 +126,7 @@ Each command arrives as a JSON-RPC message over the node WebSocket:
 }
 ```
 
-Suite acknowledges with a result:
+Burrow acknowledges with a result:
 
 ```json
 {
@@ -136,9 +136,9 @@ Suite acknowledges with a result:
 }
 ```
 
-### Canvas Rendering in Suite
+### Canvas Rendering in Burrow
 
-When a canvas command arrives, Suite:
+When a canvas command arrives, Burrow:
 
 1. Resolves which space the canvas belongs to (from the command context or
    a default mapping)
@@ -162,7 +162,7 @@ connection:
 ```elixir
 defmodule Platform.Federation.NodeClient do
   @moduledoc """
-  Connects to the OpenClaw Gateway as a node, exposing Suite's canvas
+  Connects to the OpenClaw Gateway as a node, exposing Burrow's canvas
   rendering surface through the standard node protocol.
   """
 
@@ -181,7 +181,7 @@ end
 ```elixir
 defmodule Platform.Federation.NodeCommandHandler do
   @moduledoc """
-  Routes node commands to the appropriate Suite subsystem.
+  Routes node commands to the appropriate Burrow subsystem.
   """
 
   def handle_command("canvas.present", params, ctx)
@@ -196,7 +196,7 @@ end
 
 ### Configuration
 
-Suite's node connection is configured alongside the existing runtime
+Burrow's node connection is configured alongside the existing runtime
 connection:
 
 ```elixir
@@ -204,7 +204,7 @@ connection:
 config :platform, Platform.Federation.NodeClient,
   gateway_url: "ws://127.0.0.1:18789",
   device_id: "suite-#{System.get_env("INSTANCE_ID", "default")}",
-  display_name: "Startup Suite",
+  display_name: "Burrow",
   token: System.get_env("OPENCLAW_GATEWAY_TOKEN"),
   capabilities: ~w(canvas.present canvas.navigate canvas.eval
                     canvas.snapshot canvas.a2ui_push canvas.a2ui_reset),
@@ -330,7 +330,7 @@ simple GenServer message or shared ETS lookup — no network round-trip.
 
 ## What This Replaces
 
-### Suite-specific tools that become unnecessary
+### Burrow-specific tools that become unnecessary
 
 | Old (plugin tool) | New (node canvas command) |
 |---|---|
@@ -340,7 +340,7 @@ simple GenServer message or shared ETS lookup — no network round-trip.
 
 The `suite_canvas_create` tool in the OpenClaw plugin can be removed once
 the node connection is stable. Agents use the standard `canvas` tool
-targeting the Suite node instead.
+targeting the Burrow node instead.
 
 ### What stays on RuntimeChannel
 
@@ -348,7 +348,7 @@ targeting the Suite node instead.
 - Typing indicators
 - Attention signals (message routing)
 - `reply_with_media` (file attachments in chat)
-- Tool calls for non-canvas Suite operations (task creation, etc.)
+- Tool calls for non-canvas Burrow operations (task creation, etc.)
 
 Chat is inherently a channel concern. Canvas is inherently a node concern.
 Clean separation.
@@ -368,7 +368,7 @@ Clean separation.
    issue doesn't apply.
 
 4. **Agent-agnostic**: Any agent connected to the Gateway can target the
-   Suite node — not just the one connected via RuntimeChannel.
+   Burrow node — not just the one connected via RuntimeChannel.
 
 5. **Incremental canvas updates**: Agents can eval JS, push A2UI updates,
    and snapshot results — interactive canvas workflows that tool calls
@@ -419,7 +419,7 @@ Clean separation.
 
 ### Negative / Trade-offs
 
-- Two WebSocket connections from Suite to Gateway (manageable)
+- Two WebSocket connections from Burrow to Gateway (manageable)
 - Device pairing adds a one-time setup step
 - Canvas state must be synchronized between the node protocol and
   LiveView — adds complexity
@@ -429,9 +429,9 @@ Clean separation.
 ### Risks
 
 - Node protocol may assume single-user rendering (one device, one screen).
-  Suite has multiple users viewing the same canvas. The broadcast fan-out
+  Burrow has multiple users viewing the same canvas. The broadcast fan-out
   must handle this correctly.
-- Gateway node routing may need to be aware that Suite is both a node
+- Gateway node routing may need to be aware that Burrow is both a node
   and a runtime — ensure commands route to the right connection.
 - If the node connection drops, canvas commands fail. The RuntimeChannel
   (chat) should continue working independently.

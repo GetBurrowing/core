@@ -6,7 +6,7 @@ defmodule Platform.Memory do
   The concrete provider is chosen at runtime via application config:
 
       config :platform, :memory_service,
-        provider: Platform.Memory.Providers.StartupSuite,
+        provider: Platform.Memory.Providers.MemoryService,
         base_url: "http://memory-service:8100",
         api_key: "optional-shared-secret",
         model: "embeddings",
@@ -16,7 +16,7 @@ defmodule Platform.Memory do
   `:timeout` bounds search, delete and health; `:ingest_timeout` bounds
   ingest only (an ingest embeds before it answers and is slow by nature).
   Ingest never falls back to `:timeout`. See
-  `Platform.Memory.Providers.StartupSuite` for why.
+  `Platform.Memory.Providers.MemoryService` for why.
 
   When `MEMORY_SERVICE_URL` isn't set at boot the provider falls back to
   `Platform.Memory.Providers.Noop` so the app still starts and the existing
