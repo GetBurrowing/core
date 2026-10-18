@@ -70,7 +70,7 @@ final class IntentsTests: XCTestCase {
         for host in hosts { store.add(host: host) }
         XCTAssertEqual(store.installs.map(\.host), hosts)
         return IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
             installs: store, sleeper: sleeper ?? clock, now: { clock.now }, lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }
 
@@ -437,15 +437,15 @@ final class IntentsTests: XCTestCase {
     // MARK: Copy and entities
 
     func testWaitingSummaryRowsAndDialog() {
-        func approvalRow(_ n: Int) -> (id: String, approval: SuiteApproval) {
+        func approvalRow(_ n: Int) -> (id: String, approval: BurrowApproval) {
             (
                 "\(a)|ap\(n)",
-                SuiteApproval(
+                BurrowApproval(
                     id: "ap\(n)", kind: "plan", title: "Plan \(n)", spaceName: "Burrow iOS", spacePathSegment: nil, taskID: nil, insertedAt: nil,
                     summary: nil)
             )
         }
-        let tasks = (1...3).map { SuiteTask(id: "t\($0)", title: "Task \($0)", status: "in_progress", projectName: "Core") }
+        let tasks = (1...3).map { BurrowTask(id: "t\($0)", title: "Task \($0)", status: "in_progress", projectName: "Core") }
         let summary = WaitingSummary(approvals: [approvalRow(1), approvalRow(2)], tasks: tasks)
         XCTAssertEqual(summary.rows.map(\.title), ["Plan 1", "Plan 2", "Task 1"])
         XCTAssertEqual(summary.rows.map(\.symbol), ["checkmark.seal", "checkmark.seal", "checklist"])
@@ -458,18 +458,18 @@ final class IntentsTests: XCTestCase {
 
     func testSubtitlesLeadWithTheTypeAndNameTheInstallOnlyWhenSeveral() {
         let single = env(tokens: [:], hosts: [a])
-        let space = SuiteSpace(id: "s1", name: "Saru", kind: "dm")
+        let space = BurrowSpace(id: "s1", name: "Saru", kind: "dm")
         XCTAssertEqual(SpaceEntity(space, host: a, env: single).subtitle, "Direct message")
         XCTAssertEqual(SpaceEntity(space, host: a, env: single).pathSegment, "s1", "no path_segment: the id, never a slug")
-        let task = SuiteTask(id: "t1", title: "Ship", status: "in_progress", projectName: "Core")
+        let task = BurrowTask(id: "t1", title: "Ship", status: "in_progress", projectName: "Core")
         XCTAssertEqual(TaskEntity(task, host: a, env: single).subtitle, "Task in Core, in_progress")
 
         UserDefaults().removePersistentDomain(forName: defaultsName)
         let multi = env(tokens: [:], hosts: [a, b])
-        multi.installs.updateName("Legacy Suite", for: b)
+        multi.installs.updateName("Legacy Burrow", for: b)
         XCTAssertEqual(
-            AgentEntity(SuiteAgent(id: "g1", name: "Saru", slug: nil, role: "historian"), host: b, env: multi).subtitle, "Agent, historian, Legacy Suite")
-        XCTAssertEqual(SpaceEntity(SuiteSpace(id: "s2", name: "SXI", kind: "channel"), host: b, env: multi).id, "\(b)|s2")
+            AgentEntity(BurrowAgent(id: "g1", name: "Saru", slug: nil, role: "historian"), host: b, env: multi).subtitle, "Agent, historian, Legacy Burrow")
+        XCTAssertEqual(SpaceEntity(BurrowSpace(id: "s2", name: "SXI", kind: "channel"), host: b, env: multi).id, "\(b)|s2")
     }
 
     func testEntityRefParsesOnlyHostPipeUUID() {

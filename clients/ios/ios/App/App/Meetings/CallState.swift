@@ -56,7 +56,7 @@ struct CallParticipant: Equatable, Identifiable {
     }
 
     /// An agent is a LiveKit agent participant, or anyone whose metadata
-    /// says `{"agent": true}` (Suite's own voice workers publish that).
+    /// says `{"agent": true}` (Burrow's own voice workers publish that).
     static func isAgent(kindIsAgent: Bool, metadata: String?) -> Bool {
         if kindIsAgent { return true }
         guard let data = metadata?.data(using: .utf8),

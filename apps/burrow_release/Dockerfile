@@ -1,10 +1,10 @@
 # The WITH-modules image (ADR 0055, task 01a0ee08 stage 4): the release of the
-# apps/suite_release host, whose deps are core plus the selected build-time
+# apps/burrow_release host, whose deps are core plus the selected build-time
 # modules (today: Play, apps/game_stream). apps/platform/Dockerfile builds the
 # WITHOUT-modules image from apps/platform alone and is unchanged.
 #
 # Build from the repo root, like core's:
-#   podman build -f apps/suite_release/Dockerfile .
+#   podman build -f apps/burrow_release/Dockerfile .
 #
 # The RUNTIME stage below is core's, line for line, except the one
 # `COPY --from=build` line that names where the release was built.
@@ -36,9 +36,9 @@ ARG GIT_SHA
 COPY apps/platform/mix.exs apps/platform/mix.lock platform/
 COPY apps/game_stream/mix.exs apps/game_stream/mix.lock game_stream/
 COPY apps/social/mix.exs apps/social/mix.lock social/
-COPY apps/suite_release/mix.exs apps/suite_release/mix.lock suite_release/
+COPY apps/burrow_release/mix.exs apps/burrow_release/mix.lock burrow_release/
 
-WORKDIR /app/apps/suite_release
+WORKDIR /app/apps/burrow_release
 RUN mix deps.get --only $MIX_ENV
 # Hex deps only: the path deps (core and the module) have no source yet.
 RUN mix deps.compile --skip-local-deps
@@ -55,7 +55,7 @@ COPY apps/game_stream/lib game_stream/lib
 COPY apps/social/config social/config
 COPY apps/social/priv social/priv
 COPY apps/social/lib social/lib
-COPY apps/suite_release/config suite_release/config
+COPY apps/burrow_release/config burrow_release/config
 
 # The ADR corpus and the build commit go into CORE's priv/, where
 # Platform.Responsibilities.ContextProviders and Platform.BuildInfo read them,
@@ -72,12 +72,12 @@ RUN cd assets && npm ci
 
 # Assets. The host's `assets.deploy` builds app.css from the generated wrapper
 # stylesheet, app.js with `@extensions` bound to the generated entry, and
-# core's two islands, all into apps/suite_release/priv/static/assets. The
+# core's two islands, all into apps/burrow_release/priv/static/assets. The
 # Endpoint serves `from: :platform`, so they then move into core's
 # priv/static (inside this image only), beside the Excalidraw runtime assets
 # core's script copies there, and `phx.digest` writes core's
 # cache_manifest.json over the whole directory, as core's own build does.
-WORKDIR /app/apps/suite_release
+WORKDIR /app/apps/burrow_release
 RUN mix assets.deploy
 RUN cd ../platform/assets && node scripts/copy_excalidraw_assets.mjs
 RUN mkdir -p ../platform/priv/static/assets \
@@ -209,7 +209,7 @@ VOLUME ["/data/platform/chat_uploads"]
 
 USER app
 
-COPY --from=build --chown=app:app /app/apps/suite_release/_build/prod/rel/platform ./
+COPY --from=build --chown=app:app /app/apps/burrow_release/_build/prod/rel/platform ./
 
 EXPOSE 4000
 

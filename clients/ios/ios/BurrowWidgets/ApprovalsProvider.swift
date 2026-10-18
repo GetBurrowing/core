@@ -25,7 +25,7 @@ struct ApprovalsWidgetIntent: WidgetConfigurationIntent {
 /// request is in flight (WidgetPendingApprovals.swift).
 struct ApprovalsProvider: AppIntentTimelineProvider {
     var installs = InstallStore.shared
-    var client = SuiteAPIClient.shared
+    var client = BurrowAPIClient.shared
     var cache = ApprovalsCache()
     var store = WidgetApprovalStore()
     var sender = WidgetApprovalSender()

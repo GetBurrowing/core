@@ -60,7 +60,7 @@ struct WaitingControlProvider: ControlValueProvider {
         case (nil, let counts?): approvals = counts.approvals
         case (nil, nil): approvals = nil
         }
-        return .waiting(signedIn: SuiteAPIClient.shared.isSignedIn(host: host), approvals: approvals, install: installName(host, installs))
+        return .waiting(signedIn: BurrowAPIClient.shared.isSignedIn(host: host), approvals: approvals, install: installName(host, installs))
     }
 }
 

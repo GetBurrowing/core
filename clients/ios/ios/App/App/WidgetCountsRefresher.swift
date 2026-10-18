@@ -9,7 +9,7 @@ import WidgetKit
 /// The widgets' own 15-minute refresh covers the time the app is closed.
 enum WidgetCountsRefresher {
     static func refresh(host: String? = InstallStore.shared.selectedHost,
-                        client: SuiteAPIClient = .shared, cache: CountsCache = CountsCache()) {
+                        client: BurrowAPIClient = .shared, cache: CountsCache = CountsCache()) {
         guard let host, client.isSignedIn(host: host) else {
             WidgetCenter.shared.reloadAllTimelines()
             return

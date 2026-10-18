@@ -1,7 +1,7 @@
-# Burrow: the Suite iOS app (Capacitor shell)
+# Burrow: the iOS app (Capacitor shell)
 
 Burrow (listed under its publisher's name in App Store Connect) is a native shell around the
-Suite web UI (task 01a10882). The web UI runs in a
+Burrow web UI (task 01a10882). The web UI runs in a
 WKWebView pointed at the install the person picked; native code exists only
 where the web cannot reach: sign-in, push, the install picker and the Home
 Screen quick action.
@@ -10,9 +10,9 @@ Screen quick action.
 VoIP, PushToTalk), native game streaming, Apple Watch, Siri / App Intents.
 
 **The seam:** every native capability the web UI calls goes through ONE
-Capacitor plugin, `SuiteNative` (`ios/App/App/Plugins/SuiteNativePlugin.swift`,
+Capacitor plugin, `SuiteNative` (`ios/App/App/Plugins/BurrowNativePlugin.swift`,
 JS name `SuiteNative`). A v2 meetings plugin registers beside it in
-`SuiteBridgeViewController.capacitorDidLoad`; it does not grow this one.
+`BurrowBridgeViewController.capacitorDidLoad`; it does not grow this one.
 
 ## Layout
 
@@ -22,10 +22,10 @@ JS name `SuiteNative`). A v2 meetings plugin registers beside it in
 | `www/index.html` | Bundled boot page; the shell replaces it with the selected install |
 | `ios/App/project.yml` | xcodegen spec. The `.xcodeproj` is generated from it; commit both |
 | `ios/App/CapApp-SPM` | Capacitor's SPM glue (managed by `cap sync`) |
-| `ios/App/App/SuiteBridgeViewController.swift` | Edge-to-edge web view, navigation policy, pull-to-refresh, status bar |
-| `ios/Shared/` | Compiled into the app AND both extensions: `InstallStore` (installs + selection in App Group `group.com.kobo-ai.burrow`), `KeychainTokenStore`, `SuiteAPIClient`, `SlabState`, the share sheet model, colour slots (`Colors.xcassets`) |
+| `ios/App/App/BurrowBridgeViewController.swift` | Edge-to-edge web view, navigation policy, pull-to-refresh, status bar |
+| `ios/Shared/` | Compiled into the app AND both extensions: `InstallStore` (installs + selection in App Group `group.com.kobo-ai.burrow`), `KeychainTokenStore`, `BurrowAPIClient`, `SlabState`, the share sheet model, colour slots (`Colors.xcassets`) |
 | `ios/ShareExtension/` | Share to Burrow (`com.kobo-ai.burrow.share`), see Share sheet below |
-| `ios/SuiteWidgets/` | My approvals / My tasks widgets (`com.kobo-ai.burrow.widgets`, iOS 17+), see Widgets below |
+| `ios/BurrowWidgets/` | My approvals / My tasks widgets (`com.kobo-ai.burrow.widgets`, iOS 17+), see Widgets below |
 | `ios/App/App/InstallPickerView.swift` | SwiftUI picker (canvas 01a10887) |
 | `ios/App/App/AuthSession.swift` | PKCE S256 + ASWebAuthenticationSession + `POST /api/app/session` |
 | `ios/Shared/KeychainTokenStore.swift` | Bearer per install host, Keychain only, access group `$(AppIdentifierPrefix)com.kobo-ai.burrow.shared` |
@@ -138,11 +138,11 @@ WKWebView inside a third-party app cannot complete WebAuthn for a relying party
 the app has no associated domain for.
 
 **Measured 2026-10-04** on mac-host, iPhone 17 simulator (iOS 26.3), Debug build
-with `-SuiteLoginProbe burrow.example.com` (loads `/auth/login` with no
+with `-BurrowLoginProbe burrow.example.com` (loads `/auth/login` with no
 navigation policy), driven by `EvidenceUITests.test2LoginProbe`:
 
-1. `/auth/login` redirected to pocket-id, and its "Sign in to Suite" page
-   rendered in the WKWebView ("Do you want to sign in to Suite with your <install>
+1. `/auth/login` redirected to pocket-id, and its "Sign in to Burrow" page
+   rendered in the WKWebView ("Do you want to sign in to Burrow with your <install>
    account?", Sign in / Cancel / Sign in with login code).
 2. Tapping **Sign in** produced no passkey sheet. Within 8 s pocket-id showed
    **"The operation was not allowed or timed out."** with a Try again button,
@@ -205,8 +205,8 @@ The bearer for each install lives in ONE Keychain item: service
 `com.kobo-ai.burrow.session`, account = install host, access group
 `$(AppIdentifierPrefix)com.kobo-ai.burrow.shared` (each target's
 `keychain-access-groups` entitlement, passed to Swift through the
-`SuiteKeychainAccessGroup` Info.plist key). Never UserDefaults, never the App
-Group container, never logged. `SuiteAPIClient.authorizedRequest` is the only
+`BurrowKeychainAccessGroup` Info.plist key). Never UserDefaults, never the App
+Group container, never logged. `BurrowAPIClient.authorizedRequest` is the only
 place a bearer is attached, looked up by the host the request is built for;
 a host with no token fails before any request exists.
 
@@ -244,7 +244,7 @@ Two paths, chosen from the server's `GET /api/app/upload_config`
   upload expired after the connection was lost too long. Share it again.";
   any other terminal failure also notifies.
 - **Over `max_upload_bytes`:** refused before any byte moves, with the
-  server's label: "<name> is 1.2 GB. This Suite accepts files up to 1 GB."
+  server's label: "<name> is 1.2 GB. This Burrow accepts files up to 1 GB."
   Sizes everywhere use one decimal rule (`ByteLabel`): 1 MB = 1_000_000 bytes.
 
 Against a server without `upload_config`, only the multipart path exists and
@@ -260,7 +260,7 @@ foreground. `slabState(count:fetchedAt:now:signedIn:)`: info fill ONLY for
 use `surfaceMuted`. Each timeline carries a second entry at the stale
 boundary, so a widget that cannot refresh still loses its cyan on time. Deep
 links `burrow://open?host=<host>&path=/inbox|/tasks` (allow-listed paths)
-open in SuiteBridgeViewController. StaticConfiguration only, SF Pro Heavy
+open in BurrowBridgeViewController. StaticConfiguration only, SF Pro Heavy
 numeral, no bundled font in the widget.
 
 ## History: the Burrow rename

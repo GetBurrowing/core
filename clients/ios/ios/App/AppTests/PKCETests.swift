@@ -16,7 +16,7 @@ final class PKCETests: XCTestCase {
     }
 
     func testLoginURLCarriesTheChallenge() {
-        let url = AuthSession.loginURL(host: "suite.example.com", challenge: "abc")
-        XCTAssertEqual(url.absoluteString, "https://suite.example.com/auth/login?app_challenge=abc")
+        let url = AuthSession.loginURL(host: "burrow.example.com", challenge: "abc")
+        XCTAssertEqual(url.absoluteString, "https://burrow.example.com/auth/login?app_challenge=abc")
     }
 }

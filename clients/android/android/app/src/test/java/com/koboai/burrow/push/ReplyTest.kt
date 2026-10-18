@@ -109,7 +109,7 @@ class ReplyTest {
 
     @Test
     fun `a reply to another install uses that install's bearer only`() {
-        val other = PushPayload.from(mention + ("install_host" to "suite.example.org"))
+        val other = PushPayload.from(mention + ("install_host" to "burrow.example.org"))
         val transport = RecordingTransport(mapOf(route to HttpResponse(201, "{}")))
         assertFalse(handler(transport).handle(app, other, "On it"))
         // Not signed in there: no request, and never install A's bearer.

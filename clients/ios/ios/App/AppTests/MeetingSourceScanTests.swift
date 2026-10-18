@@ -66,7 +66,7 @@ final class MeetingSourceScanTests: XCTestCase {
     }
 
     func testNoMeetingsLogLineInterpolatesAToken() throws {
-        let files = try swiftFiles("App/Meetings") + [appRoot.appendingPathComponent("App/Plugins/SuiteMeetingsPlugin.swift")]
+        let files = try swiftFiles("App/Meetings") + [appRoot.appendingPathComponent("App/Plugins/BurrowMeetingsPlugin.swift")]
         var logLines = 0
         var offences: [String] = []
         for file in files {
@@ -127,7 +127,7 @@ final class MeetingSourceScanTests: XCTestCase {
     func testOnlyTheAppTargetLinksLiveKit() throws {
         let yml = try String(contentsOf: appRoot.appendingPathComponent("project.yml"), encoding: .utf8)
         let targets = Self.targetBlocks(yml)
-        XCTAssertTrue(targets.keys.contains("SuiteWidgets") && targets.keys.contains("ShareExtension"), "parsed: \(targets.keys.sorted())")
+        XCTAssertTrue(targets.keys.contains("BurrowWidgets") && targets.keys.contains("ShareExtension"), "parsed: \(targets.keys.sorted())")
         let linking = targets.filter { $0.value.contains("package: LiveKit") }.map(\.key).sorted()
         XCTAssertEqual(linking, ["App"])
     }

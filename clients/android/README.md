@@ -32,16 +32,16 @@ and widgets (stage 4).
 | `InstallStore.kt` | `Shared/InstallStore.swift` | Install list and selection in SharedPreferences. No built-in installs: the person adds theirs by URL (a list made only of the old built-in hosts, with no bearer, is cleared once); a removed install stays removed. The app install id lives in a separate file excluded from backup. |
 | `KeystoreTokenStore.kt` | `Shared/KeychainTokenStore.swift` | The bearer per install host: AES-256-GCM under a non-exportable AndroidKeyStore key; ciphertext + IV in the private prefs file `burrow_bearer_tokens`, with the host as GCM associated data. Not `EncryptedSharedPreferences` (androidx.security-crypto is deprecated). |
 | `Pkce.kt`, `AuthSession.kt`, `AuthCallback.kt` | `App/AuthSession.swift` | PKCE S256, the Custom Tab sign-in and the `burrow://auth/callback` parser. |
-| `AppApiClient.kt` | `Shared/SuiteAPIClient.swift` | `/api/app/*` calls. The bearer is attached in one place, looked up by the host the request is for. |
+| `AppApiClient.kt` | `Shared/BurrowAPIClient.swift` | `/api/app/*` calls. The bearer is attached in one place, looked up by the host the request is for. |
 | `InstallSession.kt` | `App/InstallSession.swift` | `InstallLauncher` (relaunch through `POST /api/app/handoff`) and `NativeSignOut`. |
 | `NavigationPolicy.kt` | `App/NavigationPolicy.swift` | Which navigations stay in the WebView. |
-| `SuiteNativePlugin.kt` | `App/Plugins/SuiteNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`, `donate`. See "Push" and "Conversations, shortcuts and voice reply". |
+| `BurrowNativePlugin.kt` | `App/Plugins/BurrowNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`, `donate`. See "Push" and "Conversations, shortcuts and voice reply". |
 | `shortcuts/` | `Intents/` (INSendMessageIntent donation) | Conversation shortcuts, the `donate` bridge and the sender monogram. See "Conversations, shortcuts and voice reply". |
 | `share/` | `Shared/ShareSheetModel.swift`, `ShareExtension` | The share target. See "Share". |
-| `widgets/` | `Shared/SlabState.swift`, `CountsCache.swift`, `SuiteWidgets` | Glance count widgets. See "Widgets". |
+| `widgets/` | `Shared/SlabState.swift`, `CountsCache.swift`, `BurrowWidgets` | Glance count widgets. See "Widgets". |
 | `push/` | `App/Push*.swift`, `NotificationRouter` | FCM, the permission explainer, channels, the notification builder and Reply. See "Push". |
 | `NativeBridgeExposure.kt` | (none; iOS injects into every frame) | Gives the current install's origin `window.Capacitor` and SuiteNative. See "Bridge on a remote origin". |
-| `MainActivity.kt`, `BurrowWebViewClient.kt` | `App/SuiteBridgeViewController.swift` | The shell: install lifecycle, policy, back, status bar. |
+| `MainActivity.kt`, `BurrowWebViewClient.kt` | `App/BurrowBridgeViewController.swift` | The shell: install lifecycle, policy, back, status bar. |
 | `InstallPickerView.kt`, `InstallProbe.kt` | `App/InstallPickerView.swift` | The install picker (Android Views), the iOS layout and copy. |
 
 ## Rig (test-host)
@@ -314,7 +314,7 @@ per-file limit of its own. `SizeCheck` then sorts each file:
     in-process stand-in for the upload endpoint (no request leaves the
     device), so `svc wifi disable` / `svc data disable` show the offline path.
 - **Over `max_upload_bytes`:** refused before any upload, with the server's
-  label: "<name> is 1.2 GB. This Suite accepts files up to 1 GB."
+  label: "<name> is 1.2 GB. This Burrow accepts files up to 1 GB."
 
 Every size label (the file row, the over-limit copy, the notifications) is
 `ByteLabel`: the one decimal rule shared with the server, web and iOS

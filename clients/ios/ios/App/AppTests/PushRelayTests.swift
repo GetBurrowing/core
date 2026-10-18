@@ -66,7 +66,7 @@ final class PushRelayTests: XCTestCase {
     func testAnotherInstallHostAsAADDoesNotOpen() throws {
         let f = try fixture()
         XCTAssertNotNil(PushSeal.open(f.sealed, installHost: f.host, key: f.privateKey), "positive control")
-        XCTAssertNil(PushSeal.open(f.sealed, installHost: "suite-a.localhost", key: f.privateKey))
+        XCTAssertNil(PushSeal.open(f.sealed, installHost: "burrow-a.localhost", key: f.privateKey))
         XCTAssertNil(PushSeal.open(f.sealed, installHost: f.host, key: Curve25519.KeyAgreement.PrivateKey()))
         XCTAssertNil(PushSeal.open("not base64!", installHost: f.host, key: f.privateKey))
     }
@@ -113,7 +113,7 @@ final class PushRelayTests: XCTestCase {
         XCTAssertEqual(out.title, "Dana in launch")
         XCTAssertEqual(out.body, "@Robin can you check the deck before 3?")
         XCTAssertEqual(out.categoryIdentifier, "BURROW_MENTION")
-        XCTAssertEqual(out.threadIdentifier, "suite-b.localhost:\(f.inner["thread_id"]!)", "the NSE adds the host prefix")
+        XCTAssertEqual(out.threadIdentifier, "\(f.host):\(f.inner["thread_id"]!)", "the NSE adds the host prefix")
         XCTAssertEqual(out.userInfo["space_id"] as? String, f.inner["space_id"])
         XCTAssertEqual(out.userInfo["url"] as? String, f.inner["url"])
         XCTAssertEqual(out.userInfo["install_host"] as? String, f.host)
@@ -134,20 +134,20 @@ final class PushRelayTests: XCTestCase {
 
     func testAWrongInstallHostGetsTheFallbackCopyNeverCiphertext() throws {
         let f = try fixture()
-        let (prep, _) = preparer(key: f.privateKey, hosts: [f.host, "suite-a.localhost"])
+        let (prep, _) = preparer(key: f.privateKey, hosts: [f.host, "burrow-a.localhost"])
 
-        // The blob was sealed for suite-b; a relay that moved it to suite-a.
-        let out = prep.prepare(relayed(host: "suite-a.localhost", sealed: f.sealed))
+        // The blob was sealed for the fixture's host; a relay that moved it to burrow-a.
+        let out = prep.prepare(relayed(host: "burrow-a.localhost", sealed: f.sealed))
 
-        XCTAssertEqual(out.body, "New message in SUITE-A")
+        XCTAssertEqual(out.body, "New message in BURROW-A")
         XCTAssertFalse(out.body.contains(f.sealed.prefix(12)))
         XCTAssertFalse(out.body.isEmpty)
     }
 
     func testANullSealedGetsTheFallbackCopy() throws {
-        let (prep, _) = preparer(key: nil, hosts: ["suite-b.localhost"])
-        let out = prep.prepare(relayed(host: "suite-b.localhost", sealed: nil))
-        XCTAssertEqual(out.body, "New message in SUITE-B")
+        let (prep, _) = preparer(key: nil, hosts: ["burrow-b.localhost"])
+        let out = prep.prepare(relayed(host: "burrow-b.localhost", sealed: nil))
+        XCTAssertEqual(out.body, "New message in BURROW-B")
     }
 
     func testAKeylessDeviceGetsTheFallbackCopy() throws {
@@ -157,13 +157,13 @@ final class PushRelayTests: XCTestCase {
     }
 
     func testADirectPushKeepsItsTextAndStillRecordsTheCount() {
-        let (prep, unread) = preparer(key: nil, hosts: ["suite-c.localhost"])
+        let (prep, unread) = preparer(key: nil, hosts: ["burrow-c.localhost"])
         let content = UNMutableNotificationContent()
         content.title = "Dana in launch"
         content.body = "direct path check"
-        content.threadIdentifier = "suite-c.localhost:s1"
+        content.threadIdentifier = "burrow-c.localhost:s1"
         content.userInfo = [
-            "kind": "chat_mention", "install_host": "suite-c.localhost", "unread_count": 2,
+            "kind": "chat_mention", "install_host": "burrow-c.localhost", "unread_count": 2,
             "unread_as_of": "2026-10-10T15:00:00Z",
         ]
 
@@ -171,23 +171,23 @@ final class PushRelayTests: XCTestCase {
 
         XCTAssertEqual(out.title, "Dana in launch")
         XCTAssertEqual(out.body, "direct path check")
-        XCTAssertEqual(out.threadIdentifier, "suite-c.localhost:s1")
-        XCTAssertEqual(unread.entry(for: "suite-c.localhost")?.count, 2)
+        XCTAssertEqual(out.threadIdentifier, "burrow-c.localhost:s1")
+        XCTAssertEqual(unread.entry(for: "burrow-c.localhost")?.count, 2)
         XCTAssertEqual(out.badge, 2)
     }
 
     func testTheBadgeIsTheSumAcrossInstalls() {
-        let (prep, unread) = preparer(key: nil, hosts: ["suite-a.localhost", "suite-b.localhost"])
-        unread.write(count: 2, asOf: Date(timeIntervalSince1970: 100), for: "suite-a.localhost")
+        let (prep, unread) = preparer(key: nil, hosts: ["burrow-a.localhost", "burrow-b.localhost"])
+        unread.write(count: 2, asOf: Date(timeIntervalSince1970: 100), for: "burrow-a.localhost")
 
-        let out = prep.prepare(relayed(host: "suite-b.localhost", sealed: nil, count: 3))
+        let out = prep.prepare(relayed(host: "burrow-b.localhost", sealed: nil, count: 3))
 
         XCTAssertEqual(out.badge, 5)
     }
 
     func testTheSubtitleNamesTheInstallOnlyWithTwoSignedIn() throws {
         let f = try fixture()
-        let hosts = [f.host, "suite-a.localhost"]
+        let hosts = [f.host, "burrow-a.localhost"]
 
         let (one, _) = preparer(key: f.privateKey, hosts: hosts, signedIn: [f.host])
         XCTAssertEqual(one.prepare(relayed(host: f.host, sealed: f.sealed)).subtitle, "")
@@ -209,16 +209,16 @@ final class PushRelayTests: XCTestCase {
     }
 
     func testTheTotalExcludesARemovedInstall() {
-        let installs = installsStore(["suite-a.localhost", "suite-b.localhost"])
+        let installs = installsStore(["burrow-a.localhost", "burrow-b.localhost"])
         let store = InstallUnreadStore(defaults: defaults)
-        store.write(count: 2, asOf: Date(), for: "suite-a.localhost")
-        store.write(count: 3, asOf: Date(), for: "suite-b.localhost")
+        store.write(count: 2, asOf: Date(), for: "burrow-a.localhost")
+        store.write(count: 3, asOf: Date(), for: "burrow-b.localhost")
         XCTAssertEqual(store.total, 5)
 
-        installs.remove(host: "suite-b.localhost")
+        installs.remove(host: "burrow-b.localhost")
 
         XCTAssertEqual(store.total, 2)
-        XCTAssertNil(store.entry(for: "suite-b.localhost"), "removal clears the entry")
+        XCTAssertNil(store.entry(for: "burrow-b.localhost"), "removal clears the entry")
     }
 
     func testAnEntryForAHostNotSavedNeverCounts() {
@@ -243,15 +243,15 @@ final class PushRelayTests: XCTestCase {
     func testInstallBadgesIsFalseWhenOnlyTheCurrentInstallHasUnread() {
         let store = InstallUnreadStore(defaults: defaults, hosts: { ["a", "b"] })
         store.write(count: 4, asOf: Date(), for: "a")
-        XCTAssertFalse(SuiteNativePlugin.othersUnread(store: store, selectedHost: "a"))
-        XCTAssertTrue(SuiteNativePlugin.othersUnread(store: store, selectedHost: "b"))
+        XCTAssertFalse(BurrowNativePlugin.othersUnread(store: store, selectedHost: "a"))
+        XCTAssertTrue(BurrowNativePlugin.othersUnread(store: store, selectedHost: "b"))
 
         store.write(count: 0, asOf: Date().addingTimeInterval(10), for: "a")
-        XCTAssertFalse(SuiteNativePlugin.othersUnread(store: store, selectedHost: "b"), "zero is not unread")
+        XCTAssertFalse(BurrowNativePlugin.othersUnread(store: store, selectedHost: "b"), "zero is not unread")
     }
 
     func testInstallBadgesIsARegisteredBridgeMethod() {
-        XCTAssertTrue(SuiteNativePlugin().pluginMethods.contains { $0.name == "installBadges" })
+        XCTAssertTrue(BurrowNativePlugin().pluginMethods.contains { $0.name == "installBadges" })
     }
 
     // MARK: Picker pill
@@ -265,18 +265,18 @@ final class PushRelayTests: XCTestCase {
 
     @MainActor
     func testThePickerKeepsItsRowOrderAndLastCountsAcrossARefresh() {
-        let installs = installsStore(["suite-a.localhost", "suite-b.localhost"])
+        let installs = installsStore(["burrow-a.localhost", "burrow-b.localhost"])
         let store = InstallUnreadStore(defaults: defaults)
-        store.write(count: 3, asOf: Date(timeIntervalSince1970: 100), for: "suite-b.localhost")
+        store.write(count: 3, asOf: Date(timeIntervalSince1970: 100), for: "burrow-b.localhost")
         let model = InstallPickerModel(store: installs, unreadStore: store)
         let order = model.installs.map(\.host)
 
-        store.markStale("suite-b.localhost")
+        store.markStale("burrow-b.localhost")
         NotificationCenter.default.post(name: .burrowInstallBadgesChanged, object: nil)
 
         XCTAssertEqual(model.installs.map(\.host), order, "unread never reorders rows")
-        XCTAssertEqual(model.unread["suite-b.localhost"]?.count, 3)
-        XCTAssertEqual(model.unread["suite-b.localhost"]?.stale, true)
+        XCTAssertEqual(model.unread["burrow-b.localhost"]?.count, 3)
+        XCTAssertEqual(model.unread["burrow-b.localhost"]?.stale, true)
     }
 
     // MARK: UnreadReconciler
@@ -294,7 +294,7 @@ final class PushRelayTests: XCTestCase {
             hosts: ["a", "b"], store: store,
             fetch: { host, reply in
                 if host == "a" {
-                    reply(.success(SuiteCounts(approvals: 0, tasks: 0, fetchedAt: Date(), unread: 1, asOf: asOf)))
+                    reply(.success(BurrowCounts(approvals: 0, tasks: 0, fetchedAt: Date(), unread: 1, asOf: asOf)))
                 } else {
                     reply(.failure(Unreachable()))
                 }
@@ -322,7 +322,7 @@ final class PushRelayTests: XCTestCase {
             fetch: { _, reply in
                 reply(
                     .success(
-                        SuiteCounts(
+                        BurrowCounts(
                             approvals: 0, tasks: 0, fetchedAt: Date(), unread: 1, asOf: Date(timeIntervalSince1970: 100))))
             },
             completion: { _ in done.fulfill() })
@@ -367,7 +367,7 @@ final class PushRelayTests: XCTestCase {
         encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let counts = try decoder.decode(SuiteCounts.self, from: encoder.encode(Old()))
+        let counts = try decoder.decode(BurrowCounts.self, from: encoder.encode(Old()))
         XCTAssertNil(counts.unread)
         XCTAssertNil(counts.asOf)
     }
@@ -377,9 +377,9 @@ final class PushRelayTests: XCTestCase {
         StubURLProtocol.respond = { _ in
             (200, Data(#"{"approvals":1,"tasks":2,"unread":7,"as_of":"2026-10-10T15:00:00.5Z"}"#.utf8))
         }
-        let client = SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["x.test": "t"]))
+        let client = BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["x.test": "t"]))
         let done = expectation(description: "counts")
-        var got: SuiteCounts?
+        var got: BurrowCounts?
         client.counts(host: "x.test") {
             got = try? $0.get()
             done.fulfill()
@@ -424,7 +424,7 @@ final class PushRelayTests: XCTestCase {
 
         let done = expectation(description: "signed out")
         NativeSignOut(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: tokens), tokens: tokens,
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: tokens), tokens: tokens,
             appInstallID: "install-1", forgetPushKey: { forgotten.append($0) }
         ).run(host: host) { done.fulfill() }
         wait(for: [done], timeout: 5)
@@ -456,33 +456,33 @@ final class PushRelayTests: XCTestCase {
     /// recipients); `content.subtitle` is never drawn. Measured on the
     /// simulator: "Dana, launch · B, @Robin ..." (review round 2 evidence).
     func testTwoSignedInInstallsPutTheInstallInADrawnGroupName() throws {
-        let hosts = ["suite-a.localhost", "suite-b.localhost"]
+        let hosts = ["burrow-a.localhost", "burrow-b.localhost"]
         let (prep, _) = preparer(key: nil, hosts: hosts, signedIn: Set(hosts))
 
-        let space = try intent(prep, chatPush(host: "suite-b.localhost", space: "launch", author: "Dana"))
-        XCTAssertEqual(space.speakableGroupName?.spokenPhrase, "launch · SUITE-B")
+        let space = try intent(prep, chatPush(host: "burrow-b.localhost", space: "launch", author: "Dana"))
+        XCTAssertEqual(space.speakableGroupName?.spokenPhrase, "launch · BURROW-B")
         XCTAssertEqual(space.recipients?.count, 2, "iOS draws the group name only with more than one recipient")
         XCTAssertEqual(space.recipients?.filter(\.isMe).count, 1)
         XCTAssertEqual(space.recipients?.first?.displayName, "Dana")
 
-        let dm = try intent(prep, chatPush(host: "suite-b.localhost", space: "Cora", author: "Cora", kind: "chat_message"))
-        XCTAssertEqual(dm.speakableGroupName?.spokenPhrase, "Cora · SUITE-B", "a dm: <sender> · <install>")
+        let dm = try intent(prep, chatPush(host: "burrow-b.localhost", space: "Cora", author: "Cora", kind: "chat_message"))
+        XCTAssertEqual(dm.speakableGroupName?.spokenPhrase, "Cora · BURROW-B", "a dm: <sender> · <install>")
         XCTAssertEqual(dm.recipients?.count, 2)
         XCTAssertEqual(dm.sender?.displayName, "Cora", "the sender line is unchanged")
     }
 
     func testOneSignedInInstallKeepsTheIntentAsBefore() throws {
-        let hosts = ["suite-a.localhost", "suite-b.localhost"]
-        let (prep, _) = preparer(key: nil, hosts: hosts, signedIn: ["suite-b.localhost"])
+        let hosts = ["burrow-a.localhost", "burrow-b.localhost"]
+        let (prep, _) = preparer(key: nil, hosts: hosts, signedIn: ["burrow-b.localhost"])
 
-        let space = try intent(prep, chatPush(host: "suite-b.localhost", space: "launch", author: "Dana"))
+        let space = try intent(prep, chatPush(host: "burrow-b.localhost", space: "launch", author: "Dana"))
         XCTAssertEqual(space.speakableGroupName?.spokenPhrase, "launch")
         XCTAssertNil(space.recipients)
 
-        let dm = try intent(prep, chatPush(host: "suite-b.localhost", space: "Cora", author: "Cora", kind: "chat_message"))
+        let dm = try intent(prep, chatPush(host: "burrow-b.localhost", space: "Cora", author: "Cora", kind: "chat_message"))
         XCTAssertNil(dm.speakableGroupName)
         XCTAssertNil(dm.recipients)
-        XCTAssertNil(prep.prepare(chatPush(host: "suite-b.localhost", space: nil, author: "Cora")).userInfo["install_label"])
+        XCTAssertNil(prep.prepare(chatPush(host: "burrow-b.localhost", space: nil, author: "Cora")).userInfo["install_label"])
     }
 
     func testTheConversationNameRule() {
@@ -502,7 +502,7 @@ final class PushRelayTests: XCTestCase {
             return (200, Data(#"{"approvals":4,"tasks":5,"unread":\#(unread),"as_of":"2026-10-10T15:00:00Z"}"#.utf8))
         }
         let hosts = ["a.test", "b.test", "c.test"]
-        let client = SuiteAPIClient(
+        let client = BurrowAPIClient(
             session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: Dictionary(uniqueKeysWithValues: hosts.map { ($0, "t") })))
         let store = InstallUnreadStore(defaults: defaults, hosts: { hosts })
         let cache = CountsCache(defaults: defaults)
@@ -570,7 +570,7 @@ final class PushRelayTests: XCTestCase {
         let installs = installsStore([host])
         let store = InstallUnreadStore(defaults: defaults, hosts: { [host] })
         store.write(count: 3, asOf: Date(timeIntervalSince1970: 100), for: host)
-        let client = SuiteAPIClient(
+        let client = BurrowAPIClient(
             session: URLSession(configuration: .ephemeral), tokens: MemoryTokenStore(tokens: [host: "t"]))
 
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
@@ -597,9 +597,9 @@ final class PushRelayTests: XCTestCase {
 
     func testTheSwitchBannerShowsOnlyWhenTheInstallChanges() {
         XCTAssertEqual(SwitchBanner.message("B"), "Switched to B")
-        XCTAssertTrue(SwitchBanner.shouldShow(currentHost: "suite-a.localhost", targetHost: "suite-b.localhost"))
-        XCTAssertFalse(SwitchBanner.shouldShow(currentHost: "suite-b.localhost", targetHost: "Suite-B.localhost"))
-        XCTAssertFalse(SwitchBanner.shouldShow(currentHost: nil, targetHost: "suite-b.localhost"), "cold launch")
+        XCTAssertTrue(SwitchBanner.shouldShow(currentHost: "burrow-a.localhost", targetHost: "burrow-b.localhost"))
+        XCTAssertFalse(SwitchBanner.shouldShow(currentHost: "burrow-b.localhost", targetHost: "Burrow-B.localhost"))
+        XCTAssertFalse(SwitchBanner.shouldShow(currentHost: nil, targetHost: "burrow-b.localhost"), "cold launch")
         XCTAssertEqual(SwitchBanner.duration, 2)
     }
 }

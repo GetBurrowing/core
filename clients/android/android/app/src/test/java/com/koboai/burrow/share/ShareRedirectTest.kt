@@ -20,7 +20,7 @@ import java.io.ByteArrayInputStream
 /**
  * The share sheet on the real transport against a TLS MockWebServer.
  *
- * On 2026-10-10 suite.example.test began answering every path, the `/api/app` routes
+ * On 2026-10-10 burrow.example.test began answering every path, the `/api/app` routes
  * included, with a 302 to burrow.example.invalid. The transport never follows a
  * redirect, so `GET /api/app/spaces` failed, the sheet said "Couldn't load
  * your spaces", and because `upload_config` was only asked after the space
@@ -75,7 +75,7 @@ class ShareRedirectTest {
         assertEquals(ShareSheetModel.Phase.READY, m.phase)
         assertEquals(ShareSheetModel.Banner.INSTALL_MOVED, m.banner)
         assertEquals(
-            "This Suite moved to 127.0.0.1. Open Burrow, add 127.0.0.1 and sign in there, then share again.",
+            "This Burrow moved to 127.0.0.1. Open Burrow, add 127.0.0.1 and sign in there, then share again.",
             m.bannerText,
         )
         // Never reached the install: no limit is claimed, least of all the old "8 MB".
@@ -99,7 +99,7 @@ class ShareRedirectTest {
 
         assertEquals(ShareSheetModel.Banner.SPACES_FAILED, m.banner)
         assertEquals("10 MB", m.uploadConfig?.maxUploadLabel)
-        assertEquals("big.bin is 20 MB. This Suite accepts files up to 10 MB.", m.size.notice)
+        assertEquals("big.bin is 20 MB. This Burrow accepts files up to 10 MB.", m.size.notice)
         assertEquals(listOf("/api/app/spaces", "/api/app/upload_config"), List(install.requestCount) { install.takeRequest().path })
     }
 

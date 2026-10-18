@@ -15,7 +15,7 @@ import java.io.ByteArrayInputStream
  * max_upload_bytes it is refused with the server's label before any upload.
  */
 class LargeUploadTest {
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val space = ShareSpace("0192-s1", "design-review", "design-review", emptyList())
     private val oneGb = UploadConfig(1_000_000_000, "1 GB", 33_554_432, 8_000_000)
 
@@ -97,7 +97,7 @@ class LargeUploadTest {
     fun `over the server max is refused with the server's label`() {
         val big = file("quarterly-raw.mov", 1_153_433_600)
         val m = model(listOf(big), FakeClient(oneGb))
-        assertEquals("quarterly-raw.mov is 1.2 GB. This Suite accepts files up to 1 GB.", m.size.notice)
+        assertEquals("quarterly-raw.mov is 1.2 GB. This Burrow accepts files up to 1 GB.", m.size.notice)
         assertTrue(m.size.blocked)
         assertFalse(m.canSend)
     }
@@ -109,7 +109,7 @@ class LargeUploadTest {
         assertNull(raised.size.notice)
         assertEquals(listOf(big), raised.size.chunked)
         val lowered = model(listOf(file("clip.mov", 600_000_000)), FakeClient(UploadConfig(500_000_000, "500 MB", 1, 8_000_000)))
-        assertEquals("clip.mov is 600 MB. This Suite accepts files up to 500 MB.", lowered.size.notice)
+        assertEquals("clip.mov is 600 MB. This Burrow accepts files up to 500 MB.", lowered.size.notice)
     }
 
     @Test

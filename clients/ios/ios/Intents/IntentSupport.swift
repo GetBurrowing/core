@@ -69,7 +69,7 @@ struct LastMeetingSpaceStore {
 /// Everything an intent reaches outside itself. `current` is what the
 /// running intents and entity queries use; tests swap it.
 struct IntentEnvironment {
-    var client: SuiteAPIClient
+    var client: BurrowAPIClient
     var installs: InstallStore
     var sleeper: IntentSleeper
     var now: () -> Date
@@ -156,17 +156,17 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     static func from(_ error: Error, host: String, env: IntentEnvironment) -> Error {
         if error is IntentFailure || error is CancellationError { return error }
         switch error {
-        case SuiteAPIClient.Failure.notSignedIn,
-            SuiteAPIClient.Failure.status(401),
-            SuiteAPIClient.Failure.refused(status: 401, code: _):
+        case BurrowAPIClient.Failure.notSignedIn,
+            BurrowAPIClient.Failure.status(401),
+            BurrowAPIClient.Failure.refused(status: 401, code: _):
             return IntentFailure.signedOut
-        case SuiteAPIClient.Failure.status(404), SuiteAPIClient.Failure.refused(status: 404, code: _):
+        case BurrowAPIClient.Failure.status(404), BurrowAPIClient.Failure.refused(status: 404, code: _):
             return IntentFailure.notFound
-        case SuiteAPIClient.Failure.refused(status: 422, code: "agent_not_callable"):
+        case BurrowAPIClient.Failure.refused(status: 422, code: "agent_not_callable"):
             return IntentFailure.cannotCallAgents
-        case SuiteAPIClient.Failure.refused(status: 422, code: "too_many_invitees"):
+        case BurrowAPIClient.Failure.refused(status: 422, code: "too_many_invitees"):
             return IntentFailure.tooManyInvitees
-        case SuiteAPIClient.Failure.refused(status: 422, code: "no_project"):
+        case BurrowAPIClient.Failure.refused(status: 422, code: "no_project"):
             return IntentFailure.noProject(install: env.installName(host))
         default:
             return IntentFailure.unreachable(install: env.installName(host))
@@ -321,7 +321,7 @@ final class SystemSearchableIndex: SearchableIndexStore {
 /// (task 01a111bb stage 7): an index refresh still in flight when the person
 /// signs out must not put that install's people back after the delete.
 ///
-/// Round 8 (a test iPad, iOS 27.0.1, 2026-10-14): after the suite-exp
+/// Round 8 (a test iPad, iOS 27.0.1, 2026-10-14): after the exp
 /// install was removed, Siri still found its people, hydration of them
 /// failed ("Entity hydration failed") and the send broke. The domain delete
 /// alone did not take them out of what Siri searches: an item built with

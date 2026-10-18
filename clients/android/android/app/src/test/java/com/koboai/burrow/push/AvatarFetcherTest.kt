@@ -70,13 +70,13 @@ class AvatarFetcherTest {
 
     @Test(timeout = 10_000)
     fun `a url on any other host gets no Authorization header at all`() {
-        // The install is suite.example.com and holds a bearer; the picture is
+        // The install is burrow.example.com and holds a bearer; the picture is
         // an OIDC url somewhere else.
-        tokens.store("suite.example.com", bearer)
+        tokens.store("burrow.example.com", bearer)
         tokens.store(avatars.authority, "a-bearer-for-another-install")
         avatars.server.enqueue(image())
 
-        assertNotNull(fetcher().fetch(avatars.url("/idp/face.png"), "suite.example.com"))
+        assertNotNull(fetcher().fetch(avatars.url("/idp/face.png"), "burrow.example.com"))
 
         assertNull(avatars.server.takeRequest().getHeader("Authorization"))
     }

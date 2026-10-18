@@ -6,13 +6,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     static let switchInstallShortcut = "com.kobo-ai.burrow.switch-install"
 
     var window: UIWindow?
-    private var bridge: SuiteBridgeViewController? { window?.rootViewController as? SuiteBridgeViewController }
+    private var bridge: BurrowBridgeViewController? { window?.rootViewController as? BurrowBridgeViewController }
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         let window = UIWindow(windowScene: windowScene)
-        let shell = SuiteBridgeViewController()
+        let shell = BurrowBridgeViewController()
         // Cold launch from the quick action: open on the picker.
         shell.startOnPicker = connectionOptions.shortcutItem?.type == Self.switchInstallShortcut
         window.rootViewController = shell
@@ -67,7 +67,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             // `burrow://debug/push-key?host=`: a sealed-preview key for a test push.
             if urlContexts.contains(where: { DebugPushKeySeam.handle(url: $0.url) }) { return }
         #endif
-        // `burrow://open?...` is a widget deep link (SuiteBridgeViewController
+        // `burrow://open?...` is a widget deep link (BurrowBridgeViewController
         // opens it); anything else is Capacitor's.
         if let link = urlContexts.lazy.compactMap({ DeepLink(url: $0.url) }).first {
             bridge?.open(link)

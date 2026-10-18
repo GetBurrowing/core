@@ -22,7 +22,7 @@ import org.junit.Test
 import java.io.IOException
 
 class PushRegistrarTest {
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val bearer = "tok_live_bearer_9f8e7d"
     private val fcm = "fcm-instance-id-0123456:APA91bFakeTokenBodyForTests"
     private val tokens = KeystoreTokenStore(InMemoryKeyValueStore(), FakeTokenCipher())

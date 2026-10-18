@@ -57,7 +57,7 @@ final class ShortcutParameterRefreshTests: XCTestCase {
         for host in [a, b] { store.add(host: host) }
         store.select(a)
         return IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
             installs: store, sleeper: VirtualClock(), now: { Date(timeIntervalSince1970: 3_000_000) },
             lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }

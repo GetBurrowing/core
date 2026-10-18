@@ -9,7 +9,7 @@ import Foundation
 //
 // Rules this file keeps:
 // - ONLY actions the person took by hand in Burrow's UI are donated: a
-//   message sent or a task approved in the web view (the SuiteNative.donate
+//   message sent or a task approved in the web view (the `SuiteNative.donate`
 //   bridge), a call started or answered, a notification reply, a space or
 //   task opened, and the agent of an Ask. Intent runs (Siri, Shortcuts) are
 //   NOT re-donated: the system already knows about them.

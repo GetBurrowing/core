@@ -32,7 +32,7 @@ import java.util.concurrent.Executors
 
 /**
  * The shell: Capacitor's bridge around the selected install's web UI.
- * Mirrors iOS `SuiteBridgeViewController`.
+ * Mirrors iOS `BurrowBridgeViewController`.
  *
  * - edge to edge: the WebView draws under transparent system bars and the
  *   web UI pads itself with `env(safe-area-inset-*)` (`viewport-fit=cover`
@@ -84,7 +84,7 @@ class MainActivity :
         pickerReturn = PickerReturn(store)
         tokens = KeystoreTokenStore(SharedPreferencesStore(this, KeystoreTokenStore.PREFS_FILE), AndroidKeyStoreCipher())
         client = AppApiClient(tokens)
-        registerPlugin(SuiteNativePlugin::class.java)
+        registerPlugin(BurrowNativePlugin::class.java)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
@@ -206,7 +206,7 @@ class MainActivity :
     /** The counts may have changed: the page's switcher dot re-queries, an open picker redraws. */
     private fun installBadgesChanged() {
         if (!started || isDestroyed) return
-        bridge?.triggerWindowJSEvent(SuiteNativePlugin.BADGES_EVENT)
+        bridge?.triggerWindowJSEvent(BurrowNativePlugin.BADGES_EVENT)
         picker?.refreshUnread()
     }
 

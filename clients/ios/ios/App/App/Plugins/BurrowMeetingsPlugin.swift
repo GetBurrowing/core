@@ -42,15 +42,17 @@ struct MeetingMediaSnapshot: Equatable {
 
 /// `SuiteMeetings` (task 01a10db7 stage 3): the web UI hands a meeting join
 /// to the native call. Registered beside `SuiteNative` in
-/// `SuiteBridgeViewController.capacitorDidLoad`.
+/// `BurrowBridgeViewController.capacitorDidLoad`.
 ///
 /// `meeting_client.js` calls `join({meetingId})` INSTEAD of building its own
 /// LiveKit `Room`: both would join as the same `user:<id>` identity, kick
 /// each other out, and play the call twice. `callEnded` tells the page the
 /// native call is over so it can push the same `meeting_left` its own
 /// Disconnected handler pushes.
-public class SuiteMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
-    public let identifier = "SuiteMeetingsPlugin"
+public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "BurrowMeetingsPlugin"
+    // The JS-facing wire name stays `SuiteMeetings`, as `SuiteNative` does
+    // (docs/runbooks/burrow-rename-deferred.md).
     public let jsName = "SuiteMeetings"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "join", returnType: CAPPluginReturnPromise),
@@ -68,7 +70,7 @@ public class SuiteMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
     /// How long `setMuted` waits for the SDK's confirmation.
     static let muteTimeout: TimeInterval = 5
 
-    weak var shell: SuiteBridgeViewController?
+    weak var shell: BurrowBridgeViewController?
     /// The native call. Injected by tests.
     var media: @MainActor () -> any MeetingMediaControl = { CallController.shared }
     private var stateObserver: AnyCancellable?

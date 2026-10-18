@@ -31,7 +31,7 @@ struct WaitingSummary: Equatable {
         IntentCopy.waiting(approvals: approvals, tasks: tasks, firstTitle: rows.first?.title)
     }
 
-    init(approvals: [(id: String, approval: SuiteApproval)], tasks: [SuiteTask]) {
+    init(approvals: [(id: String, approval: BurrowApproval)], tasks: [BurrowTask]) {
         let all =
             approvals.map { item in
                 Row(kind: item.approval.isPlan ? .plan : .review, title: item.approval.title, space: item.approval.spaceName, approvalID: item.id)

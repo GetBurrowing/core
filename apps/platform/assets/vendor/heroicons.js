@@ -46,7 +46,7 @@ module.exports = plugin(function({matchComponents, theme}) {
   // fallback; ADR 0055 stage 4): a with-modules release host builds
   // this stylesheet with core as a path dependency, so the Heroicons dep sits
   // in the HOST's `deps/`, not in apps/platform/deps. The host's Tailwind
-  // profile (apps/suite_release/config/config.exs) passes its own path here.
+  // profile (apps/burrow_release/config/config.exs) passes its own path here.
   // Unset, the root is core's own deps, exactly as before. Without it the
   // with-Play image shipped no `hero-*` class from the vendored set at all,
   // silently: `existsSync` below skips a missing root.

@@ -44,7 +44,7 @@ final class CallAndMeetingTests: XCTestCase {
         var tokens: [String: String] = [:]
         for host in hosts { tokens[host] = "token-for-\(host)" }
         return IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
             installs: store, sleeper: clock, now: { clock.now }, lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }
 

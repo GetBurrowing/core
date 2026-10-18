@@ -9,11 +9,11 @@ import com.getcapacitor.JSExport
 import com.getcapacitor.MessageHandler
 
 /**
- * Gives the selected install's pages `window.Capacitor` and SuiteNative.
+ * Gives the selected install's pages `window.Capacitor` and the `SuiteNative` plugin.
  *
  * Capacitor Android injects its bridge only into its own origin
  * (`https://localhost`) and accepts plugin messages only from its allowed
- * origins, so a remote install would never see SuiteNative. Capacitor's
+ * origins, so a remote install would never see `SuiteNative`. Capacitor's
  * `server.allowNavigation` is not the answer: it routes those hosts through
  * Capacitor's local proxy, which re-issues every request. Instead, for
  * exactly ONE origin at a time, the current install:

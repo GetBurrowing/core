@@ -48,7 +48,11 @@ defmodule Platform.Federation.Peers.InstallIdentity do
   alias Platform.Repo
   alias Platform.Vault
 
+  # `protocol` stays the v1 id: a peer running core from before task 01a14ba9
+  # matches it EXACTLY and refuses anything else. `protocols` lists every id
+  # this install accepts, so a v2-aware peer can see v2 is understood here.
   @protocol "suite-federation/1"
+  @protocols ["suite-federation/1", "burrow-federation/2"]
   @alg "ed25519"
   @overlap_seconds 7 * 24 * 60 * 60
   @vault_slug_prefix "peer-federation-key-"
@@ -169,8 +173,9 @@ defmodule Platform.Federation.Peers.InstallIdentity do
   end
 
   @doc """
-  The public `/.well-known/suite-federation` document. Creates the identity
-  on first call. Contains public keys only.
+  The public federation descriptor, served at both
+  `/.well-known/suite-federation` and `/.well-known/burrow-federation`.
+  Creates the identity on first call. Contains public keys only.
   """
   @spec descriptor() :: map()
   def descriptor do
@@ -180,6 +185,7 @@ defmodule Platform.Federation.Peers.InstallIdentity do
 
     %{
       protocol: @protocol,
+      protocols: @protocols,
       install_id: install_id,
       display_name: display_name,
       base_url: base_url,
@@ -249,7 +255,10 @@ defmodule Platform.Federation.Peers.InstallIdentity do
 
     case Vault.put(slug, :keypair, private_key,
            scope: @vault_scope,
-           provider: "suite-federation",
+           # A display label only: nothing in lib/ looks a credential up by
+           # this provider value, so keys created before task 01a14ba9 keep
+           # "suite-federation" harmlessly.
+           provider: "burrow-federation",
            name: "Burrow federation signing key #{kid}",
            metadata: %{"kid" => kid, "fingerprint" => fingerprint, "alg" => @alg}
          ) do

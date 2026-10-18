@@ -9,7 +9,7 @@ final class MeetingAPITests: XCTestCase {
     }
 
     private func api(_ tokens: [String: String]) -> MeetingAPI {
-        MeetingAPI(client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)))
+        MeetingAPI(client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)))
     }
 
     private let joinJSON = Data(
@@ -50,7 +50,7 @@ final class MeetingAPITests: XCTestCase {
             _ = try await api([:]).join(host: "a.example.com", meetingID: "m1")
             XCTFail("expected notSignedIn")
         } catch {
-            XCTAssertEqual(error as? SuiteAPIClient.Failure, .notSignedIn)
+            XCTAssertEqual(error as? BurrowAPIClient.Failure, .notSignedIn)
         }
         XCTAssertEqual(StubURLProtocol.requests.count, 0)
     }

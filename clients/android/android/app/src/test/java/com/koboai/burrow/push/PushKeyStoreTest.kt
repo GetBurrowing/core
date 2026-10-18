@@ -22,23 +22,23 @@ class PushKeyStoreTest {
 
     @Test
     fun `a host's public key is made once, stable, and base64url without padding of 32 bytes`() {
-        val first = store.publicKey("suite-b.localhost")!!
-        assertEquals(first, store.publicKey("suite-b.localhost"))
+        val first = store.publicKey("burrow-b.localhost")!!
+        assertEquals(first, store.publicKey("burrow-b.localhost"))
         assertEquals(43, first.length)
         assertFalse(first.contains('=') || first.contains('+') || first.contains('/'))
         assertEquals(32, Base64.getUrlDecoder().decode(first).size)
-        assertEquals(first, PushKeyStore.base64Url(X25519.publicFromPrivate(store.privateKey("suite-b.localhost")!!)))
+        assertEquals(first, PushKeyStore.base64Url(X25519.publicFromPrivate(store.privateKey("burrow-b.localhost")!!)))
     }
 
     @Test
     fun `each install gets its own key`() {
-        assertNotEquals(store.publicKey("suite-a.localhost"), store.publicKey("suite-b.localhost"))
+        assertNotEquals(store.publicKey("burrow-a.localhost"), store.publicKey("burrow-b.localhost"))
     }
 
     @Test
     fun `the private key is stored encrypted, never as its own bytes`() {
-        store.publicKey("suite-b.localhost")
-        val key = store.privateKey("suite-b.localhost")!!
+        store.publicKey("burrow-b.localhost")
+        val key = store.privateKey("burrow-b.localhost")!!
         val raw = PushKeyStore.base64Url(key)
         val rawStd = Base64.getEncoder().encodeToString(key)
         prefs.keys().forEach { k ->
@@ -49,22 +49,22 @@ class PushKeyStoreTest {
 
     @Test
     fun `the host is the associated data, so a key moved to another host's entry does not open`() {
-        store.publicKey("suite-a.localhost")
-        val stolen = prefs.getString("pushkey.v1.suite-a.localhost")!!
-        prefs.putString("pushkey.v1.suite-b.localhost", stolen)
-        assertNull(store.privateKey("suite-b.localhost"))
+        store.publicKey("burrow-a.localhost")
+        val stolen = prefs.getString("pushkey.v1.burrow-a.localhost")!!
+        prefs.putString("pushkey.v1.burrow-b.localhost", stolen)
+        assertNull(store.privateKey("burrow-b.localhost"))
         // ...and the undecryptable entry is forgotten.
-        assertNull(prefs.getString("pushkey.v1.suite-b.localhost"))
-        assertNotNull(store.privateKey("suite-a.localhost"))
+        assertNull(prefs.getString("pushkey.v1.burrow-b.localhost"))
+        assertNotNull(store.privateKey("burrow-a.localhost"))
     }
 
     @Test
     fun `sign-out removes only that host's key`() {
-        store.publicKey("suite-a.localhost")
-        store.publicKey("suite-b.localhost")
-        store.remove("suite-a.localhost")
-        assertNull(store.privateKey("suite-a.localhost"))
-        assertNotNull(store.privateKey("suite-b.localhost"))
+        store.publicKey("burrow-a.localhost")
+        store.publicKey("burrow-b.localhost")
+        store.remove("burrow-a.localhost")
+        assertNull(store.privateKey("burrow-a.localhost"))
+        assertNotNull(store.privateKey("burrow-b.localhost"))
     }
 
     @Test
@@ -81,7 +81,7 @@ class PushKeyStoreTest {
                     aad: ByteArray,
                 ): ByteArray = throw java.security.KeyStoreException("no keystore")
             }
-        assertNull(PushKeyStore(InMemoryKeyValueStore(), refusing).publicKey("suite-b.localhost"))
+        assertNull(PushKeyStore(InMemoryKeyValueStore(), refusing).publicKey("burrow-b.localhost"))
     }
 
     @Test
@@ -93,7 +93,7 @@ class PushKeyStoreTest {
 
     @Test
     fun `toString names a count, never a key`() {
-        store.publicKey("suite-b.localhost")
+        store.publicKey("burrow-b.localhost")
         assertEquals("PushKeyStore(1 hosts)", store.toString())
     }
 }

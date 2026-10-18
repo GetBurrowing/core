@@ -43,7 +43,7 @@ retarget_island = fn name ->
 
   unless core_outdir in args do
     raise "core's esbuild #{name} profile no longer passes #{core_outdir}; " <>
-            "update apps/suite_release/config/config.exs to retarget it"
+            "update apps/burrow_release/config/config.exs to retarget it"
   end
 
   Keyword.merge(profile,

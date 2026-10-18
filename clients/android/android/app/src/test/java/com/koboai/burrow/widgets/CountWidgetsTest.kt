@@ -15,7 +15,7 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class CountWidgetsTest {
     private val now = 1_800_000_000_000L
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val live = CountsEntry(now, host, signedIn = true, counts = Counts(3, 12, now))
     private val signedOut = CountsEntry(now, host, signedIn = false, counts = null)
     private val stale = CountsEntry(now, host, signedIn = true, counts = Counts(3, 12, now - 31 * 60_000L))

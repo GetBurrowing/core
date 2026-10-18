@@ -3,7 +3,7 @@ defmodule Platform.Social.RuntimeConfig do
   Social's runtime settings, read from the OS environment at boot by
   `Platform.Social.Application.start/2` (ADR 0055 section 8, task 01a14722).
 
-  Not a `config/runtime.exs` block: the prod image is `apps/suite_release`,
+  Not a `config/runtime.exs` block: the prod image is `apps/burrow_release`,
   whose release runs core's `config/runtime.exs`, and core never names
   Social. A module reads its own env in its own `Application.start/2`, the
   way Play does (`Platform.GameStream.RuntimeConfig`).

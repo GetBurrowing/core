@@ -34,7 +34,7 @@ struct MeetingJoin: Decodable, Equatable, CustomStringConvertible, CustomDebugSt
     var debugDescription: String { description }
 }
 
-/// The native meeting routes, on `SuiteAPIClient`'s per-host bearer.
+/// The native meeting routes, on `BurrowAPIClient`'s per-host bearer.
 struct MeetingAPI {
     enum Failure: Error, Equatable {
         /// 404: no such meeting, or not one this person may join.
@@ -48,21 +48,21 @@ struct MeetingAPI {
         case other(status: Int)
     }
 
-    var client: SuiteAPIClient = .shared
+    var client: BurrowAPIClient = .shared
 
     func join(host: String, meetingID: String) async throws -> MeetingJoin {
-        let path = "/api/app/meetings/\(SuiteAPIClient.segment(meetingID))/join"
+        let path = "/api/app/meetings/\(BurrowAPIClient.segment(meetingID))/join"
         let response = try await client.send(host: host, path: path, method: "POST", json: [:])
         guard response.isSuccess else { throw Self.failure(response) }
         do {
             return try JSONDecoder().decode(MeetingJoin.self, from: response.data)
         } catch {
-            throw SuiteAPIClient.Failure.badResponse
+            throw BurrowAPIClient.Failure.badResponse
         }
     }
 
     func leave(host: String, meetingID: String) async throws {
-        let path = "/api/app/meetings/\(SuiteAPIClient.segment(meetingID))/leave"
+        let path = "/api/app/meetings/\(BurrowAPIClient.segment(meetingID))/leave"
         let response = try await client.send(host: host, path: path, method: "POST", json: [:])
         guard response.isSuccess else { throw Self.failure(response) }
     }
@@ -76,7 +76,7 @@ struct MeetingAPI {
         do {
             return try JSONDecoder().decode(RingStatus.self, from: response.data)
         } catch {
-            throw SuiteAPIClient.Failure.badResponse
+            throw BurrowAPIClient.Failure.badResponse
         }
     }
 
@@ -88,9 +88,9 @@ struct MeetingAPI {
         guard response.isSuccess else { throw Self.failure(response) }
     }
 
-    static func ringPath(_ ringID: String) -> String { "/api/app/rings/\(SuiteAPIClient.segment(ringID))" }
+    static func ringPath(_ ringID: String) -> String { "/api/app/rings/\(BurrowAPIClient.segment(ringID))" }
 
-    static func failure(_ response: SuiteAPIClient.Response) -> Failure {
+    static func failure(_ response: BurrowAPIClient.Response) -> Failure {
         switch (response.status, response.errorCode) {
         case (404, _): return .notFound
         case (409, "meeting_over"): return .meetingOver

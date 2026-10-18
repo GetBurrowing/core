@@ -127,6 +127,7 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
         {"GET", "/mcp"},
         # peer-install descriptor and inbox, called by other installs (task 01a0d90f)
         {"GET", "/.well-known/suite-federation"},
+        {"GET", "/.well-known/burrow-federation"},
         {"POST", "/federation/v1/inbox"}
       ]
 
@@ -149,6 +150,7 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
             {"GET", "/auth/oidc/callback"},
             {"POST", "/api/webhooks/livekit"},
             {"GET", "/.well-known/suite-federation"},
+            {"GET", "/.well-known/burrow-federation"},
             {"POST", "/federation/v1/inbox"}
           ] do
         info = Phoenix.Router.route_info(Router, verb, path, @chat_host)

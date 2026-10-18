@@ -70,7 +70,7 @@ final class AvatarStubProtocol: URLProtocol {
 /// in-app colours and opaque flatten, and the extension's exactly-once
 /// delivery.
 final class AvatarTests: XCTestCase {
-    private let host = "suite.example.com"
+    private let host = "burrow.example.com"
     private let bearer = "tok_live_bearer_9f8e7d"
     private var cache: URL!
     private var now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -138,11 +138,11 @@ final class AvatarTests: XCTestCase {
     }
 
     func testTheSameNameOnAnotherPortIsAnotherHost() {
-        XCTAssertTrue(AvatarFetcher.sameHost(URL(string: "https://SUITE.example.com/a")!, host))
-        XCTAssertTrue(AvatarFetcher.sameHost(URL(string: "https://suite.example.com:443/a")!, host))
-        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://suite.example.com:8443/a")!, host))
-        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://suite.example.com.evil.example/a")!, host))
-        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://suite.example.com/a")!, nil))
+        XCTAssertTrue(AvatarFetcher.sameHost(URL(string: "https://BURROW.example.com/a")!, host))
+        XCTAssertTrue(AvatarFetcher.sameHost(URL(string: "https://burrow.example.com:443/a")!, host))
+        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://burrow.example.com:8443/a")!, host))
+        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://burrow.example.com.evil.example/a")!, host))
+        XCTAssertFalse(AvatarFetcher.sameHost(URL(string: "https://burrow.example.com/a")!, nil))
     }
 
     func testARedirectIsNotFollowedAndItsTargetSeesNothing() async {

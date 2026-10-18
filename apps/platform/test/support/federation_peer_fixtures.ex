@@ -105,6 +105,38 @@ defmodule Platform.FederationPeerFixtures do
     {raw, headers}
   end
 
+  @doc """
+  The same envelope as `envelope/4`, signed under `burrow-federation/2`
+  (task 01a14ba9 stage 1): the signature covers the v2 prefix and travels in
+  the v2 header ONLY. The body is the builder's, byte for byte. A `:signer`
+  in `opts` signs the v2 signature too.
+  """
+  def envelope_v2(remote, type, payload \\ %{}, opts \\ []) do
+    {raw, headers} = envelope(remote, type, payload, opts)
+    {_kid, private_key} = Keyword.get(opts, :signer, {remote.kid, remote.private_key})
+    {raw, sign_headers(headers, raw, private_key, :v2)}
+  end
+
+  @doc """
+  `headers` with every signature header removed and one signature over
+  `raw` under `version` (`:v1` or `:v2`) added in that version's header.
+  """
+  def sign_headers(headers, raw, private_key, version) do
+    value =
+      (Envelope.signing_prefix(version) <> raw)
+      |> Ed25519.sign(private_key)
+      |> Base.url_encode64(padding: false)
+
+    headers
+    |> List.keydelete(Envelope.signature_header(:v1), 0)
+    |> List.keydelete(Envelope.signature_header(:v2), 0)
+    |> List.keystore(
+      Envelope.signature_header(version),
+      0,
+      {Envelope.signature_header(version), value}
+    )
+  end
+
   @doc "The `relationship.propose` payload `remote` would send."
   def propose_payload(remote, overrides \\ %{}) do
     Map.merge(
@@ -134,15 +166,31 @@ defmodule Platform.FederationPeerFixtures do
     )
   end
 
-  @doc "Signature header value of a header list."
-  def signature(headers) do
-    {_, value} = List.keyfind(headers, Envelope.signature_header(), 0)
+  @doc "Signature header value of a header list (`version` `:v1` default, or `:v2`)."
+  def signature(headers, version \\ :v1) do
+    {_, value} = List.keyfind(headers, Envelope.signature_header(version), 0)
     value
   end
 
-  @doc "Replaces the signature header."
-  def with_signature(headers, value) do
-    List.keystore(headers, Envelope.signature_header(), 0, {Envelope.signature_header(), value})
+  @doc "Replaces (or adds) the signature header of `version` (`:v1` default, or `:v2`)."
+  def with_signature(headers, value, version \\ :v1) do
+    header = Envelope.signature_header(version)
+    List.keystore(headers, header, 0, {header, value})
+  end
+
+  @doc """
+  Stores `protocols` as what `peer` advertised (`metadata["protocols"]`,
+  task 01a14ba9 stage 2) and returns the updated row.
+  """
+  def advertise!(peer, protocols) do
+    {:ok, peer} =
+      peer
+      |> Platform.Federation.Peers.Peer.update_changeset(%{
+        metadata: Map.put(peer.metadata || %{}, "protocols", protocols)
+      })
+      |> Platform.Repo.update()
+
+    peer
   end
 
   @doc "Resolve every host in `map` statically (host => [ip tuple]) for this test."

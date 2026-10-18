@@ -81,7 +81,7 @@ final class RingCenter: IncomingVoIPHandling {
     var server: RingServing = MeetingAPI()
     /// Whether this install holds a bearer for `host`.
     var knowsInstall: (String) -> Bool = { host in
-        InstallStore.shared.installs.contains { $0.host == host } && SuiteAPIClient.shared.isSignedIn(host: host)
+        InstallStore.shared.installs.contains { $0.host == host } && BurrowAPIClient.shared.isSignedIn(host: host)
     }
     /// Whether a native call is already up.
     var isBusy: () -> Bool = { CallController.shared.meetingID != nil }
@@ -256,7 +256,7 @@ final class RingCenter: IncomingVoIPHandling {
         rings[uuid] = ring
         guard let payload = ring.payload else { return }
         if ring.inApp { clearIncoming(payload.ringID) }
-        let endTask = backgroundTask("suite.ring.decline")
+        let endTask = backgroundTask("burrow.ring.decline")
         track {
             try? await self.server.transition(host: payload.installHost, ringID: payload.ringID, to: .decline)
             endTask()
@@ -271,7 +271,7 @@ final class RingCenter: IncomingVoIPHandling {
         reporter?.reportEnded(uuid: uuid, reason: .unanswered)
         guard let payload = ring.payload else { return }
         if ring.inApp { clearIncoming(payload.ringID) }
-        let endTask = backgroundTask("suite.ring.missed")
+        let endTask = backgroundTask("burrow.ring.missed")
         track {
             try? await self.server.transition(host: payload.installHost, ringID: payload.ringID, to: .missed)
             endTask()
@@ -290,7 +290,7 @@ final class RingCenter: IncomingVoIPHandling {
 
     /// "Not now": the inviter hears it as a decline.
     func declineWaiting(_ invite: RingInvite) {
-        let endTask = backgroundTask("suite.ring.decline")
+        let endTask = backgroundTask("burrow.ring.decline")
         track {
             try? await self.server.transition(host: invite.installHost, ringID: invite.ringID, to: .decline)
             endTask()

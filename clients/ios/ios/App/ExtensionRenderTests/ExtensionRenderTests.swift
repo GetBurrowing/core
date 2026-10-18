@@ -66,14 +66,14 @@ final class ExtensionRenderTests: XCTestCase {
     // MARK: Share sheet
 
     private func sheet(_ configure: (ShareSheetModel) -> Void) -> some View {
-        let model = ShareSheetModel(install: Install(host: "suite.example.net"))
+        let model = ShareSheetModel(install: Install(host: "burrow.example.net"))
         configure(model)
         return ShareSheetView(model: model, onCancel: {}, onDone: {})
     }
 
     private let spaces = [
         try! JSONDecoder().decode(
-            SuiteSpace.self,
+            BurrowSpace.self,
             from: Data(
                 """
                 {"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel","agents":[{"id":"a1","name":"Saru","slug":"saru"}]}
@@ -171,14 +171,14 @@ final class ExtensionRenderTests: XCTestCase {
     }
 
     /// The share extension as the system presents it on iPad: a form sheet
-    /// of `SuiteLayout.sheetWidth` x 620 centred over the host app.
+    /// of `BurrowLayout.sheetWidth` x 620 centred over the host app.
     private func shareFormSheet<V: View>(_ sheet: V, in size: CGSize) -> some View {
         ZStack {
-            SuiteColor.surfaceMuted.color
+            BurrowColor.surfaceMuted.color
             sheet
                 .environment(\.horizontalSizeClass, .regular)
-                .frame(width: SuiteLayout.sheetWidth, height: 620)
-                .clipShape(RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous))
+                .frame(width: BurrowLayout.sheetWidth, height: 620)
+                .clipShape(RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous))
         }
         .frame(width: size.width, height: size.height)
     }
@@ -214,16 +214,16 @@ final class ExtensionRenderTests: XCTestCase {
 
     private func entry(approvals: Int, tasks: Int, minutesOld: Double = 2, signedIn: Bool = true) -> CountsEntry {
         CountsEntry(
-            date: now, host: "suite.example.net", signedIn: signedIn,
-            counts: SuiteCounts(approvals: approvals, tasks: tasks, fetchedAt: now.addingTimeInterval(-minutesOld * 60)))
+            date: now, host: "burrow.example.net", signedIn: signedIn,
+            counts: BurrowCounts(approvals: approvals, tasks: tasks, fetchedAt: now.addingTimeInterval(-minutesOld * 60)))
     }
 
     private func widgetFrame<V: View>(_ view: V) -> some View {
         view
-            .background(SuiteColor.surface.color)
+            .background(BurrowColor.surface.color)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .padding(12)
-            .background(SuiteColor.surfaceMuted.color)
+            .background(BurrowColor.surfaceMuted.color)
     }
 
     func testSmallWidgetStates() throws {
@@ -285,7 +285,7 @@ final class ExtensionRenderTests: XCTestCase {
             VStack(alignment: .leading, spacing: 0) {
                 Text(dialog)
                     .font(.body)
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .padding([.horizontal, .top], 16)
                 snippet
             }
@@ -296,10 +296,10 @@ final class ExtensionRenderTests: XCTestCase {
 
     func testSiriSnippets() throws {
         let size = CGSize(width: 402, height: 520)
-        func row(_ n: Int, _ title: String, _ space: String) -> (id: String, approval: SuiteApproval) {
+        func row(_ n: Int, _ title: String, _ space: String) -> (id: String, approval: BurrowApproval) {
             (
-                "suite.example.net|ap\(n)",
-                SuiteApproval(
+                "burrow.example.net|ap\(n)",
+                BurrowApproval(
                     id: "ap\(n)", kind: n == 1 ? "plan" : "review", title: title, spaceName: space, spacePathSegment: nil, taskID: nil,
                     insertedAt: nil, summary: nil)
             )
@@ -307,8 +307,8 @@ final class ExtensionRenderTests: XCTestCase {
         let summary = WaitingSummary(
             approvals: [row(1, "Burrow iOS intents plan", "Burrow iOS"), row(2, "Banner copy review", "Internal Legacy SXI")],
             tasks: [
-                SuiteTask(id: "t1", title: "Ship the widget confirm strip", status: "in_progress", projectName: "Burrow iOS"),
-                SuiteTask(id: "t2", title: "Rotate the APNs key", status: "todo", projectName: "Infrastructure"),
+                BurrowTask(id: "t1", title: "Ship the widget confirm strip", status: "in_progress", projectName: "Burrow iOS"),
+                BurrowTask(id: "t2", title: "Rotate the APNs key", status: "todo", projectName: "Infrastructure"),
             ])
         try snapshot(
             "snippet-whats-waiting",
@@ -317,8 +317,8 @@ final class ExtensionRenderTests: XCTestCase {
                 WaitingSnippetView(summary: summary) { row in
                     if row.approvalID != nil {
                         HStack(spacing: 8) {
-                            Button("Approve") {}.buttonStyle(SuiteApproveButtonStyle())
-                            Button("Reject") {}.buttonStyle(SuiteRejectButtonStyle())
+                            Button("Approve") {}.buttonStyle(BurrowApproveButtonStyle())
+                            Button("Reject") {}.buttonStyle(BurrowRejectButtonStyle())
                         }
                     }
                 }), size: size)
@@ -335,8 +335,8 @@ final class ExtensionRenderTests: XCTestCase {
         try snapshot(
             "snippet-approve-confirm-multi-install",
             siriCard(
-                dialog: IntentCopy.approveConfirm(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Suite"),
-                ConfirmSnippetView.approve(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Suite")),
+                dialog: IntentCopy.approveConfirm(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Burrow"),
+                ConfirmSnippetView.approve(isPlan: true, title: "Burrow iOS: App Intents", space: "Burrow iOS", install: "Legacy Burrow")),
             size: CGSize(width: 402, height: 340))
         let question = "Is the banner copy final?"
         try snapshot(
@@ -367,11 +367,11 @@ final class ExtensionRenderTests: XCTestCase {
             ("Meeting notes export", "Meetings", "Export transcripts as Markdown"),
             ("Quota alerts", "Control", "Warn at 80 percent of the monthly budget"),
         ]
-        let host = "suite.example.net"
+        let host = "burrow.example.net"
         let all = displays + Array(repeating: ApprovalsEntry.Display.live, count: extra)
         let rows = all.enumerated().map { index, display in
             let t = titles[index % titles.count]
-            let approval = SuiteApproval(
+            let approval = BurrowApproval(
                 id: "ap\(index)", kind: index == 1 ? "review" : "plan", title: t.0, spaceName: t.1, spacePathSegment: nil,
                 taskID: "7a000000-0000-4000-8000-00000000000\(index)", insertedAt: nil, summary: t.2)
             return ApprovalsEntry.Row(id: "\(host)|ap\(index)", approval: approval, display: display)
@@ -392,7 +392,7 @@ final class ExtensionRenderTests: XCTestCase {
             ("stale", approvalsEntry([.stale, .stale], extra: 0, minutesOld: 47)),
             ("zero", approvalsEntry([])),
             ("signed-out", approvalsEntry([], signedIn: false)),
-            ("multi-install", approvalsEntry([.live, .live], extra: 1, installName: "Legacy Suite")),
+            ("multi-install", approvalsEntry([.live, .live], extra: 1, installName: "Legacy Burrow")),
         ]
         let sizes: [(String, WidgetFamily, CGSize)] = [
             ("medium", .systemMedium, CGSize(width: 364, height: 170)),
@@ -442,7 +442,7 @@ final class ExtensionRenderTests: XCTestCase {
             ("waiting-live", .waiting(signedIn: true, approvals: 3, install: nil)),
             ("waiting-zero", .waiting(signedIn: true, approvals: 0, install: nil)),
             ("waiting-signed-out", .waiting(signedIn: false, approvals: nil, install: nil)),
-            ("waiting-multi-install", .waiting(signedIn: true, approvals: 2, install: "Legacy Suite")),
+            ("waiting-multi-install", .waiting(signedIn: true, approvals: 2, install: "Legacy Burrow")),
             ("start-meeting", .startMeeting(lastSpace: "Burrow iOS", install: nil)),
             ("start-meeting-first", .startMeeting(lastSpace: nil, install: nil)),
         ]
@@ -544,7 +544,7 @@ final class ExtensionRenderTests: XCTestCase {
     /// as reachable: `/health` ok, `/manifest.json` named `Acme` / `B launch`.
     /// Icons 404, so the rows show their letter.
     private final class RigHosts: URLProtocol {
-        static let names = ["suite-a.localhost": "Acme", "suite-b.localhost": "B launch"]
+        static let names = ["burrow-a.localhost": "Acme", "burrow-b.localhost": "B launch"]
 
         override class func canInit(with request: URLRequest) -> Bool {
             names.keys.contains(request.url?.host ?? "")
@@ -572,10 +572,10 @@ final class ExtensionRenderTests: XCTestCase {
     private func unreadPicker(_ counts: [String: (Int, Bool)], dark: Bool = false) -> some View {
         let defaults = UserDefaults(suiteName: "ExtensionRenderTests.unread.\(UUID().uuidString)")!
         let store = InstallStore(defaults: defaults)
-        for host in ["suite.example.net", "suite.example.org", "suite.example.test"] { store.remove(host: host) }
-        store.add(host: "suite-a.localhost", name: "Acme")
-        store.add(host: "suite-b.localhost", name: "B launch")
-        store.select("suite-a.localhost")
+        for host in ["burrow.example.net", "burrow.example.org", "burrow.example.test"] { store.remove(host: host) }
+        store.add(host: "burrow-a.localhost", name: "Acme")
+        store.add(host: "burrow-b.localhost", name: "B launch")
+        store.select("burrow-a.localhost")
         let unread = InstallUnreadStore(defaults: defaults)
         for (host, (count, stale)) in counts {
             unread.write(count: count, asOf: Date(), for: host)
@@ -589,23 +589,23 @@ final class ExtensionRenderTests: XCTestCase {
     func testInstallPickerUnreadPills() throws {
         URLProtocol.registerClass(RigHosts.self)
         defer { URLProtocol.unregisterClass(RigHosts.self) }
-        try snapshot("unread-b3-a-none", unreadPicker(["suite-b.localhost": (3, false)]), size: phone, settle: 1.5)
+        try snapshot("unread-b3-a-none", unreadPicker(["burrow-b.localhost": (3, false)]), size: phone, settle: 1.5)
         try snapshot(
-            "unread-both", unreadPicker(["suite-a.localhost": (2, false), "suite-b.localhost": (3, false)]), size: phone,
+            "unread-both", unreadPicker(["burrow-a.localhost": (2, false), "burrow-b.localhost": (3, false)]), size: phone,
             settle: 1.5)
         try snapshot(
-            "unread-both-dark", unreadPicker(["suite-a.localhost": (2, false), "suite-b.localhost": (3, false)], dark: true),
+            "unread-both-dark", unreadPicker(["burrow-a.localhost": (2, false), "burrow-b.localhost": (3, false)], dark: true),
             size: phone, settle: 1.5)
-        try snapshot("unread-99plus", unreadPicker(["suite-b.localhost": (122, false)]), size: phone, settle: 1.5)
+        try snapshot("unread-99plus", unreadPicker(["burrow-b.localhost": (122, false)]), size: phone, settle: 1.5)
         try snapshot(
-            "unread-stale", unreadPicker(["suite-a.localhost": (1, false), "suite-b.localhost": (2, true)]), size: phone,
+            "unread-stale", unreadPicker(["burrow-a.localhost": (1, false), "burrow-b.localhost": (2, true)]), size: phone,
             settle: 1.5)
     }
 
     func testSwitchBanner() throws {
         for dark in [false, true] {
             let view = ZStack(alignment: .top) {
-                SuiteColor.surfaceMuted.color
+                BurrowColor.surfaceMuted.color
                 SwitchBannerView(text: SwitchBanner.message("B launch")).padding(.top, 60)
             }
             try save(dark ? "switch-banner-dark" : "switch-banner-light", view, size: CGSize(width: 402, height: 160), dark: dark)

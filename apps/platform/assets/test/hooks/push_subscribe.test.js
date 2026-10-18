@@ -68,6 +68,22 @@ describe("nativePushPlugin", () => {
     const win = { Capacitor: { isNativePlatform: () => true, Plugins: { SuiteNative: plugin } } }
     expect(nativePushPlugin(win)).toBe(plugin)
   })
+
+  // Task 01a14ba9 stage 4: BurrowNative (newer builds) or SuiteNative (older).
+  it("Burrow-only: returns BurrowNative", () => {
+    const plugin = { enablePush() {} }
+    const win = { Capacitor: { isNativePlatform: () => true, Plugins: { BurrowNative: plugin } } }
+    expect(nativePushPlugin(win)).toBe(plugin)
+  })
+
+  it("both present: BurrowNative wins", () => {
+    const burrow = { enablePush() {} }
+    const suite = { enablePush() {} }
+    const win = {
+      Capacitor: { isNativePlatform: () => true, Plugins: { BurrowNative: burrow, SuiteNative: suite } }
+    }
+    expect(nativePushPlugin(win)).toBe(burrow)
+  })
 })
 
 describe("native branch", () => {

@@ -27,7 +27,7 @@ class ConversationShortcutsTest {
         Person
             .Builder()
             .setName("Sam")
-            .setKey("suite.example.com|user:u1")
+            .setKey("burrow.example.com|user:u1")
             .build()
 
     private fun ConversationShortcuts.publish(
@@ -37,16 +37,16 @@ class ConversationShortcutsTest {
 
     @Test
     fun `(a) the id is host-scoped and parse round-trips`() {
-        assertEquals("suite.example.com|0192-s", ConversationShortcuts.shortcutId("Suite.Example.Com", "0192-s"))
-        assertEquals("suite.example.com" to "0192-s", ConversationShortcuts.parse("suite.example.com|0192-s"))
+        assertEquals("burrow.example.com|0192-s", ConversationShortcuts.shortcutId("Burrow.Example.Com", "0192-s"))
+        assertEquals("burrow.example.com" to "0192-s", ConversationShortcuts.parse("burrow.example.com|0192-s"))
         // The same space id on two installs is two shortcuts.
-        val other = ConversationShortcuts.shortcutId("suite.example.org", "0192-s")
-        assertNotEquals(other, ConversationShortcuts.shortcutId("suite.example.com", "0192-s"))
+        val other = ConversationShortcuts.shortcutId("burrow.example.org", "0192-s")
+        assertNotEquals(other, ConversationShortcuts.shortcutId("burrow.example.com", "0192-s"))
         assertNull(ConversationShortcuts.shortcutId("not a host", "0192-s"))
-        assertNull(ConversationShortcuts.shortcutId("suite.example.com", "../x"))
+        assertNull(ConversationShortcuts.shortcutId("burrow.example.com", "../x"))
         assertNull(ConversationShortcuts.parse("switch_install"))
         assertNull(ConversationShortcuts.parse("0192-s"))
-        assertNull(ConversationShortcuts.parse("suite.example.com|a|b"))
+        assertNull(ConversationShortcuts.parse("burrow.example.com|a|b"))
     }
 
     @Test
@@ -55,38 +55,38 @@ class ConversationShortcutsTest {
         val s = shortcuts(sink)
         s.publish("10.0.2.2", "a")
         s.publish("10.0.2.20", "b")
-        s.publish("suite.example.org", "c")
+        s.publish("burrow.example.org", "c")
 
         s.removeForHost("10.0.2.2")
 
         assertEquals(listOf("10.0.2.2|a"), sink.removedDynamic)
-        assertEquals(setOf("10.0.2.20|b", "suite.example.org|c"), sink.dynamic.keys)
-        assertEquals(setOf("10.0.2.20|b", "suite.example.org|c"), registry.keys())
+        assertEquals(setOf("10.0.2.20|b", "burrow.example.org|c"), sink.dynamic.keys)
+        assertEquals(setOf("10.0.2.20|b", "burrow.example.org|c"), registry.keys())
     }
 
     @Test
     fun `a removal drops both the dynamic and the long-lived shortcut`() {
         val sink = RecordingShortcutSink()
         val s = shortcuts(sink)
-        s.publish("suite.example.com", "a")
-        s.removeForHost("suite.example.com")
-        assertEquals(listOf("suite.example.com|a"), sink.removedDynamic)
-        assertEquals(listOf("suite.example.com|a"), sink.removedLongLived)
+        s.publish("burrow.example.com", "a")
+        s.removeForHost("burrow.example.com")
+        assertEquals(listOf("burrow.example.com|a"), sink.removedDynamic)
+        assertEquals(listOf("burrow.example.com|a"), sink.removedLongLived)
     }
 
     @Test
     fun `(c) the static shortcut counts toward the cap and the least recently used is evicted`() {
         val sink = RecordingShortcutSink(max = 5, manifest = 1)
         val s = shortcuts(sink)
-        for (i in 1..4) s.publish("suite.example.com", "s$i")
+        for (i in 1..4) s.publish("burrow.example.com", "s$i")
         // s1 is used again, so s2 is now the least recently used.
-        s.publish("suite.example.com", "s1")
-        s.publish("suite.example.com", "s5")
+        s.publish("burrow.example.com", "s1")
+        s.publish("burrow.example.com", "s5")
 
         assertEquals(4, sink.dynamic.size)
         assertEquals(4, registry.keys().size)
-        assertEquals(listOf("suite.example.com|s2"), sink.removedDynamic)
-        assertEquals(listOf("suite.example.com|s2"), sink.removedLongLived)
+        assertEquals(listOf("burrow.example.com|s2"), sink.removedDynamic)
+        assertEquals(listOf("burrow.example.com|s2"), sink.removedLongLived)
         assertFalse(sink.removedDynamic.contains(ConversationShortcuts.SWITCH_INSTALL_ID))
         assertFalse(sink.removedLongLived.contains(ConversationShortcuts.SWITCH_INSTALL_ID))
     }
@@ -94,15 +94,15 @@ class ConversationShortcutsTest {
     @Test
     fun `no room at all publishes nothing`() {
         val sink = RecordingShortcutSink(max = 1, manifest = 1)
-        assertNull(shortcuts(sink).publish("suite.example.com", "a"))
+        assertNull(shortcuts(sink).publish("burrow.example.com", "a"))
         assertTrue(sink.pushed.isEmpty())
     }
 
     @Test
     fun `(d) a published shortcut is a long-lived conversation that opens the space`() {
         val sink = RecordingShortcutSink()
-        val id = shortcuts(sink).publish("suite.example.com", "0192-s", "Internal Legacy SXI", "/chat/internal-legacy-sxi", listOf(sam))
-        assertEquals("suite.example.com|0192-s", id)
+        val id = shortcuts(sink).publish("burrow.example.com", "0192-s", "Internal Legacy SXI", "/chat/internal-legacy-sxi", listOf(sam))
+        assertEquals("burrow.example.com|0192-s", id)
         val shortcut = sink.pushed.single()
 
         assertEquals(id, shortcut.id)
@@ -122,7 +122,7 @@ class ConversationShortcutsTest {
         val intent = shortcut.intent
         assertEquals(LaunchRouter.ACTION_OPEN_CONVERSATION, intent.action)
         assertEquals(MainActivity::class.java.name, intent.component!!.className)
-        assertEquals("suite.example.com", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_HOST))
+        assertEquals("burrow.example.com", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_HOST))
         assertEquals("/chat/internal-legacy-sxi", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_PATH))
     }
 

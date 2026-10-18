@@ -1,14 +1,14 @@
 import XCTest
 @testable import App
 
-final class SuiteAPIClientTests: XCTestCase {
+final class BurrowAPIClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
     }
 
-    private func client(_ tokens: [String: String]) -> SuiteAPIClient {
-        SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens))
+    private func client(_ tokens: [String: String]) -> BurrowAPIClient {
+        BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens))
     }
 
     private func spacesJSON() -> Data {
@@ -21,7 +21,7 @@ final class SuiteAPIClientTests: XCTestCase {
     // MARK: Not signed in: no network
 
     func testMissingTokenGivesNotSignedInWithNoRequest() {
-        let install = Install(host: "suite.example.net")
+        let install = Install(host: "burrow.example.net")
         let defaultsName = "ShareSheetModelTests.\(UUID().uuidString)"
         defer { UserDefaults().removePersistentDomain(forName: defaultsName) }
         let model = ShareSheetModel(install: install, client: client([:]), lastSpace: UserDefaults(suiteName: defaultsName))
@@ -40,7 +40,7 @@ final class SuiteAPIClientTests: XCTestCase {
     }
 
     func testNoSelectedInstallIsNotSignedIn() {
-        let model = ShareSheetModel(install: nil, client: client(["suite.example.net": "tok"]))
+        let model = ShareSheetModel(install: nil, client: client(["burrow.example.net": "tok"]))
         model.start()
         XCTAssertEqual(model.phase, .notSignedIn)
         XCTAssertEqual(StubURLProtocol.requests.count, 0)
@@ -50,13 +50,13 @@ final class SuiteAPIClientTests: XCTestCase {
         let api = client([:])
         let group = expectation(description: "all")
         group.expectedFulfillmentCount = 4
-        api.spaces(host: "b.example.com") { if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { group.fulfill() } }
-        api.counts(host: "b.example.com") { if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { group.fulfill() } }
+        api.spaces(host: "b.example.com") { if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { group.fulfill() } }
+        api.counts(host: "b.example.com") { if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { group.fulfill() } }
         api.postJSON(host: "b.example.com", path: "/api/app/devices", json: [:]) {
-            if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { group.fulfill() }
+            if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { group.fulfill() }
         }
         api.sendMessage(host: "b.example.com", spaceID: "s1", form: SharePayload.text("hi").form(message: "", agentID: nil)) {
-            if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { group.fulfill() }
+            if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { group.fulfill() }
         }
         wait(for: [group], timeout: 5)
         XCTAssertEqual(StubURLProtocol.requests.count, 0)
@@ -83,8 +83,8 @@ final class SuiteAPIClientTests: XCTestCase {
 
         let refused = expectation(description: "B refused")
         refused.expectedFulfillmentCount = 2
-        onlyA.counts(host: b) { if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { refused.fulfill() } }
-        onlyA.spaces(host: b) { if case .failure(SuiteAPIClient.Failure.notSignedIn) = $0 { refused.fulfill() } }
+        onlyA.counts(host: b) { if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { refused.fulfill() } }
+        onlyA.spaces(host: b) { if case .failure(BurrowAPIClient.Failure.notSignedIn) = $0 { refused.fulfill() } }
         wait(for: [refused], timeout: 5)
         XCTAssertEqual(StubURLProtocol.requests.map { $0.url?.host }, [a], "nothing goes to B without B's own token")
         StubURLProtocol.reset()
@@ -130,7 +130,7 @@ final class SuiteAPIClientTests: XCTestCase {
             // `as_of` is read too since task 01a1261e (no `unread` from this server).
             XCTAssertEqual(
                 try? result.get(),
-                SuiteCounts(
+                BurrowCounts(
                     approvals: 3, tasks: 12, fetchedAt: fetched, unread: nil,
                     asOf: InstallUnreadStore.parseDate("2026-10-04T23:00:00.123456Z")))
             done.fulfill()

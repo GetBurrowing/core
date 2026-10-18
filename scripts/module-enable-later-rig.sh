@@ -9,7 +9,7 @@
 #   module-enable-later-rig.sh prod-like    <base image> <core image> <play image>
 #
 #   <core image>  the WITHOUT-modules image (apps/platform/Dockerfile)
-#   <play image>  the WITH-Play image (apps/suite_release/Dockerfile)
+#   <play image>  the WITH-Play image (apps/burrow_release/Dockerfile)
 #   <base image>  a build of origin/main from BEFORE the module moved, whose
 #                 migrations path still holds Play's two migrations
 #

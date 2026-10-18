@@ -5,7 +5,7 @@ import UIKit
 /// surfaces comes from one of these slots, each with an Any and a Dark
 /// appearance; no colour literal appears in Swift. Slot -> web token table:
 /// clients/ios/README.md.
-enum SuiteColor: String, CaseIterable {
+enum BurrowColor: String, CaseIterable {
     /// `primary` (orange) marks primary actions only. `info` (teal-cyan) is
     /// reserved for live state: the live widget count, and on the in-call
     /// screen (App/Meetings/InCallView.swift) the speaking ring and the one
@@ -18,7 +18,7 @@ enum SuiteColor: String, CaseIterable {
 }
 
 /// Public Sans (bundled, OFL), scaled with Dynamic Type through `relativeTo`.
-enum SuiteFont {
+enum BurrowFont {
     static let family = "Public Sans"
 
     static func title() -> Font {
@@ -54,7 +54,7 @@ enum SuiteFont {
     }
 }
 
-enum SuiteRadius {
+enum BurrowRadius {
     static let field: CGFloat = 10
     static let box: CGFloat = 14
 }
@@ -63,7 +63,7 @@ enum SuiteRadius {
 /// in a centred column no wider than a form sheet. Compact width (iPhone,
 /// Slide Over, narrow Split View) keeps the iPhone layout. Layout follows
 /// the size class, never the device idiom.
-enum SuiteLayout {
+enum BurrowLayout {
     /// UIKit's form-sheet width.
     static let sheetWidth: CGFloat = 540
     /// Side gutters once the space is narrower than a sheet plus gutters.
@@ -81,7 +81,7 @@ enum SuiteLayout {
 extension View {
     /// Regular width: the view becomes a centred card (surface fill, box
     /// radius, border) on the muted surface. Compact: unchanged.
-    func suiteFormSheet(regular: Bool) -> some View {
+    func burrowFormSheet(regular: Bool) -> some View {
         modifier(FormSheetLayout(regular: regular))
     }
 }
@@ -94,18 +94,18 @@ struct FormSheetLayout: ViewModifier {
             GeometryReader { geometry in
                 content
                     .frame(
-                        width: SuiteLayout.columnWidth(available: geometry.size.width),
-                        height: max(0, min(SuiteLayout.sheetMaxHeight, geometry.size.height - 2 * SuiteLayout.gutter))
+                        width: BurrowLayout.columnWidth(available: geometry.size.width),
+                        height: max(0, min(BurrowLayout.sheetMaxHeight, geometry.size.height - 2 * BurrowLayout.gutter))
                     )
-                    .background(SuiteColor.surface.color)
-                    .clipShape(RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous))
+                    .background(BurrowColor.surface.color)
+                    .clipShape(RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
-                            .stroke(SuiteColor.border.color, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous)
+                            .stroke(BurrowColor.border.color, lineWidth: 1)
                     )
                     .frame(width: geometry.size.width, height: geometry.size.height)
             }
-            .background(SuiteColor.surfaceMuted.color.ignoresSafeArea())
+            .background(BurrowColor.surfaceMuted.color.ignoresSafeArea())
         } else {
             content
         }

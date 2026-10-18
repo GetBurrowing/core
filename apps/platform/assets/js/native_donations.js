@@ -12,7 +12,9 @@
 export function nativeDonatePlugin(win = globalThis.window) {
   const cap = win?.Capacitor;
   if (!cap?.isNativePlatform?.()) return null;
-  const plugin = cap.Plugins?.SuiteNative;
+  // `BurrowNative` in newer app builds, `SuiteNative` in older ones (task
+  // 01a14ba9): read either, Burrow first.
+  const plugin = cap.Plugins?.BurrowNative || cap.Plugins?.SuiteNative;
   return typeof plugin?.donate === "function" ? plugin : null;
 }
 

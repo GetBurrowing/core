@@ -13,13 +13,13 @@ import WebKit
 ///   root.html.heex);
 /// - the status bar follows the web UI's theme, read from `data-theme`;
 /// - the install host stays in the view, every other host opens in Safari
-///   (NavigationPolicy, applied through SuiteNative.shouldOverrideLoad);
+///   (NavigationPolicy, applied through `SuiteNative.shouldOverrideLoad`);
 /// - pull-to-refresh is a UIRefreshControl in the base-content colour, off
 ///   on `/chat` paths.
-final class SuiteBridgeViewController: CAPBridgeViewController {
+final class BurrowBridgeViewController: CAPBridgeViewController {
     private let store = InstallStore.shared
-    private let plugin = SuiteNativePlugin()
-    private let meetingsPlugin = SuiteMeetingsPlugin()
+    private let plugin = BurrowNativePlugin()
+    private let meetingsPlugin = BurrowMeetingsPlugin()
     private var callScreen: UIViewController?
     private var callObservation: AnyCancellable?
     private var activeObservation: NSObjectProtocol?
@@ -51,12 +51,12 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     /// Set by SceneDelegate when a widget's deep link cold-launched the app.
     var pendingDeepLink: DeepLink?
 
-    /// DEBUG only: `-SuiteLoginProbe <host>` loads that host's `/auth/login`
+    /// DEBUG only: `-BurrowLoginProbe <host>` loads that host's `/auth/login`
     /// with no navigation policy at all, to measure a plain in-WKWebView
     /// pocket-id login (README, Login).
     private var loginProbeHost: String? {
         #if DEBUG
-            return UserDefaults.standard.string(forKey: "SuiteLoginProbe")
+            return UserDefaults.standard.string(forKey: "BurrowLoginProbe")
         #else
             return nil
         #endif
@@ -67,7 +67,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         plugin.shell = self
         bridge?.registerPluginInstance(plugin)
-        // Native meetings (task 01a10db7 stage 3), beside SuiteNative.
+        // Native meetings (task 01a10db7 stage 3), beside `SuiteNative`.
         meetingsPlugin.shell = self
         bridge?.registerPluginInstance(meetingsPlugin)
         // CapacitorBridge.init makes its own CAPNotificationRouter the
@@ -79,21 +79,21 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = SuiteColor.surface.uiColor
+        view.backgroundColor = BurrowColor.surface.uiColor
         guard let webView else { return }
         webView.isOpaque = false
-        webView.backgroundColor = SuiteColor.surface.uiColor
-        webView.scrollView.backgroundColor = SuiteColor.surface.uiColor
+        webView.backgroundColor = BurrowColor.surface.uiColor
+        webView.scrollView.backgroundColor = BurrowColor.surface.uiColor
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = true
 
-        cover.backgroundColor = SuiteColor.surface.uiColor
+        cover.backgroundColor = BurrowColor.surface.uiColor
         cover.frame = webView.bounds
         cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         cover.isHidden = true
         webView.addSubview(cover)
 
-        refresh.tintColor = SuiteColor.onSurface.uiColor
+        refresh.tintColor = BurrowColor.onSurface.uiColor
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
 
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
@@ -362,7 +362,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
         }
         let host = UIHostingController(rootView: picker)
         host.modalPresentationStyle = .fullScreen
-        host.view.backgroundColor = SuiteColor.surface.uiColor
+        host.view.backgroundColor = BurrowColor.surface.uiColor
         pickerHost = host
         (presentedViewController ?? self).present(host, animated: currentInstall != nil)
     }
@@ -453,7 +453,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     }
 
     /// The status bar sits over the web UI's top bar, so its style follows
-    /// the web theme (the person can pick a theme in Suite that differs from
+    /// the web theme (the person can pick a theme in Burrow that differs from
     /// iOS). Without a readable theme it follows the system appearance.
     private func syncStatusBarWithWebTheme() {
         webView?.evaluateJavaScript("document.documentElement.getAttribute('data-theme')") { [weak self] value, _ in

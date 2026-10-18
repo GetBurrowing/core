@@ -11,7 +11,7 @@ import org.robolectric.Shadows.shadowOf
 
 /** Shared Robolectric setup for the push tests. */
 object PushTestSupport {
-    const val HOST = "suite.example.com"
+    const val HOST = "burrow.example.com"
     const val BEARER = "tok_live_bearer_9f8e7d"
 
     val mention =

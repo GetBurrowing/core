@@ -137,7 +137,7 @@ defmodule Platform.MixProject do
   # notes/2026-10-02-elixir-1.20.4-module-definition.md, which also records
   # why the default stays "compiled".
   #
-  # Only this project carries the hook. apps/game_stream and apps/suite_release
+  # Only this project carries the hook. apps/game_stream and apps/burrow_release
   # compile platform as a path dep with this mix.exs, so it reaches platform
   # code in all three builds.
   defp module_definition_opts do

@@ -22,8 +22,8 @@ import java.io.File
 /** The switcher pills, the switch banner and their resources (task 01a1261e stage 5). */
 @RunWith(RobolectricTestRunner::class)
 class UnreadUiTest {
-    private val a = "suite-a.localhost"
-    private val b = "suite-b.localhost"
+    private val a = "burrow-a.localhost"
+    private val b = "burrow-b.localhost"
 
     @Test
     fun `pill text is none at 0, the number at 7, and 99+ at 100`() {
@@ -38,7 +38,7 @@ class UnreadUiTest {
     fun `the banner shows only for a switch to ANOTHER install`() {
         assertTrue(SwitchBanner.shouldShow(a, b))
         assertFalse(SwitchBanner.shouldShow(b, b))
-        assertFalse(SwitchBanner.shouldShow("SUITE-B.localhost", b))
+        assertFalse(SwitchBanner.shouldShow("BURROW-B.localhost", b))
         // Nothing was showing (cold start from a notification): no "switched".
         assertFalse(SwitchBanner.shouldShow(null, b))
     }

@@ -14,7 +14,7 @@ CI publishes one image per supported module set (`.github/workflows/ci.yml`,
 | Module set | Built from | Moving tag | Pinned tags |
 |---|---|---|---|
 | none | `apps/platform/Dockerfile` | `core` | `core-<sha>`, `core-<short_sha>` |
-| `play` | `apps/suite_release/Dockerfile` | `play` | `play-<sha>`, `play-<short_sha>` |
+| `play` | `apps/burrow_release/Dockerfile` | `play` | `play-<sha>`, `play-<short_sha>` |
 
 `latest`, `<sha>` and `<short_sha>` are the **with-Play** image. They stay on
 that image only so that the three hand-maintained test-host installs keep their

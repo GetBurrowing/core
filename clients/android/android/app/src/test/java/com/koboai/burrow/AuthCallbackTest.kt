@@ -18,7 +18,7 @@ class AuthCallbackTest {
             null,
             "",
             "https://auth/callback?code=x",
-            "https://suite.example.com/auth/callback?code=x",
+            "https://burrow.example.com/auth/callback?code=x",
             "burrow://evil/callback?code=x",
             "burrow://auth/callback/extra?code=x",
             "burrow://auth/callbackx?code=x",

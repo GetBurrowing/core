@@ -14,7 +14,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // is delivered to the router.
         let center = UNUserNotificationCenter.current()
         center.delegate = NotificationRouter.shared
-        SuiteNotificationCategory.register(center: center)
+        BurrowNotificationCategory.register(center: center)
         IntentAppHooks.install()
         IntentTrace.append("launch sha=\(IntentTrace.buildSHA) state=\(application.applicationState.rawValue)")
         // Rings (stage 5): the CallKit provider exists, then PushKit starts,
@@ -72,10 +72,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     enum EvidenceHooks {
         static func apply() {
             let args = UserDefaults.standard
-            if args.bool(forKey: "SuiteEvidenceReset") {
+            if args.bool(forKey: "BurrowEvidenceReset") {
                 UserDefaults(suiteName: InstallStore.appGroup)?.removePersistentDomain(forName: InstallStore.appGroup)
             }
-            if let host = args.string(forKey: "SuiteExtraInstall") {
+            if let host = args.string(forKey: "BurrowExtraInstall") {
                 let store = InstallStore.shared
                 let selected = store.selectedHost
                 store.add(host: host)
@@ -85,7 +85,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // placeholder bearer, so an injected ring for that host keeps
             // ringing. Use an unresolvable host (`*.invalid`) so the
             // placeholder never reaches a server.
-            if let host = args.string(forKey: "SuiteEvidenceSignInHost"), host.hasSuffix(".invalid") {
+            if let host = args.string(forKey: "BurrowEvidenceSignInHost"), host.hasSuffix(".invalid") {
                 let store = InstallStore.shared
                 store.add(host: host)
                 _ = KeychainTokenStore.shared.store("evidence-placeholder", for: host)
@@ -94,7 +94,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // people cache, `<host>|<uuid>|<name>|<kind>` on a signed-in
             // `*.invalid` host, so a system test can hand the system an
             // entity ID and watch it resolve through MessagePersonEntityQuery.
-            if #available(iOS 27, *), let spec = args.string(forKey: "SuiteEvidencePerson") {
+            if #available(iOS 27, *), let spec = args.string(forKey: "BurrowEvidencePerson") {
                 let parts = spec.split(separator: "|").map(String.init)
                 if parts.count == 4, parts[0].hasSuffix(".invalid") {
                     InstallStore.shared.add(host: parts[0])
@@ -105,7 +105,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // Task 01a120be stage 4 evidence: the large-upload completion
             // notification, posted by the uploader's own code path once
             // notifications are allowed (EvidenceUITests presses Home first).
-            if let space = args.string(forKey: "SuiteEvidenceSentNotification") {
+            if let space = args.string(forKey: "BurrowEvidenceSentNotification") {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
                     guard granted else { return }
                     // A time trigger, so the system delivers it while the
@@ -114,7 +114,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                     UNUserNotificationCenter.current().add(BackgroundUploader.sentNotificationRequest(space, trigger: trigger))
                 }
             }
-            if args.bool(forKey: "SuiteRequestPush") {
+            if args.bool(forKey: "BurrowRequestPush") {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
             }
         }

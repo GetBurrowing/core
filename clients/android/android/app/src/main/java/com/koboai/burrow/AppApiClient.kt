@@ -94,7 +94,7 @@ class SessionGrant(
 }
 
 /**
- * Calls to an install's `/api/app/` routes. Mirrors iOS `SuiteAPIClient`:
+ * Calls to an install's `/api/app/` routes. Mirrors iOS `BurrowAPIClient`:
  * the bearer is looked up by the SAME host the request is built for, at the
  * moment it is built, in one place ([authorized]), so install A's bearer is
  * never sent to install B. A host with no bearer fails NOT_SIGNED_IN before

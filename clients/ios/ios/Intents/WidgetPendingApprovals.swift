@@ -99,7 +99,7 @@ struct WidgetApprovalSender {
         case failed
     }
 
-    var client: SuiteAPIClient = .shared
+    var client: BurrowAPIClient = .shared
     var installs: InstallStore = .shared
     var store = WidgetApprovalStore()
     var pending = PendingApproveStore()

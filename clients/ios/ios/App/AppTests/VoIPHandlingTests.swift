@@ -97,7 +97,7 @@ final class VoIPHandlingTests: XCTestCase {
         center = RingCenter()
         center.reporter = reporter
         center.server = server
-        center.knowsInstall = { $0 == "suite.example.com" }
+        center.knowsInstall = { $0 == "burrow.example.com" }
         center.isBusy = { [unowned self] in self.busy }
         center.showInvite = { [unowned self] in self.invites.append($0) }
         center.schedule = { [unowned self] after, work in
@@ -121,7 +121,7 @@ final class VoIPHandlingTests: XCTestCase {
     private func payload(_ overrides: [String: Any?] = [:]) -> [AnyHashable: Any] {
         var p: [String: Any] = [
             "ring_id": ringID, "meeting_id": "m1", "space_id": "s1", "trigger": "live_invite",
-            "caller_name": "Sam in Design review", "install_host": "suite.example.com",
+            "caller_name": "Sam in Design review", "install_host": "burrow.example.com",
             "sent_at": "2026-10-06T16:00:00Z",
         ]
         for (k, v) in overrides { p[k] = v }
@@ -330,7 +330,7 @@ final class VoIPHandlingTests: XCTestCase {
         push(payload())
         await center.settle()
         XCTAssertEqual(reporter.ended.map(\.1), [.unanswered])
-        XCTAssertEqual(invites, [RingInvite(ringID: ringID, meetingID: "m1", installHost: "suite.example.com", title: "Sam in Design review")])
+        XCTAssertEqual(invites, [RingInvite(ringID: ringID, meetingID: "m1", installHost: "burrow.example.com", title: "Sam in Design review")])
         XCTAssertEqual(server.statusCalls, 0)
     }
 
@@ -382,7 +382,7 @@ final class VoIPHandlingTests: XCTestCase {
         center.answer(uuid) { fulfilled = $0 }
         await center.settle()
         XCTAssertEqual(Array(log.events.suffix(2)), ["post:answer", "join"])
-        XCTAssertEqual(joins.first?.0, "suite.example.com")
+        XCTAssertEqual(joins.first?.0, "burrow.example.com")
         XCTAssertEqual(joins.first?.1, "m1")
         XCTAssertEqual(joins.first?.2, uuid)
         XCTAssertEqual(fulfilled, true)
@@ -467,7 +467,7 @@ final class VoIPHandlingTests: XCTestCase {
         let p = RingPayload(payload())
         XCTAssertNotNil(p)
         XCTAssertEqual(p?.callUUID, uuid)
-        XCTAssertEqual(p?.installHost, "suite.example.com")
+        XCTAssertEqual(p?.installHost, "burrow.example.com")
         XCTAssertEqual(RingPayload(payload(["caller_name": "  "]))?.callerName, "Burrow")
     }
 }

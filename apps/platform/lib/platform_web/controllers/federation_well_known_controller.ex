@@ -1,7 +1,8 @@
 defmodule PlatformWeb.FederationWellKnownController do
   @moduledoc """
-  `GET /.well-known/suite-federation`: this install's public federation
-  descriptor (task 01a0d90f stage 2, ADR 0054 section 1).
+  `GET /.well-known/suite-federation` and `GET /.well-known/burrow-federation`
+  (the latter added by task 01a14ba9 stage 1, same body): this install's public
+  federation descriptor (task 01a0d90f stage 2, ADR 0054 section 1).
 
   Answers 404 unless `Platform.Federation.Peers.Config.enabled?/0`. The 404
   is the same body a route that does not exist would give, so an install with

@@ -25,7 +25,9 @@ import org.json.JSONArray
 import java.util.concurrent.Executors
 
 /**
- * SuiteNative is the app's ONE Capacitor plugin: every native capability
+ * The app's ONE Capacitor plugin. Web JS reaches it as `SuiteNative`, the
+ * wire name older core JS looks up; core JS from task 01a14ba9 on also reads
+ * `BurrowNative`, and the name flips in a later app release. Every native capability
  * the web UI reaches goes through it, with the same contract as iOS
  * (`apps/platform/assets/js/hooks/push_subscribe.js`, `mountNative/1`):
  *
@@ -56,7 +58,7 @@ import java.util.concurrent.Executors
  * growing it.
  */
 @CapacitorPlugin(name = "SuiteNative")
-class SuiteNativePlugin : Plugin() {
+class BurrowNativePlugin : Plugin() {
     private val io = Executors.newSingleThreadExecutor()
     private val waiting = mutableListOf<PluginCall>()
 

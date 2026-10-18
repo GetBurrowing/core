@@ -5,7 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class InstallSessionTest {
-    private val install = Install("suite.example.com")
+    private val install = Install("burrow.example.com")
     private val tokens = KeystoreTokenStore(InMemoryKeyValueStore(), FakeTokenCipher())
 
     private val removed = mutableListOf<String>()
@@ -22,10 +22,10 @@ class InstallSessionTest {
     @Test
     fun `a stored bearer relaunches through POST api-app-handoff`() {
         tokens.store(install.host, "b1")
-        val ok = HttpResponse(200, """{"handoff_url":"https://suite.example.com/auth/app/handoff?code=x"}""")
+        val ok = HttpResponse(200, """{"handoff_url":"https://burrow.example.com/auth/app/handoff?code=x"}""")
         val transport = RecordingTransport(mapOf("POST /api/app/handoff" to ok))
-        val step = launcher(transport).start(install, "https://suite.example.com/tasks?id=1")
-        assertEquals(LaunchStep.Load("https://suite.example.com/auth/app/handoff?code=x"), step)
+        val step = launcher(transport).start(install, "https://burrow.example.com/tasks?id=1")
+        assertEquals(LaunchStep.Load("https://burrow.example.com/auth/app/handoff?code=x"), step)
         assertEquals("""{"path":"/tasks?id=1"}""", transport.requests.single().body)
     }
 
@@ -43,22 +43,22 @@ class InstallSessionTest {
         val offline = RecordingTransport(failing = setOf("POST /api/app/handoff"))
         assertEquals(LaunchStep.Load(install.baseUrl), launcher(offline).start(install, null))
         val broken = RecordingTransport(mapOf("POST /api/app/handoff" to HttpResponse(502, "")))
-        assertEquals(LaunchStep.Load("https://suite.example.com/x"), launcher(broken).start(install, "https://suite.example.com/x"))
+        assertEquals(LaunchStep.Load("https://burrow.example.com/x"), launcher(broken).start(install, "https://burrow.example.com/x"))
         assertEquals("b1", tokens.token(install.host))
     }
 
     @Test
     fun `localPath keeps only a path on the same host`() {
-        assertEquals("/chat/x?y=1", InstallLauncher.localPath("https://suite.example.com/chat/x?y=1", "suite.example.com"))
-        assertNull(InstallLauncher.localPath("https://suite.example.com/", "suite.example.com"))
-        assertNull(InstallLauncher.localPath("https://evil.example/chat", "suite.example.com"))
-        assertNull(InstallLauncher.localPath(null, "suite.example.com"))
+        assertEquals("/chat/x?y=1", InstallLauncher.localPath("https://burrow.example.com/chat/x?y=1", "burrow.example.com"))
+        assertNull(InstallLauncher.localPath("https://burrow.example.com/", "burrow.example.com"))
+        assertNull(InstallLauncher.localPath("https://evil.example/chat", "burrow.example.com"))
+        assertNull(InstallLauncher.localPath(null, "burrow.example.com"))
     }
 
     @Test
     fun `sign-out deletes the device, revokes the session, then forgets the bearer`() {
         tokens.store(install.host, "b1")
-        tokens.store("suite.example.org", "b2")
+        tokens.store("burrow.example.org", "b2")
         val transport =
             RecordingTransport(
                 mapOf(
@@ -73,7 +73,7 @@ class InstallSessionTest {
         )
         assertEquals(listOf("Bearer b1", "Bearer b1"), transport.requests.map { it.headers["Authorization"] })
         assertNull(tokens.token(install.host))
-        assertEquals("b2", tokens.token("suite.example.org"))
+        assertEquals("b2", tokens.token("burrow.example.org"))
     }
 
     @Test
@@ -98,7 +98,7 @@ class InstallSessionTest {
     @Test
     fun `signing out of A removes A's shortcuts only`() {
         tokens.store(install.host, "b1")
-        tokens.store("suite.example.org", "b2")
+        tokens.store("burrow.example.org", "b2")
         NativeSignOut(AppApiClient(tokens, RecordingTransport()), tokens, "i") { removed.add(it) }.run(install.host)
         assertEquals(listOf(install.host), removed)
     }

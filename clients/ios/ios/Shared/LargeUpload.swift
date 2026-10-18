@@ -62,14 +62,14 @@ enum ShareRoute: Equatable {
         return multipartBodyBytes <= config.multipartMaxBytes ? .multipart : .chunked
     }
 
-    /// "<name> is 1.2 GB. This Suite accepts files up to 1 GB." (design
+    /// "<name> is 1.2 GB. This Burrow accepts files up to 1 GB." (design
     /// canvas 01a120be-f336, "TOO LARGE").
     static func tooLargeText(name: String, bytes: Int64, label: String) -> String {
-        "\(name) is \(ByteLabel.format(bytes)). This Suite accepts files up to \(label)."
+        "\(name) is \(ByteLabel.format(bytes)). This Burrow accepts files up to \(label)."
     }
 }
 
-/// The one size-label rule every Suite surface uses (task 01a120be):
+/// The one size-label rule every Burrow surface uses (task 01a120be):
 /// decimal units only, so "MB" always means 1_000_000 bytes.
 ///
 /// Below 1000 it is "<n> bytes". Otherwise the largest unit in KB, MB, GB,
@@ -118,7 +118,7 @@ enum ByteLabel {
     }
 }
 
-extension SuiteAPIClient {
+extension BurrowAPIClient {
     static let uploadConfigPath = "/api/app/upload_config"
 
     static func uploadsPath(_ spaceID: String) -> String {

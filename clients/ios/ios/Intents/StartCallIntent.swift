@@ -163,7 +163,7 @@ enum CallDestination {
 // BURROW_APP: set for the App target only (project.yml). Siri refuses a
 // schema intent that more than one bundle declares (ToolDiscoveryError 4,
 // "Multiple flow tools found"), and ../Intents is compiled into
-// SuiteWidgets and NotificationService too, so every schema intent and
+// BurrowWidgets and NotificationService too, so every schema intent and
 // everything that names one is App-only (task 01a111bb).
 #if BURROW_APP
 @available(iOS 27, *)

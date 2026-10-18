@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 // No server.url: the shell boots the bundled www/index.html, and
-// SuiteBridgeViewController then loads the install the person picked.
+// BurrowBridgeViewController then loads the install the person picked.
 // A static server.url would pin every tester to one install.
 const config: CapacitorConfig = {
   appId: "com.kobo-ai.burrow",

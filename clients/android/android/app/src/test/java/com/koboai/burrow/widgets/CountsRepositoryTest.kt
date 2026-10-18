@@ -15,7 +15,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class CountsRepositoryTest {
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val tokens = KeystoreTokenStore(InMemoryKeyValueStore(), FakeTokenCipher())
 
     private class MemoryStore : CountsStore {
@@ -65,7 +65,7 @@ class CountsRepositoryTest {
             }
             // No bearer: no request at all.
             val none = RecordingTransport()
-            assertNull(CountsRepository(AppApiClient(tokens, none), store).refresh("suite.example.org"))
+            assertNull(CountsRepository(AppApiClient(tokens, none), store).refresh("burrow.example.org"))
             assertTrue(none.requests.isEmpty())
         }
 

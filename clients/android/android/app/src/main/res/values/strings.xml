@@ -58,7 +58,7 @@
     <string name="upload_channel">Uploads</string>
     <string name="upload_in_progress">Uploading to Burrow</string>
 
-    <!-- Widgets (iOS SlabState.swift / SuiteWidgets copy). -->
+    <!-- Widgets (iOS SlabState.swift / BurrowWidgets copy). -->
     <string name="widget_approvals_title">My approvals</string>
     <string name="widget_tasks_title">My tasks</string>
     <string name="widget_approvals_description">Approvals waiting on you</string>

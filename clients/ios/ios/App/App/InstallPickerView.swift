@@ -14,7 +14,7 @@ enum InstallCopy {
     static let addressLabel = "Address"
     static let checkAndAdd = "Check and add"
     static let checking = "Checking"
-    static let notSuite = "Couldn't find Burrow at this address. Check the spelling, or ask your admin for the link."
+    static let notBurrow = "Couldn't find Burrow at this address. Check the spelling, or ask your admin for the link."
     static let rowUnreachable = "Can't reach. Tap to retry."
     static func cantReach(_ host: String) -> String { "Can't reach \(host)" }
     static let tryAgain = "Try again"
@@ -36,7 +36,7 @@ enum UnreadPill {
 }
 
 /// Probes an install: `/health` must answer `{"status":"ok"}` and
-/// `/manifest.json` must be a web app manifest. Both, or it is not Suite.
+/// `/manifest.json` must be a web app manifest. Both, or it is not Burrow.
 enum InstallProbe {
     struct Result {
         let name: String?
@@ -149,7 +149,7 @@ final class InstallPickerModel: ObservableObject {
     }
 
     /// Adds an install after probing it. Returns false with the field kept
-    /// filled when the address is not a Suite install.
+    /// filled when the address is not a Burrow install.
     func add(_ typed: String) async -> Bool {
         guard let host = InstallStore.normalizeHost(typed),
             let result = await InstallProbe.probe(host: host)
@@ -195,7 +195,7 @@ struct InstallPickerView: View {
     var body: some View {
         // Regular width: a centred form sheet; compact: the iPhone layout.
         ZStack {
-            SuiteColor.surface.color.ignoresSafeArea()
+            BurrowColor.surface.color.ignoresSafeArea()
             if let host = model.cantReachHost {
                 CantReachView(host: host) {
                     Task { await model.continueWithSelection(onContinue) }
@@ -211,7 +211,7 @@ struct InstallPickerView: View {
                 list
             }
         }
-        .suiteFormSheet(regular: sizeClass == .regular)
+        .burrowFormSheet(regular: sizeClass == .regular)
         .onAppear { model.refreshAll() }
         .sheet(isPresented: $showingAdd) {
             AddInstallFlow(store: model.installStore, mode: .sheet) { install in
@@ -227,22 +227,22 @@ struct InstallPickerView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(InstallCopy.title)
-                        .font(SuiteFont.title())
+                        .font(BurrowFont.title())
                         .tracking(-0.3)
-                        .foregroundColor(SuiteColor.onSurface.color)
+                        .foregroundColor(BurrowColor.onSurface.color)
                         .padding(.top, 16)
                         .padding(.bottom, 4)
                     Text(InstallCopy.subtitle)
-                        .font(SuiteFont.secondary())
-                        .foregroundColor(SuiteColor.muted.color)
+                        .font(BurrowFont.secondary())
+                        .foregroundColor(BurrowColor.muted.color)
                         .padding(.bottom, 24)
                     rows
                 }
                 .padding(.horizontal, 16)
             }
             VStack(spacing: 8) {
-                SuiteButton(title: InstallCopy.addButton, style: .outlined) { showingAdd = true }
-                SuiteButton(title: InstallCopy.continueButton, style: .primary, busy: model.continuing) {
+                BurrowButton(title: InstallCopy.addButton, style: .outlined) { showingAdd = true }
+                BurrowButton(title: InstallCopy.continueButton, style: .primary, busy: model.continuing) {
                     Task { await model.continueWithSelection(onContinue) }
                 }
                 .disabled(model.selectedHost == nil)
@@ -266,8 +266,8 @@ struct InstallPickerView: View {
                 .hoverEffect()
                 .onTapGesture { model.select(install.host) }
                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                .listRowBackground(SuiteColor.surface.color)
-                .listRowSeparatorTint(SuiteColor.border.color)
+                .listRowBackground(BurrowColor.surface.color)
+                .listRowSeparatorTint(BurrowColor.border.color)
                 .listRowSeparator(install.host == model.installs.last?.host ? .hidden : .visible, edges: .bottom)
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
@@ -282,10 +282,10 @@ struct InstallPickerView: View {
         .scrollDisabled(true)
         .environment(\.defaultMinListRowHeight, 64)
         .frame(height: CGFloat(model.installs.count) * 64)
-        .clipShape(RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
-                .stroke(SuiteColor.border.color, lineWidth: 1)
+            RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous)
+                .stroke(BurrowColor.border.color, lineWidth: 1)
         )
     }
 }
@@ -345,8 +345,8 @@ struct InstallRow: View {
             InstallIcon(install: install, image: icon)
             VStack(alignment: .leading, spacing: 2) {
                 Text(install.displayName)
-                    .font(SuiteFont.body(.semibold))
-                    .foregroundColor(SuiteColor.onSurface.color)
+                    .font(BurrowFont.body(.semibold))
+                    .foregroundColor(BurrowColor.onSurface.color)
                     .lineLimit(1)
                 // The status replaces the host line so it never takes width
                 // from the name (canvas self-critique). A stale count says so
@@ -354,11 +354,11 @@ struct InstallRow: View {
                 // unreachable; the red dot and tap-to-retry stay.
                 HStack(spacing: 6) {
                     if status.showsUnreachableDot {
-                        Circle().fill(SuiteColor.destructive.color).frame(width: 8, height: 8)
+                        Circle().fill(BurrowColor.destructive.color).frame(width: 8, height: 8)
                     }
                     Text(status.text(host: install.host))
-                        .font(SuiteFont.caption())
-                        .foregroundColor(status.showsUnreachableDot ? SuiteColor.onSurface.color : SuiteColor.muted.color)
+                        .font(BurrowFont.caption())
+                        .foregroundColor(status.showsUnreachableDot ? BurrowColor.onSurface.color : BurrowColor.muted.color)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -387,12 +387,12 @@ struct UnreadPillView: View {
 
     var body: some View {
         Text(text)
-            .font(SuiteFont.pill())
+            .font(BurrowFont.pill())
             .monospacedDigit()
-            .foregroundColor(SuiteColor.onPrimary.color)
+            .foregroundColor(BurrowColor.onPrimary.color)
             .padding(.horizontal, 7)
             .frame(minWidth: 22, minHeight: 22)
-            .background(Capsule(style: .continuous).fill(SuiteColor.primary.color))
+            .background(Capsule(style: .continuous).fill(BurrowColor.primary.color))
             .opacity(stale ? Self.staleOpacity : 1)
             .accessibilityLabel("\(text) unread")
             .accessibilityIdentifier("unread-pill")
@@ -405,21 +405,21 @@ struct InstallIcon: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                .fill(SuiteColor.surfaceMuted.color)
+            RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                .fill(BurrowColor.surfaceMuted.color)
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Text(String(install.displayName.prefix(1)).uppercased())
-                    .font(SuiteFont.body(.heavy))
-                    .foregroundColor(SuiteColor.onSurface.color)
+                    .font(BurrowFont.body(.heavy))
+                    .foregroundColor(BurrowColor.onSurface.color)
             }
         }
         .frame(width: 40, height: 40)
-        .clipShape(RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                .stroke(SuiteColor.border.color, lineWidth: 1)
+            RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                .stroke(BurrowColor.border.color, lineWidth: 1)
         )
         .accessibilityHidden(true)
     }
@@ -431,21 +431,21 @@ struct SelectionMark: View {
     var body: some View {
         if selected {
             ZStack {
-                Circle().fill(SuiteColor.primary.color)
+                Circle().fill(BurrowColor.primary.color)
                 Image(systemName: "checkmark")
                     .font(.system(size: 12, weight: .heavy))
-                    .foregroundColor(SuiteColor.onPrimary.color)
+                    .foregroundColor(BurrowColor.onPrimary.color)
             }
             .frame(width: 24, height: 24)
         } else {
             Circle()
-                .stroke(SuiteColor.border.color, lineWidth: 2)
+                .stroke(BurrowColor.border.color, lineWidth: 2)
                 .frame(width: 24, height: 24)
         }
     }
 }
 
-struct SuiteButton: View {
+struct BurrowButton: View {
     enum Style { case primary, outlined }
 
     let title: String
@@ -459,28 +459,28 @@ struct SuiteButton: View {
                 if busy {
                     ProgressView().tint(foreground)
                 } else {
-                    Text(title).font(SuiteFont.body(.bold))
+                    Text(title).font(BurrowFont.body(.bold))
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 48)
             .foregroundColor(foreground)
             .background(
-                RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                    .fill(style == .primary ? SuiteColor.primary.color : SuiteColor.surface.color)
+                RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                    .fill(style == .primary ? BurrowColor.primary.color : BurrowColor.surface.color)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                    .stroke(style == .outlined ? SuiteColor.border.color : .clear, lineWidth: 1)
+                RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                    .stroke(style == .outlined ? BurrowColor.border.color : .clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
-        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous))
         .hoverEffect()
         .disabled(busy)
     }
 
     private var foreground: Color {
-        style == .primary ? SuiteColor.onPrimary.color : SuiteColor.onSurface.color
+        style == .primary ? BurrowColor.onPrimary.color : BurrowColor.onSurface.color
     }
 }
 
@@ -494,17 +494,17 @@ struct CantReachView: View {
             Spacer()
             Image(systemName: "wifi.exclamationmark")
                 .font(.system(size: 40, weight: .semibold))
-                .foregroundColor(SuiteColor.destructive.color)
+                .foregroundColor(BurrowColor.destructive.color)
                 .padding(.bottom, 16)
                 .accessibilityHidden(true)
             Text(InstallCopy.cantReach(host))
-                .font(SuiteFont.title())
+                .font(BurrowFont.title())
                 .multilineTextAlignment(.center)
-                .foregroundColor(SuiteColor.onSurface.color)
+                .foregroundColor(BurrowColor.onSurface.color)
             Spacer()
             VStack(spacing: 8) {
-                SuiteButton(title: InstallCopy.tryAgain, style: .primary, action: tryAgain)
-                SuiteButton(title: InstallCopy.chooseAnother, style: .outlined, action: chooseAnother)
+                BurrowButton(title: InstallCopy.tryAgain, style: .primary, action: tryAgain)
+                BurrowButton(title: InstallCopy.chooseAnother, style: .outlined, action: chooseAnother)
             }
             .padding(.bottom, 16)
         }
@@ -668,8 +668,8 @@ final class AddInstallFlowModel: ObservableObject {
 
     static let defaultProbe: Probe = { host in
         #if DEBUG
-            // Screenshot seam: `-SuiteAddInstallProbe offline|notFound|<name>`.
-            if let stub = UserDefaults.standard.string(forKey: "SuiteAddInstallProbe") {
+            // Screenshot seam: `-BurrowAddInstallProbe offline|notFound|<name>`.
+            if let stub = UserDefaults.standard.string(forKey: "BurrowAddInstallProbe") {
                 switch stub {
                 case "offline": return .offline
                 case "notFound": return .notFound
@@ -709,7 +709,7 @@ struct AddInstallFlow: View {
 
     var body: some View {
         ZStack {
-            SuiteColor.surface.color.ignoresSafeArea()
+            BurrowColor.surface.color.ignoresSafeArea()
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     Image("LaunchMark")
@@ -720,9 +720,9 @@ struct AddInstallFlow: View {
                         .padding(.top, mode == .sheet ? 32 : 24)
                         .padding(.bottom, 24)
                     Text(AddInstallCopy.title)
-                        .font(SuiteFont.title())
+                        .font(BurrowFont.title())
                         .tracking(-0.3)
-                        .foregroundColor(SuiteColor.onSurface.color)
+                        .foregroundColor(BurrowColor.onSurface.color)
                         .accessibilityAddTraits(.isHeader)
                         .padding(.bottom, 8)
                     if case .confirm(let candidate) = model.state {
@@ -734,7 +734,7 @@ struct AddInstallFlow: View {
                 .padding(.horizontal, 16)
             }
             .scrollDismissesKeyboard(.never)
-            .frame(maxWidth: mode == .sheet && sizeClass == .regular ? SuiteLayout.sheetWidth : .infinity)
+            .frame(maxWidth: mode == .sheet && sizeClass == .regular ? BurrowLayout.sheetWidth : .infinity)
         }
         .onAppear { focused = true }
     }
@@ -742,13 +742,13 @@ struct AddInstallFlow: View {
     private var entry: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(AddInstallCopy.body)
-                .font(SuiteFont.body())
-                .foregroundColor(SuiteColor.onSurface.color)
+                .font(BurrowFont.body())
+                .foregroundColor(BurrowColor.onSurface.color)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 20)
             TextField(AddInstallCopy.placeholder, text: $model.address)
-                .font(SuiteFont.input())
-                .foregroundColor(SuiteColor.onSurface.color)
+                .font(BurrowFont.input())
+                .foregroundColor(BurrowColor.onSurface.color)
                 .keyboardType(.URL)
                 .textContentType(.URL)
                 .textInputAutocapitalization(.never)
@@ -761,32 +761,32 @@ struct AddInstallFlow: View {
                 .padding(.horizontal, 12)
                 .frame(height: 48)
                 .background(
-                    RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                        .fill(SuiteColor.surfaceMuted.color)
+                    RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                        .fill(BurrowColor.surfaceMuted.color)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                        .stroke(SuiteColor.border.color, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                        .stroke(BurrowColor.border.color, lineWidth: 1)
                 )
             if let message = model.message {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: model.state == .offline ? "wifi.exclamationmark" : "exclamationmark.circle.fill")
-                        .foregroundColor(SuiteColor.destructive.color)
+                        .foregroundColor(BurrowColor.destructive.color)
                         .accessibilityHidden(true)
                     Text(message)
-                        .font(SuiteFont.secondary())
-                        .foregroundColor(SuiteColor.onSurface.color)
+                        .font(BurrowFont.secondary())
+                        .foregroundColor(BurrowColor.onSurface.color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 12)
                 .accessibilityElement(children: .combine)
             }
-            SuiteButton(title: model.buttonTitle, style: .primary, action: submit)
+            BurrowButton(title: model.buttonTitle, style: .primary, action: submit)
                 .disabled(!model.canSubmit)
                 .padding(.top, 16)
             Text(AddInstallCopy.help)
-                .font(SuiteFont.secondary())
-                .foregroundColor(SuiteColor.muted.color)
+                .font(BurrowFont.secondary())
+                .foregroundColor(BurrowColor.muted.color)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 16)
                 .padding(.bottom, 16)
@@ -799,12 +799,12 @@ struct AddInstallFlow: View {
                 InstallIcon(install: Install(host: candidate.host, name: candidate.name), image: model.icon)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(candidate.displayName)
-                        .font(SuiteFont.body(.semibold))
-                        .foregroundColor(SuiteColor.onSurface.color)
+                        .font(BurrowFont.body(.semibold))
+                        .foregroundColor(BurrowColor.onSurface.color)
                         .lineLimit(2)
                     Text(candidate.host)
-                        .font(SuiteFont.mono())
-                        .foregroundColor(SuiteColor.muted.color)
+                        .font(BurrowFont.mono())
+                        .foregroundColor(BurrowColor.muted.color)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -813,16 +813,16 @@ struct AddInstallFlow: View {
             }
             .padding(16)
             .background(
-                RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
-                    .fill(SuiteColor.surfaceMuted.color)
+                RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous)
+                    .fill(BurrowColor.surfaceMuted.color)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
-                    .stroke(SuiteColor.border.color, lineWidth: 1)
+                RoundedRectangle(cornerRadius: BurrowRadius.box, style: .continuous)
+                    .stroke(BurrowColor.border.color, lineWidth: 1)
             )
             .accessibilityElement(children: .combine)
             .padding(.top, 12)
-            SuiteButton(title: AddInstallCopy.continueToSignIn, style: .primary) {
+            BurrowButton(title: AddInstallCopy.continueToSignIn, style: .primary) {
                 if let install = model.confirm() { onContinue(install) }
             }
             .padding(.top, 16)
@@ -831,8 +831,8 @@ struct AddInstallFlow: View {
                 focused = true
             } label: {
                 Text(AddInstallCopy.changeAddress)
-                    .font(SuiteFont.secondary(.semibold))
-                    .foregroundColor(SuiteColor.onSurface.color)
+                    .font(BurrowFont.secondary(.semibold))
+                    .foregroundColor(BurrowColor.onSurface.color)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.plain)

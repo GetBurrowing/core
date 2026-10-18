@@ -16,52 +16,52 @@ enum SnippetMetrics {
 
 /// Approve: primary fill, onPrimary label, field radius, at least 72 x
 /// 40 pt. The only primary colour in a row.
-struct SuiteApproveChrome: ViewModifier {
+struct BurrowApproveChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(SuiteColor.onPrimary.color)
+            .foregroundStyle(BurrowColor.onPrimary.color)
             .lineLimit(1)
             .padding(.horizontal, 12)
             .frame(minWidth: SnippetMetrics.buttonMinWidth, minHeight: SnippetMetrics.buttonHeight)
             .background(
-                RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                    .fill(SuiteColor.primary.color)
+                RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                    .fill(BurrowColor.primary.color)
             )
     }
 }
 
 /// Reject (and Cancel): a neutral outline (border slot), onSurface label.
 /// Never the destructive red: rejecting is a normal choice, not a failure.
-struct SuiteRejectChrome: ViewModifier {
+struct BurrowRejectChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(SuiteColor.onSurface.color)
+            .foregroundStyle(BurrowColor.onSurface.color)
             .lineLimit(1)
             .padding(.horizontal, 12)
             .frame(minWidth: SnippetMetrics.buttonMinWidth, minHeight: SnippetMetrics.buttonHeight)
             .overlay(
-                RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                    .stroke(SuiteColor.border.color, lineWidth: 1)
+                RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                    .stroke(BurrowColor.border.color, lineWidth: 1)
             )
     }
 }
 
 extension View {
-    func suiteApproveChrome() -> some View { modifier(SuiteApproveChrome()) }
-    func suiteRejectChrome() -> some View { modifier(SuiteRejectChrome()) }
+    func burrowApproveChrome() -> some View { modifier(BurrowApproveChrome()) }
+    func burrowRejectChrome() -> some View { modifier(BurrowRejectChrome()) }
 }
 
-struct SuiteApproveButtonStyle: ButtonStyle {
+struct BurrowApproveButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.suiteApproveChrome().opacity(configuration.isPressed ? 0.8 : 1)
+        configuration.label.burrowApproveChrome().opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
-struct SuiteRejectButtonStyle: ButtonStyle {
+struct BurrowRejectButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.suiteRejectChrome().opacity(configuration.isPressed ? 0.8 : 1)
+        configuration.label.burrowRejectChrome().opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
@@ -81,24 +81,24 @@ struct WaitingSnippetView<Actions: View>: View {
             if summary.isEmpty {
                 Text(IntentCopy.nothingWaiting)
                     .font(.body)
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
             } else {
                 ForEach(Array(summary.rows.enumerated()), id: \.offset) { _, row in
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: row.symbol)
                             .font(.body)
-                            .foregroundStyle(SuiteColor.onSurface.color)
+                            .foregroundStyle(BurrowColor.onSurface.color)
                             .frame(width: 24)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(row.title)
                                 .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(SuiteColor.onSurface.color)
+                                .foregroundStyle(BurrowColor.onSurface.color)
                                 .lineLimit(1)
                             if let space = row.space {
                                 Text(space)
                                     .font(.footnote)
-                                    .foregroundStyle(SuiteColor.muted.color)
+                                    .foregroundStyle(BurrowColor.muted.color)
                                     .lineLimit(1)
                             }
                             // Under the title, so a snippet-width row never
@@ -113,7 +113,7 @@ struct WaitingSnippetView<Actions: View>: View {
                 if summary.more > 0 {
                     Text(IntentCopy.andMore(summary.more))
                         .font(.footnote)
-                        .foregroundStyle(SuiteColor.muted.color)
+                        .foregroundStyle(BurrowColor.muted.color)
                 }
             }
         }
@@ -141,23 +141,23 @@ struct ConfirmSnippetView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(heading)
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(SuiteColor.muted.color)
+                .foregroundStyle(BurrowColor.muted.color)
             Text(title)
                 .font(.body.weight(.semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
             if let space, !space.isEmpty {
                 Text("in \(space)")
                     .font(.subheadline)
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
             }
             if let install, !install.isEmpty {
                 Text("on \(install)")
                     .font(.subheadline)
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .foregroundStyle(BurrowColor.muted.color)
             }
             Text(consequence)
                 .font(.subheadline)
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .padding(.top, 4)
         }
         .padding(SnippetMetrics.padding)
@@ -188,11 +188,11 @@ struct DoneSnippetView: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.circle")
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .accessibilityHidden(true)
             Text(text)
                 .font(.body)
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
         }
         .padding(SnippetMetrics.padding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,15 +216,15 @@ struct AskAgentSnippetView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "cpu")
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .accessibilityHidden(true)
                 Text(agent)
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
             }
             Text("\u{201C}\(question)\u{201D}")
                 .font(.subheadline)
-                .foregroundStyle(SuiteColor.muted.color)
+                .foregroundStyle(BurrowColor.muted.color)
                 .lineLimit(1)
             switch state {
             case .working:
@@ -232,17 +232,17 @@ struct AskAgentSnippetView: View {
                     ProgressView()
                     Text(IntentCopy.agentWorking(agent: agent))
                         .font(.subheadline)
-                        .foregroundStyle(SuiteColor.onSurface.color)
+                        .foregroundStyle(BurrowColor.onSurface.color)
                 }
             case .reply(let text):
                 Text(text)
                     .font(.subheadline)
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .fixedSize(horizontal: false, vertical: true)
             case .timedOut:
                 Text(IntentCopy.agentTimedOutSnippet(agent: agent))
                     .font(.subheadline)
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

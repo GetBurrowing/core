@@ -755,7 +755,9 @@ const MeetingClient = {
   // the web path exactly as before.
   _nativeMeetings() {
     const plugins = window.Capacitor && window.Capacitor.Plugins
-    return (plugins && plugins.SuiteMeetings) || null
+    // `BurrowMeetings` in newer app builds, `SuiteMeetings` in older ones
+    // (task 01a14ba9): read either, Burrow first.
+    return (plugins && (plugins.BurrowMeetings || plugins.SuiteMeetings)) || null
   },
 
   async _joinNative(native, meetingId) {

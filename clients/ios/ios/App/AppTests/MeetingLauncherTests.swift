@@ -23,14 +23,14 @@ final class MeetingLauncherTests: XCTestCase {
     }
 
     private var installs: InstallStore { InstallStore(defaults: UserDefaults(suiteName: defaultsName)!) }
-    private let link = DeepLink.meeting(host: "suite.example.com", slug: "design-review")!
+    private let link = DeepLink.meeting(host: "burrow.example.com", slug: "design-review")!
 
     func testWithoutALauncherTheDeepLinkOpens() {
         MeetingLauncher.start = nil
         var opened: [DeepLink] = []
         IntentNavigator.handler = { opened.append($0) }
 
-        let route = MeetingLauncher.open(host: "suite.example.com", meetingID: "m1", fallback: link, installs: installs)
+        let route = MeetingLauncher.open(host: "burrow.example.com", meetingID: "m1", fallback: link, installs: installs)
 
         XCTAssertEqual(route, .web(link))
         XCTAssertEqual(opened, [link])
@@ -42,10 +42,10 @@ final class MeetingLauncherTests: XCTestCase {
         var opened: [DeepLink] = []
         IntentNavigator.handler = { opened.append($0) }
 
-        let route = MeetingLauncher.open(host: "suite.example.com", meetingID: "m1", fallback: link, installs: installs)
+        let route = MeetingLauncher.open(host: "burrow.example.com", meetingID: "m1", fallback: link, installs: installs)
 
         XCTAssertEqual(route, .native)
-        XCTAssertEqual(started, ["suite.example.com|m1"])
+        XCTAssertEqual(started, ["burrow.example.com|m1"])
         XCTAssertEqual(opened, [], "a native join must not also open the web meeting page")
     }
 

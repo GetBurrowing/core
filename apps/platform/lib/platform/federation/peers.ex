@@ -40,6 +40,15 @@ defmodule Platform.Federation.Peers do
   becomes its `owner`); the peer's `space.share` handler creates the replica.
   `mark_revoked/2` also marks every shared space of the relationship
   `revoked`. The relay itself runs in the peer's `PeerConnection`.
+
+  ## Protocol versions (task 01a14ba9 stage 2)
+
+  Every descriptor fetch stores the peer's advertised protocol ids in
+  `metadata["protocols"]` (`descriptor_protocols/1`): `propose/2` on the new
+  row, `Platform.Federation.Peers.Inbound` on a bound proposal, and
+  `protocol_readiness/0` for every active peer. `Envelope.build/4` reads it to
+  decide whether it may sign `burrow-federation/2`. `protocol_readiness/0` is
+  the gate for turning that on (ADR 0054, "Protocol versions").
   """
 
   import Ecto.Query
@@ -296,7 +305,8 @@ defmodule Platform.Federation.Peers do
              base_url: base_url,
              display_name: Keyword.get(opts, :display_name, descriptor["display_name"]),
              status: "pending_outbound",
-             public_keys: keys
+             public_keys: keys,
+             metadata: %{"protocols" => descriptor_protocols(descriptor)}
            }) do
       payload = %{
         "install_id" => me.install_id,
@@ -384,6 +394,113 @@ defmodule Platform.Federation.Peers do
       end
 
     {:ok, new, results}
+  end
+
+  # ── Protocol versions (task 01a14ba9 stage 2) ──────────────────────────
+
+  @protocols_max 16
+  @protocol_id_max 64
+
+  @doc """
+  The protocol ids a fetched descriptor advertises, as stored in
+  `peer.metadata["protocols"]`: its `"protocols"` list (which
+  `Client.fetch_descriptor/1` already normalises to `[protocol]` for a
+  descriptor that has none), keeping strings of at most 64 bytes, deduplicated,
+  at most 16. The peer chose these values, so they are bounded here.
+  """
+  @spec descriptor_protocols(map()) :: [String.t()]
+  def descriptor_protocols(%{"protocols" => protocols}) when is_list(protocols) do
+    protocols
+    |> Enum.filter(&(is_binary(&1) and byte_size(&1) in 1..@protocol_id_max))
+    |> Enum.uniq()
+    |> Enum.take(@protocols_max)
+  end
+
+  def descriptor_protocols(%{"protocol" => protocol}) when is_binary(protocol),
+    do: descriptor_protocols(%{"protocols" => [protocol]})
+
+  def descriptor_protocols(_descriptor), do: []
+
+  @doc """
+  The gate for turning on `PEER_FEDERATION_SIGNING_PROTOCOL=burrow-federation/2`
+  on this install (ADR 0054, "Protocol versions").
+
+  For every `active` peer, re-fetches its descriptor through
+  `Client.fetch_descriptor/1`, stores the advertised list in
+  `metadata["protocols"]`, and returns one row per peer:
+
+      %{peer_install_id, base_url, protocols, ready, error}
+
+  `ready` is true when the peer advertises `"burrow-federation/2"`. When the
+  fetch fails, or the descriptor names a different install than the row
+  (`:install_id_mismatch`), the stored metadata is left alone, `protocols` is
+  the stored list (`[]` if none), `ready` is false and `error` is the reason;
+  otherwise `error` is nil. Flip the variable only when every row is ready.
+
+  From a release:
+
+      /app/bin/platform rpc 'IO.inspect(Platform.Federation.Peers.protocol_readiness())'
+  """
+  @spec protocol_readiness() :: [
+          %{
+            peer_install_id: String.t(),
+            base_url: String.t(),
+            protocols: [String.t()],
+            ready: boolean(),
+            error: term()
+          }
+        ]
+  def protocol_readiness do
+    for peer <- list_peers(status: "active"), do: peer_readiness(peer)
+  end
+
+  defp peer_readiness(%Peer{} = peer) do
+    result =
+      with {:ok, descriptor} <- Client.fetch_descriptor(peer.base_url),
+           :ok <- same_install(descriptor, peer) do
+        store_protocols(peer, descriptor_protocols(descriptor))
+      end
+
+    case result do
+      {:ok, protocols} ->
+        readiness_row(peer, protocols, nil)
+
+      {:error, reason} ->
+        readiness_row(peer, stored_protocols(peer), reason)
+    end
+  end
+
+  defp same_install(%{"install_id" => id}, %Peer{peer_install_id: id}), do: :ok
+
+  defp same_install(%{"install_id" => id}, %Peer{peer_install_id: peer_id})
+       when is_binary(id) do
+    if String.downcase(id) == String.downcase(peer_id),
+      do: :ok,
+      else: {:error, :install_id_mismatch}
+  end
+
+  defp same_install(_descriptor, _peer), do: {:error, :install_id_mismatch}
+
+  defp store_protocols(%Peer{} = peer, protocols) do
+    metadata = Map.put(peer.metadata || %{}, "protocols", protocols)
+
+    case peer |> Peer.update_changeset(%{metadata: metadata}) |> Repo.update() do
+      {:ok, _updated} -> {:ok, protocols}
+      {:error, _changeset} -> {:error, :metadata_update_failed}
+    end
+  end
+
+  defp stored_protocols(%Peer{metadata: %{"protocols" => list}}) when is_list(list), do: list
+  defp stored_protocols(_peer), do: []
+
+  defp readiness_row(%Peer{} = peer, protocols, error) do
+    %{
+      peer_install_id: peer.peer_install_id,
+      base_url: peer.base_url,
+      protocols: protocols,
+      ready: is_nil(error) and Envelope.protocol_id(:v2) in protocols,
+      error: error
+    }
   end
 
   # ── Shared spaces (stage 5) ────────────────────────────────────────────

@@ -69,6 +69,29 @@ defmodule Platform.Federation.Peers.InboundTest do
       assert {kid, pub} == {remote.kid, remote.b64}
     end
 
+    test "a recorded proposal stores the protocols its .well-known advertises (01a14ba9)" do
+      dual = ["suite-federation/1", "burrow-federation/2"]
+      remote = remote_install()
+      resolve!(%{host(remote) => [@public]})
+      serve_descriptor(descriptor(remote, %{"protocols" => dual}))
+
+      assert deliver(remote, "relationship.propose", propose_payload(remote)) ==
+               {:ok, :proposal_recorded}
+
+      assert Peers.get_peer_by_install_id(remote.install_id).metadata["protocols"] == dual
+
+      # a proposer whose descriptor has no list is stored v1-only
+      old = remote_install()
+      resolve!(%{host(old) => [@public]})
+      serve_descriptor(descriptor(old))
+
+      assert deliver(old, "relationship.propose", propose_payload(old)) ==
+               {:ok, :proposal_recorded}
+
+      assert Peers.get_peer_by_install_id(old.install_id).metadata["protocols"] ==
+               ["suite-federation/1"]
+    end
+
     test "a proposal whose key does not match the sender's .well-known is refused" do
       remote = remote_install()
       resolve!(%{host(remote) => [@public]})

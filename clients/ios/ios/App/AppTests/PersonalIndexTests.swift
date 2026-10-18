@@ -113,7 +113,7 @@ final class PersonalIndexTests: XCTestCase {
         defer { InstallStore.didRemove = removeHook }
         for host in [a, b] { store.add(host: host) }
         return IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
             installs: store, sleeper: VirtualClock(), now: { Date(timeIntervalSince1970: 4_000_000) },
             lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }
@@ -369,8 +369,8 @@ final class PersonalIndexTests: XCTestCase {
 
     // MARK: Round 8, bug A: a name on two installs is asked about
 
-    /// Alex's iPad, signed in to prod and suite-exp: "Message Sam" went to
-    /// suite-exp's Sam, the first of the two indexed Jordans Siri found,
+    /// Alex's iPad, signed in to prod and exp: "Message Sam" went to
+    /// exp's Sam, the first of the two indexed Jordans Siri found,
     /// handed to Burrow as a resolved entity and used as is.
     @available(iOS 27, *)
     private func jordans() {

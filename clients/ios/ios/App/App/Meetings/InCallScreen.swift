@@ -33,7 +33,7 @@ struct InCallScreen: View {
                 RingBanner(invite: invite, notNow: { waiting.notNow() }, switchCall: { waiting.switchToInvite() })
                     .padding(.horizontal, InCallStyle.gutter)
                     .padding(.top, 8)
-                    .frame(maxWidth: SuiteLayout.sheetWidth)
+                    .frame(maxWidth: BurrowLayout.sheetWidth)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }

@@ -263,9 +263,9 @@ struct WhatsWaitingIntent: AppIntent {
                     let entity = ApprovalEntity(id: id, title: row.title, isPlan: row.kind == .plan, spaceName: row.space, subtitle: "")
                     HStack(spacing: 8) {
                         Button("Approve", intent: ApproveIntent(approval: entity))
-                            .buttonStyle(SuiteApproveButtonStyle())
+                            .buttonStyle(BurrowApproveButtonStyle())
                         Button("Reject", intent: RejectIntent(approval: entity))
-                            .buttonStyle(SuiteRejectButtonStyle())
+                            .buttonStyle(BurrowRejectButtonStyle())
                     }
                 }
             })

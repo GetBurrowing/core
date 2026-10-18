@@ -8,7 +8,7 @@ import WidgetKit
 struct CountsProvider: TimelineProvider {
     var installs = InstallStore.shared
     var cache = CountsCache()
-    var client = SuiteAPIClient.shared
+    var client = BurrowAPIClient.shared
 
     func placeholder(in context: Context) -> CountsEntry { .preview }
 

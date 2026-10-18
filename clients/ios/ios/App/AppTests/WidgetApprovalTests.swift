@@ -35,7 +35,7 @@ final class WidgetApprovalTests: XCTestCase {
         defer { InstallStore.didRemove = removeHook }
         for host in hosts { store.add(host: host) }
         return WidgetApprovalActions(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
             installs: store, store: WidgetApprovalStore(defaults: defaults), pending: PendingApproveStore(directory: pendingDirectory),
             now: { [unowned self] in self.clock }, reload: {})
     }
@@ -61,8 +61,8 @@ final class WidgetApprovalTests: XCTestCase {
 
     private func id(_ host: String, _ uuid: String) -> String { EntityRef(host: host, uuid: uuid).id }
 
-    private func approval(_ uuid: String, title: String = "Burrow iOS intents plan") -> SuiteApproval {
-        SuiteApproval(
+    private func approval(_ uuid: String, title: String = "Burrow iOS intents plan") -> BurrowApproval {
+        BurrowApproval(
             id: uuid, kind: "plan", title: title, spaceName: "Burrow iOS", spacePathSegment: nil, taskID: "7a000000-0000-4000-8000-000000000001",
             insertedAt: nil, summary: "Add App Intents")
     }
@@ -422,7 +422,7 @@ final class WidgetApprovalTests: XCTestCase {
         let p2 = approval("ab000000-0000-4000-8000-0000000000a2")
         let p3 = approval("ab000000-0000-4000-8000-0000000000a3")
         let previous = [p1, p2, p3]
-        func merged(settled: SuiteApproval, state: WidgetRowState = .approved) -> [String] {
+        func merged(settled: BurrowApproval, state: WidgetRowState = .approved) -> [String] {
             let marks = [id(b, settled.id): WidgetRowMark(state: state, at: clock)]
             return ApprovalsCache.merge(fetched: previous.filter { $0 != settled }, previous: previous, host: b, marks: marks, now: clock).map(\.id)
         }
@@ -447,7 +447,7 @@ final class WidgetApprovalTests: XCTestCase {
         XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 0, install: nil).value, "Nothing waiting")
         XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 0, install: nil).symbol, "tray")
         XCTAssertEqual(ControlCopy.waiting(signedIn: false, approvals: 3, install: nil).value, "Sign in to Burrow")
-        XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 1, install: "Legacy Suite").value, "1 approval, Legacy Suite")
+        XCTAssertEqual(ControlCopy.waiting(signedIn: true, approvals: 1, install: "Legacy Burrow").value, "1 approval, Legacy Burrow")
         XCTAssertEqual(
             ControlCopy.startMeeting(lastSpace: "Burrow iOS", install: nil),
             ControlCopy(symbol: "video.badge.plus", label: "Start meeting", value: "in Burrow iOS"))

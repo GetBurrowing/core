@@ -72,7 +72,8 @@ defmodule Platform.Federation.Peers.Client do
   @max_response_bytes 64 * 1024
   @inbox_path "/federation/v1/inbox"
   @descriptor_path "/.well-known/suite-federation"
-  @protocol "suite-federation/1"
+  # Every protocol id a peer's descriptor may name (task 01a14ba9 stage 1).
+  @protocols ["suite-federation/1", "burrow-federation/2"]
 
   @type target :: %{url: String.t(), hostname: String.t() | nil}
 
@@ -111,6 +112,11 @@ defmodule Platform.Federation.Peers.Client do
   @doc """
   Fetches and shape-checks a peer's `/.well-known/suite-federation`
   descriptor. Returns the decoded map (string keys) or `{:error, reason}`.
+
+  `protocol` must be `"suite-federation/1"` or `"burrow-federation/2"`. A
+  descriptor with no `protocols` list (a peer from before task 01a14ba9) is
+  normalised to `"protocols" => [protocol]`; a malformed one is
+  `:invalid_descriptor`.
   """
   @spec fetch_descriptor(String.t()) :: {:ok, map()} | {:error, term()}
   def fetch_descriptor(base_url) when is_binary(base_url) do
@@ -119,9 +125,9 @@ defmodule Platform.Federation.Peers.Client do
     case request(:get, url, headers: [{"accept", "application/json"}]) do
       {:ok, %{status: 200, body: body}} ->
         case decode_json(body) do
-          %{"protocol" => @protocol, "install_id" => id, "keys" => keys} = desc
-          when is_binary(id) and is_list(keys) ->
-            {:ok, desc}
+          %{"protocol" => protocol, "install_id" => id, "keys" => keys} = desc
+          when protocol in @protocols and is_binary(id) and is_list(keys) ->
+            normalise_protocols(desc)
 
           _ ->
             {:error, :invalid_descriptor}
@@ -136,6 +142,24 @@ defmodule Platform.Federation.Peers.Client do
   end
 
   def fetch_descriptor(_), do: {:error, :malformed_url}
+
+  defp normalise_protocols(%{"protocol" => protocol} = desc) do
+    case Map.fetch(desc, "protocols") do
+      :error ->
+        {:ok, Map.put(desc, "protocols", [protocol])}
+
+      {:ok, nil} ->
+        {:ok, Map.put(desc, "protocols", [protocol])}
+
+      {:ok, list} when is_list(list) ->
+        if Enum.all?(list, &is_binary/1),
+          do: {:ok, desc},
+          else: {:error, :invalid_descriptor}
+
+      {:ok, _} ->
+        {:error, :invalid_descriptor}
+    end
+  end
 
   @doc """
   The SSRF guard. Returns the pinned target for `url`, or the reason it is

@@ -26,9 +26,9 @@ class PkceTest {
     @Test
     fun `login URL carries the S256 challenge of the session's own verifier`() {
         val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-        val session = AuthSession(Install("suite.example.com"), verifier)
+        val session = AuthSession(Install("burrow.example.com"), verifier)
         assertEquals(
-            "https://suite.example.com/auth/login?app_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "https://burrow.example.com/auth/login?app_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
             session.loginUrl,
         )
         assertTrue(verifier !in session.toString())

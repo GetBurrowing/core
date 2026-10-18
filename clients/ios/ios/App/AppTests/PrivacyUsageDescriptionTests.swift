@@ -7,7 +7,7 @@ import XCTest
 /// getUserMedia reaches TCC on behalf of the app. v1.1 (3) had no microphone key
 /// and crashed on joining a meeting.
 final class PrivacyUsageDescriptionTests: XCTestCase {
-    private let info = Bundle(for: SuiteBridgeViewController.self).infoDictionary ?? [:]
+    private let info = Bundle(for: BurrowBridgeViewController.self).infoDictionary ?? [:]
 
     func testEveryCaptureTheWebViewCanRequestHasAUsageDescription() {
         // Meetings (LiveKit in the web view) use the microphone and the camera;

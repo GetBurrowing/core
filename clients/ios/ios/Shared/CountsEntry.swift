@@ -7,7 +7,7 @@ struct CountsEntry: TimelineEntry {
     let date: Date
     let host: String?
     let signedIn: Bool
-    let counts: SuiteCounts?
+    let counts: BurrowCounts?
 
     func state(_ kind: SlabKind) -> SlabState {
         guard signedIn else { return .signedOut }
@@ -30,7 +30,7 @@ struct CountsEntry: TimelineEntry {
 
     static let preview = CountsEntry(
         date: Date(), host: "yourteam.example.com", signedIn: true,
-        counts: SuiteCounts(approvals: 3, tasks: 12, fetchedAt: Date()))
+        counts: BurrowCounts(approvals: 3, tasks: 12, fetchedAt: Date()))
 
     /// The widgets ask for a new timeline this often.
     static let refreshInterval: TimeInterval = 15 * 60

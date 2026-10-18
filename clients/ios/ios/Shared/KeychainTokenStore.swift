@@ -31,11 +31,11 @@ protocol TokenHostListing {
 ///   Nothing in this file prints a token.
 ///
 /// The access group carries the team prefix, which only the build knows, so
-/// each target's Info.plist passes it in as `SuiteKeychainAccessGroup`.
+/// each target's Info.plist passes it in as `BurrowKeychainAccessGroup`.
 struct KeychainTokenStore: MutableTokenStore, TokenHostListing {
     static let service = "com.kobo-ai.burrow.session"
     static let accessGroupSuffix = "com.kobo-ai.burrow.shared"
-    static let infoPlistKey = "SuiteKeychainAccessGroup"
+    static let infoPlistKey = "BurrowKeychainAccessGroup"
 
     static let shared = KeychainTokenStore()
 

@@ -1,4 +1,4 @@
-defmodule SuiteRelease.MixProject do
+defmodule BurrowRelease.MixProject do
   @moduledoc """
   The with-modules release host (ADR 0055, task 01a0ee08): a Mix project with
   no code of its own whose deps are core plus the selected build-time
@@ -12,14 +12,14 @@ defmodule SuiteRelease.MixProject do
       mix assets.build     # generated @extensions entry + wrapper stylesheet
 
   Stage 4 builds and publishes the release image from
-  `apps/suite_release/Dockerfile`; `apps/platform/Dockerfile` builds the
+  `apps/burrow_release/Dockerfile`; `apps/platform/Dockerfile` builds the
   without-modules image.
   """
   use Mix.Project
 
   def project do
     [
-      app: :suite_release,
+      app: :burrow_release,
       version: "0.1.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -54,7 +54,7 @@ defmodule SuiteRelease.MixProject do
       # The image's asset build (stage 4): core's `assets.deploy` with this
       # host's generated inputs and output directory. Core's
       # `copy_excalidraw_assets.mjs` and `phx.digest` run in
-      # apps/suite_release/Dockerfile, which moves these outputs into core's
+      # apps/burrow_release/Dockerfile, which moves these outputs into core's
       # `priv/static` (the `from: :platform` the Endpoint serves) inside the
       # image only, so nothing is ever written into apps/platform's tree here.
       "assets.deploy": [

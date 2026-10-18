@@ -90,7 +90,7 @@ class PushPermissionTest {
         // pushState's only inputs are the SDK, Android's switch and this
         // device's flag: the per-user web banner dismissal (PR #1190) cannot
         // reach it. The plugin source reads no banner or server state either.
-        val plugin = File("src/main/java/com/koboai/burrow/SuiteNativePlugin.kt").readText()
+        val plugin = File("src/main/java/com/koboai/burrow/BurrowNativePlugin.kt").readText()
         val pushState = plugin.substringAfter("fun pushState(").substringBefore("@PluginMethod")
         assertTrue(pushState.contains("BurrowPush.prefs(context).explainerShown"))
         for (word in listOf("banner", "dismiss", "push_permission", "client(", "handoff")) {

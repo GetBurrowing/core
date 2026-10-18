@@ -4,9 +4,9 @@ import XCTest
 
 final class ThemeTests: XCTestCase {
     func testEveryColourSlotHasANamedAsset() {
-        for slot in SuiteColor.allCases {
+        for slot in BurrowColor.allCases {
             XCTAssertNotNil(
-                UIColor(named: slot.rawValue, in: Bundle(for: SuiteBridgeViewController.self), compatibleWith: nil),
+                UIColor(named: slot.rawValue, in: Bundle(for: BurrowBridgeViewController.self), compatibleWith: nil),
                 "missing colour asset \(slot.rawValue)")
         }
     }
@@ -41,15 +41,15 @@ final class ThemeTests: XCTestCase {
     func testTheScannerCatchesLiteralColours() {
         XCTAssertFalse(Self.literalColours(in: #"Circle().stroke(Color(red: 0, green: 0.8, blue: 0.9))"#).isEmpty)
         XCTAssertFalse(Self.literalColours(in: #".foregroundStyle(.white)"#).isEmpty)
-        XCTAssertFalse(Self.literalColours(in: #".foregroundStyle(muted ? .gray : SuiteColor.onSurface.color)"#).isEmpty)
+        XCTAssertFalse(Self.literalColours(in: #".foregroundStyle(muted ? .gray : BurrowColor.onSurface.color)"#).isEmpty)
         XCTAssertFalse(Self.literalColours(in: #"view.backgroundColor = UIColor.black"#).isEmpty)
         XCTAssertFalse(Self.literalColours(in: #".tint(Color.cyan)"#).isEmpty)
-        XCTAssertEqual(Self.literalColours(in: #".foregroundStyle(SuiteColor.info.color)"#), [])
-        XCTAssertEqual(Self.literalColours(in: #".fill((inverted ? SuiteColor.onSurface : .surfaceMuted).color)"#), [])
+        XCTAssertEqual(Self.literalColours(in: #".foregroundStyle(BurrowColor.info.color)"#), [])
+        XCTAssertEqual(Self.literalColours(in: #".fill((inverted ? BurrowColor.onSurface : .surfaceMuted).color)"#), [])
         XCTAssertEqual(Self.literalColours(in: #"/// iOS `primary` is orange; Color(red:) is banned"#), [])
     }
 
-    /// Every colour under App/Meetings comes through a `SuiteColor` slot.
+    /// Every colour under App/Meetings comes through a `BurrowColor` slot.
     func testMeetingsCodeHasNoLiteralColour() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("App/Meetings")
@@ -60,11 +60,11 @@ final class ThemeTests: XCTestCase {
         var offences: [String] = []
         for file in files {
             for (n, line) in try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines).enumerated() {
-                slotUses += line.components(separatedBy: "SuiteColor.").count - 1
+                slotUses += line.components(separatedBy: "BurrowColor.").count - 1
                 offences += Self.literalColours(in: line).map { "\(file.lastPathComponent):\(n + 1) \($0)" }
             }
         }
-        XCTAssertGreaterThan(slotUses, 10, "the screen draws through SuiteColor slots")
+        XCTAssertGreaterThan(slotUses, 10, "the screen draws through BurrowColor slots")
         XCTAssertEqual(offences, [])
     }
 }

@@ -221,6 +221,44 @@ describe("MeetingClient native hand-off (SuiteMeetings)", () => {
 
     expect(livekitFake.created.length).toBe(1)
   })
+
+  // Task 01a14ba9 stage 4: newer app builds register `BurrowMeetings`, older
+  // ones `SuiteMeetings`. The page reads either, Burrow first.
+  it("Burrow-only (BurrowMeetings): joins natively and builds NO Room", async () => {
+    const plugin = fakePlugin()
+    window.Capacitor = { Plugins: { BurrowMeetings: plugin } }
+    const hook = buildHook()
+
+    await hook._join({ ...PAYLOAD, meeting_id: "m1" })
+
+    expect(plugin.joins).toEqual([{ meetingId: "m1" }])
+    expect(livekitFake.created.length).toBe(0)
+  })
+
+  it("Suite-only (SuiteMeetings, an older app build): still joins natively", async () => {
+    const plugin = fakePlugin()
+    window.Capacitor = { Plugins: { SuiteMeetings: plugin } }
+    const hook = buildHook()
+
+    expect(hook._nativeMeetings()).toBe(plugin)
+    await hook._join({ ...PAYLOAD, meeting_id: "m1" })
+
+    expect(plugin.joins).toEqual([{ meetingId: "m1" }])
+    expect(livekitFake.created.length).toBe(0)
+  })
+
+  it("both present: BurrowMeetings wins and SuiteMeetings is never called", async () => {
+    const burrow = fakePlugin()
+    const suite = fakePlugin()
+    window.Capacitor = { Plugins: { BurrowMeetings: burrow, SuiteMeetings: suite } }
+    const hook = buildHook()
+
+    expect(hook._nativeMeetings()).toBe(burrow)
+    await hook._join({ ...PAYLOAD, meeting_id: "m1" })
+
+    expect(burrow.joins).toEqual([{ meetingId: "m1" }])
+    expect(suite.joins).toEqual([])
+  })
 })
 
 /**

@@ -20,7 +20,8 @@ defmodule PlatformWeb.Router do
        is a fixed absolute URL), the `/org-context[/*file_key]` 301s, the
        HMAC-token attachment routes, the subscribed `invite.ics` calendar
        feed, the `/api/*` + `/mcp` machine callers, and the
-       `/.well-known/suite-federation` peer descriptor.
+       `/.well-known/suite-federation` (and `/.well-known/burrow-federation`)
+       peer descriptor.
 
   Enforcement of bucket 1 is the `:host_surface_enforcement` config flag, `:on`
   as of stage 4. The whole point of it being a flag is that the rollback is one
@@ -1070,6 +1071,9 @@ defmodule PlatformWeb.Router do
   scope "/.well-known", PlatformWeb do
     pipe_through(:api)
     get("/suite-federation", FederationWellKnownController, :show)
+    # Same descriptor under the renamed protocol (task 01a14ba9 stage 1). The
+    # suite path stays: peers running older core fetch only that one.
+    get("/burrow-federation", FederationWellKnownController, :show)
   end
 
   # Install-to-install federation inbox (task 01a0d90f stage 3, ADR 0054).

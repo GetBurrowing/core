@@ -146,7 +146,7 @@ struct SpotlightIndexMigration {
 /// Indexing for the iOS 27 messages and phone entities, called from the
 /// catalog's fetch path. Below iOS 27 there is nothing to index here.
 enum PersonalIndex {
-    static func index(people: [SuitePerson], host: String, env: IntentEnvironment) {
+    static func index(people: [BurrowPerson], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
         let entities = people.map { MessagePersonEntity($0, host: host, env: env) }
         PeopleCache.shared.remember(entities)
@@ -163,7 +163,7 @@ enum PersonalIndex {
     /// (Array<Person> | Schema<MessagePerson> | Array<Schema<MessagePerson>>)'"),
     /// so an indexed conversation named "Dalton" could only compete with
     /// the person Dalton for the spoken name.
-    static func index(spaces: [SuiteSpace], host: String, env: IntentEnvironment) {
+    static func index(spaces: [BurrowSpace], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
         SpotlightIndexer.index(spaces.filter { !$0.isDirectMessage && $0.kind != "group" }.map { ConversationEntity($0, host: host, env: env) }, host: host)
     }

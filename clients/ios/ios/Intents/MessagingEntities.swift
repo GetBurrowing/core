@@ -85,7 +85,7 @@ struct MessagePersonEntity {
         self.person = person
     }
 
-    init(_ person: SuitePerson, host: String, env: IntentEnvironment) {
+    init(_ person: BurrowPerson, host: String, env: IntentEnvironment) {
         let lead = person.isAgent ? "Agent" : "Person"
         self.init(
             id: EntityRef(host: host, uuid: person.id).id, name: person.name, kind: person.kind,
@@ -323,7 +323,7 @@ struct ConversationEntity {
         self.dateLastActive = nil
     }
 
-    init(_ space: SuiteSpace, host: String, env: IntentEnvironment) {
+    init(_ space: BurrowSpace, host: String, env: IntentEnvironment) {
         self.init(
             id: EntityRef(host: host, uuid: space.id).id, name: space.name, org: space.org?.name,
             isDirectMessage: space.isDirectMessage, pathSegment: space.linkSegment, install: env.disambiguator(host))

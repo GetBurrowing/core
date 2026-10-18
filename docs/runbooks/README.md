@@ -30,3 +30,6 @@ rollback, verification.
   — After the task `01a114a8` deploy: grant `code_mode`, create and start the
   `dispatch.code_mode` experiment for five agents, install the usage hook per
   host, the dsh and Oddjob follow-ups, and how to read `code_mode_report`.
+- [`burrow-rename-deferred.md`](burrow-rename-deferred.md)
+  — The ledger of `suite`-named identifiers the Burrow rename (task
+  `01a14ba9`) keeps on purpose, each with its reason and removal condition.

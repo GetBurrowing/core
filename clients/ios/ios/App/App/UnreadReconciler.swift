@@ -9,12 +9,12 @@ import WidgetKit
 /// last count and is marked stale. Then the icon badge becomes the sum, and
 /// listeners hear `.burrowInstallBadgesChanged`.
 enum UnreadReconciler {
-    typealias Fetch = (String, @escaping (Result<SuiteCounts, Error>) -> Void) -> Void
+    typealias Fetch = (String, @escaping (Result<BurrowCounts, Error>) -> Void) -> Void
 
     static let maxConcurrent = 4
 
     static func refreshAll() {
-        let client = SuiteAPIClient.shared
+        let client = BurrowAPIClient.shared
         let hosts = InstallStore.shared.installs.map(\.host).filter { client.isSignedIn(host: $0) }
         reconcile(
             hosts: hosts, store: .shared,
@@ -28,7 +28,7 @@ enum UnreadReconciler {
     /// after it.
     static func reconcile(
         hosts: [String], store: InstallUnreadStore, maxConcurrent: Int = maxConcurrent, fetch: @escaping Fetch,
-        answered: @escaping (String, SuiteCounts) -> Void = { _, _ in }, completion: @escaping (Int) -> Void = { _ in }
+        answered: @escaping (String, BurrowCounts) -> Void = { _, _ in }, completion: @escaping (Int) -> Void = { _ in }
     ) {
         let group = DispatchGroup()
         let slots = DispatchSemaphore(value: max(1, maxConcurrent))
@@ -66,15 +66,15 @@ enum UnreadReconciler {
 
     private final class ResultBox: @unchecked Sendable {
         private let lock = NSLock()
-        private var values: [String: Result<SuiteCounts, Error>] = [:]
+        private var values: [String: Result<BurrowCounts, Error>] = [:]
 
-        func set(_ host: String, _ result: Result<SuiteCounts, Error>) {
+        func set(_ host: String, _ result: Result<BurrowCounts, Error>) {
             lock.lock()
             values[host] = result
             lock.unlock()
         }
 
-        func get(_ host: String) -> Result<SuiteCounts, Error>? {
+        func get(_ host: String) -> Result<BurrowCounts, Error>? {
             lock.lock()
             defer { lock.unlock() }
             return values[host]
@@ -91,7 +91,7 @@ enum UnreadReconciler {
 /// install got two counts requests per open. Android's `ResumeRefresh`.
 enum OpenRefresh {
     static func run() {
-        let client = SuiteAPIClient.shared
+        let client = BurrowAPIClient.shared
         let hosts = InstallStore.shared.installs.map(\.host).filter { client.isSignedIn(host: $0) }
         run(
             hosts: hosts, selectedHost: InstallStore.shared.selectedHost, client: client, store: .shared,
@@ -101,7 +101,7 @@ enum OpenRefresh {
 
     /// The testable core: `client` is the only thing that touches the network.
     static func run(
-        hosts: [String], selectedHost: String?, client: SuiteAPIClient, store: InstallUnreadStore, cache: CountsCache,
+        hosts: [String], selectedHost: String?, client: BurrowAPIClient, store: InstallUnreadStore, cache: CountsCache,
         reloadWidgets: @escaping () -> Void, completion: @escaping (Int) -> Void = { _ in }
     ) {
         UnreadReconciler.reconcile(

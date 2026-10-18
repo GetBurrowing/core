@@ -15,7 +15,7 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 
 class AppShareClientTest {
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val tokens = KeystoreTokenStore(InMemoryKeyValueStore(), FakeTokenCipher()).also { it.store(host, "tok_bearer") }
 
     @Test
@@ -41,7 +41,7 @@ class AppShareClientTest {
     fun `a non-2xx, a bad space id, or no bearer is an ApiException and nothing leaks`() {
         val client = AppShareClient(AppApiClient(tokens, RecordingTransport())) { _, _, _ -> HttpResponse(413, "{}") }
         val form = MultipartForm(listOf("text" to "hi"), null)
-        for ((h, id) in listOf(host to "0192-s1", host to "../session", "suite.example.org" to "0192-s1")) {
+        for ((h, id) in listOf(host to "0192-s1", host to "../session", "burrow.example.org" to "0192-s1")) {
             try {
                 client.send(h, id, form)
                 fail("expected a failure for $h $id")

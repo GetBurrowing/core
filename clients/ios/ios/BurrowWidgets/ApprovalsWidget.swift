@@ -59,11 +59,11 @@ struct ApprovalsWidgetView: View {
                 }
             }
             .padding(ApprovalsLayout.padding)
-            .containerBackground(SuiteColor.surface.color, for: .widget)
+            .containerBackground(BurrowColor.surface.color, for: .widget)
         default:
             ApprovalsList(entry: entry, maxRows: ApprovalsLayout.maxRows(family), showsSummary: false, showsHeader: true)
                 .padding(ApprovalsLayout.padding)
-                .containerBackground(SuiteColor.surface.color, for: .widget)
+                .containerBackground(BurrowColor.surface.color, for: .widget)
         }
     }
 }
@@ -83,7 +83,7 @@ struct ApprovalsList: View {
                 Link(destination: entry.inboxURL) {
                     Text(SlabKind.approvals.caption(for: entry.slab, fetchedAt: nil))
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(SuiteColor.onSurface.color)
+                        .foregroundStyle(BurrowColor.onSurface.color)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 }
             case .live, .stale:
@@ -93,7 +93,7 @@ struct ApprovalsList: View {
                 if entry.slab == .stale {
                     Text(SlabKind.approvals.caption(for: .stale, fetchedAt: entry.fetchedAt))
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(SuiteColor.muted.color)
+                        .foregroundStyle(BurrowColor.muted.color)
                 }
                 Spacer(minLength: 0)
                 if maxRows > 2, entry.rows.count > maxRows {
@@ -104,7 +104,7 @@ struct ApprovalsList: View {
                             Image(systemName: "chevron.right")
                         }
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(SuiteColor.onSurface.color)
+                        .foregroundStyle(BurrowColor.onSurface.color)
                     }
                 }
             }
@@ -121,27 +121,27 @@ struct ApprovalsHeader: View {
         HStack(spacing: 8) {
             Text(SlabKind.approvals.title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .lineLimit(1)
             Spacer(minLength: 4)
             if let install = entry.installName {
                 Text(install)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(SuiteColor.surfaceMuted.color))
+                    .background(Capsule().fill(BurrowColor.surfaceMuted.color))
             }
             if entry.slab != .signedOut {
                 let live = entry.slab.usesLiveFill
                 Text("\(entry.count)")
                     .font(.system(size: 15, weight: .heavy))
                     .monospacedDigit()
-                    .foregroundStyle(live ? SuiteColor.onInfo.color : SuiteColor.onSurface.color)
+                    .foregroundStyle(live ? BurrowColor.onInfo.color : BurrowColor.onSurface.color)
                     .frame(minWidth: 28, minHeight: 24)
                     .padding(.horizontal, 4)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(live ? SuiteColor.info.color : SuiteColor.surfaceMuted.color))
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(live ? BurrowColor.info.color : BurrowColor.surfaceMuted.color))
             }
         }
         .accessibilityElement(children: .combine)
@@ -159,20 +159,20 @@ struct ApprovalRowView: View {
             case .confirming:
                 Text("Approve \(row.approval.title)?")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     // Confirm makes this prompt out of date until Approving draws.
                     .invalidatableContent()
-                Button(intent: ConfirmApprovalIntent(approvalID: row.id)) { Text("Confirm").suiteApproveChrome() }
+                Button(intent: ConfirmApprovalIntent(approvalID: row.id)) { Text("Confirm").burrowApproveChrome() }
                     .buttonStyle(.plain)
-                Button(intent: CancelArmIntent(approvalID: row.id)) { Text("Cancel").suiteRejectChrome() }
+                Button(intent: CancelArmIntent(approvalID: row.id)) { Text("Cancel").burrowRejectChrome() }
                     .buttonStyle(.plain)
             case .failed:
                 Link(destination: entry.taskURL(row)) {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(SuiteColor.destructive.color)
+                            .foregroundStyle(BurrowColor.destructive.color)
                             .accessibilityHidden(true)
                         titleBlock(note: "Couldn't approve. Tap to open.")
                     }
@@ -188,19 +188,19 @@ struct ApprovalRowView: View {
     @ViewBuilder private var trailing: some View {
         switch row.display {
         case .live:
-            Button(intent: ArmApprovalIntent(approvalID: row.id)) { Text("Approve").suiteApproveChrome() }
+            Button(intent: ArmApprovalIntent(approvalID: row.id)) { Text("Approve").burrowApproveChrome() }
                 .buttonStyle(.plain)
             // A rejection needs a note: Reject opens the task in the app.
-            Link(destination: entry.taskURL(row)) { Text("Reject").suiteRejectChrome() }
+            Link(destination: entry.taskURL(row)) { Text("Reject").burrowRejectChrome() }
         case .approving:
             // A widget cannot animate; a static symbol stands for the spinner.
-            status(Image(systemName: "hourglass").foregroundStyle(SuiteColor.onSurface.color), "Approving")
+            status(Image(systemName: "hourglass").foregroundStyle(BurrowColor.onSurface.color), "Approving")
         case .approved:
-            status(Image(systemName: "checkmark.circle.fill").foregroundStyle(SuiteColor.onSurface.color), "Approved")
+            status(Image(systemName: "checkmark.circle.fill").foregroundStyle(BurrowColor.onSurface.color), "Approved")
         case .alreadyHandled(let by):
             Text(IntentCopy.alreadyHandled(by: by))
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
         case .stale, .confirming, .failed:
@@ -214,7 +214,7 @@ struct ApprovalRowView: View {
             icon.accessibilityHidden(true)
             Text(text)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
         }
     }
 
@@ -222,23 +222,23 @@ struct ApprovalRowView: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(row.approval.title)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .lineLimit(1)
             if let note {
                 Text(note)
                     .font(.system(size: 13))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .lineLimit(1)
             } else if let space = row.approval.spaceName {
                 Text(space)
                     .font(.system(size: 13))
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .foregroundStyle(BurrowColor.muted.color)
                     .lineLimit(1)
             }
             if showsSummary, note == nil, let summary = row.approval.summary, !summary.isEmpty {
                 Text(summary)
                     .font(.system(size: 13))
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .foregroundStyle(BurrowColor.muted.color)
                     .lineLimit(1)
             }
         }

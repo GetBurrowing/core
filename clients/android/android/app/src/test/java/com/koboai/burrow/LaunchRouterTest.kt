@@ -140,7 +140,7 @@ class LaunchRouterTest {
     }
 
     private fun conversation(
-        host: String = "suite.example.com",
+        host: String = "burrow.example.com",
         path: String = "/chat/internal-legacy-sxi",
     ) = Intent(LaunchRouter.ACTION_OPEN_CONVERSATION)
         .setClassName("com.koboai.burrow", "com.koboai.burrow.MainActivity")
@@ -151,12 +151,12 @@ class LaunchRouterTest {
     fun `a conversation shortcut opens the conversation cold and warm and is consumed`() {
         val cold = conversation()
         router.onLaunch(cold, restored = false)
-        assertEquals(listOf("openConversation(suite.example.com,/chat/internal-legacy-sxi)"), shell.calls)
+        assertEquals(listOf("openConversation(burrow.example.com,/chat/internal-legacy-sxi)"), shell.calls)
         assertNull(cold.action)
         shell.calls.clear()
         val warm = conversation()
         router.onNewIntent(warm)
-        assertEquals(listOf("openConversation(suite.example.com,/chat/internal-legacy-sxi)"), shell.calls)
+        assertEquals(listOf("openConversation(burrow.example.com,/chat/internal-legacy-sxi)"), shell.calls)
         assertNull(warm.action)
     }
 

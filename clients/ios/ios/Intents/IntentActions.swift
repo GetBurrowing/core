@@ -203,7 +203,7 @@ struct IntentActions {
             let elapsed = env.now().timeIntervalSince(start)
             guard elapsed <= window else { return finish(.timedOut) }
             progress?(min(1, elapsed / window))
-            let messages: [SuiteMessage]
+            let messages: [BurrowMessage]
             do {
                 messages = try await env.client.messagesAfter(host: ref.host, spaceID: spaceID, after: cursor)
             } catch {

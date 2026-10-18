@@ -5,7 +5,7 @@ import WidgetKit
 /// tests (ExtensionRenderTests) can compile the views without an `@main`.
 /// The controls need iOS 18; the widgets target stays on 17.
 @main
-struct SuiteWidgetBundle: WidgetBundle {
+struct BurrowWidgetBundle: WidgetBundle {
     var body: some Widget {
         ApprovalsWidget()
         TasksWidget()

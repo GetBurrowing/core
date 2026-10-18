@@ -18,7 +18,7 @@ class PushPayloadTest {
             "thread_id" to "0192-s",
             "space_id" to "0192-s",
             "message_id" to "0192-m",
-            "install_host" to "suite.example.com",
+            "install_host" to "burrow.example.com",
             "author_name" to "Sam",
             "space_name" to "Internal Legacy SXI",
         )
@@ -32,7 +32,7 @@ class PushPayloadTest {
         assertEquals("/chat/internal-legacy-sxi?message=0192-m", p.url)
         assertEquals("0192-s", p.spaceId)
         assertEquals("0192-m", p.messageId)
-        assertEquals("suite.example.com", p.installHost)
+        assertEquals("burrow.example.com", p.installHost)
         assertEquals("Sam", p.authorName)
         assertEquals("Internal Legacy SXI", p.spaceName)
         assertTrue(p.isMention)
@@ -79,20 +79,20 @@ class PushPayloadTest {
 
     @Test
     fun `the install host is normalised and a non-host is dropped`() {
-        assertEquals("suite.example.com", PushPayload.from(mention + ("install_host" to "Suite.Example.Com")).installHost)
+        assertEquals("burrow.example.com", PushPayload.from(mention + ("install_host" to "Burrow.Example.Com")).installHost)
         assertNull(PushPayload.from(mention + ("install_host" to "not a host")).installHost)
     }
 
     @Test
     fun `group keys are per install and space for mentions, per install for approvals`() {
-        assertEquals("mentions:suite.example.com:0192-s", PushPayload.from(mention).groupKey)
-        val review = PushPayload.from(mapOf("kind" to "review_request_pending", "install_host" to "suite.example.com", "task_id" to "t1"))
-        val plan = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "suite.example.com", "task_id" to "t2"))
-        assertEquals("approvals:suite.example.com", review.groupKey)
+        assertEquals("mentions:burrow.example.com:0192-s", PushPayload.from(mention).groupKey)
+        val review = PushPayload.from(mapOf("kind" to "review_request_pending", "install_host" to "burrow.example.com", "task_id" to "t1"))
+        val plan = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "burrow.example.com", "task_id" to "t2"))
+        assertEquals("approvals:burrow.example.com", review.groupKey)
         assertEquals(review.groupKey, plan.groupKey)
-        val other = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "suite.example.org"))
+        val other = PushPayload.from(mapOf("kind" to "task_plan_review", "install_host" to "burrow.example.org"))
         assertNotEquals(review.groupKey, other.groupKey)
-        assertNull(PushPayload.from(mapOf("kind" to "chat_message", "install_host" to "suite.example.com")).groupKey)
+        assertNull(PushPayload.from(mapOf("kind" to "chat_message", "install_host" to "burrow.example.com")).groupKey)
     }
 
     @Test
@@ -158,7 +158,7 @@ class PushPayloadTest {
 
     @Test
     fun `the avatar url and tone are parsed and round-trip through the reply bundle`() {
-        val url = "https://suite.example.com/api/app/agents/0192-a/avatar?v=c0ffee12"
+        val url = "https://burrow.example.com/api/app/agents/0192-a/avatar?v=c0ffee12"
         val p = PushPayload.from(mention + ("author_avatar_url" to url) + ("author_avatar_tone" to "agent"))
         assertEquals(url, p.authorAvatarUrl)
         assertEquals("agent", p.authorAvatarTone)
@@ -181,13 +181,13 @@ class PushPayloadTest {
 
     @Test
     fun `a chat push with host and space has a shortcut id, a redacted one does not`() {
-        assertEquals("suite.example.com|0192-s", PushPayload.from(mention).shortcutId)
+        assertEquals("burrow.example.com|0192-s", PushPayload.from(mention).shortcutId)
         assertNull(PushPayload.from(mention - "space_id").shortcutId)
         assertNull(PushPayload.from(mention - "install_host").shortcutId)
         assertNull(
             PushPayload
                 .from(
-                    mapOf("kind" to "review_request_pending", "install_host" to "suite.example.com", "space_id" to "s"),
+                    mapOf("kind" to "review_request_pending", "install_host" to "burrow.example.com", "space_id" to "s"),
                 ).shortcutId,
         )
     }

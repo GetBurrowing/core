@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the person shared into Suite, already copied somewhere the
+/// What the person shared into Burrow, already copied somewhere the
 /// extension owns (a file the system hands over is deleted when its
 /// callback returns).
 enum SharePayload: Equatable {
@@ -21,7 +21,7 @@ enum SharePayload: Equatable {
     /// The multipart body for `POST /api/app/spaces/:id/messages`: `text`
     /// (the message, then the shared URL or text on its own line), an
     /// optional `agent_id`, and for a file the single `file` part.
-    func form(message: String, agentID: String?, boundary: String = "suite-\(UUID().uuidString)") -> MultipartForm {
+    func form(message: String, agentID: String?, boundary: String = "burrow-\(UUID().uuidString)") -> MultipartForm {
         let note = message.trimmingCharacters(in: .whitespacesAndNewlines)
         var text: String
         switch self {
@@ -71,7 +71,7 @@ final class ShareSheetModel: ObservableObject {
                 return "Couldn't load your spaces. Check your connection and try again."
             case .tooLarge(let bytes):
                 return
-                    "This item is \(ByteLabel.format(bytes)). Burrow takes up to \(ByteLabel.format(SuiteAPIClient.maxRequestBytes)) from the share sheet."
+                    "This item is \(ByteLabel.format(bytes)). Burrow takes up to \(ByteLabel.format(BurrowAPIClient.maxRequestBytes)) from the share sheet."
             case .overLimit(let name, let bytes, let label):
                 return ShareRoute.tooLargeText(name: name, bytes: bytes, label: label)
             }
@@ -83,7 +83,7 @@ final class ShareSheetModel: ObservableObject {
     static let sentDwell: TimeInterval = 1.0
 
     @Published private(set) var phase: Phase = .loadingSpaces
-    @Published private(set) var spaces: [SuiteSpace] = []
+    @Published private(set) var spaces: [BurrowSpace] = []
     @Published var selectedSpaceID: String? {
         didSet { if oldValue != selectedSpaceID { selectedAgentID = nil } }
     }
@@ -101,12 +101,12 @@ final class ShareSheetModel: ObservableObject {
     }
 
     let install: Install?
-    private let client: SuiteAPIClient
+    private let client: BurrowAPIClient
     private let lastSpace: UserDefaults
     private let uploader: LargeFileUploading
 
     init(
-        install: Install?, client: SuiteAPIClient = .shared,
+        install: Install?, client: BurrowAPIClient = .shared,
         lastSpace: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup),
         uploader: LargeFileUploading = BackgroundUploader.shared
     ) {
@@ -116,8 +116,8 @@ final class ShareSheetModel: ObservableObject {
         self.uploader = uploader
     }
 
-    var selectedSpace: SuiteSpace? { spaces.first { $0.id == selectedSpaceID } }
-    var selectedAgent: SuiteSpace.Agent? { selectedSpace?.agents.first { $0.id == selectedAgentID } }
+    var selectedSpace: BurrowSpace? { spaces.first { $0.id == selectedSpaceID } }
+    var selectedAgent: BurrowSpace.Agent? { selectedSpace?.agents.first { $0.id == selectedAgentID } }
 
     /// Fields lock while sending and after sending.
     var fieldsLocked: Bool {
@@ -141,7 +141,7 @@ final class ShareSheetModel: ObservableObject {
         else { return .multipart }
         let fileBytes = Self.fileSize(part.url)
         guard let uploadConfig else {
-            return body <= SuiteAPIClient.maxRequestBytes ? .multipart : .tooLarge(name: part.filename, bytes: fileBytes, label: "")
+            return body <= BurrowAPIClient.maxRequestBytes ? .multipart : .tooLarge(name: part.filename, bytes: fileBytes, label: "")
         }
         return ShareRoute.decide(fileName: part.filename, fileBytes: fileBytes, multipartBodyBytes: body, config: uploadConfig)
     }
@@ -176,7 +176,7 @@ final class ShareSheetModel: ObservableObject {
         }
     }
 
-    private func spacesLoaded(_ result: Result<[SuiteSpace], Error>) {
+    private func spacesLoaded(_ result: Result<[BurrowSpace], Error>) {
         switch result {
         case .success(let list):
             spaces = list
@@ -186,7 +186,7 @@ final class ShareSheetModel: ObservableObject {
                 selectedSpaceID = last
             }
             phase = .ready
-        case .failure(SuiteAPIClient.Failure.notSignedIn), .failure(SuiteAPIClient.Failure.status(401)):
+        case .failure(BurrowAPIClient.Failure.notSignedIn), .failure(BurrowAPIClient.Failure.status(401)):
             phase = .notSignedIn
         case .failure:
             banner = .spacesFailed
@@ -212,13 +212,13 @@ final class ShareSheetModel: ObservableObject {
                     self.lastSpace.set(space.id, forKey: Self.lastSpaceKey(install.host))
                     self.phase = .sent(spaceName: space.name)
                     DispatchQueue.main.asyncAfter(deadline: .now() + Self.sentDwell, execute: onSent)
-                case .failure(SuiteAPIClient.Failure.tooLarge(let bytes)):
+                case .failure(BurrowAPIClient.Failure.tooLarge(let bytes)):
                     self.banner = .tooLarge(bytes: bytes)
                     self.phase = .ready
-                case .failure(SuiteAPIClient.Failure.status(413)):
-                    self.banner = .tooLarge(bytes: (try? form.contentLength()) ?? SuiteAPIClient.maxRequestBytes + 1)
+                case .failure(BurrowAPIClient.Failure.status(413)):
+                    self.banner = .tooLarge(bytes: (try? form.contentLength()) ?? BurrowAPIClient.maxRequestBytes + 1)
                     self.phase = .ready
-                case .failure(SuiteAPIClient.Failure.notSignedIn), .failure(SuiteAPIClient.Failure.status(401)):
+                case .failure(BurrowAPIClient.Failure.notSignedIn), .failure(BurrowAPIClient.Failure.status(401)):
                     self.phase = .notSignedIn
                 case .failure:
                     self.banner = .sendFailed
@@ -230,7 +230,7 @@ final class ShareSheetModel: ObservableObject {
 
     /// A file over the multipart limit: reserve it, hand it to the
     /// background uploader, and close the sheet at once.
-    private func sendChunked(install: Install, space: SuiteSpace, part: MultipartForm.FilePart, onSent: @escaping () -> Void) {
+    private func sendChunked(install: Install, space: BurrowSpace, part: MultipartForm.FilePart, onSent: @escaping () -> Void) {
         let size = Self.fileSize(part.url)
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         client.reserveUpload(
@@ -251,10 +251,10 @@ final class ShareSheetModel: ObservableObject {
                     self.lastSpace.set(space.id, forKey: Self.lastSpaceKey(install.host))
                     self.phase = .handedOff
                     DispatchQueue.main.asyncAfter(deadline: .now() + Self.sentDwell, execute: onSent)
-                case .failure(SuiteAPIClient.Failure.refused(413, _)):
+                case .failure(BurrowAPIClient.Failure.refused(413, _)):
                     self.checkSize()
                     self.phase = .ready
-                case .failure(SuiteAPIClient.Failure.notSignedIn), .failure(SuiteAPIClient.Failure.refused(401, _)):
+                case .failure(BurrowAPIClient.Failure.notSignedIn), .failure(BurrowAPIClient.Failure.refused(401, _)):
                     self.phase = .notSignedIn
                 case .failure:
                     self.banner = .sendFailed
@@ -280,7 +280,7 @@ final class ShareSheetModel: ObservableObject {
             banner = .overLimit(name: name, bytes: bytes, label: label)
         case .tooLarge:
             let body = (try? payload?.form(message: message, agentID: nil).contentLength()) ?? nil
-            banner = .tooLarge(bytes: body ?? SuiteAPIClient.maxRequestBytes + 1)
+            banner = .tooLarge(bytes: body ?? BurrowAPIClient.maxRequestBytes + 1)
         default:
             if isSizeBanner { banner = nil }
         }
@@ -294,7 +294,7 @@ final class ShareSheetModel: ObservableObject {
 
     #if DEBUG
         /// Screenshot evidence only: put the sheet in a state without a server.
-        func debugSet(phase: Phase, banner: Banner? = nil, spaces: [SuiteSpace]? = nil, uploadConfig: UploadConfig? = nil) {
+        func debugSet(phase: Phase, banner: Banner? = nil, spaces: [BurrowSpace]? = nil, uploadConfig: UploadConfig? = nil) {
             if let spaces { self.spaces = spaces }
             if let uploadConfig { self.uploadConfig = uploadConfig }
             self.phase = phase

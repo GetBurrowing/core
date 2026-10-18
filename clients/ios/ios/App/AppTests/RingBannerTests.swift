@@ -15,7 +15,7 @@ final class RingBannerTests: XCTestCase {
     private var missed: [RingInvite] = []
 
     private let sam = RingInvite(
-        ringID: "01a111f0-0000-7000-8000-000000000002", meetingID: "m2", installHost: "suite.example.com",
+        ringID: "01a111f0-0000-7000-8000-000000000002", meetingID: "m2", installHost: "burrow.example.com",
         title: "Sam in Design review")
 
     override func setUp() async throws {
@@ -69,7 +69,7 @@ final class RingBannerTests: XCTestCase {
     func testTheInviteDecodesFromTheRingWaitingAlert() {
         let userInfo: [AnyHashable: Any] = [
             "aps": ["alert": ["title": "Sam in Design review", "body": "Invites you to join"], "category": "SUITE_RING_WAITING"],
-            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
+            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "burrow.example.com",
         ]
         XCTAssertEqual(RingInvite(userInfo: userInfo), sam)
         XCTAssertEqual(sam.initial, "S")
@@ -78,8 +78,8 @@ final class RingBannerTests: XCTestCase {
 
     func testARingWaitingPushHasNoSystemPresentation() {
         XCTAssertEqual(NotificationRouter.presentation(forCategory: "SUITE_RING_WAITING"), [])
-        XCTAssertEqual(NotificationRouter.presentation(forCategory: SuiteNotificationCategory.mention), [.banner, .list, .sound])
-        XCTAssertTrue(SuiteNotificationCategory.all().contains { $0.identifier == "SUITE_RING_WAITING" })
+        XCTAssertEqual(NotificationRouter.presentation(forCategory: BurrowNotificationCategory.mention), [.banner, .list, .sound])
+        XCTAssertTrue(BurrowNotificationCategory.all().contains { $0.identifier == "SUITE_RING_WAITING" })
     }
 
     /// Task 01a14ba1: the Burrow name for the same ring is presented the same
@@ -88,13 +88,13 @@ final class RingBannerTests: XCTestCase {
         XCTAssertEqual(NotificationRouter.presentation(forCategory: "BURROW_RING_WAITING"), [])
         XCTAssertEqual(NotificationRouter.presentation(forCategory: "BURROW_MENTION"), [.banner, .list, .sound])
         XCTAssertEqual(NotificationRouter.presentation(forCategory: "SUITE_MENTION"), [.banner, .list, .sound])
-        XCTAssertTrue(SuiteNotificationCategory.all().contains { $0.identifier == "BURROW_RING_WAITING" })
+        XCTAssertTrue(BurrowNotificationCategory.all().contains { $0.identifier == "BURROW_RING_WAITING" })
     }
 
     func testTheInviteDecodesFromABurrowRingWaitingAlert() {
         let userInfo: [AnyHashable: Any] = [
             "aps": ["alert": ["title": "Sam in Design review", "body": "Invites you to join"], "category": "BURROW_RING_WAITING"],
-            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
+            "ring_id": sam.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "burrow.example.com",
         ]
         XCTAssertEqual(RingInvite(userInfo: userInfo), sam)
     }

@@ -99,20 +99,20 @@ final class MultipartFormTests: XCTestCase {
         try handle.truncate(atOffset: 0)
         try handle.close()
         let overhead = try header.contentLength()
-        let fileBytes = SuiteAPIClient.maxRequestBytes - overhead + 1
+        let fileBytes = BurrowAPIClient.maxRequestBytes - overhead + 1
         let writer = try FileHandle(forWritingTo: url)
         try writer.truncate(atOffset: UInt64(fileBytes))
         try writer.close()
-        XCTAssertEqual(try header.contentLength(), SuiteAPIClient.maxRequestBytes + 1)
+        XCTAssertEqual(try header.contentLength(), BurrowAPIClient.maxRequestBytes + 1)
 
         StubURLProtocol.reset()
-        let client = SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["a.example.com": "tok-a"]))
+        let client = BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["a.example.com": "tok-a"]))
         let done = expectation(description: "send")
         client.sendMessage(host: "a.example.com", spaceID: "s1", form: header) { result in
-            guard case .failure(SuiteAPIClient.Failure.tooLarge(let bytes)) = result else {
+            guard case .failure(BurrowAPIClient.Failure.tooLarge(let bytes)) = result else {
                 return XCTFail("expected tooLarge, got \(result)")
             }
-            XCTAssertEqual(bytes, SuiteAPIClient.maxRequestBytes + 1)
+            XCTAssertEqual(bytes, BurrowAPIClient.maxRequestBytes + 1)
             done.fulfill()
         }
         wait(for: [done], timeout: 5)

@@ -9,8 +9,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UnreadStoreTest {
-    private val a = "suite-a.localhost"
-    private val b = "suite-b.localhost"
+    private val a = "burrow-a.localhost"
+    private val b = "burrow-b.localhost"
     private val prefs = InMemoryKeyValueStore()
     private var signedIn = listOf(a, b)
     private val store = UnreadStore(prefs) { signedIn }

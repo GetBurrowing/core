@@ -17,10 +17,31 @@ defmodule Platform.Federation.Peers.Envelope do
        "kid": <signing kid>, "ts": <unix ms>, "nonce": <16 bytes, b64url>,
        "type": <string>, "payload": {...}}
 
-  The signature is Ed25519 over `"suite-federation/1\\n" <> raw_body` and
-  travels, unpadded base64url, in the `suite-federation-signature` header.
-  The verifier works on the RAW bytes it received and never re-encodes JSON,
-  so key order and whitespace cannot change a verdict.
+  The signature is Ed25519 over `<signing prefix> <> raw_body` and travels,
+  unpadded base64url, in that protocol's signature header. The verifier works
+  on the RAW bytes it received and never re-encodes JSON, so key order and
+  whitespace cannot change a verdict.
+
+  ## Protocol ids (task 01a14ba9 stage 1)
+
+  The protocol id names the SIGNATURE DOMAIN only. The body schema is the
+  same under both, so the body's `"v"` stays `1` under either id.
+
+  | protocol id | signing prefix | signature header | sent by this install |
+  |---|---|---|---|
+  | `suite-federation/1` | `"suite-federation/1\\n"` | `suite-federation-signature` | yes (default) |
+  | `burrow-federation/2` | `"burrow-federation/2\\n"` | `burrow-federation-signature` | only when switched on AND the peer advertises it |
+
+  The id is inside the signed bytes, so a renamed id is a new protocol, not
+  an alias: a v1-only peer refuses a v2 signature. This install ACCEPTS both.
+  What it SIGNS is chosen per recipient by `build/4` (see "Choosing the
+  signing protocol" below). The verifier picks the arm by HEADER: when
+  `burrow-federation-signature` is present only it is checked, over the v2
+  prefix, with no fallback to a v1 header on the same request (so a bad v2
+  header beside a good v1 header is `:bad_signature`); otherwise
+  `suite-federation-signature` is checked over the v1 prefix; with neither,
+  `:missing_signature`. The verified map's `:protocol` names the arm that
+  verified.
 
   ## Verification order
 
@@ -52,20 +73,51 @@ defmodule Platform.Federation.Peers.Envelope do
   `Platform.Federation.Peers.Inbound`, which re-fetches the proposer's
   `.well-known`.
 
+  ## Choosing the signing protocol (task 01a14ba9 stage 2)
+
+  `build/4` signs under exactly one protocol and sends exactly one signature
+  header, never both. It picks v2 only when BOTH hold:
+
+    1. `Platform.Federation.Peers.Config.signing_protocol/0` is
+       `"burrow-federation/2"` (env `PEER_FEDERATION_SIGNING_PROTOCOL`, off by
+       default), and
+    2. the recipient is a `%Peer{}` whose `metadata["protocols"]` (stored
+       from its descriptor at every fetch, see `Platform.Federation.Peers`)
+       includes `"burrow-federation/2"`.
+
+  Otherwise it signs v1. A peer with no stored list is v1-only. A bare
+  install_id recipient always signs v1: the builder has no descriptor for it,
+  so it cannot know the peer's version. In production every send passes a
+  `%Peer{}`, including `relationship.propose`, whose pending_outbound row
+  already carries the protocols of the descriptor fetched a moment before;
+  the bare-id form is used by test fixtures.
+
+  A `Platform.Federation.Peers.PeerConnection` holds the `%Peer{}` it was
+  started with, so a protocols refresh reaches a running connection's sends
+  only after the connection restarts (an install restart does that).
+
   The caller (the plug) returns only the reason atom to the peer and never
   echoes input.
   """
 
   alias Platform.Federation.Ed25519
   alias Platform.Federation.Peers
+  alias Platform.Federation.Peers.Config
   alias Platform.Federation.Peers.InstallIdentity
   alias Platform.Federation.Peers.NonceCache
   alias Platform.Federation.Peers.Peer
   alias Platform.Federation.Peers.PeerKey
 
   @version 1
+  # v1 is the wire id every install running core before task 01a14ba9 speaks;
+  # these literals ARE that id and are not renamed. v2 is sent only per
+  # `signing_version/1`.
   @prefix "suite-federation/1\n"
   @signature_header "suite-federation-signature"
+  @protocol_v1 "suite-federation/1"
+  @prefix_v2 "burrow-federation/2\n"
+  @signature_header_v2 "burrow-federation-signature"
+  @protocol_v2 "burrow-federation/2"
   @max_bytes 256 * 1024
   @window_ms 300_000
 
@@ -96,8 +148,11 @@ defmodule Platform.Federation.Peers.Envelope do
   @type verified :: %{
           envelope: map(),
           peer: Peer.t() | nil,
-          key_status: String.t() | :payload
+          key_status: String.t() | :payload,
+          protocol: String.t()
         }
+
+  @type protocol_version :: :v1 | :v2
 
   @doc "Maximum accepted body size in bytes (256 KB)."
   def max_bytes, do: @max_bytes
@@ -105,11 +160,30 @@ defmodule Platform.Federation.Peers.Envelope do
   @doc "Timestamp window in milliseconds (300 s either side)."
   def window_ms, do: @window_ms
 
-  @doc "The header carrying the signature."
-  def signature_header, do: @signature_header
+  @doc "The v1 signature header (the default `build/4` sends; see `signing_version/1`)."
+  def signature_header, do: signature_header(:v1)
 
-  @doc "The domain-separation prefix the signature covers."
-  def signing_prefix, do: @prefix
+  @doc "The header carrying the signature for protocol `:v1` or `:v2`."
+  @spec signature_header(protocol_version()) :: String.t()
+  def signature_header(:v1), do: @signature_header
+  def signature_header(:v2), do: @signature_header_v2
+
+  @doc "The v1 domain-separation prefix (the default; see `signing_version/1`)."
+  def signing_prefix, do: signing_prefix(:v1)
+
+  @doc "The domain-separation prefix the signature covers for `:v1` or `:v2`."
+  @spec signing_prefix(protocol_version()) :: String.t()
+  def signing_prefix(:v1), do: @prefix
+  def signing_prefix(:v2), do: @prefix_v2
+
+  @doc "The protocol id string for `:v1` or `:v2`."
+  @spec protocol_id(protocol_version()) :: String.t()
+  def protocol_id(:v1), do: @protocol_v1
+  def protocol_id(:v2), do: @protocol_v2
+
+  @doc "Every protocol id this install accepts, oldest first."
+  @spec accepted_protocols() :: [String.t()]
+  def accepted_protocols, do: [@protocol_v1, @protocol_v2]
 
   @doc "Envelope types a pending (not yet active) peer may send."
   def handshake_types, do: @handshake_types
@@ -117,6 +191,9 @@ defmodule Platform.Federation.Peers.Envelope do
   @doc """
   Builds a signed envelope of `type` carrying `payload` for `recipient` (a
   `%Peer{}` or a recipient install_id). Returns `{:ok, {raw_body, headers}}`.
+
+  The signature covers the prefix of `signing_version(recipient)` and travels
+  in that protocol's header alone. A bare install_id recipient always gets v1.
 
   Options (tests and key rotation use them; production callers normally pass
   none):
@@ -132,6 +209,7 @@ defmodule Platform.Federation.Peers.Envelope do
       when is_binary(type) and is_map(payload) do
     with {:ok, from} <- sender_id(opts) do
       to = Keyword.get_lazy(opts, :to, fn -> recipient_id(recipient) end)
+      version = signing_version(recipient)
 
       fields = fn kid ->
         %{
@@ -147,9 +225,25 @@ defmodule Platform.Federation.Peers.Envelope do
         }
       end
 
-      sign(fields, Keyword.get(opts, :signer))
+      sign(fields, Keyword.get(opts, :signer), version)
     end
   end
+
+  @doc """
+  The protocol (`:v1` or `:v2`) `build/4` signs with for `recipient`. See
+  "Choosing the signing protocol" in the moduledoc.
+  """
+  @spec signing_version(Peer.t() | String.t()) :: protocol_version()
+  def signing_version(recipient) do
+    if Config.signing_protocol() == @protocol_v2 and peer_speaks_v2?(recipient),
+      do: :v2,
+      else: :v1
+  end
+
+  defp peer_speaks_v2?(%Peer{metadata: %{"protocols" => protocols}}) when is_list(protocols),
+    do: @protocol_v2 in protocols
+
+  defp peer_speaks_v2?(_recipient), do: false
 
   @doc """
   Verifies a received envelope. `headers` is a list of `{name, value}` (any
@@ -165,10 +259,10 @@ defmodule Platform.Federation.Peers.Envelope do
          :ok <- check_recipient(env),
          {:ok, peer} <- resolve_sender(env),
          {:ok, public_key, key_status} <- resolve_key(env, peer, now_ms),
-         :ok <- check_signature(raw_body, headers, public_key),
+         {:ok, protocol} <- check_signature(raw_body, headers, public_key),
          :ok <- check_timestamp(env, now_ms),
          :ok <- NonceCache.check_and_record(env["from"], env["nonce"], env["ts"], now_ms) do
-      {:ok, %{envelope: env, peer: peer, key_status: key_status}}
+      {:ok, %{envelope: env, peer: peer, key_status: key_status, protocol: protocol}}
     end
   end
 
@@ -192,12 +286,13 @@ defmodule Platform.Federation.Peers.Envelope do
   defp recipient_id(%Peer{peer_install_id: id}), do: id
   defp recipient_id(id) when is_binary(id), do: id
 
-  defp sign(fields, {kid, private_key}) when is_binary(kid) and is_binary(private_key) do
+  defp sign(fields, {kid, private_key}, version)
+       when is_binary(kid) and is_binary(private_key) do
     raw = Jason.encode!(fields.(kid))
-    {:ok, {raw, headers(Ed25519.sign(@prefix <> raw, private_key))}}
+    {:ok, {raw, headers(Ed25519.sign(signing_prefix(version) <> raw, private_key), version)}}
   end
 
-  defp sign(fields, signer) do
+  defp sign(fields, signer, version) do
     kid_opt =
       case signer do
         {:install, kid} -> kid
@@ -207,8 +302,9 @@ defmodule Platform.Federation.Peers.Envelope do
     with {:ok, kid} <- install_kid(kid_opt) do
       raw = Jason.encode!(fields.(kid))
 
-      with {:ok, %{signature: signature}} <- InstallIdentity.sign(@prefix <> raw, kid) do
-        {:ok, {raw, headers(signature)}}
+      with {:ok, %{signature: signature}} <-
+             InstallIdentity.sign(signing_prefix(version) <> raw, kid) do
+        {:ok, {raw, headers(signature, version)}}
       end
     end
   end
@@ -222,10 +318,10 @@ defmodule Platform.Federation.Peers.Envelope do
 
   defp install_kid(kid), do: {:ok, kid}
 
-  defp headers(signature) do
+  defp headers(signature, version) do
     [
       {"content-type", "application/json"},
-      {@signature_header, Base.url_encode64(signature, padding: false)}
+      {signature_header(version), Base.url_encode64(signature, padding: false)}
     ]
   end
 
@@ -315,18 +411,23 @@ defmodule Platform.Federation.Peers.Envelope do
     end
   end
 
+  # The arm is chosen by HEADER, deterministically: a present v2 header is the
+  # only one checked, so a bad v2 signature never falls back to a v1 header
+  # carried on the same request.
   defp check_signature(raw, headers, public_key) do
-    case header(headers, @signature_header) do
-      nil ->
-        {:error, :missing_signature}
+    case {header(headers, @signature_header_v2), header(headers, @signature_header)} do
+      {nil, nil} -> {:error, :missing_signature}
+      {nil, v1} -> verify_signature(@prefix, raw, v1, public_key, @protocol_v1)
+      {v2, _} -> verify_signature(@prefix_v2, raw, v2, public_key, @protocol_v2)
+    end
+  end
 
-      value ->
-        with {:ok, signature} <- Base.url_decode64(value, padding: false),
-             true <- Ed25519.verify(@prefix <> raw, signature, public_key) do
-          :ok
-        else
-          _ -> {:error, :bad_signature}
-        end
+  defp verify_signature(prefix, raw, value, public_key, protocol) do
+    with {:ok, signature} <- Base.url_decode64(value, padding: false),
+         true <- Ed25519.verify(prefix <> raw, signature, public_key) do
+      {:ok, protocol}
+    else
+      _ -> {:error, :bad_signature}
     end
   end
 

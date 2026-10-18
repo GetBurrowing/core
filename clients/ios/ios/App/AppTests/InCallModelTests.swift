@@ -223,7 +223,7 @@ final class InCallModelTests: XCTestCase {
     func testTheShellPresentsTheScreenInTheDarkHost() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-                .appendingPathComponent("App/SuiteBridgeViewController.swift"), encoding: .utf8)
+                .appendingPathComponent("App/BurrowBridgeViewController.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("InCallHostingController(rootView: InCallScreen("))
         XCTAssertFalse(source.contains("UIHostingController(rootView: InCallScreen("))
     }

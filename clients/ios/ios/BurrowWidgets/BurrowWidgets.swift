@@ -53,7 +53,7 @@ struct SingleCountView: View {
             SlabView(kind: kind, entry: entry)
                 .padding(8)
                 .widgetURL(entry.link(kind))
-                .containerBackground(SuiteColor.surface.color, for: .widget)
+                .containerBackground(BurrowColor.surface.color, for: .widget)
         }
     }
 }
@@ -79,7 +79,7 @@ struct OverviewView: View {
                 }
             }
             .padding(8)
-            .containerBackground(SuiteColor.surface.color, for: .widget)
+            .containerBackground(BurrowColor.surface.color, for: .widget)
         }
     }
 }
@@ -96,7 +96,7 @@ struct SlabView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(kind.title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(SuiteColor.onSurface.color)
+                .foregroundColor(BurrowColor.onSurface.color)
                 .lineLimit(1)
                 .padding(.horizontal, 8)
                 .padding(.top, 6)
@@ -115,13 +115,13 @@ struct SlabView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundColor(state.usesLiveFill ? SuiteColor.onInfo.color : SuiteColor.onSurface.color)
+            .foregroundColor(state.usesLiveFill ? BurrowColor.onInfo.color : BurrowColor.onSurface.color)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .background(
                 ContainerRelativeShape()
-                    .fill(state.usesLiveFill ? SuiteColor.info.color : SuiteColor.surfaceMuted.color)
+                    .fill(state.usesLiveFill ? BurrowColor.info.color : BurrowColor.surfaceMuted.color)
             )
         }
         .accessibilityElement(children: .combine)

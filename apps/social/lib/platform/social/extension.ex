@@ -2,7 +2,7 @@ defmodule Platform.Social.Extension do
   @moduledoc """
   Social's `Platform.Extension` implementation (ADR 0055), registered by
   config only in a with-Social build (`apps/social/config/config.exs` for the
-  module's own runs, `apps/suite_release/config/config.exs` for the
+  module's own runs, `apps/burrow_release/config/config.exs` for the
   with-modules image).
 
   Task 01a140a8 (Social 1/7) contributes the module's migrations; Social 4/7

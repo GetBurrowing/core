@@ -97,6 +97,22 @@ describe("installBadgesPlugin", () => {
     const win = { Capacitor: { isNativePlatform: () => true, Plugins: { SuiteNative: plugin } } }
     expect(installBadgesPlugin(win)).toBe(plugin)
   })
+
+  // Task 01a14ba9 stage 4: BurrowNative (newer builds) or SuiteNative (older).
+  it("Burrow-only: returns BurrowNative", () => {
+    const plugin = { installBadges() {} }
+    const win = { Capacitor: { isNativePlatform: () => true, Plugins: { BurrowNative: plugin } } }
+    expect(installBadgesPlugin(win)).toBe(plugin)
+  })
+
+  it("both present: BurrowNative wins", () => {
+    const burrow = { installBadges() {} }
+    const suite = { installBadges() {} }
+    const win = {
+      Capacitor: { isNativePlatform: () => true, Plugins: { BurrowNative: burrow, SuiteNative: suite } }
+    }
+    expect(installBadgesPlugin(win)).toBe(burrow)
+  })
 })
 
 describe("visibility of the button", () => {

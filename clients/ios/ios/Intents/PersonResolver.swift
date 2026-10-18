@@ -145,7 +145,7 @@ enum PersonResolver {
     // MARK: Same name on another install (round 8)
     //
     // Measured on a test iPad (iOS 27.0.1, 2026-10-14), signed in to prod
-    // and suite-exp: "Message Sam" went to suite-exp's Sam, not prod's
+    // and exp: "Message Sam" went to exp's Sam, not prod's
     // Sam Taylor. Siri searched the index, took the FIRST of two indexed
     // Jordans and handed Burrow that one entity (`.messagePerson`), which was
     // used as is, so the "which one?" prompt never ran. Now a person found

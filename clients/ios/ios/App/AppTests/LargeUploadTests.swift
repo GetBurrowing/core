@@ -21,7 +21,7 @@ final class LargeUploadTests: XCTestCase {
         StubURLProtocol.respond = { _ in
             (200, Data(#"{"max_upload_bytes":1073741824,"max_upload_label":"1 GB","chunk_bytes":33554432,"multipart_max_bytes":8000000}"#.utf8))
         }
-        let api = SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"]))
+        let api = BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"]))
         let done = expectation(description: "config")
         var got: UploadConfig?
         api.uploadConfig(host: "h.example.com") {
@@ -37,7 +37,7 @@ final class LargeUploadTests: XCTestCase {
 
     func testReserveUploadPostsTheFileAndMapsA413() throws {
         StubURLProtocol.respond = { _ in (413, Data(#"{"error":"file_too_large","max_upload_label":"1 GB"}"#.utf8)) }
-        let api = SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"]))
+        let api = BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"]))
         let done = expectation(description: "reserve")
         var failure: Error?
         api.reserveUpload(
@@ -48,7 +48,7 @@ final class LargeUploadTests: XCTestCase {
             done.fulfill()
         }
         wait(for: [done], timeout: 5)
-        XCTAssertEqual(failure as? SuiteAPIClient.Failure, .refused(status: 413, code: "file_too_large"))
+        XCTAssertEqual(failure as? BurrowAPIClient.Failure, .refused(status: 413, code: "file_too_large"))
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.path, "/api/app/spaces/s1/uploads")
         let body = try XCTUnwrap(StubURLProtocol.json(at: 0))
         XCTAssertEqual(body["filename"] as? String, "clip.mov")
@@ -66,7 +66,7 @@ final class LargeUploadTests: XCTestCase {
             .tooLarge(name: "quarterly-raw.mov", bytes: 1_153_433_600, label: "1 GB"))
         XCTAssertEqual(
             ShareRoute.tooLargeText(name: "quarterly-raw.mov", bytes: 1_153_433_600, label: "1 GB"),
-            "quarterly-raw.mov is 1.2 GB. This Suite accepts files up to 1 GB.")
+            "quarterly-raw.mov is 1.2 GB. This Burrow accepts files up to 1 GB.")
     }
 
     func testAChangedServerLimitChangesTheDecision() {
@@ -441,7 +441,7 @@ final class LargeUploadTests: XCTestCase {
         let defaultsName = "LargeUploadTests.\(UUID().uuidString)"
         let model = ShareSheetModel(
             install: Install(host: "h.example.com"),
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"])),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: ["h.example.com": "tok"])),
             lastSpace: UserDefaults(suiteName: defaultsName), uploader: uploader)
         model.start()
         let loaded = expectation(description: "loaded")
@@ -470,7 +470,7 @@ final class LargeUploadTests: XCTestCase {
         model.payload = .file(try file(named: "quarterly-raw.mov", bytes: 2_000_000))
 
         XCTAssertEqual(model.banner, .overLimit(name: "quarterly-raw.mov", bytes: 2_000_000, label: "1 MB"))
-        XCTAssertEqual(model.banner?.text, "quarterly-raw.mov is 2 MB. This Suite accepts files up to 1 MB.")
+        XCTAssertEqual(model.banner?.text, "quarterly-raw.mov is 2 MB. This Burrow accepts files up to 1 MB.")
         XCTAssertFalse(model.canSend)
         XCTAssertFalse(StubURLProtocol.requests.contains { $0.url?.path.hasSuffix("/uploads") == true })
     }

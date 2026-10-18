@@ -39,7 +39,7 @@ final class MessagingTests: XCTestCase {
         for host in hosts { store.add(host: host) }
         let clock = VirtualClock()
         return IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
             installs: store, sleeper: clock, now: { clock.now }, lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }
 
@@ -56,7 +56,7 @@ final class MessagingTests: XCTestCase {
     // MARK: API client
 
     func testSpacesDecodeOrgAndToleratesAnOlderServerWithout() throws {
-        struct Body: Decodable { let spaces: [SuiteSpace] }
+        struct Body: Decodable { let spaces: [BurrowSpace] }
         let new = try JSONDecoder().decode(Body.self, from: generalInTwoOrgs(host: a)).spaces
         XCTAssertEqual(new.map { $0.org?.name }, ["Legacy", "Red Star", nil])
 
@@ -84,7 +84,7 @@ final class MessagingTests: XCTestCase {
             }
         }
         let people = try await client.people(host: a, query: "Pri ya")
-        XCTAssertEqual(people, [SuitePerson(id: "p", kind: "user", name: "Priya", orgNames: ["Legacy"])])
+        XCTAssertEqual(people, [BurrowPerson(id: "p", kind: "user", name: "Priya", orgNames: ["Legacy"])])
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.query, "q=Pri%20ya")
         let dm = try await client.personDM(host: a, userID: "p")
         XCTAssertEqual(dm.spaceID, "d")

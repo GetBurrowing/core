@@ -343,6 +343,12 @@ config :platform, Platform.Feedback.Intake, disposition_mode: "none"
 # the host. Tests that need it on flip it per-test and restore it on exit.
 config :platform, :peer_federation_enabled, false
 
+# Federation signing protocol (task 01a14ba9 stage 2): pinned unset (nil means
+# v1, `suite-federation/1`) so `Federation.Peers.Config.signing_protocol/0`
+# never reads `PEER_FEDERATION_SIGNING_PROTOCOL` from the host. Tests that
+# need v2 put the key per-test and restore it on exit.
+config :platform, :peer_federation_signing_protocol, nil
+
 # Peer federation HTTP never reaches the network in tests (task 01a0d90f
 # stage 3): every `Federation.Peers.Client` request goes to the `Req.Test`
 # stub of that name, and the SSRF guard's DNS lookups go to a static map that

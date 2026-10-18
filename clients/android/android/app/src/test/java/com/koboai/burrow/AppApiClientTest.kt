@@ -9,7 +9,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class AppApiClientTest {
-    private val host = "suite.example.net"
+    private val host = "burrow.example.net"
     private val bearer = "tok_live_bearer_9f8e7d"
     private val code = "login-code-5150"
     private val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"

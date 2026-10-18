@@ -99,3 +99,44 @@ test("in a plain browser, message_sent reaches nothing", () => {
 
   assert.deepEqual(calls, []);
 });
+
+// Task 01a14ba9 stage 4: newer app builds register `BurrowNative`, older ones
+// `SuiteNative`. Either is used; Burrow wins when both are present.
+test("Burrow-only: the payload reaches BurrowNative.donate", () => {
+  const calls = [];
+  const win = fakeWindow({
+    isNativePlatform: () => true,
+    Plugins: { BurrowNative: { donate: (detail) => calls.push(detail) } },
+  });
+
+  installNativeDonations(win);
+  const detail = { kind: "task_created", task_id: "t-1" };
+  win.dispatch("phx:native_donate", detail);
+
+  assert.deepEqual(calls, [detail]);
+});
+
+test("Suite-only: an older app build's SuiteNative.donate is still used", () => {
+  const plugin = { donate() {} };
+  const win = fakeWindow({ isNativePlatform: () => true, Plugins: { SuiteNative: plugin } });
+
+  assert.equal(nativeDonatePlugin(win), plugin);
+});
+
+test("both present: BurrowNative wins and SuiteNative is never called", () => {
+  const burrowCalls = [];
+  const suiteCalls = [];
+  const win = fakeWindow({
+    isNativePlatform: () => true,
+    Plugins: {
+      BurrowNative: { donate: (d) => burrowCalls.push(d) },
+      SuiteNative: { donate: (d) => suiteCalls.push(d) },
+    },
+  });
+
+  installNativeDonations(win);
+  win.dispatch("phx:native_donate", { kind: "task_created" });
+
+  assert.equal(burrowCalls.length, 1);
+  assert.deepEqual(suiteCalls, []);
+});

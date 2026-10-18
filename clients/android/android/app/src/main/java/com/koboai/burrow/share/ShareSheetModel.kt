@@ -47,7 +47,7 @@ class ShareSheetModel(
         SPACES_FAILED("Couldn't load your spaces. Check your connection and try again."),
 
         /** The install answered with a redirect: it moved. [bannerText] names where. */
-        INSTALL_MOVED("This Suite has moved. Open Burrow and sign in to its new address, then share again."),
+        INSTALL_MOVED("This Burrow has moved. Open Burrow and sign in to its new address, then share again."),
     }
 
     /** The host a redirecting install points at, when [Banner.INSTALL_MOVED] knows it. */
@@ -60,7 +60,7 @@ class ShareSheetModel(
             val b = banner ?: return null
             val to = movedTo
             return if (b == Banner.INSTALL_MOVED && to != null) {
-                "This Suite moved to $to. Open Burrow, add $to and sign in there, then share again."
+                "This Burrow moved to $to. Open Burrow, add $to and sign in there, then share again."
             } else {
                 b.text
             }
@@ -310,7 +310,7 @@ data class SizeCheck(
                         if (config == null) {
                             "${over.single().name} is ${ByteLabel.format(over.single().size)}. Burrow can send files up to 8 MB each."
                         } else {
-                            "${over.single().name} is ${ByteLabel.format(over.single().size)}. This Suite accepts files up to $limit."
+                            "${over.single().name} is ${ByteLabel.format(over.single().size)}. This Burrow accepts files up to $limit."
                         },
                         true,
                         "Send",
@@ -323,7 +323,7 @@ data class SizeCheck(
                         if (config == null) {
                             "These files are each over 8 MB. Burrow can send files up to 8 MB each."
                         } else {
-                            "These files are each over $limit. This Suite accepts files up to $limit."
+                            "These files are each over $limit. This Burrow accepts files up to $limit."
                         },
                         true,
                         "Send",

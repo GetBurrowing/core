@@ -29,11 +29,13 @@
 
 const DOT_SELECTOR = "[data-role='install-unread-dot']"
 
-// The SuiteNative plugin when the switcher may show, else null.
+// The app's native plugin when the switcher may show, else null. The plugin
+// is `BurrowNative` in newer app builds and `SuiteNative` in older ones; both
+// are installed in the wild, so read either, Burrow first (task 01a14ba9).
 export function installBadgesPlugin(win = globalThis.window) {
   const cap = win?.Capacitor
   if (!cap?.isNativePlatform?.()) return null
-  const plugin = cap.Plugins?.SuiteNative
+  const plugin = cap.Plugins?.BurrowNative || cap.Plugins?.SuiteNative
   if (!plugin || typeof plugin.installBadges !== "function") return null
   return plugin
 }

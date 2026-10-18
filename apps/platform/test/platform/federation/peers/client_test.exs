@@ -218,4 +218,72 @@ defmodule Platform.Federation.Peers.ClientTest do
       assert_received {:posted, "/federation/v1/inbox", ~s({"a":1})}
     end
   end
+
+  describe "descriptor protocol ids (task 01a14ba9 stage 1)" do
+    setup do
+      resolve!(%{"peer.example.test" => [@public]})
+      :ok
+    end
+
+    defp serve(desc) do
+      Req.Test.stub(Client, fn conn -> Req.Test.json(conn, desc) end)
+    end
+
+    test "a v1 descriptor with no protocols list is normalised to [protocol]" do
+      remote = remote_install()
+      serve(descriptor(remote))
+
+      assert {:ok, %{"protocol" => "suite-federation/1", "protocols" => ["suite-federation/1"]}} =
+               Client.fetch_descriptor("https://peer.example.test")
+    end
+
+    test "a descriptor whose protocol is burrow-federation/2 is accepted" do
+      remote = remote_install()
+      serve(descriptor(remote, %{"protocol" => "burrow-federation/2"}))
+
+      assert {:ok, %{"protocol" => "burrow-federation/2", "protocols" => ["burrow-federation/2"]}} =
+               Client.fetch_descriptor("https://peer.example.test")
+    end
+
+    test "a protocols list the peer sends is kept as sent" do
+      remote = remote_install()
+      both = ["suite-federation/1", "burrow-federation/2"]
+      serve(descriptor(remote, %{"protocols" => both}))
+
+      assert {:ok, %{"protocol" => "suite-federation/1", "protocols" => ^both}} =
+               Client.fetch_descriptor("https://peer.example.test")
+    end
+
+    test "an unknown protocol and a malformed protocols list are refused" do
+      remote = remote_install()
+
+      for protocol <- ["burrow-federation/1", "suite-federation/2", "other/1", nil] do
+        serve(descriptor(remote, %{"protocol" => protocol}))
+
+        assert Client.fetch_descriptor("https://peer.example.test") ==
+                 {:error, :invalid_descriptor},
+               "#{inspect(protocol)} was accepted"
+      end
+
+      for protocols <- ["burrow-federation/2", [1], %{}] do
+        serve(descriptor(remote, %{"protocols" => protocols}))
+
+        assert Client.fetch_descriptor("https://peer.example.test") ==
+                 {:error, :invalid_descriptor},
+               "protocols #{inspect(protocols)} was accepted"
+      end
+    end
+
+    test "the fetch path is still /.well-known/suite-federation" do
+      test_pid = self()
+
+      Req.Test.stub(Client, fn conn ->
+        send(test_pid, {:path, conn.request_path})
+        Req.Test.json(conn, descriptor(remote_install()))
+      end)
+
+      assert {:ok, _} = Client.fetch_descriptor("https://peer.example.test")
+      assert_received {:path, "/.well-known/suite-federation"}
+    end
+  end
 end

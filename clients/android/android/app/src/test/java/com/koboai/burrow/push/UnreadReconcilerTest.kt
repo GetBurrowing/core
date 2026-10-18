@@ -20,8 +20,8 @@ class UnreadReconcilerTest {
         private const val COUNTS_BODY = """{"approvals":1,"tasks":0,"unread":4,"as_of":"2026-10-10T15:00:00Z"}"""
     }
 
-    private val a = "suite-a.localhost"
-    private val b = "suite-b.localhost"
+    private val a = "burrow-a.localhost"
+    private val b = "burrow-b.localhost"
     private val store = UnreadStore(InMemoryKeyValueStore()) { listOf(a, b) }
 
     @Test

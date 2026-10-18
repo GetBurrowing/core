@@ -36,7 +36,9 @@ const AUTO_DENY_THRESHOLD_MS = 100;
 export function nativePushPlugin(win = globalThis.window) {
   const cap = win?.Capacitor;
   if (!cap?.isNativePlatform?.()) return null;
-  return cap.Plugins?.SuiteNative || null;
+  // The plugin is `BurrowNative` in newer app builds and `SuiteNative` in
+  // older ones (task 01a14ba9); installed apps of both kinds coexist.
+  return cap.Plugins?.BurrowNative || cap.Plugins?.SuiteNative || null;
 }
 
 // Which native shell is running ("android" / "ios"), or null. It rides

@@ -4,7 +4,7 @@ import android.app.Application
 import android.app.Notification
 import androidx.core.app.NotificationCompat
 import com.koboai.burrow.FakeTokenCipher
-import com.koboai.burrow.SuiteNativePlugin
+import com.koboai.burrow.BurrowNativePlugin
 import com.koboai.burrow.push.PushTestSupport.active
 import com.koboai.burrow.push.PushTestSupport.posted
 import com.koboai.burrow.shortcuts.ConversationShortcuts
@@ -24,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 class RelayedPushTest {
     private lateinit var app: Application
     private val b = SealFixture.host
-    private val a = "suite-a.localhost"
+    private val a = "burrow-a.localhost"
     private lateinit var sink: RecordingShortcutSink
 
     private fun label(): String {
@@ -197,8 +197,8 @@ class RelayedPushTest {
         signInA()
         NotificationPresenter.present(app, SealFixture.relayed())
         val unread = BurrowPush.unread(app)
-        assertEquals("""{"others_unread":true}""", SuiteNativePlugin.installBadgesAnswer(unread.othersUnread(a)).toString())
-        assertEquals("""{"others_unread":false}""", SuiteNativePlugin.installBadgesAnswer(unread.othersUnread(b)).toString())
+        assertEquals("""{"others_unread":true}""", BurrowNativePlugin.installBadgesAnswer(unread.othersUnread(a)).toString())
+        assertEquals("""{"others_unread":false}""", BurrowNativePlugin.installBadgesAnswer(unread.othersUnread(b)).toString())
     }
 
     @Test

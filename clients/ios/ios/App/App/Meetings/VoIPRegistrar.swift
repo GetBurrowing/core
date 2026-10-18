@@ -36,7 +36,7 @@ final class VoIPRegistrar: NSObject, PKPushRegistryDelegate {
     func registerWithSignedInInstalls() {
         guard let hexCredential else { return }
         for install in InstallStore.shared.installs
-        where !registeredHosts.contains(install.host) && SuiteAPIClient.shared.isSignedIn(host: install.host) {
+        where !registeredHosts.contains(install.host) && BurrowAPIClient.shared.isSignedIn(host: install.host) {
             registeredHosts.insert(install.host)
             let host = install.host
             Task {
@@ -55,7 +55,7 @@ final class VoIPRegistrar: NSObject, PKPushRegistryDelegate {
     static func voipDeviceBody(hex: String) -> [String: Any] {
         [
             "token": hex,
-            "environment": SuiteAPI.pushEnvironment,
+            "environment": BurrowAPI.pushEnvironment,
             "bundle_id": Bundle.main.bundleIdentifier ?? "com.kobo-ai.burrow",
             "app_install_id": InstallStore.shared.appInstallID,
         ]
@@ -64,9 +64,9 @@ final class VoIPRegistrar: NSObject, PKPushRegistryDelegate {
     static let voipDevicesPath = "/api/app/voip_devices"
 
     private static func post(hex: String, host: String) async throws {
-        let response = try await SuiteAPIClient.shared.send(
+        let response = try await BurrowAPIClient.shared.send(
             host: host, path: voipDevicesPath, method: "POST", json: voipDeviceBody(hex: hex))
-        guard response.isSuccess else { throw SuiteAPIClient.Failure.status(response.status) }
+        guard response.isSuccess else { throw BurrowAPIClient.Failure.status(response.status) }
     }
 
     // MARK: PKPushRegistryDelegate (delivered on the main queue)
@@ -133,13 +133,13 @@ final class ProviderCallReporter: IncomingCallReporting {
     /// feeds a captured payload in here. Both doors go through
     /// `VoIPEntry.receive`, exactly as the PushKit delegate does.
     ///
-    ///   * launch argument `-SuiteInjectVoIP <base64 JSON>`
+    ///   * launch argument `-BurrowInjectVoIP <base64 JSON>`
     ///   * `burrow://debug/voip?payload=<base64 JSON>`
     ///
     /// Compiled out of Release.
     @MainActor
     enum DebugVoIPSeam {
-        static let argument = "SuiteInjectVoIP"
+        static let argument = "BurrowInjectVoIP"
 
         /// Decodes standard or URL-safe base64 of a JSON object.
         static func payload(base64: String) -> [AnyHashable: Any]? {

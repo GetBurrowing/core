@@ -30,7 +30,7 @@ class PushSealTest {
 
     @Test
     fun `another install_host as aad does not open`() {
-        assertNull(PushSeal.openBytes(SealFixture.sealed, "suite-a.localhost", SealFixture.privateKey))
+        assertNull(PushSeal.openBytes(SealFixture.sealed, "burrow-a.localhost", SealFixture.privateKey))
     }
 
     @Test

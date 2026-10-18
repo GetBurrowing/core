@@ -93,4 +93,27 @@ defmodule PlatformWeb.FederationWellKnownControllerTest do
 
     assert %{conn | host: "chat.example.test"} |> get(@path) |> Map.fetch!(:status) == 200
   end
+
+  describe "both well-known paths (task 01a14ba9 stage 1)" do
+    test "/.well-known/burrow-federation answers 404 while the flag is off", %{conn: conn} do
+      set_enabled(false)
+      assert conn |> get("/.well-known/burrow-federation") |> Map.fetch!(:status) == 404
+    end
+
+    test "serve byte-identical JSON carrying protocol v1 and both protocols", %{conn: conn} do
+      set_enabled(true)
+      Application.put_env(:platform, :peer_federation_base_url, "https://peer-a.example.test")
+
+      suite = get(conn, @path)
+      burrow = get(build_conn(), "/.well-known/burrow-federation")
+
+      assert suite.status == 200
+      assert burrow.status == 200
+      assert suite.resp_body == burrow.resp_body
+
+      body = Jason.decode!(burrow.resp_body)
+      assert body["protocol"] == "suite-federation/1"
+      assert body["protocols"] == ["suite-federation/1", "burrow-federation/2"]
+    end
+  end
 end

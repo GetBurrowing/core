@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// One Suite install the app can open. Each install has its own spaces and
+/// One Burrow install the app can open. Each install has its own spaces and
 /// its own sign-in, so the host is the identity of everything per-install:
 /// the Keychain account for its bearer, the web view's origin, and the
 /// `install_host` a push payload routes by.

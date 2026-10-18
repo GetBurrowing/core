@@ -169,4 +169,81 @@ defmodule Platform.Federation.Peers.HandshakeTest do
     assert body["payload"]["kid"] == new.kid
     assert Base.url_decode64!(body["payload"]["public_key"], padding: false) == new.public_key
   end
+
+  describe "protocol versions (task 01a14ba9 stage 2)" do
+    @dual ["suite-federation/1", "burrow-federation/2"]
+
+    # The remote serving `desc`; every POST is forwarded with BOTH signature
+    # header lists, so a test sees exactly which header(s) were sent.
+    defp stub_remote_desc(desc) do
+      test_pid = self()
+
+      Req.Test.stub(Client, fn conn ->
+        case conn.method do
+          "GET" ->
+            Req.Test.json(conn, desc)
+
+          "POST" ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+            v1 = Plug.Conn.get_req_header(conn, Envelope.signature_header(:v1))
+            v2 = Plug.Conn.get_req_header(conn, Envelope.signature_header(:v2))
+            send(test_pid, {:inbox_headers, raw, v1, v2})
+
+            Req.Test.json(conn, %{ok: true})
+        end
+      end)
+    end
+
+    test "propose stores the descriptor's protocols on the pending_outbound row", %{
+      remote: remote
+    } do
+      stub_remote_desc(descriptor(remote, %{"protocols" => @dual}))
+
+      assert {:ok, peer} = Peers.propose(remote.base_url)
+      assert peer.metadata["protocols"] == @dual
+      assert Peers.get_peer(peer.id).metadata["protocols"] == @dual
+    end
+
+    test "propose to a peer with no protocols list stores it as v1-only", %{remote: remote} do
+      stub_remote_desc(descriptor(remote))
+
+      assert {:ok, peer} = Peers.propose(remote.base_url)
+      assert Peers.get_peer(peer.id).metadata["protocols"] == ["suite-federation/1"]
+    end
+
+    test "with the flag off, propose to a v2 peer signs v1 only", %{me: me, remote: remote} do
+      stub_remote_desc(descriptor(remote, %{"protocols" => @dual}))
+
+      assert {:ok, _peer} = Peers.propose(remote.base_url)
+      assert_received {:inbox_headers, raw, [v1], []}
+      assert signed_by?(raw, v1, me.public_key)
+    end
+
+    test "with the flag on, propose to a peer whose descriptor advertises v2 signs v2 only", %{
+      me: me,
+      remote: remote
+    } do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+      stub_remote_desc(descriptor(remote, %{"protocols" => @dual}))
+
+      assert {:ok, _peer} = Peers.propose(remote.base_url)
+      assert_received {:inbox_headers, raw, [], [v2]}
+
+      assert Ed25519.verify(
+               Envelope.signing_prefix(:v2) <> raw,
+               Base.url_decode64!(v2, padding: false),
+               me.public_key
+             )
+    end
+
+    test "with the flag on, propose to a v1-only peer signs v1 only", %{me: me, remote: remote} do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+      stub_remote_desc(descriptor(remote))
+
+      assert {:ok, _peer} = Peers.propose(remote.base_url)
+      assert_received {:inbox_headers, raw, [v1], []}
+      assert signed_by?(raw, v1, me.public_key)
+    end
+  end
 end

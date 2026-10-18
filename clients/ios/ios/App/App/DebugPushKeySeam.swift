@@ -10,30 +10,30 @@ import UserNotifications
     /// exercising the real Notification Service Extension. The private key
     /// never leaves the Keychain; nothing is logged. Not compiled in Release.
     enum DebugPushKeySeam {
-        /// `simctl launch ... -SuiteDebugPushKeyHost <host> -SuiteDebugPushKeyName <name>`:
+        /// `simctl launch ... -BurrowDebugPushKeyHost <host> -BurrowDebugPushKeyName <name>`:
         /// the same as the link, without the system's "Open in Burrow?" prompt.
         static func applyLaunchArgument(defaults: UserDefaults = .standard) {
-            // `-SuiteDebugPushKeyRemove <host>`: undo, on a shared simulator.
-            if let host = defaults.string(forKey: "SuiteDebugPushKeyRemove") {
+            // `-BurrowDebugPushKeyRemove <host>`: undo, on a shared simulator.
+            if let host = defaults.string(forKey: "BurrowDebugPushKeyRemove") {
                 InstallStore.shared.remove(host: host)
                 PushKeyStore.shared.remove(for: host)
                 if let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: InstallStore.appGroup) {
                     try? FileManager.default.removeItem(at: container.appendingPathComponent("debug-push-key-\(host).txt"))
                 }
             }
-            guard let host = defaults.string(forKey: "SuiteDebugPushKeyHost") else { return }
+            guard let host = defaults.string(forKey: "BurrowDebugPushKeyHost") else { return }
             var components = URLComponents()
             components.scheme = DeepLink.scheme
             components.host = "debug"
             components.path = "/push-key"
             components.queryItems = [
                 URLQueryItem(name: "host", value: host),
-                URLQueryItem(name: "name", value: defaults.string(forKey: "SuiteDebugPushKeyName")),
+                URLQueryItem(name: "name", value: defaults.string(forKey: "BurrowDebugPushKeyName")),
             ]
             if let url = components.url { handle(url: url) }
         }
 
-        /// `-SuiteDebugLocalPush <file>`: read an APNs payload from `<file>` in
+        /// `-BurrowDebugLocalPush <file>`: read an APNs payload from `<file>` in
         /// the App Group container, run it through the Notification Service
         /// Extension's own pipeline (`PushContentPreparer`, then
         /// `AvatarNotificationDelivery` with the live `AvatarFetcher`, task
@@ -41,7 +41,7 @@ import UserNotifications
         /// For evidence frames on a simulator whose `simctl push` does not
         /// launch the extension.
         static func applyLocalPushArgument(defaults: UserDefaults = .standard) {
-            guard let name = defaults.string(forKey: "SuiteDebugLocalPush"),
+            guard let name = defaults.string(forKey: "BurrowDebugLocalPush"),
                 let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: InstallStore.appGroup),
                 let data = try? Data(contentsOf: container.appendingPathComponent(name)),
                 let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

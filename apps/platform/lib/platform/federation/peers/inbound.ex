@@ -123,7 +123,10 @@ defmodule Platform.Federation.Peers.Inbound do
         base_url: base_url,
         display_name: display_name(payload["display_name"], descriptor),
         status: "pending_inbound",
-        public_keys: [%{kid: kid, public_key: payload["public_key"]}]
+        public_keys: [%{kid: kid, public_key: payload["public_key"]}],
+        # task 01a14ba9 stage 2: what the proposer's descriptor advertises
+        # decides whether this install may sign v2 to it.
+        metadata: %{"protocols" => Peers.descriptor_protocols(descriptor)}
       }
 
       case Peers.create_peer(attrs) do

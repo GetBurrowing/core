@@ -18,8 +18,8 @@ final class InstallSessionTests: XCTestCase {
         super.tearDown()
     }
 
-    private func client() -> SuiteAPIClient {
-        SuiteAPIClient(session: StubURLProtocol.session(), tokens: store)
+    private func client() -> BurrowAPIClient {
+        BurrowAPIClient(session: StubURLProtocol.session(), tokens: store)
     }
 
     private func calls() -> [String] {
@@ -55,9 +55,9 @@ final class InstallSessionTests: XCTestCase {
     }
 
     func testLogoutLinkIsTakenOverByTheNativeSignOut() {
-        let policy = NavigationPolicy(installHost: "suite.example.com")
-        XCTAssertEqual(policy.decide(url: URL(string: "https://suite.example.com/auth/logout"), isMainFrame: true), .signOut)
-        XCTAssertEqual(policy.decide(url: URL(string: "https://suite.example.com/auth/logout"), isMainFrame: false), .allow)
+        let policy = NavigationPolicy(installHost: "burrow.example.com")
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.com/auth/logout"), isMainFrame: true), .signOut)
+        XCTAssertEqual(policy.decide(url: URL(string: "https://burrow.example.com/auth/logout"), isMainFrame: false), .allow)
         XCTAssertEqual(policy.decide(url: URL(string: "https://other.example/auth/logout"), isMainFrame: true), .openExternally)
     }
 
@@ -107,7 +107,7 @@ final class InstallSessionTests: XCTestCase {
     }
 
     func testHandoffPathIsTheLocalPathAndQuery() {
-        let h = "suite.example.com"
+        let h = "burrow.example.com"
         XCTAssertEqual(InstallLauncher.localPath(of: URL(string: "https://\(h)/chat/s1?message=m1"), on: h), "/chat/s1?message=m1")
         XCTAssertNil(InstallLauncher.localPath(of: URL(string: "https://\(h)/"), on: h))
         XCTAssertNil(InstallLauncher.localPath(of: URL(string: "https://\(h)"), on: h))

@@ -5,7 +5,7 @@ import UIKit
 /// The native in-call screen (task 01a10db7 stage 4), drawn to the design
 /// canvas 01a11166 "Burrow iOS v2: native meetings".
 ///
-/// Every colour is a `SuiteColor` slot. Canvas -> iOS slot mapping:
+/// Every colour is a `BurrowColor` slot. Canvas -> iOS slot mapping:
 ///   base-100 -> surface, base-content -> onSurface, base-content/60 ->
 ///   muted, base-200 -> surfaceMuted, edge -> border, the canvas's cyan
 ///   "primary" (speaking ring, Resume / Try again fills) -> info + onInfo
@@ -17,7 +17,7 @@ import UIKit
 /// themes, because this screen sits beside the dark system call UI.
 enum InCallStyle {
     /// The speaking ring. Cyan marks live call state.
-    static let ring: SuiteColor = .info
+    static let ring: BurrowColor = .info
     static let ringWidth: CGFloat = 2
     static let rowHeight: CGFloat = 64
     static let avatar: CGFloat = 40
@@ -29,7 +29,7 @@ enum InCallStyle {
     static let fixedGeometryCap: DynamicTypeSize = .xxxLarge
 }
 
-extension SuiteFont {
+extension BurrowFont {
     /// Call title: Public Sans 800, 22 pt.
     static func callTitle() -> Font { .custom(family, size: 22, relativeTo: .title2).weight(.heavy) }
 }
@@ -66,7 +66,7 @@ struct InCallView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SuiteColor.surface.color.ignoresSafeArea())
+        .background(BurrowColor.surface.color.ignoresSafeArea())
     }
 
     private var regular: Bool { sizeClass == .regular }
@@ -77,7 +77,7 @@ struct InCallView: View {
                 .padding(.horizontal, InCallStyle.gutter)
                 .padding(.top, InCallStyle.gutter)
                 .padding(.bottom, 8)
-            Rectangle().fill(SuiteColor.border.color).frame(height: 1)
+            Rectangle().fill(BurrowColor.border.color).frame(height: 1)
             ScrollView {
                 participantLists
                     .opacity(model.dimsList ? InCallStyle.dimmedOpacity : 1)
@@ -86,8 +86,8 @@ struct InCallView: View {
             .frame(maxWidth: .infinity)
             if let alone = model.aloneText {
                 Text(alone)
-                    .font(SuiteFont.body())
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .font(BurrowFont.body())
+                    .foregroundStyle(BurrowColor.muted.color)
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 16)
@@ -97,7 +97,7 @@ struct InCallView: View {
                 .padding(.horizontal, InCallStyle.gutter)
                 .padding(.bottom, InCallStyle.gutter)
         }
-        .frame(maxWidth: regular ? SuiteLayout.sheetWidth : .infinity)
+        .frame(maxWidth: regular ? BurrowLayout.sheetWidth : .infinity)
         .frame(maxWidth: .infinity)
     }
 
@@ -106,30 +106,30 @@ struct InCallView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(model.title)
-                .font(SuiteFont.callTitle())
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .font(BurrowFont.callTitle())
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .accessibilityIdentifier("incall-title")
             HStack(spacing: 6) {
                 if model.statusKind == .connecting || model.statusKind == .reconnecting {
-                    ProgressView().controlSize(.mini).tint(SuiteColor.muted.color)
+                    ProgressView().controlSize(.mini).tint(BurrowColor.muted.color)
                 }
                 if model.statusKind == .poorConnection {
                     Image(systemName: "wifi.exclamationmark")
-                        .font(SuiteFont.caption())
-                        .foregroundStyle(SuiteColor.onSurface.color)
+                        .font(BurrowFont.caption())
+                        .foregroundStyle(BurrowColor.onSurface.color)
                 }
                 Text(model.status)
-                    .font(SuiteFont.caption())
+                    .font(BurrowFont.caption())
                     .monospacedDigit()
-                    .foregroundStyle(model.statusKind == .poorConnection ? SuiteColor.onSurface.color : SuiteColor.muted.color)
+                    .foregroundStyle(model.statusKind == .poorConnection ? BurrowColor.onSurface.color : BurrowColor.muted.color)
                     .accessibilityIdentifier("incall-status")
             }
             if let note = model.mutedByHostNote ?? note {
                 Text(note)
-                    .font(SuiteFont.caption())
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .font(BurrowFont.caption())
+                    .foregroundStyle(BurrowColor.muted.color)
                     .accessibilityIdentifier("incall-note")
             }
         }
@@ -156,8 +156,8 @@ struct InCallView: View {
     private func section(_ title: String, _ rows: [InCallModel.Row]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(SuiteFont.caption(.semibold))
-                .foregroundStyle(SuiteColor.muted.color)
+                .font(BurrowFont.caption(.semibold))
+                .foregroundStyle(BurrowColor.muted.color)
                 .padding(.vertical, 8)
             ForEach(rows) { row in
                 ParticipantRow(row: row)
@@ -172,10 +172,10 @@ struct InCallView: View {
             if model.lostConnection {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(SuiteColor.destructive.color)
+                        .foregroundStyle(BurrowColor.destructive.color)
                     Text(InCallCopy.lostConnection)
-                        .font(SuiteFont.body())
-                        .foregroundStyle(SuiteColor.onSurface.color)
+                        .font(BurrowFont.body())
+                        .foregroundStyle(BurrowColor.onSurface.color)
                     Spacer(minLength: 0)
                 }
                 .accessibilityIdentifier("incall-lost-connection")
@@ -183,10 +183,10 @@ struct InCallView: View {
             if let recovery = model.recovery {
                 Button(action: recovery == .resume ? actions.resume : actions.tryAgain) {
                     Text(recovery == .resume ? InCallCopy.resume : InCallCopy.tryAgain)
-                        .font(SuiteFont.body(.semibold))
-                        .foregroundStyle(SuiteColor.onInfo.color)
+                        .font(BurrowFont.body(.semibold))
+                        .foregroundStyle(BurrowColor.onInfo.color)
                         .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(SuiteColor.info.color, in: RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+                        .background(BurrowColor.info.color, in: RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous))
                 }
                 .accessibilityIdentifier("incall-recovery")
             }
@@ -195,8 +195,8 @@ struct InCallView: View {
                     Text(InCallCopy.openFullMeeting)
                     Image(systemName: "chevron.right")
                 }
-                .font(SuiteFont.body())
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .font(BurrowFont.body())
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .frame(minHeight: 44)
             }
             .accessibilityIdentifier("incall-open-full")
@@ -212,7 +212,7 @@ struct InCallView: View {
                     .frame(maxWidth: .infinity)
                 ControlTile(
                     glyph: "phone.down.fill", label: InCallCopy.leave, inverted: false,
-                    glyphColor: SuiteColor.destructive, action: actions.leave
+                    glyphColor: BurrowColor.destructive, action: actions.leave
                 )
                 .accessibilityIdentifier("incall-leave")
                 .frame(maxWidth: .infinity)
@@ -242,8 +242,8 @@ struct ParticipantRow: View {
             // Its own fixed column: a long name at AX5 wraps beside it and
             // never runs under it.
             Image(systemName: row.isMuted ? "mic.slash" : "mic")
-                .font(SuiteFont.body())
-                .foregroundStyle(SuiteColor.muted.color)
+                .font(BurrowFont.body())
+                .foregroundStyle(BurrowColor.muted.color)
                 .dynamicTypeSize(...InCallStyle.fixedGeometryCap)
                 .frame(minWidth: 28)
                 .fixedSize()
@@ -253,16 +253,16 @@ struct ParticipantRow: View {
         .padding(.vertical, 8)
         .frame(minHeight: InCallStyle.rowHeight)
         .background(
-            RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                .fill(row.isSpeaking ? SuiteColor.surfaceMuted.color : SuiteColor.surface.color)
+            RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                .fill(row.isSpeaking ? BurrowColor.surfaceMuted.color : BurrowColor.surface.color)
         )
         .accessibilityElement(children: .combine)
     }
 
     private var name: some View {
         Text(row.name)
-            .font(SuiteFont.body(.semibold))
-            .foregroundStyle(SuiteColor.onSurface.color)
+            .font(BurrowFont.body(.semibold))
+            .foregroundStyle(BurrowColor.onSurface.color)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("incall-row-name")
     }
@@ -270,8 +270,8 @@ struct ParticipantRow: View {
     @ViewBuilder private var tag: some View {
         if row.isAgent {
             Text(InCallCopy.agentTag)
-                .font(SuiteFont.caption())
-                .foregroundStyle(SuiteColor.muted.color)
+                .font(BurrowFont.caption())
+                .foregroundStyle(BurrowColor.muted.color)
         }
     }
 
@@ -290,8 +290,8 @@ struct ParticipantRow: View {
             }
             if let answering = row.answering {
                 Text(answering)
-                    .font(SuiteFont.caption(.semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .font(BurrowFont.caption(.semibold))
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("incall-answering")
             }
@@ -307,10 +307,10 @@ struct Avatar: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(SuiteColor.surfaceMuted.color)
+            Circle().fill(BurrowColor.surfaceMuted.color)
             Text(initial)
-                .font(SuiteFont.body(.semibold))
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .font(BurrowFont.body(.semibold))
+                .foregroundStyle(BurrowColor.onSurface.color)
         }
         .frame(width: size, height: size)
         .overlay {
@@ -330,7 +330,7 @@ struct ControlTile: View {
     let label: String
     /// Muted: an onSurface fill with a surface glyph.
     let inverted: Bool
-    let glyphColor: SuiteColor?
+    let glyphColor: BurrowColor?
     let action: () -> Void
 
     var body: some View {
@@ -341,11 +341,11 @@ struct ControlTile: View {
                     .foregroundStyle((glyphColor ?? (inverted ? .surface : .onSurface)).color)
                     .frame(width: InCallStyle.tile, height: InCallStyle.tile)
                     .background(
-                        (inverted ? SuiteColor.onSurface : SuiteColor.surfaceMuted).color,
-                        in: RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+                        (inverted ? BurrowColor.onSurface : BurrowColor.surfaceMuted).color,
+                        in: RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous))
                 Text(label)
-                    .font(SuiteFont.caption())
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .font(BurrowFont.caption())
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .lineLimit(1)
             }
         }
@@ -362,19 +362,19 @@ struct AudioTile: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                    .fill(SuiteColor.surfaceMuted.color)
+                RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous)
+                    .fill(BurrowColor.surfaceMuted.color)
                 Image(systemName: Self.glyph(for: routeName))
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .foregroundStyle(BurrowColor.onSurface.color)
                 if showsPicker {
                     RoutePicker().opacity(0.02)
                 }
             }
             .frame(width: InCallStyle.tile, height: InCallStyle.tile)
             Text(routeName ?? InCallCopy.audio)
-                .font(SuiteFont.caption())
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .font(BurrowFont.caption())
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .lineLimit(1)
                 .accessibilityIdentifier("incall-audio-label")
         }
@@ -409,15 +409,15 @@ struct EndedView: View {
         VStack(spacing: 12) {
             Spacer()
             Text(model.title)
-                .font(SuiteFont.callTitle())
-                .foregroundStyle(SuiteColor.onSurface.color)
+                .font(BurrowFont.callTitle())
+                .foregroundStyle(BurrowColor.onSurface.color)
                 .multilineTextAlignment(.center)
                 .accessibilityIdentifier("incall-ended-title")
             if let duration = model.duration {
                 Text(duration)
-                    .font(SuiteFont.caption())
+                    .font(BurrowFont.caption())
                     .monospacedDigit()
-                    .foregroundStyle(SuiteColor.muted.color)
+                    .foregroundStyle(BurrowColor.muted.color)
             }
             if model.showsOpenSpace {
                 Button(action: actions.openSpace) {
@@ -425,23 +425,23 @@ struct EndedView: View {
                         Text(InCallCopy.openSpace)
                         Image(systemName: "chevron.right")
                     }
-                    .font(SuiteFont.body())
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .font(BurrowFont.body())
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .frame(minHeight: 44)
                 }
             }
             Spacer()
             Button(action: actions.done) {
                 Text(InCallCopy.done)
-                    .font(SuiteFont.body(.semibold))
-                    .foregroundStyle(SuiteColor.onSurface.color)
+                    .font(BurrowFont.body(.semibold))
+                    .foregroundStyle(BurrowColor.onSurface.color)
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(SuiteColor.surfaceMuted.color, in: RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+                    .background(BurrowColor.surfaceMuted.color, in: RoundedRectangle(cornerRadius: BurrowRadius.field, style: .continuous))
             }
             .accessibilityIdentifier("incall-done")
         }
         .padding(InCallStyle.gutter)
-        .frame(maxWidth: SuiteLayout.sheetWidth)
+        .frame(maxWidth: BurrowLayout.sheetWidth)
     }
 }
 
@@ -452,7 +452,7 @@ final class InCallHostingController<Content: View>: UIHostingController<Content>
     override init(rootView: Content) {
         super.init(rootView: rootView)
         overrideUserInterfaceStyle = .dark
-        view.backgroundColor = SuiteColor.surface.uiColor
+        view.backgroundColor = BurrowColor.surface.uiColor
     }
 
     @available(*, unavailable)

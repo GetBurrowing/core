@@ -13,7 +13,7 @@ import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class ConversationNoterTest {
-    private val host = "suite.example.com"
+    private val host = "burrow.example.com"
     private val design = ShareSpace("0192-s", "Design", "design", emptyList(), kind = "group")
     private val dm = ShareSpace("0192-d", "Sam", "0192-d", emptyList(), kind = "dm")
 

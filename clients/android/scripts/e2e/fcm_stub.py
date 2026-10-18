@@ -3,14 +3,14 @@
 
 Task 01a10d8e stage 1. Python 3 standard library only.
 
-Point a Suite dev server at it with
+Point a Burrow dev server at it with
 
     config :platform, :fcm,
       service_account: File.read!("<path written by --make-key>"),
       base_url: "http://127.0.0.1:<port>",
       token_url: "http://127.0.0.1:<port>/token"
 
-(or FCM_SERVICE_ACCOUNT_JSON) and every push Suite sends lands here instead
+(or FCM_SERVICE_ACCOUNT_JSON) and every push Burrow sends lands here instead
 of Google.
 
 Endpoints

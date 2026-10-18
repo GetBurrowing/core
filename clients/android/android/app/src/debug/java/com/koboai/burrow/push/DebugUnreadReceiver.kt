@@ -21,9 +21,9 @@ import java.util.concurrent.Executors
  *
  *   am broadcast -a com.koboai.burrow.debug.UNREAD \
  *     -n com.koboai.burrow.debug/com.koboai.burrow.push.DebugUnreadReceiver \
- *     --es installs 'suite-a.localhost=A,suite-b.localhost=B' \
- *     --es counts 'suite-a.localhost=0,suite-b.localhost=3' \
- *     --es push_key 'suite-b.localhost=<base64url X25519 private key>'
+ *     --es installs 'burrow-a.localhost=A,burrow-b.localhost=B' \
+ *     --es counts 'burrow-a.localhost=0,burrow-b.localhost=3' \
+ *     --es push_key 'burrow-b.localhost=<base64url X25519 private key>'
  *
  * - `installs`: adds each host with that name and stores a stand-in bearer
  *   (as DebugWidgetReceiver does), so it counts as signed in, and selects

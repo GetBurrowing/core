@@ -223,7 +223,7 @@ final class BackgroundUploader: NSObject, LargeFileUploading {
         reservation: UploadReservation, host: String, file: URL, filename: String, byteSize: Int64, spaceName: String
     ) throws {
         guard let url = Self.absoluteUploadURL(reservation.uploadURL, host: host), reservation.chunkBytes > 0 else {
-            throw SuiteAPIClient.Failure.badResponse
+            throw BurrowAPIClient.Failure.badResponse
         }
         var job = UploadJob(
             id: reservation.id, host: host, uploadURL: url, filename: filename, byteSize: byteSize, chunkBytes: reservation.chunkBytes,

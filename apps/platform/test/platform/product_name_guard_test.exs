@@ -13,7 +13,11 @@ defmodule Platform.ProductNameGuardTest do
       any `vendor/` directory;
     * `apps/platform/priv/prototype/**` and `apps/platform/priv/static/sw.js`;
     * `apps/social/lib/**`;
-    * `docs/burrow/**/*.md`, `README.md` and `CONTRIBUTING.md`.
+    * `docs/burrow/**/*.md`, `README.md` and `CONTRIBUTING.md`;
+    * `clients/android/**/*.{kt,xml,gradle,kts}` (task 01a14ba9 stage 4) and
+      `clients/ios/**/*.{swift,plist,yml,pbxproj,entitlements}` (stage 5),
+      except any `node_modules/`, `build/`, `.gradle/`, `.build/`,
+      `DerivedData/` or `Pods/` directory.
 
   The files are enumerated with `Path.wildcard/1`, not `git ls-files`: CI's
   Test job checks the repo out (`actions/checkout`) BEFORE it installs git,
@@ -24,7 +28,10 @@ defmodule Platform.ProductNameGuardTest do
   ## What is forbidden, per line
 
   `\\bSuite\\b` (case-sensitive), `startup suite` (any case), `Startup Burrow`
-  and `Burrow Suite`. Before matching:
+  and `Burrow Suite`. Client files (`clients/`) are also matched against
+  `\\bSuite[A-Z]` (a `Suite`-prefixed identifier such as `SuiteNativePlugin`)
+  and `\\bsuite[-.][a-z]` in any case (a `suite`-named host or key such as
+  `suite.example.com` or `SUITE-B.localhost`). Before matching:
 
     * the GitHub organisation spans `Startup-Suite/`, `github.com/Startup-Suite`
       and `ghcr.io/startup-suite` are removed. The organisation is renamed last,
@@ -40,8 +47,11 @@ defmodule Platform.ProductNameGuardTest do
   stores its denylist. A line is tokenised (lowercase, split on anything that
   is not `[a-z0-9]`, plus every dotted or hyphenated compound of adjacent
   tokens), each token is hashed, and the line is skipped when any hash is in
-  the list. REMOVE THIS SKIP WHEN A3 LANDS: its lines will no longer carry the
-  old product name.
+  the list. A3 has landed. The skip stays because A3 deliberately kept the
+  former default install hosts in the Android and iOS `InstallStore` tests: they
+  are the preimages that prove A3's shipped digest list, and they carry the old
+  product name as a `suite.` host prefix. Remove the skip when sibling task A3b
+  (01a14dce) moves those tests onto its digest seam.
 
   ## The allowlist fires in both directions
 
@@ -63,6 +73,11 @@ defmodule Platform.ProductNameGuardTest do
     ~r/Burrow Suite/
   ]
 
+  # Extra patterns for client files only. Core keeps `Suite`-prefixed module
+  # names that are not product copy (e.g. `Mix.Tasks.Suite.`), so these are
+  # not applied there.
+  @client_forbidden [~r/\bSuite[A-Z]/, ~r/\bsuite[-.][a-z]/i]
+
   # GitHub organisation and registry names: renamed with the org, last.
   @org_spans ~r/Startup-Suite\/|github\.com\/Startup-Suite|ghcr\.io\/startup-suite/
 
@@ -81,6 +96,17 @@ defmodule Platform.ProductNameGuardTest do
   @earlier_name "States the product's earlier name on purpose"
   @org_name "The GitHub organisation's name, renamed with the org by its own ticket"
   @quoted "Quotes the title of an earlier design artefact or memory page verbatim"
+  @plugin_wire "Capacitor plugin wire name: core JS older than task 01a14ba9 looks up only SuiteNative, so the app keeps registering it until every install runs the Burrow-first lookup (docs/runbooks/burrow-rename-deferred.md)"
+
+  @a3b_pinned "Pinned by whole-file sha256 in InstallIdentityGuardTest's @deferred list for A3b (01a14dce); an edit here is a stale pin. Rename when A3b rewrites the file"
+
+  @android "clients/android/android/app/src"
+
+  @ios "clients/ios/ios"
+
+  @persisted_key "UserDefaults key persisted on users' devices: renaming it silently drops the stored value on upgrade (the installs list, sign-ins, caches), and no iOS test can run here to prove a migration. Migrate in a release with a device-tested migration (docs/runbooks/burrow-rename-deferred.md)"
+
+  @sealed_fixture "Bound to the sealed push_seal_v1.json fixture, whose install host is suite-b.localhost: the expected label is derived from that host, and the fixture stays byte-identical to its core and Android copies until all three are resealed (docs/runbooks/burrow-rename-deferred.md)"
 
   @allowlist [
     {"README.md", "Burrow used to be called Startup Suite", @earlier_name},
@@ -126,7 +152,90 @@ defmodule Platform.ProductNameGuardTest do
     {"apps/platform/lib/platform/tasks/plan_engine.ex", "[Suite engine quirks]", @quoted},
     {"apps/platform/lib/platform_web/live/control_center/native_login.ex", ~s("Suite), @quoted},
     {"apps/platform/lib/platform_web/live/org_memory_live/mobile_shell.ex", "Suite tokens",
-     @quoted}
+     @quoted},
+    {"#{@android}/main/java/com/koboai/burrow/BurrowNativePlugin.kt", ~s(name = "SuiteNative"),
+     @plugin_wire},
+    {"#{@android}/main/java/com/koboai/burrow/BurrowNativePlugin.kt", "`SuiteNative`",
+     @plugin_wire},
+    {"#{@android}/main/java/com/koboai/burrow/NativeBridgeExposure.kt", ~s[listOf("SuiteNative"],
+     @plugin_wire},
+    {"#{@android}/main/java/com/koboai/burrow/NativeBridgeExposure.kt", "`SuiteNative`",
+     @plugin_wire},
+    {"#{@android}/main/java/com/koboai/burrow/shortcuts/ConversationNoter.kt",
+     "`SuiteNative.donate(detail)`", @plugin_wire},
+    {"#{@android}/test/java/com/koboai/burrow/shortcuts/DonateDispatchTest.kt",
+     "`SuiteNative.donate`", @plugin_wire},
+    {"#{@android}/test/java/com/koboai/burrow/InstallStoreTest.kt", ~s("suite.example.com"),
+     @a3b_pinned},
+    # iOS (task 01a14ba9 stage 5): the Capacitor wire names.
+    {"#{@ios}/App/App/Plugins/BurrowNativePlugin.swift", ~s(jsName = "SuiteNative"),
+     @plugin_wire},
+    {"#{@ios}/App/App/Plugins/BurrowNativePlugin.swift", "`SuiteNative`", @plugin_wire},
+    {"#{@ios}/App/App/Plugins/BurrowMeetingsPlugin.swift", ~s(jsName = "SuiteMeetings"),
+     @plugin_wire},
+    {"#{@ios}/App/App/Plugins/BurrowMeetingsPlugin.swift", "`SuiteMeetings`", @plugin_wire},
+    {"#{@ios}/App/App/Plugins/BurrowMeetingsPlugin.swift", "`SuiteNative`", @plugin_wire},
+    {"#{@ios}/App/App/BurrowBridgeViewController.swift", "`SuiteNative.shouldOverrideLoad`",
+     @plugin_wire},
+    {"#{@ios}/App/App/BurrowBridgeViewController.swift", "`SuiteNative`", @plugin_wire},
+    {"#{@ios}/App/App/BurrowBridgeViewController.swift", "`SuiteNative.installBadges()`",
+     @plugin_wire},
+    {"#{@ios}/App/App/Meetings/CallController.swift", "`SuiteMeetings.setMuted`", @plugin_wire},
+    {"#{@ios}/App/App/Meetings/CallState.swift", "`SuiteMeetings`", @plugin_wire},
+    {"#{@ios}/App/AppTests/BurrowMeetingsPluginTests.swift", "`SuiteMeetings`", @plugin_wire},
+    {"#{@ios}/Intents/DonationPolicy.swift", "`SuiteNative.donate`", @plugin_wire},
+    {"#{@ios}/Shared/InstallUnreadStore.swift", "`SuiteNative.installBadges`", @plugin_wire},
+    # iOS: persisted UserDefaults keys, each by its exact code form, so renaming the
+    # constant leaves its entry stale and fails the guard.
+    {"#{@ios}/Shared/InstallStore.swift", ~s(static let installs = "suite.installs.v1"),
+     @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", ~s(static let selected = "suite.installs.selected.v1"),
+     @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift",
+     ~s(static let confirmed = "suite.installs.confirmed.v1"), @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", ~s(static let appInstallID = "suite.app_install_id.v1"),
+     @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift",
+     ~s(static let defaultsChecked = "suite.installs.defaults_checked.v1"), @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", "`suite.installs.v1`", @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", "`suite.installs.selected.v1`", @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", "`suite.installs.confirmed.v1`", @persisted_key},
+    {"#{@ios}/Shared/InstallStore.swift", "`suite.installs.defaults_checked.v1`", @persisted_key},
+    {"#{@ios}/App/App/Meetings/RecentCalls.swift", ~s(static let key = "suite.recent_calls.v1"),
+     @persisted_key},
+    {"#{@ios}/Intents/ApprovalsWidgetModel.swift", ~s(armKey = "suite.widget.arm.v1"),
+     @persisted_key},
+    {"#{@ios}/Intents/ApprovalsWidgetModel.swift", ~s(marksKey = "suite.widget.rows.v1"),
+     @persisted_key},
+    {"#{@ios}/Intents/ApprovalsWidgetModel.swift", ~s(keyPrefix = "suite.approvals.v1."),
+     @persisted_key},
+    {"#{@ios}/Intents/IntentSupport.swift", ~s("suite.intents.last-meeting-space.v1.),
+     @persisted_key},
+    {"#{@ios}/Intents/ShortcutParameterRefresh.swift",
+     ~s(digestPrefix = "suite.shortcuts.digest.v1."), @persisted_key},
+    {"#{@ios}/Intents/ShortcutParameterRefresh.swift", ~s(dirtyKey = "suite.shortcuts.dirty.v1"),
+     @persisted_key},
+    {"#{@ios}/Intents/ShortcutParameterRefresh.swift",
+     ~s(refreshedAtKey = "suite.shortcuts.refreshed-at.v1"), @persisted_key},
+    {"#{@ios}/App/AppTests/ShortcutParameterRefreshTests.swift",
+     ~s[hasPrefix("suite.shortcuts.")], @persisted_key},
+    {"#{@ios}/Shared/CountsCache.swift", ~s(keyPrefix = "suite.counts.v1."), @persisted_key},
+    {"#{@ios}/Shared/InstallUnreadStore.swift", ~s(keyPrefix = "suite.unread.v1."),
+     @persisted_key},
+    {"#{@ios}/Shared/ShareSheetModel.swift", ~s("suite.share.last_space.v1.), @persisted_key},
+    # iOS: A3b-pinned InstallStoreTests.swift, left byte-for-byte as A3 pinned it.
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.example.com"), @a3b_pinned},
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", "Suite.Example.com", @a3b_pinned},
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s(name: "Suite"), @a3b_pinned},
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.v1"), @a3b_pinned},
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.selected.v1"),
+     @a3b_pinned},
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.confirmed.v1"),
+     @a3b_pinned},
+    # iOS: lines bound to the sealed push fixture's host.
+    {"#{@ios}/App/AppTests/PushRelayTests.swift", ~s[.body, "New message in SUITE-B")],
+     @sealed_fixture},
+    {"#{@ios}/App/AppTests/PushRelayTests.swift", ~s[.subtitle, "SUITE-B")], @sealed_fixture}
   ]
 
   describe "scan of the repository" do
@@ -136,11 +245,33 @@ defmodule Platform.ProductNameGuardTest do
       # A guard whose glob silently matched nothing would pass on every tree.
       assert length(files) > 500, "only #{length(files)} files scanned; a scan root moved?"
 
-      for root <- ["apps/platform/lib/", "apps/platform/assets/js/", "apps/social/lib/"] do
+      for root <- [
+            "apps/platform/lib/",
+            "apps/platform/assets/js/",
+            "apps/social/lib/",
+            "clients/android/android/app/src/main/",
+            "clients/android/android/app/src/test/",
+            "#{@ios}/App/App/",
+            "#{@ios}/App/AppTests/",
+            "#{@ios}/Shared/",
+            "#{@ios}/BurrowWidgets/"
+          ] do
         assert Enum.any?(files, &String.starts_with?(&1, root)), "nothing scanned under #{root}"
       end
 
-      for file <- ["README.md", "docs/burrow/index.md", "apps/platform/priv/static/sw.js"] do
+      for file <- [
+            "README.md",
+            "docs/burrow/index.md",
+            "apps/platform/priv/static/sw.js",
+            "#{@android}/main/java/com/koboai/burrow/BurrowNativePlugin.kt",
+            "#{@android}/main/res/values/strings.xml",
+            "clients/android/android/app/build.gradle",
+            "#{@ios}/App/App/Plugins/BurrowNativePlugin.swift",
+            "#{@ios}/App/App/Info.plist",
+            "#{@ios}/App/project.yml",
+            "#{@ios}/App/App.xcodeproj/project.pbxproj",
+            "#{@ios}/BurrowWidgets/BurrowWidgets.entitlements"
+          ] do
         assert file in files, "#{file} is not scanned"
       end
     end
@@ -236,6 +367,80 @@ defmodule Platform.ProductNameGuardTest do
       end
     end
 
+    test "client files also flag Suite-prefixed identifiers and suite-named hosts" do
+      for line <- [
+            "class SuiteNativePlugin : Plugin()",
+            "registerPlugin(SuiteFoo::class.java)",
+            ~s(private val host = "suite.example.com"),
+            ~s(private val a = "suite-a.localhost"),
+            ~s[prefs.getString("pushkey.v1.suite-b.localhost")],
+            ~s[assertEquals(ALLOW, main("https://SUITE.example.net/"))]
+          ] do
+        assert offences([line], "clients/android/p.kt", []) == ["clients/android/p.kt:1: #{line}"],
+               "#{inspect(line)} was not flagged in a client file"
+      end
+    end
+
+    test "client patterns leave Burrow names, the English word and other files alone" do
+      for line <- [
+            "class BurrowNativePlugin : Plugin()",
+            ~s(private val host = "burrow.example.com"),
+            "the unit test suite passes",
+            "UserDefaults(suiteName: group)",
+            "SUITE_MENTION and BURROW_MENTION"
+          ] do
+        assert offences([line], "clients/android/p.kt", []) == [], "#{inspect(line)} was flagged"
+      end
+
+      # Core keeps Suite-prefixed module names; the client patterns are not applied there.
+      assert offences(["SuiteExecutor runs suite.deploy"], "apps/platform/lib/p.ex", []) == []
+    end
+
+    test "iOS files get the client patterns too" do
+      for line <- [
+            "view.backgroundColor = SuiteColor.surface.uiColor",
+            "final class SuiteBridgeViewController: CAPBridgeViewController {",
+            "<key>SuiteKeychainAccessGroup</key>",
+            "path = SuiteWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR;",
+            ~s(private let host = "suite.example.net"),
+            ~s(static let installs = "suite.installs.v1")
+          ] do
+        assert offences([line], "clients/ios/p.swift", []) == ["clients/ios/p.swift:1: #{line}"],
+               "#{inspect(line)} was not flagged in an iOS file"
+      end
+
+      for line <- [
+            "defaults = UserDefaults(suiteName: suiteName)",
+            "view.backgroundColor = BurrowColor.surface.uiColor",
+            ~s[XCTAssertEqual(category, "SUITE_RING_WAITING")],
+            "HPKE.Ciphersuite(kem: .Curve25519_HKDF_SHA256)"
+          ] do
+        assert offences([line], "clients/ios/p.swift", []) == [], "#{inspect(line)} was flagged"
+      end
+    end
+
+    test "an allowlisted persisted key does not hide a renamed type on its line" do
+      allowed = [~s(static let installs = "suite.installs.v1")]
+      kept = ~s(        static let installs = "suite.installs.v1")
+      assert offences([kept], "clients/ios/p.swift", allowed) == []
+
+      renamed_back = kept <> " // SuiteAPIClient"
+
+      assert offences([renamed_back], "clients/ios/p.swift", allowed) ==
+               ["clients/ios/p.swift:1: #{String.trim(renamed_back)}"]
+    end
+
+    test "an allowlisted wire name does not hide a renamed-back identifier on its line" do
+      allowed = [~s(name = "SuiteNative")]
+      kept = ~s[@CapacitorPlugin(name = "SuiteNative")]
+      assert offences([kept], "clients/android/p.kt", allowed) == []
+
+      renamed_back = kept <> " class SuiteNativePlugin"
+
+      assert offences([renamed_back], "clients/android/p.kt", allowed) ==
+               ["clients/android/p.kt:1: #{renamed_back}"]
+    end
+
     test "the skip list holds five sha256 digests" do
       assert MapSet.size(@a3_owned_hashes) == 5
       assert Enum.all?(@a3_owned_hashes, &(&1 =~ ~r/\A[0-9a-f]{64}\z/))
@@ -254,14 +459,26 @@ defmodule Platform.ProductNameGuardTest do
       "apps/social/lib/**",
       "docs/burrow/**/*.md",
       "README.md",
-      "CONTRIBUTING.md"
+      "CONTRIBUTING.md",
+      "clients/android/**/*.{kt,xml,gradle,kts}",
+      "clients/ios/**/*.{swift,plist,yml,pbxproj,entitlements}"
     ]
     |> Enum.flat_map(&Path.wildcard(Path.join(@repo_root, &1)))
     |> Enum.filter(&File.regular?/1)
     |> Enum.map(&Path.relative_to(&1, @repo_root))
     |> Enum.reject(&("vendor" in Path.split(&1)))
+    |> Enum.reject(&generated_client_path?/1)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  # Build output and installed packages under a client tree are not source.
+  defp generated_client_path?(rel) do
+    String.starts_with?(rel, "clients/") and
+      Enum.any?(
+        Path.split(rel),
+        &(&1 in ["node_modules", "build", ".gradle", ".build", "DerivedData", "Pods"])
+      )
   end
 
   defp read_lines(rel), do: @repo_root |> Path.join(rel) |> File.read!() |> String.split("\n")
@@ -273,15 +490,18 @@ defmodule Platform.ProductNameGuardTest do
   defp offences(lines, rel, allowed) do
     lines
     |> Enum.with_index(1)
-    |> Enum.filter(fn {line, _} -> offending?(line, allowed) end)
+    |> Enum.filter(fn {line, _} -> offending?(line, allowed, forbidden_for(rel)) end)
     |> Enum.map(fn {line, n} -> "#{rel}:#{n}: #{String.trim(line)}" end)
   end
 
-  defp offending?(line, allowed) do
+  defp forbidden_for("clients/" <> _), do: @forbidden ++ @client_forbidden
+  defp forbidden_for(_rel), do: @forbidden
+
+  defp offending?(line, allowed, forbidden) do
     stripped =
       Enum.reduce(allowed, Regex.replace(@org_spans, line, ""), &String.replace(&2, &1, ""))
 
-    Enum.any?(@forbidden, &Regex.match?(&1, stripped)) and not a3_owned?(line)
+    Enum.any?(forbidden, &Regex.match?(&1, stripped)) and not a3_owned?(line)
   end
 
   defp a3_owned?(line) do

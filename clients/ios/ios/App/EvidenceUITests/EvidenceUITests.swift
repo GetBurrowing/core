@@ -37,17 +37,17 @@ final class EvidenceUITests: XCTestCase {
     }
 
     func test1Picker() {
-        var app = launch(["-SuiteEvidenceReset", "YES"])
+        var app = launch(["-BurrowEvidenceReset", "YES"])
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 15))
         sleep(5)
         shot("picker-first-launch")
         app.terminate()
 
-        app = launch(["-SuiteExtraInstall", "suite-offline.invalid"])
+        app = launch(["-BurrowExtraInstall", "burrow-offline.invalid"])
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 15))
         sleep(6)
         shot("picker-saved-unreachable")
-        app.staticTexts["suite.example.test"].firstMatch.swipeLeft()
+        app.staticTexts["burrow.example.test"].firstMatch.swipeLeft()
         sleep(1)
         shot("picker-swipe-remove")
         app.staticTexts["Choose a Burrow install"].tap()
@@ -66,7 +66,7 @@ final class EvidenceUITests: XCTestCase {
         for _ in 0..<10 where field.exists { sleep(1) }
         sleep(2)
 
-        let offline = app.staticTexts["suite-offline.invalid"].firstMatch
+        let offline = app.staticTexts["burrow-offline.invalid"].firstMatch
         XCTAssertTrue(offline.waitForExistence(timeout: 5))
         // The first tap can be spent closing the row left swiped open.
         offline.tap()
@@ -74,11 +74,11 @@ final class EvidenceUITests: XCTestCase {
         offline.tap()
         sleep(2)
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Can't reach suite-offline.invalid"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Can't reach burrow-offline.invalid"].waitForExistence(timeout: 20))
         shot("picker-cant-reach")
         app.buttons["Choose another install"].tap()
 
-        app.staticTexts["suite.example.net"].firstMatch.tap()
+        app.staticTexts["burrow.example.net"].firstMatch.tap()
         app.buttons["Continue"].tap()
         // ASWebAuthenticationSession's consent alert belongs to springboard.
         let consent = consentButton(app, "Continue")
@@ -96,7 +96,7 @@ final class EvidenceUITests: XCTestCase {
     }
 
     func test2LoginProbe() {
-        let app = launch(["-SuiteLoginProbe", "suite.example.org"])
+        let app = launch(["-BurrowLoginProbe", "burrow.example.org"])
         let signIn = app.webViews.buttons["Sign in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 30))
         shot("probe-1-pocket-id-in-wkwebview")
@@ -111,7 +111,7 @@ final class EvidenceUITests: XCTestCase {
     }
 
     func test3Notification() {
-        let app = launch(["-SuiteRequestPush", "YES"])
+        let app = launch(["-BurrowRequestPush", "YES"])
         for _ in 0..<3 {
             let allow = springboard.buttons["Allow"]
             if allow.waitForExistence(timeout: 5) { allow.tap() }
@@ -137,7 +137,7 @@ final class EvidenceUITests: XCTestCase {
     /// Task 01a1261e review round 2: what iOS RENDERS for a chat push from
     /// one of two signed-in installs. The harness first copies each payload
     /// named in $COMM_FILES (comma-separated) into the App Group container;
-    /// each runs through the DEBUG `-SuiteDebugLocalPush` seam (the Notification
+    /// each runs through the DEBUG `-BurrowDebugLocalPush` seam (the Notification
     /// Service Extension's own two calls). Writes every Notification Center
     /// cell's accessibility label to `<tag>-nc-cells.txt`.
     func testCommunicationNotificationLabels() {
@@ -145,13 +145,13 @@ final class EvidenceUITests: XCTestCase {
         let tag = env["COMM_TAG"] ?? "comm"
         let files = (env["COMM_FILES"] ?? "").split(separator: ",").map(String.init)
         let extra = (env["COMM_ARGS"] ?? "").split(separator: " ").map(String.init)
-        var app = launch(["-SuiteRequestPush", "YES"])
+        var app = launch(["-BurrowRequestPush", "YES"])
         let allow = springboard.buttons["Allow"]
         if allow.waitForExistence(timeout: 8) { allow.tap() }
         sleep(2)
         app.terminate()
         for file in files {
-            app = launch(["-SuiteDebugLocalPush", file] + extra)
+            app = launch(["-BurrowDebugLocalPush", file] + extra)
             sleep(2)
             XCUIDevice.shared.press(.home)
             sleep(5)
@@ -190,7 +190,7 @@ final class EvidenceUITests: XCTestCase {
     /// Task 01a120be stage 4: the "Sent to #<space>" notification a finished
     /// background upload posts, drawn by the system.
     func test4UploadSentNotification() {
-        let app = launch(["-SuiteEvidenceSentNotification", "design-review"])
+        let app = launch(["-BurrowEvidenceSentNotification", "design-review"])
         for _ in 0..<3 {
             let allow = springboard.buttons["Allow"]
             if allow.waitForExistence(timeout: 5) { allow.tap() }
@@ -213,7 +213,7 @@ final class EvidenceUITests: XCTestCase {
     private var prefix: String { ProcessInfo.processInfo.environment["EVIDENCE_PREFIX"] ?? "" }
 
     private func freshAddFlow(_ extra: [String] = []) -> XCUIApplication {
-        let app = launch(["-SuiteEvidenceReset", "YES"] + extra)
+        let app = launch(["-BurrowEvidenceReset", "YES"] + extra)
         XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 20))
         return app
     }
@@ -240,7 +240,7 @@ final class EvidenceUITests: XCTestCase {
 
         // The confirmation card against a live install: its own logo, name and host.
         app = freshAddFlow()
-        type(app, "https://suite-exp.example.org/chat ")
+        type(app, "https://burrow-exp.example.org/chat ")
         app.buttons["Continue"].tap()
         XCTAssertTrue(app.buttons["Continue to sign in"].waitForExistence(timeout: 20))
         // The install's logo loads after the card appears.
@@ -264,7 +264,7 @@ final class EvidenceUITests: XCTestCase {
         app.terminate()
 
         // Offline, through the DEBUG probe seam.
-        app = freshAddFlow(["-SuiteAddInstallProbe", "offline"])
+        app = freshAddFlow(["-BurrowAddInstallProbe", "offline"])
         type(app, "acme.burrow.app")
         app.buttons["Continue"].tap()
         XCTAssertTrue(app.staticTexts["You're offline. Connect and try again."].waitForExistence(timeout: 10))
@@ -273,7 +273,7 @@ final class EvidenceUITests: XCTestCase {
         app.terminate()
 
         // The switcher's Add install sheet: the same flow.
-        app = launch(["-SuiteEvidenceReset", "YES", "-SuiteExtraInstall", "suite-exp.example.org"])
+        app = launch(["-BurrowEvidenceReset", "YES", "-BurrowExtraInstall", "burrow-exp.example.org"])
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 20))
         app.buttons["Add an install"].tap()
         XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 5))

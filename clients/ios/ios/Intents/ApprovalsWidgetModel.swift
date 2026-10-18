@@ -127,7 +127,7 @@ struct WidgetApprovalStore {
 /// The last approvals list per install host, in the App Group, so a failed
 /// refresh can show the last good rows (as stale after 30 minutes).
 struct CachedApprovals: Codable, Equatable {
-    var approvals: [SuiteApproval]
+    var approvals: [BurrowApproval]
     var fetchedAt: Date
 }
 
@@ -157,7 +157,7 @@ struct ApprovalsCache {
     /// never before the server has answered the approve. A kept row
     /// stays where it was: right after the row that preceded it before (or
     /// first, if nothing did), never moved to the end.
-    static func merge(fetched: [SuiteApproval], previous: [SuiteApproval], host: String, marks: [String: WidgetRowMark], now: Date) -> [SuiteApproval] {
+    static func merge(fetched: [BurrowApproval], previous: [BurrowApproval], host: String, marks: [String: WidgetRowMark], now: Date) -> [BurrowApproval] {
         let fetchedIDs = Set(fetched.map(\.id))
         var merged = fetched
         var lastPlaced: String?
@@ -193,7 +193,7 @@ struct ApprovalsEntry: TimelineEntry {
     struct Row: Equatable, Identifiable {
         /// `<host>|<id>`, what the intents carry.
         let id: String
-        let approval: SuiteApproval
+        let approval: BurrowApproval
         let display: Display
     }
 
@@ -216,7 +216,7 @@ struct ApprovalsEntry: TimelineEntry {
     /// The v1 count entry, so small and lock-screen families render exactly
     /// as before.
     var countsEntry: CountsEntry {
-        CountsEntry(date: date, host: host, signedIn: signedIn, counts: fetchedAt.map { SuiteCounts(approvals: count, tasks: 0, fetchedAt: $0) })
+        CountsEntry(date: date, host: host, signedIn: signedIn, counts: fetchedAt.map { BurrowCounts(approvals: count, tasks: 0, fetchedAt: $0) })
     }
 
     /// The approvals list (`/inbox`), or just the app with no install.
@@ -235,7 +235,7 @@ struct ApprovalsEntry: TimelineEntry {
         rows: [
             Row(
                 id: "yourteam.example.com|preview-1",
-                approval: SuiteApproval(
+                approval: BurrowApproval(
                     id: "preview-1", kind: "plan", title: "Burrow iOS intents plan", spaceName: "Burrow iOS", spacePathSegment: nil, taskID: nil,
                     insertedAt: nil, summary: nil),
                 display: .live)

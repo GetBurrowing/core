@@ -18,8 +18,8 @@ import java.net.URI
 
 /** One app open = ONE `/api/app/counts` per signed-in install (task 01a1261e remediation, case 7009). */
 class ResumeRefreshTest {
-    private val a = "suite-a.localhost"
-    private val b = "suite-b.localhost"
+    private val a = "burrow-a.localhost"
+    private val b = "burrow-b.localhost"
 
     private class MemoryCounts : CountsStore {
         val map = mutableMapOf<String, Counts>()

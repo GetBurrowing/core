@@ -4,14 +4,14 @@ import UIKit
 import UserNotifications
 import WebKit
 
-// SuiteNative is the app's ONE Capacitor plugin: every native capability the
+// `SuiteNative` is the app's ONE Capacitor plugin: every native capability the
 // web UI reaches goes through it. A later meetings plugin (v2) registers
-// beside it in SuiteBridgeViewController.capacitorDidLoad rather than
+// beside it in BurrowBridgeViewController.capacitorDidLoad rather than
 // growing this one.
 
 // MARK: - Notification categories
 
-enum SuiteNotificationCategory {
+enum BurrowNotificationCategory {
     static let mention = "SUITE_MENTION"
     static let open = "SUITE_OPEN"
     static let replyAction = "SUITE_REPLY"
@@ -175,15 +175,15 @@ final class PushRegistrar {
 // MARK: - App API client
 
 /// Calls to the install's `/api/app/*` routes with that install's bearer.
-enum SuiteAPI {
+enum BurrowAPI {
     static var pushEnvironment: String {
-        (Bundle.main.object(forInfoDictionaryKey: "SuitePushEnvironment") as? String) ?? "production"
+        (Bundle.main.object(forInfoDictionaryKey: "BurrowPushEnvironment") as? String) ?? "production"
     }
 
     /// Through the shared client: the bearer for `host`, from the shared
     /// Keychain, attached in one place.
     static func post(host: String, path: String, json: [String: Any], completion: @escaping (Result<Data, Error>) -> Void) {
-        SuiteAPIClient.shared.postJSON(host: host, path: path, json: json, completion: completion)
+        BurrowAPIClient.shared.postJSON(host: host, path: path, json: json, completion: completion)
     }
 
     static func registerDevice(host: String, token: Data, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -205,7 +205,7 @@ enum SuiteAPI {
             // Task 01a14ba1: this build registers the BURROW_* categories, so
             // the server may send them. A build that sends no scheme keeps
             // getting SUITE_*.
-            "push_category_scheme": SuiteNotificationCategory.scheme,
+            "push_category_scheme": BurrowNotificationCategory.scheme,
         ]
         // Task 01a1261e: this install's sealed-preview public key. No key
         // (Keychain refused) registers exactly as before: no preview.
@@ -216,7 +216,7 @@ enum SuiteAPI {
     static func reply(host: String, spaceID: String, replyTo messageID: String?, text: String, completion: @escaping (Result<Void, Error>) -> Void) {
         var body: [String: Any] = ["text": text]
         if let messageID { body["reply_to"] = messageID }
-        let path = SuiteAPIClient.messagesPath(spaceID)
+        let path = BurrowAPIClient.messagesPath(spaceID)
         post(host: host, path: path, json: body) { result in
             completion(result.map { _ in () })
         }
@@ -230,7 +230,7 @@ enum SuiteAPI {
 final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationRouter()
 
-    /// Set by SuiteBridgeViewController; until the shell is up, an Open is
+    /// Set by BurrowBridgeViewController; until the shell is up, an Open is
     /// parked here and replayed.
     var openHandler: ((Install, URL) -> Void)?
     private(set) var pendingOpen: (Install, URL)?
@@ -244,7 +244,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         completionHandler(Self.presentation(forCategory: content.categoryIdentifier))
         // The NSE already wrote this push's unread count: refresh the dot.
         NotificationCenter.default.post(name: .burrowInstallBadgesChanged, object: nil)
-        if SuiteNotificationCategory.isRingWaiting(content.categoryIdentifier) {
+        if BurrowNotificationCategory.isRingWaiting(content.categoryIdentifier) {
             showRingWaiting(content.userInfo)
         }
     }
@@ -253,7 +253,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     /// (`SUITE_RING_WAITING` or `BURROW_RING_WAITING`) gets NO system banner and no sound:
     /// it becomes the in-call invite banner and the call is never interrupted.
     static func presentation(forCategory category: String) -> UNNotificationPresentationOptions {
-        SuiteNotificationCategory.isRingWaiting(category) ? [] : [.banner, .list, .sound]
+        BurrowNotificationCategory.isRingWaiting(category) ? [] : [.banner, .list, .sound]
     }
 
     /// Hands a ring-waiting payload to the in-call banner.
@@ -272,7 +272,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         let payload = PushPayload(userInfo: response.notification.request.content.userInfo)
 
         switch response.actionIdentifier {
-        case let id where SuiteNotificationCategory.isReply(id):
+        case let id where BurrowNotificationCategory.isReply(id):
             guard
                 let text = (response as? UNTextInputNotificationResponse)?.userText
                     .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
@@ -280,8 +280,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             else {
                 return completionHandler()
             }
-            let task = UIApplication.shared.beginBackgroundTask(withName: "suite.reply")
-            SuiteAPI.reply(host: host, spaceID: spaceID, replyTo: payload.messageID, text: text) { result in
+            let task = UIApplication.shared.beginBackgroundTask(withName: "burrow.reply")
+            BurrowAPI.reply(host: host, spaceID: spaceID, replyTo: payload.messageID, text: text) { result in
                 if case .success = result, let event = payload.replyDonation() { Donations.shared.donate(event) }
                 DispatchQueue.main.async {
                     completionHandler()
@@ -295,7 +295,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         default:
             // A tap on a ring-waiting notification shown while the app was
             // in the background: the banner, not a page.
-            if SuiteNotificationCategory.isRingWaiting(response.notification.request.content.categoryIdentifier) {
+            if BurrowNotificationCategory.isRingWaiting(response.notification.request.content.categoryIdentifier) {
                 showRingWaiting(response.notification.request.content.userInfo)
                 return completionHandler()
             }
@@ -327,9 +327,11 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
 
 // MARK: - The plugin
 
-@objc(SuiteNativePlugin)
-public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
-    public let identifier = "SuiteNativePlugin"
+@objc(BurrowNativePlugin)
+public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "BurrowNativePlugin"
+    // The JS-facing wire name stays `SuiteNative`: core JS older than task
+    // 01a14ba9 looks up only that name (docs/runbooks/burrow-rename-deferred.md).
     public let jsName = "SuiteNative"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pushState", returnType: CAPPluginReturnPromise),
@@ -342,7 +344,7 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
     /// The shell's navigation policy, consulted for every web view
     /// navigation before Capacitor's own rule. Owned by the bridge view
     /// controller; nil while no install is loaded.
-    weak var shell: SuiteBridgeViewController?
+    weak var shell: BurrowBridgeViewController?
 
     override public func shouldOverrideLoad(_ navigationAction: WKNavigationAction) -> NSNumber? {
         guard let shell else { return nil }
@@ -370,19 +372,19 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
             guard granted else {
                 return call.resolve(["registered": false, "state": "denied"])
             }
-            SuiteNotificationCategory.register(center: center)
+            BurrowNotificationCategory.register(center: center)
             PushRegistrar.shared.requestToken { tokenResult in
                 switch tokenResult {
                 case .failure:
                     call.reject("APNs registration failed", "apns_failed")
                 case .success(let token):
-                    SuiteAPI.registerDevice(host: host, token: token) { result in
+                    BurrowAPI.registerDevice(host: host, token: token) { result in
                         switch result {
                         case .success:
                             call.resolve(["registered": true, "state": "granted"])
-                        case .failure(SuiteAPIClient.Failure.notSignedIn):
+                        case .failure(BurrowAPIClient.Failure.notSignedIn):
                             call.reject("Not signed in to this install", "not_signed_in")
-                        case .failure(SuiteAPIClient.Failure.status(let status)):
+                        case .failure(BurrowAPIClient.Failure.status(let status)):
                             call.reject("Device registration returned \(status)", "registration_failed")
                         case .failure:
                             call.reject("Device registration failed", "registration_failed")

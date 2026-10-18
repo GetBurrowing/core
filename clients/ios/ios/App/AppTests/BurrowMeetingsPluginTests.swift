@@ -32,7 +32,7 @@ private struct SDKRefused: Error {}
 /// `SuiteMeetings` (task 01a13c62 stage 2): capabilities, confirmed mute,
 /// media state and active speakers for the in-app meeting page.
 @MainActor
-final class SuiteMeetingsPluginTests: XCTestCase {
+final class BurrowMeetingsPluginTests: XCTestCase {
     private var resolved: [String: Any]?
     private var rejected: String?
 
@@ -49,14 +49,14 @@ final class SuiteMeetingsPluginTests: XCTestCase {
             })
     }
 
-    private func makePlugin(_ media: FakeMedia) -> SuiteMeetingsPlugin {
-        let plugin = SuiteMeetingsPlugin()
+    private func makePlugin(_ media: FakeMedia) -> BurrowMeetingsPlugin {
+        let plugin = BurrowMeetingsPlugin()
         plugin.media = { media }
         return plugin
     }
 
     func testTheNewMethodsAreRegistered() {
-        let names = SuiteMeetingsPlugin().pluginMethods.map(\.name)
+        let names = BurrowMeetingsPlugin().pluginMethods.map(\.name)
         for name in ["join", "state", "leave", "capabilities", "setMuted"] {
             XCTAssertTrue(names.contains(name), name)
         }
@@ -64,7 +64,7 @@ final class SuiteMeetingsPluginTests: XCTestCase {
 
     func testCapabilitiesShape() {
         let done = expectation(description: "resolved")
-        SuiteMeetingsPlugin().capabilities(makeCall("capabilities", done: done))
+        BurrowMeetingsPlugin().capabilities(makeCall("capabilities", done: done))
         wait(for: [done], timeout: 1)
         XCTAssertEqual(resolved?["mic"] as? Bool, true)
         XCTAssertEqual(resolved?["camera"] as? Bool, false, "stage 4 flips camera")

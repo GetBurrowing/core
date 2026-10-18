@@ -80,7 +80,7 @@ A module lives in `apps/<module>` (Play: `apps/game_stream`) as a standalone Mix
 takes core as a **path dependency**: `{:platform, path: "../platform", env: Mix.env()}`. Core
 never depends on a module, never names one, and cannot tell whether one exists.
 
-A with-modules build is a thin **release host**, `apps/suite_release`: a Mix project with no
+A with-modules build is a thin **release host**, `apps/burrow_release`: a Mix project with no
 code of its own whose `deps` are `:platform` plus the selected modules, all by path. Its
 config imports core's config and adds the module selection. Its release is the with-modules
 image. `apps/platform` by itself remains the without-modules build and the without-modules
@@ -116,7 +116,7 @@ no `mix.exs`. B has none of these costs.
 
 **Costs of B that we accept:**
 
-- **Two lockfiles.** Mix ignores a path dependency's lockfile, so `apps/suite_release/mix.lock`
+- **Two lockfiles.** Mix ignores a path dependency's lockfile, so `apps/burrow_release/mix.lock`
   resolves core's dependency tree independently of `apps/platform/mix.lock`. The two must hold
   the same versions for every package core uses. Stage 3 adds the check that every entry in
   `apps/platform/mix.lock` appears, unchanged, in each host and module lockfile: an ExUnit test
@@ -261,7 +261,7 @@ it. Measured on test-host, `node:24-slim` and core's Tailwind 4.1.12:
   @source "../../../game_stream/lib";
   ```
 
-  The generated files are gitignored in `apps/suite_release`.
+  The generated files are gitignored in `apps/burrow_release`.
 - **esbuild.** Core's `platform` profile adds `--alias:@extensions=./js/extensions/none.js`.
   `--alias:@=.` does not capture `@extensions`. The host's profile overrides only that alias,
   plus its own output directory and `NODE_PATH`. `hooks/index.js` spreads `@extensions` first,
@@ -452,7 +452,7 @@ registration, and nothing else**:
   `PLATFORM_TEST_DATABASE`, as in core.
 
 This is exactly what CI's with-Play job (stage 4) will prove, because it is the module's own
-`mix test`. `apps/suite_release` uses the same two config files, plus the two asset profiles.
+`mix test`. `apps/burrow_release` uses the same two config files, plus the two asset profiles.
 
 ### 9. Install safety at merge
 

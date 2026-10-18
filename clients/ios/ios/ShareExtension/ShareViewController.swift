@@ -14,10 +14,10 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = SuiteColor.surface.uiColor
+        view.backgroundColor = BurrowColor.surface.uiColor
         // iPad presents a share extension as a form sheet; ask for the
         // standard form-sheet size. iPhone ignores it.
-        preferredContentSize = CGSize(width: SuiteLayout.sheetWidth, height: 620)
+        preferredContentSize = CGSize(width: BurrowLayout.sheetWidth, height: 620)
 
         model = ShareSheetModel(install: InstallStore.shared.selectedInstall)
         let sheet = ShareSheetView(
@@ -26,7 +26,7 @@ final class ShareViewController: UIViewController {
             onDone: { [weak self] in self?.finish() }
         )
         let host = UIHostingController(rootView: sheet)
-        host.view.backgroundColor = SuiteColor.surface.uiColor
+        host.view.backgroundColor = BurrowColor.surface.uiColor
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host.view)
@@ -67,7 +67,7 @@ final class ShareViewController: UIViewController {
 /// file, a web URL, plain text.
 enum ShareItemLoader {
     static var workDirectory: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("suite-share", isDirectory: true)
+        FileManager.default.temporaryDirectory.appendingPathComponent("burrow-share", isDirectory: true)
     }
 
     static func cleanUp() {

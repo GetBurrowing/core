@@ -6,7 +6,7 @@ import SwiftUI
 /// optional agent row, message field.
 ///
 /// iPad: the system presents the extension as a form sheet; the content is
-/// the iPhone layout in a column no wider than `SuiteLayout.sheetWidth`.
+/// the iPhone layout in a column no wider than `BurrowLayout.sheetWidth`.
 /// Send sits in the top bar, so the keyboard never covers it. Hardware
 /// keyboard: Return sends (once a space is chosen), Escape cancels.
 struct ShareSheetView: View {
@@ -17,7 +17,7 @@ struct ShareSheetView: View {
     var body: some View {
         VStack(spacing: 0) {
             navBar
-            Rectangle().fill(SuiteColor.border.color).frame(height: 1)
+            Rectangle().fill(BurrowColor.border.color).frame(height: 1)
             if model.phase == .notSignedIn {
                 notSignedIn
             } else {
@@ -32,21 +32,21 @@ struct ShareSheetView: View {
                 }
             }
         }
-        .frame(maxWidth: SuiteLayout.sheetWidth)
+        .frame(maxWidth: BurrowLayout.sheetWidth)
         .frame(maxWidth: .infinity)
-        .background(SuiteColor.surface.color.ignoresSafeArea())
-        .foregroundColor(SuiteColor.onSurface.color)
+        .background(BurrowColor.surface.color.ignoresSafeArea())
+        .foregroundColor(BurrowColor.onSurface.color)
     }
 
     // MARK: Nav bar
 
     private var navBar: some View {
         ZStack {
-            Text("Share to Burrow").font(SuiteFont.body(.semibold))
+            Text("Share to Burrow").font(BurrowFont.body(.semibold))
             HStack {
                 Button("Cancel", action: onCancel)
-                    .font(SuiteFont.body())
-                    .foregroundColor(SuiteColor.onSurface.color)
+                    .font(BurrowFont.body())
+                    .foregroundColor(BurrowColor.onSurface.color)
                     .keyboardShortcut(.cancelAction)
                     .hoverEffect()
                     .disabled(model.fieldsLocked)
@@ -67,14 +67,14 @@ struct ShareSheetView: View {
             ZStack {
                 Text("Send").opacity(model.phase == .sending ? 0 : 1)
                 if model.phase == .sending {
-                    ProgressView().tint(SuiteColor.onPrimary.color)
+                    ProgressView().tint(BurrowColor.onPrimary.color)
                 }
             }
-            .font(SuiteFont.secondary(.bold))
-            .foregroundColor(SuiteColor.onPrimary.color)
+            .font(BurrowFont.secondary(.bold))
+            .foregroundColor(BurrowColor.onPrimary.color)
             .padding(.horizontal, 14)
             .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: SuiteRadius.field).fill(SuiteColor.primary.color))
+            .background(RoundedRectangle(cornerRadius: BurrowRadius.field).fill(BurrowColor.primary.color))
             .opacity(model.canSend || model.phase == .sending ? 1 : 0.4)
         }
         // Return sends only while Send is enabled (a space chosen, not
@@ -90,14 +90,14 @@ struct ShareSheetView: View {
     private var notSignedIn: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(ShareSheetModel.notSignedInText)
-                .font(SuiteFont.body())
+                .font(BurrowFont.body())
                 .fixedSize(horizontal: false, vertical: true)
             Button(action: onCancel) {
                 Text("Close")
-                    .font(SuiteFont.body(.bold))
-                    .foregroundColor(SuiteColor.onPrimary.color)
+                    .font(BurrowFont.body(.bold))
+                    .foregroundColor(BurrowColor.onPrimary.color)
                     .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(RoundedRectangle(cornerRadius: SuiteRadius.field).fill(SuiteColor.primary.color))
+                    .background(RoundedRectangle(cornerRadius: BurrowRadius.field).fill(BurrowColor.primary.color))
             }
             Spacer()
         }
@@ -135,8 +135,8 @@ struct ShareSheetView: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(SuiteFont.caption())
-            .foregroundColor(SuiteColor.muted.color)
+            .font(BurrowFont.caption())
+            .foregroundColor(BurrowColor.muted.color)
             .padding(.top, 12)
             .padding(.bottom, 6)
     }
@@ -145,21 +145,21 @@ struct ShareSheetView: View {
         HStack(spacing: 8) { content() }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: SuiteRadius.field).stroke(SuiteColor.border.color, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: BurrowRadius.field).stroke(BurrowColor.border.color, lineWidth: 1))
     }
 
     @ViewBuilder
     private var spaceRow: some View {
         if model.phase == .loadingSpaces {
             field {
-                Text("Loading spaces").font(SuiteFont.body()).foregroundColor(SuiteColor.muted.color)
+                Text("Loading spaces").font(BurrowFont.body()).foregroundColor(BurrowColor.muted.color)
                 Spacer()
-                ProgressView().tint(SuiteColor.onSurface.color)
+                ProgressView().tint(BurrowColor.onSurface.color)
             }
         } else if model.banner == .spacesFailed && model.spaces.isEmpty {
             Button(action: model.loadSpaces) {
                 field {
-                    Text("Try again").font(SuiteFont.body(.semibold))
+                    Text("Try again").font(BurrowFont.body(.semibold))
                     Spacer()
                 }
             }
@@ -171,18 +171,18 @@ struct ShareSheetView: View {
             } label: {
                 field {
                     Text(model.selectedSpace?.name ?? "Choose a space")
-                        .font(SuiteFont.body(model.selectedSpace == nil ? .regular : .semibold))
-                        .foregroundColor(model.selectedSpace == nil ? SuiteColor.muted.color : SuiteColor.onSurface.color)
+                        .font(BurrowFont.body(model.selectedSpace == nil ? .regular : .semibold))
+                        .foregroundColor(model.selectedSpace == nil ? BurrowColor.muted.color : BurrowColor.onSurface.color)
                         .lineLimit(1)
                     Spacer()
-                    Image(systemName: "chevron.right").foregroundColor(SuiteColor.muted.color)
+                    Image(systemName: "chevron.right").foregroundColor(BurrowColor.muted.color)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func agentRow(_ space: SuiteSpace) -> some View {
+    private func agentRow(_ space: BurrowSpace) -> some View {
         if let agent = model.selectedAgent {
             field {
                 Button {
@@ -192,11 +192,11 @@ struct ShareSheetView: View {
                         Text("@\(agent.name)")
                         Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
                     }
-                    .font(SuiteFont.caption(.semibold))
-                    .foregroundColor(SuiteColor.onSurface.color)
+                    .font(BurrowFont.caption(.semibold))
+                    .foregroundColor(BurrowColor.onSurface.color)
                     .padding(.horizontal, 10)
                     .frame(height: 28)
-                    .background(RoundedRectangle(cornerRadius: 16).fill(SuiteColor.surfaceMuted.color))
+                    .background(RoundedRectangle(cornerRadius: 16).fill(BurrowColor.surfaceMuted.color))
                 }
                 .accessibilityLabel("Remove @\(agent.name)")
                 Spacer()
@@ -208,9 +208,9 @@ struct ShareSheetView: View {
                 }
             } label: {
                 field {
-                    Text("No agent").font(SuiteFont.body()).foregroundColor(SuiteColor.muted.color)
+                    Text("No agent").font(BurrowFont.body()).foregroundColor(BurrowColor.muted.color)
                     Spacer()
-                    Image(systemName: "chevron.right").foregroundColor(SuiteColor.muted.color)
+                    Image(systemName: "chevron.right").foregroundColor(BurrowColor.muted.color)
                 }
             }
         }
@@ -218,27 +218,27 @@ struct ShareSheetView: View {
 
     private var messageField: some View {
         TextField("Add a message", text: $model.message, axis: .vertical)
-            .font(SuiteFont.input())
+            .font(BurrowFont.input())
             .lineLimit(3...8)
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: SuiteRadius.field).stroke(SuiteColor.border.color, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: BurrowRadius.field).stroke(BurrowColor.border.color, lineWidth: 1))
     }
 
     private func bannerView(_ banner: ShareSheetModel.Banner) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(SuiteColor.destructive.color)
+                .foregroundColor(BurrowColor.destructive.color)
             // Error copy is base-content beside the error-tone icon: error
             // red fails AA as text (canvas, palette).
             Text(banner.text)
-                .font(SuiteFont.secondary())
-                .foregroundColor(SuiteColor.onSurface.color)
+                .font(BurrowFont.secondary())
+                .foregroundColor(BurrowColor.onSurface.color)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: SuiteRadius.field).fill(SuiteColor.surfaceMuted.color))
+        .background(RoundedRectangle(cornerRadius: BurrowRadius.field).fill(BurrowColor.surfaceMuted.color))
         .accessibilityElement(children: .combine)
     }
 
@@ -249,13 +249,13 @@ struct ShareSheetView: View {
             Image(systemName: "arrow.up.circle.fill")
                 .font(.system(size: 44, weight: .semibold))
             Text(ShareSheetModel.handedOffText)
-                .font(SuiteFont.body(.semibold))
+                .font(BurrowFont.body(.semibold))
                 .multilineTextAlignment(.center)
         }
-        .foregroundColor(SuiteColor.onSurface.color)
+        .foregroundColor(BurrowColor.onSurface.color)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SuiteColor.surface.color.opacity(0.94))
+        .background(BurrowColor.surface.color.opacity(0.94))
         .accessibilityElement(children: .combine)
     }
 
@@ -264,13 +264,13 @@ struct ShareSheetView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 44, weight: .semibold))
             Text("Sent to \(spaceName)")
-                .font(SuiteFont.body(.semibold))
+                .font(BurrowFont.body(.semibold))
                 .multilineTextAlignment(.center)
         }
-        .foregroundColor(SuiteColor.onSurface.color)
+        .foregroundColor(BurrowColor.onSurface.color)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SuiteColor.surface.color.opacity(0.94))
+        .background(BurrowColor.surface.color.opacity(0.94))
         .accessibilityElement(children: .combine)
     }
 }
@@ -284,21 +284,21 @@ struct PreviewCard: View {
         HStack(spacing: 12) {
             thumbnail
                 .frame(width: 64, height: 64)
-                .background(RoundedRectangle(cornerRadius: SuiteRadius.field).fill(SuiteColor.surfaceMuted.color))
-                .clipShape(RoundedRectangle(cornerRadius: SuiteRadius.field))
+                .background(RoundedRectangle(cornerRadius: BurrowRadius.field).fill(BurrowColor.surfaceMuted.color))
+                .clipShape(RoundedRectangle(cornerRadius: BurrowRadius.field))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(SuiteFont.body(.semibold))
+                    .font(BurrowFont.body(.semibold))
                     .lineLimit(2)
                 Text(subtitle)
-                    .font(SuiteFont.caption())
-                    .foregroundColor(SuiteColor.muted.color)
+                    .font(BurrowFont.caption())
+                    .foregroundColor(BurrowColor.muted.color)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: SuiteRadius.box).stroke(SuiteColor.border.color, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: BurrowRadius.box).stroke(BurrowColor.border.color, lineWidth: 1))
     }
 
     @ViewBuilder
@@ -314,14 +314,14 @@ struct PreviewCard: View {
         case .file: glyph("doc")
         case .url: glyph("link")
         case .text: glyph("text.alignleft")
-        case nil: ProgressView().tint(SuiteColor.onSurface.color)
+        case nil: ProgressView().tint(BurrowColor.onSurface.color)
         }
     }
 
     private func glyph(_ name: String) -> some View {
         Image(systemName: name)
             .font(.system(size: 24, weight: .semibold))
-            .foregroundColor(SuiteColor.onSurface.color)
+            .foregroundColor(BurrowColor.onSurface.color)
     }
 
     private var title: String {

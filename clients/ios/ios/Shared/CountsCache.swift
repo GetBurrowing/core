@@ -2,7 +2,7 @@ import Foundation
 
 /// `GET /api/app/counts`: approvals waiting on the person and tasks assigned
 /// to them and open.
-struct SuiteCounts: Codable, Equatable {
+struct BurrowCounts: Codable, Equatable {
     var approvals: Int
     var tasks: Int
     /// When THIS device received the counts. Staleness is measured from the
@@ -36,12 +36,12 @@ struct CountsCache {
         self.defaults = defaults ?? .standard
     }
 
-    func counts(for host: String) -> SuiteCounts? {
+    func counts(for host: String) -> BurrowCounts? {
         guard let data = defaults.data(forKey: Self.keyPrefix + host) else { return nil }
-        return try? Self.decoder.decode(SuiteCounts.self, from: data)
+        return try? Self.decoder.decode(BurrowCounts.self, from: data)
     }
 
-    func write(_ counts: SuiteCounts, for host: String) {
+    func write(_ counts: BurrowCounts, for host: String) {
         if let data = try? Self.encoder.encode(counts) {
             defaults.set(data, forKey: Self.keyPrefix + host)
         }

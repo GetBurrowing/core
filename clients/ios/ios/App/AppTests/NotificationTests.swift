@@ -5,7 +5,7 @@ import XCTest
 
 final class NotificationTests: XCTestCase {
     func testCategoryIdentifiersMatchTheServerPayload() {
-        let categories = Dictionary(uniqueKeysWithValues: SuiteNotificationCategory.all().map { ($0.identifier, $0) })
+        let categories = Dictionary(uniqueKeysWithValues: BurrowNotificationCategory.all().map { ($0.identifier, $0) })
         // Platform.Push.Notification maps chat_mention -> SUITE_MENTION,
         // approvals -> SUITE_OPEN and meeting_ring_waiting ->
         // SUITE_RING_WAITING (task 01a10db7 stage 5; no actions: it becomes
@@ -43,46 +43,46 @@ final class NotificationTests: XCTestCase {
     }
 
     func testReplyAndRingMatchBothNames() {
-        XCTAssertTrue(SuiteNotificationCategory.isReply("SUITE_REPLY"))
-        XCTAssertTrue(SuiteNotificationCategory.isReply("BURROW_REPLY"))
-        XCTAssertFalse(SuiteNotificationCategory.isReply("SUITE_OPEN_ACTION"))
-        XCTAssertFalse(SuiteNotificationCategory.isReply("BURROW_OPEN_ACTION"))
-        XCTAssertTrue(SuiteNotificationCategory.isRingWaiting("SUITE_RING_WAITING"))
-        XCTAssertTrue(SuiteNotificationCategory.isRingWaiting("BURROW_RING_WAITING"))
-        XCTAssertFalse(SuiteNotificationCategory.isRingWaiting("BURROW_MENTION"))
+        XCTAssertTrue(BurrowNotificationCategory.isReply("SUITE_REPLY"))
+        XCTAssertTrue(BurrowNotificationCategory.isReply("BURROW_REPLY"))
+        XCTAssertFalse(BurrowNotificationCategory.isReply("SUITE_OPEN_ACTION"))
+        XCTAssertFalse(BurrowNotificationCategory.isReply("BURROW_OPEN_ACTION"))
+        XCTAssertTrue(BurrowNotificationCategory.isRingWaiting("SUITE_RING_WAITING"))
+        XCTAssertTrue(BurrowNotificationCategory.isRingWaiting("BURROW_RING_WAITING"))
+        XCTAssertFalse(BurrowNotificationCategory.isRingWaiting("BURROW_MENTION"))
     }
 
     /// The capability the server keys BURROW_* on (task 01a14ba1): this build
     /// registers both sets, so it says so when it registers its device.
     func testRegistrationBodyDeclaresTheBurrowCategoryScheme() {
-        let body = SuiteAPI.registrationBody(token: Data([0x00, 0xab]), appInstallID: "install-1", publicKey: "pk")
+        let body = BurrowAPI.registrationBody(token: Data([0x00, 0xab]), appInstallID: "install-1", publicKey: "pk")
         XCTAssertEqual(body["push_category_scheme"] as? String, "burrow")
         XCTAssertEqual(body["token"] as? String, "00ab")
         XCTAssertEqual(body["app_install_id"] as? String, "install-1")
         XCTAssertEqual(body["push_public_key"] as? String, "pk")
 
-        let noKey = SuiteAPI.registrationBody(token: Data([0x01]), appInstallID: "install-1", publicKey: nil)
+        let noKey = BurrowAPI.registrationBody(token: Data([0x01]), appInstallID: "install-1", publicKey: nil)
         XCTAssertNil(noKey["push_public_key"])
         XCTAssertEqual(noKey["push_category_scheme"] as? String, "burrow", "the scheme does not depend on the key")
     }
 
     func testPayloadDestinationStaysOnItsInstall() {
-        let relative = PushPayload(userInfo: ["install_host": "suite.example.com", "url": "/chat/s1?message=m1"])
-        XCTAssertEqual(relative.destination()?.absoluteString, "https://suite.example.com/chat/s1?message=m1")
+        let relative = PushPayload(userInfo: ["install_host": "burrow.example.com", "url": "/chat/s1?message=m1"])
+        XCTAssertEqual(relative.destination()?.absoluteString, "https://burrow.example.com/chat/s1?message=m1")
 
-        let absolute = PushPayload(userInfo: ["install_host": "suite.example.com", "url": "https://suite.example.com/inbox"])
-        XCTAssertEqual(absolute.destination()?.absoluteString, "https://suite.example.com/inbox")
+        let absolute = PushPayload(userInfo: ["install_host": "burrow.example.com", "url": "https://burrow.example.com/inbox"])
+        XCTAssertEqual(absolute.destination()?.absoluteString, "https://burrow.example.com/inbox")
 
-        let foreign = PushPayload(userInfo: ["install_host": "suite.example.com", "url": "https://evil.example/x"])
-        XCTAssertEqual(foreign.destination()?.absoluteString, "https://suite.example.com/")
+        let foreign = PushPayload(userInfo: ["install_host": "burrow.example.com", "url": "https://evil.example/x"])
+        XCTAssertEqual(foreign.destination()?.absoluteString, "https://burrow.example.com/")
 
         XCTAssertNil(PushPayload(userInfo: ["url": "/chat"]).destination())
     }
 
     func testAuthorizationStateVocabulary() {
-        XCTAssertEqual(SuiteNativePlugin.state(.authorized), "granted")
-        XCTAssertEqual(SuiteNativePlugin.state(.denied), "denied")
-        XCTAssertEqual(SuiteNativePlugin.state(.notDetermined), "prompt")
+        XCTAssertEqual(BurrowNativePlugin.state(.authorized), "granted")
+        XCTAssertEqual(BurrowNativePlugin.state(.denied), "denied")
+        XCTAssertEqual(BurrowNativePlugin.state(.notDetermined), "prompt")
     }
 
     func testDeviceTokenHex() {
@@ -100,7 +100,7 @@ final class NotificationDelegateTests: XCTestCase {
         let savedHandler = NotificationRouter.shared.openHandler
         defer { NotificationRouter.shared.openHandler = savedHandler }
 
-        let shell = SuiteBridgeViewController()
+        let shell = BurrowBridgeViewController()
         shell.loadViewIfNeeded()
 
         XCTAssertNotNil(shell.bridge, "the bridge loaded")

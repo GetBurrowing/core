@@ -7,7 +7,7 @@ import Foundation
 /// call through CallKit and LiveKit. The widget extension compiles this file
 /// too and installs nothing, so there the intent keeps opening the meeting's
 /// web page, exactly as before. This file must never import LiveKit: it is
-/// compiled into SuiteWidgets.
+/// compiled into BurrowWidgets.
 enum MeetingLauncher {
     enum Route: Equatable {
         case native

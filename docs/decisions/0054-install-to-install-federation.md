@@ -300,3 +300,61 @@ new branch in AttentionRouter, not a fall-through.
   untrusted source joins that predicate instead of adding a clause.
 - The author-field rule in section 6 is the one guarantee that no module enforces; the ingest
   is responsible for it. Its test is the regression guard for it.
+
+## Protocol versions
+
+Added by task 01a14ba9 (the Burrow rename, stages 1 and 2). The rename cannot simply edit the
+protocol id, because the id is inside the signed bytes: a renamed id is a new protocol, and an
+install running older core refuses it.
+
+**Definitions.** The protocol id names the signature domain only. The body schema and the
+body's `"v": 1` are the same under both.
+
+| id | signing prefix | signature header |
+|---|---|---|
+| `suite-federation/1` (v1) | `"suite-federation/1\n"` | `suite-federation-signature` |
+| `burrow-federation/2` (v2) | `"burrow-federation/2\n"` | `burrow-federation-signature` |
+
+The descriptor keeps `"protocol": "suite-federation/1"` and adds
+`"protocols": ["suite-federation/1", "burrow-federation/2"]`. It is served at both
+`/.well-known/suite-federation` and `/.well-known/burrow-federation`. The client still fetches
+the `suite-federation` path, because an install running older core does not serve the other
+one. A descriptor with no `protocols` list is read as `[protocol]`.
+
+**Verifier rule.** The header picks the arm, with no fallback. When
+`burrow-federation-signature` is present, only that header is checked, over the v2 prefix. A bad
+v2 signature is `:bad_signature` even if a valid v1 header is on the same request. Otherwise
+`suite-federation-signature` is checked over the v1 prefix. With neither header the result is
+`:missing_signature`.
+
+**Sender rule.** Each envelope carries one signature header, never both. `Envelope.build/4`
+signs v2 only when both of these hold:
+
+- `PEER_FEDERATION_SIGNING_PROTOCOL` is exactly `burrow-federation/2`. It is unset by default,
+  and any other value (case or whitespace variants included) means v1.
+- The recipient peer's stored `metadata["protocols"]` includes `burrow-federation/2`.
+
+Otherwise it signs v1. The list is stored from the peer's descriptor every time it is fetched:
+on `propose`, when an inbound proposal is bound, and on every readiness check. A peer with no
+stored list counts as v1-only. A bare install_id recipient always gets v1, because the builder
+has no descriptor for it.
+
+**Readiness gate and flip procedure.** On the install that is about to switch:
+
+1. Run `/app/bin/platform rpc 'IO.inspect(Platform.Federation.Peers.protocol_readiness())'`.
+   For every active peer it re-fetches the descriptor, refreshes `metadata["protocols"]`, and
+   prints `%{peer_install_id, base_url, protocols, ready, error}`.
+2. Flip only when every row has `ready: true`. Any `ready: false` row (a v1-only peer, or one
+   with an `error`) means wait. The per-peer check would keep a v1-only peer on v1 anyway, but
+   the gate makes the flip a decision taken with the evidence in hand. A failed refresh leaves
+   the row's stored list as it was.
+3. Set `PEER_FEDERATION_SIGNING_PROTOCOL=burrow-federation/2` and restart. A running
+   `PeerConnection` holds the peer row it started with, so the restart is also what picks up the
+   refreshed lists.
+4. To roll back, unset the variable and restart. Every install keeps accepting v1.
+
+**Retiring v1.** v1 can be removed (the v1 verifier arm, the v1 header, the
+`/.well-known/suite-federation` path and the `protocol` field value) once both hold: every known
+install sends v2, and `protocol_readiness/0` on every install shows no v1-only peer. The client's
+fetch path moves to `/.well-known/burrow-federation` in that same later release, not before. The
+names kept until then are listed in `docs/runbooks/burrow-rename-deferred.md`.

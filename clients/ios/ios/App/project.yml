@@ -1,4 +1,4 @@
-# Suite iOS shell (task 01a10882). The xcodeproj is GENERATED from this
+# Burrow iOS shell (task 01a10882). The xcodeproj is GENERATED from this
 # file: run `xcodegen generate` in clients/ios/ios/App after adding or
 # moving a Swift file, then commit both. Capacitor's SPM glue lives in the
 # local package CapApp-SPM, which `npx cap sync ios` rewrites.
@@ -17,7 +17,7 @@ packages:
   # audio-session and CallKit seams move between minors, and a resolver
   # picking up a new minor on a fresh clone would change call behaviour
   # without a diff. 2.17.0 was the newest 2.x release on 2026-10-06.
-  # App target ONLY: ../Intents is compiled into SuiteWidgets too, so
+  # App target ONLY: ../Intents is compiled into BurrowWidgets too, so
   # nothing shared may import LiveKit.
   LiveKit:
     url: https://github.com/livekit/client-sdk-swift
@@ -81,7 +81,7 @@ targets:
         buildPhase: resources
       - path: App/config.xml
         buildPhase: resources
-      # InstallStore, KeychainTokenStore, SuiteAPIClient, SlabState and the
+      # InstallStore, KeychainTokenStore, BurrowAPIClient, SlabState and the
       # colour slots: compiled into the app AND both extensions.
       - path: ../Shared
       # App Entities, App Intents and their snippets: compiled into the app
@@ -93,7 +93,7 @@ targets:
       - package: LiveKit
         product: LiveKit
       - target: ShareExtension
-      - target: SuiteWidgets
+      - target: BurrowWidgets
       - target: NotificationService
     configFiles:
       Debug: ../debug.xcconfig
@@ -110,7 +110,7 @@ targets:
         INFOPLIST_FILE: App/Info.plist
         # The iOS 27 schema intents (messages.*, phone.startCall,
         # reminders.createReminder) compile ONLY here. ../Intents is also in
-        # SuiteWidgets and NotificationService, and a schema intent declared by
+        # BurrowWidgets and NotificationService, and a schema intent declared by
         # more than one bundle makes Siri refuse it (task 01a111bb).
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) BURROW_APP"
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
@@ -123,7 +123,7 @@ targets:
         Release:
           BURROW_APS_ENVIRONMENT: production
           BURROW_PUSH_ENVIRONMENT: production
-  # Share to Suite (task 01a10882 stage 4). Bearer from the shared
+  # Share to Burrow (task 01a10882 stage 4). Bearer from the shared
   # Keychain access group; never web-view cookies.
   ShareExtension:
     type: app-extension
@@ -145,22 +145,22 @@ targets:
         SKIP_INSTALL: "YES"
   # My approvals / My tasks widgets. iOS 17+ for containerBackground,
   # content margins and App Intents buttons, the same floor as the app.
-  SuiteWidgets:
+  BurrowWidgets:
     type: app-extension
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: ../SuiteWidgets
+      - path: ../BurrowWidgets
         excludes:
           - "Info.plist"
-          - "SuiteWidgets.entitlements"
+          - "BurrowWidgets.entitlements"
       - path: ../Shared
       - path: ../Intents
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.widgets
-        INFOPLIST_FILE: ../SuiteWidgets/Info.plist
-        CODE_SIGN_ENTITLEMENTS: ../SuiteWidgets/SuiteWidgets.entitlements
+        INFOPLIST_FILE: ../BurrowWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../BurrowWidgets/BurrowWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: "YES"
         SKIP_INSTALL: "YES"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -216,11 +216,11 @@ targets:
       - path: ExtensionRenderTests
       - path: ../Shared
       - path: ../ShareExtension/ShareSheetView.swift
-      - path: ../SuiteWidgets/SuiteWidgets.swift
-      - path: ../SuiteWidgets/CountsProvider.swift
-      - path: ../SuiteWidgets/ApprovalsWidget.swift
-      - path: ../SuiteWidgets/ApprovalsProvider.swift
-      - path: ../SuiteWidgets/Controls.swift
+      - path: ../BurrowWidgets/BurrowWidgets.swift
+      - path: ../BurrowWidgets/CountsProvider.swift
+      - path: ../BurrowWidgets/ApprovalsWidget.swift
+      - path: ../BurrowWidgets/ApprovalsProvider.swift
+      - path: ../BurrowWidgets/Controls.swift
       - path: App/InstallPickerView.swift
       # The "Switched to" banner (task 01a1261e stage 4 evidence).
       - path: App/SwitchBanner.swift

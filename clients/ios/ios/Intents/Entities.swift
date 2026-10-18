@@ -73,7 +73,7 @@ struct SpaceEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ space: SuiteSpace, host: String, env: IntentEnvironment) {
+    init(_ space: BurrowSpace, host: String, env: IntentEnvironment) {
         self.init(
             id: EntityRef(host: host, uuid: space.id).id,
             name: space.name,
@@ -131,7 +131,7 @@ struct TaskEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ task: SuiteTask, host: String, env: IntentEnvironment) {
+    init(_ task: BurrowTask, host: String, env: IntentEnvironment) {
         let lead = task.projectName.map { "Task in \($0)" } ?? "Task"
         self.init(
             id: EntityRef(host: host, uuid: task.id).id, title: task.title,
@@ -181,7 +181,7 @@ struct ApprovalEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ approval: SuiteApproval, host: String, env: IntentEnvironment) {
+    init(_ approval: BurrowApproval, host: String, env: IntentEnvironment) {
         var lead = approval.isPlan ? "Plan to approve" : "Review to approve"
         if let space = approval.spaceName, !space.isEmpty { lead += " in \(space)" }
         self.init(
@@ -230,7 +230,7 @@ struct MeetingEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ meeting: SuiteMeeting, host: String, env: IntentEnvironment) {
+    init(_ meeting: BurrowMeeting, host: String, env: IntentEnvironment) {
         self.init(
             id: EntityRef(host: host, uuid: meeting.id).id, name: meeting.name, slug: meeting.slug,
             subtitle: IntentCopy.subtitle(
@@ -275,7 +275,7 @@ struct ProjectEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ project: SuiteProject, host: String, env: IntentEnvironment) {
+    init(_ project: BurrowProject, host: String, env: IntentEnvironment) {
         self.init(
             id: EntityRef(host: host, uuid: project.id).id, name: project.name,
             subtitle: IntentCopy.subtitle(["Project", project.org?.name], install: env.disambiguator(host)))
@@ -331,7 +331,7 @@ struct AgentEntity: AppEntity {
         self.subtitle = subtitle
     }
 
-    init(_ agent: SuiteAgent, host: String, env: IntentEnvironment) {
+    init(_ agent: BurrowAgent, host: String, env: IntentEnvironment) {
         self.init(
             id: EntityRef(host: host, uuid: agent.id).id, name: agent.name,
             subtitle: IntentCopy.subtitle(["Agent", agent.role], install: env.disambiguator(host)))
@@ -502,9 +502,9 @@ struct EntityCatalog {
     /// `directory` (task 01a111bb stage 7) lists the whole set the device
     /// indexes for Siri: collaborators, space mates, org mates and agents.
     /// Every list (not a search) is indexed per host as it arrives.
-    func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: SuitePerson)] {
+    func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: BurrowPerson)] {
         await load("people", hosts: hosts) { host in
-            let people: [SuitePerson]
+            let people: [BurrowPerson]
             do {
                 people = try await env.client.people(host: host, query: query, directory: directory)
             } catch  where directory && query == nil && Self.status(of: error) == 404 {
@@ -522,7 +522,7 @@ struct EntityCatalog {
     }
 
     /// Every space on each host, as raw rows (for conversation entities).
-    func spaceRows(hosts: [String]) async -> [(host: String, space: SuiteSpace)] {
+    func spaceRows(hosts: [String]) async -> [(host: String, space: BurrowSpace)] {
         await load("spaces", hosts: hosts) { host in
             let spaces = try await env.client.spaces(host: host)
             Self.spaceIDsBySegment[host] = Dictionary(spaces.map { ($0.linkSegment, $0.id) }, uniquingKeysWith: { first, _ in first })
@@ -589,7 +589,7 @@ struct EntityCatalog {
 
     static func status(of error: Error) -> Int {
         switch error {
-        case SuiteAPIClient.Failure.status(let status), SuiteAPIClient.Failure.refused(let status, _): return status
+        case BurrowAPIClient.Failure.status(let status), BurrowAPIClient.Failure.refused(let status, _): return status
         default: return 0
         }
     }

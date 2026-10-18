@@ -2,7 +2,7 @@ import Foundation
 
 /// A space the person can post into, from `GET /api/app/spaces`, with the
 /// agents participating in it (the share sheet's optional agent row).
-struct SuiteSpace: Decodable, Equatable, Identifiable {
+struct BurrowSpace: Decodable, Equatable, Identifiable {
     struct Agent: Decodable, Equatable, Identifiable {
         let id: String
         let name: String
@@ -24,7 +24,7 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
     /// The space's own org (task 01a111bb), so two "general" channels in two
     /// orgs read apart. Nil for a DM, an org-less space, or an older server
     /// that sends no `org` at all.
-    let org: SuiteOrg?
+    let org: BurrowOrg?
 
     /// What `/chat/<segment>` opens this space by. The server's
     /// `path_segment` when it sends one; otherwise the id, which
@@ -42,7 +42,7 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
 
     init(
         id: String, name: String, slug: String? = nil, kind: String? = nil, pathSegment: String? = nil, agents: [Agent] = [],
-        org: SuiteOrg? = nil
+        org: BurrowOrg? = nil
     ) {
         self.id = id
         self.name = name
@@ -67,12 +67,12 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
         agents = try container.decodeIfPresent([Agent].self, forKey: .agents) ?? []
         // Tolerant: an older server sends no `org`, and a malformed one must
         // not fail the whole list (the share sheet decodes this too).
-        org = (try? container.decodeIfPresent(SuiteOrg.self, forKey: .org)) ?? nil
+        org = (try? container.decodeIfPresent(BurrowOrg.self, forKey: .org)) ?? nil
     }
 }
 
 /// An org as the server names it: `{id, name}`.
-struct SuiteOrg: Codable, Equatable {
+struct BurrowOrg: Codable, Equatable {
     let id: String
     let name: String
 }
@@ -85,7 +85,7 @@ struct SuiteOrg: Codable, Equatable {
 /// be sent to install B. A host with no token fails `notSignedIn` before any
 /// request exists, so a signed-out share sheet or widget makes no network
 /// call at all.
-struct SuiteAPIClient {
+struct BurrowAPIClient {
     enum Failure: Error, Equatable {
         case notSignedIn
         case status(Int)
@@ -108,7 +108,7 @@ struct SuiteAPIClient {
     /// only against a server that predates that endpoint.
     static let maxRequestBytes: Int64 = 8_000_000
 
-    static let shared = SuiteAPIClient()
+    static let shared = BurrowAPIClient()
 
     let session: URLSession
     let tokens: TokenStore
@@ -134,8 +134,8 @@ struct SuiteAPIClient {
 
     // MARK: Routes
 
-    func spaces(host: String, completion: @escaping (Result<[SuiteSpace], Error>) -> Void) {
-        struct Body: Decodable { let spaces: [SuiteSpace] }
+    func spaces(host: String, completion: @escaping (Result<[BurrowSpace], Error>) -> Void) {
+        struct Body: Decodable { let spaces: [BurrowSpace] }
         get(host: host, path: "/api/app/spaces") { result in
             completion(
                 result.flatMap { data in
@@ -147,7 +147,7 @@ struct SuiteAPIClient {
 
     func counts(
         host: String, now: @escaping () -> Date = Date.init,
-        completion: @escaping (Result<SuiteCounts, Error>) -> Void
+        completion: @escaping (Result<BurrowCounts, Error>) -> Void
     ) {
         struct Body: Decodable {
             let approvals: Int
@@ -166,7 +166,7 @@ struct SuiteAPIClient {
                 result.flatMap { data in
                     Result {
                         let body = try JSONDecoder().decode(Body.self, from: data)
-                        return SuiteCounts(
+                        return BurrowCounts(
                             approvals: body.approvals, tasks: body.tasks, fetchedAt: now(), unread: body.unread,
                             asOf: InstallUnreadStore.parseDate(body.asOf))
                     }.mapError { _ in Failure.badResponse }
@@ -245,7 +245,7 @@ struct SuiteAPIClient {
             let size = try form.contentLength()
             guard size <= Self.maxRequestBytes else { throw Failure.tooLarge(bytes: size) }
             let bodyURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("suite-share-\(UUID().uuidString).multipart")
+                .appendingPathComponent("burrow-share-\(UUID().uuidString).multipart")
             try form.write(to: bodyURL)
             request.httpMethod = "POST"
             request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
@@ -312,7 +312,7 @@ struct MultipartForm {
     var fields: [(name: String, value: String)]
     var file: FilePart?
 
-    init(boundary: String = "suite-\(UUID().uuidString)", fields: [(name: String, value: String)] = [], file: FilePart? = nil) {
+    init(boundary: String = "burrow-\(UUID().uuidString)", fields: [(name: String, value: String)] = [], file: FilePart? = nil) {
         self.boundary = boundary
         self.fields = fields
         self.file = file
@@ -384,7 +384,7 @@ struct MultipartForm {
 
 /// One approval inbox row from `GET /api/app/approvals`: a plan or a
 /// review waiting on the person.
-struct SuiteApproval: Codable, Equatable {
+struct BurrowApproval: Codable, Equatable {
     let id: String
     /// `plan` or `review`.
     let kind: String
@@ -415,7 +415,7 @@ enum ApprovalOutcome: Equatable {
     case alreadyHandled(by: String?)
 }
 
-struct SuiteTask: Decodable, Equatable {
+struct BurrowTask: Decodable, Equatable {
     let id: String
     let title: String
     let status: String?
@@ -427,7 +427,7 @@ struct SuiteTask: Decodable, Equatable {
     }
 }
 
-struct SuiteMeeting: Decodable, Equatable {
+struct BurrowMeeting: Decodable, Equatable {
     let id: String
     let slug: String
     let name: String
@@ -447,7 +447,7 @@ struct CreatedMeeting: Decodable, Equatable {
     let slug: String
 }
 
-struct SuiteAgent: Decodable, Equatable {
+struct BurrowAgent: Decodable, Equatable {
     let id: String
     let name: String
     let slug: String?
@@ -466,7 +466,7 @@ struct AgentDM: Decodable, Equatable {
 }
 
 /// One message from `GET /api/app/spaces/:id/messages?after=`.
-struct SuiteMessage: Decodable, Equatable {
+struct BurrowMessage: Decodable, Equatable {
     let id: String
     let authorType: String?
     let authorID: String?
@@ -483,7 +483,7 @@ struct SuiteMessage: Decodable, Equatable {
 
 /// Async forms of the App Intents routes. Every request is built by
 /// `authorizedRequest` for the host it names, at the moment it is sent.
-extension SuiteAPIClient {
+extension BurrowAPIClient {
     struct Response {
         let status: Int
         let data: Data
@@ -520,8 +520,8 @@ extension SuiteAPIClient {
         }
     }
 
-    func approvals(host: String) async throws -> [SuiteApproval] {
-        struct Body: Decodable { let approvals: [SuiteApproval] }
+    func approvals(host: String) async throws -> [BurrowApproval] {
+        struct Body: Decodable { let approvals: [BurrowApproval] }
         return try await fetch(Body.self, host: host, path: "/api/app/approvals").approvals
     }
 
@@ -546,8 +546,8 @@ extension SuiteAPIClient {
         return .done(object?["status"] as? String ?? "")
     }
 
-    func tasks(host: String, query: String? = nil, limit: Int? = nil) async throws -> [SuiteTask] {
-        struct Body: Decodable { let tasks: [SuiteTask] }
+    func tasks(host: String, query: String? = nil, limit: Int? = nil) async throws -> [BurrowTask] {
+        struct Body: Decodable { let tasks: [BurrowTask] }
         var components = URLComponents()
         components.path = "/api/app/tasks"
         var items: [URLQueryItem] = []
@@ -557,8 +557,8 @@ extension SuiteAPIClient {
         return try await fetch(Body.self, host: host, path: components.string ?? "/api/app/tasks").tasks
     }
 
-    func meetings(host: String) async throws -> [SuiteMeeting] {
-        struct Body: Decodable { let meetings: [SuiteMeeting] }
+    func meetings(host: String) async throws -> [BurrowMeeting] {
+        struct Body: Decodable { let meetings: [BurrowMeeting] }
         return try await fetch(Body.self, host: host, path: "/api/app/meetings").meetings
     }
 
@@ -580,8 +580,8 @@ extension SuiteAPIClient {
         return try await fetch(CreatedMeeting.self, host: host, path: "/api/app/meetings", method: "POST", json: json)
     }
 
-    func agents(host: String) async throws -> [SuiteAgent] {
-        struct Body: Decodable { let agents: [SuiteAgent] }
+    func agents(host: String) async throws -> [BurrowAgent] {
+        struct Body: Decodable { let agents: [BurrowAgent] }
         return try await fetch(Body.self, host: host, path: "/api/app/agents").agents
     }
 
@@ -589,14 +589,14 @@ extension SuiteAPIClient {
         try await fetch(AgentDM.self, host: host, path: "/api/app/agents/\(Self.segment(agentID))/dm", method: "POST", json: [:])
     }
 
-    func messagesAfter(host: String, spaceID: String, after: String?) async throws -> [SuiteMessage] {
-        struct Body: Decodable { let messages: [SuiteMessage] }
+    func messagesAfter(host: String, spaceID: String, after: String?) async throws -> [BurrowMessage] {
+        struct Body: Decodable { let messages: [BurrowMessage] }
         var path = Self.messagesPath(spaceID)
         if let after { path += "?after=\(Self.segment(after))" }
         return try await fetch(Body.self, host: host, path: path).messages
     }
 
-    func spaces(host: String) async throws -> [SuiteSpace] {
+    func spaces(host: String) async throws -> [BurrowSpace] {
         try await withCheckedThrowingContinuation { continuation in
             spaces(host: host) { continuation.resume(with: $0) }
         }
@@ -622,7 +622,7 @@ extension SuiteAPIClient {
 
 /// One row of `GET /api/app/people`: a human or an agent the person may
 /// message. No email or phone, by design.
-struct SuitePerson: Decodable, Equatable {
+struct BurrowPerson: Decodable, Equatable {
     let id: String
     /// `user` or `agent`.
     let kind: String
@@ -658,16 +658,16 @@ struct SuitePerson: Decodable, Equatable {
 }
 
 /// One project from `GET /api/app/projects`.
-struct SuiteProject: Decodable, Equatable {
+struct BurrowProject: Decodable, Equatable {
     let id: String
     let name: String
-    let org: SuiteOrg?
+    let org: BurrowOrg?
 }
 
 /// `GET /api/app/projects`: the projects, and the project of the newest
 /// meeting the person can see (nil when there is none: ask).
-struct SuiteProjects: Decodable, Equatable {
-    let projects: [SuiteProject]
+struct BurrowProjects: Decodable, Equatable {
+    let projects: [BurrowProject]
     let lastMeetingProjectID: String?
 
     private enum CodingKeys: String, CodingKey {
@@ -697,14 +697,14 @@ enum ReadOutcome: Equatable {
     case notSupported
 }
 
-extension SuiteAPIClient {
+extension BurrowAPIClient {
     /// People to message: `?q=` searches (so a person outside the recent set
     /// is still found by name); no query is the recent collaborators.
     /// `directory: true` (no query) is the whole set the app indexes for
     /// Siri: collaborators, space mates, org mates and agents, scoped by the
     /// server exactly as a search is (task 01a111bb stage 7).
-    func people(host: String, query: String? = nil, directory: Bool = false) async throws -> [SuitePerson] {
-        struct Body: Decodable { let people: [SuitePerson] }
+    func people(host: String, query: String? = nil, directory: Bool = false) async throws -> [BurrowPerson] {
+        struct Body: Decodable { let people: [BurrowPerson] }
         var components = URLComponents()
         components.path = "/api/app/people"
         if let query, !query.isEmpty {
@@ -720,8 +720,8 @@ extension SuiteAPIClient {
         try await fetch(AgentDM.self, host: host, path: "/api/app/people/\(Self.segment(userID))/dm", method: "POST", json: [:])
     }
 
-    func projects(host: String) async throws -> SuiteProjects {
-        try await fetch(SuiteProjects.self, host: host, path: "/api/app/projects")
+    func projects(host: String) async throws -> BurrowProjects {
+        try await fetch(BurrowProjects.self, host: host, path: "/api/app/projects")
     }
 
     func editMessage(host: String, messageID: String, text: String) async throws -> EditOutcome {

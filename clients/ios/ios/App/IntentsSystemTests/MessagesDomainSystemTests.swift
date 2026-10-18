@@ -74,7 +74,7 @@ final class MessagesDomainSystemTests: XCTestCase {
         let id = "evidence.invalid|3e000000-0000-4000-8000-0000000000d1"
         await MainActor.run {
             let app = XCUIApplication()
-            app.launchArguments += ["-SuiteEvidencePerson", "\(id)|Dalton Evidence|user"]
+            app.launchArguments += ["-BurrowEvidencePerson", "\(id)|Dalton Evidence|user"]
             app.launch()
         }
         let entities = definitions.entities["MessagePersonEntity"]

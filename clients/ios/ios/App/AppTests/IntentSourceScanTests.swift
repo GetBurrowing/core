@@ -66,7 +66,7 @@ final class IntentSourceScanTests: XCTestCase {
     /// network request and logs nothing, so it can never log a title or body.
     func testTheNotificationServiceNeitherFetchesNorLogs() throws {
         let files = ["NotificationService/NotificationService.swift", "Intents/CommunicationNotification.swift"]
-        let banned = ["URLSession", "URLRequest", "SuiteAPIClient", "Logger(", "os_log", "print(", "NSLog", "IntentLog"]
+        let banned = ["URLSession", "URLRequest", "BurrowAPIClient", "Logger(", "os_log", "print(", "NSLog", "IntentLog"]
         for path in files {
             let source = try String(contentsOf: iosRoot.appendingPathComponent(path), encoding: .utf8)
             XCTAssertTrue(source.contains("UNNotification"), "\(path) was not read")
@@ -163,7 +163,7 @@ final class ShippedHostScanTests: XCTestCase {
     private func shippedFiles() throws -> [URL] {
         let fm = FileManager.default
         var files: [URL] = []
-        let directories = ["App/App", "Shared", "Intents", "ShareExtension", "SuiteWidgets", "NotificationService"]
+        let directories = ["App/App", "Shared", "Intents", "ShareExtension", "BurrowWidgets", "NotificationService"]
         for directory in directories {
             let root = iosRoot.appendingPathComponent(directory)
             XCTAssertTrue(fm.fileExists(atPath: root.path), "missing \(root.path)")

@@ -51,9 +51,9 @@
 	<string>Burrow uses the microphone when you join a meeting.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Burrow opens your photo library when you choose a photo to attach to a message.</string>
-	<key>SuiteKeychainAccessGroup</key>
+	<key>BurrowKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.kobo-ai.burrow.shared</string>
-	<key>SuitePushEnvironment</key>
+	<key>BurrowPushEnvironment</key>
 	<string>$(BURROW_PUSH_ENVIRONMENT)</string>
 	<key>UIAppFonts</key>
 	<array>

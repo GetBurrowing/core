@@ -282,4 +282,242 @@ defmodule Platform.Federation.Peers.EnvelopeTest do
       assert length(Peers.list_peers()) == 2
     end
   end
+
+  describe "protocol ids: suite-federation/1 and burrow-federation/2 (task 01a14ba9 stage 1)" do
+    test "a v1-signed envelope verifies as suite-federation/1 (unchanged behaviour)", %{
+      remote: remote,
+      now: now
+    } do
+      {raw, headers} = envelope(remote, "test.ping", %{"note" => "v1"}, ts: now)
+
+      assert List.keymember?(headers, "suite-federation-signature", 0)
+      refute List.keymember?(headers, "burrow-federation-signature", 0)
+
+      assert {:ok, %{protocol: "suite-federation/1", envelope: %{"v" => 1}}} =
+               Envelope.verify(raw, headers, now)
+    end
+
+    test "a v2-signed envelope verifies as burrow-federation/2", %{remote: remote, now: now} do
+      {raw, headers} = envelope_v2(remote, "test.ping", %{"note" => "v2"}, ts: now)
+
+      assert List.keymember?(headers, "burrow-federation-signature", 0)
+      refute List.keymember?(headers, "suite-federation-signature", 0)
+
+      assert {:ok, %{protocol: "burrow-federation/2", envelope: body}} =
+               Envelope.verify(raw, headers, now)
+
+      # the body schema is unchanged: the protocol id names the signature domain only
+      assert body["v"] == 1
+      assert body["payload"] == %{"note" => "v2"}
+    end
+
+    test "the builder this install sends with still signs v1 only", %{remote: remote, now: now} do
+      {_raw, headers} = envelope(remote, "test.ping", %{}, ts: now)
+
+      assert Envelope.signature_header() == "suite-federation-signature"
+      assert Envelope.signing_prefix() == "suite-federation/1\n"
+      assert Envelope.signature_header(:v2) == "burrow-federation-signature"
+      assert Envelope.signing_prefix(:v2) == "burrow-federation/2\n"
+      assert [{"content-type", _}, {"suite-federation-signature", _}] = headers
+    end
+
+    test "a v1 signature in the v2 header is refused, and a v2 signature in the v1 header", %{
+      remote: remote,
+      now: now
+    } do
+      {raw, v1_headers} = envelope(remote, "test.ping", %{}, ts: now)
+      v1_sig = signature(v1_headers, :v1)
+      v2_sig = [] |> sign_headers(raw, remote.private_key, :v2) |> signature(:v2)
+
+      # positive controls: each signature verifies under its own header
+      assert {:ok, %{protocol: "suite-federation/1"}} =
+               Envelope.verify(raw, [{"suite-federation-signature", v1_sig}], now)
+
+      NonceCache.reset()
+
+      assert {:ok, %{protocol: "burrow-federation/2"}} =
+               Envelope.verify(raw, [{"burrow-federation-signature", v2_sig}], now)
+
+      NonceCache.reset()
+
+      # domain separation: swapped headers do not verify
+      assert Envelope.verify(raw, [{"burrow-federation-signature", v1_sig}], now) ==
+               {:error, :bad_signature}
+
+      assert Envelope.verify(raw, [{"suite-federation-signature", v2_sig}], now) ==
+               {:error, :bad_signature}
+    end
+
+    test "a bad v2 header beside a good v1 header is refused: no fallback to v1", %{
+      remote: remote,
+      now: now
+    } do
+      {raw, v1_headers} = envelope(remote, "test.ping", %{}, ts: now)
+      {_pub, other_priv} = Ed25519.generate()
+      bad_v2 = [] |> sign_headers(raw, other_priv, :v2) |> signature(:v2)
+
+      both = with_signature(v1_headers, bad_v2, :v2)
+
+      assert signature(both, :v1) == signature(v1_headers, :v1)
+      assert Envelope.verify(raw, both, now) == {:error, :bad_signature}
+
+      # control: the same request without the bad v2 header verifies on v1
+      assert {:ok, %{protocol: "suite-federation/1"}} = Envelope.verify(raw, v1_headers, now)
+    end
+
+    test "a good v2 header beside a bad v1 header verifies as v2", %{remote: remote, now: now} do
+      {raw, v2_headers} = envelope_v2(remote, "test.ping", %{}, ts: now)
+      both = with_signature(v2_headers, "!!!", :v1)
+
+      assert {:ok, %{protocol: "burrow-federation/2"}} = Envelope.verify(raw, both, now)
+    end
+
+    test "neither header is :missing_signature; an undecodable v2 header is :bad_signature", %{
+      remote: remote,
+      now: now
+    } do
+      {raw, v2_headers} = envelope_v2(remote, "test.ping", %{}, ts: now)
+
+      assert Envelope.verify(raw, [{"content-type", "application/json"}], now) ==
+               {:error, :missing_signature}
+
+      assert Envelope.verify(raw, with_signature(v2_headers, "!!!", :v2), now) ==
+               {:error, :bad_signature}
+    end
+  end
+
+  describe "signing protocol choice (task 01a14ba9 stage 2)" do
+    @v1_header "suite-federation-signature"
+    @v2_header "burrow-federation-signature"
+    @dual ["suite-federation/1", "burrow-federation/2"]
+
+    defp signature_headers(headers) do
+      for {name, _} <- headers, name in [@v1_header, @v2_header], do: name
+    end
+
+    # Signed AS `remote` toward this install, choosing the protocol for
+    # `recipient`, so the result can go through the full verifier.
+    defp build_for(recipient, remote, now) do
+      %{install_id: local_id} = InstallIdentity.current()
+
+      {:ok, env} =
+        Envelope.build("test.ping", %{"n" => 1}, recipient,
+          from: remote.install_id,
+          signer: {remote.kid, remote.private_key},
+          to: local_id,
+          ts: now
+        )
+
+      env
+    end
+
+    test "flag unset + peer advertising v2: ONLY suite-federation-signature", %{
+      remote: remote,
+      peer: peer,
+      now: now
+    } do
+      put_env_restored(:peer_federation_signing_protocol, nil)
+      peer = advertise!(peer, @dual)
+
+      {raw, headers} = build_for(peer, remote, now)
+
+      assert signature_headers(headers) == [@v1_header]
+      assert Envelope.signing_version(peer) == :v1
+      assert {:ok, %{protocol: "suite-federation/1"}} = Envelope.verify(raw, headers, now)
+    end
+
+    test "flag v2 + peer advertising v2: ONLY burrow-federation-signature, and it verifies", %{
+      remote: remote,
+      peer: peer,
+      now: now
+    } do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+      peer = advertise!(peer, @dual)
+
+      {raw, headers} = build_for(peer, remote, now)
+
+      assert signature_headers(headers) == [@v2_header]
+      assert Envelope.signing_version(peer) == :v2
+      assert {:ok, %{protocol: "burrow-federation/2"}} = Envelope.verify(raw, headers, now)
+    end
+
+    test "flag v2: this install's own key signs the v2 prefix, not the v1 one", %{peer: peer} do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+      peer = advertise!(peer, @dual)
+      me = InstallIdentity.current()
+
+      {:ok, {raw, headers}} = Envelope.build("test.ping", %{}, peer)
+      sig = headers |> signature(:v2) |> Base.url_decode64!(padding: false)
+
+      assert signature_headers(headers) == [@v2_header]
+      assert Ed25519.verify(Envelope.signing_prefix(:v2) <> raw, sig, me.public_key)
+      refute Ed25519.verify(Envelope.signing_prefix(:v1) <> raw, sig, me.public_key)
+    end
+
+    test "flag v2 + a v1-only peer (no protocols metadata, or v1 alone): v1", %{
+      remote: remote,
+      peer: peer,
+      now: now
+    } do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+
+      # positive control: the same flag signs v2 to the same peer once it advertises v2
+      assert Envelope.signing_version(advertise!(peer, @dual)) == :v2
+
+      no_metadata = %{peer | metadata: %{}}
+      assert Envelope.signing_version(no_metadata) == :v1
+      {raw, headers} = build_for(no_metadata, remote, now)
+      assert signature_headers(headers) == [@v1_header]
+      assert {:ok, %{protocol: "suite-federation/1"}} = Envelope.verify(raw, headers, now)
+
+      v1_only = advertise!(peer, ["suite-federation/1"])
+      assert Envelope.signing_version(v1_only) == :v1
+      assert {_raw, headers} = build_for(v1_only, remote, now + 1)
+      assert signature_headers(headers) == [@v1_header]
+    end
+
+    test "flag v2 + a bare install_id recipient always signs v1", %{
+      remote: remote,
+      now: now
+    } do
+      put_env_restored(:peer_federation_signing_protocol, "burrow-federation/2")
+
+      assert Envelope.signing_version(remote.install_id) == :v1
+      {_raw, headers} = build_for(remote.install_id, remote, now)
+      assert signature_headers(headers) == [@v1_header]
+    end
+
+    test "a near-miss flag value signs v1 (app env and PEER_FEDERATION_SIGNING_PROTOCOL)", %{
+      peer: peer
+    } do
+      peer = advertise!(peer, @dual)
+      near_misses = ["burrow-federation/2 ", "BURROW-FEDERATION/2", "burrow-federation/1", ""]
+
+      for value <- near_misses do
+        put_env_restored(:peer_federation_signing_protocol, value)
+        assert Envelope.signing_version(peer) == :v1, "app env #{inspect(value)} selected v2"
+      end
+
+      # the environment variable, read when the app env key is absent
+      Application.delete_env(:platform, :peer_federation_signing_protocol)
+      original = System.get_env("PEER_FEDERATION_SIGNING_PROTOCOL")
+
+      on_exit(fn ->
+        if original,
+          do: System.put_env("PEER_FEDERATION_SIGNING_PROTOCOL", original),
+          else: System.delete_env("PEER_FEDERATION_SIGNING_PROTOCOL")
+      end)
+
+      for value <- near_misses do
+        System.put_env("PEER_FEDERATION_SIGNING_PROTOCOL", value)
+        assert Envelope.signing_version(peer) == :v1, "env #{inspect(value)} selected v2"
+      end
+
+      # positive control: the exact string does select v2 through the variable
+      System.put_env("PEER_FEDERATION_SIGNING_PROTOCOL", "burrow-federation/2")
+      assert Envelope.signing_version(peer) == :v2
+      {:ok, {_raw, headers}} = Envelope.build("test.ping", %{}, peer)
+      assert signature_headers(headers) == [@v2_header]
+    end
+  end
 end

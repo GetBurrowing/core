@@ -21,15 +21,15 @@ struct SwitchBannerView: View {
 
     var body: some View {
         Text(text)
-            .font(SuiteFont.secondary(.semibold))
-            .foregroundColor(SuiteColor.onSurface.color)
+            .font(BurrowFont.secondary(.semibold))
+            .foregroundColor(BurrowColor.onSurface.color)
             .lineLimit(1)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(
-                Capsule(style: .continuous).fill(SuiteColor.surface.color)
+                Capsule(style: .continuous).fill(BurrowColor.surface.color)
             )
-            .overlay(Capsule(style: .continuous).stroke(SuiteColor.border.color, lineWidth: 1))
+            .overlay(Capsule(style: .continuous).stroke(BurrowColor.border.color, lineWidth: 1))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
             .accessibilityAddTraits(.isStaticText)
             .accessibilityIdentifier("switch-banner")

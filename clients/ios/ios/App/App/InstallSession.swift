@@ -19,10 +19,10 @@ enum LaunchStep: Equatable {
 /// (offline, a 5xx) loads the page itself; the web view may still hold a
 /// cookie, and if not its `/auth/login` comes back to the native flow.
 struct InstallLauncher {
-    let client: SuiteAPIClient
+    let client: BurrowAPIClient
     let tokens: MutableTokenStore
 
-    init(client: SuiteAPIClient = .shared, tokens: MutableTokenStore = KeychainTokenStore.shared) {
+    init(client: BurrowAPIClient = .shared, tokens: MutableTokenStore = KeychainTokenStore.shared) {
         self.client = client
         self.tokens = tokens
     }
@@ -33,7 +33,7 @@ struct InstallLauncher {
             switch result {
             case .success(let url):
                 completion(.load(url))
-            case .failure(SuiteAPIClient.Failure.status(401)):
+            case .failure(BurrowAPIClient.Failure.status(401)):
                 tokens.remove(for: install.host)
                 completion(.signIn)
             case .failure:
@@ -65,14 +65,14 @@ struct InstallLauncher {
 /// signed out offline is signed out on this phone. The shell then lets the
 /// web `/auth/logout` run in the web view.
 struct NativeSignOut {
-    let client: SuiteAPIClient
+    let client: BurrowAPIClient
     let tokens: MutableTokenStore
     let appInstallID: String
     /// Deletes the install's sealed-preview key with its bearer (task 01a1261e).
     let forgetPushKey: (String) -> Void
 
     init(
-        client: SuiteAPIClient = .shared,
+        client: BurrowAPIClient = .shared,
         tokens: MutableTokenStore = KeychainTokenStore.shared,
         appInstallID: String = InstallStore.shared.appInstallID,
         forgetPushKey: @escaping (String) -> Void = { PushKeyStore.shared.remove(for: $0) }
@@ -84,7 +84,7 @@ struct NativeSignOut {
     }
 
     func run(host: String, completion: @escaping () -> Void) {
-        client.delete(host: host, path: SuiteAPIClient.devicePath(appInstallID)) { _ in
+        client.delete(host: host, path: BurrowAPIClient.devicePath(appInstallID)) { _ in
             client.delete(host: host, path: "/api/app/session") { _ in
                 tokens.remove(for: host)
                 forgetPushKey(host)
