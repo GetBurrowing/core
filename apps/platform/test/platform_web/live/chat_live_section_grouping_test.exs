@@ -15,7 +15,10 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
   Initech" — rather than the slug coincidence that used to implement it.
   """
 
-  use Platform.DataCase, async: true
+  # `async: false` (task 01a155ef): Fixture E' renames the singleton root org
+  # row, holding its row lock until the sandbox rolls back; concurrent async
+  # tests that touch the root row stall behind it on CI's parallel pass.
+  use Platform.DataCase, async: false
 
   alias Platform.Chat.Space
   alias PlatformWeb.ChatLive

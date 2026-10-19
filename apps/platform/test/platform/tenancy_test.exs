@@ -9,7 +9,13 @@ defmodule Platform.TenancyTest do
   present in the DB.
   """
 
-  use Platform.DataCase, async: true
+  # `async: false` (task 01a155ef): `get_root_org/0`'s corruption test runs
+  # `DROP INDEX orgs_single_root`, and its zero-roots test UPDATEs the root
+  # row. Both are rolled back with the sandbox, but the DROP holds an ACCESS
+  # EXCLUSIVE lock on `orgs` until then, stalling every concurrent async test
+  # that reads `orgs` into 57014 / pool timeouts on CI's first parallel pass.
+  # Same convention as the other orgs-DDL modules (seed_root_orgs_test etc.).
+  use Platform.DataCase, async: false
 
   alias Platform.Accounts.User
   alias Platform.Repo
