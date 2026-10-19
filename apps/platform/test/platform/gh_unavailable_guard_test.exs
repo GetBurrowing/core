@@ -1,6 +1,6 @@
 defmodule Platform.GhUnavailableGuardTest do
   @moduledoc """
-  `gh` is not installed in `ghcr.io/startup-suite/core` (`command -v gh` in
+  `gh` is not installed in `ghcr.io/getburrowing/core` (`command -v gh` in
   the running container returns nothing). Every site that shelled out to it
   without checking therefore died with `ErlangError: :enoent` — an opaque
   failure indistinguishable from a git failure once it has been through a

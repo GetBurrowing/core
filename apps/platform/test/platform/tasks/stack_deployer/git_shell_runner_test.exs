@@ -10,7 +10,7 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunnerTest do
       consume it and every rollup push failed with a generic non-zero git
       exit.
 
-    * **Fix C** — `gh` is not installed in `ghcr.io/startup-suite/core`.
+    * **Fix C** — `gh` is not installed in `ghcr.io/getburrowing/core`.
       `System.cmd("gh", …)` on a host without it raises
       `ErlangError: :enoent`, which is indistinguishable from a git
       failure once it has been through the deployer's try/rescue.

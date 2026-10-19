@@ -203,7 +203,7 @@ See [`deployment/`](deployment/) for the reusable deployment contracts and examp
 docker build -t startup-suite-core .
 
 # Or pull from GHCR (after CI publishes)
-docker pull ghcr.io/startup-suite/core:latest
+docker pull ghcr.io/getburrowing/core:latest
 ```
 
 ---

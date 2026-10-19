@@ -12,7 +12,7 @@ Real target instances belong in the private **Core Ops** repository.
 
 Current application artifact:
 
-- OCI image: `ghcr.io/startup-suite/core`
+- OCI image: `ghcr.io/getburrowing/core`
 - container port: `4000`
 - startup command: Phoenix release `bin/server`
 

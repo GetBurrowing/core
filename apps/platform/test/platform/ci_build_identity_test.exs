@@ -27,7 +27,7 @@ defmodule Platform.CiBuildIdentityTest do
   agree with whatever the workflow says, including a tag that silently
   disappeared.
 
-  GHCR only (task 01a14afe): every image is pushed to `ghcr.io/startup-suite`
+  GHCR only (task 01a14afe): every image is pushed to `ghcr.io/getburrowing`
   and to no other registry. Docker Hub was a second publish target from task
   01a14a79 until this task; its repositories stay for rollback but receive no
   new tags. Each step's GHCR tag list is compared as a FULL list against its
@@ -127,8 +127,8 @@ defmodule Platform.CiBuildIdentityTest do
       code = code_only(step)
 
       assert code =~
-               ~r/^\s+outputs: type=image,"name=ghcr\.io\/startup-suite\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
-             "the build step no longer pushes by digest to ghcr.io/startup-suite/core " <>
+               ~r/^\s+outputs: type=image,"name=ghcr\.io\/getburrowing\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
+             "the build step no longer pushes by digest to ghcr.io/getburrowing/core " <>
                "alone. A leg that tags directly would overwrite `latest` with a " <>
                "single-arch image; a leg missing the name leaves publish-manifest " <>
                "nothing to stitch; a second name would publish to another registry."
@@ -163,14 +163,14 @@ defmodule Platform.CiBuildIdentityTest do
     # core-<branch tag>, core-<sha>, core-<short sha>). Each must appear as a
     # `-t` argument.
     @ghcr_main_tags [
-      "ghcr.io/startup-suite/core:core",
-      "ghcr.io/startup-suite/core:core-${{ github.sha }}",
-      "ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.short_sha }}"
+      "ghcr.io/getburrowing/core:core",
+      "ghcr.io/getburrowing/core:core-${{ github.sha }}",
+      "ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.short_sha }}"
     ]
     @ghcr_branch_tags [
-      "ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.branch_tag }}",
-      "ghcr.io/startup-suite/core:core-${{ github.sha }}",
-      "ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.short_sha }}"
+      "ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.branch_tag }}",
+      "ghcr.io/getburrowing/core:core-${{ github.sha }}",
+      "ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.short_sha }}"
     ]
 
     test "main publishes core, core-<sha> and core-<short sha>", %{publish: job} do
@@ -214,7 +214,7 @@ defmodule Platform.CiBuildIdentityTest do
       collect = job |> named_step("Collect digests") |> code_only()
 
       assert collect =~
-               ~s|echo "ghcr_refs=$(printf 'ghcr.io/startup-suite/core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"|
+               ~s|echo "ghcr_refs=$(printf 'ghcr.io/getburrowing/core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"|
 
       refute collect =~ ~r/^\s+echo "refs=/m,
              "Collect digests still emits a non-GHCR `refs` output."
@@ -250,20 +250,20 @@ defmodule Platform.CiBuildIdentityTest do
     end
 
     @ghcr_play_main_tags [
-      "ghcr.io/startup-suite/core:play",
-      "ghcr.io/startup-suite/core:play-${{ github.sha }}",
-      "ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}",
-      "ghcr.io/startup-suite/core:latest",
-      "ghcr.io/startup-suite/core:${{ github.sha }}",
-      "ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}"
+      "ghcr.io/getburrowing/core:play",
+      "ghcr.io/getburrowing/core:play-${{ github.sha }}",
+      "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
+      "ghcr.io/getburrowing/core:latest",
+      "ghcr.io/getburrowing/core:${{ github.sha }}",
+      "ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }}"
     ]
     @ghcr_play_branch_tags [
-      "ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.branch_tag }}",
-      "ghcr.io/startup-suite/core:play-${{ github.sha }}",
-      "ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}",
-      "ghcr.io/startup-suite/core:${{ steps.vars.outputs.branch_tag }}",
-      "ghcr.io/startup-suite/core:${{ github.sha }}",
-      "ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}"
+      "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.branch_tag }}",
+      "ghcr.io/getburrowing/core:play-${{ github.sha }}",
+      "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
+      "ghcr.io/getburrowing/core:${{ steps.vars.outputs.branch_tag }}",
+      "ghcr.io/getburrowing/core:${{ github.sha }}",
+      "ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }}"
     ]
 
     test "main keeps latest, the full sha and the short sha on the play image",
@@ -302,10 +302,10 @@ defmodule Platform.CiBuildIdentityTest do
   # burrow tag, and so does any tag on another registry.
   describe "the build-and-push-agent-host job" do
     @agent_host_ghcr_tags [
-      "ghcr.io/startup-suite/suite-agent-host:latest",
-      "ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}",
-      "ghcr.io/startup-suite/burrow-agent-host:latest",
-      "ghcr.io/startup-suite/burrow-agent-host:${{ github.sha }}"
+      "ghcr.io/getburrowing/suite-agent-host:latest",
+      "ghcr.io/getburrowing/suite-agent-host:${{ github.sha }}",
+      "ghcr.io/getburrowing/burrow-agent-host:latest",
+      "ghcr.io/getburrowing/burrow-agent-host:${{ github.sha }}"
     ]
 
     test "tags burrow-agent-host on GHCR beside the legacy suite-agent-host tags" do
@@ -330,7 +330,7 @@ defmodule Platform.CiBuildIdentityTest do
     test "no -t, tags: entry or outputs: name in ci.yml names docker.io" do
       refs = published_refs(File.read!(@ci_workflow))
 
-      assert Enum.any?(refs, &String.starts_with?(&1, "ghcr.io/startup-suite/")),
+      assert Enum.any?(refs, &String.starts_with?(&1, "ghcr.io/getburrowing/")),
              "the extractor found no GHCR refs, so it cannot see any ref: #{inspect(refs)}"
 
       assert Enum.filter(refs, &(&1 =~ ~r/docker\.io/)) == []
@@ -341,10 +341,10 @@ defmodule Platform.CiBuildIdentityTest do
           steps:
             - name: Build
               with:
-                outputs: type=image,"name=docker.io/acme/suite-core,ghcr.io/startup-suite/core",push=true
+                outputs: type=image,"name=docker.io/acme/suite-core,ghcr.io/getburrowing/core",push=true
                 tags: |
                   docker.io/acme/suite-core:play
-                  ghcr.io/startup-suite/core:play
+                  ghcr.io/getburrowing/core:play
             - name: Manifest
               run: |
                 docker buildx imagetools create \\

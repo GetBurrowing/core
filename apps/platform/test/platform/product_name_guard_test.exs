@@ -34,7 +34,7 @@ defmodule Platform.ProductNameGuardTest do
   `suite.example.com` or `SUITE-B.localhost`). Before matching:
 
     * the GitHub organisation spans `Startup-Suite/`, `github.com/Startup-Suite`
-      and `ghcr.io/startup-suite` are removed. The organisation is renamed last,
+      and `ghcr.io/getburrowing` are removed. The organisation is renamed last,
       by its own ticket;
     * each allowlisted substring for that file is removed, so an allowlisted
       identifier does not hide a second, new occurrence on the same line.
@@ -319,7 +319,7 @@ defmodule Platform.ProductNameGuardTest do
     test "removes the GitHub organisation spans before matching" do
       for line <- [
             "see github.com/Startup-Suite/core",
-            "ghcr.io/startup-suite/core:latest",
+            "ghcr.io/getburrowing/core:latest",
             "Startup-Suite/feedback issues"
           ] do
         assert offences([line], "planted.ex", []) == [], "#{inspect(line)} was flagged"

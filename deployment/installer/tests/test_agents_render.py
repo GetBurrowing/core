@@ -457,13 +457,13 @@ class PackagingTest(unittest.TestCase):
         # GHCR. Docker Hub is no longer a publish target (task 01a14afe), so a
         # legacy image_namespace install's agent-host image stays frozen.
         for repo in (
-            "ghcr.io/startup-suite/burrow-agent-host",
-            "ghcr.io/startup-suite/suite-agent-host",
+            "ghcr.io/getburrowing/burrow-agent-host",
+            "ghcr.io/getburrowing/suite-agent-host",
         ):
             self.assertIn(f"{repo}:latest", push)
             self.assertIn(f"{repo}:${{{{ github.sha }}}}", push)
         tags = push.split("tags: |\n", 1)[1]
-        self.assertIn("ghcr.io/startup-suite/", tags)
+        self.assertIn("ghcr.io/getburrowing/", tags)
         self.assertNotIn("docker.io", tags)
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
 

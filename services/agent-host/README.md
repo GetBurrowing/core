@@ -71,7 +71,7 @@ host or Postgres, because under rootless podman container root is not host
 root.
 
 The image is pushed by CI (`build-and-push-agent-host`) as
-`ghcr.io/startup-suite/burrow-agent-host:latest` and `:<sha>`, and under its
+`ghcr.io/getburrowing/burrow-agent-host:latest` and `:<sha>`, and under its
 pre-rename name `suite-agent-host` (GHCR and Docker Hub) for hosts installed
 before the rename, only when a push to main changes `services/agent-host/**`,
 because every push restarts every agent on an `AutoUpdate=registry` host.

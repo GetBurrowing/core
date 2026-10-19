@@ -726,7 +726,7 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   # `ErlangError: :enoent`, which surfaces through the deployer's
   # try/rescue as a generic "rollup merge raised" blocker — visually
   # indistinguishable from a git failure, and the reason the missing binary
-  # in `ghcr.io/startup-suite/core` took a separate investigation to find.
+  # in `ghcr.io/getburrowing/core` took a separate investigation to find.
   #
   # Returning a distinct, greppable `:gh_unavailable` that names the binary
   # turns the next occurrence into a one-line diagnosis. Mirrors the

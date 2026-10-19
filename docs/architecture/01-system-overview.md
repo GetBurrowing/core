@@ -33,7 +33,7 @@ graph TB
   subgraph Host["Production Host — Docker"]
     Postgres[("PostgreSQL<br/>core_platform DB")]
     Watchtower["Watchtower<br/>auto-deploy on :latest push"]
-    GHCR["GHCR<br/>ghcr.io/startup-suite/core"]
+    GHCR["GHCR<br/>ghcr.io/getburrowing/core"]
   end
 
   subgraph CI["CI/CD (GitHub Actions)"]

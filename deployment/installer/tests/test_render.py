@@ -964,7 +964,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
             with self.subTest(modules=sorted(module_set)):
                 # The registry default CI publishes. The legacy Docker Hub
                 # name is no longer published (task 01a14afe).
-                ghcr = f"ghcr.io/startup-suite/{registry.REGISTRY_IMAGES['core']}:{tag}"
+                ghcr = f"ghcr.io/getburrowing/{registry.REGISTRY_IMAGES['core']}:{tag}"
                 self.assertIn(ghcr, published)
         # `:latest` is the play image (ci.yml's play main step), not a
         # flavour, so the loop above never asks for it. Pin the play main
@@ -973,16 +973,16 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         # stage 4: deleting `:latest` used to leave this test green).
         play = [s for s in steps if s.startswith("      - name: Build and push play (main)")]
         self.assertEqual(len(play), 1, "expected exactly one play main build step")
-        self.assertIn("ghcr.io/startup-suite/core:latest", _ci_publish_refs(play[0]))
+        self.assertIn("ghcr.io/getburrowing/core:latest", _ci_publish_refs(play[0]))
         self.assertEqual(
             _ci_publish_refs(play[0]),
             [
-                "ghcr.io/startup-suite/core:play",
-                "ghcr.io/startup-suite/core:play-${{ github.sha }}",
-                "ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}",
-                "ghcr.io/startup-suite/core:latest",
-                "ghcr.io/startup-suite/core:${{ github.sha }}",
-                "ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}",
+                "ghcr.io/getburrowing/core:play",
+                "ghcr.io/getburrowing/core:play-${{ github.sha }}",
+                "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
+                "ghcr.io/getburrowing/core:latest",
+                "ghcr.io/getburrowing/core:${{ github.sha }}",
+                "ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }}",
             ],
         )
 
@@ -992,7 +992,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         with open(CI_WORKFLOW, encoding="utf-8") as handle:
             refs = _ci_publish_refs(handle.read())
         self.assertTrue(
-            any(r.startswith("ghcr.io/startup-suite/") for r in refs),
+            any(r.startswith("ghcr.io/getburrowing/") for r in refs),
             f"positive control: the extractor must see CI's GHCR refs, got {refs}",
         )
         self.assertEqual([r for r in refs if "docker.io" in r], [])

@@ -29,7 +29,7 @@ Core publishes a deployable OCI image.
 
 For the current Phoenix platform app, the artifact is:
 
-- image: `ghcr.io/startup-suite/core`
+- image: `ghcr.io/getburrowing/core`
 
 Core is responsible for:
 
