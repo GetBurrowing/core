@@ -36,8 +36,8 @@ defmodule Platform.Social.RenderQueueTest do
   end
 
   # The queue hears a task's result just after the clip's own broadcast.
-  defp idle?(tries \\ 50) do
-    case RenderQueue.status() do
+  defp idle?(server \\ RenderQueue, tries \\ 50) do
+    case RenderQueue.status(server) do
       %{running: [], queued: []} ->
         true
 
@@ -48,7 +48,7 @@ defmodule Platform.Social.RenderQueueTest do
         receive do
           :never -> :ok
         after
-          20 -> idle?(tries - 1)
+          20 -> idle?(server, tries - 1)
         end
     end
   end
@@ -179,6 +179,52 @@ defmodule Platform.Social.RenderQueueTest do
     await_status(retry.id, "rendered")
     failed = await_status(stuck.id, "failed")
     assert failed.error == "render interrupted by a restart"
+  end
+
+  # The job writes the clip's terminal status (and broadcasts it) BEFORE
+  # its task returns, so a caller can re-request a render while the queue
+  # still lists the clip as running. That request must run after the
+  # current one, not be dropped as a duplicate (it left a forced re-render
+  # stuck in `rendering`).
+  test "a clip enqueued while its render is finishing renders again afterwards" do
+    test_pid = self()
+
+    job = fn clip_id ->
+      ref = make_ref()
+      send(test_pid, {:job_finishing, ref, self(), clip_id})
+
+      receive do
+        {:finish, ^ref} -> {:ok, clip_id}
+      end
+    end
+
+    start_supervised!({Task.Supervisor, name: :social_test_rerun_tasks})
+
+    queue =
+      start_supervised!(
+        {RenderQueue,
+         name: :social_test_rerun_queue,
+         task_supervisor: :social_test_rerun_tasks,
+         job: job,
+         recover: false}
+      )
+
+    clip_id = Ecto.UUID.generate()
+    RenderQueue.enqueue(clip_id, queue)
+    assert_receive {:job_finishing, ref1, pid1, ^clip_id}, 5_000
+
+    # re-requested while the first run is still the queue's running task
+    RenderQueue.enqueue(clip_id, queue)
+    RenderQueue.enqueue(clip_id, queue)
+    assert %{running: [^clip_id], queued: []} = RenderQueue.status(queue)
+
+    send(pid1, {:finish, ref1})
+    assert_receive {:job_finishing, ref2, pid2, ^clip_id}, 5_000
+    send(pid2, {:finish, ref2})
+
+    # two enqueues during one run collapse into a single re-run
+    refute_receive {:job_finishing, _, _, _}, 300
+    assert idle?(queue)
   end
 
   describe "render_clip/3 refusals" do

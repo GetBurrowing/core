@@ -14,6 +14,18 @@ defmodule Platform.Social.RenderQueue do
   killed is recorded `failed` ("render crashed: ...") and the queue keeps
   serving.
 
+  ## Re-requested while finishing
+
+  A job records the clip's terminal status (and broadcasts it) before its
+  task returns, so the queue still lists the clip as running for a moment
+  after anyone can see it `rendered` or `failed`. An `enqueue/1` for a clip
+  that is running is therefore never a duplicate to drop: its only caller,
+  `Platform.Social.render_clip/3`, enqueues a clip only after moving it to
+  `rendering` from `candidate`, `failed` or `rendered`, which a running
+  job's clip leaves only once the job has recorded its result. The request
+  is remembered and the clip is queued again once the running task ends.
+  Several such enqueues during one run collapse into one re-run.
+
   ## Restart
 
   On (re)start the queue first terminates any task still running under its
@@ -74,6 +86,8 @@ defmodule Platform.Social.RenderQueue do
     state = %{
       queue: :queue.new(),
       running: %{},
+      # clip ids re-requested while their render was still running
+      rerun: MapSet.new(),
       task_supervisor: Keyword.get(opts, :task_supervisor, Platform.Social.RenderTaskSupervisor),
       concurrency: Keyword.get(opts, :concurrency) || concurrency(),
       job: Keyword.get(opts, :job, &RenderJob.run/1),
@@ -104,10 +118,15 @@ defmodule Platform.Social.RenderQueue do
 
   @impl true
   def handle_cast({:enqueue, clip_id}, state) do
-    if queued_or_running?(state, clip_id) do
-      {:noreply, state}
-    else
-      {:noreply, drain(%{state | queue: :queue.in(clip_id, state.queue)})}
+    cond do
+      :queue.member(clip_id, state.queue) ->
+        {:noreply, state}
+
+      clip_id in Map.values(state.running) ->
+        {:noreply, %{state | rerun: MapSet.put(state.rerun, clip_id)}}
+
+      true ->
+        {:noreply, drain(%{state | queue: :queue.in(clip_id, state.queue)})}
     end
   end
 
@@ -125,7 +144,14 @@ defmodule Platform.Social.RenderQueue do
   @impl true
   def handle_info({ref, _result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, drain(%{state | running: Map.delete(state.running, ref)})}
+
+    case Map.pop(state.running, ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {clip_id, running} ->
+        {:noreply, drain(requeue_rerun(%{state | running: running}, clip_id))}
+    end
   end
 
   # A task crashed or was killed: record it, keep serving.
@@ -135,8 +161,16 @@ defmodule Platform.Social.RenderQueue do
         {:noreply, state}
 
       {clip_id, running} ->
-        RenderJob.fail(clip_id, "render crashed: #{crash_reason(reason)}")
-        {:noreply, drain(%{state | running: running})}
+        state = %{state | running: running}
+
+        if MapSet.member?(state.rerun, clip_id) do
+          # The job had already recorded its result and the clip was
+          # re-requested (status `rendering` again): render it, do not fail it.
+          {:noreply, drain(requeue_rerun(state, clip_id))}
+        else
+          RenderJob.fail(clip_id, "render crashed: #{crash_reason(reason)}")
+          {:noreply, drain(state)}
+        end
     end
   end
 
@@ -160,8 +194,17 @@ defmodule Platform.Social.RenderQueue do
     end
   end
 
-  defp queued_or_running?(state, clip_id),
-    do: :queue.member(clip_id, state.queue) or clip_id in Map.values(state.running)
+  defp requeue_rerun(state, clip_id) do
+    if MapSet.member?(state.rerun, clip_id) do
+      %{
+        state
+        | rerun: MapSet.delete(state.rerun, clip_id),
+          queue: :queue.in(clip_id, state.queue)
+      }
+    else
+      state
+    end
+  end
 
   defp stop_orphaned_tasks(sup) do
     case Process.whereis(sup) || (is_pid(sup) && sup) do
