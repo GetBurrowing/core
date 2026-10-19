@@ -633,6 +633,7 @@ def warnings(normalized):
                 "deprecated",
                 "images.image_namespace",
                 "image_namespace (the legacy Docker Hub images) is deprecated; "
+                "those images are no longer published and stay frozen at their last push; "
                 "set images.registry instead, e.g. ghcr.io/<owner>",
             )
         )

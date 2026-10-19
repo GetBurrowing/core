@@ -453,13 +453,18 @@ class PackagingTest(unittest.TestCase):
         self.assertIn('git diff --quiet "$BEFORE" "$GITHUB_SHA" -- services/agent-host', job)
         push = job.split("- name: Build and push agent-host\n", 1)[1]
         self.assertIn("if: steps.changed.outputs.agent_host == 'true'", push)
-        # The registry default (task 01a14dd8) and the legacy image_namespace default.
+        # The registry default (task 01a14dd8) and the pre-rename name, both on
+        # GHCR. Docker Hub is no longer a publish target (task 01a14afe), so a
+        # legacy image_namespace install's agent-host image stays frozen.
         for repo in (
             "ghcr.io/startup-suite/burrow-agent-host",
-            "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host",
+            "ghcr.io/startup-suite/suite-agent-host",
         ):
             self.assertIn(f"{repo}:latest", push)
             self.assertIn(f"{repo}:${{{{ github.sha }}}}", push)
+        tags = push.split("tags: |\n", 1)[1]
+        self.assertIn("ghcr.io/startup-suite/", tags)
+        self.assertNotIn("docker.io", tags)
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
 
 

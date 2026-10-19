@@ -852,20 +852,39 @@ def _ci_main_build_steps():
     ]
 
 
-# CI publishes Docker Hub refs under the repo variable, never a literal
-# namespace (task 01a14b9e); the installer's legacy refs are under
-# images.image_namespace, its registry refs under images.registry (01a14dd8).
-CI_NAMESPACE = "${{ vars.DOCKERHUB_NAMESPACE }}"
+# CI publishes to GHCR only (task 01a14afe). The installer's registry refs
+# are under images.registry (01a14dd8); its legacy refs under
+# images.image_namespace still render the old Docker Hub names, images that
+# are frozen at their last Docker Hub push.
 
 
 def _published_tags(step):
-    """Image refs a step tags: `tags:` list lines and `-t <ref> \\` arguments.
-
-    The namespace expression is read as the token ``<ns>``.
-    """
-    step = step.replace(CI_NAMESPACE, "<ns>")
+    """Image refs a step tags: `tags:` list lines and `-t <ref> \\` arguments."""
     refs = re.findall(r"^\s+(?:-t )?((?:docker|ghcr)\.io/\S+?)(?: \\)?$", step, flags=re.MULTILINE)
     return set(refs)
+
+
+def _ci_publish_refs(text):
+    """Every ref a workflow publishes, in file order.
+
+    Each `outputs: type=image,"name=a,b"` name, each `tags: |` list entry and
+    each `-t <ref> \\` argument; comment lines are dropped first. Refs may
+    contain `${{ ... }}` with spaces, so each runs to the end of its line.
+    """
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    outputs = [
+        name
+        for names in re.findall(r'^\s+outputs: type=image,"name=([^"]+)"', code, re.MULTILINE)
+        for name in names.split(",")
+    ]
+    tags = [
+        entry.strip()
+        for _indent, block in re.findall(r"^( +)tags: \|\n((?:\1  .*\n?)+)", code, re.MULTILINE)
+        for entry in block.splitlines()
+        if entry.strip()
+    ]
+    dash_t = re.findall(r"^\s+-t (.+?) \\\s*$", code, re.MULTILINE)
+    return outputs + tags + dash_t
 
 
 class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
@@ -943,24 +962,65 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         published = set().union(*map(_published_tags, steps))
         for module_set, tag in registry.IMAGE_FLAVOURS.items():
             with self.subTest(modules=sorted(module_set)):
-                # The registry default CI publishes, and the legacy Docker Hub one.
+                # The registry default CI publishes. The legacy Docker Hub
+                # name is no longer published (task 01a14afe).
                 ghcr = f"ghcr.io/startup-suite/{registry.REGISTRY_IMAGES['core']}:{tag}"
                 self.assertIn(ghcr, published)
-                self.assertIn(
-                    f"docker.io/<ns>/{registry.LEGACY_HUB_IMAGES['core']}:{tag}", published
-                )
+        # `:latest` is the play image (ci.yml's play main step), not a
+        # flavour, so the loop above never asks for it. Pin the play main
+        # step's whole GHCR tag set as raw literals, mirroring
+        # ci_build_identity_test.exs's @ghcr_play_main_tags (task 01a14afe
+        # stage 4: deleting `:latest` used to leave this test green).
+        play = [s for s in steps if s.startswith("      - name: Build and push play (main)")]
+        self.assertEqual(len(play), 1, "expected exactly one play main build step")
+        self.assertIn("ghcr.io/startup-suite/core:latest", _ci_publish_refs(play[0]))
+        self.assertEqual(
+            _ci_publish_refs(play[0]),
+            [
+                "ghcr.io/startup-suite/core:play",
+                "ghcr.io/startup-suite/core:play-${{ github.sha }}",
+                "ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}",
+                "ghcr.io/startup-suite/core:latest",
+                "ghcr.io/startup-suite/core:${{ github.sha }}",
+                "ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}",
+            ],
+        )
 
-    def test_ci_names_no_literal_docker_hub_namespace(self):
-        # Every suite-* ref CI tags or pushes on Docker Hub is built from the
-        # DOCKERHUB_NAMESPACE variable (task 01a14b9e). Positive control: the
-        # same scan of a planted literal finds it.
+    def test_ci_publishes_no_docker_hub_ref(self):
+        # Task 01a14afe: no step in ci.yml tags or pushes a docker.io ref. The
+        # `registry: docker.io` logins that remain are pull auth only.
         with open(CI_WORKFLOW, encoding="utf-8") as handle:
-            text = handle.read()
-        pattern = re.compile(r"docker\.io/([^/\s'\"]+(?:\s[^/\s'\"]+)*?)/suite-")
-        found = pattern.findall(text)
-        self.assertTrue(found, "positive control: ci.yml must tag docker.io suite-* refs")
-        self.assertEqual(set(found), {CI_NAMESPACE})
-        self.assertEqual(pattern.findall("x docker.io/acme/suite-core:core"), ["acme"])
+            refs = _ci_publish_refs(handle.read())
+        self.assertTrue(
+            any(r.startswith("ghcr.io/startup-suite/") for r in refs),
+            f"positive control: the extractor must see CI's GHCR refs, got {refs}",
+        )
+        self.assertEqual([r for r in refs if "docker.io" in r], [])
+
+    def test_ci_publish_ref_extractor_sees_a_planted_docker_hub_ref(self):
+        # Positive control for the guard above, one planted ref per form.
+        planted = (
+            "    steps:\n"
+            "      - name: Build\n"
+            "        with:\n"
+            '          outputs: type=image,"name=docker.io/acme/core,ghcr.io/x/core",push=true\n'
+            "          tags: |\n"
+            "            docker.io/acme/core:${{ github.sha }}\n"
+            "            ghcr.io/x/core:play\n"
+            "      - name: Manifest\n"
+            "        run: |\n"
+            "          docker buildx imagetools create \\\n"
+            "            -t docker.io/acme/core:core \\\n"
+            "            ${{ steps.digests.outputs.ghcr_refs }}\n"
+        )
+        self.assertEqual(
+            [r for r in _ci_publish_refs(planted) if "docker.io" in r],
+            [
+                "docker.io/acme/core",
+                "docker.io/acme/core:${{ github.sha }}",
+                "docker.io/acme/core:core",
+            ],
+        )
 
     def test_the_registry_reaches_every_burrow_image(self):
         # Task 01a14dd8: every Burrow default is <images.registry>/<name>.
@@ -1084,7 +1144,8 @@ class ImageSourceRequiredTest(unittest.TestCase):
         self.assertEqual(
             err.getvalue(),
             "warning deprecated at images.image_namespace: image_namespace (the legacy Docker "
-            "Hub images) is deprecated; set images.registry instead, e.g. ghcr.io/<owner>\n",
+            "Hub images) is deprecated; those images are no longer published and stay frozen "
+            "at their last push; set images.registry instead, e.g. ghcr.io/<owner>\n",
         )
 
     def test_an_unvalidated_manifest_cannot_reach_a_default_image(self):

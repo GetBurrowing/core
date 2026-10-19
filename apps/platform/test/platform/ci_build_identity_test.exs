@@ -27,12 +27,14 @@ defmodule Platform.CiBuildIdentityTest do
   agree with whatever the workflow says, including a tag that silently
   disappeared.
 
-  GHCR dual-publish (task 01a14a79): every image is pushed to BOTH
-  `docker.io/<DOCKERHUB_NAMESPACE>/suite-core` and `ghcr.io/startup-suite/core`. Each
-  registry's tag list is compared, per step, as a FULL list against its own
-  raw literal, so a tag missing from either registry fails, and so does a
-  stray extra tag on either registry (a membership check alone would pass a
-  widened list).
+  GHCR only (task 01a14afe): every image is pushed to `ghcr.io/startup-suite`
+  and to no other registry. Docker Hub was a second publish target from task
+  01a14a79 until this task; its repositories stay for rollback but receive no
+  new tags. Each step's GHCR tag list is compared as a FULL list against its
+  own raw literal, so a missing tag fails and so does a stray extra one (a
+  membership check alone would pass a widened list). Separately, no tag,
+  `-t` argument or `outputs:` name anywhere in the workflow may name
+  `docker.io`: the `registry: docker.io` logins that remain are pull auth.
   """
 
   use ExUnit.Case, async: true
@@ -125,11 +127,11 @@ defmodule Platform.CiBuildIdentityTest do
       code = code_only(step)
 
       assert code =~
-               ~r/^\s+outputs: type=image,"name=docker\.io\/\$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}\/suite-core,ghcr\.io\/startup-suite\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
-             "the build step no longer pushes by digest to BOTH docker.io/<namespace>/suite-core " <>
-               "and ghcr.io/startup-suite/core. A leg that tags directly would overwrite " <>
-               "`latest` with a single-arch image; a leg missing a name leaves " <>
-               "publish-manifest nothing to stitch on that registry."
+               ~r/^\s+outputs: type=image,"name=ghcr\.io\/startup-suite\/core",push-by-digest=true,name-canonical=true,push=true\s*$/m,
+             "the build step no longer pushes by digest to ghcr.io/startup-suite/core " <>
+               "alone. A leg that tags directly would overwrite `latest` with a " <>
+               "single-arch image; a leg missing the name leaves publish-manifest " <>
+               "nothing to stitch; a second name would publish to another registry."
 
       refute code =~ ~r/^\s+tags:/m,
              "the per-arch build step carries `tags:`; tags belong to publish-manifest only."
@@ -160,16 +162,6 @@ defmodule Platform.CiBuildIdentityTest do
     # (ADR 0055; main: core, core-<sha>, core-<short sha>; feature branch:
     # core-<branch tag>, core-<sha>, core-<short sha>). Each must appear as a
     # `-t` argument.
-    @main_tags [
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }}"
-    ]
-    @branch_tags [
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }}"
-    ]
     @ghcr_main_tags [
       "ghcr.io/startup-suite/core:core",
       "ghcr.io/startup-suite/core:core-${{ github.sha }}",
@@ -185,13 +177,12 @@ defmodule Platform.CiBuildIdentityTest do
       step = named_step(job, "Create manifest list (main)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref == 'refs\/heads\/main'\s*$/m
 
-      for tag <- @main_tags ++ @ghcr_main_tags do
+      for tag <- @ghcr_main_tags do
         assert code_only(step) =~ ~r/^\s+-t #{Regex.escape(tag)} \\\s*$/m,
                "main manifest step no longer tags `#{tag}`."
       end
 
-      assert manifest_tags(step, "docker.io/") == @main_tags
-      assert manifest_tags(step, "ghcr.io/") == @ghcr_main_tags
+      assert all_manifest_tags(step) == @ghcr_main_tags
     end
 
     test "feature branches publish the core- branch, sha and short sha tags",
@@ -199,25 +190,43 @@ defmodule Platform.CiBuildIdentityTest do
       step = named_step(job, "Create manifest list (feature branch)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref != 'refs\/heads\/main'\s*$/m
 
-      for tag <- @branch_tags ++ @ghcr_branch_tags do
+      for tag <- @ghcr_branch_tags do
         assert code_only(step) =~ ~r/^\s+-t #{Regex.escape(tag)} \\\s*$/m,
                "feature-branch manifest step no longer tags `#{tag}`."
       end
 
-      assert manifest_tags(step, "docker.io/") == @branch_tags
-      assert manifest_tags(step, "ghcr.io/") == @ghcr_branch_tags
+      assert all_manifest_tags(step) == @ghcr_branch_tags
     end
 
-    test "no -t argument names a registry other than docker.io or ghcr.io",
-         %{publish: job} do
+    test "no -t argument names a registry other than ghcr.io", %{publish: job} do
       for name <- ["Create manifest list (main)", "Create manifest list (feature branch)"] do
         step = named_step(job, name)
         all = all_manifest_tags(step)
 
-        assert length(all) ==
-                 length(manifest_tags(step, "docker.io/")) +
-                   length(manifest_tags(step, "ghcr.io/")),
-               "#{name} tags a ref outside docker.io/ and ghcr.io/: #{inspect(all)}"
+        assert all != [], "#{name}: no -t arguments extracted"
+
+        assert length(all) == length(manifest_tags(step, "ghcr.io/")),
+               "#{name} tags a ref outside ghcr.io/: #{inspect(all)}"
+      end
+    end
+
+    test "manifests are stitched from the GHCR digests only", %{publish: job} do
+      collect = job |> named_step("Collect digests") |> code_only()
+
+      assert collect =~
+               ~s|echo "ghcr_refs=$(printf 'ghcr.io/startup-suite/core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"|
+
+      refute collect =~ ~r/^\s+echo "refs=/m,
+             "Collect digests still emits a non-GHCR `refs` output."
+
+      for name <- ["Create manifest list (main)", "Create manifest list (feature branch)"] do
+        code = job |> named_step(name) |> code_only()
+
+        assert length(Regex.scan(~r/docker buildx imagetools create/, code)) == 1,
+               "#{name}: expected exactly one `imagetools create` (GHCR)"
+
+        assert code =~ ~r/^\s+\$\{\{ steps\.digests\.outputs\.ghcr_refs \}\}\s*$/m
+        refute code =~ "steps.digests.outputs.refs"
       end
     end
   end
@@ -240,22 +249,6 @@ defmodule Platform.CiBuildIdentityTest do
                "too; extend this test when adding one."
     end
 
-    @play_main_tags [
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:latest",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}"
-    ]
-    @play_branch_tags [
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.branch_tag }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}"
-    ]
     @ghcr_play_main_tags [
       "ghcr.io/startup-suite/core:play",
       "ghcr.io/startup-suite/core:play-${{ github.sha }}",
@@ -278,13 +271,13 @@ defmodule Platform.CiBuildIdentityTest do
       step = named_step(job, "Build and push play (main)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref == 'refs\/heads\/main'\s*$/m
 
-      for tag <- @play_main_tags ++ @ghcr_play_main_tags do
+      for tag <- @ghcr_play_main_tags do
         assert code_only(step) =~ ~r/^\s+#{Regex.escape(tag)}\s*$/m,
                "play main build step no longer tags `#{tag}`."
       end
 
-      assert play_tags(step, "docker.io/") == @play_main_tags
       assert play_tags(step, "ghcr.io/") == @ghcr_play_main_tags
+      assert tag_list(step) == @ghcr_play_main_tags
     end
 
     test "feature branches tag the play image with the branch, sha and short sha",
@@ -292,26 +285,22 @@ defmodule Platform.CiBuildIdentityTest do
       step = named_step(job, "Build and push play (feature branch)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref != 'refs\/heads\/main'\s*$/m
 
-      for tag <- @play_branch_tags ++ @ghcr_play_branch_tags do
+      for tag <- @ghcr_play_branch_tags do
         assert code_only(step) =~ ~r/^\s+#{Regex.escape(tag)}\s*$/m,
                "play feature-branch build step no longer tags `#{tag}`."
       end
 
-      assert play_tags(step, "docker.io/") == @play_branch_tags
       assert play_tags(step, "ghcr.io/") == @ghcr_play_branch_tags
+      assert tag_list(step) == @ghcr_play_branch_tags
     end
   end
 
   # Task 01a14dd8 stage 2: the agent-host image is pushed under its burrow
-  # name on GHCR, AND under the pre-rename suite-agent-host name on both
-  # registries, because hosts installed before the rename pull that name.
-  # Full lists per registry, so a dropped legacy tag fails as surely as a
-  # missing burrow tag, and so does a burrow tag on Docker Hub.
+  # name on GHCR, AND under the pre-rename suite-agent-host name (GHCR only
+  # since task 01a14afe), because hosts installed before the rename pull that
+  # name. A full list, so a dropped legacy tag fails as surely as a missing
+  # burrow tag, and so does any tag on another registry.
   describe "the build-and-push-agent-host job" do
-    @agent_host_hub_tags [
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:latest",
-      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:${{ github.sha }}"
-    ]
     @agent_host_ghcr_tags [
       "ghcr.io/startup-suite/suite-agent-host:latest",
       "ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}",
@@ -327,93 +316,76 @@ defmodule Platform.CiBuildIdentityTest do
         |> job_body("build-and-push-agent-host")
         |> named_step("Build and push agent-host")
 
-      assert play_tags(step, "docker.io/") == @agent_host_hub_tags
       assert play_tags(step, "ghcr.io/") == @agent_host_ghcr_tags
+      assert tag_list(step) == @agent_host_ghcr_tags
     end
   end
 
-  # Task 01a14b9e: Docker Hub refs are built from the DOCKERHUB_NAMESPACE
-  # repository variable. Every job that pushes refuses, as its FIRST step,
-  # to run with the variable empty, so nothing is ever pushed to
-  # `docker.io//suite-core`. The step's shell is executed here, both ways.
-  describe "the DOCKERHUB_NAMESPACE guard" do
-    @pushing_jobs [
-      "build-and-push",
-      "publish-manifest",
-      "build-and-push-play",
-      "build-and-push-agent-host"
-    ]
-    @guard_name "Require the DOCKERHUB_NAMESPACE variable"
+  # Task 01a14afe: Docker Hub is no longer a publish target. No image ref the
+  # workflow PUBLISHES (a `-t` argument, a `tags:` list entry or an
+  # `outputs:` name) may name docker.io. What docker.io text remains is pull
+  # auth (`registry: docker.io` logins) and pulled images (`docker run
+  # docker.io/oven/bun:1`), neither of which publishes anything.
+  describe "no Docker Hub publish refs" do
+    test "no -t, tags: entry or outputs: name in ci.yml names docker.io" do
+      refs = published_refs(File.read!(@ci_workflow))
 
-    setup do
-      {:ok, lines: @ci_workflow |> File.read!() |> String.split("\n")}
+      assert Enum.any?(refs, &String.starts_with?(&1, "ghcr.io/startup-suite/")),
+             "the extractor found no GHCR refs, so it cannot see any ref: #{inspect(refs)}"
+
+      assert Enum.filter(refs, &(&1 =~ ~r/docker\.io/)) == []
     end
 
-    test "is the first step of every job that pushes", %{lines: lines} do
-      for name <- @pushing_jobs do
-        first =
-          lines
-          |> job_body(name)
-          |> code_only()
-          |> String.split("\n    steps:\n", parts: 2)
-          |> List.last()
-          |> String.split("\n")
-          |> hd()
+    test "positive control: the same extractor finds a planted docker.io ref in each form" do
+      planted = """
+          steps:
+            - name: Build
+              with:
+                outputs: type=image,"name=docker.io/acme/suite-core,ghcr.io/startup-suite/core",push=true
+                tags: |
+                  docker.io/acme/suite-core:play
+                  ghcr.io/startup-suite/core:play
+            - name: Manifest
+              run: |
+                docker buildx imagetools create \\
+                  -t docker.io/acme/suite-core:core \\
+                  ${{ steps.digests.outputs.ghcr_refs }}
+      """
 
-        assert first == "      - name: #{@guard_name}", "#{name}: first step is #{inspect(first)}"
-      end
-    end
+      hub = planted |> published_refs() |> Enum.filter(&(&1 =~ ~r/docker\.io/))
 
-    test "exits non-zero naming the variable when it is empty, and passes when set",
-         %{lines: lines} do
-      script = lines |> job_body("build-and-push") |> named_step(@guard_name) |> guard_script()
-      assert script =~ "DOCKERHUB_NAMESPACE"
-
-      for unset <- [nil, "", "  "] do
-        {out, code} = run_guard(script, unset)
-        assert code == 1, "guard passed with DOCKERHUB_NAMESPACE=#{inspect(unset)}"
-        assert out =~ "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset"
-      end
-
-      assert run_guard(script, "example") ==
-               {"pushing Docker Hub refs under docker.io/example/\n", 0}
-
-      for name <- @pushing_jobs do
-        assert lines |> job_body(name) |> named_step(@guard_name) |> guard_script() == script,
-               "#{name}: its guard differs from build-and-push's"
-      end
-    end
-
-    test "no Docker Hub suite-* ref spells a namespace" do
-      text = File.read!(@ci_workflow)
-
-      refs =
-        Regex.scan(
-          ~r/docker\.io\/(\$\{\{ vars\.DOCKERHUB_NAMESPACE \}\}|[a-z0-9._-]+)\/suite-/,
-          text
-        )
-
-      namespaces = refs |> Enum.map(&List.last/1) |> Enum.uniq()
-      assert namespaces == ["${{ vars.DOCKERHUB_NAMESPACE }}"]
-      # Positive control: the same scan names a planted literal.
-      assert Regex.scan(~r/docker\.io\/([a-z0-9._-]+)\/suite-/, "docker.io/acme/suite-core") ==
-               [["docker.io/acme/suite-", "acme"]]
+      assert hub == [
+               "docker.io/acme/suite-core",
+               "docker.io/acme/suite-core:play",
+               "docker.io/acme/suite-core:core"
+             ]
     end
   end
 
-  # The step's `run: |` block, dedented.
-  defp guard_script(step) do
-    [_, block] = String.split(step, "        run: |\n", parts: 2)
+  # Every ref a step publishes, in file order: each `outputs: type=image,"name=a,b"`
+  # name, each `tags: |` list entry, and each `-t <ref> \\` argument.
+  # Comment lines are dropped first.
+  defp published_refs(text) do
+    code = code_only(text)
 
-    block
-    |> String.split("\n")
-    |> Enum.take_while(&String.starts_with?(&1, "          "))
-    |> Enum.map_join("\n", &String.replace_prefix(&1, "          ", ""))
-  end
+    outputs =
+      ~r/^\s+outputs: type=image,"name=([^"]+)"/m
+      |> Regex.scan(code)
+      |> Enum.flat_map(fn [_, names] -> String.split(names, ",") end)
 
-  defp run_guard(script, value) do
-    env = [{"DOCKERHUB_NAMESPACE", value}]
-    System.cmd("sh", ["-c", script], env: env, stderr_to_stdout: true)
+    tags =
+      ~r/^( +)tags: \|\n((?:\1  .*\n?)+)/m
+      |> Regex.scan(code)
+      |> Enum.flat_map(fn [_, _, block] ->
+        block |> String.split("\n", trim: true) |> Enum.map(&String.trim/1)
+      end)
+
+    dash_t =
+      ~r/^\s+-t (.+?) \\\s*$/m
+      |> Regex.scan(code)
+      |> Enum.map(&List.last/1)
+
+    outputs ++ tags ++ dash_t
   end
 
   defp named_step(job, name) do
@@ -425,7 +397,7 @@ defmodule Platform.CiBuildIdentityTest do
 
   # Every `-t <ref>` argument in a manifest step whose ref starts with
   # `prefix`, in file order. Compared as a full list, so a stray extra tag on
-  # either registry fails as surely as a missing one.
+  # any registry fails as surely as a missing one.
   defp manifest_tags(step, prefix) do
     step |> all_manifest_tags() |> Enum.filter(&String.starts_with?(&1, prefix))
   end
@@ -440,12 +412,25 @@ defmodule Platform.CiBuildIdentityTest do
 
   # Every bare-ref line of a play step (the `tags: |` list entries) whose ref
   # starts with `prefix`, in file order. Positive control for the extraction
-  # is the docker.io/ghcr.io literal lists above: an empty result fails them.
+  # is the GHCR literal lists above: an empty result fails them.
   defp play_tags(step, prefix) do
     step
     |> code_only()
     |> String.split("\n")
     |> Enum.map(&String.trim/1)
     |> Enum.filter(&String.starts_with?(&1, prefix))
+  end
+
+  # Every entry of a step's `tags: |` list, whatever its registry, in file
+  # order. Compared against the GHCR literal as a FULL list, so a tag on any
+  # other registry fails.
+  defp tag_list(step) do
+    [_, block] = String.split(code_only(step), ~r/^\s+tags: \|\n/m, parts: 2)
+
+    block
+    |> String.split("\n")
+    |> Enum.take_while(&String.starts_with?(&1, "            "))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 end

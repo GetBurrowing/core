@@ -868,19 +868,6 @@ jobs:
       packages: write
 
     steps:
-      # Every Docker Hub ref below is docker.io/<DOCKERHUB_NAMESPACE>/... (a
-      # repository variable, task 01a14b9e). Unset, the refs would read
-      # docker.io//suite-core, so refuse before anything is built or pushed.
-      - name: Require the DOCKERHUB_NAMESPACE variable
-        env:
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
-        run: |
-          if [ -z "$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '[:space:]')" ]; then
-            echo "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset; set it with 'gh variable set DOCKERHUB_NAMESPACE --body <namespace>' before any image push"
-            exit 1
-          fi
-          echo "pushing Docker Hub refs under docker.io/${DOCKERHUB_NAMESPACE}/"
-
       - uses: actions/checkout@v5
 
       # Per-job Docker config: the self-hosted runners on one host share
@@ -891,6 +878,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
+      # the job still pulls from Docker Hub (setup-buildx-action's
+      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
+      # anonymous pull from these runners' shared egress IP is rate-limited
+      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
+      # to docker.io.
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -924,7 +917,7 @@ jobs:
           # release (falls back to johnvansickle without it).
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
-          outputs: type=image,"name=docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core,ghcr.io/startup-suite/core",push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,"name=ghcr.io/startup-suite/core",push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         env:
@@ -944,9 +937,8 @@ jobs:
       # published, not on the first arm64 host that boots the image. The env
       # values are throwaway dummies generated per run (no DB is contacted:
       # `eval` loads config and code but starts no application).
-      # The run pulls the digest from GHCR, not Docker Hub (task 01a14dd8):
-      # the build pushes the same digest under both names, and the job is
-      # already logged in to ghcr.io above.
+      # The run pulls the digest from GHCR, the only registry the build pushes
+      # to (task 01a14dd8; Docker Hub publishing stopped with task 01a14afe).
       - name: Smoke-run the image natively (NIFs load)
         env:
           IMAGE: ghcr.io/startup-suite/core@${{ steps.build.outputs.digest }}
@@ -987,19 +979,6 @@ jobs:
       packages: write
 
     steps:
-      # Every Docker Hub ref below is docker.io/<DOCKERHUB_NAMESPACE>/... (a
-      # repository variable, task 01a14b9e). Unset, the refs would read
-      # docker.io//suite-core, so refuse before anything is built or pushed.
-      - name: Require the DOCKERHUB_NAMESPACE variable
-        env:
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
-        run: |
-          if [ -z "$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '[:space:]')" ]; then
-            echo "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset; set it with 'gh variable set DOCKERHUB_NAMESPACE --body <namespace>' before any image push"
-            exit 1
-          fi
-          echo "pushing Docker Hub refs under docker.io/${DOCKERHUB_NAMESPACE}/"
-
       - name: Derive image tags
         id: vars
         run: |
@@ -1024,6 +1003,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
+      # the job still pulls from Docker Hub (setup-buildx-action's
+      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
+      # anonymous pull from these runners' shared egress IP is rate-limited
+      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
+      # to docker.io.
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -1046,17 +1031,11 @@ jobs:
             echo "::error::expected 2 per-arch digests (amd64, arm64), found ${count}"
             exit 1
           fi
-          echo "refs=$(printf 'docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"
           echo "ghcr_refs=$(printf 'ghcr.io/startup-suite/core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"
 
       - name: Create manifest list (main)
         if: github.ref == 'refs/heads/main'
         run: |
-          docker buildx imagetools create \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }} \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }} \
-            ${{ steps.digests.outputs.refs }}
           docker buildx imagetools create \
             -t ghcr.io/startup-suite/core:core \
             -t ghcr.io/startup-suite/core:core-${{ github.sha }} \
@@ -1067,11 +1046,6 @@ jobs:
         if: github.ref != 'refs/heads/main'
         run: |
           docker buildx imagetools create \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.branch_tag }} \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }} \
-            -t docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ steps.vars.outputs.short_sha }} \
-            ${{ steps.digests.outputs.refs }}
-          docker buildx imagetools create \
             -t ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.branch_tag }} \
             -t ghcr.io/startup-suite/core:core-${{ github.sha }} \
             -t ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.short_sha }} \
@@ -1079,7 +1053,6 @@ jobs:
 
       - name: Inspect published manifest
         run: |
-          docker buildx imagetools inspect docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:core-${{ github.sha }}
           docker buildx imagetools inspect ghcr.io/startup-suite/core:core-${{ github.sha }}
 
   # TWO IMAGE FLAVOURS (ADR 0055 § 9, task 01a0ee08 stage 4), one repo.
@@ -1116,19 +1089,6 @@ jobs:
       packages: write
 
     steps:
-      # Every Docker Hub ref below is docker.io/<DOCKERHUB_NAMESPACE>/... (a
-      # repository variable, task 01a14b9e). Unset, the refs would read
-      # docker.io//suite-core, so refuse before anything is built or pushed.
-      - name: Require the DOCKERHUB_NAMESPACE variable
-        env:
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
-        run: |
-          if [ -z "$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '[:space:]')" ]; then
-            echo "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset; set it with 'gh variable set DOCKERHUB_NAMESPACE --body <namespace>' before any image push"
-            exit 1
-          fi
-          echo "pushing Docker Hub refs under docker.io/${DOCKERHUB_NAMESPACE}/"
-
       - uses: actions/checkout@v5
 
       - name: Derive image tags
@@ -1148,6 +1108,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
+      # the job still pulls from Docker Hub (setup-buildx-action's
+      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
+      # anonymous pull from these runners' shared egress IP is rate-limited
+      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
+      # to docker.io.
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -1179,12 +1145,6 @@ jobs:
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:latest
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}
             ghcr.io/startup-suite/core:play
             ghcr.io/startup-suite/core:play-${{ github.sha }}
             ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}
@@ -1210,12 +1170,6 @@ jobs:
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.branch_tag }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ github.sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:play-${{ steps.vars.outputs.short_sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.branch_tag }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ github.sha }}
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core:${{ steps.vars.outputs.short_sha }}
             ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.branch_tag }}
             ghcr.io/startup-suite/core:play-${{ github.sha }}
             ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}
@@ -1226,9 +1180,10 @@ jobs:
   build-and-push-agent-host:
     # Native agents' host image, `contained` profile (task 01a10322 stage 3):
     # ghcr.io/startup-suite/burrow-agent-host, :latest and :<sha>, from
-    # services/agent-host/Dockerfile. The pre-rename suite-agent-host tags
-    # (Docker Hub and GHCR) are still pushed beside it, because hosts installed
-    # before the rename pull that name (task 01a14dd8). Pushed ONLY when a
+    # services/agent-host/Dockerfile. The pre-rename suite-agent-host tags are
+    # still pushed beside it on GHCR, because hosts installed before the
+    # rename pull that name (task 01a14dd8). Docker Hub is no longer a
+    # publish target (task 01a14afe). Pushed ONLY when a
     # push to main changes services/agent-host/**, because every push restarts
     # every agent on an AutoUpdate=registry host. Independent of `test`: nothing in
     # this image is built from the Elixir tree, and its own typecheck and unit
@@ -1242,19 +1197,6 @@ jobs:
       packages: write
 
     steps:
-      # Every Docker Hub ref below is docker.io/<DOCKERHUB_NAMESPACE>/... (a
-      # repository variable, task 01a14b9e). Unset, the refs would read
-      # docker.io//suite-core, so refuse before anything is built or pushed.
-      - name: Require the DOCKERHUB_NAMESPACE variable
-        env:
-          DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE }}
-        run: |
-          if [ -z "$(printf '%s' "$DOCKERHUB_NAMESPACE" | tr -d '[:space:]')" ]; then
-            echo "::error::repository variable DOCKERHUB_NAMESPACE is empty or unset; set it with 'gh variable set DOCKERHUB_NAMESPACE --body <namespace>' before any image push"
-            exit 1
-          fi
-          echo "pushing Docker Hub refs under docker.io/${DOCKERHUB_NAMESPACE}/"
-
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -1289,6 +1231,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/docker-config"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+      # Docker Hub is PULL-ONLY auth here, not a publish target (task 01a14afe):
+      # the job still pulls from Docker Hub (setup-buildx-action's
+      # moby/buildkit image, and the Dockerfiles' FROM base images), and an
+      # anonymous pull from these runners' shared egress IP is rate-limited
+      # (toomanyrequests lost PR #1209's merge, 2026-10-07). Nothing is pushed
+      # to docker.io.
       - uses: docker/login-action@v4
         if: steps.changed.outputs.agent_host == 'true'
         with:
@@ -1315,8 +1263,6 @@ jobs:
           cache-from: type=gha,scope=suite-agent-host
           cache-to: type=gha,mode=max,scope=suite-agent-host
           tags: |
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:latest
-            docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:${{ github.sha }}
             ghcr.io/startup-suite/suite-agent-host:latest
             ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}
             ghcr.io/startup-suite/burrow-agent-host:latest

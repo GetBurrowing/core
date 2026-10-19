@@ -53,7 +53,9 @@ the stable surface for it.
     `[images.refs] meeting-transcriber`, or stay on the legacy input below.
   - **Legacy:** `[images] image_namespace` (`setup init --image-namespace`)
     still renders the old Docker Hub images (`docker.io/<namespace>/...`) and
-    `validate` prints a deprecation warning. Its credential is
+    `validate` prints a deprecation warning. Those images are no longer
+    published: each tag is frozen at its last push, so a legacy install gets
+    no new releases until it moves to `[images] registry`. Its credential is
     `auths["https://index.docker.io/v1/"].auth`. Set exactly one of the two.
 - **A domain in a Cloudflare account you control**, and an API token with
   **Zone:Read, DNS:Edit and Account: Cloudflare Tunnel:Edit**.

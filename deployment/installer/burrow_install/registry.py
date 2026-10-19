@@ -101,6 +101,10 @@ AGENT_HOST = "agent-host"
 #   [images] image_namespace  LEGACY (deprecated, validate warns): the Docker
 #                             Hub refs every install used before task 01a14dd8,
 #                             rendered unchanged (LEGACY_HUB_IMAGES below).
+#                             CI stopped publishing them with task 01a14afe:
+#                             the Docker Hub repos stay (for rollback), but
+#                             every tag is frozen at its last push, so a legacy
+#                             install receives no new images.
 IMAGE_REGISTRY_INPUT = "images.registry"
 IMAGE_NAMESPACE_INPUT = "images.image_namespace"
 
@@ -114,7 +118,8 @@ REGISTRY_IMAGES = {
 }
 
 # Image key -> legacy repository name: docker.io/<image_namespace>/suite-core and
-# the rest, exactly as rendered before task 01a14dd8.
+# the rest, exactly as rendered before task 01a14dd8. No longer published
+# (task 01a14afe); these refs resolve to images frozen at their last push.
 LEGACY_HUB_IMAGES = {
     "core": "suite-core",
     "files-service": "suite-files-service",

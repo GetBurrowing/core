@@ -106,14 +106,10 @@ ALLOWLIST = (
         "asserts the legacy image_namespace render and the fresh-render pattern's control",
     ),
     Allow(
-        "tests/test_render.py",
-        'pattern.findall("x docker.io/acme/suite-core:core")',
-        "positive control of the CI Docker Hub namespace scan (CI still pushes the legacy refs)",
-    ),
-    Allow(
         "tests/test_agents_render.py",
         "/suite-agent-host",
-        "CI still pushes the legacy Docker Hub agent-host image (backlog 01a14afe item 1)",
+        "CI still pushes the pre-rename agent-host name to GHCR for hosts installed before "
+        "the rename (task 01a14dd8); Docker Hub publishing stopped with task 01a14afe",
     ),
     # Fresh-render guards spell what they forbid.
     Allow(
