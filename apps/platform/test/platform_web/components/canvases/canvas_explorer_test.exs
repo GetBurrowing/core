@@ -189,13 +189,13 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
     end
 
     test "in browse mode the user's own toggles decide, and an untoggled group renders no rows" do
-      group = space_group("Alpha space", rows(["Orion demo plan"]))
+      group = space_group("Alpha space", rows(["Atlas demo plan"]))
 
       collapsed = explorer(space_groups: [group], expanded_keys: [])
       opened = explorer(space_groups: [group], expanded_keys: [space_key(group)])
 
       assert rows_in_group(collapsed, space_key(group)) == []
-      assert rows_in_group(opened, space_key(group)) == ["Orion demo plan"]
+      assert rows_in_group(opened, space_key(group)) == ["Atlas demo plan"]
     end
 
     test "browse mode does NOT open a group just because it has rows" do
@@ -612,12 +612,12 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
     end
 
     test "a body-only hit whose title does not contain the term renders the title unmarked and whole" do
-      group = space_group("Alpha space", [row(title: "Orion demo plan")])
+      group = space_group("Alpha space", [row(title: "Atlas demo plan")])
 
       html = explorer(query: "approval", space_groups: [group])
 
       assert count(html, ~s([data-role="canvas-explorer-title-match"])) == 0
-      assert one_text(html, ~s([data-role="canvas-explorer-row-title"])) == "Orion demo plan"
+      assert one_text(html, ~s([data-role="canvas-explorer-row-title"])) == "Atlas demo plan"
     end
 
     test "browse mode marks nothing" do
@@ -645,7 +645,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
       meeting = %{
         key: "meeting",
         label: "In this meeting",
-        rows: rows(["Orion demo plan"]),
+        rows: rows(["Atlas demo plan"]),
         total_count: 1
       }
 
@@ -794,7 +794,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
 
     test "the selected canvas is marked as current" do
       selected = row(title: "Approval flow")
-      other = row(title: "Orion demo plan")
+      other = row(title: "Atlas demo plan")
       group = space_group("Alpha space", [selected, other])
 
       html =

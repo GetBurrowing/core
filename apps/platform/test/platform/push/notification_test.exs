@@ -44,8 +44,8 @@ defmodule Platform.Push.NotificationTest do
   defp space do
     %Space{
       id: Ecto.UUID.generate(),
-      name: "Internal Acme SXI",
-      slug: "internal-acme-sxi"
+      name: "Internal Acme Globex",
+      slug: "internal-acme-globex"
     }
   end
 
@@ -230,7 +230,7 @@ defmodule Platform.Push.NotificationTest do
 
       assert n.category == "SUITE_MENTION"
       assert n.thread_id == s.id
-      assert n.url == "/chat/internal-acme-sxi?message=#{n.message_id}"
+      assert n.url == "/chat/internal-acme-globex?message=#{n.message_id}"
       assert n.space_id == s.id
     end
 
@@ -285,7 +285,7 @@ defmodule Platform.Push.NotificationTest do
   describe "copy (canvas 01a10887 rev 23)" do
     test "mention title is {Author} in {Space}" do
       n = AttentionRouter.push_notification("Sam", message("x"), :mention, space(), [])
-      assert n.title == "Sam in Internal Acme SXI"
+      assert n.title == "Sam in Internal Acme Globex"
     end
 
     test "plan and review titles are fixed and the body is the task title" do
@@ -350,8 +350,8 @@ defmodule Platform.Push.NotificationTest do
       n = AttentionRouter.push_notification("Sam", message("hi"), :mention, space(), [])
 
       assert n.author_name == "Sam"
-      assert n.space_name == "Internal Acme SXI"
-      assert n.title == "Sam in Internal Acme SXI", "the title is unchanged"
+      assert n.space_name == "Internal Acme Globex"
+      assert n.title == "Sam in Internal Acme Globex", "the title is unchanged"
     end
 
     test "to_fcm_payload is data-only, high priority, with string values only" do
@@ -387,7 +387,7 @@ defmodule Platform.Push.NotificationTest do
       end
 
       assert data["author_name"] == "Sam"
-      assert data["space_name"] == "Internal Acme SXI"
+      assert data["space_name"] == "Internal Acme Globex"
       refute Map.has_key?(data, "task_id")
     end
 
@@ -421,7 +421,7 @@ defmodule Platform.Push.NotificationTest do
       refute Map.has_key?(data, "space_name")
       refute Map.has_key?(data, "space_id")
       refute Jason.encode!(data) =~ "Sam"
-      refute Jason.encode!(data) =~ "Internal Acme SXI"
+      refute Jason.encode!(data) =~ "Internal Acme Globex"
       assert data["title"] == "New message"
     end
   end

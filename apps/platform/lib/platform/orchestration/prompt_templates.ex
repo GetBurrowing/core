@@ -1852,7 +1852,7 @@ defmodule Platform.Orchestration.PromptTemplates do
             "Instructs the scribe to produce a 5-card meeting summary canvas " <>
             "(Summary / Decisions / Action items / Open questions / Provenance) in " <>
             "the meeting's chat space and hand structured action items off to the " <>
-            "triage agent via `dispatch_triage_attention/2`. Codifies the SXI scribe " <>
+            "triage agent via `dispatch_triage_attention/2`. Codifies the Globex scribe " <>
             "canvas structure proven on the 2026-07-13 meeting.",
         variables: [
           "space_id",
@@ -1893,7 +1893,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Meeting name (`{{meeting_name}}`), date, wall-clock duration.
         - Participant list (resolved `user:*` identities where possible). If any identity is ambiguous
           — e.g. the transcriber heard "Sam" but the participant roster has both `user:sam` and
-          `user:saru` on the invite (as on the SXI 2026-07-13 meeting) — flag it inline: "attributed
+          `user:saru` on the invite (as on the Globex 2026-07-13 meeting) — flag it inline: "attributed
           to Sam/Saru — transcriber cannot disambiguate".
         - Transcript stats: rough turn count, total words (from the transcript summary if available).
         - Mishearing corrections applied — call out every proper-noun or hostname you corrected from the raw transcript.
@@ -1912,7 +1912,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Use a `checklist` node whose children are `checklist_item` nodes. For each action item:
 
         - `label` — human-readable: `<owner>: <action verb + object> <due-hint>`
-          Example: `"Alex: draft the SXI Q3 pricing memo by Friday"`.
+          Example: `"Alex: draft the Globex Q3 pricing memo by Friday"`.
         - `note` — **structured JSON** (a stringified JSON object, not prose) with the exact keys
           below. All keys required; use `null` for any field you cannot determine from the transcript.
 
@@ -1921,7 +1921,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         ```json
         {
           "owner": "user:alex",
-          "project_hint": "sxi-orion",
+          "project_hint": "globex-atlas",
           "priority": "high",
           "due_hint": "Fri 2026-07-24",
           "source_transcript_id": "{{transcript_id}}"

@@ -687,18 +687,18 @@ defmodule PlatformWeb.TasksLiveTest do
       # / Playwright loop target the chip without depending on the
       # underlying ScopePill markup.
       assert html =~ ~s(data-scope-chip="acme")
-      assert html =~ ~s(data-scope-chip="soylent")
-      assert html =~ ~s(data-scope-chip="wayne_tech")
-      assert html =~ ~s(data-scope-chip="sxi")
-      assert html =~ ~s(data-scope-chip="paragon")
+      assert html =~ ~s(data-scope-chip="initech")
+      assert html =~ ~s(data-scope-chip="vandelay_ind")
+      assert html =~ ~s(data-scope-chip="globex")
+      assert html =~ ~s(data-scope-chip="hooli")
 
       # The scope_pill primitive emits these labels — confirming the chips
       # are actually rendered (not just the wrapper).
       assert html =~ "Acme"
-      assert html =~ "Soylent"
-      assert html =~ "Wayne-Tech"
-      assert html =~ "SXI"
-      assert html =~ "Paragon"
+      assert html =~ "Initech"
+      assert html =~ "Vandelay-Ind"
+      assert html =~ "Globex"
+      assert html =~ "Hooli"
     end
 
     test ~s(today-state: all tasks count under "acme", others under 0), %{conn: conn} do
@@ -720,10 +720,10 @@ defmodule PlatformWeb.TasksLiveTest do
       # on the org rows — an org slug is user input and has no safe atom
       # conversion, so an atom key here is that bug returning.
       assert counts["acme"] >= 3
-      assert counts["soylent"] == 0
-      assert counts["wayne_tech"] == 0
-      assert counts["sxi"] == 0
-      assert counts["paragon"] == 0
+      assert counts["initech"] == 0
+      assert counts["vandelay_ind"] == 0
+      assert counts["globex"] == 0
+      assert counts["hooli"] == 0
     end
 
     test "default scope_filter is :all on mount", %{conn: conn} do
@@ -803,7 +803,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(filters(view), "filter_scope", %{"scope" => "soylent"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "initech"})
 
       html = after_filter(view)
       # Pre-MT/RBAC contract: filtering to a non-acme scope produces an
@@ -828,7 +828,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Pin to a non-acme scope → desktop card marker disappears (mobile
       # list keeps the title, so assert on the desktop-only id).
-      _ = render_click(filters(view), "filter_scope", %{"scope" => "sxi"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "globex"})
       hidden = after_filter(view)
       refute hidden =~ task_marker
 

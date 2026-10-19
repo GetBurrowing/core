@@ -28,7 +28,7 @@ defmodule Platform.Experiments.MailSubscriberTest do
   }
 
   setup do
-    org = Tenancy.get_org_by_slug!("soylent").id
+    org = Tenancy.get_org_by_slug!("initech").id
     scientist!()
     :ok = Stub.install!(Stub.json(@verdict))
     %{org: org, account: account!(org)}

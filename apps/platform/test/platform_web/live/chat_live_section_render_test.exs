@@ -9,7 +9,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
   Coverage:
     * Pinned / DMs / sub-org section order
-    * Sub-org alphabetical order (Paragon / Soylent / Acme / Wayne-Tech / SXI)
+    * Sub-org alphabetical order (Acme / Globex / Hooli / Initech / Vandelay-Ind)
     * Empty sub-org section renders header + empty-state hint
     * Sub-org headers carry a `<.scope_pill>` reference
     * Drag-handle (`☰`) glyph is present in DOM
@@ -124,12 +124,12 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # section to render. Verify the sub-org header order against the
       # Direct Messages header order, which is the load-bearing invariant.
       dms_idx = :binary.match(sidebar, "Direct Messages") |> elem(0)
-      paragon_idx = :binary.match(sidebar, "Paragon") |> elem(0)
+      hooli_idx = :binary.match(sidebar, "Hooli") |> elem(0)
 
       assert dms_idx > 0
 
-      assert paragon_idx > dms_idx,
-             "Expected DMs section to render BEFORE sub-org sections, got DMs at #{dms_idx} and Paragon at #{paragon_idx}"
+      assert hooli_idx > dms_idx,
+             "Expected DMs section to render BEFORE sub-org sections, got DMs at #{dms_idx} and Hooli at #{hooli_idx}"
     end
 
     test "sub-org sections render in alphabetical order", %{conn: conn} do
@@ -140,9 +140,9 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       # Each sub-org header is rendered as text inside a <p class="channel-section-label">.
       # Capture their offset positions and verify they appear in the
-      # required A-Z order (Paragon / Soylent / Acme / Wayne-Tech / SXI).
+      # required A-Z order (Acme / Globex / Hooli / Initech / Vandelay-Ind).
       offsets =
-        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Globex", "Hooli", "Initech", "Vandelay-Ind"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -154,16 +154,16 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
   end
 
   describe "empty sub-org section render" do
-    test "empty Paragon bucket still renders its section header + empty-state hint", %{
+    test "empty Hooli bucket still renders its section header + empty-state hint", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
-      # Single Acme channel, no Paragon channel — Paragon bucket is empty.
+      # Single Acme channel, no Hooli channel — Hooli bucket is empty.
       create_channel("general")
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      assert sidebar =~ "Paragon"
+      assert sidebar =~ "Hooli"
 
       assert sidebar =~ "No channels yet — channels in this org appear here.",
              "Empty sub-org section is missing its empty-state hint"
@@ -183,18 +183,18 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # section carries its `bg-<token>-dot` swatch; identity text comes only
       # from `section.name`, never from the color.
       assert sidebar =~ "channel-section-color-dot"
-      assert sidebar =~ "bg-paragon-dot"
-      assert sidebar =~ "bg-soylent-dot"
-      assert sidebar =~ "bg-wayne-tech-dot"
+      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="hooli"/
+      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="initech"/
+      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="vandelay_ind"/
       # The root org has no compiled dot class (task 01a116de stage 3): its
       # dot reads the org row's colour through `data-scope`.
       assert sidebar =~
                ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
 
-      assert sidebar =~ "bg-sxi-dot"
+      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="globex"/
 
       # The old text-bearing scope pill is gone from the section header.
-      refute sidebar =~ ~s(aria-label="Paragon scope")
+      refute sidebar =~ ~s(aria-label="Hooli scope")
     end
 
     test "drag-handle glyph is present in DOM (opacity-0 lives in CSS)", %{conn: conn} do
@@ -385,7 +385,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
              "Mobile overlay should render reorderable sub-org sections keyed by data-section-id"
 
       # The org-default sub-org section labels surface in the overlay markup.
-      assert has_element?(view, "#mobile-channel-browser", "Paragon")
+      assert has_element?(view, "#mobile-channel-browser", "Hooli")
       assert has_element?(view, "#mobile-channel-browser", "Acme")
     end
 
@@ -550,7 +550,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       view = open_mobile_browser(conn)
 
-      # Resolver default is alphabetical (Acme, Paragon, Soylent, ...).
+      # Resolver default is alphabetical (Acme, Hooli, Initech, ...).
       # Reorder semantics are "insert ABOVE the drop target" (mirroring the
       # border-top drop indicator), so dropping the first section onto the
       # SECOND is a no-op — drop it onto the THIRD to move it down one slot.
@@ -558,20 +558,20 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # sends; drive it from the mobile nav element to prove the mobile
       # wiring reaches the shared server pipeline
       # (put_section_order -> chat_section_order pref).
-      [paragon_id, soylent_id, acme_id | _] = rendered_section_ids(render(view))
+      [hooli_id, initech_id, acme_id | _] = rendered_section_ids(render(view))
 
       view
       |> element("#mobile-section-list")
-      |> render_hook("section_reordered", %{"from" => paragon_id, "to" => acme_id})
+      |> render_hook("section_reordered", %{"from" => hooli_id, "to" => acme_id})
 
-      assert [^soylent_id, ^paragon_id, ^acme_id | _] = rendered_section_ids(render(view)),
-             "Dropping Paragon onto Acme should re-slot it between Soylent and Acme"
+      assert [^initech_id, ^hooli_id, ^acme_id | _] = rendered_section_ids(render(view)),
+             "Dropping Hooli onto Acme should re-slot it between Initech and Acme"
 
       # Persistence: a fresh mount must come back in the saved order, not
       # the alphabetical default.
       {:ok, _view, html} = live_following_redirect(conn)
 
-      assert [^soylent_id, ^paragon_id, ^acme_id | _] = rendered_section_ids(html),
+      assert [^initech_id, ^hooli_id, ^acme_id | _] = rendered_section_ids(html),
              "Reordered layout should persist across a remount via chat_section_order"
     end
   end
@@ -1126,12 +1126,19 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       # Goes through the REAL org-creation path, so the section row is the one
       # stage 2's `ensure_default_section/1` writes, carrying colour
-      # "newclient" — a token `section_dot_class/1` has never heard of.
+      # "newclient", the token of an org with no colour set.
       {:ok, org} = Tenancy.create_org(admin, %{name: "NewClient", slug: "newclient"})
 
       section = Repo.get_by!(Section, org_id: org.id)
       assert section.color == "newclient"
-      refute PlatformWeb.ChatLive.section_dot_class(section.color)
+      # The token names this org's own row, but the row has no colour, so the
+      # dot keeps the hollow modifier (task 01a14dd9 stage 2).
+      refute org.color_hue
+
+      assert PlatformWeb.ChatLive.section_dot_modifier(
+               section,
+               Tenancy.scope_token_index(Tenancy.list_orgs())
+             ) == "channel-section-color-dot--unassigned"
 
       {:ok, _view, html} = live_following_redirect(conn)
       dot = section_dot_html(desktop_sidebar(html), section.id)
@@ -1179,15 +1186,15 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       conn = authenticated_conn(conn)
       create_channel("general")
 
-      sxi_section = Repo.get_by!(Section, org_id: Tenancy.get_org_by_slug!("sxi").id)
+      globex_section = Repo.get_by!(Section, org_id: Tenancy.get_org_by_slug!("globex").id)
 
       {:ok, _view, html} = live_following_redirect(conn)
-      dot = section_dot_html(desktop_sidebar(html), sxi_section.id)
+      dot = section_dot_html(desktop_sidebar(html), globex_section.id)
 
-      assert dot =~ "bg-sxi-dot"
+      assert dot =~ ~r/channel-section-color-dot--scope"\s+data-scope="globex"/
 
       refute dot =~ "channel-section-color-dot--unassigned",
-             "SXI has a colour token; a hollow ring there would assert " <>
+             "Globex has a colour token; a hollow ring there would assert " <>
                "'not yet assigned' about an org that IS assigned"
     end
   end

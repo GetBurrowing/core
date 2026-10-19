@@ -39,7 +39,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   # space's `org_id` (mirroring the sidebar rail), NOT the channel slug — so a
   # channel must actually belong to the org whose pill we expect to render.
   # The seeded root orgs (priv/repo/migrations/20260519143620_seed_root_orgs.exs)
-  # use slugs acme/soylent/wayne_tech/sxi/paragon — the same tokens these tests
+  # use slugs acme/initech/vandelay_ind/globex/hooli — the same tokens these tests
   # pass in — so resolve the matching org and stamp its id. (Sidebar *section*
   # bucketing is still slug-based via `channel_scope/1`, so the
   # `channel-section-label` assertions are unaffected by the added org_id.)
@@ -89,11 +89,11 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
 
     test "active channel row does NOT render a per-channel scope-pill", %{conn: conn} do
       conn = authenticated_conn(conn)
-      # Slug "paragon" is classified into the Paragon sub-org bucket and
+      # Slug "hooli" is classified into the Hooli sub-org bucket and
       # becomes the active space — the surface that used to grow a pill.
-      create_channel("paragon")
+      create_channel("hooli")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/paragon")
+      {:ok, _view, html} = live_at(conn, ~p"/chat/hooli")
       sidebar = desktop_sidebar(html)
 
       refute sidebar =~ "channel-row-scope-pill",
@@ -106,22 +106,22 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       # Removing the per-channel pill must NOT remove the section-header grouping
       # cue. Post-019e467d that cue is a COLOR-ONLY dot (`bg-<token>-dot`), not a
       # text-bearing scope pill — recoloring a section must change only its dot,
-      # never any name/label. So the Paragon section header carries the
-      # `bg-paragon-dot` swatch but NO "Paragon scope" pill text.
-      create_channel("paragon")
+      # never any name/label. So the Hooli section header carries the
+      # `bg-hooli-dot` swatch but NO "Hooli scope" pill text.
+      create_channel("hooli")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/paragon")
+      {:ok, _view, html} = live_at(conn, ~p"/chat/hooli")
       sidebar = desktop_sidebar(html)
 
       assert sidebar =~ "channel-section-color-dot",
              "Section header should render a color-only dot as the grouping cue"
 
-      assert sidebar =~ "bg-paragon-dot",
-             "Paragon section dot should carry the paragon color utility"
+      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="hooli"/,
+             "Hooli section dot should carry the hooli color utility"
 
       # The old color-derived pill text is gone from the section header — the
       # dot is decorative (aria-hidden) and the only identity text is the name.
-      refute sidebar =~ ~s(aria-label="Paragon scope"),
+      refute sidebar =~ ~s(aria-label="Hooli scope"),
              "Section header must no longer render a text-bearing scope pill"
     end
   end
@@ -129,9 +129,9 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   describe "chat-header scope-pill" do
     test "header renders prominent scope-pill when a channel is active", %{conn: conn} do
       conn = authenticated_conn(conn)
-      create_channel("soylent")
+      create_channel("initech")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/soylent")
+      {:ok, _view, html} = live_at(conn, ~p"/chat/initech")
 
       # The `.chat-header-scope-pill` wrapper is the load-bearing CSS hook
       # for the prominent size variant.
@@ -146,32 +146,32 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     test "header pill click pushes scope_filter event and narrows the sub-org rail", %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("acme")
-      create_channel("paragon")
-      create_channel("soylent")
+      create_channel("hooli")
+      create_channel("initech")
 
-      {:ok, view, _html} = live_at(conn, ~p"/chat/soylent")
+      {:ok, view, _html} = live_at(conn, ~p"/chat/initech")
 
       # Click the chat-header scope-pill — it pushes `scope_filter` with
-      # the channel's scope ("soylent"). The active channel is Soylent,
-      # so the filter narrows the rail to the Soylent bucket only.
+      # the channel's scope ("initech"). The active channel is Initech,
+      # so the filter narrows the rail to the Initech bucket only.
       html_after =
         view
         |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="soylent"])
+          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
         )
         |> render_click()
 
       sidebar = desktop_sidebar(html_after)
 
-      # Soylent bucket header is still present…
-      assert sidebar =~ "Soylent"
+      # Initech bucket header is still present…
+      assert sidebar =~ "Initech"
 
-      # …but Paragon and Acme sub-org headers are filtered out.
-      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
-             "Paragon sub-org section should be hidden by the Soylent scope filter"
+      # …but Hooli and Acme sub-org headers are filtered out.
+      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
+             "Hooli sub-org section should be hidden by the Initech scope filter"
 
       refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Acme\s*</,
-             "Acme sub-org section should be hidden by the Soylent scope filter"
+             "Acme sub-org section should be hidden by the Initech scope filter"
     end
 
     test "header pill is not rendered when no channel is active (DM surface)", %{conn: conn} do
@@ -190,9 +190,9 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     test "mobile header renders the compact clickable scope-pill for an active channel",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      create_channel("soylent")
+      create_channel("initech")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/soylent")
+      {:ok, _view, html} = live_at(conn, ~p"/chat/initech")
 
       # The mobile header (lg:hidden) carries its OWN wrapper, distinct from the
       # desktop `.chat-header-scope-pill` so it can size the pill compact and
@@ -205,7 +205,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       # `.scope-pill-hit-expand` only for `size={:compact} clickable={true}`,
       # and it pushes the same `scope_filter` event as the desktop pill.
       assert html =~ "scope-pill-hit-expand"
-      assert html =~ ~s(phx-value-scope="soylent")
+      assert html =~ ~s(phx-value-scope="initech")
     end
 
     test "mobile header pill is suppressed on a DM/group surface (no org-scope)",
@@ -224,39 +224,39 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   describe "scope_filter event toggle semantics" do
     test "clicking the same scope twice clears the filter", %{conn: conn} do
       conn = authenticated_conn(conn)
-      create_channel("paragon")
-      create_channel("soylent")
+      create_channel("hooli")
+      create_channel("initech")
 
-      {:ok, view, _} = live_at(conn, ~p"/chat/soylent")
+      {:ok, view, _} = live_at(conn, ~p"/chat/initech")
 
-      # First click → narrows to Soylent.
+      # First click → narrows to Initech.
       html1 =
         view
         |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="soylent"])
+          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
         )
         |> render_click()
 
       sidebar1 = desktop_sidebar(html1)
 
-      refute sidebar1 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
-             "After first click, Paragon bucket should be hidden"
+      refute sidebar1 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
+             "After first click, Hooli bucket should be hidden"
 
       # Second click on the same pill → clears the filter, both buckets
       # render again.
       html2 =
         view
         |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="soylent"])
+          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
         )
         |> render_click()
 
       sidebar2 = desktop_sidebar(html2)
 
-      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
-             "After second click on the same pill, Paragon bucket should re-appear"
+      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
+             "After second click on the same pill, Hooli bucket should re-appear"
 
-      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Soylent\s*</
+      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Initech\s*</
     end
   end
 end

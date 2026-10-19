@@ -57,7 +57,7 @@ defmodule Platform.Files.CardBackfillTest do
 
   describe "dry run is the default" do
     test "run/1 with no options spends nothing and writes nothing" do
-      project = sxi_project!("Backfill Default")
+      project = globex_project!("Backfill Default")
       a = ingested_file!(project, "Invoice.pdf", "An invoice for March.")
       b = ingested_file!(project, "Receipt.pdf", "A receipt for March.")
 
@@ -84,7 +84,7 @@ defmodule Platform.Files.CardBackfillTest do
     test "the mix task with no arguments is a dry run" do
       # The task is where a human's fingers actually land, so the default
       # is asserted there and not only on the function it wraps.
-      project = sxi_project!("Backfill Mix Default")
+      project = globex_project!("Backfill Mix Default")
       file = ingested_file!(project, "Statement.pdf", "A bank statement.")
 
       stub_llm!(self(), "should never be reached\nSUPERSEDES: none")
@@ -113,7 +113,7 @@ defmodule Platform.Files.CardBackfillTest do
     end
 
     test "--dry-run beats --write when both are passed" do
-      project = sxi_project!("Backfill Ambiguous")
+      project = globex_project!("Backfill Ambiguous")
       file = ingested_file!(project, "Ambiguous.pdf", "Text.")
 
       stub_llm!(self(), "should never be reached\nSUPERSEDES: none")
@@ -139,7 +139,7 @@ defmodule Platform.Files.CardBackfillTest do
       # ingested AND holding extracted text — because that is the shape
       # that would make a hand-rolled query walk a document whose bytes
       # are not allowed to leave the building into a third-party LLM.
-      project = sxi_project!("Backfill HumanOnly")
+      project = globex_project!("Backfill HumanOnly")
       ordinary = ingested_file!(project, "Public.pdf", "A public document.")
 
       secret =
@@ -169,7 +169,7 @@ defmodule Platform.Files.CardBackfillTest do
     end
 
     test "a soft-deleted file is never a candidate" do
-      project = sxi_project!("Backfill Deleted")
+      project = globex_project!("Backfill Deleted")
       keep = ingested_file!(project, "Keep.pdf", "Kept.")
       gone = ingested_file!(project, "Gone.pdf", "Deleted.")
 
@@ -181,7 +181,7 @@ defmodule Platform.Files.CardBackfillTest do
     end
 
     test "a file that never finished ingesting is never a candidate" do
-      project = sxi_project!("Backfill Pending")
+      project = globex_project!("Backfill Pending")
       done = ingested_file!(project, "Done.pdf", "Ingested.")
       _pending = pending_file!(project, "Pending.pdf")
 
@@ -193,7 +193,7 @@ defmodule Platform.Files.CardBackfillTest do
 
   describe "writing" do
     test "dry_run: false catalogs the candidates and is idempotent on a second run" do
-      project = sxi_project!("Backfill Write")
+      project = globex_project!("Backfill Write")
       a = ingested_file!(project, "One.pdf", "Document one.")
       b = ingested_file!(project, "Two.pdf", "Document two.")
 
@@ -222,7 +222,7 @@ defmodule Platform.Files.CardBackfillTest do
     end
 
     test "a provider failure leaves card_file_key nil so the next run retries it" do
-      project = sxi_project!("Backfill Failure")
+      project = globex_project!("Backfill Failure")
       file = ingested_file!(project, "Boom.pdf", "Text.")
 
       test_pid = self()
@@ -251,7 +251,7 @@ defmodule Platform.Files.CardBackfillTest do
     end
 
     test "--limit trims the work list without lying about the census" do
-      project = sxi_project!("Backfill Limit")
+      project = globex_project!("Backfill Limit")
       _a = ingested_file!(project, "A.pdf", "Document A.")
       _b = ingested_file!(project, "B.pdf", "Document B.")
       _c = ingested_file!(project, "C.pdf", "Document C.")
@@ -286,11 +286,11 @@ defmodule Platform.Files.CardBackfillTest do
     end
   end
 
-  defp sxi_project!(name) do
+  defp globex_project!(name) do
     {:ok, project} =
       Tasks.create_project(%{
         name: "#{name} #{System.unique_integer([:positive])}",
-        org_id: tenant_org_id("sxi")
+        org_id: tenant_org_id("globex")
       })
 
     project

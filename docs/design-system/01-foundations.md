@@ -84,22 +84,22 @@ Phase 4 should add a runtime contrast guard: if a user-supplied `--agent-accent`
 The scope pill (§8.3) renders its label in the scope's own hue on a soft 12 %
 `bg-<scope>` tint. The full-saturation `text-<scope>` token (returned by
 `Platform.Tenancy.scope_color/1`, tuned for the dot and active fill) sat
-**below WCAG 1.4.3 AA** as label text on that tint at `text-xs` — e.g. soylent
+**below WCAG 1.4.3 AA** as label text on that tint at `text-xs` — e.g. initech
 ~3.0 : 1 in light. A dedicated, darker **`text-<scope>-label`** token now colors
 the non-active chip label only: same hue + chroma, lower lightness, so the scope
 identity is preserved while the label clears AA (≥ 4.5 : 1).
 
 It is **theme-aware** — the base rule is the light (darker) value, and a
 `[data-theme=dark] .text-<scope>-label` override carries the dark value (only
-soylent is nudged, `0.65 → 0.67` L, to clear AA in dark; the rest reuse the
+initech is nudged, `0.65 → 0.67` L, to clear AA in dark; the rest reuse the
 existing dark lightness).
 
 | Scope | Light `oklch` | Dark `oklch` | Light ratio¹ | Dark ratio² |
 |---------|----------------|----------------|--------|--------|
-| soylent | `55% 0.20 295` | `67% 0.20 295` | 4.66 ✓ | 4.56 ✓ |
-| wayne_tech | `52% 0.15 240` | `68% 0.15 240` | 4.66 ✓ | 5.11 ✓ |
-| sxi      | `51% 0.15 162` | `70% 0.15 162` | 4.56 ✓ | 5.71 ✓ |
-| paragon | `54% 0.16 95`  | `80% 0.16 95`  | 4.65 ✓ | 7.31 ✓ |
+| initech      | `55% 0.20 295` | `67% 0.20 295` | 4.66 ✓ | 4.56 ✓ |
+| vandelay_ind | `52% 0.15 240` | `68% 0.15 240` | 4.66 ✓ | 5.11 ✓ |
+| globex       | `51% 0.15 162` | `70% 0.15 162` | 4.56 ✓ | 5.71 ✓ |
+| hooli        | `54% 0.16 95`  | `80% 0.16 95`  | 4.65 ✓ | 7.31 ✓ |
 
 ¹ label vs composited 12 % tint over light base-100 `#FFFFFF`.
 ² label vs composited 12 % tint over dark base-100 `#171b25`.

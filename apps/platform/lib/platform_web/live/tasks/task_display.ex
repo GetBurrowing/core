@@ -17,7 +17,6 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   alias Platform.Chat.SidebarMask
   alias Platform.Tasks
   alias Platform.Tasks.Task
-  alias Platform.Tenancy
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1]
 
@@ -257,11 +256,9 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   same value by construction.
 
   `project_sections` is the `{org_slug, org_name, projects}` three-tuple list
-  produced by `PlatformWeb.Tasks.LifecycleHooks.project_sections/2`. Note the
-  org's DISPLAY NAME is `Tenancy.scope_label(org_slug)`, which is what the rail
-  actually renders — NOT the tuple's `org_name`, which the rail ignores. The
-  unmasked branch must return what the rail would otherwise have shown, so the
-  `scope_label/1` call is the real name here. It is pure and DB-free.
+  produced by `PlatformWeb.Tasks.LifecycleHooks.project_sections/2`. The
+  org's DISPLAY NAME is the tuple's `org_name`, the `name` on its row (task
+  01a14dd9 stage 2 deleted the compiled `Tenancy.scope_label/1` map).
 
   Orgs letter in `project_sections` order; projects letter in FLATTENED RAIL
   ORDER across all orgs; epics letter in `epics` (display) order — each kind
@@ -279,8 +276,8 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   def mask_labels(project_sections, masked?, revealed_ids, epics \\ [])
       when is_list(project_sections) and is_list(epics) do
     org_entries =
-      Enum.map(project_sections, fn {slug, _org_name, _projects} ->
-        {slug, Tenancy.scope_label(slug)}
+      Enum.map(project_sections, fn {slug, org_name, _projects} ->
+        {slug, org_name}
       end)
 
     project_entries =
@@ -343,8 +340,8 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   `mask_labels/3` was built from, so `rail_label/2` alone is right there: every
   key is present and a miss means a desync. Four other surfaces are not like
   that. The project-create sheet's org `<select>` lists `@orgs`, which includes
-  orgs with no projects; the scope rail lists `Tasks.scope_keys/0`, which is a
-  fixed enum. Both legitimately hold entities the map has never heard of.
+  orgs with no projects; the scope rail lists every active org the viewer
+  belongs to. Both legitimately hold entities the map has never heard of.
 
   On those surfaces a bare `rail_label/2` would render `Workspace` for a real,
   unmasked org — the mask leaking into the UNMASKED mode, which is a plain bug
@@ -384,7 +381,7 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   entry for (an org with no projects, or one this viewer cannot see) fall
   through to the bare `Workspace` prefix — fail-closed, per `rail_label/2`.
   """
-  @spec scope_pill_label(map(), boolean(), atom() | binary()) :: binary() | nil
+  @spec scope_pill_label(map(), boolean(), binary()) :: binary() | nil
   def scope_pill_label(_mask_labels, false, _scope), do: nil
 
   def scope_pill_label(mask_labels, true, scope) when is_map(mask_labels),
@@ -394,7 +391,7 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   The scope rail's `data-scope-chip` value — the same leak class as the rail's
   `data-org-slug`, and masked for the same reason.
 
-  `data-scope-chip="wayne-tech"` survives `refute html =~ "Wayne-Tech"` untouched,
+  `data-scope-chip="vandelay-ind"` survives `refute html =~ "Vandelay-Ind"` untouched,
   and it is legible in the DOM inspector a screen share is quite likely to have
   open. Nothing in `lib/` or `assets/` reads it — only tests, as an inspection
   handle — so it is free to follow the label, exactly as `rail_org_slug/2`
@@ -407,24 +404,22 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   `real_org_slug/2` before filtering, so the chip still filters to the org it
   names while the raw slug never reaches the DOM at all.
   """
-  @spec scope_pill_slug(map(), boolean(), atom() | binary()) :: binary()
+  @spec scope_pill_slug(map(), boolean(), binary()) :: binary()
   def scope_pill_slug(_mask_labels, false, scope), do: scope_slug_string(scope)
 
   def scope_pill_slug(mask_labels, true, scope) when is_map(mask_labels),
     do: rail_org_slug(mask_labels, scope_slug_string(scope))
 
-  # The rail feeds these binaries since task 01a09287 stage 2 removed the
-  # scope allowlist; the atom clause stays for the pre-existing callers that
-  # still hold `Tasks.scope_keys/0` atoms. Deliberately `to_string/1`, never
-  # `String.to_existing_atom/1` in the other direction.
+  # The rail feeds binaries since task 01a09287 stage 2 removed the scope
+  # allowlist, and no scope is an atom since task 01a14dd9 stage 2. Never
+  # `String.to_existing_atom/1` a slug.
   defp scope_slug_string(scope) when is_binary(scope), do: scope
-  defp scope_slug_string(scope) when is_atom(scope), do: Atom.to_string(scope)
 
   @doc """
   The value for the rail's `data-org-slug` attribute.
 
-  A REAL LEAK IN ATTRIBUTE FORM. `data-org-slug="wayne-tech"` survives
-  `refute html =~ "Wayne-Tech"` completely untouched: org slugs are stored
+  A REAL LEAK IN ATTRIBUTE FORM. `data-org-slug="vandelay-ind"` survives
+  `refute html =~ "Vandelay-Ind"` completely untouched: org slugs are stored
   underscored and rendered hyphenated, so an assertion written against the
   display form proves nothing at all about this attribute — and this attribute
   is legible in the DOM inspector a screen share is quite likely to have open.
@@ -443,8 +438,11 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   @spec rail_org_slug(map(), binary()) :: binary()
   def rail_org_slug(mask_labels, org_slug) when is_map(mask_labels) do
     case Map.get(mask_labels, {:org, org_slug}) do
-      nil -> "workspace"
-      label -> if label == Tenancy.scope_label(org_slug), do: org_slug, else: slugify(label)
+      nil ->
+        "workspace"
+
+      label ->
+        if placeholder_label?(label), do: slugify(label), else: org_slug
     end
   end
 
@@ -454,14 +452,13 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
 
   Org rows were the last surface in this feature still routing by a
   human-readable slug — `phx-value-id`, `phx-value-key`, `data-menu-key` and
-  `phx-value-scope` all spelled `soylent` while the row above them read
+  `phx-value-scope` all spelled `initech` while the row above them read
   `Workspace B`. Project rows already route by UUID, so the inconsistency was
   with work this same feature had already done.
 
   The fix is an ALIAS, not a UUID, because the org slug genuinely IS the
-  routing key here in a way a project's is not: `Tenancy.scope_label/1`,
-  `Tasks.scope_keys/0`, the lifecycle resolver and this module's own
-  `mask_labels/4` keys are all slug-keyed, and `revealed_rail_ids` matches on
+  routing key here in a way a project's is not: the lifecycle resolver and
+  this module's own `mask_labels/4` keys are slug-keyed, and `revealed_rail_ids` matches on
   the same string. Re-keying all of them on an org UUID is a different change
   from closing this leak. So the DOM carries the per-session placeholder slug
   (`workspace-b`) out of the SAME map the label came from, and every handler
@@ -482,6 +479,15 @@ defmodule PlatformWeb.Tasks.TaskDisplay do
   end
 
   def real_org_slug(_mask_labels, emitted), do: emitted
+
+  # True for the strings `SidebarMask` emits in place of an org name: the bare
+  # `Workspace` (fail-closed) or `Workspace <letters>`. Anything else is the
+  # org's real name, shown because masking is off or the org is revealed.
+  # Read off the label because the map holds only the label (task 01a14dd9
+  # stage 2 removed the compiled name this used to compare against). An org
+  # whose real name has that exact shape emits the placeholder slug, which
+  # `real_org_slug/2` still resolves back, so it routes correctly either way.
+  defp placeholder_label?(label), do: label =~ ~r/\AWorkspace( [A-Z]+)?\z/
 
   defp slugify(label) do
     label

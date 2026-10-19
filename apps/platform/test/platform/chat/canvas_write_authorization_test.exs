@@ -28,7 +28,7 @@ defmodule Platform.Chat.CanvasWriteAuthorizationTest do
   alias Platform.Tenancy
 
   setup do
-    %{org_a: Tenancy.get_org_by_slug!("sxi")}
+    %{org_a: Tenancy.get_org_by_slug!("globex")}
   end
 
   # ── Builders ──────────────────────────────────────────────────────────────

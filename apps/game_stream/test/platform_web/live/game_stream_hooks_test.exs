@@ -51,7 +51,7 @@ defmodule PlatformWeb.GameStreamHooksTest do
       restore(:branch_provisioner, previous_bp)
     end)
 
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     space = channel!(%{org_id: org.id, name: "Review builds"})
     user = create_user!(%{name: "Alex"})
     add_user!(space.id, user.id)

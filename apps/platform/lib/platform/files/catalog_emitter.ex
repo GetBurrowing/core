@@ -13,7 +13,7 @@ defmodule Platform.Files.CatalogEmitter do
 
   The ingester spawns **one unsupervised-in-parallel `Task` per file**
   (`Task.Supervisor.start_child/2`), so `:stop` events arrive in bursts as
-  wide as whatever the uploader dropped in at once. The live SXI corpus
+  wide as whatever the uploader dropped in at once. The live Globex corpus
   shows twelve files finishing inside 0.2s and nine more two minutes
   later. Spawning a task per event would put twelve concurrent LLM
   requests in flight from a background process with nothing above it

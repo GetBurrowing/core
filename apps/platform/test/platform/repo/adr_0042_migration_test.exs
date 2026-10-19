@@ -9,7 +9,7 @@ defmodule Platform.Repo.Adr0042MigrationTest do
     * `projects.org_id` is NOT NULL and FK-enforced against `orgs(id)`
     * `org_wiki_pages` carries `(org_id NOT NULL, project_id NULL)` FKs
     * `org_wiki_journal_entries` carries the same shape
-    * The three tenant default chat_spaces (Soylent, Wayne-Tech, SXI) are
+    * The three tenant default chat_spaces (Initech, Vandelay-Ind, Globex) are
       named "General" with slug "general"
 
   Direct SQL assertions are used (rather than schema reflection) so a future
@@ -172,11 +172,11 @@ defmodule Platform.Repo.Adr0042MigrationTest do
 
   describe "tenant chat_space rename" do
     @tenant_channel_ids [
-      # Soylent
+      # Initech
       "ec86dd1f-e5ab-45cc-8e69-aadd2847576c",
-      # Wayne-Tech
+      # Vandelay-Ind
       "ad2d9748-a94b-4529-b156-362614c86a65",
-      # SXI / Stark Industries
+      # Globex / Globex Corporation
       "019db5f7-9ff5-70c7-b678-54a4d15d1573"
     ]
 

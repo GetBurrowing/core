@@ -23,22 +23,22 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   @doc """
   `{slug, surface} => {painted 12% tint, recorded label-vs-tint ratio}` for
   the six orgs over the two light grounds. Slugs are the kebab-case class
-  fragments the measurement used (`wayne-tech`, not the row's `wayne_tech`).
+  fragments the measurement used (`vandelay-ind`, not the row's `vandelay_ind`).
   """
   def tints do
     %{
       {"legacy", "base-100"} => {"#FDF0E7", 4.6121},
-      {"soylent", "base-100"} => {"#F3EDFE", 4.6375},
-      {"wayne-tech", "base-100"} => {"#E3F4FD", 4.6738},
-      {"sxi", "base-100"} => {"#E3F7F0", 4.5539},
-      {"paragon", "base-100"} => {"#FBF7E3", 4.6724},
-      {"cyberdyne", "base-100"} => {"#FBEBF6", 4.6142},
+      {"initech", "base-100"} => {"#F3EDFE", 4.6375},
+      {"vandelay-ind", "base-100"} => {"#E3F4FD", 4.6738},
+      {"globex", "base-100"} => {"#E3F7F0", 4.5539},
+      {"hooli", "base-100"} => {"#FBF7E3", 4.6724},
+      {"wonka", "base-100"} => {"#FBEBF6", 4.6142},
       {"legacy", "base-200"} => {"#F1E4DB", 4.1375},
-      {"soylent", "base-200"} => {"#E7E1F2", 4.1560},
-      {"wayne-tech", "base-200"} => {"#D7E8F1", 4.1914},
-      {"sxi", "base-200"} => {"#D7EBE4", 4.0857},
-      {"paragon", "base-200"} => {"#EFEBD7", 4.1982},
-      {"cyberdyne", "base-200"} => {"#EFDFEA", 4.1349}
+      {"initech", "base-200"} => {"#E7E1F2", 4.1560},
+      {"vandelay-ind", "base-200"} => {"#D7E8F1", 4.1914},
+      {"globex", "base-200"} => {"#D7EBE4", 4.0857},
+      {"hooli", "base-200"} => {"#EFEBD7", 4.1982},
+      {"wonka", "base-200"} => {"#EFDFEA", 4.1349}
     }
   end
 
@@ -49,11 +49,11 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   def labels do
     %{
       "legacy" => {183, 77, 0},
-      "soylent" => {126, 78, 215},
-      "wayne-tech" => {0, 112, 181},
-      "sxi" => {0, 127, 74},
-      "paragon" => {140, 106, 0},
-      "cyberdyne" => {182, 55, 149}
+      "initech" => {126, 78, 215},
+      "vandelay-ind" => {0, 112, 181},
+      "globex" => {0, 127, 74},
+      "hooli" => {140, 106, 0},
+      "wonka" => {182, 55, 149}
     }
   end
 
@@ -66,11 +66,11 @@ defmodule Platform.Tenancy.ScopeColorPaintedFixture do
   """
   def known_divergences do
     %{
-      {"soylent", "base-100"} => {0, 1, 0},
+      {"initech", "base-100"} => {0, 1, 0},
       {"legacy", "base-200"} => {1, 0, 1},
-      {"soylent", "base-200"} => {0, 1, 1},
-      {"wayne-tech", "base-200"} => {1, 0, 0},
-      {"paragon", "base-200"} => {0, 0, 1}
+      {"initech", "base-200"} => {0, 1, 1},
+      {"vandelay-ind", "base-200"} => {1, 0, 0},
+      {"hooli", "base-200"} => {0, 0, 1}
     }
   end
 

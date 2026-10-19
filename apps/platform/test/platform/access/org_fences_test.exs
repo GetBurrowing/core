@@ -145,11 +145,11 @@ defmodule Platform.Access.OrgFencesTest do
     end
 
     test "a tenant-pinned agent sees home org + root; a root agent sees every tenant", w do
-      sxi = w.org_a.id
-      sibling = tenant_org_id("wayne_tech")
+      globex = w.org_a.id
+      sibling = tenant_org_id("vandelay_ind")
       root = acme_org_id()
 
-      for {org, tag} <- [{sxi, "home"}, {sibling, "sibling"}, {root, "root"}] do
+      for {org, tag} <- [{globex, "home"}, {sibling, "sibling"}, {root, "root"}] do
         {:ok, _} =
           Journal.append(
             %{content: "fence marker #{tag}-entry", date: Date.utc_today(), org_id: org},
@@ -157,7 +157,7 @@ defmodule Platform.Access.OrgFencesTest do
           )
       end
 
-      assert search_tags(agent!(%{"org_id" => sxi})) == ~w(home root)
+      assert search_tags(agent!(%{"org_id" => globex})) == ~w(home root)
       assert search_tags(agent!(%{})) == ~w(home root sibling)
     end
   end

@@ -85,7 +85,7 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
 
       {:ok, org} =
         Tenancy.create_org(admin, %{
-          name: "Cyberdyne Fallback #{System.unique_integer([:positive])}",
+          name: "Wonka Fallback #{System.unique_integer([:positive])}",
           slug: "wbfallback#{System.unique_integer([:positive])}"
         })
 
@@ -102,7 +102,7 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
              DIFFERENT org (section.org_id=#{section.org_id}, name=#{inspect(section.name)},
              position=#{section.position}).
 
-             This is the Cyberdyne symptom: `Tenancy.Lifecycle.create_org/2`
+             This is the Wonka symptom: `Tenancy.Lifecycle.create_org/2`
              never wrote a `channel_sections` row for the new org, so
              `Sidebar.default_section_id/3` fell through to
              `fallback_section_id/1` — the lowest-`position` section.
@@ -113,25 +113,25 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
   # ── Fixture B (negative): slug must never beat org_id ───────────────────
 
   describe "resolve_for_user/2 — a channel slug that collides with an org slug" do
-    test "a channel slugged `sxi` under a different org resolves under ITS org" do
+    test "a channel slugged `globex` under a different org resolves under ITS org" do
       viewer = create_user!()
 
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      paragon = Tenancy.get_org_by_slug!("paragon")
+      globex = Tenancy.get_org_by_slug!("globex")
+      hooli = Tenancy.get_org_by_slug!("hooli")
 
-      channel = channel!(%{org_id: paragon.id, slug: "sxi"})
+      channel = channel!(%{org_id: hooli.id, slug: "globex"})
 
       resolved = Sidebar.resolve_for_user(viewer.id, [channel])
       section = section_holding(resolved, channel.id)
 
       assert section, "channel did not resolve into any section at all"
 
-      assert section.org_id == paragon.id,
-             "slug-shaped grouping leaked: channel slugged `sxi` under Paragon " <>
+      assert section.org_id == hooli.id,
+             "slug-shaped grouping leaked: channel slugged `globex` under Hooli " <>
                "resolved into section org_id=#{section.org_id}"
 
-      refute section.org_id == sxi.id,
-             "channel slugged `sxi` was grouped by its SLUG rather than its org_id"
+      refute section.org_id == globex.id,
+             "channel slugged `globex` was grouped by its SLUG rather than its org_id"
     end
   end
 end

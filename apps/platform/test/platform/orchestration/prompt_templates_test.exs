@@ -4302,7 +4302,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
   describe "default_content_for_slug/1 — dispatch.scribe_completion" do
     # Task 019f5e2a-9db7 (M2 of the meeting-to-tasks-pipeline stack). Codifies
-    # the 5-card scribe canvas structure proven on the SXI 2026-07-13 meeting
+    # the 5-card scribe canvas structure proven on the Globex 2026-07-13 meeting
     # (canvas id 019f5e0c-e6fc-7721-b6de-944302dcfc67). The descriptor is a
     # `dispatch.*` template so stack member M1's federation_preamble guard
     # applies: `federation_preamble` MUST appear in the variables list AND
@@ -4414,7 +4414,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         space_id: "space-abc",
         room_id: "room-def",
         transcript_id: "txp-123",
-        meeting_name: "SXI weekly",
+        meeting_name: "Globex weekly",
         execution_space_id: "exec-999",
         skills_reference: skills_reference_sample
       }
@@ -4432,7 +4432,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert rendered =~ "space-abc"
       assert rendered =~ "room-def"
       assert rendered =~ "txp-123"
-      assert rendered =~ "SXI weekly"
+      assert rendered =~ "Globex weekly"
 
       # No literal placeholders left in the rendered output.
       for placeholder <-
@@ -5971,7 +5971,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       {"dispatch.scribe_completion",
        "the transcriber heard \"Sam\" but the participant roster has both `user:sam` and"},
       {"dispatch.scribe_completion",
-       "Example: `\"Alex: draft the SXI Q3 pricing memo by Friday\"`."},
+       "Example: `\"Alex: draft the Globex Q3 pricing memo by Friday\"`."},
       {"dispatch.scribe_completion", "\"owner\": \"user:alex\","},
       {"dispatch.intent_attention", "(e.g. `agent-1.host-a`). Same field,"},
       {"nudge", "(test rig, containers, ports, test hosts, credentials, missing tools)"},

@@ -5,7 +5,7 @@ defmodule PlatformWeb.Components.ScopeColorStyles do
 
   ## Why a style element and not utility classes
 
-  Tailwind utilities are resolved at BUILD time. `.text-cyberdyne` is a
+  Tailwind utilities are resolved at BUILD time. `.text-wonka` is a
   literal rule in the compiled stylesheet, so an org created at runtime can
   never acquire one without a CSS rebuild and a deploy — which is the whole
   defect task 01a09287 exists to kill. Custom properties are resolved at
@@ -185,9 +185,9 @@ defmodule PlatformWeb.Components.ScopeColorStyles do
   #
   # AA is the binding constraint on this slot; byte identity with the
   # pre-retrofit paint is NOT. Every base-100 label clears 4.5:1 against its
-  # own tint, and sxi (the thinnest margin of the six, and a live client)
+  # own tint, and globex (the thinnest margin of the six, and a live client)
   # gains under the solve, from 4.5539 to 4.6725. Pinning these labels back
-  # to the old bytes would return sxi to the tightest figure in the set and
+  # to the old bytes would return globex to the tightest figure in the set and
   # reintroduce hand-maintained per-org values beside the solver.
   #
   # Approved with the move disclosed: review request
@@ -282,7 +282,7 @@ defmodule PlatformWeb.Components.ScopeColorStyles do
   # (`oklch(15% 0 0)` / `oklch(98% 0 0)`) measures higher against the fill.
   # Those blocks chose by eye, and this does NOT reproduce their split: at
   # the six shipped fills it picks the dark token for all six, where
-  # soylent and wayne-tech shipped white at 3.30:1 and 2.67:1. Moving the six
+  # initech and vandelay-ind shipped white at 3.30:1 and 2.67:1. Moving the six
   # onto this path (task 01a09333-d374 stage 5) therefore flips those two
   # active pills to dark text, at 5.62:1 and 6.95:1;
   # `ScopeColorStylesShippedSixTest` pins that as a named delta.

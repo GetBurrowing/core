@@ -1345,7 +1345,7 @@ defmodule Platform.Meetings.SummarizerTest do
 
   # ── task 01a0826f stage 4 — the summariser call path against a SLOW provider ──
   #
-  # The production failure (2026-09-02 SXI workshop) was not in the adapter in
+  # The production failure (2026-09-02 Globex workshop) was not in the adapter in
   # isolation: `Summarizer.run_summary/1` -> `call_llm/3` (summarizer.ex:321)
   # -> `provider_adapter(:ollama)` (summarizer.ex:590) -> `adapter.chat/3`
   # (summarizer.ex:569) returned `{:error, %Req.TransportError{reason:

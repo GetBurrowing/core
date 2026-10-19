@@ -79,7 +79,7 @@ defmodule Platform.Files.CatalogEmitterTest do
       # provider or a supervisor hop.
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Wiring")
+      project = globex_project!("Emitter Wiring")
       file = ingested_file!(project, "Repeat.pdf", "Some text.")
 
       assert :ok = Ingester.run(file)
@@ -111,7 +111,7 @@ defmodule Platform.Files.CatalogEmitterTest do
     test "an eligible file gets a card written from the ingest event" do
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Catalog")
+      project = globex_project!("Emitter Catalog")
       file = ingested_file!(project, "Statement.pdf", "A bank statement for June.")
 
       stub_llm!(self(), "A June bank statement.\nSUPERSEDES: none")
@@ -142,7 +142,7 @@ defmodule Platform.Files.CatalogEmitterTest do
       # document whose bytes are not allowed to leave the building.
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter HumanOnly")
+      project = globex_project!("Emitter HumanOnly")
       file = ingested_file!(project, "Payroll.pdf", "Salaries, by name.", intent: "human_only")
 
       stub_llm!(self(), "should never be reached\nSUPERSEDES: none")
@@ -164,7 +164,7 @@ defmodule Platform.Files.CatalogEmitterTest do
     test "a soft-deleted file named by a :stop event is refused the same way" do
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Deleted")
+      project = globex_project!("Emitter Deleted")
       file = ingested_file!(project, "Old.pdf", "Superseded content.")
       {:ok, _} = Files.delete_file(%{id: Ecto.UUID.generate(), type: "agent"}, file)
 
@@ -183,8 +183,8 @@ defmodule Platform.Files.CatalogEmitterTest do
       # by an event claiming project B.
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Scope A")
-      other = sxi_project!("Emitter Scope B")
+      project = globex_project!("Emitter Scope A")
+      other = globex_project!("Emitter Scope B")
       file = ingested_file!(project, "Scoped.pdf", "Text.")
 
       stub_llm!(self(), "should never be reached\nSUPERSEDES: none")
@@ -210,7 +210,7 @@ defmodule Platform.Files.CatalogEmitterTest do
       # `:llm_called`.
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Burst")
+      project = globex_project!("Emitter Burst")
 
       files =
         for n <- 1..3, do: ingested_file!(project, "Burst#{n}.pdf", "Document number #{n}.")
@@ -247,7 +247,7 @@ defmodule Platform.Files.CatalogEmitterTest do
       # what `mix platform.backfill_file_cards` enumerates.
       emitter = start_emitter!(max_queue: 1)
 
-      project = sxi_project!("Emitter Overflow")
+      project = globex_project!("Emitter Overflow")
       files = for n <- 1..4, do: ingested_file!(project, "Flood#{n}.pdf", "Document #{n}.")
 
       blocking_stub!(self(), "A document.\nSUPERSEDES: none")
@@ -280,7 +280,7 @@ defmodule Platform.Files.CatalogEmitterTest do
       # emitter (or the cards queued behind it) down with it.
       emitter = start_emitter!()
 
-      project = sxi_project!("Emitter Failure")
+      project = globex_project!("Emitter Failure")
       boom = ingested_file!(project, "Boom.pdf", "Text one.")
       ok = ingested_file!(project, "Fine.pdf", "Text two.")
 
@@ -359,11 +359,11 @@ defmodule Platform.Files.CatalogEmitterTest do
     end
   end
 
-  defp sxi_project!(name) do
+  defp globex_project!(name) do
     {:ok, project} =
       Tasks.create_project(%{
         name: "#{name} #{System.unique_integer([:positive])}",
-        org_id: tenant_org_id("sxi")
+        org_id: tenant_org_id("globex")
       })
 
     project

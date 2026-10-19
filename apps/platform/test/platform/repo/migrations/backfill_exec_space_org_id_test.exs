@@ -136,7 +136,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
   describe "up/0 against a seeded table" do
     test "stamps the resolvable rows with the RIGHT org and leaves the rest NULL" do
       org_a = acme_org_id()
-      org_b = tenant_org_id("sxi")
+      org_b = tenant_org_id("globex")
 
       # ANTI-VACUITY. With one org in the fixture, "resolved the task's project
       # org" and "wrote a hardcoded constant" are the same observation.
@@ -265,7 +265,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
       # and this raises `Postgrex.Error ... 22P02 invalid_text_representation:
       # invalid input syntax for type uuid: "definitely-not-a-uuid"` before it
       # can assert anything.
-      org = tenant_org_id("paragon")
+      org = tenant_org_id("hooli")
       task = task_in(project_in(org))
 
       resolvable = exec_space!(task.id)
@@ -282,7 +282,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
     end
 
     test "is idempotent — the second run matches zero rows" do
-      org = tenant_org_id("soylent")
+      org = tenant_org_id("initech")
       task = task_in(project_in(org))
       space = exec_space!(task.id)
 
@@ -299,7 +299,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
     end
 
     test "down/0 is a deliberate no-op and does not clear what up/0 wrote" do
-      org = tenant_org_id("wayne_tech")
+      org = tenant_org_id("vandelay_ind")
       task = task_in(project_in(org))
       space = exec_space!(task.id)
 

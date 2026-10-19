@@ -29,7 +29,7 @@ defmodule Platform.FilesAddBytesTest do
         else: Application.delete_env(:platform, :chat_attachments_root)
     end)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
 
     {:ok, project} =
       Tasks.create_project(%{

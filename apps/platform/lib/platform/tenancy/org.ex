@@ -9,8 +9,8 @@ defmodule Platform.Tenancy.Org do
 
     * **Root** — `parent_org_id == nil`. Exactly one row (DB-enforced via
       the `orgs_single_root` partial unique index). Each install names its own.
-    * **Tenant** — `parent_org_id == root.id`. One row per tenant (Soylent,
-      Wayne-Tech, SXI, Paragon, etc.).
+    * **Tenant** — `parent_org_id == root.id`. One row per tenant (Initech,
+      Vandelay-Ind, Globex, Hooli, etc.).
 
   The `Platform.Org` namespace is the legacy single-org memory/context
   system — do not confuse the two. This module lives under

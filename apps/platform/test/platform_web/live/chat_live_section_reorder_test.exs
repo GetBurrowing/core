@@ -115,7 +115,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       offsets =
-        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Globex", "Hooli", "Initech", "Vandelay-Ind"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -134,8 +134,8 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
     # So these tests seed/expect ids, mapping slug→id via `section_id_for_slug`.
     test "non-default order rehydrates on mount", %{conn: conn} do
       user = insert_user("hydrate")
-      # SXI first → Paragon last (intentionally non-alphabetical), by id.
-      saved_slugs = ["sxi", "acme", "soylent", "wayne-tech", "paragon"]
+      # Globex first → Hooli last (intentionally non-alphabetical), by id.
+      saved_slugs = ["globex", "acme", "initech", "vandelay-ind", "hooli"]
       saved_order = Enum.map(saved_slugs, &section_id_for_slug/1)
       {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, saved_order)
 
@@ -145,7 +145,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       # The rendered NAME labels should appear in the saved id order.
-      labels = ["SXI", "Acme", "Soylent", "Wayne-Tech", "Paragon"]
+      labels = ["Globex", "Acme", "Initech", "Vandelay-Ind", "Hooli"]
 
       offsets =
         for label <- labels do
@@ -164,7 +164,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       # A partial (not full) order is HONORED skip-unknown/append-unplaced by the
       # id-keyed resolver (`Sidebar.order_sections/2`): the named sections come
       # first in saved order, the rest follow in `Section.position` order.
-      partial = ["sxi", "paragon"] |> Enum.map(&section_id_for_slug/1)
+      partial = ["globex", "hooli"] |> Enum.map(&section_id_for_slug/1)
       {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, partial)
 
       conn = authenticated_conn(conn, user)
@@ -172,14 +172,14 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      sxi_idx = :binary.match(sidebar, "SXI") |> elem(0)
-      paragon_idx = :binary.match(sidebar, "Paragon") |> elem(0)
-      soylent_idx = :binary.match(sidebar, "Soylent") |> elem(0)
+      globex_idx = :binary.match(sidebar, "Globex") |> elem(0)
+      hooli_idx = :binary.match(sidebar, "Hooli") |> elem(0)
+      initech_idx = :binary.match(sidebar, "Initech") |> elem(0)
 
-      # SXI then Paragon lead (the saved order); the remaining sections follow.
-      assert sxi_idx < paragon_idx, "SXI should lead per the saved partial order"
+      # Globex then Hooli lead (the saved order); the remaining sections follow.
+      assert globex_idx < hooli_idx, "Globex should lead per the saved partial order"
 
-      assert paragon_idx < soylent_idx,
+      assert hooli_idx < initech_idx,
              "Saved sections precede the position-appended remainder"
     end
 
@@ -200,7 +200,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       offsets =
-        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Globex", "Hooli", "Initech", "Vandelay-Ind"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -220,39 +220,39 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       create_channel("general")
       {:ok, view, _html} = live_following_redirect(conn)
 
-      # Move Soylent to SXI's slot (drop-above semantics — Soylent lands
-      # where SXI was, SXI shifts down one). Keyed by section id (Stage 6).
+      # Move Initech to Globex's slot (drop-above semantics — Initech lands
+      # where Globex was, Globex shifts down one). Keyed by section id (Stage 6).
       render_hook(view, "section_reordered", %{
-        "from" => section_id_for_slug("soylent"),
-        "to" => section_id_for_slug("sxi")
+        "from" => section_id_for_slug("initech"),
+        "to" => section_id_for_slug("globex")
       })
 
-      # In-memory: rendered HTML reflects new order. Soylent should now
-      # appear AFTER Wayne-Tech (its new slot is at SXI's original index)
-      # but BEFORE SXI (which shifted down to fill what was after it).
+      # In-memory: rendered HTML reflects new order. Initech should now
+      # appear AFTER Acme (its new slot is at Globex's original index) but
+      # BEFORE Globex (which shifted down to fill what was after it).
       html = render(view)
       sidebar = desktop_sidebar(html)
 
-      protect_idx = :binary.match(sidebar, "Wayne-Tech") |> elem(0)
-      sxi_idx = :binary.match(sidebar, "SXI") |> elem(0)
-      soylent_idx = :binary.match(sidebar, "Soylent") |> elem(0)
+      acme_idx = :binary.match(sidebar, "Acme") |> elem(0)
+      globex_idx = :binary.match(sidebar, "Globex") |> elem(0)
+      initech_idx = :binary.match(sidebar, "Initech") |> elem(0)
 
-      # New order: Acme, Paragon, Wayne-Tech, Soylent, SXI
-      assert protect_idx < soylent_idx,
-             "Expected Soylent after Wayne-Tech, got Soylent at #{soylent_idx} and Wayne-Tech at #{protect_idx}"
+      # New order: Acme, Initech, Globex, Hooli, Vandelay-Ind
+      assert acme_idx < initech_idx,
+             "Expected Initech after Acme, got Initech at #{initech_idx} and Acme at #{acme_idx}"
 
-      assert soylent_idx < sxi_idx,
-             "Expected SXI after Soylent (drop-above semantics), got Soylent at #{soylent_idx} and SXI at #{sxi_idx}"
+      assert initech_idx < globex_idx,
+             "Expected Globex after Initech (drop-above semantics), got Initech at #{initech_idx} and Globex at #{globex_idx}"
 
       # Persisted: re-fetch user and assert preferences blob updated. The order
       # is stored as section IDS (audit finding #3), so assert against the id
-      # sequence for the expected new order: Acme, Paragon, Wayne-Tech, Soylent,
-      # SXI.
+      # sequence for the expected new order: Acme, Initech, Globex, Hooli,
+      # Vandelay-Ind.
       updated_user = Repo.get!(User, user.id)
       saved = updated_user.preferences["chat_section_order"]
 
       expected_ids =
-        ["acme", "paragon", "wayne-tech", "soylent", "sxi"]
+        ["acme", "initech", "globex", "hooli", "vandelay-ind"]
         |> Enum.map(&section_id_for_slug/1)
 
       assert saved == expected_ids
@@ -325,25 +325,25 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      [paragon_section] =
+      [hooli_section] =
         Regex.run(
-          ~r/<section[^>]*data-section-key="Paragon".*?<\/section>/s,
+          ~r/<section[^>]*data-section-key="Hooli".*?<\/section>/s,
           sidebar
         ) || [""]
 
-      assert paragon_section =~ ~s(data-section-reorderable="true")
-      assert paragon_section =~ ~s(data-section-slug="paragon")
-      assert paragon_section =~ "channel-section-drag-handle"
+      assert hooli_section =~ ~s(data-section-reorderable="true")
+      assert hooli_section =~ ~s(data-section-slug="hooli")
+      assert hooli_section =~ "channel-section-drag-handle"
     end
 
-    test "Wayne-Tech uses lowercased slug 'wayne-tech'", %{conn: conn} do
-      user = insert_user("wayne-tech")
+    test "Vandelay-Ind uses lowercased slug 'vandelay-ind'", %{conn: conn} do
+      user = insert_user("vandelay-ind")
       conn = authenticated_conn(conn, user)
       create_channel("general")
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      assert sidebar =~ ~s(data-section-slug="wayne-tech")
+      assert sidebar =~ ~s(data-section-slug="vandelay-ind")
     end
 
     test "Pinned + DMs not affected by sub-org reorder", %{conn: conn} do
@@ -353,8 +353,8 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "section_reordered", %{
-        "from" => section_id_for_slug("sxi"),
-        "to" => section_id_for_slug("paragon")
+        "from" => section_id_for_slug("hooli"),
+        "to" => section_id_for_slug("globex")
       })
 
       html = render(view)
@@ -362,11 +362,11 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
 
       # DMs header still renders before all sub-orgs.
       dms_idx = :binary.match(sidebar, "Direct Messages") |> elem(0)
-      sxi_idx = :binary.match(sidebar, "SXI") |> elem(0)
-      paragon_idx = :binary.match(sidebar, "Paragon") |> elem(0)
+      globex_idx = :binary.match(sidebar, "Globex") |> elem(0)
+      hooli_idx = :binary.match(sidebar, "Hooli") |> elem(0)
 
-      assert dms_idx < sxi_idx
-      assert dms_idx < paragon_idx
+      assert dms_idx < globex_idx
+      assert dms_idx < hooli_idx
     end
   end
 
@@ -385,21 +385,25 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       user = insert_user("rename_survive")
       create_channel("general")
 
-      # The user personally puts Acme FIRST (non-default; default is
-      # alphabetical, so Acme would normally sit 3rd).
+      # The user personally puts Acme SECOND, after Globex (non-default;
+      # default is alphabetical, so Acme would normally sit first).
       personal_order =
-        ["acme", "paragon", "soylent", "wayne-tech", "sxi"]
+        ["globex", "acme", "hooli", "initech", "vandelay-ind"]
         |> Enum.map(&section_id_for_slug/1)
 
       {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, personal_order)
 
-      # Sanity: before the rename, Acme renders first.
+      # Sanity: before the rename, Acme renders second, between Globex and
+      # Hooli.
       conn1 = authenticated_conn(conn, user)
       {:ok, _v1, html1} = live_following_redirect(conn1)
       sidebar1 = desktop_sidebar(html1)
       acme_idx1 = :binary.match(sidebar1, "Acme") |> elem(0)
-      paragon_idx1 = :binary.match(sidebar1, "Paragon") |> elem(0)
-      assert acme_idx1 < paragon_idx1, "Acme should render first from the personal order"
+      hooli_idx1 = :binary.match(sidebar1, "Hooli") |> elem(0)
+      globex_idx1 = :binary.match(sidebar1, "Globex") |> elem(0)
+
+      assert globex_idx1 < acme_idx1 and acme_idx1 < hooli_idx1,
+             "Acme should render second from the personal order"
 
       # An admin renames the Acme section (id unchanged). Use the Sidebar API
       # directly with an Acme admin actor so the rename actually lands.
@@ -407,21 +411,22 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       admin = make_acme_admin("rename_survive_admin")
       {:ok, _} = Sidebar.rename_section(admin, acme_section_id, "Acme HQ")
 
-      # The user re-mounts. The renamed section must STILL render first (its id
-      # is unchanged in the saved order) — not dumped to the bottom.
+      # The user re-mounts. The renamed section must STILL render second (its
+      # id is unchanged in the saved order): not dumped to the bottom, and not
+      # back in its alphabetical default slot (first).
       conn2 = authenticated_conn(build_conn(), user)
       {:ok, _v2, html2} = live_following_redirect(conn2)
       sidebar2 = desktop_sidebar(html2)
 
       acme_hq_idx = :binary.match(sidebar2, "Acme HQ") |> elem(0)
-      paragon_idx2 = :binary.match(sidebar2, "Paragon") |> elem(0)
-      sxi_idx2 = :binary.match(sidebar2, "SXI") |> elem(0)
+      hooli_idx2 = :binary.match(sidebar2, "Hooli") |> elem(0)
+      globex_idx2 = :binary.match(sidebar2, "Globex") |> elem(0)
 
-      assert acme_hq_idx < paragon_idx2,
-             "Renamed section must keep its personal slot (first), not fall to the tail"
+      assert acme_hq_idx < hooli_idx2,
+             "Renamed section must keep its personal slot (second), not fall to the tail"
 
-      assert acme_hq_idx < sxi_idx2,
-             "Renamed section must not be dumped below the last section"
+      assert globex_idx2 < acme_hq_idx,
+             "Renamed section must not fall back to its alphabetical default slot (first)"
     end
   end
 
@@ -471,25 +476,25 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
 
       # Capture section ids while the seeded sections are present (they are
       # not deleted with the user — only the user row goes away).
-      soylent_id = section_id_for_slug("soylent")
-      sxi_id = section_id_for_slug("sxi")
+      initech_id = section_id_for_slug("initech")
+      globex_id = section_id_for_slug("globex")
 
       # Delete the user row out from under the LV. The session still
       # carries the now-stale user_id.
       Repo.delete!(user)
 
-      render_hook(view, "section_reordered", %{"from" => soylent_id, "to" => sxi_id})
+      render_hook(view, "section_reordered", %{"from" => initech_id, "to" => globex_id})
 
       html = render(view)
       sidebar = desktop_sidebar(html)
 
-      # In-memory order still applied.
-      protect_idx = :binary.match(sidebar, "Wayne-Tech") |> elem(0)
-      soylent_idx = :binary.match(sidebar, "Soylent") |> elem(0)
-      sxi_idx = :binary.match(sidebar, "SXI") |> elem(0)
+      # In-memory order still applied: Acme, Initech, Globex, Hooli, Vandelay-Ind.
+      acme_idx = :binary.match(sidebar, "Acme") |> elem(0)
+      initech_idx = :binary.match(sidebar, "Initech") |> elem(0)
+      globex_idx = :binary.match(sidebar, "Globex") |> elem(0)
 
-      assert protect_idx < soylent_idx
-      assert soylent_idx < sxi_idx
+      assert acme_idx < initech_idx
+      assert initech_idx < globex_idx
     end
   end
 
@@ -500,26 +505,26 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       user = insert_user("acct1")
 
       {:ok, updated} =
-        Accounts.update_user_preference(user.id, :chat_section_order, ["SXI", "Acme"])
+        Accounts.update_user_preference(user.id, :chat_section_order, ["Globex", "Acme"])
 
-      assert updated.preferences == %{"chat_section_order" => ["SXI", "Acme"]}
+      assert updated.preferences == %{"chat_section_order" => ["Globex", "Acme"]}
 
       # Idempotent — overwriting the same key works.
       {:ok, updated2} =
-        Accounts.update_user_preference(user.id, :chat_section_order, ["Acme", "SXI"])
+        Accounts.update_user_preference(user.id, :chat_section_order, ["Acme", "Globex"])
 
-      assert updated2.preferences == %{"chat_section_order" => ["Acme", "SXI"]}
+      assert updated2.preferences == %{"chat_section_order" => ["Acme", "Globex"]}
     end
 
     test "merges into existing preferences without clobbering siblings" do
       user = insert_user("acct2")
 
       {:ok, _} = Accounts.update_user_preference(user.id, "theme", "dark")
-      {:ok, updated} = Accounts.update_user_preference(user.id, :chat_section_order, ["SXI"])
+      {:ok, updated} = Accounts.update_user_preference(user.id, :chat_section_order, ["Globex"])
 
       assert updated.preferences == %{
                "theme" => "dark",
-               "chat_section_order" => ["SXI"]
+               "chat_section_order" => ["Globex"]
              }
     end
 
@@ -528,7 +533,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
                Accounts.update_user_preference(
                  Ecto.UUID.generate(),
                  :chat_section_order,
-                 ["Paragon"]
+                 ["Hooli"]
                )
     end
 

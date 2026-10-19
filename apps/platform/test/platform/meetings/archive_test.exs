@@ -214,7 +214,7 @@ defmodule Platform.Meetings.ArchiveTest do
       canvas!(mine, "#{@term} rollout plan")
       mine = end_meeting!(mine, ago(3))
 
-      theirs = create_meeting!("Soylent planning", org_id: tenant_org_id("soylent"))
+      theirs = create_meeting!("Initech planning", org_id: tenant_org_id("initech"))
       canvas!(theirs, "#{@term} rollout plan")
       theirs = end_meeting!(theirs, ago(2))
 
@@ -241,7 +241,7 @@ defmodule Platform.Meetings.ArchiveTest do
       mine = create_meeting!("Acme planning")
       mine = end_meeting!(mine, ago(3))
 
-      theirs = create_meeting!("Soylent planning", org_id: tenant_org_id("soylent"))
+      theirs = create_meeting!("Initech planning", org_id: tenant_org_id("initech"))
       theirs = end_meeting!(theirs, ago(2))
 
       result = Archive.search(admin, [])
@@ -497,15 +497,15 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 for an external viewer" do
     test "an invited meeting they never attended appears; an uninvited one in the SAME org does not" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       external = create_user!() |> external_member!(org_id)
       insider = create_user!() |> member!(org_id)
 
       invited =
-        create_meeting!("Soylent invited review", org_id: org_id) |> end_meeting!(ago(4))
+        create_meeting!("Initech invited review", org_id: org_id) |> end_meeting!(ago(4))
 
       uninvited =
-        create_meeting!("Soylent internal retro", org_id: org_id) |> end_meeting!(ago(3))
+        create_meeting!("Initech internal retro", org_id: org_id) |> end_meeting!(ago(3))
 
       invite!(invited, %{user_id: external.id})
 
@@ -523,11 +523,11 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "attending without an invite does not surface the meeting" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       external = create_user!() |> external_member!(org_id)
 
-      attended = create_meeting!("Soylent attended", org_id: org_id) |> end_meeting!(ago(4))
-      invited = create_meeting!("Soylent invited", org_id: org_id) |> end_meeting!(ago(3))
+      attended = create_meeting!("Initech attended", org_id: org_id) |> end_meeting!(ago(4))
+      invited = create_meeting!("Initech invited", org_id: org_id) |> end_meeting!(ago(3))
 
       seat!(attended, external)
       invite!(invited, %{user_id: external.id})
@@ -541,14 +541,14 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "a revoked invite disappears while a live invite in the same run remains" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       external = create_user!() |> external_member!(org_id)
 
       revoked_meeting =
-        create_meeting!("Soylent revoked", org_id: org_id) |> end_meeting!(ago(4))
+        create_meeting!("Initech revoked", org_id: org_id) |> end_meeting!(ago(4))
 
       live_meeting =
-        create_meeting!("Soylent live invite", org_id: org_id) |> end_meeting!(ago(3))
+        create_meeting!("Initech live invite", org_id: org_id) |> end_meeting!(ago(3))
 
       revoked = invite!(revoked_meeting, %{user_id: external.id})
       invite!(live_meeting, %{user_id: external.id})
@@ -567,14 +567,14 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "counts and filters compose on top of the narrowed set" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       external = create_user!() |> external_member!(org_id)
 
-      invited = create_meeting!("Soylent counted", org_id: org_id)
+      invited = create_meeting!("Initech counted", org_id: org_id)
       canvas!(invited, "#{@term} rollout plan")
       invited = end_meeting!(invited, ago(4))
 
-      uninvited = create_meeting!("Soylent uncounted", org_id: org_id)
+      uninvited = create_meeting!("Initech uncounted", org_id: org_id)
       canvas!(uninvited, "#{@term} rollout plan")
       uninvited = end_meeting!(uninvited, ago(3))
 
@@ -594,15 +594,15 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "artifacts_for/2 is gated by the same rule, independently of search/2" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       external = create_user!() |> external_member!(org_id)
       insider = create_user!() |> member!(org_id)
 
-      invited = create_meeting!("Soylent artifacts in", org_id: org_id)
+      invited = create_meeting!("Initech artifacts in", org_id: org_id)
       canvas!(invited, "#{@term} rollout plan")
       invited = end_meeting!(invited, ago(4))
 
-      uninvited = create_meeting!("Soylent artifacts out", org_id: org_id)
+      uninvited = create_meeting!("Initech artifacts out", org_id: org_id)
       canvas!(uninvited, "#{@term} rollout plan")
       uninvited = end_meeting!(uninvited, ago(3))
 

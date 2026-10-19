@@ -13,7 +13,7 @@ final class BurrowAPIClientTests: XCTestCase {
 
     private func spacesJSON() -> Data {
         Data("""
-        {"spaces":[{"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel",
+        {"spaces":[{"id":"s1","name":"Internal Legacy Globex","slug":"globex","kind":"channel",
           "agents":[{"id":"a1","name":"Saru","slug":"saru"}]}]}
         """.utf8)
     }
@@ -197,7 +197,7 @@ final class BurrowAPIClientTests: XCTestCase {
 
         let closed = expectation(description: "closed")
         model.send { closed.fulfill() }
-        waitFor { model.phase == .sent(spaceName: "Internal Legacy SXI") }
+        waitFor { model.phase == .sent(spaceName: "Internal Legacy Globex") }
         wait(for: [closed], timeout: ShareSheetModel.sentDwell + 2)
 
         let post = StubURLProtocol.requests.last

@@ -824,7 +824,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       {:ok, _membership} =
         Tenancy.mark_membership_external(%{
           user_id: external.id,
-          org_id: Tenancy.get_org_by_slug!("sxi").id
+          org_id: Tenancy.get_org_by_slug!("globex").id
         })
 
       # The STATUS, not the body: the body is a uniform error page shared with

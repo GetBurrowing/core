@@ -856,7 +856,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
   # space_get_messages.
   defp message_space! do
     agent = tenant_agent!(nil)
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     owner = Platform.ExternalUserFixtures.create_user!()
     Platform.ExternalUserFixtures.plain_member!(owner, org)
 
@@ -1207,7 +1207,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
   describe "runtime conformance: mail_inbound_list" do
     test "truncated: limit 2 over 3 rows, then the whole corpus" do
-      org_id = Platform.Tenancy.get_org_by_slug!("soylent").id
+      org_id = Platform.Tenancy.get_org_by_slug!("initech").id
       n = u()
 
       admin =
@@ -1260,7 +1260,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
       for i <- 1..3 do
         raw =
-          "From: a@corp.test\r\nTo: ops@soylent.test\r\nSubject: s#{i}\r\n" <>
+          "From: a@corp.test\r\nTo: ops@initech.test\r\nSubject: s#{i}\r\n" <>
             "Message-ID: <envelope-#{i}-#{u()}@corp.test>\r\n\r\nbody\r\n"
 
         1 = Platform.Mail.Inbound.ingest(account, "INBOX", 1, i, raw, quiet: true)

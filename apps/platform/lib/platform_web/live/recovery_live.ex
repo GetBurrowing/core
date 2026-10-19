@@ -26,7 +26,7 @@ defmodule PlatformWeb.RecoveryLive do
       unarchive/cancel path.
 
     * **Act-then-confirm toast.** There is no pre-action confirm. After a restore
-      a success toast names the org side-effect ("Discovery restored · Soylent
+      a success toast names the org side-effect ("Discovery restored · Initech
       reactivated too") with a View quick-link to the restored item and an Undo
       that re-archives just that item — reversible inside the retention window.
 
@@ -504,10 +504,7 @@ defmodule PlatformWeb.RecoveryLive do
         <div class="flex min-w-0 items-center gap-2">
           <span
             :if={org_scope_slug(@row)}
-            class={[
-              "size-2 shrink-0 rounded-full scope-dot-current",
-              Tenancy.scope_color(org_scope_slug(@row))
-            ]}
+            class="size-2 shrink-0 rounded-full scope-dot-current"
             data-scope={org_scope_slug(@row)}
             aria-hidden="true"
           />

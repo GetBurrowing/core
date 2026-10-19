@@ -150,7 +150,7 @@
           name="org[name]"
           value={@org_form[:name].value}
           required
-          placeholder="Cyberdyne"
+          placeholder="Wonka"
           class="input input-bordered w-full"
         />
         <p
@@ -173,7 +173,7 @@
           name="org[slug]"
           value={@org_form[:slug].value}
           required
-          placeholder="cyberdyne"
+          placeholder="wonka"
           class="input input-bordered w-full font-mono"
         />
         <p
@@ -191,7 +191,7 @@
 
       <%!-- COLOUR. A hue RING, not a hex field. A hex field cannot say
            "that yellow is invisible on white" and cannot say "that blue is
-           Wayne-Tech's"; both failures are silent and both are found by
+           Vandelay-Ind's"; both failures are silent and both are found by
            someone else, later, on the scope rail.
 
            The ring is 72 server-rendered stops. The number input beside it
@@ -331,7 +331,7 @@
            Every figure is computed server-side in `validate_org` by
            `ScopeColor.derive/2`, never in JS, and every figure is printed
            with the ground it was measured against. That is not pedantry:
-           the sxi label reads 5.10 against bare white and 4.56 against its
+           the globex label reads 5.10 against bare white and 4.56 against its
            own 12% tint over white, and only the second is the surface the
            text actually sits on. A bare number here is not interpretable. --%>
       <div :if={@preview} class="space-y-2" data-role="org-color-preview">

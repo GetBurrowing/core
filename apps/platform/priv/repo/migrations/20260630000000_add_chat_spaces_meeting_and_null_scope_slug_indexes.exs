@@ -43,14 +43,14 @@ defmodule Platform.Repo.Migrations.AddChatSpacesMeetingAndNullScopeSlugIndexes d
   task-derived slug on every task re-run, and group/system spaces have their
   own creation paths that don't go through `bootstrap_space/2`.
 
-  ## Data backfill: `stark-industries` row 019f1407-35dc-7c67-b90e-b11c4776dbbf
+  ## Data backfill: `globex-corporation` row 019f1407-35dc-7c67-b90e-b11c4776dbbf
 
   Prod has one lingering NULL/NULL channel row from the bootstrap_space
-  loophole: the `stark-industries` channel inserted 2026-06-29 with
+  loophole: the `globex-corporation` channel inserted 2026-06-29 with
   org_id and workspace_id both NULL. It's the ONLY channel-row representing
-  Stark Industries — there is no parallel org-scoped row to fall back
-  on — so the right move is to backfill its org_id to the SXI org
-  (`019e40c6-dac2-7757-b8d1-65f9ba24efa7`, derived via the SXI project's
+  Globex Corporation — there is no parallel org-scoped row to fall back
+  on — so the right move is to backfill its org_id to the Globex org
+  (`019e40c6-dac2-7757-b8d1-65f9ba24efa7`, derived via the Globex project's
   org_id) rather than delete the row.
 
   The UPDATE targets the row by exact id, so it no-ops cleanly on any DB
@@ -109,7 +109,7 @@ defmodule Platform.Repo.Migrations.AddChatSpacesMeetingAndNullScopeSlugIndexes d
     )
 
     # Pre-flight: any kind='channel' NULL/NULL slug duplicates?
-    # After the backfill above, the known SXI row should be out of this set.
+    # After the backfill above, the known Globex row should be out of this set.
     # Anything remaining is a fresh regression that must be cleaned manually.
     execute("""
     DO $$

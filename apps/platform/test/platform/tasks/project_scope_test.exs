@@ -52,9 +52,9 @@ defmodule Platform.Tasks.ProjectScopeTest do
   setup do
     %{
       acme: Platform.TenancyFixtures.acme_org_id(),
-      org_a: Platform.TenancyFixtures.tenant_org_id("soylent"),
-      org_b: Platform.TenancyFixtures.tenant_org_id("wayne_tech"),
-      org_c: Platform.TenancyFixtures.tenant_org_id("sxi")
+      org_a: Platform.TenancyFixtures.tenant_org_id("initech"),
+      org_b: Platform.TenancyFixtures.tenant_org_id("vandelay_ind"),
+      org_c: Platform.TenancyFixtures.tenant_org_id("globex")
     }
   end
 

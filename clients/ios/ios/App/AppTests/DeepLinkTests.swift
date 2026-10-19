@@ -20,7 +20,7 @@ final class DeepLinkTests: XCTestCase {
             "/tasks/\(taskID)",
             "/tasks/\(taskID.lowercased())",
             "/chat/general",
-            "/chat/internal-legacy_sxi",
+            "/chat/internal-legacy_globex",
             // A DM's path_segment is its bare UUID: DMs have no slug.
             "/chat/\(dmSegment)",
             "/meetings/standup-2026-10-05",
@@ -121,7 +121,7 @@ final class DeepLinkTests: XCTestCase {
             """
             {"spaces":[
               {"id":"d1","name":null,"slug":null,"kind":"dm","path_segment":"\(dmSegment)","agents":[]},
-              {"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel","path_segment":"sxi",
+              {"id":"s1","name":"Internal Legacy Globex","slug":"globex","kind":"channel","path_segment":"globex",
                "agents":[{"id":"a1","name":"Saru","slug":"saru"}]},
               {"id":"d2","kind":"dm"}
             ]}
@@ -129,7 +129,7 @@ final class DeepLinkTests: XCTestCase {
         struct Body: Decodable { let spaces: [BurrowSpace] }
         let spaces = try JSONDecoder().decode(Body.self, from: json).spaces
 
-        XCTAssertEqual(spaces.map(\.name), ["Direct message", "Internal Legacy SXI", "Direct message"])
+        XCTAssertEqual(spaces.map(\.name), ["Direct message", "Internal Legacy Globex", "Direct message"])
         XCTAssertEqual(spaces[0].pathSegment, dmSegment)
         XCTAssertNil(spaces[0].slug)
         XCTAssertEqual(spaces[1].agents.map(\.name), ["Saru"])

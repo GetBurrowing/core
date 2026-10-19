@@ -324,7 +324,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
     end
   end
 
-  describe "SXI-shaped fixture (regression pin)" do
+  describe "Globex-shaped fixture (regression pin)" do
     test "5-kind canvas round-trips to a deterministic Markdown string" do
       doc = %{
         "version" => 1,
@@ -334,7 +334,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
           "type" => "stack",
           "props" => %{"gap" => 12},
           "children" => [
-            heading(1, "SXI Infra Proposal"),
+            heading(1, "Globex Infra Proposal"),
             %{
               "id" => "recommendation-card",
               "type" => "card",
@@ -378,7 +378,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
       assert {:ok, out} = MarkdownExporter.export_markdown(doc)
 
       assert out == """
-             # SXI Infra Proposal
+             # Globex Infra Proposal
 
              ### Recommendation
 

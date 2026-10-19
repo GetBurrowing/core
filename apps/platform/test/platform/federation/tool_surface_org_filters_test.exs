@@ -82,74 +82,74 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
   # ── Case (a) — org_id filter scopes memory_search to one tenant ──────
 
   test "memory_search with org_id filter returns only that org's entries" do
-    soylent_id = tenant_org_id("soylent")
-    wayne_tech_id = tenant_org_id("wayne_tech")
+    initech_id = tenant_org_id("initech")
+    vandelay_ind_id = tenant_org_id("vandelay_ind")
 
-    _g = seed_journal_entry(soylent_id, "alpha bravo soylent-only marker")
-    _p = seed_journal_entry(wayne_tech_id, "alpha bravo wayne_tech-only marker")
+    _g = seed_journal_entry(initech_id, "alpha bravo initech-only marker")
+    _p = seed_journal_entry(vandelay_ind_id, "alpha bravo vandelay_ind-only marker")
 
     {:ok, %{results: results}} =
       ToolSurface.execute(
         "memory_search",
-        %{"query" => "alpha bravo", "source" => "journal", "org_id" => soylent_id},
+        %{"query" => "alpha bravo", "source" => "journal", "org_id" => initech_id},
         %{}
       )
 
     contents = Enum.map(results, & &1.content)
 
-    assert Enum.any?(contents, &String.contains?(&1, "soylent-only marker")),
-           "expected a soylent-tagged hit, got: #{inspect(contents)}"
+    assert Enum.any?(contents, &String.contains?(&1, "initech-only marker")),
+           "expected a initech-tagged hit, got: #{inspect(contents)}"
 
-    refute Enum.any?(contents, &String.contains?(&1, "wayne_tech-only marker")),
-           "wayne_tech entry leaked across the org_id filter: #{inspect(contents)}"
+    refute Enum.any?(contents, &String.contains?(&1, "vandelay_ind-only marker")),
+           "vandelay_ind entry leaked across the org_id filter: #{inspect(contents)}"
   end
 
   # ── Case (a2) — tenant agent with no filter defaults to home + root ──
 
   test "tenant-pinned agent with no org_id filter sees only home org + root" do
-    # Regression test for V4 e2e failure: a SXI-pinned agent calling
-    # memory_search without an explicit org_id used to leak Wayne-Tech
+    # Regression test for V4 e2e failure: a Globex-pinned agent calling
+    # memory_search without an explicit org_id used to leak Vandelay-Ind
     # (sibling tenant) content because no implicit scope was applied.
-    sxi_id = tenant_org_id("sxi")
-    wayne_tech_id = tenant_org_id("wayne_tech")
+    globex_id = tenant_org_id("globex")
+    vandelay_ind_id = tenant_org_id("vandelay_ind")
     acme_id = acme_org_id()
 
-    sxi_agent = create_agent(%{"org_id" => sxi_id})
+    globex_agent = create_agent(%{"org_id" => globex_id})
 
-    _sxi = seed_journal_entry(sxi_id, "marker delta sxi-only entry")
-    _pt = seed_journal_entry(wayne_tech_id, "marker delta wayne_tech-only entry")
+    _globex = seed_journal_entry(globex_id, "marker delta globex-only entry")
+    _pt = seed_journal_entry(vandelay_ind_id, "marker delta vandelay_ind-only entry")
     _ko = seed_journal_entry(acme_id, "marker delta acme-root entry")
 
     {:ok, %{results: results}} =
       ToolSurface.execute(
         "memory_search",
         %{"query" => "marker delta", "source" => "journal"},
-        %{agent_id: sxi_agent.id}
+        %{agent_id: globex_agent.id}
       )
 
     contents = Enum.map(results, & &1.content)
 
-    assert Enum.any?(contents, &String.contains?(&1, "sxi-only entry")),
-           "expected SXI hit, got: #{inspect(contents)}"
+    assert Enum.any?(contents, &String.contains?(&1, "globex-only entry")),
+           "expected Globex hit, got: #{inspect(contents)}"
 
     assert Enum.any?(contents, &String.contains?(&1, "acme-root entry")),
            "expected inherited Acme root hit, got: #{inspect(contents)}"
 
-    refute Enum.any?(contents, &String.contains?(&1, "wayne_tech-only entry")),
-           "wayne_tech content leaked to SXI agent with no explicit filter: #{inspect(contents)}"
+    refute Enum.any?(contents, &String.contains?(&1, "vandelay_ind-only entry")),
+           "vandelay_ind content leaked to Globex agent with no explicit filter: #{inspect(contents)}"
   end
 
   test "root-equivalent agent (no metadata pin) sees every tenant by default" do
     # Counter-test: a system-equivalent agent (no metadata.org_id)
     # must keep the legacy unscoped behavior so historian / dreaming
     # paths still cross-tenant.
-    sxi_id = tenant_org_id("sxi")
-    wayne_tech_id = tenant_org_id("wayne_tech")
+    globex_id = tenant_org_id("globex")
+    vandelay_ind_id = tenant_org_id("vandelay_ind")
 
     sys_agent = create_agent(%{})
 
-    _sxi = seed_journal_entry(sxi_id, "marker epsilon sxi-entry")
-    _pt = seed_journal_entry(wayne_tech_id, "marker epsilon wayne_tech-entry")
+    _globex = seed_journal_entry(globex_id, "marker epsilon globex-entry")
+    _pt = seed_journal_entry(vandelay_ind_id, "marker epsilon vandelay_ind-entry")
 
     {:ok, %{results: results}} =
       ToolSurface.execute(
@@ -160,55 +160,55 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
 
     contents = Enum.map(results, & &1.content)
 
-    assert Enum.any?(contents, &String.contains?(&1, "sxi-entry")),
-           "expected SXI hit for root-equivalent agent, got: #{inspect(contents)}"
+    assert Enum.any?(contents, &String.contains?(&1, "globex-entry")),
+           "expected Globex hit for root-equivalent agent, got: #{inspect(contents)}"
 
-    assert Enum.any?(contents, &String.contains?(&1, "wayne_tech-entry")),
-           "expected Wayne-Tech hit for root-equivalent agent (no implicit filter), got: #{inspect(contents)}"
+    assert Enum.any?(contents, &String.contains?(&1, "vandelay_ind-entry")),
+           "expected Vandelay-Ind hit for root-equivalent agent (no implicit filter), got: #{inspect(contents)}"
   end
 
   # ── Case (b) — tenant agent → sibling-org filter is unauthorized ─────
 
   test "tenant agent filtering memory_search by a sibling org_id receives unauthorized" do
-    soylent_id = tenant_org_id("soylent")
-    wayne_tech_id = tenant_org_id("wayne_tech")
+    initech_id = tenant_org_id("initech")
+    vandelay_ind_id = tenant_org_id("vandelay_ind")
 
-    tenant_agent = create_agent(%{"org_id" => soylent_id})
+    tenant_agent = create_agent(%{"org_id" => initech_id})
 
     {:error, envelope} =
       ToolSurface.execute(
         "memory_search",
-        %{"query" => "anything", "org_id" => wayne_tech_id},
+        %{"query" => "anything", "org_id" => vandelay_ind_id},
         %{agent_id: tenant_agent.id}
       )
 
     assert envelope.recoverable == false
     assert envelope.error =~ "not a member of org"
-    assert envelope.error =~ wayne_tech_id
+    assert envelope.error =~ vandelay_ind_id
   end
 
   # ── Case (c) — project_list org_id filter + org_slug serialization ───
 
   test "project_list with org_id filter returns only that org's projects with org_slug" do
-    soylent_id = tenant_org_id("soylent")
-    wayne_tech_id = tenant_org_id("wayne_tech")
+    initech_id = tenant_org_id("initech")
+    vandelay_ind_id = tenant_org_id("vandelay_ind")
 
-    {:ok, _soylent_proj} =
-      Tasks.create_project(%{name: "Soylent-only Stage4 #{rand()}", org_id: soylent_id})
+    {:ok, _initech_proj} =
+      Tasks.create_project(%{name: "Initech-only Stage4 #{rand()}", org_id: initech_id})
 
-    {:ok, _wayne_tech_proj} =
-      Tasks.create_project(%{name: "WayneTech-only Stage4 #{rand()}", org_id: wayne_tech_id})
+    {:ok, _vandelay_ind_proj} =
+      Tasks.create_project(%{name: "VandelayInd-only Stage4 #{rand()}", org_id: vandelay_ind_id})
 
     {:ok, %{projects: results}} =
-      ToolSurface.execute("project_list", %{"org_id" => soylent_id}, %{})
+      ToolSurface.execute("project_list", %{"org_id" => initech_id}, %{})
 
     names = Enum.map(results, & &1.name)
-    assert Enum.any?(names, &String.starts_with?(&1, "Soylent-only Stage4"))
-    refute Enum.any?(names, &String.starts_with?(&1, "WayneTech-only Stage4"))
+    assert Enum.any?(names, &String.starts_with?(&1, "Initech-only Stage4"))
+    refute Enum.any?(names, &String.starts_with?(&1, "VandelayInd-only Stage4"))
 
     # Each row carries org_id + org_slug.
-    assert Enum.all?(results, fn row -> row.org_id == soylent_id end)
-    assert Enum.all?(results, fn row -> row.org_slug == "soylent" end)
+    assert Enum.all?(results, fn row -> row.org_id == initech_id end)
+    assert Enum.all?(results, fn row -> row.org_slug == "initech" end)
   end
 
   # ── Case (d) — org_list_descendants over root, tenant, unknown ───────
@@ -220,7 +220,7 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
       ToolSurface.execute("org_list_descendants", %{"org_id" => root_id}, %{})
 
     slugs = Enum.map(descendants, & &1.slug)
-    assert slugs == ["paragon", "soylent", "wayne_tech", "sxi"]
+    assert slugs == ["globex", "hooli", "initech", "vandelay_ind"]
     assert Enum.all?(descendants, &(&1.role == "tenant"))
 
     # Every row carries id + slug + name + role.
@@ -230,10 +230,10 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
   end
 
   test "org_list_descendants for a tenant returns an empty list" do
-    soylent_id = tenant_org_id("soylent")
+    initech_id = tenant_org_id("initech")
 
     assert {:ok, %{descendants: [], total: 0, has_more: false}} =
-             ToolSurface.execute("org_list_descendants", %{"org_id" => soylent_id}, %{})
+             ToolSurface.execute("org_list_descendants", %{"org_id" => initech_id}, %{})
   end
 
   test "org_list_descendants for an unknown id returns a not_found envelope" do

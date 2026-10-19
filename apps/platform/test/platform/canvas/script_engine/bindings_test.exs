@@ -23,7 +23,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
   @rename ~s([["set_props", "h", {"value": "Rewritten", "level": 2}]])
 
   setup do
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     space = space!(org)
     canvas = canvas!(space)
     on_exit(fn -> CanvasServer.stop(canvas.id) end)

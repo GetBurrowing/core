@@ -162,7 +162,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
   describe "up/0 against a seeded table" do
     test "populates the resolvable rows with the RIGHT org and leaves the unresolvable ones NULL" do
       org_a = acme_org_id()
-      org_b = tenant_org_id("sxi")
+      org_b = tenant_org_id("globex")
 
       # ANTI-VACUITY. With one org in the fixture, "resolved the project's org"
       # and "wrote a hardcoded constant" are the same observation.
@@ -309,7 +309,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
     end
 
     test "is idempotent — the second run matches zero rows" do
-      org = tenant_org_id("paragon")
+      org = tenant_org_id("hooli")
       project = project_in(org)
       {meeting, space} = historical_meeting_space!(project)
       guest = guest_space!(%{"meeting_id" => meeting.id})
@@ -330,7 +330,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
     end
 
     test "down/0 is a deliberate no-op and does not clear what up/0 wrote" do
-      org = tenant_org_id("soylent")
+      org = tenant_org_id("initech")
       project = project_in(org)
       {_meeting, space} = historical_meeting_space!(project)
 
@@ -358,7 +358,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
       #
       # Honest caveat: no current code path produces this row. The meeting is
       # repointed by hand below.
-      org = tenant_org_id("wayne_tech")
+      org = tenant_org_id("vandelay_ind")
       project = project_in(org)
       {meeting, _space} = historical_meeting_space!(project)
 

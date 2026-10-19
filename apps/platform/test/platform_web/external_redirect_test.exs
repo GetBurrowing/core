@@ -32,7 +32,7 @@ defmodule PlatformWeb.ExternalRedirectTest do
     test "chat_url/1 builds an absolute https chat-host URL" do
       assert ExternalRedirect.chat_url("/chat") == "https://chat.example.com/chat"
       assert ExternalRedirect.chat_url() == "https://chat.example.com/chat"
-      assert ExternalRedirect.chat_url("/chat/orion") == "https://chat.example.com/chat/orion"
+      assert ExternalRedirect.chat_url("/chat/atlas") == "https://chat.example.com/chat/atlas"
     end
 
     test "chat_url/1 normalizes a path missing a leading slash" do

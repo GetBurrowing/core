@@ -48,7 +48,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
   # Tenant orgs only. Acme is masked too, but "acme" appears in the page's
   # own chrome (routes, ids) outside the rail, and sweeping the root org
   # would test the fixture rather than the feature.
-  @tenants ~w(soylent wayne_tech sxi)
+  @tenants ~w(initech vandelay_ind globex)
 
   defp acme_admin_conn(conn) do
     n = System.unique_integer([:positive])
@@ -86,9 +86,9 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
   defp seed_rail do
     %{
-      soylent: seed_project("soylent", "Soylent Storefront"),
-      protect: seed_project("wayne_tech", "Wayne-Tech Rollout"),
-      sxi: seed_project("sxi", "SXI Onboarding")
+      initech: seed_project("initech", "Initech Storefront"),
+      protect: seed_project("vandelay_ind", "Vandelay-Ind Rollout"),
+      globex: seed_project("globex", "Globex Onboarding")
     }
   end
 
@@ -109,7 +109,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
   # Every real name the rail carries: the three tenant display names, their
   # slugs (both spellings are covered by `forms/1`), and the project names.
   defp real_names(projects) do
-    Enum.map(@tenants, &Tenancy.scope_label/1) ++
+    Enum.map(@tenants, &Tenancy.get_org_by_slug!(&1).name) ++
       @tenants ++
       Enum.map(Map.values(projects), & &1.name)
   end
@@ -128,7 +128,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
       # just as happily against an empty rail.
       for name <- real_names(projects), do: assert_name_anywhere(rail, name)
 
-      assert rail =~ ~s(data-org-slug="soylent")
+      assert rail =~ ~s(data-org-slug="initech")
       assert rail =~ ~s(aria-pressed="false")
       assert rail =~ "hero-eye "
       refute rail =~ "channel-mask-strip"
@@ -160,12 +160,12 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
       rail = view |> toggle_mask(true) |> rail()
 
-      # The specific leak `refute html =~ "Wayne-Tech"` cannot see: the slug is
+      # The specific leak `refute html =~ "Vandelay-Ind"` cannot see: the slug is
       # stored underscored and rendered hyphenated, so an assertion on the
       # display form passes with the attribute untouched.
-      refute rail =~ ~s(data-org-slug="soylent")
-      refute rail =~ ~s(data-org-slug="wayne-tech")
-      refute rail =~ ~s(data-org-slug="wayne_tech")
+      refute rail =~ ~s(data-org-slug="initech")
+      refute rail =~ ~s(data-org-slug="vandelay-ind")
+      refute rail =~ ~s(data-org-slug="vandelay_ind")
       assert rail =~ ~s(data-org-slug="workspace-a")
     end
 
@@ -188,15 +188,15 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
         |> rail()
 
       # A DERIVED-STRING LEAK if the menu had kept `Tenancy.scope_label/1` —
-      # the visible text would mask while `aria-label="Manage Soylent"` sat
+      # the visible text would mask while `aria-label="Manage Initech"` sat
       # in the accessibility tree beside it.
       assert rail =~ ~s(aria-label="Manage Workspace)
       assert rail =~ ~s(phx-value-name="Workspace)
-      refute rail =~ ~s(aria-label="Manage Soylent")
-      refute rail =~ ~s(phx-value-name="Soylent Storefront")
+      refute rail =~ ~s(aria-label="Manage Initech")
+      refute rail =~ ~s(phx-value-name="Initech Storefront")
 
       # And the project kebab's too, in the same open pass for the org.
-      refute_name_anywhere(rail, "Soylent Storefront", @machine_attrs)
+      refute_name_anywhere(rail, "Initech Storefront", @machine_attrs)
     end
 
     test "the mode strip is the signal, and its copy names no privacy claim", %{conn: conn} do
@@ -252,17 +252,17 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
         |> render_click()
         |> rail()
 
-      assert_name_anywhere(rail, "Soylent")
-      assert rail =~ ~s(data-org-slug="soylent")
+      assert_name_anywhere(rail, "Initech")
+      assert rail =~ ~s(data-org-slug="initech")
 
       # The strip's count is the only place the reveal is announced.
       assert rail =~ "Names hidden · 1 showing"
 
       # Everything else is untouched — including the revealed org's PROJECT,
       # which letters independently and was not revealed.
-      refute_name_anywhere(rail, "Wayne-Tech", @machine_attrs)
-      refute_name_anywhere(rail, "SXI", @machine_attrs)
-      refute_name_anywhere(rail, projects.soylent.name, @machine_attrs)
+      refute_name_anywhere(rail, "Vandelay-Ind", @machine_attrs)
+      refute_name_anywhere(rail, "Globex", @machine_attrs)
+      refute_name_anywhere(rail, projects.initech.name, @machine_attrs)
     end
 
     test "Show all re-masks everything while leaving the mode on", %{conn: conn} do
@@ -340,11 +340,11 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
       # If this does not raise, every `refute_name_anywhere` above proves
       # nothing and the excluded-attribute list has swallowed the surface.
       assert_raise ExUnit.AssertionError, fn ->
-        refute_name_anywhere(unmasked_rail, "Soylent Storefront", @machine_attrs)
+        refute_name_anywhere(unmasked_rail, "Initech Storefront", @machine_attrs)
       end
 
       assert_raise ExUnit.AssertionError, fn ->
-        refute_name_anywhere(unmasked_rail, "Wayne-Tech", @machine_attrs)
+        refute_name_anywhere(unmasked_rail, "Vandelay-Ind", @machine_attrs)
       end
     end
   end

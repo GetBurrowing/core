@@ -49,7 +49,7 @@ defmodule Platform.LifecycleTest do
     end
 
     test "returns %{} — not nil — for a project of a persisted org with no pipeline" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       {:ok, project} = Tasks.create_project(%{name: "No Pipeline", org_id: org_id})
 
       # Single-source resolution: the project row is the only thing

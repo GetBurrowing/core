@@ -362,7 +362,7 @@ defmodule Platform.Tenancy.ProjectWriteFreezeTest do
       # against UUIDv7 — the same trap as the empty-string project_id above.
       # PlatformWeb.LifecycleActions.cascade_preview/2 resolves slug->UUID;
       # this is the belt-and-braces half.
-      assert Lifecycle.cascade_preview("paragon") == %{projects: [], channels: []}
+      assert Lifecycle.cascade_preview("hooli") == %{projects: [], channels: []}
       assert Lifecycle.cascade_preview("") == %{projects: [], channels: []}
       assert Lifecycle.cascade_preview(nil) == %{projects: [], channels: []}
       assert Lifecycle.cascade_preview(Ecto.UUID.generate()) == %{projects: [], channels: []}

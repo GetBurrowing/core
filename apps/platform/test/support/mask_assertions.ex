@@ -4,9 +4,9 @@ defmodule Platform.MaskAssertions do
 
   ## The hole this closes
 
-  `refute html =~ "Wayne-Tech"` PASSES while `data-section-slug="wayne-tech"` sits
-  in the DOM in plain sight. Org slugs are stored underscored (`wayne_tech`) and
-  rendered hyphenated (`wayne-tech`), so an assertion written against the display
+  `refute html =~ "Vandelay-Ind"` PASSES while `data-section-slug="vandelay-ind"` sits
+  in the DOM in plain sight. Org slugs are stored underscored (`vandelay_ind`) and
+  rendered hyphenated (`vandelay-ind`), so an assertion written against the display
   form proves nothing whatsoever about the attribute surface — and the
   attribute surface is exactly where a masked name survives, because it is the
   surface no one is looking at. Stage 3 found this hole in its own stage-2
@@ -24,7 +24,7 @@ defmodule Platform.MaskAssertions do
   — which is this feature's entire threat model:
 
     * `class` — some scope-colour utilities are named after the org slug
-      (`text-wayne-tech`, `bg-wayne-tech-dot`; the chip's own per-slug classes
+      (`text-vandelay-ind`, `bg-vandelay-ind-dot`; the chip's own per-slug classes
       were retired in task 01a09333-d374 stage 5). CSS class names cannot
       be re-generated per session.
     * `phx-value-scope` — the scope pill's event payload. It IS the filter

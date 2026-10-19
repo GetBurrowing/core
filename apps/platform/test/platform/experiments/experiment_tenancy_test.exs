@@ -36,7 +36,7 @@ defmodule Platform.Experiments.ExperimentTenancyTest do
   end
 
   test "an experiment with project P and no org gets P's org_id" do
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
     project = project!(org)
 
     experiment = experiment!(%{project_id: project.id})
@@ -47,14 +47,14 @@ defmodule Platform.Experiments.ExperimentTenancyTest do
   end
 
   test "a project/org mismatch is a changeset error" do
-    project = project!(tenant_org_id("soylent"))
+    project = project!(tenant_org_id("initech"))
 
     assert {:error, changeset} =
              Experiments.create_experiment(%{
                slug: "mismatch-#{unique()}",
                name: "Mismatch",
                project_id: project.id,
-               org_id: tenant_org_id("sxi")
+               org_id: tenant_org_id("globex")
              })
 
     assert {"project does not belong to org", _} = changeset.errors[:project_id]
@@ -68,7 +68,7 @@ defmodule Platform.Experiments.ExperimentTenancyTest do
   end
 
   test "an experiment scoped to project P gives a subject in project Q no assignment row" do
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
     p = project!(org)
     q = project!(org)
     experiment = experiment!(%{project_id: p.id})
@@ -93,12 +93,12 @@ defmodule Platform.Experiments.ExperimentTenancyTest do
   end
 
   test "an org-wide experiment takes subjects of its org only" do
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
     experiment = experiment!(%{org_id: org})
 
     assert :no_opinion =
              Assignments.assign_once(experiment, {"task", Ecto.UUID.generate()}, %{
-               org_id: tenant_org_id("sxi")
+               org_id: tenant_org_id("globex")
              })
 
     assert {:ok, %Assignment{}} =
@@ -106,7 +106,7 @@ defmodule Platform.Experiments.ExperimentTenancyTest do
   end
 
   test "a subject with no project is not in a project-scoped experiment" do
-    p = project!(tenant_org_id("soylent"))
+    p = project!(tenant_org_id("initech"))
     experiment = experiment!(%{project_id: p.id})
 
     assert :no_opinion = Assignments.assign_once(experiment, {"task", Ecto.UUID.generate()}, %{})

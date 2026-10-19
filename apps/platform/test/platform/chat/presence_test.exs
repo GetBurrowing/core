@@ -201,8 +201,8 @@ defmodule Platform.Chat.PresenceTest do
 
   describe "list_online_for_viewer/1" do
     setup do
-      home = Tenancy.get_org_by_slug!("sxi")
-      foreign = Tenancy.get_org_by_slug!("soylent")
+      home = Tenancy.get_org_by_slug!("globex")
+      foreign = Tenancy.get_org_by_slug!("initech")
 
       viewer = create_user!("Vera Viewer")
       colleague = create_user!("Cora Colleague")

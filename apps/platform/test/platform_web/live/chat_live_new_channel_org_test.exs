@@ -74,27 +74,27 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
       assert org_id == acme.id
     end
 
-    test "creating into SXI yields exactly one row, filed to SXI", %{conn: conn} do
-      user = create_user!("sxi")
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      membership!(user, sxi)
+    test "creating into Globex yields exactly one row, filed to Globex", %{conn: conn} do
+      user = create_user!("globex")
+      globex = Tenancy.get_org_by_slug!("globex")
+      membership!(user, globex)
 
       conn = init_test_session(conn, current_user_id: user.id)
       view = open_dialog(conn)
 
-      submit(view, %{"name" => "Livechan One", "description" => "", "org_id" => sxi.id})
+      submit(view, %{"name" => "Livechan One", "description" => "", "org_id" => globex.id})
 
       rows = rows_for("livechan-one")
       assert length(rows) == 1
       assert [%Space{org_id: org_id}] = rows
-      assert org_id == sxi.id
+      assert org_id == globex.id
     end
 
     test "an org the viewer cannot see is refused and falls back to the active org",
          %{conn: conn} do
       user = create_user!("forged")
       acme = Tenancy.get_org_by_slug!("acme")
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      globex = Tenancy.get_org_by_slug!("globex")
       membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
@@ -102,10 +102,10 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
 
       # A forged select value naming an org this (non-admin) member has no
       # membership in. The server-built option list is the authority.
-      submit(view, %{"name" => "Forged Dest Chan", "description" => "", "org_id" => sxi.id})
+      submit(view, %{"name" => "Forged Dest Chan", "description" => "", "org_id" => globex.id})
 
       assert [%Space{org_id: org_id}] = rows_for("forged-dest-chan")
-      refute org_id == sxi.id
+      refute org_id == globex.id
       assert org_id == acme.id
     end
   end

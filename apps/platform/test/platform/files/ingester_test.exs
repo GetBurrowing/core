@@ -205,7 +205,7 @@ defmodule Platform.Files.IngesterTest do
       assert metadata["content_type"] == "text/plain"
       assert metadata["original_filename"] == "ingester-fixture.txt"
 
-      # Regression for the SXI-markdown ingest_status=failed observed
+      # Regression for the Globex-markdown ingest_status=failed observed
       # 2026-06-19 — memory-service's MemoryEntry pydantic model rejects
       # any payload missing `date` (422 Unprocessable Entity). The mock
       # provider used here doesn't validate the shape, but locking the

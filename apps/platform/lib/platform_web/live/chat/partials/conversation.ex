@@ -165,7 +165,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     >
       <%!-- Screen-share masking (task 01a00c66 stage 5). The open channel's
            own name sits in this header at the top of the screen; masking the
-           rail row for `#wayne-tech` and leaving the header spelling it out is
+           rail row for `#vandelay-ind` and leaving the header spelling it out is
            the same leak with an extra step. `space_label/3` looks the name up
            across the whole rail because this header has no section in hand.
            Applied to BOTH breakpoint branches below — the mobile and desktop

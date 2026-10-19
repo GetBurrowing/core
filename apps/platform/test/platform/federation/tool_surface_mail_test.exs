@@ -77,8 +77,8 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
 
     set_flag(true)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
 
     admin = user!("admin") |> member!(org_id, "admin")
     member = user!("member") |> member!(org_id, "member")
@@ -90,7 +90,7 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
       })
 
     {:ok, _} =
-      Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@soylent.test"})
+      Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@initech.test"})
 
     {:ok, project} =
       Tasks.create_project(%{name: "Mail tool #{System.unique_integer()}", org_id: org_id})

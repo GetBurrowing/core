@@ -81,7 +81,7 @@ defmodule PlatformWeb.RouterHostIsolationTest do
 
     # Seeded tenant org — its slug atom is pre-registered, which TasksLive's
     # scope rail requires (`String.to_existing_atom` over active tenants).
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
@@ -105,12 +105,12 @@ defmodule PlatformWeb.RouterHostIsolationTest do
     end
   end
 
-  # In the signed-in user's org (sxi): that user is a sub-org-only member,
+  # In the signed-in user's org (globex): that user is a sub-org-only member,
   # fenced to their orgs (ticket 01a14721), so an org-less channel would be
   # refused for an access reason and this file asserts host routing only.
   defp create_space! do
     slug = "host-iso-#{System.unique_integer([:positive])}"
-    org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("globex").id
 
     {:ok, space} =
       Chat.create_space(%{

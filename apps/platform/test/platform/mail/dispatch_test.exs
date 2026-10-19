@@ -125,8 +125,8 @@ defmodule Platform.Mail.DispatchTest do
 
     Process.delete(:mail_test_adapter_hook)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
     admin = user!() |> member!(org_id, "admin")
     member = user!() |> member!(org_id)
     actor = {:user, member.id}

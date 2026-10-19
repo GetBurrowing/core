@@ -29,8 +29,8 @@ defmodule Platform.Experiments.LabelerTest do
   alias Platform.Tenancy
 
   setup do
-    org_a = Tenancy.get_org_by_slug!("soylent").id
-    org_b = Tenancy.get_org_by_slug!("sxi").id
+    org_a = Tenancy.get_org_by_slug!("initech").id
+    org_b = Tenancy.get_org_by_slug!("globex").id
     agent = scientist!()
     :ok = Stub.install!(fn _c, _m, _o -> {:error, :no_reply_planted} end)
     %{org_a: org_a, org_b: org_b, agent: agent, account: account!(org_a)}

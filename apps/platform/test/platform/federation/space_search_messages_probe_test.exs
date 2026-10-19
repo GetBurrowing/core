@@ -21,7 +21,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
   @uuid "01a006c2-6c88-7f15-86b6-828cb10f1642"
 
   setup do
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     owner = Platform.ExternalUserFixtures.create_user!()
     Platform.ExternalUserFixtures.plain_member!(owner, org)
 

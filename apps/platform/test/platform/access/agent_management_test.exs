@@ -104,7 +104,7 @@ defmodule Platform.Access.AgentManagementTest do
   end
 
   test "sub-org admin manages its members but cannot release another org's agent" do
-    tenant = Repo.get!(Org, tenant_org_id("soylent"))
+    tenant = Repo.get!(Org, tenant_org_id("initech"))
     root = Repo.get!(Org, acme_org_id())
     admin = World.create_user!()
     owner = World.create_user!()

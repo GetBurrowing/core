@@ -153,8 +153,8 @@ defmodule Platform.Meetings do
   create per-project isolation within a single org: every root-org user can
   still read every root-org meeting, by design.
 
-  What it closes is the cross-**org** read — a Soylent user reading a
-  Wayne-Tech meeting, an external user reading an internal one, an
+  What it closes is the cross-**org** read — an Initech user reading a
+  Vandelay-Ind meeting, an external user reading an internal one, an
   unauthenticated mount reading anything. Per-project ACLs are a separate ADR
   and are deliberately not invented here.
   """

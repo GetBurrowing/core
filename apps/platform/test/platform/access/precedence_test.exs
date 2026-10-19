@@ -35,7 +35,7 @@ defmodule Platform.Access.PrecedenceTest do
     Repo.delete_all(Node)
     Repo.delete_all(WikiPage)
     _root = acme_org_id()
-    org = tenant_org_id("sxi")
+    org = tenant_org_id("globex")
     %{org: org}
   end
 
@@ -317,7 +317,7 @@ defmodule Platform.Access.PrecedenceTest do
     end
 
     test "a role grant in another org does not apply", %{org: org} do
-      other = tenant_org_id("soylent")
+      other = tenant_org_id("initech")
       g = guest!(org)
       p = project!(other)
 

@@ -110,7 +110,7 @@ defmodule PlatformWeb.ModuleGateTest do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: Tenancy.get_org_by_slug!("sxi").id
+        org_id: Tenancy.get_org_by_slug!("globex").id
       })
 
     for path <- ["/tasks", "/files"] do
@@ -126,7 +126,7 @@ defmodule PlatformWeb.ModuleGateTest do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: Tenancy.get_org_by_slug!("sxi").id
+        org_id: Tenancy.get_org_by_slug!("globex").id
       })
 
     for view <- [PlatformWeb.TasksLive, PlatformWeb.ChangelogLive] do

@@ -56,7 +56,6 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Tasks
   alias Platform.Tasks.Task
-  alias Platform.Tenancy
   alias PlatformWeb.Tasks.TaskDisplay
 
   import PlatformWeb.Tasks.TaskDisplay,
@@ -224,11 +223,9 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
             <select name="task[project_id]" class="select select-bordered w-full" required>
               <option value="">Select project</option>
               <optgroup
-                :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+                :for={{org_slug, org_name, org_projects} <- @projects_by_org}
                 label={
-                  TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org_slug},
-                    real: Tenancy.scope_label(org_slug)
-                  )
+                  TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org_slug}, real: org_name)
                 }
               >
                 <option

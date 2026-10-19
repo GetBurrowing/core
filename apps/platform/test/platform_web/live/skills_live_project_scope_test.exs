@@ -80,7 +80,7 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
 
   defp seed do
     acme_org_id = Platform.TenancyFixtures.acme_org_id()
-    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
     own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
@@ -96,12 +96,12 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
   # the org filter.
   test "a plain member is not offered a foreign org's project", %{conn: conn} do
     %{skill: skill} = seed()
-    own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+    own_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
     own = project!(own_org_id, "Own Tenant Project #{System.unique_integer([:positive])}")
 
     foreign =
       project!(
-        Platform.TenancyFixtures.tenant_org_id("sxi"),
+        Platform.TenancyFixtures.tenant_org_id("globex"),
         "Foreign Project #{System.unique_integer([:positive])}"
       )
 

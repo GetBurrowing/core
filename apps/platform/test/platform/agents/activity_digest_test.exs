@@ -600,7 +600,7 @@ defmodule Platform.Agents.ActivityDigestTest do
     {:ok, _} =
       Platform.Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.tenant_org_id("sxi")
+        org_id: Platform.TenancyFixtures.tenant_org_id("globex")
       })
 
     user
@@ -625,7 +625,7 @@ defmodule Platform.Agents.ActivityDigestTest do
         completed_at: within_window()
       })
 
-      external = insert_space(%{name: "sxi-support"})
+      external = insert_space(%{name: "globex-support"})
       ep = insert_participant(external.id, %{participant_id: ext.id, display_name: "Ext"})
 
       insert_message(external.id, ep.id, %{
@@ -653,7 +653,7 @@ defmodule Platform.Agents.ActivityDigestTest do
 
       refute result =~ "external chatter"
       refute result =~ "external meeting notes"
-      refute result =~ "sxi-support"
+      refute result =~ "globex-support"
     end
 
     test "build_external/3 is the mirror — external content only, no internal", %{ext: ext} do
@@ -1159,7 +1159,7 @@ defmodule Platform.Agents.ActivityDigestTest do
       benign = benign_sentinel()
 
       ext = external_user!()
-      space = insert_space(%{name: "sxi-support", slug: "sxi-w1", kind: "channel"})
+      space = insert_space(%{name: "globex-support", slug: "globex-w1", kind: "channel"})
       ep = insert_participant(space.id, %{participant_id: ext.id, display_name: "Ext"})
 
       insert_message(space.id, ep.id, %{

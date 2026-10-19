@@ -55,7 +55,7 @@ class NotificationPresenterTest {
         assertEquals("mentions:$HOST", n.channelId)
         assertEquals("mentions:$HOST:0192-s", n.group)
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)!!
-        assertEquals("Internal Legacy SXI", style.conversationTitle)
+        assertEquals("Internal Legacy Globex", style.conversationTitle)
         val message = style.messages.single()
         assertEquals("Sam", message.person!!.name)
         assertEquals("@Robin can you check the banner copy", message.text)
@@ -63,7 +63,7 @@ class NotificationPresenterTest {
         val actions = n.actions.map { it.title.toString() }
         assertEquals(listOf("Reply", "Open"), actions)
         val reply = n.actions[0]
-        assertEquals("Message Internal Legacy SXI", reply.remoteInputs.single().label)
+        assertEquals("Message Internal Legacy Globex", reply.remoteInputs.single().label)
         assertEquals(NotificationPresenter.KEY_REPLY, reply.remoteInputs.single().resultKey)
     }
 
@@ -133,7 +133,7 @@ class NotificationPresenterTest {
     fun `mentions in one space summarise as N new in the space`() {
         for (i in 1..4) NotificationPresenter.present(app, mention + ("message_id" to "m$i"))
         val summary = active(app).single { it.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0 }.notification
-        assertEquals("4 new in Internal Legacy SXI", summary.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("4 new in Internal Legacy Globex", summary.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
     }
 
     @Test

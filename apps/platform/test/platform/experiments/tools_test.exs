@@ -62,14 +62,14 @@ defmodule Platform.Experiments.ToolsTest do
 
   setup do
     TestSurfaces.register()
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
 
     %{
       org: org,
-      other_org: tenant_org_id("sxi"),
+      other_org: tenant_org_id("globex"),
       agent: agent!(%{"org_id" => org}),
       root_agent: agent!(%{}),
-      sibling: agent!(%{"org_id" => tenant_org_id("sxi")})
+      sibling: agent!(%{"org_id" => tenant_org_id("globex")})
     }
   end
 

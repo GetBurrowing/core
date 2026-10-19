@@ -100,7 +100,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooksTest do
       # membership check on the path. Built from a REAL external session rather
       # than a hand-made struct, so the test also pins that such a session
       # produces an external scope at all.
-      outsider = ExternalUserFixtures.external_user!(Tenancy.get_org_by_slug!("sxi"))
+      outsider = ExternalUserFixtures.external_user!(Tenancy.get_org_by_slug!("globex"))
       scope = ExternalScope.for_user(outsider.id)
       assert %ExternalScope{external?: true} = scope
 

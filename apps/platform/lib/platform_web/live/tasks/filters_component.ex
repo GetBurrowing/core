@@ -89,7 +89,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
     <div id={@id} class="contents">
       <%!-- Active filter breadcrumb. Stage 5 of ADR-0042 prefixes the project
            with `<org_label> / ` (org name carries the scope color token, e.g.
-           `text-soylent`) so users always know which tenant context they're
+           `text-initech`) so users always know which tenant context they're
            inside.
 
            THE MOST VISIBLE SINGLE LEAK this task had left (01a00cf1 stage 3):
@@ -98,10 +98,10 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
            does not merely leak — it makes the masked rail beside it read as
            broken. Both halves follow @mask_labels.
 
-           `Tenancy.scope_color/1` keeps the real slug on purpose: it emits a
-           CSS utility class and no name, class names cannot be regenerated per
-           session, and `Platform.MaskAssertions` excludes `class` for exactly
-           that reason. Named limitation, as on the rail.
+           The org name is coloured from its row through `data-scope`
+           (`.scope-fill-text`; task 01a14dd9 stage 2 retired the per-slug
+           `text-<slug>` class). `data-scope` spells the slug, so it is
+           dropped while masking is on and the name renders uncoloured.
 
            THE EPIC NAME FOLLOWS THE MASK TOO. An epic is an entity with an id
            and a name — structurally a project, reachable by the same lookup —
@@ -122,11 +122,10 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         >
           <span
             :if={match?(%Tenancy.Org{}, p.org)}
-            class={"font-medium #{Tenancy.scope_color(p.org.slug)}"}
+            class="font-medium scope-fill-text"
+            data-scope={if(@mask_names?, do: nil, else: p.org.slug)}
           >
-            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, p.org.slug},
-              real: Tenancy.scope_label(p.org.slug)
-            )}
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, p.org.slug}, real: p.org.name)}
           </span>
           <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
           <span>
@@ -161,7 +160,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
            Click semantics: the "All" chip dispatches `filter_scope` with
            `phx-value-scope="all"`; sub-org chips dispatch it with their scope
-           SLUG, a plain string (`"acme"`, `"soylent"`, etc) that stays a
+           SLUG, a plain string (`"acme"`, `"initech"`, etc) that stays a
            string all the way through `parse_scope/2` into `@scope_filter`. The
            shell narrows the kanban render via
            `desktop_column_items_for_scope/6` once it mirrors the value. --%>

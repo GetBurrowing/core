@@ -136,7 +136,7 @@ defmodule Platform.FilesTest do
 
     test "honors an explicitly-passed org_id" do
       {:ok, project} = Tasks.create_project(%{name: "Org-scoped File"})
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
 
       assert {:ok, file} =
                Files.create_file(%{
@@ -1404,7 +1404,7 @@ defmodule Platform.FilesTest do
       # required; neither subsumes the other."
       {:ok, project} = Tasks.create_project(%{name: "Catalog HumanOnly"})
 
-      withheld = catalog_row(project, "withheld-orion-prompts", "human_only", "ingested")
+      withheld = catalog_row(project, "withheld-atlas-prompts", "human_only", "ingested")
       control = catalog_row(project, "ordinary-doc", "attempt", "ingested")
 
       ids = project.id |> Files.list_catalogable_files() |> Enum.map(& &1.id)
@@ -1419,7 +1419,7 @@ defmodule Platform.FilesTest do
 
     test "EXCLUDES the production human_only shape (human_only + not_attempted)" do
       # What `withdraw_from_agent_context/1` actually produces, and the
-      # shape of the live SXI row `to-be-optimized-orion_prompts.mjs`.
+      # shape of the live Globex row `to-be-optimized-atlas_prompts.mjs`.
       {:ok, project} = Tasks.create_project(%{name: "Catalog Withdrawn"})
 
       withdrawn = catalog_row(project, "withdrawn-doc", "human_only", "not_attempted")
@@ -1500,16 +1500,16 @@ defmodule Platform.FilesTest do
       assert length(first) == 8
     end
 
-    test "SXI corpus shape: 49 files, 39 catalogable" do
-      # Mirrors the live SXI project the plan cites: 49 rows total, of
+    test "Globex corpus shape: 49 files, 39 catalogable" do
+      # Mirrors the live Globex project the plan cites: 49 rows total, of
       # which one is human_only and nine are `failed` *Rubric.md files.
       # The ticket's "49 files" is wrong as an ELIGIBLE count; 39 is the
       # number, and the arithmetic only works if both exclusions apply.
-      {:ok, project} = Tasks.create_project(%{name: "Catalog SXI Shape"})
+      {:ok, project} = Tasks.create_project(%{name: "Catalog Globex Shape"})
 
-      catalog_row(project, "sxi-human-only", "human_only", "not_attempted")
-      for n <- 1..9, do: catalog_row(project, "sxi-rubric-#{n}", "attempt", "failed")
-      for n <- 1..39, do: catalog_row(project, "sxi-doc-#{n}", "attempt", "ingested")
+      catalog_row(project, "globex-human-only", "human_only", "not_attempted")
+      for n <- 1..9, do: catalog_row(project, "globex-rubric-#{n}", "attempt", "failed")
+      for n <- 1..39, do: catalog_row(project, "globex-doc-#{n}", "attempt", "ingested")
 
       assert length(Files.list_files_for_project(project.id, limit: nil)) == 49
       assert length(Files.list_catalogable_files(project.id)) == 39

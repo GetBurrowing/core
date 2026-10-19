@@ -17,14 +17,14 @@ object PushTestSupport {
     val mention =
         mapOf(
             "kind" to "chat_mention",
-            "title" to "Sam in Internal Legacy SXI",
+            "title" to "Sam in Internal Legacy Globex",
             "body" to "@Robin can you check the banner copy",
-            "url" to "/chat/internal-legacy-sxi?message=0192-m",
+            "url" to "/chat/internal-legacy-globex?message=0192-m",
             "space_id" to "0192-s",
             "message_id" to "0192-m",
             "install_host" to HOST,
             "author_name" to "Sam",
-            "space_name" to "Internal Legacy SXI",
+            "space_name" to "Internal Legacy Globex",
             "space_kind" to "channel",
             "author_id" to "0192-u",
             "author_type" to "user",

@@ -13,7 +13,7 @@ defmodule Platform.Repo.Migrations.CreateChannelSections do
 
   Seeds one section per existing org, ordered alphabetically by org name to
   match today's sub-org rail. `color` stores the scope token in CSS form
-  (org slug with `_` → `-`, e.g. `wayne_tech` → `wayne-tech`) so the UI can build
+  (org slug with `_` → `-`, e.g. `vandelay_ind` → `vandelay-ind`) so the UI can build
   the existing `.text-<token>` / `.bg-<token>-dot` classes. `ON CONFLICT
   (org_id) DO NOTHING` makes the seed idempotent on replay. UUIDv7 ids match
   the app-generated shape (see `SeedRootOrgs`).

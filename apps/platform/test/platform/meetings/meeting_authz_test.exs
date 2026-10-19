@@ -66,7 +66,7 @@ defmodule Platform.Meetings.MeetingAuthzTest do
 
   describe "fetch_meeting_for_user/2 — entitled viewers" do
     test "a member of the meeting's org gets the meeting with :chat_space preloaded" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = meeting_in_org!(org_id, "Kickoff")
       viewer = user!() |> member!(org_id)
 
@@ -77,7 +77,7 @@ defmodule Platform.Meetings.MeetingAuthzTest do
     end
 
     test "an Acme root admin resolves a tenant-org meeting they hold no membership in" do
-      org_id = tenant_org_id("wayne_tech")
+      org_id = tenant_org_id("vandelay_ind")
       meeting = meeting_in_org!(org_id, "Root Admin Reach")
       admin = user!() |> member!(acme_org_id(), "admin")
 
@@ -93,7 +93,7 @@ defmodule Platform.Meetings.MeetingAuthzTest do
 
   describe "fetch_meeting_for_user/2 — unentitled viewers" do
     test "a non-member of the meeting's org gets :not_found" do
-      meeting = meeting_in_org!(tenant_org_id("soylent"), "Private Sync")
+      meeting = meeting_in_org!(tenant_org_id("initech"), "Private Sync")
       # Acme membership only, at member level — the shape every OIDC signup has.
       outsider = user!() |> member!(acme_org_id())
 
@@ -102,14 +102,14 @@ defmodule Platform.Meetings.MeetingAuthzTest do
     end
 
     test "a nil user is never authorized" do
-      meeting = meeting_in_org!(tenant_org_id("soylent"), "Anonymous Probe")
+      meeting = meeting_in_org!(tenant_org_id("initech"), "Anonymous Probe")
 
       assert {:error, :not_found} = Meetings.fetch_meeting_for_user(nil, meeting.slug)
       assert {:error, :not_found} = Meetings.fetch_meeting_for_user(%{}, meeting.slug)
     end
 
     test "an external member of the org is narrowed to meetings whose chat space they join" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = meeting_in_org!(org_id, "Internal Only")
       external = user!()
       {:ok, _} = Tenancy.mark_membership_external(%{user_id: external.id, org_id: org_id})
@@ -133,43 +133,43 @@ defmodule Platform.Meetings.MeetingAuthzTest do
 
   describe "fetch_meeting_for_user/2 — slug is unique per project, not globally" do
     setup do
-      soylent_id = tenant_org_id("soylent")
-      wayne_tech_id = tenant_org_id("wayne_tech")
+      initech_id = tenant_org_id("initech")
+      vandelay_ind_id = tenant_org_id("vandelay_ind")
 
-      soylent_meeting = meeting_in_org!(soylent_id, "Standup")
-      wayne_tech_meeting = meeting_in_org!(wayne_tech_id, "Standup")
+      initech_meeting = meeting_in_org!(initech_id, "Standup")
+      vandelay_ind_meeting = meeting_in_org!(vandelay_ind_id, "Standup")
 
       # Same slug string, two rows, two orgs — legal under
       # unique_index(:meetings, [:project_id, :slug]).
-      assert soylent_meeting.slug == wayne_tech_meeting.slug
-      refute soylent_meeting.id == wayne_tech_meeting.id
+      assert initech_meeting.slug == vandelay_ind_meeting.slug
+      refute initech_meeting.id == vandelay_ind_meeting.id
 
       %{
-        soylent_id: soylent_id,
-        wayne_tech_id: wayne_tech_id,
-        soylent_meeting: soylent_meeting,
-        wayne_tech_meeting: wayne_tech_meeting,
-        slug: soylent_meeting.slug
+        initech_id: initech_id,
+        vandelay_ind_id: vandelay_ind_id,
+        initech_meeting: initech_meeting,
+        vandelay_ind_meeting: vandelay_ind_meeting,
+        slug: initech_meeting.slug
       }
     end
 
     test "a viewer in exactly one of the two orgs resolves that org's meeting", ctx do
-      soylent_viewer = user!() |> member!(ctx.soylent_id)
-      wayne_tech_viewer = user!() |> member!(ctx.wayne_tech_id)
+      initech_viewer = user!() |> member!(ctx.initech_id)
+      vandelay_ind_viewer = user!() |> member!(ctx.vandelay_ind_id)
 
-      assert {:ok, a} = Meetings.fetch_meeting_for_user(soylent_viewer, ctx.slug)
-      assert a.id == ctx.soylent_meeting.id
+      assert {:ok, a} = Meetings.fetch_meeting_for_user(initech_viewer, ctx.slug)
+      assert a.id == ctx.initech_meeting.id
 
-      assert {:ok, b} = Meetings.fetch_meeting_for_user(wayne_tech_viewer, ctx.slug)
-      assert b.id == ctx.wayne_tech_meeting.id
+      assert {:ok, b} = Meetings.fetch_meeting_for_user(vandelay_ind_viewer, ctx.slug)
+      assert b.id == ctx.vandelay_ind_meeting.id
     end
 
     test "a viewer entitled to both is told the link is ambiguous, not handed one at random",
          ctx do
       viewer =
         user!()
-        |> member!(ctx.soylent_id)
-        |> member!(ctx.wayne_tech_id)
+        |> member!(ctx.initech_id)
+        |> member!(ctx.vandelay_ind_id)
 
       assert {:error, :ambiguous} = Meetings.fetch_meeting_for_user(viewer, ctx.slug)
     end

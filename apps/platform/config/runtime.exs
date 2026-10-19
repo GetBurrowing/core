@@ -160,6 +160,28 @@ case System.get_env("ROOT_ORG_SLUG") do
     :ok
 end
 
+# ── Tenant display priority (per-install) ─────────────────────────────────────
+# `Platform.Tenancy.tenant_priority/0` reads this key at runtime (task
+# 01a14dd9). config.exs sets no default; when the key is unset every tenant
+# sorts slug-alphabetically after the root. An install sets
+# TENANT_ORG_PRIORITY to a comma-separated list of tenant slugs in display
+# order; entries are trimmed, blanks dropped, order kept.
+#
+# Written only when the parsed list is non-empty, so an unset or blank var
+# leaves the alphabetical fallback in charge and per-test
+# `Application.put_env/3` overrides are the only other thing that moves it.
+# The parser is only reached when the var is set.
+case System.get_env("TENANT_ORG_PRIORITY") do
+  value when is_binary(value) and value != "" ->
+    case Platform.Tenancy.parse_tenant_priority(value) do
+      [] -> :ok
+      slugs -> config :platform, :tenant_priority, slugs
+    end
+
+  _ ->
+    :ok
+end
+
 # ── Auto-admin email domain (per-install) ────────────────────────────────────
 # `Platform.Tenancy.root_org_admin_email_domain/0` reads this key at runtime
 # and `derive_role_from_email/1` uses it on every user INSERT and every
@@ -268,6 +290,16 @@ if config_env() != :test do
 
   app_url = System.get_env("APP_URL") || "http://localhost:4000"
 
+  # OIDC_EXTERNAL_GROUP has no default (task 01a14dd9): unset or blank is nil.
+  oidc_external_group =
+    case System.get_env("OIDC_EXTERNAL_GROUP") do
+      group when is_binary(group) ->
+        if String.trim(group) == "", do: nil, else: group
+
+      _ ->
+        nil
+    end
+
   # Only enable when behind a trusted reverse proxy (Traefik, nginx, etc.).
   # See PlatformWeb.Plugs.RewriteRemoteIp for security notes.
   config :platform, :trust_proxy_headers, System.get_env("TRUST_PROXY_HEADERS") in ["true", "1"]
@@ -281,9 +313,11 @@ if config_env() != :test do
     # Defaults to false for compatibility with providers that don't support PKCE.
     pkce_enabled: System.get_env("OIDC_PKCE_ENABLED") in ["true", "1"],
     # rbac-external-users M2 stage 1: the id-token claim NAME/value that marks
-    # a login as SXI-external. Static token-claim config, not a provider API
-    # call (ADR-0004). Falls back to the config.exs defaults.
-    external_group: System.get_env("OIDC_EXTERNAL_GROUP") || "sxi-external",
+    # a login as external. Static token-claim config, not a provider API
+    # call (ADR-0004). OIDC_EXTERNAL_GROUP has NO default (task 01a14dd9):
+    # unset or blank means nil, and a nil group flags nobody as external.
+    # An install with external users MUST set it.
+    external_group: oidc_external_group,
     external_claim: System.get_env("OIDC_EXTERNAL_CLAIM") || "groups",
     # OIDC authorization scope. Must include `groups` so Pocket-ID releases the
     # external-user group claim and login-time IdP role mappings. Nil when

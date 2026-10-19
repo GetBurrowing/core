@@ -90,7 +90,7 @@ defmodule PlatformWeb.Components.ScopePill do
   ### How the six shipped orgs got here (task 01a09333-d374 stage 5)
 
   Until stage 5 there were two paths. The six shipped slugs (the root org,
-  soylent, wayne-tech, sxi, paragon, cyberdyne) kept hand-authored build-time
+  initech, vandelay-ind, globex, hooli, wonka) kept hand-authored build-time
   utilities in `app.css` (`bg-<slug>` at 12%, `text-<slug>-label`,
   `border-<slug>` at 30%, `bg-<slug>-active`, `hover:bg-<slug>/22`), chosen
   by an explicit six-slug branch here, because their labels were
@@ -101,11 +101,9 @@ defmodule PlatformWeb.Components.ScopePill do
   utilities are deleted from `app.css` in the same change, so no chip can
   carry both class sets and leave the cascade to decide.
 
-  Two per-slug utilities survive in `app.css` because things other than
-  this chip use them: `text-<slug>` (`Platform.Tenancy.scope_color/1`,
-  read by the inheritance pill, files, recovery and the tasks sidebar) and
-  `bg-<slug>-dot` (`ChatLive.section_dot_class/1`, the chat rail's section
-  dots). This component no longer emits either.
+  No per-slug utility survives in `app.css` (task 01a14dd9 stage 2): the
+  chat section dots, the recolor swatches and the list-row org dots read
+  `--scope-fill` through `data-scope` too.
 
   ## Surface (task 01a09333-d374)
 
@@ -123,7 +121,7 @@ defmodule PlatformWeb.Components.ScopePill do
   2.69-2.88 at `:compact`, dark theme 2.29-3.49 and 2.93-5.10.
   `ScopePillStaticOpacityTest` computes each of those 48 cells from the
   shipped opacity and pins the figure. Every cell LOSES contrast to the
-  opacity and 47 of the 48 land below AA (the exception is paragon on the
+  opacity and 47 of the 48 land below AA (the exception is hooli on the
   dark rail at compact, 5.10:1, down from 9.44:1). Not disputed, and NOT
   this component's to change: the opacity is design-approved (2026-05-18)
   and the ruling is open. Read "Non-clickable" under "Variants" before
@@ -151,9 +149,9 @@ defmodule PlatformWeb.Components.ScopePill do
   other org. Until task 01a0938b the chat rail and the chat header reached
   only those six, through closed six-name maps, so stage 5 is when those two
   declarations first took effect. Since 01a0938b both surfaces resolve the
-  pill from the org ROW (`ChatLive.org_scope/1`: a compiled atom for the five
-  sibling tenants, the slug binary for any other org, the root included), so every org on them, runtime-created
-  ones included, wears its declared surface.
+  pill from the org ROW (`ChatLive.org_scope/1`: the slug binary as stored,
+  for every org), so every org on them, runtime-created ones included, wears
+  its declared surface.
 
   ## Edge and hover (task 01a09333-d374 stage 4)
 
@@ -187,55 +185,36 @@ defmodule PlatformWeb.Components.ScopePill do
   ### `data-scope` is a leak surface
 
   Every chip carries `data-scope`, which is what the emitted rules match on,
-  and its value is the org's SLUG AS STORED — not `slug/1`'s kebab-cased
-  Tailwind fragment, since `:wayne_tech` is the class fragment `wayne-tech` and
-  the database row `wayne_tech`.
+  and its value is the org's SLUG AS STORED — not its kebab-cased CSS token,
+  since `vandelay_ind` is the token `vandelay-ind` and the database row
+  `vandelay_ind`.
 
   It is the same leak class as `phx-value-scope` and is resolved the same
   way. An explicit `:value` wins; failing that, a caller who passed a
   `:label` has RENAMED this chip for a masked session, and spelling its true
   slug one attribute over contradicts the rename, so nothing is emitted. See
   `data_scope/1` — the reasoning there is longer than the code because the
-  first version of it leaked `wayne_tech` into a masked chat header.
+  first version of it leaked `vandelay_ind` into a masked chat header.
 
   ## Examples
 
       <.scope_pill scope="acme" label="Acme" />
-      <.scope_pill scope={:soylent} propagated_to="acme" />
-      <.scope_pill scope={:wayne_tech} clickable={false} />
-      <.scope_pill scope={:sxi} active={true} />
-      <.scope_pill scope={:sxi} size={:compact} />
-      <.scope_pill scope={:soylent} propagated_to="acme" size={:compact} />
-      <.scope_pill scope={:sxi} size={:compact} clickable={true} />
+      <.scope_pill scope="initech" label="Initech" propagated_to="acme" />
+      <.scope_pill scope="initech" label="Initech" clickable={false} />
+      <.scope_pill scope="initech" label="Initech" active={true} />
+      <.scope_pill scope="initech" label="Initech" size={:compact} />
   """
   use Phoenix.Component
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
-  # The root org has no compiled atom: it is whatever row the install seeded,
-  # so callers pass its slug as a string (task 01a116de stage 3). The five
-  # sibling atoms below are the inventory FOLLOW-UP, not install-neutral.
-  @scopes [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
-
-  @doc """
-  The canonical list of compiled scope atoms, in display order. The root org
-  is not among them; it is addressed by its slug string.
-
-  Used by tests and any caller that needs to iterate the scope enum without
-  hard-coding it locally.
-  """
-  def scopes, do: @scopes
-
-  attr(:scope, :any,
+  attr(:scope, :string,
     required: true,
     doc: """
-    The primary scope this pill represents: one of the `scopes/0` atoms, or
-    an org SLUG AS A STRING.
+    The org this pill represents: its SLUG AS A STRING, as stored on the
+    `orgs` row. There is no compiled list of scopes (task 01a14dd9 stage 2
+    deleted `scopes/0` and the per-atom labels).
 
-    Was `:atom` with `values: @scopes` until task 01a09287 stage 2. That
-    `values:` list made the pill undrawable for any org created after the
-    module was written, which is the whole thing that stage removed — the
-    rail now feeds it slugs straight off the `orgs` rows. Callers passing a
-    string should pass `label` too: `scope_label/1`'s fallback can only
+    Callers pass `label` (the org's `name`) too: the fallback can only
     title-case the slug, and an org's `name` is not always its slug
     title-cased.
     """
@@ -244,7 +223,7 @@ defmodule PlatformWeb.Components.ScopePill do
   attr(:propagated_to, :any,
     default: nil,
     doc:
-      "When set, renders the propagated variant — `<scope> → <propagated_to>` joined by a hero-arrow-right glyph. One of `scopes/0` or an org slug string (the root org has no atom)."
+      "When set, renders the propagated variant — `<scope> → <propagated_to>` joined by a hero-arrow-right glyph. An org slug string."
   )
 
   attr(:clickable, :boolean,
@@ -409,7 +388,7 @@ defmodule PlatformWeb.Components.ScopePill do
       # The `phx-value-scope` PAYLOAD, separable from `@scope` since task
       # 01a00cf1: the Tasks rail emits a per-session placeholder slug there
       # while masking is on and resolves it back in its own handler. `@scope`
-      # itself must stay the real atom — the chip's colour classes and its
+      # itself must stay the real slug — the chip's `data-scope` and its
       # `scope_label/1` fallback are both keyed on it.
       |> Map.put_new(:value, nil)
       # Declared by the call site and threaded through `scope_pill/1`; the
@@ -544,14 +523,14 @@ defmodule PlatformWeb.Components.ScopePill do
 
   # The `data-scope` attribute value: the org's SLUG AS STORED, because that
   # is what `ScopeColorStyles` keys its `[data-scope="…"]{…}` rules on. NOT
-  # `slug/1`, which kebab-cases for Tailwind class names — `:wayne_tech` is the
-  # class fragment `wayne-tech` and the row `wayne_tech`, and using the class
+  # `slug/1`, which kebab-cases for Tailwind class names — `:vandelay_ind` is the
+  # class fragment `vandelay-ind` and the row `vandelay_ind`, and using the class
   # fragment here would silently miss the rule.
   #
   # ── Why this takes the whole assigns map and not just the scope ──────
   #
   # `data-scope` is the same leak class as `phx-value-scope`: an attribute
-  # value survives `refute html =~ "Wayne-Tech"` untouched and is legible in
+  # value survives `refute html =~ "Vandelay-Ind"` untouched and is legible in
   # the DOM inspector a screen share is likely to have open. There are two
   # kinds of caller and they need different answers.
   #
@@ -561,14 +540,13 @@ defmodule PlatformWeb.Components.ScopePill do
   #     colour a rule keyed on that placeholder would give it (none, today).
   #
   #   * The CHAT rail's hidden-drawer group label and both chat header
-  #     pills (task 01a0938b) pass `scope` = the org's scope value (a
-  #     compiled atom for the five sibling tenants, the slug binary as stored
-  #     for the root org and any org created at runtime), `label` = the org's NAME unmasked or the
+  #     pills (task 01a0938b) pass `scope` = the org's slug binary as
+  #     stored, `label` = the org's NAME unmasked or the
   #     placeholder masked, and `value` = the org's SLUG unmasked or nil
   #     masked. Unmasked, `@value` is the slug, so the chip keeps its colour.
   #     Masked, only the placeholder `label` arrives, and the clause below
   #     suppresses the attribute. A first cut of this function fell back to
-  #     `@scope` there and wrote `data-scope="wayne_tech"` into a masked
+  #     `@scope` there and wrote `data-scope="vandelay_ind"` into a masked
   #     session. `ChatLiveMaskMobileTest` caught it on both surfaces; it was
   #     a real leak, not a test being fussy, and it is the reason
   #     `refute_name_anywhere/3` checks all three spellings of a name rather
@@ -589,7 +567,7 @@ defmodule PlatformWeb.Components.ScopePill do
   #       header, runtime-created ones included, and on the tasks rail (a
   #       placeholder `data-scope` no rule names). Before 01a09333-d374 stage
   #       5 the six shipped orgs kept their colour under masking through
-  #       per-slug class names (`bg-wayne-tech`), which the mask sweep
+  #       per-slug class names (`bg-vandelay-ind`), which the mask sweep
   #       tolerated because it strips `class`. Those names are retired, so a
   #       masked chip is uncoloured on every surface and no spelling of the
   #       real org is anywhere in it.
@@ -621,7 +599,6 @@ defmodule PlatformWeb.Components.ScopePill do
   defp data_scope(%{label: label}) when is_binary(label), do: nil
   defp data_scope(%{scope: scope}), do: stringify_scope(scope)
 
-  defp stringify_scope(scope) when is_atom(scope), do: Atom.to_string(scope)
   defp stringify_scope(scope) when is_binary(scope), do: scope
   defp stringify_scope(_), do: nil
 
@@ -631,23 +608,18 @@ defmodule PlatformWeb.Components.ScopePill do
 
   # ── Labels ─────────────────────────────────────────────────────────
 
-  defp scope_label(:soylent), do: "Soylent"
-  defp scope_label(:wayne_tech), do: "Wayne-Tech"
-  defp scope_label(:sxi), do: "SXI"
-  defp scope_label(:paragon), do: "Paragon"
-  defp scope_label(:cyberdyne), do: "Cyberdyne"
-
-  # Total fallback (task 01a09287 stage 2). Reached by any org outside the
-  # five compiled ones, the root org included. Callers that know the org's real name pass it as
-  # `label`, which wins over this via `display_label/2` — the rail always
-  # does. This is only what a caller that passed a bare slug gets.
+  # Total fallback, and the only label this component derives itself (task
+  # 01a14dd9 stage 2 deleted the per-atom clauses). Callers that know the
+  # org's real name pass it as `label`, which wins over this via
+  # `display_label/2` — every lib call site does. This is only what a caller
+  # that passed a bare slug gets.
   defp scope_label(scope) when is_binary(scope) do
     scope
     |> String.split(~r/[-_]/, trim: true)
     |> Enum.map_join(" ", &String.capitalize/1)
   end
 
-  defp scope_label(scope), do: scope |> to_string() |> scope_label()
+  defp scope_label(nil), do: ""
 
   # The caller's override wins over the scope enum's own name. Anything that
   # is not a binary (`nil`, or the `false` an inline `@mask_names? && ...`

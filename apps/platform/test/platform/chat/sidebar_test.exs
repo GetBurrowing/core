@@ -123,7 +123,7 @@ defmodule Platform.Chat.SidebarTest do
       positions = Enum.map(sections, & &1.position)
       assert positions == Enum.sort(positions)
 
-      # color is the scope token in CSS form, e.g. acme -> "acme", wayne_tech -> "wayne-tech"
+      # color is the scope token in CSS form, e.g. acme -> "acme", vandelay_ind -> "vandelay-ind"
       acme = Tenancy.get_org_by_slug!("acme")
       acme_section = Enum.find(sections, &(&1.org_id == acme.id))
       assert acme_section.color == "acme"
@@ -167,7 +167,7 @@ defmodule Platform.Chat.SidebarTest do
   # ── Archived orgs drop out of the rendered sidebar (task 019f4eaa) ───────
 
   describe "archived orgs vs the sidebar" do
-    # Robin, walking the review: scheduling Paragon for deletion hid its
+    # Robin, walking the review: scheduling Hooli for deletion hid its
     # channels but LEFT its section header in the sidebar, sitting above an
     # empty "No channels yet" placeholder — the org read as half-deleted.
     # The org cascade hides projects and chat_spaces; a section is its own row
@@ -176,12 +176,12 @@ defmodule Platform.Chat.SidebarTest do
 
     test "an archived org's section is dropped from the rendered sidebar" do
       admin = admin_user!()
-      paragon = Tenancy.get_org_by_slug!("paragon")
-      {:ok, _} = Tenancy.archive_org(admin, paragon)
+      hooli = Tenancy.get_org_by_slug!("hooli")
+      {:ok, _} = Tenancy.archive_org(admin, hooli)
 
-      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == hooli.id))
       # resolve_for_user/2 returns %{section:, channels:} wrappers, not sections.
-      refute Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == paragon.id))
+      refute Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == hooli.id))
 
       # Active orgs are untouched.
       acme = Tenancy.get_org_by_slug!("acme")
@@ -191,32 +191,32 @@ defmodule Platform.Chat.SidebarTest do
 
     test "a deletion-scheduled org's section is dropped too (schedule stamps archived_at)" do
       admin = admin_user!()
-      soylent = Tenancy.get_org_by_slug!("soylent")
-      {:ok, _} = Tenancy.schedule_org_deletion(admin, soylent)
+      initech = Tenancy.get_org_by_slug!("initech")
+      {:ok, _} = Tenancy.schedule_org_deletion(admin, initech)
 
-      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == soylent.id))
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == initech.id))
     end
 
     test "list_default_sections/0 STILL returns all rows — the data API stays unfiltered" do
       # Curation writes and the admin editor need the full set; only the render
       # path filters. Mirrors Tenancy.list_tenants/0 vs list_active_tenants_unscoped/0.
       admin = admin_user!()
-      paragon = Tenancy.get_org_by_slug!("paragon")
-      {:ok, _} = Tenancy.archive_org(admin, paragon)
+      hooli = Tenancy.get_org_by_slug!("hooli")
+      {:ok, _} = Tenancy.archive_org(admin, hooli)
 
-      assert Enum.any?(Sidebar.list_default_sections(), &(&1.org_id == paragon.id))
+      assert Enum.any?(Sidebar.list_default_sections(), &(&1.org_id == hooli.id))
     end
 
     test "restoring the org brings its section back" do
       admin = admin_user!()
-      paragon = Tenancy.get_org_by_slug!("paragon")
+      hooli = Tenancy.get_org_by_slug!("hooli")
 
-      {:ok, archived} = Tenancy.archive_org(admin, paragon)
-      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+      {:ok, archived} = Tenancy.archive_org(admin, hooli)
+      refute Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == hooli.id))
 
       # Nothing about the section row ever changed, so restore is free.
       {:ok, _} = Tenancy.unarchive_org(admin, archived)
-      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == paragon.id))
+      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == hooli.id))
     end
 
     # Task 019fd7f8: the section row surviving the archive is exactly what
@@ -227,15 +227,15 @@ defmodule Platform.Chat.SidebarTest do
       admin = admin_user!()
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      globex = Tenancy.get_org_by_slug!("globex")
 
-      # Acme-owned, so the SXI archive cascade never touches this channel row.
+      # Acme-owned, so the Globex archive cascade never touches this channel row.
       # NOT pinned: ChatLive partitions pinned spaces out before the resolver
       # runs, so a pinned channel never reaches this path and proves nothing.
       channel = channel!(%{org_id: acme.id})
-      {:ok, _} = Sidebar.put_channel_order(user.id, section_for!(sxi).id, [channel.id])
+      {:ok, _} = Sidebar.put_channel_order(user.id, section_for!(globex).id, [channel.id])
 
-      {:ok, _} = Tenancy.archive_org(admin, sxi)
+      {:ok, _} = Tenancy.archive_org(admin, globex)
 
       resolved = Sidebar.resolve_for_user(user.id, [channel])
 
@@ -289,8 +289,8 @@ defmodule Platform.Chat.SidebarTest do
       admin = admin_user!()
       section = hd(Sidebar.list_default_sections())
 
-      assert {:ok, updated} = Sidebar.recolor_section(admin, section.id, "paragon")
-      assert updated.color == "paragon"
+      assert {:ok, updated} = Sidebar.recolor_section(admin, section.id, "hooli")
+      assert updated.color == "hooli"
     end
   end
 
@@ -316,25 +316,27 @@ defmodule Platform.Chat.SidebarTest do
   describe "reassign_channel/3" do
     test "Acme admin sets the channel's org_id (global identity move)" do
       admin = admin_user!()
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      globex = Tenancy.get_org_by_slug!("globex")
       space = channel!()
 
-      assert {:ok, updated} = Sidebar.reassign_channel(admin, space.id, sxi.id)
-      assert updated.org_id == sxi.id
+      assert {:ok, updated} = Sidebar.reassign_channel(admin, space.id, globex.id)
+      assert updated.org_id == globex.id
     end
 
     test "missing channel returns :not_found" do
       admin = admin_user!()
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      assert {:error, :not_found} = Sidebar.reassign_channel(admin, Ecto.UUID.generate(), sxi.id)
+      globex = Tenancy.get_org_by_slug!("globex")
+
+      assert {:error, :not_found} =
+               Sidebar.reassign_channel(admin, Ecto.UUID.generate(), globex.id)
     end
 
     test "non-admin is rejected and org_id is unchanged" do
       member = member_user!()
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      globex = Tenancy.get_org_by_slug!("globex")
       space = channel!()
 
-      assert {:error, :unauthorized} = Sidebar.reassign_channel(member, space.id, sxi.id)
+      assert {:error, :unauthorized} = Sidebar.reassign_channel(member, space.id, globex.id)
       assert is_nil(Chat.get_space(space.id).org_id)
     end
   end
@@ -883,8 +885,8 @@ defmodule Platform.Chat.SidebarTest do
     test "a user's explicit placement survives the admin move" do
       admin = admin_user!()
       member = create_user!()
-      from_org = Tenancy.get_org_by_slug!("sxi")
-      to_org = Tenancy.get_org_by_slug!("paragon")
+      from_org = Tenancy.get_org_by_slug!("globex")
+      to_org = Tenancy.get_org_by_slug!("hooli")
       chosen = section_for!(Tenancy.get_org_by_slug!("acme"))
 
       channel = channel!(%{name: "Wharfside"})
@@ -913,8 +915,8 @@ defmodule Platform.Chat.SidebarTest do
     test "a user who never placed the channel sees it follow the org" do
       admin = admin_user!()
       bystander = create_user!()
-      from_org = Tenancy.get_org_by_slug!("sxi")
-      to_org = Tenancy.get_org_by_slug!("paragon")
+      from_org = Tenancy.get_org_by_slug!("globex")
+      to_org = Tenancy.get_org_by_slug!("hooli")
 
       channel = channel!(%{name: "Copperline"})
       {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
@@ -976,8 +978,8 @@ defmodule Platform.Chat.SidebarTest do
 
     test "a confirmed move persists a bridged audit row carrying BOTH org ids" do
       admin = admin_user!()
-      from_org = Tenancy.get_org_by_slug!("sxi")
-      to_org = Tenancy.get_org_by_slug!("paragon")
+      from_org = Tenancy.get_org_by_slug!("globex")
+      to_org = Tenancy.get_org_by_slug!("hooli")
 
       channel = channel!(%{name: "Rookery"})
       {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
@@ -1009,7 +1011,7 @@ defmodule Platform.Chat.SidebarTest do
 
     test "a rejected move writes no audit row" do
       member = member_user!()
-      to_org = Tenancy.get_org_by_slug!("paragon")
+      to_org = Tenancy.get_org_by_slug!("hooli")
       channel = channel!(%{name: "Sedgewick"})
 
       assert {:error, :unauthorized} = Sidebar.reassign_channel(member, channel.id, to_org.id)
@@ -1080,9 +1082,9 @@ defmodule Platform.Chat.SidebarTest do
     end
 
     test "an underscore org slug produces a hyphen-form colour token" do
-      # Org slugs are stored underscore-form (`wayne_tech`); section colour
+      # Org slugs are stored underscore-form (`vandelay_ind`); section colour
       # tokens and the `.bg-<token>-dot` CSS classes are hyphen-form.
-      org = create_org!("wayne_tech_#{System.unique_integer([:positive])}")
+      org = create_org!("vandelay_ind_#{System.unique_integer([:positive])}")
 
       assert [section] = sections_for(org.id)
       assert section.color == String.replace(org.slug, "_", "-")

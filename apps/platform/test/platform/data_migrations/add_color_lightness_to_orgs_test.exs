@@ -7,8 +7,8 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   runtime colour path, which colours an org from its ROW. Their hue and
   chroma were already stored (backfilled by `20260911220000_add_color_to_orgs`),
   but the runtime path solves every org at a fixed 72% fill lightness, and
-  five of the six ship at another one (soylent 65, cyberdyne 66, wayne-tech
-  68, sxi 70, paragon 80). Hue and chroma alone therefore cannot reproduce
+  five of the six ship at another one (initech 65, wonka 66, vandelay-ind
+  68, globex 70, hooli 80). Hue and chroma alone therefore cannot reproduce
   their fills, so the fill lightness becomes data too.
 
   Drives the migration's `pin_shipped_colours/1` helper against
@@ -16,6 +16,18 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   boots, so the seeded rows are asserted as they stand, and the helper is
   re-run to prove it is unconditional, idempotent and a no-op where a slug
   has no row.
+
+  Since task 01a14dd9 stage 3 every pinned row is keyed by the sha256 of its
+  slug, and this file names the rows by the placeholder slugs
+  `Platform.Tenancy.HistoricalRootSlug` maps those digests to. At that
+  stage's tip `test_helper.exs` still seeded the shipped tenants under their
+  stored slugs, and this file's digest lookups proved that the digest
+  predicates select the same rows the slug literals did. Since stage 4 the
+  test database seeds the tenants under their PLACEHOLDER slugs, and
+  `test_helper.exs` paints them by passing the relabelled rows through the
+  helper's optional `rows` argument. A seeded org is therefore looked up by
+  its placeholder slug (`seeded_colour/1`), and the digest arm itself is
+  driven with a slug this file owns ("paints a legacy row when one exists").
   """
   use Platform.DataCase, async: false
 
@@ -46,20 +58,21 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   # migration: the point is that the migration's numbers reproduce these.
   @shipped_fills %{
     "legacy" => "oklch(72% 0.16 50)",
-    "soylent" => "oklch(65% 0.20 295)",
-    "wayne_tech" => "oklch(68% 0.15 240)",
-    "sxi" => "oklch(70% 0.15 162)",
-    "paragon" => "oklch(80% 0.16 95)",
-    "cyberdyne" => "oklch(66% 0.19 340)"
+    "initech" => "oklch(65% 0.20 295)",
+    "vandelay_ind" => "oklch(68% 0.15 240)",
+    "globex" => "oklch(70% 0.15 162)",
+    "hooli" => "oklch(80% 0.16 95)",
+    "wonka" => "oklch(66% 0.19 340)"
   }
 
-  # The four shipped tenants `test_helper.exs` seeds into the test database
-  # before re-running `pin_shipped_colours/1`. The test database's root is
+  # The four shipped tenants `test_helper.exs` seeds into the test database,
+  # under their placeholder slugs, before re-running `pin_shipped_colours/2`
+  # with the relabelled rows. The test database's root is
   # the neutral `acme` fixture (task 01a116de stage 4), so the historical
   # `legacy` pin has no row here; "legacy is painted when its row exists" below
-  # inserts one. Cyberdyne was created through the admin panel on installs
+  # inserts one. Wonka was created through the admin panel on installs
   # that have it, so it is not in a fresh test database either.
-  @seeded ~w(soylent wayne_tech sxi paragon)
+  @seeded ~w(initech vandelay_ind globex hooli)
 
   setup_all do
     Code.require_file(@migration_path)
@@ -74,6 +87,24 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       )
     )
   end
+
+  defp by_slug(placeholder), do: from(o in Org, where: o.slug == ^placeholder)
+
+  defp rows_by_slug(placeholder), do: Repo.aggregate(by_slug(placeholder), :count)
+
+  # The colour of the seeded row stored under the placeholder slug. Exactly
+  # one such row must exist.
+  defp seeded_colour(placeholder) do
+    Repo.one!(
+      from(o in by_slug(placeholder),
+        select: {o.color_hue, o.color_chroma, o.color_lightness}
+      )
+    )
+  end
+
+  # The shipped rows relabelled onto the placeholder slugs, as
+  # `test_helper.exs` passes them.
+  defp relabelled, do: HistoricalRootSlug.relabel(migration().shipped())
 
   # The migration pins the root's row under the original operator's slug;
   # this file calls it `legacy` (Platform.Tenancy.HistoricalRootSlug).
@@ -96,20 +127,25 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   end
 
   describe "the pinned values" do
-    test "cover the six shipped orgs, plus the hyphen spelling of wayne-tech" do
+    test "cover the six shipped orgs, plus the hyphen spelling of vandelay-ind" do
       rows = migration().shipped()
       slugs = rows |> HistoricalRootSlug.relabel() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
 
       assert slugs ==
-               Enum.sort(~w(legacy soylent wayne_tech wayne-tech sxi paragon cyberdyne))
+               Enum.sort(~w(legacy initech vandelay_ind vandelay-ind globex hooli wonka))
 
-      # The relabelled row really is the historical root: it is keyed by the
+      # Every row is keyed by a digest, never by a slug (task 01a14dd9 stage 3).
+      assert Enum.all?(rows, &match?({{:sha256, _}, _, _, _}, &1))
+
+      # The root row really is the historical root: it is keyed by the
       # sha256 of a slug the install-identity guard denies, so the migration
-      # matches that slug without spelling it (task 01a14b9e stage 5).
+      # matches that slug without spelling it (task 01a14b9e stage 5). The
+      # tenant term digests are on that list too since task 01a14dd9 stage 5;
+      # the guard's TENANT AND CLIENT DIGESTS test asserts them.
       assert {:sha256, hex} = HistoricalRootSlug.from_rows(rows)
       assert Scanner.listed_digest?(hex)
 
-      assert pinned("wayne-tech") == pinned("wayne_tech")
+      assert pinned("vandelay-ind") == pinned("vandelay_ind")
     end
 
     test "reproduce each org's SHIPPED fill, which hue and chroma alone cannot" do
@@ -132,14 +168,17 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
         end)
         |> Enum.map(&elem(&1, 0))
 
-      assert Enum.sort(moved) == Enum.sort(~w(soylent wayne_tech sxi paragon cyberdyne))
+      assert Enum.sort(moved) == Enum.sort(~w(initech vandelay_ind globex hooli wonka))
     end
   end
 
   describe "after the migration ran" do
     test "every seeded shipped org carries exactly the pinned hue, chroma and lightness" do
+      # Each seeded shipped org is stored once under its placeholder slug and
+      # carries the values pinned under its record's digest.
       for slug <- @seeded do
-        assert colour(slug) == pinned(slug), slug
+        assert rows_by_slug(slug) == 1, "#{slug}: expected one row at its slug"
+        assert seeded_colour(slug) == pinned(slug), slug
       end
     end
 
@@ -163,33 +202,33 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       # so nobody ever saw it; preserving today's appearance means writing
       # the shipped values over it.
       {1, _} =
-        Repo.update_all(from(o in Org, where: o.slug == "sxi"),
+        Repo.update_all(by_slug("globex"),
           set: [color_hue: 10, color_chroma: 0.2, color_lightness: 0.5]
         )
 
-      migration().pin_shipped_colours(Repo)
+      migration().pin_shipped_colours(Repo, relabelled())
 
-      assert colour("sxi") == pinned("sxi")
+      assert seeded_colour("globex") == pinned("globex")
     end
 
     test "is idempotent: a second run changes nothing" do
-      migration().pin_shipped_colours(Repo)
-      first = Map.new(@seeded, &{&1, colour(&1)})
+      migration().pin_shipped_colours(Repo, relabelled())
+      first = Map.new(@seeded, &{&1, seeded_colour(&1)})
 
-      migration().pin_shipped_colours(Repo)
+      migration().pin_shipped_colours(Repo, relabelled())
 
-      assert Map.new(@seeded, &{&1, colour(&1)}) == first
+      assert Map.new(@seeded, &{&1, seeded_colour(&1)}) == first
     end
 
     test "no-ops for a slug with no row, and creates nothing" do
-      assert Tenancy.get_org_by_slug("cyberdyne") == nil
+      assert rows_by_slug("wonka") == 0
 
-      counts = migration().pin_shipped_colours(Repo)
+      counts = migration().pin_shipped_colours(Repo, relabelled())
 
-      assert counts["cyberdyne"] == 0
-      assert counts["wayne-tech"] == 0
-      assert counts["sxi"] == 1
-      assert Tenancy.get_org_by_slug("cyberdyne") == nil
+      assert counts["wonka"] == 0
+      assert counts["vandelay-ind"] == 0
+      assert counts["globex"] == 1
+      assert rows_by_slug("wonka") == 0
     end
 
     test "paints a legacy row when one exists (the pin is keyed on the historical slug's digest)" do
@@ -199,7 +238,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       {:sha256, _} = HistoricalRootSlug.from_rows(migration().shipped())
 
       {_, hue, chroma, lightness} =
-        Enum.find(migration().shipped(), &match?({{:sha256, _}, _, _, _}, &1))
+        List.keyfind(migration().shipped(), HistoricalRootSlug.key("legacy"), 0)
 
       root = "legacy-root-#{System.unique_integer([:positive])}"
       tenant!(root, %{color_hue: 12, color_chroma: 0.15})
@@ -214,12 +253,24 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       assert colour(bystander.slug) == {12, 0.15, nil}
     end
 
-    test "colours a cyberdyne row an operator created with a hue of their own" do
-      tenant!("cyberdyne", %{color_hue: 12, color_chroma: 0.15})
+    test "colours a wonka row an operator created with a hue of their own" do
+      # The shipped rows are keyed by digest, so a row this test can create is
+      # one under the placeholder slug, reached by passing the relabelled rows
+      # through the optional `rows` argument (task 01a14dd9 stage 3).
+      tenant!("wonka", %{color_hue: 12, color_chroma: 0.15})
 
-      migration().pin_shipped_colours(Repo)
+      counts = migration().pin_shipped_colours(Repo, relabelled())
 
-      assert colour("cyberdyne") == pinned("cyberdyne")
+      assert counts["wonka"] == 1
+      assert colour("wonka") == pinned("wonka")
+    end
+
+    test "rows defaults to the migration's own shipped rows" do
+      assert migration().pin_shipped_colours(Repo) ==
+               migration().pin_shipped_colours(Repo, migration().shipped())
+
+      assert Enum.sort(Map.keys(migration().pin_shipped_colours(Repo))) ==
+               migration().shipped() |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> Enum.sort()
     end
 
     test "leaves every other org alone" do
@@ -234,36 +285,20 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   describe "the chat surfaces' data-scope names a stored row" do
     test "every scope the chat rail and header resolve from an org row emits a stored slug" do
       # The chat rail drawer and both chat header pills resolve their chip's
-      # scope from the org ROW through `ChatLive.org_scope/1` (task 01a0938b
-      # stage 1): the six shipped slugs keep their atoms, every other org
-      # passes its stored slug as a binary. It used to be two closed six-name
-      # maps, which gave a runtime org no pill at all. Since 01a09333 stage 5
-      # the chip's colour depends on the `data-scope` it emits naming a row
-      # the stylesheet has a rule for; a mismatch (`wayne-tech` against a
-      # `wayne_tech` row) is an uncoloured chip and no error. Held against the
-      # rows in the database, not the migration's table, which lists both
-      # wayne-tech spellings.
+      # scope from the org ROW through `ChatLive.org_scope/1`. Since task
+      # 01a14dd9 stage 2 that is the stored slug BINARY for every org (the five
+      # compiled sibling atoms are gone). The chip's colour depends on the
+      # `data-scope` it emits naming a row the stylesheet has a rule for; a
+      # mismatch (a hyphen spelling against an underscore row) is an
+      # uncoloured chip and no error. Held against the rows in the database.
       stored_rows = Repo.all(from(o in Org, select: o.slug))
       stored = MapSet.new(stored_rows)
 
-      # The six shipped slugs still land on exactly the component's atoms, so
-      # the header's `@scope_filter == header_scope` active state keeps working.
-      # The root org is the exception since task 01a116de stage 3: it has no
-      # compiled atom and takes the binary path like any runtime org.
       assert ChatLive.org_scope("legacy") == "legacy"
-
-      atoms = Enum.map(~w(paragon soylent wayne_tech sxi cyberdyne), &ChatLive.org_scope/1)
-
-      assert atoms |> Enum.uniq() |> Enum.sort() ==
-               Enum.sort(PlatformWeb.Components.ScopePill.scopes())
-
-      # Every shipped atom but Cyberdyne (below) has a row to be coloured by.
-      for atom <- atoms, atom != :cyberdyne do
-        assert Atom.to_string(atom) in stored, "no stored row for #{inspect(atom)}"
-      end
 
       for slug <- stored_rows do
         scope = ChatLive.org_scope(slug)
+        assert scope == slug, "#{slug} resolves to #{inspect(scope)}"
 
         html =
           Phoenix.LiveViewTest.render_component(&PlatformWeb.Components.ScopePill.scope_pill/1,
@@ -272,22 +307,23 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
         [_, data_scope] = Regex.run(~r/data-scope="([^"]+)"/, html)
         assert data_scope in stored, "#{slug} (#{inspect(scope)}) emits data-scope=#{data_scope}"
-
-        # A runtime org's binary scope must name its own row, not a sibling's.
-        if is_binary(scope), do: assert(data_scope == slug)
-
-        if is_atom(scope), do: assert(Tenancy.get_org_by_slug(data_scope).color_lightness)
+        assert data_scope == slug
       end
 
-      # Cyberdyne has no row in a fresh database (installs create it in the
-      # admin panel); its atom emits the one spelling the migration pins.
-      html =
-        Phoenix.LiveViewTest.render_component(&PlatformWeb.Components.ScopePill.scope_pill/1,
-          scope: :cyberdyne
-        )
+      # A section's colour token (`css_slug/1`) resolves back to the same row,
+      # for every row including the shipped ones whose slug carries `_`.
+      index = Tenancy.scope_token_index(Repo.all(Org))
 
-      assert html =~ ~s(data-scope="cyberdyne")
-      assert pinned("cyberdyne")
+      for slug <- stored_rows do
+        assert index[Tenancy.css_slug(slug)].slug == slug
+      end
+
+      # Every pinned row the migration ships (some have no row in a fresh
+      # database; installs create them in the admin panel) still resolves to
+      # its own stored spelling, so its pinned colour is the one painted.
+      for {slug, _h, _c, _l} <- HistoricalRootSlug.relabel(migration().shipped()) do
+        assert ChatLive.org_scope(slug) == slug
+      end
     end
   end
 
@@ -306,7 +342,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
     test "the CHECK constraint refuses a raw write the changeset never saw" do
       assert_raise Postgrex.Error, ~r/orgs_color_lightness_range/, fn ->
-        Repo.update_all(from(o in Org, where: o.slug == "sxi"), set: [color_lightness: 1.5])
+        Repo.update_all(by_slug("globex"), set: [color_lightness: 1.5])
       end
     end
   end

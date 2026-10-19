@@ -116,7 +116,7 @@ defmodule Platform.Meetings.InviteDeliveryExternalTest do
   # row with `external: true`, which is exactly what `Tenancy.external_user?/1`
   # reads. Written through `Tenancy.mark_membership_external/1` rather than by
   # hand so the fixture cannot drift from the predicate.
-  defp external_user(name, org_slug \\ "sxi") do
+  defp external_user(name, org_slug \\ "globex") do
     user = create_user(name)
     org = Tenancy.get_org_by_slug!(org_slug)
 

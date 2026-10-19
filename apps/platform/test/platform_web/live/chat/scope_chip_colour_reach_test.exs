@@ -7,7 +7,7 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
   for its `data-scope`. Chat shows every root member every org's channels,
   so the block has to carry every org such a member can see, not just the
   orgs they belong to. Built from the Tasks rail's narrower list, the block
-  left this member's SXI chip with no fill, no dot and a text-coloured ring,
+  left this member's Globex chip with no fill, no dot and a text-coloured ring,
   while an admin (Robin, on every dev server) saw it coloured.
   """
   use PlatformWeb.ConnCase, async: false
@@ -40,15 +40,15 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  test "an SXI channel's header chip has a colour rule for an Acme member", %{conn: conn} do
+  test "an Globex channel's header chip has a colour rule for an Acme member", %{conn: conn} do
     {conn, user} = acme_member_conn(conn)
 
     {:ok, channel} =
       Chat.create_space(%{
-        name: "SXI reach",
-        slug: "sxi-reach",
+        name: "Globex reach",
+        slug: "globex-reach",
         kind: "channel",
-        org_id: Tenancy.get_org_by_slug!("sxi").id
+        org_id: Tenancy.get_org_by_slug!("globex").id
       })
 
     {:ok, _} =
@@ -59,15 +59,15 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
       })
 
     # By id: a slug is looked up in the VIEWER's active org (Acme here), and
-    # would miss this SXI channel and mint an Acme one with the same slug.
+    # would miss this Globex channel and mint an Acme one with the same slug.
     {:ok, view, _html} = live(conn, ~p"/chat/#{channel.id}")
     html = render(view)
 
     # The chip: the header pill carries the stored slug.
-    assert html =~ ~s(data-scope="sxi" class=), "no header chip for the SXI channel"
+    assert html =~ ~s(data-scope="globex" class=), "no header chip for the Globex channel"
 
-    # The rule it needs, at SXI's shipped fill. Without it the chip above is
+    # The rule it needs, at Globex's shipped fill. Without it the chip above is
     # uncoloured, and nothing errors.
-    assert html =~ ~s|[data-scope="sxi"]{--scope-fill:oklch(70% 0.15 162);|
+    assert html =~ ~s|[data-scope="globex"]{--scope-fill:oklch(70% 0.15 162);|
   end
 end

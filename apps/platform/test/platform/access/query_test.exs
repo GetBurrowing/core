@@ -43,7 +43,7 @@ defmodule Platform.Access.QueryTest do
     Repo.delete_all(Node)
     Repo.delete_all(WikiPage)
     _root = acme_org_id()
-    org = tenant_org_id("sxi")
+    org = tenant_org_id("globex")
     author = member!(org)
 
     p = project!(org)

@@ -71,29 +71,29 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   setup do
     acme = ensure_root_org()
     # Two tenant orgs so we can exercise sibling-tenant isolation.
-    sxi = ensure_tenant_org("sxi-files-#{System.unique_integer([:positive])}", acme)
+    globex = ensure_tenant_org("globex-files-#{System.unique_integer([:positive])}", acme)
 
-    wayne_tech =
-      ensure_tenant_org("wayne-tech-files-#{System.unique_integer([:positive])}", acme)
+    vandelay_ind =
+      ensure_tenant_org("vandelay-ind-files-#{System.unique_integer([:positive])}", acme)
 
-    {:ok, project_a} = Tasks.create_project(%{name: "ProjA #{u()}", org_id: sxi.id})
-    {:ok, project_b} = Tasks.create_project(%{name: "ProjB #{u()}", org_id: wayne_tech.id})
+    {:ok, project_a} = Tasks.create_project(%{name: "ProjA #{u()}", org_id: globex.id})
+    {:ok, project_b} = Tasks.create_project(%{name: "ProjB #{u()}", org_id: vandelay_ind.id})
 
-    # Agent pinned to SXI — should see SXI projects, not Wayne-tech.
-    agent_sxi = create_agent("sxi-agent", %{"org_id" => sxi.id})
-    # Agent pinned to Wayne-tech — sibling of agent_sxi.
-    agent_pt = create_agent("pt-agent", %{"org_id" => wayne_tech.id})
+    # Agent pinned to Globex — should see Globex projects, not Vandelay-ind.
+    agent_globex = create_agent("globex-agent", %{"org_id" => globex.id})
+    # Agent pinned to Vandelay-ind — sibling of agent_globex.
+    agent_pt = create_agent("pt-agent", %{"org_id" => vandelay_ind.id})
     # Agent pinned to the root org — root-equivalent, sees every tenant.
     agent_root = create_agent("root-agent", %{"org_id" => acme.id})
 
     {:ok,
      %{
        acme: acme,
-       sxi: sxi,
-       wayne_tech: wayne_tech,
+       globex: globex,
+       vandelay_ind: vandelay_ind,
        project_a: project_a,
        project_b: project_b,
-       agent_sxi: agent_sxi,
+       agent_globex: agent_globex,
        agent_pt: agent_pt,
        agent_root: agent_root
      }}
@@ -201,8 +201,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # ── file_list ─────────────────────────────────────────────────────────
 
   describe "execute/3 file_list" do
-    test "returns project files for an SXI-pinned agent reading an SXI project",
-         %{agent_sxi: agent, project_a: project} do
+    test "returns project files for an Globex-pinned agent reading an Globex project",
+         %{agent_globex: agent, project_a: project} do
       f1 = create_file(project, filename: "alpha.txt", body: "alpha")
       f2 = create_file(project, filename: "beta.txt", body: "beta")
 
@@ -230,8 +230,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       end
     end
 
-    test "returns auth error for SXI agent reading Wayne-tech project",
-         %{agent_sxi: agent, project_b: project} do
+    test "returns auth error for Globex agent reading Vandelay-ind project",
+         %{agent_globex: agent, project_b: project} do
       _ = create_file(project, filename: "sibling.txt")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -242,7 +242,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
     test "root-equivalent agent sees cross-tenant projects",
          %{agent_root: agent, project_a: a, project_b: b} do
-      _ = create_file(a, filename: "in-sxi.txt")
+      _ = create_file(a, filename: "in-globex.txt")
       _ = create_file(b, filename: "in-pt.txt")
 
       assert {:ok, %{count: 1}} =
@@ -252,7 +252,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
                ToolSurface.execute("file_list", %{"project_id" => b.id}, context_for(agent))
     end
 
-    test "honors content_type filter", %{agent_sxi: agent, project_a: project} do
+    test "honors content_type filter", %{agent_globex: agent, project_a: project} do
       _pdf = create_file(project, filename: "doc.pdf", content_type: "application/pdf")
       _txt = create_file(project, filename: "doc.txt", content_type: "text/plain")
 
@@ -275,7 +275,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects explicit org_id mismatch from tenant-pinned agent",
-         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+         %{agent_globex: agent, project_a: project, vandelay_ind: pt} do
       _ = create_file(project)
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -296,7 +296,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "lists human-only files alongside readable ones, each carrying its own availability",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       readable = create_file(project, filename: "readable.txt", ingest_status: "ingested")
 
       withheld =
@@ -335,7 +335,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "pending, failed and human_only carry three DISTINCT notes",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       pending = create_file(project, filename: "pending.txt", ingest_status: "pending")
       failed = create_file(project, filename: "failed.txt", ingest_status: "failed")
 
@@ -370,7 +370,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
   describe "execute/3 file_get_text" do
     test "returns the full body when no page arg",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, text: "alpha beta gamma", pages: nil)
 
       assert {:ok,
@@ -385,7 +385,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "returns just the requested page for a paginated file",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       pages = ["page one body", "page two body", "page three body"]
       file = create_file(project, text: Enum.join(pages, "\n\n"), pages: pages)
 
@@ -398,7 +398,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "page out of range returns :page_out_of_range",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       pages = ["only one"]
       file = create_file(project, text: "only one", pages: pages)
 
@@ -418,7 +418,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "file with no cached text returns :no_text_available",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       # Skip the upsert_extracted_text call — simulates a file that's
       # still ingesting / extraction failed.
       file = create_file(project, ingest_status: "pending")
@@ -428,7 +428,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "returns auth error when reading a sibling-tenant file",
-         %{agent_sxi: agent, project_b: project} do
+         %{agent_globex: agent, project_b: project} do
       file = create_file(project, text: "sibling tenant body")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -445,7 +445,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test ":no_text_available suggestion now mentions binary: true",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, ingest_status: "pending")
 
       assert {:error, %{code: :no_text_available, suggestion: suggestion}} =
@@ -461,7 +461,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     setup :with_tmp_storage_root
 
     test "returns base64 bytes for a small text file even when extracted text exists",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       body = "alpha-binary-body"
       file = create_file_with_bytes(project, body, filename: "alpha.txt")
       # Also seed the text cache to prove binary: true skips it.
@@ -487,7 +487,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "returns raw bytes when no platform_file_texts row exists",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       # A binary blob the extractor wouldn't index — no text upsert.
       body = <<0x50, 0x4B, 0x03, 0x04, "fake-zip-bytes">>
 
@@ -515,7 +515,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       assert Base.decode64!(data_b64) == body
     end
 
-    test "rejects oversize file with :too_large", %{agent_sxi: agent, project_a: project} do
+    test "rejects oversize file with :too_large", %{agent_globex: agent, project_a: project} do
       # Synthesize a 26 MB row WITHOUT writing 26 MB of bytes — the size
       # check runs against `file.byte_size` before the storage read, so
       # we can lie about the on-disk size and still exercise the cap.
@@ -537,7 +537,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "binary: true with sibling-tenant file returns unauthorized",
-         %{agent_sxi: agent, project_b: project} do
+         %{agent_globex: agent, project_b: project} do
       file = create_file_with_bytes(project, "tenant-isolated", filename: "isolated.bin")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -600,7 +600,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
   describe "execute/3 file_get_text — human_only gate" do
     test "refuses the extracted text of a human_only file that still HAS a text row",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       body = "confidential settlement terms paragraph"
 
       file =
@@ -621,7 +621,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "an otherwise-identical attempt-intent file DOES return the body",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       # Control for the test above: same shape, intent flipped. Without
       # this, a refusal could come from any unrelated fixture defect.
       body = "confidential settlement terms paragraph"
@@ -631,7 +631,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
                ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
     end
 
-    test "the page branch is gated too", %{agent_sxi: agent, project_a: project} do
+    test "the page branch is gated too", %{agent_globex: agent, project_a: project} do
       pages = ["page one secret", "page two secret"]
 
       file =
@@ -674,7 +674,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     setup :with_tmp_storage_root
 
     test "binary: true refuses a human_only row AND returns no bytes at all",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       body = "human-audience-bytes"
 
       file =
@@ -707,7 +707,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "positive control: an attempt-intent file still serves BOTH text and bytes",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       # Without this, a gate that broke every read would pass every
       # refutation above.
       body = "readable-both-ways"
@@ -738,7 +738,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     # `:human_only` (file exists) from `unauthorized` (nothing said) and
     # use file_get_text as an existence oracle. Both branches pinned.
     test "a sibling-org caller gets unauthorized, never :human_only",
-         %{agent_sxi: agent, project_b: project} do
+         %{agent_globex: agent, project_b: project} do
       file =
         create_file_with_bytes(project, "sibling-org-secret",
           filename: "sibling-human-only.txt",
@@ -759,7 +759,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
   describe "execute/3 file_get_metadata" do
     test "returns the canonical metadata shape for a same-org agent",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file =
         create_file(project,
           filename: "metadata-doc.pdf",
@@ -808,7 +808,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "a human-only file still returns metadata, marked unreadable with an explanation",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file =
         create_file(project,
           filename: "board-deck.key",
@@ -833,7 +833,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "pending and failed metadata rows report distinct unavailability notes",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       pending = create_file(project, filename: "wip.txt", ingest_status: "pending")
       failed = create_file(project, filename: "broken.txt", ingest_status: "failed")
 
@@ -877,7 +877,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "tenant-pinned agent reading a sibling-org file gets unauthorized envelope",
-         %{agent_sxi: agent, project_b: project} do
+         %{agent_globex: agent, project_b: project} do
       file = create_file(project, filename: "sibling-meta.txt")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -922,7 +922,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
   describe "execute/3 file_search" do
     test "drops a human_only file that IS still present in the index",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       visible =
         create_file(project, filename: "public.txt", text: "public rate-limit cap is 100 rps")
 
@@ -963,7 +963,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     # row and an index entry, and flipping it to human_only later must
     # take both away AND stop being returned.
     test "an ingested file flipped to human_only drops out and loses its cached text",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       kept =
         create_file(project, filename: "kept.txt", text: "kept rate-limit cap is 100 rps")
 
@@ -1015,7 +1015,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "returns hits with snippets sourced from cached extracted text",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       f1 = create_file(project, filename: "alpha.txt", text: "alpha rate-limit cap is 100 rps")
       _f2 = create_file(project, filename: "beta.txt", text: "beta unrelated body")
       f3 = create_file(project, filename: "gamma.txt", text: "gamma rate-limit cap doc")
@@ -1053,7 +1053,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "returns empty hits list (NOT :not_found) when memory returns nothing",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       _f = create_file(project, text: "anything")
       install_memory_stub([])
 
@@ -1068,7 +1068,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "drops hits whose underlying file row has been deleted",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       f1 = create_file(project, filename: "kept.txt", text: "kept body")
       stale_id = Ecto.UUID.generate()
 
@@ -1105,8 +1105,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       assert pid == a.id
     end
 
-    test "returns auth error for SXI agent searching Wayne-tech project",
-         %{agent_sxi: agent, project_b: project} do
+    test "returns auth error for Globex agent searching Vandelay-ind project",
+         %{agent_globex: agent, project_b: project} do
       _ = create_file(project, text: "sibling-body")
       install_memory_stub([])
 
@@ -1121,7 +1121,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects explicit org_id mismatch from tenant-pinned agent",
-         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+         %{agent_globex: agent, project_a: project, vandelay_ind: pt} do
       _ = create_file(project, text: "body")
       install_memory_stub([])
 
@@ -1148,7 +1148,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "missing query returns recoverable arg error",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       assert {:error, %{recoverable: true, error: msg}} =
                ToolSurface.execute(
                  "file_search",
@@ -1167,7 +1167,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "honors the limit argument when forwarding to Memory",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       files =
         for i <- 1..5 do
           create_file(project, filename: "f#{i}.txt", text: "body #{i}")
@@ -1189,7 +1189,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "surfaces a recoverable error envelope when Memory.search errors",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       install_memory_stub({:error, :memory_service_down})
 
       assert {:error, %{code: :memory_service_error, recoverable: true, error: msg}} =
@@ -1203,7 +1203,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "snippet is nil when the file has no cached extracted text",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, ingest_status: "pending")
       install_memory_stub([%{entry_id: file.id, score: 0.6}])
 
@@ -1219,7 +1219,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "snippet truncates to 240 graphemes when body is longer",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       long_body = String.duplicate("x", 1_000)
       file = create_file(project, text: long_body)
       install_memory_stub([%{entry_id: file.id, score: 0.5}])
@@ -1311,7 +1311,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     setup :with_tmp_storage_root
 
     test "persists inline bytes, returns state: ready, fires async ingest",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       install_memory_stub([])
       body = "hello inline body #{u()}"
       data_b64 = Base.encode64(body)
@@ -1352,7 +1352,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "dedup branch returns the same id with deduplicated: true",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       install_memory_stub([])
       body = "dedup-body-#{u()}"
       data_b64 = Base.encode64(body)
@@ -1394,7 +1394,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects oversize inline payload with recoverable error",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       prev = Application.get_env(:platform, :inline_upload_max_bytes, 25 * 1024 * 1024)
       Application.put_env(:platform, :inline_upload_max_bytes, 16)
       on_exit(fn -> Application.put_env(:platform, :inline_upload_max_bytes, prev) end)
@@ -1417,7 +1417,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "invalid base64 returns recoverable arg error",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       assert {:error, %{recoverable: true, error: msg}} =
                ToolSurface.execute(
                  "file_add",
@@ -1438,7 +1438,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     setup :with_tmp_storage_root
 
     test "reserves a pending row and returns an upload_url",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       assert {:ok,
               %{
                 id: file_id,
@@ -1473,7 +1473,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects oversize presigned byte_size",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       prev = Application.get_env(:platform, :upload_max_bytes, 500 * 1024 * 1024)
       Application.put_env(:platform, :upload_max_bytes, 1024)
       on_exit(fn -> Application.put_env(:platform, :upload_max_bytes, prev) end)
@@ -1494,7 +1494,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "neither data_base64 nor byte_size returns recoverable arg error",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       assert {:error, %{recoverable: true, error: msg}} =
                ToolSurface.execute(
                  "file_add",
@@ -1511,7 +1511,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "data_base64 takes precedence when both are passed",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       install_memory_stub([])
       body = "precedence-body-#{u()}"
       data_b64 = Base.encode64(body)
@@ -1537,8 +1537,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   describe "execute/3 file_add — authorization & arg validation" do
     setup :with_tmp_storage_root
 
-    test "rejects SXI agent writing into a Wayne-tech project",
-         %{agent_sxi: agent, project_b: project} do
+    test "rejects Globex agent writing into a Vandelay-ind project",
+         %{agent_globex: agent, project_b: project} do
       assert {:error, %{error: msg, recoverable: false}} =
                ToolSurface.execute(
                  "file_add",
@@ -1555,7 +1555,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects explicit org_id mismatch from tenant-pinned agent",
-         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+         %{agent_globex: agent, project_a: project, vandelay_ind: pt} do
       assert {:error, %{error: msg, recoverable: false}} =
                ToolSurface.execute(
                  "file_add",
@@ -1641,7 +1641,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
   describe "execute/3 file_delete" do
     test "deletes the row and returns deleted: true",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, filename: "doomed.txt", body: "doomed body")
       assert Files.get_file(file.id), "precondition: file row exists"
 
@@ -1657,7 +1657,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "idempotent re-delete returns :not_found (no crash)",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, filename: "twice.txt", body: "twice body")
 
       assert {:ok, %{deleted: true}} =
@@ -1686,8 +1686,8 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
       assert msg =~ "file not found"
     end
 
-    test "cross-org SXI agent deleting a Wayne-tech file is rejected; row still exists",
-         %{agent_sxi: agent, project_b: project} do
+    test "cross-org Globex agent deleting a Vandelay-ind file is rejected; row still exists",
+         %{agent_globex: agent, project_b: project} do
       file = create_file(project, filename: "protect-only.txt", body: "off-limits")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -1702,7 +1702,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "rejects explicit org_id mismatch from tenant-pinned agent",
-         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+         %{agent_globex: agent, project_a: project, vandelay_ind: pt} do
       file = create_file(project, filename: "pinned.txt", body: "pinned")
 
       assert {:error, %{error: msg, recoverable: false}} =
@@ -1753,7 +1753,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "broadcasts {:file_deleted, file_id} on the project topic",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, filename: "broadcast.txt", body: "broadcast")
       :ok = Files.subscribe_project(project.id)
 
@@ -1771,7 +1771,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     # ── Soft-delete semantics (task 019f7cb0 stage 4 rewire) ────────────
 
     test "soft-deletes: row retained with deleted_at for the 30-day undo window",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, filename: "undoable.txt", body: "undoable")
 
       assert {:ok, %{deleted: true}} =
@@ -1791,7 +1791,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "scrubs the AI search index under the file id",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       install_memory_stub([], notify_delete: self())
       file = create_file(project, filename: "indexed.txt", body: "indexed")
 
@@ -1807,7 +1807,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "audit-logs the delete with the acting agent attributed",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       # Guarantee the telemetry→audit bridge is attached (same defensive
       # dance as Platform.Files.SoftDeleteTest — attach is idempotent-ish
       # via detach-first, and this module is async: false).
@@ -1846,7 +1846,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     end
 
     test "refuses a file in an archived project with :project_archived",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       file = create_file(project, filename: "frozen.txt", body: "frozen")
 
       project
@@ -1879,7 +1879,7 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     # `ingest_intent` fails HERE, loudly, instead of quietly opening a new
     # unhandled hole in the helper.
     test "every pair the DB accepts has a clause; every pair it rejects names the coupling check",
-         %{agent_sxi: agent, project_a: project} do
+         %{agent_globex: agent, project_a: project} do
       pairs =
         for intent <- Files.File.valid_ingest_intents(),
             status <- Files.File.valid_ingest_statuses(),

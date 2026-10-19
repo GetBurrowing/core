@@ -18,9 +18,11 @@ class IdentityTermsTest(unittest.TestCase):
         with open(SCANNER, encoding="utf-8") as handle:
             source = handle.read()
         block = re.search(r"@digests MapSet\.new\(\[(.*?)\]\)", source, re.DOTALL).group(1)
-        lines = [line.strip() for line in block.splitlines() if line.strip()]
-        self.assertEqual(len(lines), 21)
-        self.assertEqual(len(DIGESTS), 21)
+        # count digest entries, not lines: the block carries comment lines
+        # (A3c 01a14dd9 added one above its tenant and client digests)
+        entries = re.findall(r'"([0-9a-f]{64})"', block)
+        self.assertEqual(len(entries), 29)
+        self.assertEqual(len(DIGESTS), 29)
         self.assertEqual(load_digests(), DIGESTS)
 
     def test_a_planted_term_is_named_in_every_shape(self):

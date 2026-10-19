@@ -7,9 +7,9 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
   Before this stage a runtime-created org got no pill anywhere in chat: the
   drawer went through `sub_org_scope_atom/1` (six display names), the header
   through `space_scope_atom/1` -> `section_scope_atom/1` (six slugs), and both
-  returned nil for anything else. `org_scope/1` keeps the six shipped atoms,
-  because `@scope_filter` holds atoms and the header's active state compares
-  against it, and hands every other org its stored slug as a binary.
+  returned nil for anything else. Since task 01a14dd9 stage 2 `org_scope/1`
+  hands EVERY org its stored slug as a binary; `@scope_filter` holds the same
+  binary, so the header's active state compares like with like.
   """
 
   use Platform.DataCase, async: true
@@ -48,8 +48,8 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
   end
 
   describe "org_scope/1" do
-    test "a shipped sibling slug keeps its existing scope atom" do
-      assert ChatLive.org_scope("wayne_tech") == :wayne_tech
+    test "a shipped sibling slug is its stored binary too (no compiled atoms, task 01a14dd9)" do
+      assert ChatLive.org_scope("vandelay_ind") == "vandelay_ind"
     end
 
     test "the root org's slug is the stored binary: it has no compiled atom" do
@@ -70,10 +70,10 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
       assert ChatLive.space_scope_atom(channel_on(org)) == "new_client"
     end
 
-    test "a channel on a shipped org keeps its atom" do
-      wayne_tech = Tenancy.get_org_by_slug!("wayne_tech")
+    test "a channel on a shipped org resolves to its stored slug" do
+      vandelay_ind = Tenancy.get_org_by_slug!("vandelay_ind")
 
-      assert ChatLive.space_scope_atom(channel_on(wayne_tech)) == :wayne_tech
+      assert ChatLive.space_scope_atom(channel_on(vandelay_ind)) == "vandelay_ind"
     end
 
     test "dm and group spaces still carry no scope" do
@@ -93,10 +93,10 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
       assert sections.bucket_orgs["Newclient"] ==
                %{slug: "new_client", name: "Newclient", scope: "new_client"}
 
-      wayne_tech = Tenancy.get_org_by_slug!("wayne_tech")
+      vandelay_ind = Tenancy.get_org_by_slug!("vandelay_ind")
 
-      assert sections.bucket_orgs[wayne_tech.name] ==
-               %{slug: "wayne_tech", name: wayne_tech.name, scope: :wayne_tech}
+      assert sections.bucket_orgs[vandelay_ind.name] ==
+               %{slug: "vandelay_ind", name: vandelay_ind.name, scope: "vandelay_ind"}
     end
 
     test "a rename moves the bucket key and keeps the slug" do

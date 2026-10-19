@@ -101,7 +101,7 @@ class ConversationShortcutsTest {
     @Test
     fun `(d) a published shortcut is a long-lived conversation that opens the space`() {
         val sink = RecordingShortcutSink()
-        val id = shortcuts(sink).publish("burrow.example.com", "0192-s", "Internal Legacy SXI", "/chat/internal-legacy-sxi", listOf(sam))
+        val id = shortcuts(sink).publish("burrow.example.com", "0192-s", "Internal Legacy Globex", "/chat/internal-legacy-globex", listOf(sam))
         assertEquals("burrow.example.com|0192-s", id)
         val shortcut = sink.pushed.single()
 
@@ -109,7 +109,7 @@ class ConversationShortcutsTest {
         assertTrue(shortcut.longLivedForTest)
         assertEquals(setOf(ConversationShortcuts.CATEGORY_CONVERSATION, ConversationShortcuts.CATEGORY_SHARE_TARGET), shortcut.categories)
         assertEquals(id, shortcut.locusId!!.id)
-        assertEquals("Internal Legacy SXI", shortcut.shortLabel.toString())
+        assertEquals("Internal Legacy Globex", shortcut.shortLabel.toString())
         assertEquals(
             "Sam",
             shortcut.personsForTest
@@ -123,12 +123,12 @@ class ConversationShortcutsTest {
         assertEquals(LaunchRouter.ACTION_OPEN_CONVERSATION, intent.action)
         assertEquals(MainActivity::class.java.name, intent.component!!.className)
         assertEquals("burrow.example.com", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_HOST))
-        assertEquals("/chat/internal-legacy-sxi", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_PATH))
+        assertEquals("/chat/internal-legacy-globex", intent.getStringExtra(LaunchRouter.EXTRA_CONVERSATION_PATH))
     }
 
     @Test
     fun `the conversation path strips the query and refuses anything that is not a chat path`() {
-        assertEquals("/chat/internal-legacy-sxi", ConversationShortcuts.conversationPath("/chat/internal-legacy-sxi?message=0192-m", "s"))
+        assertEquals("/chat/internal-legacy-globex", ConversationShortcuts.conversationPath("/chat/internal-legacy-globex?message=0192-m", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("//evil.example/chat/x", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("/chat", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath(null, "s"))

@@ -212,7 +212,7 @@ defmodule Platform.Experiments.SurfacesTest do
 
     test "a project-scoped experiment reads the task's project from the dispatch surface",
          %{template: template} do
-      org = Platform.TenancyFixtures.tenant_org_id("soylent")
+      org = Platform.TenancyFixtures.tenant_org_id("initech")
       {:ok, p} = Platform.Tasks.create_project(%{name: "Scoped #{unique()}", org_id: org})
       {:ok, q} = Platform.Tasks.create_project(%{name: "Other #{unique()}", org_id: org})
       {:ok, in_p} = Platform.Tasks.create_task(%{project_id: p.id, title: "in P"})

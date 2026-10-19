@@ -339,14 +339,12 @@
    the slug-agnostic `.scope-*` rules below, reading custom properties that
    `PlatformWeb.Components.ScopeColorStyles` emits per org from its row.
 
-   Until task 01a09333-d374 stage 5 the six shipped orgs (the root org,
-   soylent, wayne-tech, sxi, paragon, cyberdyne) had their own hand-authored chip
-   utilities here: `bg-<slug>` (12% alpha), `bg-<slug>-active`,
-   `border-<slug>` (30% alpha), `hover:bg-<slug>/22` and
-   `text-<slug>-label`. Stage 5 moved the six onto the var path and deleted
-   those, so no chip can carry both class sets. Two per-slug utilities
-   remain at the end of this layer because non-chip code uses them; see
-   the note there.
+   Until task 01a09333-d374 stage 5 the six shipped orgs had their own
+   hand-authored chip utilities here (`bg-<slug>`, `bg-<slug>-active`,
+   `border-<slug>`, `hover:bg-<slug>/22`, `text-<slug>-label`). Stage 5
+   moved them onto the var path. Task 01a14dd9 stage 2 deleted the last two
+   per-slug utilities (`text-<slug>`, `bg-<slug>-dot`) and the per-slug
+   recolor swatches: no rule in this file names an org.
    ────────────────────────────────────────────────────── */
 @layer utilities {
   /* ── Runtime scope colours (var-driven) ───────────────────────────────
@@ -376,7 +374,7 @@
      The label decision, recorded when the six shipped orgs had their own
      label tokens and kept since: the full-saturation fill is tuned for the
      dot and the active pill, NOT for label text on the chip's tint, where
-     it dips below AA (e.g. soylent ~3.0:1 light). So the label darkens
+     it dips below AA (one shipped org measured ~3.0:1 light). So the label darkens
      only the LABEL: same hue + chroma as the fill, lower L, so the pill
      label meets AA while preserving the scope hue. Since task
      01a09333-d374 that rule applies per surface: each org has one label
@@ -442,41 +440,19 @@
       0 0 0 4px var(--color-focus-ring);
   }
 
-  /* ── Two per-slug utilities that are NOT chip classes ──────────────────
-     Kept after task 01a09333-d374 stage 5 deleted every per-slug CHIP
-     utility, because code other than the scope chip reads them:
-       - `.text-<slug>` is `Platform.Tenancy.scope_color/1`'s answer, used
-         by the inheritance pill, the files and recovery pages, and the
-         tasks sidebar dots and filter breadcrumb.
-       - `.bg-<slug>-dot` is `ChatLive.section_dot_class/1`'s answer, the
-         chat rail's section-header dot.
-     Both are the org's full-saturation fill, the same value its row now
-     carries (hue, chroma, fill lightness) and `--scope-fill` emits, and
-     `ScopePillTest` holds each one to the values the stage 5 migration
-     writes to that row. They are a second copy of
-     that fill and a candidate for the var path in their own right; do not
-     add a slug here. Set the org's `color_hue` instead.
-
-     The root org has NO entry (task 01a116de stage 3). It is install data,
-     not a compiled slug, so its dot reads `--scope-fill` off its own row:
-     `.scope-dot-current` below and the chat rail's
-     `.channel-section-color-dot--unassigned[data-scope]`. */
-  .text-soylent { color: oklch(65% 0.20 295); }
-  .bg-soylent-dot { background-color: oklch(65% 0.20 295); }
-  .text-wayne-tech { color: oklch(68% 0.15 240); }
-  .bg-wayne-tech-dot { background-color: oklch(68% 0.15 240); }
-  .text-sxi { color: oklch(70% 0.15 162); }
-  .bg-sxi-dot { background-color: oklch(70% 0.15 162); }
-  .text-paragon { color: oklch(80% 0.16 95); }
-  .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
-  .text-cyberdyne { color: oklch(66% 0.19 340); }
-  .bg-cyberdyne-dot { background-color: oklch(66% 0.19 340); }
+  /* Text in an org's full-saturation fill, for the few non-chip call
+     sites that colour a word rather than a chip (the inheritance pill's
+     accent, the tasks breadcrumb's org name). Reads `--scope-fill` from the
+     element's own `data-scope`; with no rule emitted the declaration is
+     invalid at computed-value time and the text inherits its colour. Task
+     01a14dd9 stage 2 replaced the per-slug `.text-<slug>` utilities with
+     this. */
+  .scope-fill-text { color: var(--scope-fill); }
 
   /* A list-row org dot that takes the org's row colour when one is emitted
-     for its `data-scope`, and otherwise the element's own `color` (the
-     `.text-<slug>` / `text-muted` class beside it). Replaces `bg-current`
-     on those dots so the root org, which has no `.text-<slug>`, is still
-     coloured from its row (task 01a116de stage 3). */
+     for its `data-scope`, and otherwise the element's own `color`. Replaces
+     `bg-current` on those dots (task 01a116de stage 3); since task 01a14dd9
+     stage 2 it is the only colour those dots have. */
   .scope-dot-current { background-color: var(--scope-fill, currentColor); }
 }
 
@@ -5543,7 +5519,7 @@ body, .font-suite {
   }
 
   /* Color-only section swatch in the section header. Communicates the section's
-     scope COLOR (via a `bg-<token>-dot` utility) and nothing else — the section
+     scope COLOR (via `data-scope` and `--scope-fill`) and nothing else — the section
      name is the text identity beside it. Replaces the old scope_pill whose
      visible text was derived from the color token, which made a recolor look
      like a rename. `flex-shrink-0` so it never collapses; `aria-hidden` in the
@@ -5552,11 +5528,10 @@ body, .font-suite {
     @apply inline-block size-2 flex-shrink-0 rounded-full;
   }
 
-  /* An org the colour vocabulary has never heard of (task 01a00910 stage 4).
-     Once sidebar buckets derive from the orgs table, a new org can reach the
-     rail with no `bg-<token>-dot` utility — `section_dot_class/1` returns nil
-     for it, deliberately, and that nil is the signal rather than a missing
-     case. It renders here as a HOLLOW dot: same `size-2` diameter, same slot,
+  /* A colour token no org row has (task 01a00910 stage 4).
+     `ChatLive.section_dot_scope/2` returns nil for it, deliberately, and that
+     nil is the signal rather than a missing case. It renders here as a
+     HOLLOW dot: same `size-2` diameter, same slot,
      a 1px ring in `--color-base-300` and NO fill.
 
      Why not omit the dot: the slot is what keeps the header column true. Drop
@@ -5574,13 +5549,14 @@ body, .font-suite {
     box-shadow: inset 0 0 0 1px var(--color-base-300);
   }
 
-  /* The same slot, for a section wearing its own org's colour with no
-     compiled `bg-<token>-dot` (the root org on every install; task 01a116de
-     stage 3). `data-scope` is the org slug, so `--scope-fill` is the org's
+  /* The same slot, for a section whose colour token names an org row (every
+     coloured section since task 01a14dd9 stage 2; the root since 01a116de
+     stage 3). `data-scope` is that org's slug, so `--scope-fill` is the org's
      row colour when `ScopeColorStyles` emitted one: fill and ring both take
-     it and the dot reads solid. An org with no `color_hue` emits nothing,
-     both fallbacks fire, and the dot stays the hollow ring above. */
-  .channel-section-color-dot--unassigned[data-scope] {
+     it and the dot reads solid. An org with no `color_hue`, or a masked
+     section with no `data-scope`, gets no value, both fallbacks fire, and
+     the dot stays the hollow ring above. */
+  .channel-section-color-dot--scope {
     background-color: var(--scope-fill, transparent);
     box-shadow: inset 0 0 0 1px var(--scope-fill, var(--color-base-300));
   }
@@ -6084,47 +6060,23 @@ body, .font-suite {
     @apply w-full rounded border border-warning/40 bg-base-100 px-1.5 py-0.5 text-sm font-medium text-base-content focus:border-warning focus:outline-none;
   }
 
-  /* Compact recolor palette under a section header (admin-edit). The 5 scope
-     tokens are the only choices — no free-form picker. */
+  /* Compact recolor palette under a section header (admin-edit). The org
+     rows with a colour are the only choices — no free-form picker. */
   .channel-section-palette {
     @apply flex items-center gap-1.5 px-3 pb-1;
   }
 
   /* One color swatch. Active token gets a ring so the current color reads.
-     Each swatch reuses the canonical `bg-<slug>-dot` scope color. */
+     Each swatch is coloured from its org's row through `data-scope` (task
+     01a14dd9 stage 2; the own-org swatch since 01a116de stage 3), and is
+     hollow when that org has no colour. */
   .channel-section-swatch {
     @apply inline-block size-4 rounded-full ring-1 ring-base-content/15 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-warning;
+    background-color: var(--scope-fill, transparent);
   }
 
   .channel-section-swatch--active {
     @apply ring-2 ring-warning ring-offset-1 ring-offset-base-200;
-  }
-
-  /* The section's OWN org swatch, coloured from the org's row through its
-     `data-scope` (task 01a116de stage 3): how the root org, which has no
-     compiled token, gets a swatch. Hollow when the org has no colour. */
-  .channel-section-swatch--own {
-    background-color: var(--scope-fill, transparent);
-  }
-
-  .channel-section-swatch--soylent {
-    background-color: oklch(65% 0.2 295);
-  }
-
-  .channel-section-swatch--wayne-tech {
-    background-color: oklch(68% 0.15 240);
-  }
-
-  .channel-section-swatch--sxi {
-    background-color: oklch(70% 0.15 162);
-  }
-
-  .channel-section-swatch--paragon {
-    background-color: oklch(80% 0.16 95);
-  }
-
-  .channel-section-swatch--cyberdyne {
-    background-color: oklch(66% 0.19 340);
   }
 
   /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"
@@ -6250,7 +6202,7 @@ body, .font-suite {
   /* The move confirmation's message slot (task 019ffcad stage 4). The hide
      toast's slot minus `truncate`, and that one word is the whole difference.
 
-     The rail is ~224px wide. "Moved #gen-migration to Wayne-Tech." at text-sm
+     The rail is ~224px wide. "Moved #gen-migration to Vandelay-Ind." at text-sm
      runs past that, and `truncate` ellipsises from the RIGHT, so the line would
      render "Moved #gen-migration to P…", cutting the destination: the half of
      the sentence the copy rule exists to keep, and it would still pass a test

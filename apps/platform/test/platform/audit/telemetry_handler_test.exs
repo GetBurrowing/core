@@ -300,7 +300,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
 
     test "federated_user actor_type with both actor_id (handle) and actor_org_id" do
       pseudonymous_handle = Ecto.UUID.generate()
-      peer_org_id = tenant_org_id("soylent")
+      peer_org_id = tenant_org_id("initech")
 
       :telemetry.execute(
         [:platform, :auth, :callback],

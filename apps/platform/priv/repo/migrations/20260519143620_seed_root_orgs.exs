@@ -2,8 +2,8 @@ defmodule Platform.Repo.Migrations.SeedRootOrgs do
   @moduledoc """
   Seed this install's root org (task 01a068f6 stage 2).
 
-  Originally seeded five hardcoded operator-brand orgs (Acme root + Soylent,
-  Wayne-Tech, SXI, Paragon tenants) — the exact bug task 01a068f6 exists to
+  Originally seeded five hardcoded operator-brand orgs (Acme root + Initech,
+  Vandelay-Ind, Globex, Hooli tenants) — the exact bug task 01a068f6 exists to
   fix: every fresh Suite install came up owned by one customer's org
   structure. Now seeds ONE root org (`parent_org_id IS NULL`), named and
   slugged from `ROOT_ORG_NAME`/`ROOT_ORG_SLUG` env vars, defaulting to
@@ -21,7 +21,7 @@ defmodule Platform.Repo.Migrations.SeedRootOrgs do
 
   ## Dropped: the four tenant-org inserts
 
-  This migration no longer inserts Soylent/Wayne-Tech/SXI/Paragon. Those
+  This migration no longer inserts Initech/Vandelay-Ind/Globex/Hooli. Those
   were operator-brand tenant orgs with no reason to exist on every fresh
   install; any install that wants child orgs creates them post-install via
   `Platform.Tenancy.create_org/2` (see `PlatformWeb.Live.AdminOrgsLive`).

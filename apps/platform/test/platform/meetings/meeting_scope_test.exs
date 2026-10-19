@@ -68,8 +68,8 @@ defmodule Platform.Meetings.MeetingScopeTest do
   setup do
     %{
       acme: Platform.TenancyFixtures.acme_org_id(),
-      org_a: Platform.TenancyFixtures.tenant_org_id("soylent"),
-      org_b: Platform.TenancyFixtures.tenant_org_id("wayne_tech")
+      org_a: Platform.TenancyFixtures.tenant_org_id("initech"),
+      org_b: Platform.TenancyFixtures.tenant_org_id("vandelay_ind")
     }
   end
 

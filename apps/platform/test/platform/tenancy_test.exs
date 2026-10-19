@@ -67,7 +67,7 @@ defmodule Platform.TenancyTest do
     test "the four tenants are seeded under Acme" do
       acme = Tenancy.get_org_by_slug!("acme")
 
-      for slug <- ~w(soylent wayne_tech sxi paragon) do
+      for slug <- ~w(initech vandelay_ind globex hooli) do
         tenant = Tenancy.get_org_by_slug!(slug)
         assert tenant.parent_org_id == acme.id, "#{slug} should parent to Acme"
       end
@@ -119,7 +119,7 @@ defmodule Platform.TenancyTest do
 
   describe "get_org_by_slug!/1" do
     test "returns the org when found" do
-      assert %Org{slug: "soylent"} = Tenancy.get_org_by_slug!("soylent")
+      assert %Org{slug: "initech"} = Tenancy.get_org_by_slug!("initech")
     end
 
     test "raises Ecto.NoResultsError for an unknown slug" do
@@ -186,10 +186,10 @@ defmodule Platform.TenancyTest do
     test "returns every org (root + tenants)" do
       slugs = Tenancy.list_orgs() |> Enum.map(& &1.slug) |> Enum.sort()
       assert "acme" in slugs
-      assert "soylent" in slugs
-      assert "wayne_tech" in slugs
-      assert "sxi" in slugs
-      assert "paragon" in slugs
+      assert "initech" in slugs
+      assert "vandelay_ind" in slugs
+      assert "globex" in slugs
+      assert "hooli" in slugs
     end
   end
 
@@ -201,7 +201,7 @@ defmodule Platform.TenancyTest do
 
     test "includes the four seeded tenants" do
       slugs = Tenancy.list_tenants() |> Enum.map(& &1.slug) |> Enum.sort()
-      assert slugs == ~w(paragon soylent wayne_tech sxi)
+      assert slugs == ~w(globex hooli initech vandelay_ind)
     end
   end
 
@@ -222,25 +222,25 @@ defmodule Platform.TenancyTest do
     test "includes the root Acme plus every active tenant" do
       slugs = Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug)
       assert "acme" in slugs
-      assert Enum.sort(slugs) == ~w(acme paragon soylent wayne_tech sxi)
+      assert Enum.sort(slugs) == ~w(acme globex hooli initech vandelay_ind)
     end
 
     test "returns rows in canonical tenant-priority order (Acme first)" do
       slugs = Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug)
-      assert slugs == ["acme", "soylent", "wayne_tech", "sxi", "paragon"]
+      assert slugs == ["acme", "initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "excludes an archived tenant" do
-      archive_org!("sxi")
+      archive_org!("globex")
 
       slugs = Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug)
-      refute "sxi" in slugs
+      refute "globex" in slugs
       # the other four scopes (root + 3 active tenants) survive
-      assert Enum.sort(slugs) == ~w(acme paragon soylent wayne_tech)
+      assert Enum.sort(slugs) == ~w(acme hooli initech vandelay_ind)
     end
 
     test "excludes a deletion-scheduled tenant (scheduling stamps archived_at)" do
-      org = Tenancy.get_org_by_slug!("paragon")
+      org = Tenancy.get_org_by_slug!("hooli")
 
       org
       |> Org.changeset(%{
@@ -250,28 +250,28 @@ defmodule Platform.TenancyTest do
       |> Repo.update!()
 
       slugs = Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug)
-      refute "paragon" in slugs
+      refute "hooli" in slugs
     end
 
     test "still lists Acme even though the root can never be archived" do
       # Archive every tenant; only the un-archivable root remains.
-      Enum.each(~w(soylent wayne_tech sxi paragon), &archive_org!/1)
+      Enum.each(~w(initech vandelay_ind globex hooli), &archive_org!/1)
 
       slugs = Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug)
       assert slugs == ["acme"]
     end
 
     test "regression: list_tenants/0 STILL returns an archived tenant (all-rows callers)" do
-      archive_org!("sxi")
+      archive_org!("globex")
 
       # list_active_tenants_unscoped hides it...
-      refute "sxi" in (Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug))
+      refute "globex" in (Tenancy.list_active_tenants_unscoped() |> Enum.map(& &1.slug))
 
       # ...but list_tenants/0 (org-summary walkers, preamble builder,
       # federation tool surface) still sees every tenant regardless of
       # archive state.
       all = Tenancy.list_tenants() |> Enum.map(& &1.slug) |> Enum.sort()
-      assert all == ~w(paragon soylent wayne_tech sxi)
+      assert all == ~w(globex hooli initech vandelay_ind)
     end
   end
 
@@ -298,24 +298,24 @@ defmodule Platform.TenancyTest do
       user =
         create_user!(%{email: "tenant_scope_#{System.unique_integer([:positive])}@example.com"})
         |> membership!("acme", "member")
-        |> membership!("soylent", "member")
+        |> membership!("initech", "member")
 
       refute Tenancy.root_admin?(user)
 
       slugs = slugs_for(user)
-      assert Enum.sort(slugs) == ~w(acme soylent)
-      refute "sxi" in slugs
-      refute "wayne_tech" in slugs
-      refute "paragon" in slugs
+      assert Enum.sort(slugs) == ~w(acme initech)
+      refute "globex" in slugs
+      refute "vandelay_ind" in slugs
+      refute "hooli" in slugs
     end
 
     test "preserves canonical tenant-priority ordering" do
       user =
         create_user!(%{email: "tenant_ord_#{System.unique_integer([:positive])}@example.com"})
-        |> membership!("paragon", "member")
-        |> membership!("soylent", "member")
+        |> membership!("hooli", "member")
+        |> membership!("initech", "member")
 
-      assert slugs_for(user) == ["soylent", "paragon"]
+      assert slugs_for(user) == ["initech", "hooli"]
     end
 
     test "a root (Acme) admin bypasses the membership filter" do
@@ -324,7 +324,7 @@ defmodule Platform.TenancyTest do
         |> membership!("acme", "admin")
 
       assert Tenancy.root_admin?(admin) == true
-      assert Enum.sort(slugs_for(admin)) == ~w(acme paragon soylent wayne_tech sxi)
+      assert Enum.sort(slugs_for(admin)) == ~w(acme globex hooli initech vandelay_ind)
     end
 
     test "the admin bypass also works off preloaded memberships (zero-query path)" do
@@ -334,16 +334,16 @@ defmodule Platform.TenancyTest do
 
       preloaded = Repo.preload(admin, org_memberships: :org)
       assert Tenancy.root_admin_preloaded?(preloaded) == true
-      assert Enum.sort(slugs_for(preloaded)) == ~w(acme paragon soylent wayne_tech sxi)
+      assert Enum.sort(slugs_for(preloaded)) == ~w(acme globex hooli initech vandelay_ind)
     end
 
     test "an archived org the member belongs to is still excluded" do
       user =
         create_user!(%{email: "tenant_arch_#{System.unique_integer([:positive])}@example.com"})
         |> membership!("acme", "member")
-        |> membership!("sxi", "member")
+        |> membership!("globex", "member")
 
-      Tenancy.get_org_by_slug!("sxi")
+      Tenancy.get_org_by_slug!("globex")
       |> Org.changeset(%{archived_at: DateTime.utc_now()})
       |> Repo.update!()
 
@@ -358,7 +358,7 @@ defmodule Platform.TenancyTest do
 
     test "list_active_tenants_unscoped/0 stays unscoped for system callers" do
       assert Enum.sort(Enum.map(Tenancy.list_active_tenants_unscoped(), & &1.slug)) ==
-               ~w(acme paragon soylent wayne_tech sxi)
+               ~w(acme globex hooli initech vandelay_ind)
     end
   end
 
@@ -366,12 +366,12 @@ defmodule Platform.TenancyTest do
 
   describe "tenant_priority/0 + helpers" do
     test "canonical order is the seed tenant order and names no root slug" do
-      assert Tenancy.tenant_priority() == ["soylent", "wayne_tech", "sxi", "paragon"]
+      assert Tenancy.tenant_priority() == ["initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "tenant_priority_index/1 returns position, or sentinel for unknown" do
-      assert Tenancy.tenant_priority_index("soylent") == 0
-      assert Tenancy.tenant_priority_index("paragon") == 3
+      assert Tenancy.tenant_priority_index("initech") == 0
+      assert Tenancy.tenant_priority_index("hooli") == 3
       assert Tenancy.tenant_priority_index("acme") == 9_999
       assert Tenancy.tenant_priority_index("never-heard-of-it") == 9_999
     end
@@ -379,29 +379,29 @@ defmodule Platform.TenancyTest do
     test "list_orgs_in_priority_order/0 surfaces the root first, then seed order" do
       slugs = Tenancy.list_orgs_in_priority_order() |> Enum.map(& &1.slug)
       # The root sorts first structurally; any unknown extras tail-sort by slug.
-      assert Enum.take(slugs, 5) == ["acme", "soylent", "wayne_tech", "sxi", "paragon"]
+      assert Enum.take(slugs, 5) == ["acme", "initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "sort_by_tenant_priority/2 ranks a parentless %Org{} first, then by slug priority" do
       items = [
-        %Org{slug: "paragon", parent_org_id: "p"},
+        %Org{slug: "hooli", parent_org_id: "p"},
         %Org{slug: "zz-root", parent_org_id: nil},
-        %Org{slug: "soylent", parent_org_id: "p"},
-        %Org{slug: "sxi", parent_org_id: "p"},
-        %Org{slug: "wayne_tech", parent_org_id: "p"}
+        %Org{slug: "initech", parent_org_id: "p"},
+        %Org{slug: "globex", parent_org_id: "p"},
+        %Org{slug: "vandelay_ind", parent_org_id: "p"}
       ]
 
       sorted = Tenancy.sort_by_tenant_priority(items, & &1.slug)
 
       assert Enum.map(sorted, & &1.slug) ==
-               ["zz-root", "soylent", "wayne_tech", "sxi", "paragon"]
+               ["zz-root", "initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "sort_by_tenant_priority/2 with a plain slug accessor has no root rank" do
-      items = [%{slug: "paragon"}, %{slug: "acme"}, %{slug: "soylent"}]
+      items = [%{slug: "hooli"}, %{slug: "acme"}, %{slug: "initech"}]
 
       sorted = Tenancy.sort_by_tenant_priority(items, & &1.slug)
-      assert Enum.map(sorted, & &1.slug) == ["soylent", "paragon", "acme"]
+      assert Enum.map(sorted, & &1.slug) == ["initech", "hooli", "acme"]
     end
   end
 
@@ -452,7 +452,7 @@ defmodule Platform.TenancyTest do
 
     test "false for a sub-org admin (tenant admin is NOT an Acme admin)" do
       user = create_user!()
-      create_membership!(user, Tenancy.get_org_by_slug!("soylent"), "admin")
+      create_membership!(user, Tenancy.get_org_by_slug!("initech"), "admin")
       refute Tenancy.root_admin?(user)
     end
 
@@ -488,8 +488,8 @@ defmodule Platform.TenancyTest do
     end
 
     test "false for an admin membership on a tenant org" do
-      soylent = Tenancy.get_org_by_slug!("soylent")
-      user = %User{org_memberships: [%OrgMembership{role: "admin", org: soylent}]}
+      initech = Tenancy.get_org_by_slug!("initech")
+      user = %User{org_memberships: [%OrgMembership{role: "admin", org: initech}]}
       refute Tenancy.root_admin_preloaded?(user)
     end
 
@@ -517,20 +517,20 @@ defmodule Platform.TenancyTest do
     end
 
     test "returns %{org:, role:} for a member user" do
-      soylent = Tenancy.get_org_by_slug!("soylent")
-      user = %User{org_memberships: [%OrgMembership{role: "member", org: soylent}]}
+      initech = Tenancy.get_org_by_slug!("initech")
+      user = %User{org_memberships: [%OrgMembership{role: "member", org: initech}]}
 
-      assert %{org: %Org{slug: "soylent"}, role: :member} = Tenancy.load_membership(user)
+      assert %{org: %Org{slug: "initech"}, role: :member} = Tenancy.load_membership(user)
     end
 
     test "returns the first membership when multiple are preloaded" do
       acme = Tenancy.get_org_by_slug!("acme")
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      globex = Tenancy.get_org_by_slug!("globex")
 
       user = %User{
         org_memberships: [
           %OrgMembership{role: "admin", org: acme},
-          %OrgMembership{role: "member", org: sxi}
+          %OrgMembership{role: "member", org: globex}
         ]
       }
 
@@ -574,7 +574,7 @@ defmodule Platform.TenancyTest do
     test "false when the user is not a member of the named org" do
       user = create_user!()
       create_membership!(user, Tenancy.get_org_by_slug!("acme"), "member")
-      refute Tenancy.member_of?(user, "soylent")
+      refute Tenancy.member_of?(user, "initech")
     end
 
     test "false for an unknown slug" do
@@ -595,7 +595,7 @@ defmodule Platform.TenancyTest do
     end
 
     test "returns :tenant for a tenant org" do
-      assert Tenancy.tier(Tenancy.get_org_by_slug!("soylent")) == :tenant
+      assert Tenancy.tier(Tenancy.get_org_by_slug!("initech")) == :tenant
     end
   end
 
@@ -606,63 +606,66 @@ defmodule Platform.TenancyTest do
 
     test "returns the Acme org for a tenant" do
       acme = Tenancy.get_org_by_slug!("acme")
-      parent = Tenancy.parent_org(Tenancy.get_org_by_slug!("soylent"))
+      parent = Tenancy.parent_org(Tenancy.get_org_by_slug!("initech"))
       assert parent.id == acme.id
     end
   end
 
-  # ── scope_color / scope_label (pure, DB-free) ────────────────────────
+  # ── Row-driven scope display (task 01a14dd9 stage 2) ─────────────────
+  #
+  # `scope_color/1` and `scope_label/1` (compiled slug maps) are deleted; the
+  # guard that they stay deleted is `Platform.ScopeRegistryConsistencyTest`.
 
-  describe "scope_color/1" do
-    test "returns the canonical tailwind class for each seeded scope (atom)" do
-      assert Tenancy.scope_color(:soylent) == "text-soylent"
-      assert Tenancy.scope_color(:wayne_tech) == "text-wayne-tech"
-      assert Tenancy.scope_color(:sxi) == "text-sxi"
-      assert Tenancy.scope_color(:paragon) == "text-paragon"
+  describe "css_slug/1" do
+    test "lowercases and turns underscores into hyphens" do
+      assert Tenancy.css_slug("vandelay_ind") == "vandelay-ind"
+      assert Tenancy.css_slug("Initech") == "initech"
     end
 
-    test "accepts a binary slug" do
-      assert Tenancy.scope_color("sxi") == "text-sxi"
-    end
-
-    test "has no compiled class for the root org: it is coloured from its row" do
-      # Task 01a116de stage 3. The root is install data; its dot reads
-      # `--scope-fill` through `data-scope`, so the class map stays silent.
-      root = Tenancy.get_root_org()
-      assert Tenancy.scope_color(root.slug) == "text-muted"
-    end
-
-    test "falls back to text-muted for an unknown atom" do
-      assert Tenancy.scope_color(:__never_seeded__) == "text-muted"
-    end
-
-    test "falls back to text-muted for an unknown binary (even one that doesn't atomise)" do
-      assert Tenancy.scope_color(
-               "never-going-to-be-an-atom-#{System.unique_integer([:positive])}"
-             ) ==
-               "text-muted"
+    test "is nil for anything that is not a binary" do
+      assert Tenancy.css_slug(nil) == nil
+      assert Tenancy.css_slug(:initech) == nil
     end
   end
 
-  describe "scope_label/1" do
-    test "returns the canonical label for each seeded scope (atom)" do
-      assert Tenancy.scope_label(:soylent) == "Soylent"
-      assert Tenancy.scope_label(:wayne_tech) == "Wayne-Tech"
-      assert Tenancy.scope_label(:sxi) == "SXI"
-      assert Tenancy.scope_label(:paragon) == "Paragon"
+  defp scope_row(slug, attrs) do
+    struct!(Org, Map.merge(%{slug: slug, name: String.capitalize(slug)}, attrs))
+  end
+
+  describe "scope_token_index/1 and scope_palette/1 (pure over rows)" do
+    test "the index keys every org by its token, archived orgs included" do
+      archived = scope_row("hooli", %{color_hue: 200, archived_at: ~U[2026-01-01 00:00:00Z]})
+      live = scope_row("vandelay_ind", %{color_hue: 40, color_lightness: 0.7})
+
+      index = Tenancy.scope_token_index([archived, live])
+
+      assert %{slug: "hooli", hue: 200, archived?: true, token: "hooli"} = index["hooli"]
+
+      assert %{slug: "vandelay_ind", hue: 40, lightness: 0.7, archived?: false} =
+               index["vandelay-ind"]
     end
 
-    test "accepts a binary slug" do
-      assert Tenancy.scope_label("soylent") == "Soylent"
-    end
+    test "the palette is non-archived orgs WITH a hue, root first, as tokens" do
+      root = scope_row("acme", %{parent_org_id: nil, color_hue: 264})
+      parent_id = Ecto.UUID.generate()
 
-    test "falls back to a capitalised echo for an unknown atom" do
-      assert Tenancy.scope_label(:__never_seeded__) == "__never_seeded__"
-    end
+      orgs = [
+        scope_row("wonka", %{parent_org_id: parent_id, color_hue: 340}),
+        scope_row("hooli", %{
+          parent_org_id: parent_id,
+          color_hue: 200,
+          archived_at: DateTime.utc_now()
+        }),
+        scope_row("globex", %{parent_org_id: parent_id, color_hue: nil}),
+        scope_row("vandelay_ind", %{parent_org_id: parent_id, color_hue: 40}),
+        root
+      ]
 
-    test "falls back to a capitalised echo for an unknown binary" do
-      slug = "made_up_slug_#{System.unique_integer([:positive])}"
-      assert Tenancy.scope_label(slug) == String.capitalize(slug)
+      assert Enum.map(Tenancy.scope_palette(orgs), & &1.token) ==
+               ["acme", "vandelay-ind", "wonka"]
+
+      assert %{token: "vandelay-ind", slug: "vandelay_ind", name: "Vandelay_ind"} =
+               Enum.find(Tenancy.scope_palette(orgs), &(&1.slug == "vandelay_ind"))
     end
   end
 
@@ -1267,51 +1270,51 @@ defmodule Platform.TenancyTest do
 
     test ":overridden when org defines the key AND an ancestor also defines it" do
       acme = Tenancy.get_org_by_slug!("acme")
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
 
       lookup =
         build_lookup(%{
-          {soylent.id, :greeting} => "Hi from Soylent",
+          {initech.id, :greeting} => "Hi from Initech",
           {acme.id, :greeting} => "Hi from Acme"
         })
 
-      assert {:overridden, "Hi from Soylent", "Hi from Acme"} =
-               Tenancy.effective_value(soylent, :greeting, "fallback", lookup_fn: lookup)
+      assert {:overridden, "Hi from Initech", "Hi from Acme"} =
+               Tenancy.effective_value(initech, :greeting, "fallback", lookup_fn: lookup)
     end
 
     test ":inherited when org has nothing and an ancestor defines the key" do
       acme = Tenancy.get_org_by_slug!("acme")
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
 
       lookup = build_lookup(%{{acme.id, :greeting} => "Hi from Acme"})
 
       assert {:inherited, %Org{id: source_id}, "Hi from Acme"} =
-               Tenancy.effective_value(soylent, :greeting, "fallback", lookup_fn: lookup)
+               Tenancy.effective_value(initech, :greeting, "fallback", lookup_fn: lookup)
 
       assert source_id == acme.id
     end
 
     test ":defined_here with the default when no org in the chain defines the key" do
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
       lookup = build_lookup(%{})
 
       assert {:defined_here, "fallback-default"} =
-               Tenancy.effective_value(soylent, :greeting, "fallback-default", lookup_fn: lookup)
+               Tenancy.effective_value(initech, :greeting, "fallback-default", lookup_fn: lookup)
     end
 
     test "deep ancestor walk — 3-level hierarchy, key defined only at the root" do
       acme = Tenancy.get_org_by_slug!("acme")
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
 
-      # Create a hypothetical sub-sub-org parented to Soylent. The
+      # Create a hypothetical sub-sub-org parented to Initech. The
       # seed only has two tiers; this test exercises the resolver's
       # depth handling for the future-tier case Plan 1 v3 documents.
       sub_sub =
         %Org{}
         |> Org.changeset(%{
-          name: "Soylent North",
-          slug: "soylent_north_#{System.unique_integer([:positive])}",
-          parent_org_id: soylent.id
+          name: "Initech North",
+          slug: "initech_north_#{System.unique_integer([:positive])}",
+          parent_org_id: initech.id
         })
         |> Repo.insert!()
 

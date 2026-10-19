@@ -105,7 +105,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
     test "an archived org groups its cascade children — revealed on expand", %{conn: conn} do
       {conn, admin} = acme_admin_conn(conn)
-      org = tenant_org!(%{name: "Soylent"})
+      org = tenant_org!(%{name: "Initech"})
       project = project!(org, %{name: "Discovery"})
       channel = channel!(org, %{name: "Standup"})
 
@@ -235,7 +235,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
     test "restoring a cascade child names the org reactivated as a side-effect", %{conn: conn} do
       {conn, admin} = acme_admin_conn(conn)
-      org = tenant_org!(%{name: "Soylent"})
+      org = tenant_org!(%{name: "Initech"})
       project = project!(org, %{name: "Discovery"})
 
       {:ok, _} = Tenancy.archive_org(admin, org)
@@ -248,7 +248,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
       toast = view |> element("[data-role=recovery-toast]") |> render()
       assert toast =~ "Discovery restored"
-      assert toast =~ "Soylent reactivated too"
+      assert toast =~ "Initech reactivated too"
 
       # The child came back and its org was reactivated with it.
       refute Repo.get(Project, project.id).archived_at
@@ -327,7 +327,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
     test "an org with scheduled children opens the warning instead of restoring", %{conn: conn} do
       {conn, admin} = acme_admin_conn(conn)
-      org = tenant_org!(%{name: "Soylent"})
+      org = tenant_org!(%{name: "Initech"})
       project = project!(org, %{name: "Discovery"})
       {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
 

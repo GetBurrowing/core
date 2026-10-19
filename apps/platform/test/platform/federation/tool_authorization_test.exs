@@ -21,7 +21,7 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
 
   setup do
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
 
     internal = World.create_user!()
     World.plain_member!(internal, org)

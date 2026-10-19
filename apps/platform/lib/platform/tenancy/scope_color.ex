@@ -68,7 +68,7 @@ defmodule Platform.Tenancy.ScopeColor do
   1.17-1.41:1. WCAG 1.4.11 asks 3:1 for the visual boundary of an
   interactive component. The edge cannot be a higher alpha of the fill:
   four of the six shipped colours never reach 3:1 against white at ANY
-  alpha (fully opaque, root 2.61, wayne-tech 2.83, sxi 2.51, paragon 1.87).
+  alpha (fully opaque, root 2.61, vandelay-ind 2.83, globex 2.51, hooli 1.87).
 
   So each cell also solves an `edge`: the fill's hue and chroma at a lower
   L, walked from the fill exactly as the label is (light DOWN, dark UP, in
@@ -81,8 +81,8 @@ defmodule Platform.Tenancy.ScopeColor do
   label: where the fill already holds, the edge IS the fill. At the default
   72% fill (`derive/2`) that is every dark cell, since the fill measures
   5.9-10.0:1 against the two dark grounds, and no light cell. At the
-  shipped fills (`derive/3`) it is also both light cells of soylent (65%)
-  and cyberdyne (66%).
+  shipped fills (`derive/3`) it is also both light cells of initech (65%)
+  and wonka (66%).
 
   `edge_hover` is the hover edge, solved here as its own value so the
   browser paints exactly what was measured: `@hover_step` of L darker than
@@ -99,7 +99,7 @@ defmodule Platform.Tenancy.ScopeColor do
   light; a shortfall that does not move with hue is a constant offset
   between two definitions rather than a property of any colour.
 
-  Steps are half-percent, not whole. `app.css` records cyberdyne needing
+  Steps are half-percent, not whole. `app.css` records wonka needing
   `55.5%` at hue 340 precisely because whole-percent steps overshoot the
   4.56-4.66 band there. Walking from the fill (rather than taking the
   minimal qualifying L) is what reproduces the shipped ramp: the root org's dark
@@ -119,15 +119,15 @@ defmodule Platform.Tenancy.ScopeColor do
   The six shipped labels were solved against the resting chip on base-100
   alone, which is now exactly the `base-100` cell. `derive/3` at each
   shipped fill reproduces 9 of the 12 shipped `-100` values exactly and the
-  other three to within one 0.5% step, all in light: sxi moves one step
+  other three to within one 0.5% step, all in light: globex moves one step
   DARKER (51% to 50.5%) because its shipped label has no margin (4.4974
-  under +1 green), and soylent (55% to 55.5%) and wayne-tech (52% to 52.5%)
+  under +1 green), and initech (55% to 55.5%) and vandelay-ind (52% to 52.5%)
   move one step LIGHTER because the lighter value already holds with margin
   against the bytes this module emits. Those three moves are what the six
   paint on base-100 since stage 5 moved them onto this path; their rail
   labels are the `base-200` cells. In light those are darker than the one
   label each org used to wear on both surfaces, which failed AA in the
-  rail; in dark four are unchanged and soylent and cyberdyne walk back to
+  rail; in dark four are unchanged and initech and wonka walk back to
   their fill. The byte-level gate
   on what the six emit is `ScopeColorStylesShippedSixTest`. Nothing in this
   module writes `app.css`.
@@ -151,21 +151,21 @@ defmodule Platform.Tenancy.ScopeColor do
 
       org          painted   worst single +-1     worst all-channel +-1
       root          4.6121      4.5804                  4.5124   holds
-      soylent      4.6375      4.6042                  4.5340   holds
-      wayne-tech      4.6738      4.6224                  4.5706   holds
-      sxi           4.5539      4.4974                  4.4535   CROSSES
-      paragon      4.6724      4.6265                  4.5668   holds
-      cyberdyne    4.6142      4.5854                  4.5161   holds
+      initech       4.6375      4.6042                  4.5340   holds
+      vandelay-ind  4.6738      4.6224                  4.5706   holds
+      globex        4.5539      4.4974                  4.4535   CROSSES
+      hooli         4.6724      4.6265                  4.5668   holds
+      wonka         4.6142      4.5854                  4.5161   holds
 
-  `sxi` (Stark Industries, a live client) is the thin one. The single
-  most sensitive move is one unit UP on the label's green, and on `sxi`
+  `globex` (Globex Corporation, a live client) is the thin one. The single
+  most sensitive move is one unit UP on the label's green, and on `globex`
   that move alone gives 4.4974, under AA.
 
   `floor_contrast/2` is that green-channel move, in both directions, and it
   is what the solver walks against. It reproduces the "worst single" column
-  for five of the six. cyberdyne's worst single move is on a channel other
+  for five of the six. wonka's worst single move is on a channel other
   than green, so `floor_contrast/2` reports 4.5920 there where the column
-  says 4.5854: the green-only floor overstates cyberdyne's margin by
+  says 4.5854: the green-only floor overstates wonka's margin by
   0.0066.
 
   Once a tint is emitted as opaque hex the one-byte uncertainty leaves the
@@ -527,12 +527,12 @@ defmodule Platform.Tenancy.ScopeColor do
        translucent background. Each encoded channel is
        `fill * alpha + surface * (1 - alpha)`. Compositing in linear light
        instead moves the six shipped orgs' light-theme label contrast by
-       up to 0.36 (cyberdyne, 22% over base-100), and always UPWARD,
+       up to 0.36 (wonka, 22% over base-100), and always UPWARD,
        toward a pass the browser does not paint.
     2. **Quantisation: 8-bit, applied ONCE, at the end.** The composite is
        carried in float and rounded to a byte one time. No intermediate is
        rounded: quantising the fill to bytes first and then compositing
-       moves wayne-tech's 12% tint over base-100 by one byte (`#e4f4fd`,
+       moves vandelay-ind's 12% tint over base-100 by one byte (`#e4f4fd`,
        where the browser paints `#e3f4fd`) and leaves the other five
        shipped orgs unchanged, so the wrong order would ship unnoticed on
        five of six.
@@ -546,7 +546,7 @@ defmodule Platform.Tenancy.ScopeColor do
   Against the twelve measured 12% tints (six orgs over base-100 and
   base-200, DOM swatches painted and read back pixel-wise), this matches
   seven exactly. The other five are one byte HIGH on one or two channels:
-  soylent over base-100, and root, soylent, wayne-tech and paragon over
+  initech over base-100, and root, initech, vandelay-ind and hooli over
   base-200. `Platform.Design.WcagContrast`'s independent float path gives
   the same twelve values. No mechanism for that byte survived testing; see
   "The one-byte rule" in the moduledoc for what it means for a value
@@ -707,7 +707,7 @@ defmodule Platform.Tenancy.ScopeColor do
   # This function used to feed `abs(x)` to the transfer function instead, so
   # a negative channel came back POSITIVE (red 58 rather than 0) and the
   # downstream `max(0.0)` could never fire. That made every contrast figure
-  # for an out-of-gamut colour a figure no browser paints — sxi read 4.37
+  # for an out-of-gamut colour a figure no browser paints — globex read 4.37
   # where Chrome paints 4.56 — and the admin colour picker prints these
   # figures to an operator as the answer to "is this legible?". A preview
   # that lies is worse than no preview, so the sign fold is gone.

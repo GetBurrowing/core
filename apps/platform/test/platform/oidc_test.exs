@@ -53,8 +53,9 @@ defmodule Platform.OIDCTest do
 
   describe "external_group/0 + external_claim/0" do
     test "read the configured marker value and claim name (test defaults)" do
-      # config/config.exs base defaults (survive the test.exs :oidc merge).
-      assert OIDC.external_group() == "sxi-external"
+      # config/test.exs pins the marker (config.exs sets none, task 01a14dd9);
+      # external_claim's "groups" is the config.exs base default.
+      assert OIDC.external_group() == "globex-external"
       assert OIDC.external_claim() == "groups"
     end
   end
@@ -106,16 +107,61 @@ defmodule Platform.OIDCTest do
         Application.put_env(:platform, :oidc, Keyword.put(original, :external_group, nil))
         assert OIDC.claim_groups(%{"groups" => ["acme-client"]}) == ["acme-client"]
         # Control: the predicate DOES go false under the same config.
-        refute OIDC.external_claim?(%{"groups" => ["sxi-external"]})
+        refute OIDC.external_claim?(%{"groups" => ["globex-external"]})
       after
         Application.put_env(:platform, :oidc, original)
       end
     end
   end
 
+  # Task 01a14dd9 stage 1: OIDC_EXTERNAL_GROUP has no default, so nil is the
+  # unconfigured state of every fresh install.
+  describe "external marker with no default (task 01a14dd9)" do
+    test "with external_group nil, external_claim? is false for every claims shape" do
+      original = Application.get_env(:platform, :oidc, [])
+
+      try do
+        Application.put_env(:platform, :oidc, Keyword.put(original, :external_group, nil))
+        assert OIDC.external_group() == nil
+
+        for claims <- [
+              %{"groups" => ["globex-external"]},
+              %{"groups" => "globex-external"},
+              %{"groups" => [nil]},
+              %{"groups" => [""]},
+              %{"groups" => ""},
+              %{"groups" => []},
+              %{}
+            ] do
+          refute OIDC.external_claim?(claims), "flagged #{inspect(claims)} with no marker"
+        end
+      after
+        Application.put_env(:platform, :oidc, original)
+      end
+    end
+
+    test "with the marker absent from the keyword list entirely, nothing is flagged" do
+      original = Application.get_env(:platform, :oidc, [])
+
+      try do
+        Application.put_env(:platform, :oidc, Keyword.delete(original, :external_group))
+        assert OIDC.external_group() == nil
+        refute OIDC.external_claim?(%{"groups" => ["globex-external"]})
+      after
+        Application.put_env(:platform, :oidc, original)
+      end
+    end
+
+    test "with the pinned placeholder, a claims map carrying it is external" do
+      assert OIDC.external_group() == "globex-external"
+      assert OIDC.external_claim?(%{"groups" => ["employees", OIDC.external_group()]})
+      refute OIDC.external_claim?(%{"groups" => ["employees"]})
+    end
+  end
+
   describe "external_claim?/1" do
     test "list containing the group -> true" do
-      assert OIDC.external_claim?(%{"groups" => ["employees", "sxi-external"]})
+      assert OIDC.external_claim?(%{"groups" => ["employees", "globex-external"]})
     end
 
     test "list without the group -> false" do
@@ -123,11 +169,11 @@ defmodule Platform.OIDCTest do
     end
 
     test "bare string equal to the group -> true" do
-      assert OIDC.external_claim?(%{"groups" => "sxi-external"})
+      assert OIDC.external_claim?(%{"groups" => "globex-external"})
     end
 
     test "bare string not equal -> false" do
-      refute OIDC.external_claim?(%{"groups" => "sxi-internal"})
+      refute OIDC.external_claim?(%{"groups" => "globex-internal"})
     end
 
     test "claim missing entirely -> false" do
@@ -150,7 +196,7 @@ defmodule Platform.OIDCTest do
 
       try do
         Application.put_env(:platform, :oidc, Keyword.put(original, :external_group, nil))
-        refute OIDC.external_claim?(%{"groups" => ["sxi-external"]})
+        refute OIDC.external_claim?(%{"groups" => ["globex-external"]})
       after
         Application.put_env(:platform, :oidc, original)
       end

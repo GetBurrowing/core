@@ -82,12 +82,12 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
         org_id: account.org_id,
         account_id: account.id,
         sender_key: "ops",
-        from_address: "ops@soylent.test",
+        from_address: "ops@initech.test",
         recipients: ["someone@example.com"],
         subject: "earlier",
         body: "b",
         actor_type: "system",
-        message_id_header: "<#{id}@soylent.test>",
+        message_id_header: "<#{id}@initech.test>",
         status: "sending"
       }
       |> Delivery.insert_changeset()
@@ -114,7 +114,7 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
       end
     end)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
 
     admin = user!("admin") |> member!(org_id, "admin")
     member = user!("member") |> member!(org_id, "member")
@@ -134,7 +134,7 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
       )
 
     {:ok, _} =
-      Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@soylent.test"})
+      Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@initech.test"})
 
     {:ok, project} =
       Tasks.create_project(%{
@@ -206,7 +206,7 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
       assert has_element?(
                view,
                ~s([data-role="mail-draft-from"] option[selected]),
-               "ops@soylent.test"
+               "ops@initech.test"
              )
 
       view
@@ -263,7 +263,7 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
       view |> element(~s([data-role="mail-review-and-send"])) |> render_click()
 
       assert has_element?(view, ~s([data-role="mail-confirm"]))
-      assert has_element?(view, ~s([data-role="mail-confirm-from"]), "ops@soylent.test")
+      assert has_element?(view, ~s([data-role="mail-confirm-from"]), "ops@initech.test")
       assert has_element?(view, ~s([data-role="mail-confirm-body"]), "Edited body, by a person.")
       assert has_element?(view, ~s([data-role="mail-confirm-recipient"]), ctx.member.email)
       assert has_element?(view, ~s([data-role="mail-confirm-count"]), "1 recipient")
@@ -498,7 +498,7 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
     end
 
     test "a draft of another org does not open by URL", %{conn: conn} = ctx do
-      other_org_id = Tenancy.get_org_by_slug!("sxi").id
+      other_org_id = Tenancy.get_org_by_slug!("globex").id
       other_admin = user!("other") |> member!(other_org_id, "admin")
 
       {:ok, other} =

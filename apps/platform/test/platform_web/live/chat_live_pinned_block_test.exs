@@ -595,7 +595,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       block = rail(conn) |> pinned_block()
       refute block =~ "channel-section-color-dot"
 
-      for token <- ["paragon", "soylent", "acme", "wayne-tech", "sxi"] do
+      for token <- ["hooli", "initech", "acme", "vandelay-ind", "globex"] do
         refute block =~ "bg-#{token}-dot",
                "client colour token #{token} leaked into the Pinned block"
       end

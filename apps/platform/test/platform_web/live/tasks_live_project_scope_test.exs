@@ -100,7 +100,7 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
 
   defp seed do
     acme_org_id = Platform.TenancyFixtures.acme_org_id()
-    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
     own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
@@ -151,36 +151,36 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
 
     test "a member of exactly two orgs sees exactly those two sections", %{conn: conn} do
       acme_org_id = Platform.TenancyFixtures.acme_org_id()
-      soylent_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
-      sxi_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+      initech_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
+      globex_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
       own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
 
-      soylent =
-        project!(soylent_org_id, "Soylent Work #{System.unique_integer([:positive])}")
+      initech =
+        project!(initech_org_id, "Initech Work #{System.unique_integer([:positive])}")
 
-      foreign = project!(sxi_org_id, "Foreign Project #{System.unique_integer([:positive])}")
+      foreign = project!(globex_org_id, "Foreign Project #{System.unique_integer([:positive])}")
 
-      user = user!("member", acme_org_id) |> member_of!(soylent_org_id)
+      user = user!("member", acme_org_id) |> member_of!(initech_org_id)
       refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, html} = live(conn, "/tasks")
 
       # Positive control — an implementation rendering ZERO sections must fail.
-      assert section_slugs(html) == ["acme", "soylent"]
+      assert section_slugs(html) == ["acme", "initech"]
 
       headers = section_header_text(html)
-      assert headers =~ Tenancy.scope_label("acme")
-      assert headers =~ Tenancy.scope_label("soylent")
+      assert headers =~ Tenancy.get_org_by_slug!("acme").name
+      assert headers =~ Tenancy.get_org_by_slug!("initech").name
 
-      for absent <- ["wayne_tech", "sxi", "paragon"] do
-        refute headers =~ Tenancy.scope_label(absent)
+      for absent <- ["vandelay_ind", "globex", "hooli"] do
+        refute headers =~ Tenancy.get_org_by_slug!(absent).name
       end
 
       sidebar = sidebar_text(html)
       assert sidebar =~ own.name
-      assert sidebar =~ soylent.name
+      assert sidebar =~ initech.name
       refute sidebar =~ foreign.name
     end
 
@@ -203,9 +203,9 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       # `create_project` re-runs `project_sections/2` outside `mount/3`; a
       # viewer-less read there re-leaks the headers after any sidebar refresh.
       acme_org_id = Platform.TenancyFixtures.acme_org_id()
-      soylent_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      initech_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
 
-      user = user!("member", acme_org_id) |> member_of!(soylent_org_id)
+      user = user!("member", acme_org_id) |> member_of!(initech_org_id)
       refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
@@ -218,7 +218,7 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
           "project" => %{"name" => new_name, "slug" => "", "org_id" => acme_org_id}
         })
 
-      assert section_slugs(html) == ["acme", "soylent"]
+      assert section_slugs(html) == ["acme", "initech"]
       assert sidebar_text(html) =~ new_name
     end
   end

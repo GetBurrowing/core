@@ -36,7 +36,7 @@ defmodule Platform.Chat.DigestScopeTest do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: TenancyFixtures.tenant_org_id("sxi")
+        org_id: TenancyFixtures.tenant_org_id("globex")
       })
 
     user
@@ -91,10 +91,10 @@ defmodule Platform.Chat.DigestScopeTest do
       internal = create_space!("acme-eng")
       add_user!(internal.id, acme.id)
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       add_user!(external.id, ext.id)
 
-      mixed = create_space!("sxi-shared")
+      mixed = create_space!("globex-shared")
       add_user!(mixed.id, acme.id)
       add_user!(mixed.id, ext.id)
 
@@ -121,10 +121,10 @@ defmodule Platform.Chat.DigestScopeTest do
       ext = external_user!()
       other = create_user!()
 
-      a = create_space!("sxi-support")
+      a = create_space!("globex-support")
       add_user!(a.id, ext.id)
 
-      b = create_space!("sxi-shared")
+      b = create_space!("globex-shared")
       add_user!(b.id, ext.id)
 
       # A space the external user is NOT in.
@@ -149,11 +149,11 @@ defmodule Platform.Chat.DigestScopeTest do
       kp = add_user!(internal.id, acme.id)
       post!(internal.id, kp.id, "internal msg")
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       ep = add_user!(external.id, ext.id)
       post!(external.id, ep.id, "external msg")
 
-      mixed = create_space!("sxi-shared")
+      mixed = create_space!("globex-shared")
       mk = add_user!(mixed.id, acme.id)
       _me = add_user!(mixed.id, ext.id)
       post!(mixed.id, mk.id, "mixed msg")
@@ -175,7 +175,7 @@ defmodule Platform.Chat.DigestScopeTest do
       kp = add_user!(internal.id, acme.id)
       post!(internal.id, kp.id, "internal msg")
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       ep = add_user!(external.id, ext.id)
       post!(external.id, ep.id, "external msg")
 

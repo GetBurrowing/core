@@ -427,8 +427,8 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
     end
 
     test "a tenant-pinned agent cannot reach a user outside its org" do
-      tenant = Tenancy.get_org_by_slug!("soylent")
-      assert tenant.parent_org_id, "soylent must be a TENANT or agent_home_org/1 returns :root"
+      tenant = Tenancy.get_org_by_slug!("initech")
+      assert tenant.parent_org_id, "initech must be a TENANT or agent_home_org/1 returns :root"
 
       agent = insert_agent(%{metadata: %{"org_id" => tenant.id}})
       outsider = insert_user()
@@ -442,7 +442,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
     # in its org. Without this, a rule that denied every tenant agent would
     # pass the refusal above.
     test "but it can reach a user who holds a membership in its own org" do
-      tenant = Tenancy.get_org_by_slug!("soylent")
+      tenant = Tenancy.get_org_by_slug!("initech")
       agent = insert_agent(%{metadata: %{"org_id" => tenant.id}})
       colleague = insert_user()
 

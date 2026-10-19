@@ -3,7 +3,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
   Stage 5 of ADR-0042 (+ V1 e2e regression fix): the Tasks sidebar
   groups its project picker by owning org. Acme (root) renders first,
   then tenant orgs in canonical `Platform.Tenancy.tenant_priority/0`
-  order — Soylent, Wayne-Tech, SXI, Paragon — matching the
+  order — Initech, Vandelay-Ind, Globex, Hooli — matching the
   project-create FAB's `<select>` so the two surfaces never disagree.
   Each section is a collapsible `<details>` with a colored dot driven
   by `Platform.Tenancy.scope_color/1`.
@@ -52,74 +52,74 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
 
       # Seed projects across multiple orgs (Acme + 2 tenants).
       _acme_proj = seed_project("acme", "Platform Core")
-      _gen_proj = seed_project("soylent", "Soylent Storefront")
-      _sxi_proj = seed_project("sxi", "SXI Onboarding")
+      _gen_proj = seed_project("initech", "Initech Storefront")
+      _globex_proj = seed_project("globex", "Globex Onboarding")
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # Each org slug present in the seeded data renders a <details>
       # section keyed by `data-org-slug=<slug>`.
       assert html =~ ~s(data-role="project-group" data-org-slug="acme")
-      assert html =~ ~s(data-role="project-group" data-org-slug="soylent")
-      assert html =~ ~s(data-role="project-group" data-org-slug="sxi")
+      assert html =~ ~s(data-role="project-group" data-org-slug="initech")
+      assert html =~ ~s(data-role="project-group" data-org-slug="globex")
 
       # Header labels come from Tenancy.scope_label/1 (canonical
       # human-readable names).
       assert html =~ "Acme"
-      assert html =~ "Soylent"
-      assert html =~ "SXI"
+      assert html =~ "Initech"
+      assert html =~ "Globex"
 
       # Project names render inside their sections.
       assert html =~ "Platform Core"
-      assert html =~ "Soylent Storefront"
-      assert html =~ "SXI Onboarding"
+      assert html =~ "Initech Storefront"
+      assert html =~ "Globex Onboarding"
     end
 
     test "Acme (root) section renders before any tenant section", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      # Alphabetical name order would put Paragon first, but Acme must
+      # Alphabetical name order would put Hooli first, but Acme must
       # always lead because it's the root org.
-      _paragon = seed_project("paragon", "Paragon Project")
+      _hooli = seed_project("hooli", "Hooli Project")
       _acme = seed_project("acme", "Acme Project")
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       acme_pos = :binary.match(html, ~s(data-org-slug="acme"))
-      paragon_pos = :binary.match(html, ~s(data-org-slug="paragon"))
+      hooli_pos = :binary.match(html, ~s(data-org-slug="hooli"))
 
-      assert is_tuple(acme_pos) and is_tuple(paragon_pos)
+      assert is_tuple(acme_pos) and is_tuple(hooli_pos)
       {acme_idx, _} = acme_pos
-      {alt_idx, _} = paragon_pos
+      {alt_idx, _} = hooli_pos
       assert acme_idx < alt_idx, "Acme section must render before tenant sections"
     end
 
     test "tenant sections render in canonical tenant-priority order", %{conn: conn} do
       # Regression for V1 e2e failure: the sidebar used to sort tenants
-      # alphabetically by name (putting Paragon first), but the reviewer
+      # alphabetically by name (putting Hooli first), but the reviewer
       # expected the canonical "tenant-priority" order matching the seed
-      # list — Soylent, Wayne-Tech, SXI, Paragon — also matching the
+      # list — Initech, Vandelay-Ind, Globex, Hooli — also matching the
       # project-create FAB's <select> ordering.
       conn = authenticated_conn(conn)
 
       # Insert in reverse priority order to ensure the sort actually fires.
-      _paragon = seed_project("paragon", "Paragon Project")
-      _sxi = seed_project("sxi", "SXI Project")
-      _wayne_tech = seed_project("wayne_tech", "Wayne-Tech Project")
-      _soylent = seed_project("soylent", "Soylent Project")
+      _hooli = seed_project("hooli", "Hooli Project")
+      _globex = seed_project("globex", "Globex Project")
+      _vandelay_ind = seed_project("vandelay_ind", "Vandelay-Ind Project")
+      _initech = seed_project("initech", "Initech Project")
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       positions =
-        for slug <- ["paragon", "soylent", "wayne_tech", "sxi"] do
+        for slug <- ["hooli", "initech", "vandelay_ind", "globex"] do
           {idx, _} = :binary.match(html, ~s(data-org-slug="#{slug}"))
           {slug, idx}
         end
 
       sorted = Enum.sort_by(positions, fn {_slug, idx} -> idx end)
 
-      assert Enum.map(sorted, &elem(&1, 0)) == ["soylent", "wayne_tech", "sxi", "paragon"],
-             "expected soylent → wayne_tech → sxi → paragon (tenant-priority) render order, got: #{inspect(sorted)}"
+      assert Enum.map(sorted, &elem(&1, 0)) == ["initech", "vandelay_ind", "globex", "hooli"],
+             "expected initech → vandelay_ind → globex → hooli (tenant-priority) render order, got: #{inspect(sorted)}"
     end
 
     test "@orgs assigns surface in tenant-priority order for the FAB <select>", %{conn: conn} do
@@ -153,13 +153,13 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
 
       tenants_in_order = Enum.drop(option_labels, 1) |> Enum.take(4)
 
-      assert tenants_in_order == ["Soylent", "Wayne-Tech", "SXI", "Paragon"],
+      assert tenants_in_order == ["Initech", "Vandelay-Ind", "Globex", "Hooli"],
              "FAB org-select tenant ordering: #{inspect(tenants_in_order)}"
     end
 
     test "breadcrumb prefixes selected project with org label", %{conn: conn} do
       conn = authenticated_conn(conn)
-      proj = seed_project("soylent", "Storefront")
+      proj = seed_project("initech", "Storefront")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -173,7 +173,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
 
       html = render(view)
 
-      # Breadcrumb shows "Soylent / Storefront" with the org-scope color
+      # Breadcrumb shows "Initech / Storefront" with the org-scope color
       # class on the org label. The breadcrumb lives in the board header.
       breadcrumb =
         Regex.run(
@@ -183,7 +183,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
 
       _ = breadcrumb
 
-      # `text-soylent` appears only on the breadcrumb's org-label span
+      # `text-initech` appears only on the breadcrumb's org-label span
       # (org dots use `bg-current text-<scope>` inside the sidebar but
       # those render even pre-selection — so this assertion needs to
       # specifically prove the breadcrumb fires). Use the breadcrumb's
@@ -191,7 +191,8 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       assert html =~ "Storefront"
       # The "/" between org label and project name is part of the
       # breadcrumb only.
-      assert html =~ ~r/text-soylent[^>]*>\s*Soylent\s*<\/span>\s*<span[^>]*>\s*\/\s*<\/span>/
+      assert html =~
+               ~r/scope-fill-text"\s+data-scope="initech"[^>]*>\s*Initech\s*<\/span>\s*<span[^>]*>\s*\/\s*<\/span>/
     end
   end
 

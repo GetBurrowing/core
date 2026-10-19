@@ -455,8 +455,8 @@ defmodule PlatformWeb.ShellLiveTest do
 
   describe "viewer-scoped shell presence assign" do
     setup %{conn: conn} do
-      home = Tenancy.get_org_by_slug!("sxi")
-      foreign = Tenancy.get_org_by_slug!("soylent")
+      home = Tenancy.get_org_by_slug!("globex")
+      foreign = Tenancy.get_org_by_slug!("initech")
 
       viewer = presence_user!("Vera Viewer")
       colleague = presence_user!("Cora Colleague")
@@ -602,7 +602,7 @@ defmodule PlatformWeb.ShellLiveTest do
 
   describe "rendered shell presence strip" do
     setup %{conn: conn} do
-      home = Tenancy.get_org_by_slug!("sxi")
+      home = Tenancy.get_org_by_slug!("globex")
 
       viewer = presence_user!("Vera Viewer")
       colleague = presence_user!("Cora Colleague")
@@ -2096,7 +2096,7 @@ defmodule PlatformWeb.ShellLiveTest do
     # `parent_org_id == nil`, which makes its members resolve to `:root_all`
     # and silently disables the very fence under test.
     defp tenant_orgs do
-      {Tenancy.get_org_by_slug!("sxi"), Tenancy.get_org_by_slug!("soylent")}
+      {Tenancy.get_org_by_slug!("globex"), Tenancy.get_org_by_slug!("initech")}
     end
 
     defp scoped_conn(conn, org) do
@@ -2156,12 +2156,12 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "a foreign org's agents are absent while the viewer's own org's are present",
          %{conn: conn} do
-      {sxi, soylent} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      mine = seed_org_space(sxi, "Mine", viewer: user)
+      {globex, initech} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      mine = seed_org_space(globex, "Mine", viewer: user)
       # Deliberately NOT joined: the viewer is an org-mate of this space but
       # not a member of it, which is exactly the case the stage-3 fence adds.
-      theirs = seed_org_space(soylent, "Theirs")
+      theirs = seed_org_space(initech, "Theirs")
       {:ok, view, _html} = live(conn, ~p"/tasks")
       opened_html = render_async(view, 2_000)
 
@@ -2190,13 +2190,13 @@ defmodule PlatformWeb.ShellLiveTest do
     # org the viewer is not a member of, which is precisely what the deleted
     # `first_space/0` would have picked.
     test "the oldest space in a foreign org no longer supplies the roster", %{conn: conn} do
-      {sxi, soylent} = tenant_orgs()
+      {globex, initech} = tenant_orgs()
 
       # Seeded first, so it is the oldest.
-      {conn, user} = scoped_conn(conn, sxi)
+      {conn, user} = scoped_conn(conn, globex)
 
-      theirs = seed_org_space(soylent, "Oldest")
-      mine = seed_org_space(sxi, "Newer", viewer: user)
+      theirs = seed_org_space(initech, "Oldest")
+      mine = seed_org_space(globex, "Newer", viewer: user)
 
       assert DateTime.compare(theirs.space.inserted_at, mine.space.inserted_at) in [:lt, :eq]
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -2209,10 +2209,10 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     test "an agent on two visible spaces is listed once and counted once", %{conn: conn} do
-      {sxi, _soylent} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      a = seed_org_space(sxi, "First", viewer: user)
-      b = seed_org_space(sxi, "Second", viewer: user)
+      {globex, _initech} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      a = seed_org_space(globex, "First", viewer: user)
+      b = seed_org_space(globex, "Second", viewer: user)
 
       # Put A's member on B's roster too — same agent, two visible spaces.
       {:ok, _} = Chat.add_space_agent(b.space.id, a.member.id, role: "member")
@@ -2240,9 +2240,9 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "a {:roster_changed_any, _} broadcast refreshes the composite without a remount",
          %{conn: conn} do
-      {sxi, _soylent} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      mine = seed_org_space(sxi, "Live", viewer: user)
+      {globex, _initech} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      mine = seed_org_space(globex, "Live", viewer: user)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
 
@@ -2269,11 +2269,11 @@ defmodule PlatformWeb.ShellLiveTest do
 
     test "a viewer with no org memberships sees an empty roster, not every agent",
          %{conn: conn} do
-      {sxi, _soylent} = tenant_orgs()
-      # Positive control: an sxi member DOES see this agent, so the empty
+      {globex, _initech} = tenant_orgs()
+      # Positive control: an globex member DOES see this agent, so the empty
       # result below is the `:none` fence firing and not an empty database.
-      {member_conn, member_user} = scoped_conn(conn, sxi)
-      mine = seed_org_space(sxi, "Fenced", viewer: member_user)
+      {member_conn, member_user} = scoped_conn(conn, globex)
+      mine = seed_org_space(globex, "Fenced", viewer: member_user)
       {:ok, member_view, _} = live(member_conn, ~p"/tasks")
       _ = render_async(member_view, 2_000)
       assert mine.principal.name in roster_agent_names(member_view)
@@ -2370,9 +2370,9 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     test "the button renders the seeded roster as a literal n/m ratio", %{conn: conn} do
-      {sxi, _} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      %{agents: agents} = seed_meter_space(sxi, 2, 1, viewer: user)
+      {globex, _} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      %{agents: agents} = seed_meter_space(globex, 2, 1, viewer: user)
       [a, b, _c] = agents
       _ = make_agent_active(a)
       _ = make_agent_active(b)
@@ -2391,9 +2391,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # refutation fails even if someone updates both endpoint expectations to
     # the same class.
     test "the dot class and the ratio both CHANGE when roster health changes", %{conn: conn} do
-      {sxi, _} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      %{space: space, agents: agents} = seed_meter_space(sxi, 2, 1, viewer: user)
+      {globex, _} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      %{space: space, agents: agents} = seed_meter_space(globex, 2, 1, viewer: user)
       [a, b, c] = agents
       _ = make_agent_active(a)
       _ = make_agent_active(b)
@@ -2433,9 +2433,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # classes as the violation; they must not come back in the meter markup
     # or in the module that supplies its colours.
     test "no raw Tailwind status colours in the agents meter or its colour module", %{conn: conn} do
-      {sxi, _} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      %{agents: [a | _]} = seed_meter_space(sxi, 1, 2, viewer: user)
+      {globex, _} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      %{agents: [a | _]} = seed_meter_space(globex, 1, 2, viewer: user)
       _ = make_agent_active(a)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       _ = render_async(view, 2_000)
@@ -2463,9 +2463,9 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     test "an orphaned roster row reads 'Deleted agent' with no dot and no status", %{conn: conn} do
-      {sxi, _} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      %{agents: agents} = seed_meter_space(sxi, 1, 1, viewer: user)
+      {globex, _} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      %{agents: agents} = seed_meter_space(globex, 1, 1, viewer: user)
       [principal, member] = agents
       _ = make_agent_active(principal)
       Repo.delete!(member)
@@ -2502,9 +2502,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # NOT with an overflow check, which cannot see leftward overflow
     # (no scrollbar, scrollWidth == clientWidth).
     test "the roster panel anchors to the header, not to the trigger button", %{conn: conn} do
-      {sxi, _} = tenant_orgs()
-      {conn, user} = scoped_conn(conn, sxi)
-      %{agents: [a | _]} = seed_meter_space(sxi, 1, 1, viewer: user)
+      {globex, _} = tenant_orgs()
+      {conn, user} = scoped_conn(conn, globex)
+      %{agents: [a | _]} = seed_meter_space(globex, 1, 1, viewer: user)
       _ = make_agent_active(a)
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render_async(view, 2_000)
@@ -3030,7 +3030,7 @@ defmodule PlatformWeb.ShellLiveTest do
       # A seeded child org — a freshly created top-level org has
       # `parent_org_id == nil`, which resolves `:root_all` and disables the
       # very org fence these fixtures depend on.
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
 
       # Two staff in a private conversation, and a third org-mate who is NOT a
       # participant of it. Invented names only; `core` is public.
@@ -3270,7 +3270,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # separately. A single test that passed if EITHER were true would pin neither.
   describe "roster leak: mailbox reach vs. assigns reach on /chat" do
     setup %{conn: conn} do
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
 
       insider_a = presence_user!("Dana Duofirst")
       insider_b = presence_user!("Errol Duosecond")
@@ -3477,7 +3477,7 @@ defmodule PlatformWeb.ShellLiveTest do
   # fence and broadening this query widens the leak.
   describe "roster fence: viewer membership and private kinds" do
     setup %{conn: conn} do
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
 
       viewer = presence_user!("Vera Viewer")
       other = presence_user!("Oscar Otherstaff")
@@ -3632,7 +3632,7 @@ defmodule PlatformWeb.ShellLiveTest do
       # `Tenancy.scope(q, :root_all, _)` is identity — that would silently
       # disable the org fence and make everything below pass for the wrong
       # reason. Asserted, not assumed.
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
 
       refute is_nil(org.parent_org_id),
              "fixture org #{org.slug} is top-level, so visibility resolves to " <>

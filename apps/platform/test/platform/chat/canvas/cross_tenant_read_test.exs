@@ -52,7 +52,7 @@ defmodule Platform.Chat.Canvas.CrossTenantReadTest do
   @reads ["canvas_describe", "canvas_versions"]
 
   setup do
-    %{org_a: Tenancy.get_org_by_slug!("sxi"), org_b: Tenancy.get_org_by_slug!("soylent")}
+    %{org_a: Tenancy.get_org_by_slug!("globex"), org_b: Tenancy.get_org_by_slug!("initech")}
   end
 
   # Both reads behind one call, so no case can be written for one and quietly

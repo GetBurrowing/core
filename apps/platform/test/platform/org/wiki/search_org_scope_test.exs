@@ -71,7 +71,7 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
 
   describe "page/journal scoping via org_id" do
     test "org_id: [] returns zero rows from a fixture proven to hold matching rows" do
-      page = seed_page(tenant_org_id("sxi"))
+      page = seed_page(tenant_org_id("globex"))
 
       # ANTI-VACUITY: without this control the assertion below would pass
       # against an index that simply contains nothing.
@@ -81,15 +81,15 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
     end
 
     test "org_id: nil still returns the legacy workspace-only rows" do
-      page = seed_page(tenant_org_id("sxi"))
+      page = seed_page(tenant_org_id("globex"))
 
       assert page.id in hit_ids(source: :page, org_id: nil)
     end
 
     test "org_id: [a, b] returns A's and B's rows and NOT C's" do
-      a = tenant_org_id("sxi")
-      b = tenant_org_id("soylent")
-      c = tenant_org_id("wayne_tech")
+      a = tenant_org_id("globex")
+      b = tenant_org_id("initech")
+      c = tenant_org_id("vandelay_ind")
 
       pa = seed_page(a)
       pb = seed_page(b)
@@ -103,9 +103,9 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
     end
 
     test "org_id: a single binary returns only that org's rows" do
-      a = tenant_org_id("sxi")
+      a = tenant_org_id("globex")
       pa = seed_page(a)
-      pb = seed_page(tenant_org_id("soylent"))
+      pb = seed_page(tenant_org_id("initech"))
 
       ids = hit_ids(source: :page, org_id: a)
 
@@ -131,7 +131,7 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
 
     test "a tenant org_id still returns a lexical hit on a burrow page" do
       burrow = seed_burrow_page()
-      tenant = tenant_org_id("sxi")
+      tenant = tenant_org_id("globex")
 
       # The row is NOT the tenant's: without the burrow clause the tenant
       # filter alone would drop it.
@@ -143,9 +143,9 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
 
     test "CONTROL: a sibling org's org page is still filtered out" do
       burrow = seed_burrow_page()
-      tenant = tenant_org_id("sxi")
+      tenant = tenant_org_id("globex")
       own = seed_page(tenant)
-      sibling = seed_page(tenant_org_id("soylent"))
+      sibling = seed_page(tenant_org_id("initech"))
 
       ids = hit_ids(source: :page, org_id: tenant)
 
@@ -156,9 +156,9 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
 
     test "the burrow namespace filter returns the burrow page and nothing else" do
       burrow = seed_burrow_page()
-      org_page = seed_page(tenant_org_id("sxi"))
+      org_page = seed_page(tenant_org_id("globex"))
 
-      ids = hit_ids(source: :page, namespace: "burrow", org_id: tenant_org_id("sxi"))
+      ids = hit_ids(source: :page, namespace: "burrow", org_id: tenant_org_id("globex"))
 
       assert burrow.id in ids
       refute org_page.id in ids
@@ -168,7 +168,7 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
       burrow = seed_burrow_page()
 
       {:ok, %{results: results}} =
-        Search.search(@query, source: :page, org_id: tenant_org_id("sxi"))
+        Search.search(@query, source: :page, org_id: tenant_org_id("globex"))
 
       assert %{source: "page", path: path} = Enum.find(results, &(&1.id == burrow.id))
       assert path == burrow.file_key
@@ -177,7 +177,7 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
 
   describe "task scoping via the projects join" do
     test "org_id: [] returns zero tasks from a fixture proven to hold matching tasks" do
-      task = seed_task(tenant_org_id("sxi"))
+      task = seed_task(tenant_org_id("globex"))
 
       assert task.id in hit_ids(source: :task)
 
@@ -185,15 +185,15 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
     end
 
     test "org_id: nil still returns tasks" do
-      task = seed_task(tenant_org_id("sxi"))
+      task = seed_task(tenant_org_id("globex"))
 
       assert task.id in hit_ids(source: :task, org_id: nil)
     end
 
     test "org_id: [a, b] returns A's and B's tasks and NOT C's" do
-      a = tenant_org_id("sxi")
-      b = tenant_org_id("soylent")
-      c = tenant_org_id("wayne_tech")
+      a = tenant_org_id("globex")
+      b = tenant_org_id("initech")
+      c = tenant_org_id("vandelay_ind")
 
       ta = seed_task(a)
       tb = seed_task(b)

@@ -205,7 +205,7 @@ defmodule Platform.Chat.AttentionRouterEmailInboundTest do
 
   describe "a hostile email" do
     setup do
-      org_id = Tenancy.get_org_by_slug!("soylent").id
+      org_id = Tenancy.get_org_by_slug!("initech").id
       n = System.unique_integer([:positive])
 
       admin =

@@ -24,7 +24,7 @@ defmodule Platform.Files.HTMLBackfillTest do
       <script>function zzScriptBackfillSentinel() { alert("x"); }</script>
     </head>
     <body>
-      <h1>Orion Technical Stack</h1>
+      <h1>Atlas Technical Stack</h1>
       <p>The prose a search index should actually contain.</p>
     </body>
   </html>
@@ -157,7 +157,7 @@ defmodule Platform.Files.HTMLBackfillTest do
       assert refreshed.ingest_intent == "attempt"
 
       text = Files.fetch_extracted_text(held.id).text
-      assert text =~ "# Orion Technical Stack"
+      assert text =~ "# Atlas Technical Stack"
       assert text =~ "The prose a search index should actually contain."
       refute text =~ "zzScriptBackfillSentinel"
       refute text =~ "zz-style-backfill-sentinel"
@@ -199,7 +199,7 @@ defmodule Platform.Files.HTMLBackfillTest do
       # printed a line above would be describing a corpse.
       row = Repo.get!(Platform.Files.File, held.id)
       assert row.ingest_status == "ingested"
-      assert Files.fetch_extracted_text(held.id).text =~ "Orion Technical Stack"
+      assert Files.fetch_extracted_text(held.id).text =~ "Atlas Technical Stack"
       assert report.changed == 1
     end
 

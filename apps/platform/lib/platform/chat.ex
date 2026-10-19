@@ -406,7 +406,7 @@ defmodule Platform.Chat do
   Fetch the ORG-LESS space with this slug, if there is one.
 
   Deliberately narrower than `get_space_by_slug(slug, [])`: that back-compat
-  branch returns the OLDEST row of any org, so an SXI channel would answer a
+  branch returns the OLDEST row of any org, so a Globex channel would answer a
   root-org member's lookup and ADR-0042's per-org slug scoping would be weakened.
   This one matches `org_id IS NULL` explicitly and can therefore never hand
   back another tenant's channel.
@@ -909,7 +909,7 @@ defmodule Platform.Chat do
       agent DMs are out of scope for external users.
     * External initiator, `target_type == "user"` → `true` iff ANY of the
       target's orgs is in the initiator's DM allowlist. This uniformly
-      covers external→allowlisted-org member AND SXI↔SXI (a second
+      covers external→allowlisted-org member AND Globex↔Globex (a second
       external user whose org is the same allowlisted org).
   """
   @spec external_dm_permitted?(binary(), String.t(), binary()) :: boolean()
@@ -6622,7 +6622,7 @@ defmodule Platform.Chat do
 
   # M9 (rbac-external-users): bind attachment writes to the external scope so a
   # file only ever lands in a space the uploader is a `chat_participants` member
-  # of (an allowlisted SXI location). Threaded into `post_message_with_attachments/3`
+  # of (an allowlisted Globex location). Threaded into `post_message_with_attachments/3`
   # as a second guard alongside `ensure_space_writable/1`, mirroring how M8 added
   # `ensure_dm_send_allowed/2` on the send seam.
   #

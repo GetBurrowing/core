@@ -87,8 +87,8 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
   test "each space carries its own org; DMs and org-less spaces carry null", %{conn: conn} do
     me = create_user!(%{name: "Two Orgs"})
     other = create_user!()
-    legacy = Platform.Tenancy.get_org_by_slug!("sxi")
-    red_star = Platform.Tenancy.get_org_by_slug!("soylent")
+    legacy = Platform.Tenancy.get_org_by_slug!("globex")
+    red_star = Platform.Tenancy.get_org_by_slug!("initech")
     plain_member!(me, legacy)
     plain_member!(me, red_star)
 

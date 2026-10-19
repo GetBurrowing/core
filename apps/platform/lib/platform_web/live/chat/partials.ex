@@ -253,7 +253,12 @@ defmodule PlatformWeb.ChatLive.Partials do
             data-role="move-to-org-destination"
             data-section-id={dest.section_id}
           >
-            <span :if={dest.dot} class={["channel-section-color-dot", dest.dot]} aria-hidden="true">
+            <span
+              :if={dest.scope}
+              class="channel-section-color-dot channel-section-color-dot--scope"
+              data-scope={dest.scope}
+              aria-hidden="true"
+            >
             </span>
             <span class="min-w-0 truncate">{dest.name}</span>
           </button>

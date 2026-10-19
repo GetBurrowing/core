@@ -3,13 +3,13 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
   Consolidated regression net for the cross-tenant disclosure (task 019f9257).
 
   Ties the three fixes together against the EXACT reported repro (Alex Testerson,
-  an SXI external user granted ONLY the Orion channel via the real grant path)
+  an Globex external user granted ONLY the Atlas channel via the real grant path)
   so a future refactor of any single seam — identity scope derivation (stage 1),
   the plug host fence (stage 2), or the admission/recovery redirects (stage 3) —
   cannot silently re-open the leak. Fast server-side tests, no browser.
 
   Fixtures use the AUTHORITATIVE grant path (`ExternalGrants.apply_grant/2`) so
-  the external user holds a `chat_participants` row for Orion and NOTHING
+  the external user holds a `chat_participants` row for Atlas and NOTHING
   else; an Acme-internal `General` channel exists that must never appear; an
   ordinary internal user is the control.
   """
@@ -37,13 +37,13 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
     |> Repo.insert!()
   end
 
-  defp sxi_org! do
+  defp globex_org! do
     n = System.unique_integer([:positive])
 
     %Org{}
     |> Org.changeset(%{
-      name: "SXI #{n}",
-      slug: "sxi_leak_#{n}",
+      name: "Globex #{n}",
+      slug: "globex_leak_#{n}",
       parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
@@ -98,20 +98,20 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
   end
 
   setup %{conn: conn} do
-    sxi = sxi_org!()
+    globex = globex_org!()
     testerson = create_user!("Alex Testerson")
-    orion = channel!("Orion", org_id: sxi.id)
+    atlas = channel!("Atlas", org_id: globex.id)
     # Acme-internal channel — Testerson has NO participant row for it.
     general = channel!("General")
 
-    grant_only!(testerson, sxi, orion)
+    grant_only!(testerson, globex, atlas)
 
-    %{conn: conn, sxi: sxi, testerson: testerson, orion: orion, general: general}
+    %{conn: conn, globex: globex, testerson: testerson, atlas: atlas, general: general}
   end
 
   describe "(a) stage 1 — identity scope: external user on the SUITE host, no chat_mode" do
-    test "sees ONLY Orion, never General/all-channels", ctx do
-      %{conn: conn, testerson: testerson, orion: orion, general: general} = ctx
+    test "sees ONLY Atlas, never General/all-channels", ctx do
+      %{conn: conn, testerson: testerson, atlas: atlas, general: general} = ctx
 
       # Default (suite) host, no chat_mode session key, CHAT_HOST unset so the
       # stage-2 fence does not intercept — this exercises the stage-1 scope
@@ -119,9 +119,9 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
       {:ok, _view, html} =
         conn
         |> authed(testerson)
-        |> live("/chat/#{orion.slug}")
+        |> live("/chat/#{atlas.slug}")
 
-      assert html =~ orion.name
+      assert html =~ atlas.name
       refute html =~ general.name
       # Identity-derived external branch, discovery chrome off.
       assert html =~ ~s(data-role="external-rail")
@@ -162,7 +162,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
     end
 
     test "no loop: the same external user already on the chat host is not redirected away", ctx do
-      %{conn: conn, testerson: testerson, orion: orion} = ctx
+      %{conn: conn, testerson: testerson, atlas: atlas} = ctx
       put_chat_host("chat.localhost")
 
       # On the chat host the external surface mounts and remains scoped.
@@ -170,9 +170,9 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
         conn
         |> Map.put(:host, "chat.localhost")
         |> authed(testerson)
-        |> live("/chat/#{orion.slug}")
+        |> live("/chat/#{atlas.slug}")
 
-      assert html =~ orion.name
+      assert html =~ atlas.name
       refute html =~ "General"
     end
   end

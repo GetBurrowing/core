@@ -163,7 +163,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     } do
       admin = create_acme_admin!()
       target_org = create_org!()
-      chan_a = create_channel!("Orion")
+      chan_a = create_channel!("Atlas")
       chan_b = create_channel!("Bug Reports")
 
       holding = create_user!(%{name: "Multi Grant"})
@@ -217,7 +217,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     setup %{conn: conn} do
       admin = create_acme_admin!()
       target_org = create_org!()
-      chan_a = create_channel!("Orion")
+      chan_a = create_channel!("Atlas")
       chan_b = create_channel!("Bug Reports")
 
       user = create_user!(%{name: "Add More"})

@@ -259,11 +259,11 @@ defmodule Platform.Tenancy.ScopeColorTest do
     # The resting 12% chip over the light rail ground, painted.
     @painted_rail_chips %{
       "legacy" => {{"oklch(72% 0.16 50)"}, {241, 228, 219}},
-      "soylent" => {{"oklch(65% 0.20 295)"}, {231, 225, 242}},
-      "wayne-tech" => {{"oklch(68% 0.15 240)"}, {215, 232, 241}},
-      "sxi" => {{"oklch(70% 0.15 162)"}, {215, 235, 228}},
-      "paragon" => {{"oklch(80% 0.16 95)"}, {239, 235, 215}},
-      "cyberdyne" => {{"oklch(66% 0.19 340)"}, {239, 223, 234}}
+      "initech" => {{"oklch(65% 0.20 295)"}, {231, 225, 242}},
+      "vandelay-ind" => {{"oklch(68% 0.15 240)"}, {215, 232, 241}},
+      "globex" => {{"oklch(70% 0.15 162)"}, {215, 235, 228}},
+      "hooli" => {{"oklch(80% 0.16 95)"}, {239, 235, 215}},
+      "wonka" => {{"oklch(66% 0.19 340)"}, {239, 223, 234}}
     }
 
     defp byte({r, g, b}), do: {round(r * 255), round(g * 255), round(b * 255)}
@@ -278,8 +278,8 @@ defmodule Platform.Tenancy.ScopeColorTest do
     test "every shipped chip composites to within one byte of the painted value" do
       # One byte, not zero, and the tolerance is the finding rather than a
       # concession: six of eighteen channels differ by exactly 1 and none by
-      # more (legacy red and blue, soylent green and blue, wayne-tech red,
-      # paragon blue; every one computed one HIGH. Re-counted 2026-09-21,
+      # more (legacy red and blue, initech green and blue, vandelay-ind red,
+      # hooli blue; every one computed one HIGH. Re-counted 2026-09-21,
       # task 01a09333-d374, see `ScopeColorPaintedTest`). That measured
       # noise floor is WHY the solver targets a margin
       # (`floor_contrast/2` perturbs green by +/-1) instead of a bare 4.5 —
@@ -345,7 +345,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
       # a small share of the label's luminance, so a one-byte green move
       # costs little (0.0048 at its thinnest) and the nominal figure lands
       # close to the floor. `floor_contrast/2` is green-only by design; its
-      # doc records the same limit for cyberdyne.
+      # doc records the same limit for wonka.
       thinnest = Enum.min_by(cells, & &1.contrast)
       assert thinnest.name == "hue 338 C=0.247 light chip on base-100"
       assert_in_delta thinnest.contrast, 4.5061, 0.0001
@@ -669,16 +669,16 @@ defmodule Platform.Tenancy.ScopeColorTest do
     test "at the shipped six fills the rail edge lands on the design direction's L, or one step lighter" do
       # Canvas 01a09775 derived one edge L per slug, solved on the rail
       # (base-200, the harder light ground) in whole-percent steps. The
-      # half-percent walk reproduces four exactly; for sxi and paragon the
+      # half-percent walk reproduces four exactly; for globex and hooli the
       # half step between already holds. Stage 5 moves the six onto this
       # path; these are the values it will ship.
       design = %{
         "legacy" => {{72, 0.16, 50}, 65.0},
-        "soylent" => {{65, 0.20, 295}, 65.0},
-        "wayne-tech" => {{68, 0.15, 240}, 63.0},
-        "sxi" => {{70, 0.15, 162}, 61.0},
-        "paragon" => {{80, 0.16, 95}, 63.0},
-        "cyberdyne" => {{66, 0.19, 340}, 66.0}
+        "initech" => {{65, 0.20, 295}, 65.0},
+        "vandelay-ind" => {{68, 0.15, 240}, 63.0},
+        "globex" => {{70, 0.15, 162}, 61.0},
+        "hooli" => {{80, 0.16, 95}, 63.0},
+        "wonka" => {{66, 0.19, 340}, 66.0}
       }
 
       solved =
@@ -688,11 +688,11 @@ defmodule Platform.Tenancy.ScopeColorTest do
 
       assert solved == %{
                "legacy" => 65.0,
-               "soylent" => 65.0,
-               "wayne-tech" => 63.0,
-               "sxi" => 61.5,
-               "paragon" => 63.5,
-               "cyberdyne" => 66.0
+               "initech" => 65.0,
+               "vandelay-ind" => 63.0,
+               "globex" => 61.5,
+               "hooli" => 63.5,
+               "wonka" => 66.0
              }
 
       for {slug, {_, l}} <- design, do: assert((solved[slug] - l) in [0.0, 0.5], slug)
@@ -708,11 +708,11 @@ defmodule Platform.Tenancy.ScopeColorTest do
     # {slug, hue, chroma, fill L, shipped light label L, shipped dark label L}
     @shipped [
       {"legacy", 50, 0.16, 0.72, 55.0, 72.0},
-      {"soylent", 295, 0.20, 0.65, 55.0, 67.0},
-      {"wayne-tech", 240, 0.15, 0.68, 52.0, 68.0},
-      {"sxi", 162, 0.15, 0.70, 51.0, 70.0},
-      {"paragon", 95, 0.16, 0.80, 54.0, 80.0},
-      {"cyberdyne", 340, 0.19, 0.66, 55.5, 67.5}
+      {"initech", 295, 0.20, 0.65, 55.0, 67.0},
+      {"vandelay-ind", 240, 0.15, 0.68, 52.0, 68.0},
+      {"globex", 162, 0.15, 0.70, 51.0, 70.0},
+      {"hooli", 95, 0.16, 0.80, 54.0, 80.0},
+      {"wonka", 340, 0.19, 0.66, 55.5, 67.5}
     ]
 
     test "all twelve shipped base-100 values reproduce to within one 0.5% step" do
@@ -724,10 +724,10 @@ defmodule Platform.Tenancy.ScopeColorTest do
       end
     end
 
-    test "nine are exact; sxi moves darker for margin, soylent and wayne-tech lighter" do
-      # Pinned so the moduledoc's count stays true. sxi's shipped 51% has a
+    test "nine are exact; globex moves darker for margin, initech and vandelay-ind lighter" do
+      # Pinned so the moduledoc's count stays true. globex's shipped 51% has a
       # floor of 4.4974 under +1 green (no margin), so the solver takes one
-      # step darker. soylent's and wayne-tech's lighter step already holds
+      # step darker. initech's and vandelay-ind's lighter step already holds
       # with margin against the bytes emitted here, so the walk from the
       # fill stops there first. Every dark value is exact.
       moved =
@@ -742,9 +742,9 @@ defmodule Platform.Tenancy.ScopeColorTest do
         end
 
       assert Enum.sort(moved) == [
-               {"soylent", :light, 55.0, 55.5},
-               {"wayne-tech", :light, 52.0, 52.5},
-               {"sxi", :light, 51.0, 50.5}
+               {"globex", :light, 51.0, 50.5},
+               {"initech", :light, 55.0, 55.5},
+               {"vandelay-ind", :light, 52.0, 52.5}
              ]
     end
 
@@ -757,7 +757,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
     end
 
     test "the half-percent step is load-bearing, not cosmetic" do
-      # app.css records cyberdyne needing 55.5% "because whole-percent steps
+      # app.css records wonka needing 55.5% "because whole-percent steps
       # at hue 340 overshoot" the band. Asserting merely that some L ends in
       # .5 would pass for a solver that rounds; an integer is a half-percent
       # too. So assert the claim itself: where the solver lands on a
@@ -786,10 +786,10 @@ defmodule Platform.Tenancy.ScopeColorTest do
     # label.
     @recorded [
       {"oklch(72% 0.16 50)", 2.61, "legacy"},
-      {"oklch(65% 0.20 295)", 3.50, "soylent"},
-      {"oklch(68% 0.15 240)", 2.83, "wayne-tech"},
-      {"oklch(80% 0.16 95)", 1.87, "paragon"},
-      {"oklch(66% 0.19 340)", 3.43, "cyberdyne"}
+      {"oklch(65% 0.20 295)", 3.50, "initech"},
+      {"oklch(68% 0.15 240)", 2.83, "vandelay-ind"},
+      {"oklch(80% 0.16 95)", 1.87, "hooli"},
+      {"oklch(66% 0.19 340)", 3.43, "wonka"}
     ]
 
     for {color, expected, slug} <- @recorded do
@@ -869,7 +869,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
 
     defp bytes({r, g, b}), do: {round(r * 255), round(g * 255), round(b * 255)}
 
-    test "the shipped sxi label is OUT of the sRGB gamut" do
+    test "the shipped globex label is OUT of the sRGB gamut" do
       {r, _g, _b} = linear_srgb(0.51, 0.15, 162)
 
       assert r < 0,
@@ -921,7 +921,7 @@ defmodule Platform.Tenancy.ScopeColorTest do
       assert bytes(clip_encode(linear_srgb(l, c, h))) == {0, 127, 74}
     end
 
-    test "the sxi light figure agrees with the painted one, on both sides of 4.5" do
+    test "the globex light figure agrees with the painted one, on both sides of 4.5" do
       # The figure this cost: under the old sign-fold `encode/1` the module
       # reported 4.37 for a colour Chrome paints at 4.56 — an AA failure
       # that does not exist. Both are computed here, the second through an

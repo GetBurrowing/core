@@ -39,13 +39,13 @@ defmodule Platform.Chat.SidebarMask do
   ## Which channel rows mask
 
   A channel masks when its normalised name IS its org's name/slug, or begins
-  with it as a leading token — `#wayne-tech`, `#cyberdyne-builds`,
-  `#sxi-crosspost` all render as `#workspace-f`. See `names_org?/2` for the
+  with it as a leading token — `#vandelay-ind`, `#wonka-builds`,
+  `#globex-crosspost` all render as `#workspace-f`. See `names_org?/2` for the
   exact rule. Fail-closed: when in doubt, mask.
 
   ACCEPTED FALSE POSITIVE: a channel that merely begins with an org's name
-  token but is unrelated to that org is masked too — an org named `Atlas`
-  makes `#atlas-migration` (a database channel) read `#workspace-c` while the
+  token but is unrelated to that org is masked too — an org named `Delta`
+  makes `#delta-migration` (a database channel) read `#workspace-c` while the
   mode is on. That is the direction to be wrong in. Over-masking costs one
   click of per-item reveal; under-masking puts a real client name on a shared
   screen, which is the whole failure this feature exists to prevent.
@@ -55,11 +55,11 @@ defmodule Platform.Chat.SidebarMask do
   This list is the ONLY artifact carrying it (there is no PR description for
   this branch). Keep it complete; an unstated leak is the failure condition.
 
-    * **Project-code channels.** `#orion`, `#stark-industries` — names
+    * **Project-code channels.** `#atlas`, `#q3-launch` — names
       that contain no token of any org name, so no rule can infer the link.
       A hardcoded keyword list is refused on purpose: it is stale the day a
       new client arrives and reads as coverage the feature does not have.
-      `#orion` renders verbatim while masked, deliberately, and there is a
+      `#atlas` renders verbatim while masked, deliberately, and there is a
       test pinning that so a keyword list cannot be quietly added.
     * **Cross-section rail rows.** A channel named after org B filed under
       org A's section renders verbatim IN THE RAIL. `space_label/3` (header
@@ -82,7 +82,7 @@ defmodule Platform.Chat.SidebarMask do
     * **The meeting participant rail.** Checked in stage 5: it renders
       participant display names only, and no org name reaches it.
     * **The browser tab title.** Masked via `space_label/3` since stage 5 and
-      correct for derived channel names as of stage 6 — `#cyberdyne-builds`
+      correct for derived channel names as of stage 6 — `#wonka-builds`
       now titles as `# workspace-f`, matching the header beside it.
 
   ## Boundary note — TWO consumers now, and why this still lives in Chat
@@ -97,8 +97,8 @@ defmodule Platform.Chat.SidebarMask do
   generic arities below exist rather than a forked copy:
 
     * Tasks orgs are NOT structs. The identity key is a SLUG STRING and the
-      display name comes from a FUNCTION CALL (`Tenancy.scope_label/1`), not
-      from a `.name` field. `placeholders/1` and `label/4` both reach into
+      display name arrives beside it (the `org_name` of a `project_sections`
+      tuple), not as a `.name` field on a section struct. `placeholders/1` and `label/4` both reach into
       `section.id` / `section.name`, so neither fits.
     * Tasks has TWO entity kinds in one rail — orgs and their projects, each
       lettered independently with its own prefix. Chat had one.
@@ -177,7 +177,7 @@ defmodule Platform.Chat.SidebarMask do
   @doc """
   The id/name form of `label/4`, for a caller with no section struct in hand —
   the Tasks rail, whose org identity is a slug string and whose display name
-  comes from `Tenancy.scope_label/1` rather than a field.
+  arrives beside it rather than on a section struct.
 
   FAIL-CLOSED, and this branch is the whole point of the function: an id with
   no entry in `placeholders` returns the BARE PREFIX, never `real_name`. The
@@ -266,16 +266,16 @@ defmodule Platform.Chat.SidebarMask do
   The string to render for one CHANNEL row inside `section`.
 
   Some channels are named after the org whose section they sit in —
-  `#wayne-tech` under Wayne-Tech, or derived from it — `#cyberdyne-builds` under
-  Cyberdyne. Masking the header and leaving those rows is the same leak with
+  `#vandelay-ind` under Vandelay-Ind, or derived from it — `#wonka-builds` under
+  Wonka. Masking the header and leaving those rows is the same leak with
   an extra step, so a row whose NORMALISED name matches its own section per
   `names_org?/2` renders as the section's placeholder in channel form
   (`workspace-b`).
 
   ## Named limitation
 
-  This deliberately does NOT catch project-code channels like `#orion` or
-  `#stark-industries`, which share no token with any org name. That
+  This deliberately does NOT catch project-code channels like `#atlas` or
+  `#q3-launch`, which share no token with any org name. That
   residual is a NAMED LIMITATION, not something to paper over with a
   hardcoded keyword list: a hardcoded list is stale the day a new client
   arrives, and it would read as coverage the feature does not have.
@@ -300,7 +300,7 @@ defmodule Platform.Chat.SidebarMask do
   The label for the OPEN channel — the chat header's title and the browser
   tab's `<title>`, neither of which is rendered from inside a rail section.
 
-  The rail masks `#wayne-tech` because it can see the section that row sits in.
+  The rail masks `#vandelay-ind` because it can see the section that row sits in.
   The header and the tab have no section in hand, so this looks the name up
   across the WHOLE rail: a channel whose normalised name matches ANY section
   per `names_org?/2` renders as that section's placeholder in channel form.
@@ -313,7 +313,7 @@ defmodule Platform.Chat.SidebarMask do
   to be wrong about.
 
   Same named limitation as `channel_label/3`: a project-code channel
-  (`#orion`) names no org and so is not caught.
+  (`#atlas`) names no org and so is not caught.
   """
   @spec space_label(map(), [resolved()], binary()) :: binary()
   def space_label(%{masked?: false}, _sections, channel_name), do: channel_name
@@ -327,12 +327,12 @@ defmodule Platform.Chat.SidebarMask do
 
   @doc """
   True when `channel_name` is the section's org name or slug, or is a channel
-  DERIVED from it by a leading token — `#cyberdyne-builds` under Cyberdyne.
+  DERIVED from it by a leading token — `#wonka-builds` under Wonka.
 
   Exact equality was the stage-2..5 rule and it under-masked badly: stage 6's
-  review found `#cyberdyne-builds` and `#sxi-crosspost` rendering verbatim in
+  review found `#wonka-builds` and `#globex-crosspost` rendering verbatim in
   the rail, the drawer, the drawer's SEARCH RESULTS, the composer placeholder
-  and the browser tab — the tab read `# cyberdyne-builds` directly above a
+  and the browser tab — the tab read `# wonka-builds` directly above a
   chat header reading `Workspace F`. The rule is now:
 
       normalise(channel_name) == candidate
@@ -344,7 +344,7 @@ defmodule Platform.Chat.SidebarMask do
   names its ORG, which is what the hidden drawer and the scope pill hand in.
   When that comparison ran against a stale stored copy, the lookup missed and
   a masked pill fell back to the bare `"Workspace"` (the 01a0938b symptom). Leading token only, not a
-  free `contains`: `#builds-cyberdyne` and `#retro-cyberdyne-notes` still
+  free `contains`: `#builds-wonka` and `#retro-wonka-notes` still
   render verbatim. A bare `contains` would mask on any coincidental substring
   anywhere in a name (an org called `Ex` would swallow half the rail), which
   is a different failure, not a stronger one.
@@ -395,7 +395,7 @@ defmodule Platform.Chat.SidebarMask do
   def slug(label) when is_binary(label), do: normalise(label)
 
   # Downcase and collapse hyphens / underscores / whitespace to a single
-  # hyphen, so "Wayne-Tech", "wayne_tech" and "pro tect" all compare equal.
+  # hyphen, so "Vandelay-Ind", "vandelay_ind" and "vandelay ind" all compare equal.
   defp normalise(nil), do: ""
 
   defp normalise(value) when is_binary(value) do

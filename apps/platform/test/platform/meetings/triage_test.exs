@@ -74,7 +74,7 @@ defmodule Platform.Meetings.TriageTest do
       items = [
         %{title: "Kickoff onboarding for Neven"},
         %{title: "Prep Q3 board deck"},
-        %{title: "Sync with SXI legal"}
+        %{title: "Sync with Globex legal"}
       ]
 
       assert {:ok, %{filed: filed, skipped: [], errors: []}} =
@@ -84,7 +84,7 @@ defmodule Platform.Meetings.TriageTest do
       titles = Enum.map(filed, & &1.title)
       assert "Kickoff onboarding for Neven" in titles
       assert "Prep Q3 board deck" in titles
-      assert "Sync with SXI legal" in titles
+      assert "Sync with Globex legal" in titles
     end
 
     test "custom source string is honored", %{project: project, canvas: canvas} do
@@ -314,7 +314,7 @@ defmodule Platform.Meetings.TriageTest do
       # this test is about the cap counter, not the fuzzy matcher.
       items = [
         %{title: "Confirm venue booking"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Kickoff Neven onboarding"},
         %{title: "Schedule board dry-run"}
       ]
@@ -413,7 +413,7 @@ defmodule Platform.Meetings.TriageTest do
     } do
       items = [
         %{title: "Ship Q3 launch plan"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Book venue for kickoff"}
       ]
 
@@ -437,7 +437,7 @@ defmodule Platform.Meetings.TriageTest do
     } do
       items = [
         %{title: "Ship Q3 launch plan"},
-        %{title: "Draft SXI engagement letter"}
+        %{title: "Draft Globex engagement letter"}
       ]
 
       {:ok, %{filed: [t1, t2]}} =
@@ -536,7 +536,7 @@ defmodule Platform.Meetings.TriageTest do
       # matches heavily), so we avoid a common lead word entirely.
       titles = [
         "Confirm venue booking for offsite",
-        "Draft SXI engagement letter",
+        "Draft Globex engagement letter",
         "Kickoff Neven onboarding",
         "Schedule board dry-run rehearsal",
         "Prep quarterly finance packet",
@@ -555,7 +555,7 @@ defmodule Platform.Meetings.TriageTest do
         "Backup vault before rotation",
         "Prune docker registry",
         "Onboard new intern next month",
-        "Sync with SXI legal counsel",
+        "Sync with Globex legal counsel",
         "Restore staging database",
         "Ship mobile app v2.3",
         "Rebuild search index nightly",
@@ -598,7 +598,7 @@ defmodule Platform.Meetings.TriageTest do
       # gate does not collapse the batch and starve the cap counter.
       items = [
         %{title: "Confirm venue booking"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Kickoff Neven onboarding"},
         %{title: "Schedule board dry-run"},
         %{title: "Prep quarterly finance packet"},
@@ -678,7 +678,7 @@ defmodule Platform.Meetings.TriageTest do
 
       items = [
         %{title: "Confirm venue booking for offsite"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Rotate S3 access keys"},
         %{title: "Ship mobile app v2.3"},
         %{title: "Rebuild search index nightly"}
@@ -777,7 +777,7 @@ defmodule Platform.Meetings.TriageTest do
 
       items = [
         %{title: "Confirm venue booking for offsite"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Kickoff Neven onboarding"},
         %{title: "Ship mobile app v2.3"}
       ]
@@ -800,7 +800,7 @@ defmodule Platform.Meetings.TriageTest do
     } do
       items = [
         %{title: "Confirm venue booking for offsite"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Kickoff Neven onboarding"},
         %{title: "Rotate S3 access keys"},
         %{title: "Ship mobile app v2.3"}
@@ -854,7 +854,7 @@ defmodule Platform.Meetings.TriageTest do
       items = [
         %{title: "Ship mobile app v2.3"},
         %{title: "Rotate S3 access keys"},
-        %{title: "Draft SXI engagement letter"}
+        %{title: "Draft Globex engagement letter"}
       ]
 
       {:ok, %{filed: filed}} =
@@ -1092,7 +1092,7 @@ defmodule Platform.Meetings.TriageTest do
           action_items: [
             %{title: "Ship mobile app v2.3"},
             %{title: "Rotate S3 access keys"},
-            %{title: "Draft SXI engagement letter"}
+            %{title: "Draft Globex engagement letter"}
           ]
         )
 
@@ -1156,7 +1156,7 @@ defmodule Platform.Meetings.TriageTest do
       titles = [
         %{title: "Ship mobile app v2.3"},
         %{title: "Rotate S3 access keys"},
-        %{title: "Draft SXI engagement letter"},
+        %{title: "Draft Globex engagement letter"},
         %{title: "Wire up Klaviyo webhook"},
         %{title: "Migrate legacy PDF pipeline"},
         %{title: "Audit RBAC roles"}

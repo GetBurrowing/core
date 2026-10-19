@@ -1808,13 +1808,17 @@ defmodule PlatformWeb.FilesLive do
   defp pluralize_unit(word, 1), do: word
   defp pluralize_unit(word, _count), do: word <> "s"
 
+  # The selected project's org, named and coloured from its row (task
+  # 01a14dd9 stage 2 retired the compiled `Tenancy.scope_label/1` /
+  # `scope_color/1` maps): the label is the org's `name`, and the colour
+  # reaches the text through `data-scope` and `.scope-fill-text`.
   @doc false
-  def org_label_for(%{org: %Tenancy.Org{slug: slug}}), do: Tenancy.scope_label(slug)
+  def org_label_for(%{org: %Tenancy.Org{name: name}}) when is_binary(name), do: name
   def org_label_for(_), do: ""
 
   @doc false
-  def org_color_for(%{org: %Tenancy.Org{slug: slug}}), do: Tenancy.scope_color(slug)
-  def org_color_for(_), do: "text-muted"
+  def org_scope_for(%{org: %Tenancy.Org{slug: slug}}) when is_binary(slug), do: slug
+  def org_scope_for(_), do: nil
 
   # ── Semantic-result accessors (tolerate both atom + string keys) ───────
 

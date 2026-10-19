@@ -188,7 +188,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
 
       # Force the row to a different org_id to prove the second call
       # short-circuits on `find_by_task_id` and does NOT rewrite it.
-      other_id = tenant_org_id("sxi")
+      other_id = tenant_org_id("globex")
 
       {1, _} =
         Repo.update_all(

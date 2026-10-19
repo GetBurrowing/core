@@ -39,7 +39,7 @@ Checked against prod, not assumed:
   signed.
 - **No** prod project row carries `deploy_config["webhook_secret"]` — Startup
   Burrow's `deploy_config` holds only `default_deploy_target`,
-  `default_strategy`, `deploy_targets`; Soylent' is `%{}`.
+  `default_strategy`, `deploy_targets`; Initech' is `%{}`.
 - The deployed release has both `Application.get_env(:platform,
   :github_webhook_secret)` and `:github_webhook_signature_required` at `nil` —
   it predates this branch.
@@ -299,7 +299,7 @@ Matching is on **exact** `repo_url` against the payload's
 
 ```elixir
 project = Platform.Repo.get_by(Platform.Tasks.Project,
-  repo_url: "https://github.com/Soylent/SoylentMVP")
+  repo_url: "https://github.com/Initech/InitechMVP")
 
 Platform.Tasks.update_project(project, %{
   deploy_config: Map.put(project.deploy_config || %{}, "webhook_secret", secret)

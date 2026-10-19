@@ -120,14 +120,14 @@ defmodule Platform.Meetings.CandidatesTest do
 
     test "two meetings in different orgs derive different org_ids" do
       acme = acme_org_id()
-      sxi = tenant_org_id("sxi")
+      globex = tenant_org_id("globex")
 
       {:ok, acme_candidate} = Candidates.create(candidate_attrs(create_meeting!(acme).id))
-      {:ok, sxi_candidate} = Candidates.create(candidate_attrs(create_meeting!(sxi).id))
+      {:ok, globex_candidate} = Candidates.create(candidate_attrs(create_meeting!(globex).id))
 
       assert acme_candidate.org_id == acme
-      assert sxi_candidate.org_id == sxi
-      refute acme_candidate.org_id == sxi_candidate.org_id
+      assert globex_candidate.org_id == globex
+      refute acme_candidate.org_id == globex_candidate.org_id
     end
 
     test "a meeting id that resolves to nothing still writes, with a nil org_id" do
@@ -156,7 +156,7 @@ defmodule Platform.Meetings.CandidatesTest do
 
     test "an explicit org_id wins over derivation" do
       meeting = create_meeting!(acme_org_id())
-      explicit = tenant_org_id("paragon")
+      explicit = tenant_org_id("hooli")
 
       {:ok, candidate} = Candidates.create(candidate_attrs(meeting.id, %{org_id: explicit}))
 

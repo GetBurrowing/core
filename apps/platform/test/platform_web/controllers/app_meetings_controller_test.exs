@@ -73,7 +73,7 @@ defmodule PlatformWeb.AppMeetingsControllerTest do
 
     on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
 
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     user = create_user!()
     plain_member!(user, org)
     %{token: token, session: session} = app_session!(user)
@@ -117,7 +117,7 @@ defmodule PlatformWeb.AppMeetingsControllerTest do
     end
 
     test "another org's meeting is 404 and is not started", ctx do
-      other = meeting!(Tenancy.get_org_by_slug!("soylent"))
+      other = meeting!(Tenancy.get_org_by_slug!("initech"))
 
       conn = ctx.conn |> bearer(ctx.token) |> post("/api/app/meetings/#{other.id}/join")
 
@@ -161,7 +161,7 @@ defmodule PlatformWeb.AppMeetingsControllerTest do
     end
 
     test "another org's meeting is 404", ctx do
-      other = meeting!(Tenancy.get_org_by_slug!("soylent"))
+      other = meeting!(Tenancy.get_org_by_slug!("initech"))
       conn = ctx.conn |> bearer(ctx.token) |> post("/api/app/meetings/#{other.id}/leave")
       assert json_response(conn, 404) == %{"error" => "not_found"}
     end

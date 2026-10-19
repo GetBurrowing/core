@@ -19,7 +19,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   The stage's written site list has five entries and the scope-rail chips are
   not among them; stage 2's live-DOM sweep found them. They render in the page
   header at desktop width, inches above the rail, so a masked rail beside an
-  unmasked `Soylent` chip is the exact failure this feature exists to prevent.
+  unmasked `Initech` chip is the exact failure this feature exists to prevent.
   Covered here.
 
   ## What is NOT covered, and is not an oversight
@@ -47,7 +47,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   # per-session placeholder slug (see `TaskDisplay.real_org_slug/2`).
   @machine_attrs ~w(value)
 
-  @tenants ~w(soylent wayne_tech sxi)
+  @tenants ~w(initech vandelay_ind globex)
 
   defp acme_admin_conn(conn) do
     n = System.unique_integer([:positive])
@@ -83,14 +83,14 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   defp seed_rail do
     %{
-      soylent: seed_project("soylent", "Soylent Storefront"),
-      protect: seed_project("wayne_tech", "Wayne-Tech Rollout"),
-      sxi: seed_project("sxi", "SXI Onboarding")
+      initech: seed_project("initech", "Initech Storefront"),
+      protect: seed_project("vandelay_ind", "Vandelay-Ind Rollout"),
+      globex: seed_project("globex", "Globex Onboarding")
     }
   end
 
   defp real_names(projects) do
-    Enum.map(@tenants, &Tenancy.scope_label/1) ++
+    Enum.map(@tenants, &Tenancy.get_org_by_slug!(&1).name) ++
       @tenants ++
       Enum.map(Map.values(projects), & &1.name)
   end
@@ -163,8 +163,8 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
       assert sheet =~ "Workspace A"
       assert sheet =~ "Project A"
-      refute sheet =~ ~s(data-org-slug="wayne-tech")
-      refute sheet =~ ~s(data-org-slug="wayne_tech")
+      refute sheet =~ ~s(data-org-slug="vandelay-ind")
+      refute sheet =~ ~s(data-org-slug="vandelay_ind")
       assert sheet =~ ~s(data-org-slug="workspace-a")
     end
 
@@ -204,18 +204,18 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       unmasked =
-        view |> select_project(projects.soylent) |> subtree("[data-role=tasks-breadcrumb]")
+        view |> select_project(projects.initech) |> subtree("[data-role=tasks-breadcrumb]")
 
-      assert_name_anywhere(unmasked, "Soylent")
-      assert_name_anywhere(unmasked, "Soylent Storefront")
+      assert_name_anywhere(unmasked, "Initech")
+      assert_name_anywhere(unmasked, "Initech Storefront")
 
       crumb = view |> toggle_mask(true) |> subtree("[data-role=tasks-breadcrumb]")
 
       # The most visible single leak this task had left: on screen at BOTH
       # breakpoints for as long as a project is selected, directly above the
       # rail stage 2 masked.
-      refute_name_anywhere(crumb, "Soylent Storefront", @machine_attrs)
-      refute_name_anywhere(crumb, "Soylent", @machine_attrs)
+      refute_name_anywhere(crumb, "Initech Storefront", @machine_attrs)
+      refute_name_anywhere(crumb, "Initech", @machine_attrs)
       assert crumb =~ "Workspace"
       assert crumb =~ "Project"
     end
@@ -231,12 +231,12 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       {:ok, view, html} = live(conn, ~p"/tasks")
 
       rail = subtree(html, "#tasks-scope-rail")
-      for slug <- @tenants, do: assert_name_anywhere(rail, Tenancy.scope_label(slug))
+      for slug <- @tenants, do: assert_name_anywhere(rail, Tenancy.get_org_by_slug!(slug).name)
 
       rail = view |> toggle_mask(true) |> subtree("#tasks-scope-rail")
 
       for slug <- @tenants do
-        refute_name_anywhere(rail, Tenancy.scope_label(slug), @machine_attrs)
+        refute_name_anywhere(rail, Tenancy.get_org_by_slug!(slug).name, @machine_attrs)
         refute_name_anywhere(rail, slug, @machine_attrs)
       end
 
@@ -244,7 +244,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # text and keeps the real name in the accessibility tree has not been
       # masked. That is the defect the sibling task 01a00c66 shipped and fixed.
       assert rail =~ "Workspace A"
-      refute rail =~ ~s(aria-label="Soylent)
+      refute rail =~ ~s(aria-label="Initech)
 
       # `phx-value-scope` IS masked now. It is still the filter's argument —
       # but an argument does not have to be spelled with the real slug, and the
@@ -252,7 +252,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # attributes included. The chip carries the per-session alias and
       # `FiltersComponent` inverts it; the test below proves the control still
       # fires.
-      refute rail =~ ~s(phx-value-scope="soylent")
+      refute rail =~ ~s(phx-value-scope="initech")
       assert rail =~ ~s(phx-value-scope="workspace-b")
     end
 
@@ -300,7 +300,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # `Workspace B`, not `A`: the letters come from the SAME map the rail
       # letters from, where Acme is `Workspace A`. Acme owns no project here so
       # it has no optgroup — and that is the point. A picker that lettered its
-      # groups independently would call Soylent `Workspace A` here and
+      # groups independently would call Initech `Workspace A` here and
       # `Workspace B` in the rail two inches away, which is worse than not
       # masking it: the viewer would believe they were two workspaces.
       assert select =~ ~s(label="Workspace B")
@@ -330,7 +330,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # `Workspace B`, not `A`: the letters come from the SAME map the rail
       # letters from, where Acme is `Workspace A`. Acme owns no project here so
       # it has no optgroup — and that is the point. A picker that lettered its
-      # groups independently would call Soylent `Workspace A` here and
+      # groups independently would call Initech `Workspace A` here and
       # `Workspace B` in the rail two inches away, which is worse than not
       # masking it: the viewer would believe they were two workspaces.
       assert select =~ ~s(label="Workspace B")
@@ -338,7 +338,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
       # The option VALUE keeps the real project id. It is what the form posts;
       # mask it and the sheet creates a task against nothing.
-      assert select =~ ~s(value="#{projects.soylent.id}")
+      assert select =~ ~s(value="#{projects.initech.id}")
     end
   end
 
@@ -358,13 +358,14 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
         |> render_click()
         |> subtree("[data-role=project-create-org-select]")
 
-      for slug <- @tenants, do: assert_name_anywhere(unmasked, Tenancy.scope_label(slug))
+      for slug <- @tenants,
+          do: assert_name_anywhere(unmasked, Tenancy.get_org_by_slug!(slug).name)
 
       html = toggle_mask(view, true)
       select = subtree(html, "[data-role=project-create-org-select]")
 
       for slug <- @tenants do
-        refute_name_anywhere(select, Tenancy.scope_label(slug), @machine_attrs)
+        refute_name_anywhere(select, Tenancy.get_org_by_slug!(slug).name, @machine_attrs)
       end
 
       assert select =~ "Workspace"
@@ -408,7 +409,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   # Third exclusion, added with the runtime scope-colour block (task 01a09287
   # stage 3): the ONE `<style data-role="org-scope-colors">` element, content
-  # and all. It carries `[data-scope="soylent"]{…}` rules for the viewer's
+  # and all. It carries `[data-scope="initech"]{…}` rules for the viewer's
   # orgs.
   #
   # This is the same concession the `class` exclusion above already makes,
@@ -417,7 +418,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   # keyed on a per-session placeholder would have to be re-derived for a
   # value the stylesheet does not know. Nothing here is ever DISPLAYED: a
   # <style> body renders no text, and in a masked session the rail's chips
-  # carry the PLACEHOLDER slug, so a `[data-scope="soylent"]` rule matches
+  # carry the PLACEHOLDER slug, so a `[data-scope="initech"]` rule matches
   # no element at all.
   #
   # The exclusion is deliberately keyed on `data-role` and asserted to strike
@@ -450,10 +451,10 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
     test "the selected epic's real name is nowhere in the masked document", %{conn: conn} do
       conn = acme_admin_conn(conn)
       projects = seed_rail()
-      epic = seed_epic(projects.soylent, "Zephyr Migration")
+      epic = seed_epic(projects.initech, "Zephyr Migration")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      _ = select_project(view, projects.soylent)
+      _ = select_project(view, projects.initech)
       unmasked = select_epic(view, epic)
 
       # ANTI-VACUITY: the epic name IS on this screen unmasked, and it is in
@@ -479,7 +480,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
       {:ok, view, html} = live(conn, ~p"/tasks")
 
-      # ANTI-VACUITY: both spellings are in the unmasked document. `wayne_tech`
+      # ANTI-VACUITY: both spellings are in the unmasked document. `vandelay_ind`
       # is stored underscored and rendered hyphenated, and one form passing
       # while the other leaks is exactly the hole the sibling task 01a00c66
       # shipped.
@@ -510,7 +511,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      crumb = view |> select_project(projects.soylent) |> subtree("[data-role=tasks-breadcrumb]")
+      crumb = view |> select_project(projects.initech) |> subtree("[data-role=tasks-breadcrumb]")
 
       # The identical call the masked breadcrumb test makes, against the
       # UNMASKED breadcrumb — which is exactly the DOM that site rendered
@@ -525,11 +526,11 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # drop either of those two lines from `tasks_live.html.heex` and only
       # this one fires.
       assert_raise ExUnit.AssertionError, fn ->
-        refute_name_anywhere(crumb, "Soylent Storefront", @machine_attrs)
+        refute_name_anywhere(crumb, "Initech Storefront", @machine_attrs)
       end
 
       assert_raise ExUnit.AssertionError, fn ->
-        refute_name_anywhere(crumb, "Soylent", @machine_attrs)
+        refute_name_anywhere(crumb, "Initech", @machine_attrs)
       end
     end
 
@@ -544,7 +545,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # module-level, so this fires on the pill's TEXT and `aria-label` — the
       # two surfaces the `label` attr overrides — and not on the argument.
       assert_raise ExUnit.AssertionError, fn ->
-        refute_name_anywhere(rail, "Soylent", @machine_attrs)
+        refute_name_anywhere(rail, "Initech", @machine_attrs)
       end
     end
 
@@ -562,7 +563,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       # unmasked org. That bug ships green — every masked test still passes.
       rail = subtree(html, "#tasks-scope-rail")
       refute rail =~ "Workspace A"
-      assert_name_anywhere(rail, "Soylent")
+      assert_name_anywhere(rail, "Initech")
 
       select =
         view
@@ -571,7 +572,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
         |> subtree("[data-role=project-create-org-select]")
 
       refute select =~ "Workspace A"
-      assert_name_anywhere(select, "Soylent")
+      assert_name_anywhere(select, "Initech")
     end
   end
 end

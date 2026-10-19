@@ -154,7 +154,7 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
   #
   # Mirrors `router_host_isolation_test.exs`: an INTERNAL user, because
   # `ExternalUserScope` already gates external users and would confound
-  # the signal. The seeded "sxi" org is used for the same reason it is
+  # the signal. The seeded "globex" org is used for the same reason it is
   # there — its slug atom is pre-registered for the authenticated shell.
   defp internal_user! do
     n = System.unique_integer([:positive])
@@ -168,7 +168,7 @@ defmodule PlatformWeb.RouterExternalChatHostTest do
       })
       |> Repo.insert!()
 
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})

@@ -53,7 +53,7 @@ defmodule PlatformWeb.Components.InheritancePill do
 
       <.inheritance_pill
         org={@current_org}
-        scope={:soylent}
+        scope={@current_org.slug}
         record_key={:my_skill}
         default={nil}
         lookup_fn={&Skills.lookup_for_org/2}
@@ -74,10 +74,10 @@ defmodule PlatformWeb.Components.InheritancePill do
       "The `%Platform.Tenancy.Org{}` whose perspective we are rendering. Passed to `effective_value/4`."
   )
 
-  attr(:scope, :any,
+  attr(:scope, :string,
     required: true,
     doc:
-      "The sub-org scope: one of `ScopePill.scopes/0`, or an org slug string (the root org has no compiled atom). Drives the accent color in the `:defined_here` and `:overridden` states (no accent for `:inherited`)."
+      "The sub-org scope: an org slug string, as stored. Drives the accent color in the `:defined_here` and `:overridden` states (no accent for `:inherited`) through `data-scope` and the org row's colour."
   )
 
   attr(:record_key, :any,
@@ -134,6 +134,7 @@ defmodule PlatformWeb.Components.InheritancePill do
             accent_class(@state, @scope),
             "focus-visible-ring cursor-pointer"
           ]}
+          data-scope={accent_scope(@state, @scope)}
           aria-label={@aria_label}
         >
           {pill_inner(assigns)}
@@ -146,6 +147,7 @@ defmodule PlatformWeb.Components.InheritancePill do
             accent_class(@state, @scope),
             "cursor-not-allowed"
           ]}
+          data-scope={accent_scope(@state, @scope)}
           aria-label={@aria_label}
           title="Only root-org admins can override"
           data-tooltip="Only root-org admins can override"
@@ -159,6 +161,7 @@ defmodule PlatformWeb.Components.InheritancePill do
             state_class(@state),
             accent_class(@state, @scope)
           ]}
+          data-scope={accent_scope(@state, @scope)}
           aria-label={@aria_label}
         >
           {pill_inner(assigns)}
@@ -230,8 +233,15 @@ defmodule PlatformWeb.Components.InheritancePill do
   defp state_class(:defined_here), do: "inheritance-pill--defined"
   defp state_class(:overridden), do: "inheritance-pill--overridden"
 
-  # Inherited state has no accent (muted base-content); the other two
-  # carry the sub-org scope's text color via `Tenancy.scope_color/1`.
+  # Inherited state has no accent (muted base-content); the other two carry
+  # the sub-org scope's fill colour, read from the org row through
+  # `data-scope` (`.scope-fill-text`; task 01a14dd9 stage 2 retired the
+  # per-slug `text-<slug>` classes).
   defp accent_class(:inherited, _scope), do: nil
-  defp accent_class(_state, scope), do: Tenancy.scope_color(scope)
+  defp accent_class(_state, scope) when is_binary(scope), do: "scope-fill-text"
+  defp accent_class(_state, _scope), do: nil
+
+  defp accent_scope(:inherited, _scope), do: nil
+  defp accent_scope(_state, scope) when is_binary(scope), do: scope
+  defp accent_scope(_state, _scope), do: nil
 end

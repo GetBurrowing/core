@@ -117,7 +117,7 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
   setup %{conn: conn} do
     on_exit(&restore_tracker!/0)
 
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
 
     viewer = guard_user!("Vera Viewer")
     colleague = guard_user!("Cora Colleague")

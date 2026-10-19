@@ -80,7 +80,11 @@ config :platform, :oidc,
   issuer: "https://issuer.example.com",
   app_url: "http://www.example.com",
   strategy: Platform.TestOIDCStrategy,
-  http_adapter: {Assent.HTTPAdapter.Mint, []}
+  http_adapter: {Assent.HTTPAdapter.Mint, []},
+  # config.exs sets no external_group (task 01a14dd9); pin a neutral marker
+  # so the external-user suites have one. Tests read it back through
+  # `Platform.OIDC.external_group/0` rather than spelling it.
+  external_group: "globex-external"
 
 # Per-OS-process so two `mix test` runs on one host never share (and never
 # delete) each other's blobs. config/runtime.exs leaves this key alone in

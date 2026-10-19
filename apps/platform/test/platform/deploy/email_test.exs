@@ -199,12 +199,12 @@ defmodule Platform.Deploy.EmailTest do
 
     Process.delete(:mail_test_adapter_hook)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
     admin = user!(org_id, "admin")
     member = user!(org_id)
     account = account!(admin, org_id)
-    sender!(admin, account, "reports", "reports@soylent.test", "Soylent Reports")
+    sender!(admin, account, "reports", "reports@initech.test", "Initech Reports")
     {:ok, project} = Tasks.create_project(%{name: unique("mail-deploy"), org_id: org_id})
 
     %{
@@ -245,7 +245,7 @@ defmodule Platform.Deploy.EmailTest do
       assert queued.responsibility == "task_deploy"
       assert queued.actor_type == "system"
       assert queued.drafted_by_type == "system"
-      assert queued.from_address == "reports@soylent.test"
+      assert queued.from_address == "reports@initech.test"
       assert queued.recipients == [ctx.member.email]
       assert queued.subject == "Weekly report"
       assert queued.body =~ "Revenue is up **12%**."
@@ -256,7 +256,7 @@ defmodule Platform.Deploy.EmailTest do
       assert id == queued.id
 
       assert [email] = adapter_messages()
-      assert email.from == {"Soylent Reports", "reports@soylent.test"}
+      assert email.from == {"Initech Reports", "reports@initech.test"}
       assert email.to == [{"", ctx.member.email}]
       assert email.subject == "Weekly report"
       assert email.text_body =~ "Revenue is up **12%**."
@@ -286,7 +286,7 @@ defmodule Platform.Deploy.EmailTest do
     test "an account of another org → account_wrong_org", ctx do
       other_admin = user!(ctx.other_org_id, "admin")
       foreign = account!(other_admin, ctx.other_org_id, %{"internal_only" => false})
-      sender!(other_admin, foreign, "reports", "reports@sxi.test", "SXI")
+      sender!(other_admin, foreign, "reports", "reports@globex.test", "Globex")
 
       task = email_task!(ctx, email_config(ctx, %{"account_id" => foreign.id}))
       stage = deploy_stage!(task)

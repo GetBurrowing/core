@@ -395,9 +395,9 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       viewer = viewer_in_acme!()
 
       {:ok, project} =
-        Tasks.create_project(%{name: "Soylent planning", org_id: tenant_org_id("soylent")})
+        Tasks.create_project(%{name: "Initech planning", org_id: tenant_org_id("initech")})
 
-      {:ok, theirs} = Meetings.create_meeting(%{project_id: project.id, name: "Soylent sync"})
+      {:ok, theirs} = Meetings.create_meeting(%{project_id: project.id, name: "Initech sync"})
 
       canvas = canvas!(theirs, "Their canvas")
       version!(canvas, 1, at("2026-07-29T14:20:00Z"))

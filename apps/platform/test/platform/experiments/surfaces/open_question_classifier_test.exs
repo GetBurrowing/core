@@ -99,7 +99,7 @@ defmodule Platform.Experiments.Surfaces.OpenQuestionClassifierTest do
 
   describe "subject_attributes/1" do
     test "a meeting reads its project and the project's org" do
-      org = Platform.TenancyFixtures.tenant_org_id("soylent")
+      org = Platform.TenancyFixtures.tenant_org_id("initech")
 
       {:ok, project} =
         Platform.Tasks.create_project(%{

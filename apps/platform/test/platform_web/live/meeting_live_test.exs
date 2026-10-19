@@ -260,8 +260,8 @@ defmodule PlatformWeb.MeetingLiveTest do
     # so `:user_id` is a canvas-author placeholder and never an authz subject.
 
     test "a viewer with no membership in the meeting's org is redirected away", %{conn: conn} do
-      project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
-      {meeting, _space} = create_meeting(%{project: project, name: "Soylent Only"})
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("initech"))
+      {meeting, _space} = create_meeting(%{project: project, name: "Initech Only"})
 
       # Acme-root membership at :member level — the shape every OIDC signup
       # has, and not a membership in the meeting's org.
@@ -272,7 +272,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "denial is indistinguishable from a genuinely absent slug", %{conn: conn} do
-      project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("initech"))
       {meeting, _space} = create_meeting(%{project: project, name: "Oracle Probe"})
       {conn, _user} = authenticated_conn(conn)
 
@@ -287,7 +287,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "a denied mount subscribes to none of the meeting's topics", %{conn: conn} do
-      project = create_project(Platform.TenancyFixtures.tenant_org_id("wayne_tech"))
+      project = create_project(Platform.TenancyFixtures.tenant_org_id("vandelay_ind"))
       {meeting, space} = create_meeting(%{project: project, name: "No Side Effects"})
       {conn, _user} = authenticated_conn(conn)
 
@@ -306,9 +306,9 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "a member of the meeting's org mounts normally", %{conn: conn} do
-      org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      org_id = Platform.TenancyFixtures.tenant_org_id("initech")
       project = create_project(org_id)
-      {meeting, _space} = create_meeting(%{project: project, name: "Soylent Standup"})
+      {meeting, _space} = create_meeting(%{project: project, name: "Initech Standup"})
       {conn, user} = authenticated_conn(conn)
       member!(user, org_id)
 
@@ -320,18 +320,18 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "a slug matching meetings in two of the viewer's orgs gets the ambiguity flash",
          %{conn: conn} do
-      soylent_id = Platform.TenancyFixtures.tenant_org_id("soylent")
-      wayne_tech_id = Platform.TenancyFixtures.tenant_org_id("wayne_tech")
+      initech_id = Platform.TenancyFixtures.tenant_org_id("initech")
+      vandelay_ind_id = Platform.TenancyFixtures.tenant_org_id("vandelay_ind")
 
       {meeting, _space} =
-        create_meeting(%{project: create_project(soylent_id), slug: "standup", name: "A"})
+        create_meeting(%{project: create_project(initech_id), slug: "standup", name: "A"})
 
       {_other, _space} =
-        create_meeting(%{project: create_project(wayne_tech_id), slug: "standup", name: "B"})
+        create_meeting(%{project: create_project(vandelay_ind_id), slug: "standup", name: "B"})
 
       {conn, user} = authenticated_conn(conn)
-      member!(user, soylent_id)
-      member!(user, wayne_tech_id)
+      member!(user, initech_id)
+      member!(user, vandelay_ind_id)
 
       # Notably this does NOT raise Ecto.MultipleResultsError, which the
       # unscoped `Repo.get_by(Meeting, slug: slug)` read did.
@@ -3068,7 +3068,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "the empty state renders under the not-found flash without a centred hero",
          %{conn: conn} do
-      other_org_project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
+      other_org_project = create_project(Platform.TenancyFixtures.tenant_org_id("initech"))
       {meeting, _space} = create_meeting(%{project: other_org_project, name: "Not Yours"})
 
       # The real path this state has to survive: a denied detail request

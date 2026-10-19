@@ -175,7 +175,7 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
 
   describe "GUARD — reachable from a designer runtime holding only `task`" do
     setup do
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
 
       internal = World.create_user!()
       World.plain_member!(internal, org)

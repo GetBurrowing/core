@@ -99,7 +99,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
   `mask_labels` is precomputed by `LifecycleHooks.assign_mask_labels/1` on the
   same pass that assigns `project_sections`. No render site in this module may
-  call `Platform.Chat.SidebarMask` or `Tenancy.scope_label/1` for a rail row:
+  call `Platform.Chat.SidebarMask` or read an org name directly for a rail row:
   one resolved string per entity is what keeps the attribute surface and the
   text surface from disagreeing.
 
@@ -489,8 +489,8 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
         <%!-- Stage 5 of ADR-0042: project picker grouped by org via collapsible
              <details> sections. The root org first, then tenant orgs alphabetically.
-             Header carries the scope color dot (Tenancy.scope_color/1, pure +
-             DB-free) so users see at a glance which org a section belongs to. --%>
+             Header carries the scope color dot (`data-scope`, coloured from the
+             org row) so users see at a glance which org a section belongs to. --%>
         <%!-- Mode strip (task 01a00cf1 stage 2). THE STRIP IS THE SIGNAL, NOT
              THE ICON STATE: an eye and a crossed-out eye differ by a few
              pixels of stroke, read in a half-second glance while a share
@@ -517,26 +517,25 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
         <div :if={!@projects_collapsed} class="flex-1 overflow-y-auto">
           <%!-- Every name-bearing surface on these rows reads @mask_labels via
-               TaskDisplay.rail_label/2 — never Tenancy.scope_label/1 or
-               project.name directly, and never SidebarMask itself. One
+               TaskDisplay.rail_label/2 — never an org or project name read
+               directly, and never SidebarMask itself. One
                resolved string per entity, so the attribute surface and the
                text surface cannot disagree. That divergence is the defect that
                cost the sibling task 01a00c66 a full review cycle.
 
                THE ORG ROW'S FOUR ROUTING ATTRIBUTES FOLLOW THE LABEL TOO —
                `phx-value-id` on the reveal button, `phx-value-key` /
-               `data-menu-key` on the kebab. Each carried `soylent` verbatim
+               `data-menu-key` on the kebab. Each carried `initech` verbatim
                under a row reading `Workspace B`, which is the one surface left
                in this feature routing by a human-readable name: project rows
                have keyed by UUID all along. They now carry the per-session
                placeholder slug out of the same map, and the handlers resolve
                it with `TaskDisplay.real_org_slug/2` before acting.
 
-               `Tenancy.scope_color/1` DELIBERATELY keeps the real slug: it
-               produces a CSS utility class and no name. Class names cannot be
-               regenerated per session, they are invisible on a screen share,
-               and `Platform.MaskAssertions` excludes `class` for exactly that
-               reason. This is a named limitation, not a miss. --%>
+               The org dot is coloured only through `data-scope`, which spells
+               the slug, so it is dropped while the org is masked and the dot
+               takes the row's text colour (task 01a14dd9 stage 2 retired the
+               per-slug class that used to colour it under masking). --%>
           <details
             :for={{org_slug, _org_name, org_projects} <- @project_sections}
             open
@@ -559,7 +558,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               ]
             }>
               <span
-                class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+                class="size-2 rounded-full scope-dot-current"
                 data-scope={
                   if(@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug),
                     do: nil,
@@ -727,7 +726,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
              TaskDisplay.rail_label/2, exactly as the desktop rows do — the SAME
              map, so the phone and the laptop cannot letter an org differently.
              `data-org-slug` follows the label here too; it is the leak that
-             `refute html =~ "Wayne-Tech"` cannot see. --%>
+             `refute html =~ "Vandelay-Ind"` cannot see. --%>
         <div class="flex flex-col">
           <details
             :for={{org_slug, _org_name, org_projects} <- @project_sections}
@@ -744,7 +743,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               )
             ]}>
               <span
-                class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+                class="size-2 rounded-full scope-dot-current"
                 data-scope={
                   if(@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug),
                     do: nil,
@@ -901,10 +900,10 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                      the shared screen the moment someone opened the picker.
                      Both follow @mask_labels (task 01a00cf1 stage 3). --%>
                 <optgroup
-                  :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+                  :for={{org_slug, org_name, org_projects} <- @projects_by_org}
                   label={
                     TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org_slug},
-                      real: Tenancy.scope_label(org_slug)
+                      real: org_name
                     )
                   }
                 >
@@ -1051,9 +1050,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 value={org.id}
                 selected={@project_form[:org_id].value == org.id}
               >
-                {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org.slug},
-                  real: Tenancy.scope_label(org.slug)
-                )}
+                {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, org.slug}, real: org.name)}
               </option>
             </select>
             <p

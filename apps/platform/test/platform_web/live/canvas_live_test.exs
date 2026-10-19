@@ -35,7 +35,7 @@ defmodule PlatformWeb.CanvasLiveTest do
   @router PlatformWeb.Router
 
   setup do
-    %{org: Tenancy.get_org_by_slug!("sxi")}
+    %{org: Tenancy.get_org_by_slug!("globex")}
   end
 
   # ── Builders ──────────────────────────────────────────────────────────────

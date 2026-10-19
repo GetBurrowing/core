@@ -17,7 +17,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     assigns =
       Map.merge(
         %{
-          scope: :acme,
+          scope: "acme",
           propagated_to: nil,
           # nil = let the component pick the size-appropriate default (true at
           # :default size, false at :compact). Tests that care pass it explicitly.
@@ -59,7 +59,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     assigns =
       Map.merge(
         %{
-          scope: :acme,
+          scope: "acme",
           propagated_to: nil,
           clickable: nil,
           active: false,
@@ -103,11 +103,21 @@ defmodule PlatformWeb.Components.ScopePillTest do
     |> MapSet.new()
   end
 
-  describe "scopes/0 enum" do
-    test "returns the canonical 5-atom list in display order" do
-      # The root org has no compiled atom since task 01a116de stage 3: it is
-      # install data and is passed by its slug string.
-      assert scopes() == [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+  # Placeholder org slugs: the component holds no list of its own (task
+  # 01a14dd9 stage 2), so any slug a row could carry is a fair input.
+  @shipped ~w(initech vandelay_ind globex hooli wonka)
+
+  describe "no compiled scope list (task 01a14dd9 stage 2)" do
+    test "scopes/0 is gone: the pill takes org slugs, not a compiled enum" do
+      Code.ensure_loaded!(PlatformWeb.Components.ScopePill)
+      refute function_exported?(PlatformWeb.Components.ScopePill, :scopes, 0)
+    end
+
+    test "the component source carries no per-scope label clause" do
+      source = File.read!("lib/platform_web/components/scope_pill.ex")
+
+      refute source =~ ~r/defp scope_label\(:[a-z]/
+      refute source =~ ~r/@scopes\s*\[/
     end
   end
 
@@ -120,11 +130,11 @@ defmodule PlatformWeb.Components.ScopePillTest do
     @retired ~w(bg-SLUG text-SLUG-label border-SLUG bg-SLUG-dot bg-SLUG-active hover:bg-SLUG/22)
 
     for {scope, fragment, label} <- [
-          {:soylent, "soylent", "Soylent"},
-          {:wayne_tech, "wayne-tech", "Wayne-Tech"},
-          {:sxi, "sxi", "SXI"},
-          {:paragon, "paragon", "Paragon"},
-          {:cyberdyne, "cyberdyne", "Cyberdyne"}
+          {"initech", "initech", "Initech"},
+          {"vandelay_ind", "vandelay-ind", "Vandelay Ind"},
+          {"globex", "globex", "Globex"},
+          {"hooli", "hooli", "Hooli"},
+          {"wonka", "wonka", "Wonka"}
         ] do
       @tag scope: scope, fragment: fragment, label: label
       test "#{scope} renders the var-path utilities and none of its retired classes", %{
@@ -149,29 +159,29 @@ defmodule PlatformWeb.Components.ScopePillTest do
       end
     end
 
-    test "cyberdyne renders in the active variant" do
-      html = render_pill(%{scope: :cyberdyne, active: true})
+    test "wonka renders in the active variant" do
+      html = render_pill(%{scope: "wonka", active: true})
       assert "scope-active" in chip_classes(html)
-      assert html =~ ">Cyberdyne</span>"
+      assert html =~ ">Wonka</span>"
     end
 
-    test "cyberdyne renders in the compact variant" do
-      html = render_pill(%{scope: :cyberdyne, size: :compact})
+    test "wonka renders in the compact variant" do
+      html = render_pill(%{scope: "wonka", size: :compact})
       tokens = chip_classes(html)
       assert "scope-tint" in tokens
       assert "scope-text" in tokens
       assert "scope-edge-inset" in tokens
       assert html =~ "scope-dot"
-      assert html =~ ">Cyberdyne</span>"
+      assert html =~ ">Wonka</span>"
     end
 
     test "renders without the arrow glyph" do
-      html = render_pill(%{scope: :acme})
+      html = render_pill(%{scope: "acme"})
       refute html =~ "hero-arrow-right"
     end
 
     test "renders a colored dot as a redundant signal beyond color (WCAG 1.4.1)" do
-      html = render_pill(%{scope: :acme})
+      html = render_pill(%{scope: "acme"})
       assert html =~ "rounded-full"
       assert html =~ ~s(aria-hidden="true")
     end
@@ -251,7 +261,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # all, so no slug-specific branch survives in the component.
       new_org = class_lists(render_pill(%{scope: "hueless_co"}))
 
-      for scope <- scopes() do
+      for scope <- @shipped do
         assert class_lists(render_pill(%{scope: scope})) == new_org, "#{scope}"
       end
     end
@@ -259,20 +269,20 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "the shipped six still carry data-scope, so the probe is not slug-specific" do
       # data-scope is emitted for EVERY chip. Since stage 5 it is also the
       # ONLY thing that colours the six: their rules are keyed on it.
-      assert render_pill(%{scope: :acme}) =~ ~s(data-scope="acme")
-      assert render_pill(%{scope: :wayne_tech}) =~ ~s(data-scope="wayne_tech")
+      assert render_pill(%{scope: "acme"}) =~ ~s(data-scope="acme")
+      assert render_pill(%{scope: "vandelay_ind"}) =~ ~s(data-scope="vandelay_ind")
     end
 
     test "data-scope is the STORED slug, not the kebab-cased class fragment" do
-      # `:wayne_tech` is the class fragment `wayne-tech` and the org row
-      # `wayne_tech`. `ScopeColorStyles` keys its rules on `orgs.slug`, so
+      # `"vandelay_ind"` is the class fragment `vandelay-ind` and the org row
+      # `vandelay_ind`. `ScopeColorStyles` keys its rules on `orgs.slug`, so
       # emitting the class fragment here would produce a `data-scope` that
       # matches no emitted rule — a silent miss, on the one org whose two
       # spellings differ.
-      html = render_pill(%{scope: :wayne_tech})
+      html = render_pill(%{scope: "vandelay_ind"})
 
-      assert html =~ ~s(data-scope="wayne_tech")
-      refute html =~ ~s(data-scope="wayne-tech")
+      assert html =~ ~s(data-scope="vandelay_ind")
+      refute html =~ ~s(data-scope="vandelay-ind")
     end
 
     test "a chip whose LABEL is overridden with no value emits NO data-scope" do
@@ -283,27 +293,27 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # The chat header and the hidden-channels drawer mask by overriding the
       # visible label and handing over the REAL scope (the atom or runtime
       # slug `ChatLive.org_scope/1` resolves from the org row, task 01a0938b)
-      # and no `value`. Falling back to `@scope` there wrote `data-scope="wayne_tech"` into a masked session: the underscore
-      # spelling, which `refute html =~ "Wayne-Tech"` does not catch, in an
+      # and no `value`. Falling back to `@scope` there wrote `data-scope="vandelay_ind"` into a masked session: the underscore
+      # spelling, which `refute html =~ "Vandelay Ind"` does not catch, in an
       # attribute, which renders as no text at all and is perfectly legible
       # in a DOM inspector.
-      html = render_pill(%{scope: :wayne_tech, label: "Workspace B", clickable: false})
+      html = render_pill(%{scope: "vandelay_ind", label: "Workspace B", clickable: false})
 
       assert html =~ ">Workspace B</span>"
       refute html =~ "data-scope="
 
       # The UNDERSCORE spelling is the one that leaked. Since stage 5 the
       # hyphen spelling is gone too: the per-slug class names that spelled it
-      # (`bg-wayne-tech`) were retired with the move, so no spelling of the
+      # (`bg-vandelay-ind`) were retired with the move, so no spelling of the
       # real org survives anywhere in a masked chip, class included.
       #
       # The cost, stated: a masked chip carries no `data-scope`, so none of
       # the emitted rules matches it and it renders uncoloured. Before stage
       # 5 the six kept their colour under masking through those class names.
-      refute html =~ "wayne_tech"
-      refute html =~ "wayne-tech"
-      refute html =~ ">Wayne-Tech</span>"
-      refute html =~ ~s(aria-label="Wayne-Tech scope")
+      refute html =~ "vandelay_ind"
+      refute html =~ "vandelay-ind"
+      refute html =~ ">Vandelay Ind</span>"
+      refute html =~ ~s(aria-label="Vandelay Ind scope")
     end
 
     test "a label override does NOT suppress data-scope when masking is off" do
@@ -313,9 +323,9 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # masking is off — if `false` suppressed the attribute, every such
       # unmasked pill would lose its colour and the test above would still
       # pass.
-      html = render_pill(%{scope: :wayne_tech, label: false, clickable: false})
+      html = render_pill(%{scope: "vandelay_ind", label: false, clickable: false})
 
-      assert html =~ ~s(data-scope="wayne_tech")
+      assert html =~ ~s(data-scope="vandelay_ind")
     end
 
     test "an explicit value beats a label override — the tasks rail keeps its colour" do
@@ -323,7 +333,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # placeholder rather than nothing: `value` is the payload that is safe
       # to spell, so there is no reason to suppress it. Without this the
       # suppression above would silently take the tasks rail's colour with it.
-      html = render_pill(%{scope: "soylent", label: "Workspace B", value: "workspace-b"})
+      html = render_pill(%{scope: "initech", label: "Workspace B", value: "workspace-b"})
 
       assert html =~ ~s(data-scope="workspace-b")
       assert html =~ ~s(phx-value-scope="workspace-b")
@@ -331,113 +341,113 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
       # Since stage 5 the six carry no per-slug class name, so the real slug
       # is absent from the whole chip, not only from the two attributes.
-      refute html =~ ~s(data-scope="soylent")
-      refute html =~ ">Soylent</span>"
-      refute html =~ "soylent"
+      refute html =~ ~s(data-scope="initech")
+      refute html =~ ">Initech</span>"
+      refute html =~ "initech"
     end
 
     test "a masked chip emits the PLACEHOLDER slug in data-scope, not the real one" do
       # `data-scope` is fed `@value || @scope`, the same expression as
       # `phx-value-scope`, because it is the same leak class: an attribute
-      # value survives `refute html =~ "Soylent"` untouched and is legible
+      # value survives `refute html =~ "Initech"` untouched and is legible
       # in the DOM inspector a screen share is likely to have open.
       #
-      # The cost is real and is the right trade: a `[data-scope="soylent"]`
+      # The cost is real and is the right trade: a `[data-scope="initech"]`
       # rule then matches no element, so a masked chip loses its colour. That
       # is the concession `rail_mask_surfaces_test.exs` already documents for
       # the style block itself.
-      html = render_pill(%{scope: "soylent", value: "workspace-b"})
+      html = render_pill(%{scope: "initech", value: "workspace-b"})
 
       assert html =~ ~s(data-scope="workspace-b")
-      refute html =~ ~s(data-scope="soylent")
+      refute html =~ ~s(data-scope="initech")
     end
   end
 
   describe "propagated variant" do
     test "renders both chips when propagated_to is set" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme})
-      assert html =~ "Soylent"
+      html = render_pill(%{scope: "initech", propagated_to: "acme"})
+      assert html =~ "Initech"
       assert html =~ "Acme"
     end
 
     test "renders the hero-arrow-right glyph joining the two chips" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme})
+      html = render_pill(%{scope: "initech", propagated_to: "acme"})
       assert html =~ "hero-arrow-right"
     end
 
     test "wraps the pair in a propagated container span" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme})
+      html = render_pill(%{scope: "initech", propagated_to: "acme"})
       assert html =~ "scope-pill-propagated"
     end
   end
 
   describe "click-to-filter wiring (clickable: true, the default)" do
     test "renders as a <button> not a <span>" do
-      html = render_pill(%{scope: :acme})
+      html = render_pill(%{scope: "acme"})
       assert html =~ "<button"
       assert html =~ ~s(type="button")
     end
 
     test "fires phx-click=\"scope_filter\" with phx-value-scope" do
-      html = render_pill(%{scope: :acme})
+      html = render_pill(%{scope: "acme"})
       assert html =~ ~s(phx-click="scope_filter")
       assert html =~ ~s(phx-value-scope="acme")
     end
 
     test "includes phx-value-propagated-to when propagated" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme})
+      html = render_pill(%{scope: "initech", propagated_to: "acme"})
       assert html =~ ~s(phx-value-propagated-to="acme")
     end
 
     test "renders aria-label \"Filter by {scope-name} scope\"" do
-      html = render_pill(%{scope: :wayne_tech})
-      assert html =~ ~s(aria-label="Filter by Wayne-Tech scope")
+      html = render_pill(%{scope: "vandelay_ind"})
+      assert html =~ ~s(aria-label="Filter by Vandelay Ind scope")
     end
 
     test "applies the project's standard focus-visible-ring class" do
-      html = render_pill(%{scope: :acme})
+      html = render_pill(%{scope: "acme"})
       assert html =~ "focus-visible-ring"
     end
 
     test "has hover styling on the default (non-active) state" do
       # Hover is on the edge since stage 4, and the six take it since stage 5.
-      assert "scope-edge-hover" in chip_classes(render_pill(%{scope: :acme}))
+      assert "scope-edge-hover" in chip_classes(render_pill(%{scope: "acme"}))
     end
   end
 
   describe "non-clickable variant (clickable: false)" do
     test "renders as a <span>, not a <button>" do
-      html = render_pill(%{scope: :sxi, clickable: false})
+      html = render_pill(%{scope: "globex", clickable: false})
       refute html =~ "<button"
       assert html =~ "<span"
     end
 
     test "has no phx-click attribute" do
-      html = render_pill(%{scope: :sxi, clickable: false})
+      html = render_pill(%{scope: "globex", clickable: false})
       refute html =~ "phx-click"
     end
 
     test "applies 0.55 opacity for visual non-interactive distinction" do
-      html = render_pill(%{scope: :sxi, clickable: false})
+      html = render_pill(%{scope: "globex", clickable: false})
       assert html =~ "opacity-55"
     end
 
     test "still has an aria-label for screen readers (color is not the only signal)" do
-      html = render_pill(%{scope: :sxi, clickable: false})
-      assert html =~ ~s(aria-label="SXI scope")
+      html = render_pill(%{scope: "globex", clickable: false})
+      assert html =~ ~s(aria-label="Globex scope")
     end
   end
 
   describe "active-filter state styling (active: true)" do
     test "renders the hero-check icon instead of the colored dot" do
-      html = render_pill(%{scope: :acme, active: true})
+      html = render_pill(%{scope: "acme", active: true})
       assert html =~ "hero-check"
     end
 
     test "applies the full-saturation background via scope-active" do
       # `.scope-active` paints `--scope-fill` with `--scope-active-content`
       # text and the soft outer ring; the resting tint must not appear.
-      tokens = chip_classes(render_pill(%{scope: :acme, active: true}))
+      tokens = chip_classes(render_pill(%{scope: "acme", active: true}))
       assert "scope-active" in tokens
       refute Enum.any?(tokens, &String.starts_with?(&1, "scope-tint"))
       refute "bg-legacy-active" in tokens
@@ -446,40 +456,40 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "active utility carries the soft outer ring via box-shadow" do
       css = File.read!("assets/css/app.css")
       assert css =~ ~r/\.scope-active \{[^}]*box-shadow: 0 0 0 2px/
-      assert "scope-active" in chip_classes(render_pill(%{scope: :acme, active: true}))
+      assert "scope-active" in chip_classes(render_pill(%{scope: "acme", active: true}))
     end
 
     test "aria-label flips to \"Currently filtered by {scope-name} scope\"" do
-      html = render_pill(%{scope: :soylent, active: true})
-      assert html =~ ~s(aria-label="Currently filtered by Soylent scope")
+      html = render_pill(%{scope: "initech", active: true})
+      assert html =~ ~s(aria-label="Currently filtered by Initech scope")
     end
 
     test "aria-pressed=\"true\" on the active button" do
-      html = render_pill(%{scope: :soylent, active: true})
+      html = render_pill(%{scope: "initech", active: true})
       assert html =~ ~s(aria-pressed="true")
     end
 
     test "aria-pressed=\"false\" on the inactive button" do
-      html = render_pill(%{scope: :soylent, active: false})
+      html = render_pill(%{scope: "initech", active: false})
       assert html =~ ~s(aria-pressed="false")
     end
 
     test "does not apply hover style when active (active state is terminal)" do
-      tokens = chip_classes(render_pill(%{scope: :acme, active: true}))
+      tokens = chip_classes(render_pill(%{scope: "acme", active: true}))
       refute Enum.any?(tokens, &String.contains?(&1, "hover")), inspect(tokens)
     end
 
-    test "yellow-content scope (paragon) takes scope-active; its dark text is emitted per org" do
+    test "yellow-content scope (hooli) takes scope-active; its dark text is emitted per org" do
       # The text colour on the active pill is `--scope-active-content`, chosen
       # by measured contrast in `ScopeColorStyles` and pinned for the six in
       # `ScopeColorStylesShippedSixTest`. The rendered HTML carries the class.
-      assert "scope-active" in chip_classes(render_pill(%{scope: :paragon, active: true}))
+      assert "scope-active" in chip_classes(render_pill(%{scope: "hooli", active: true}))
     end
   end
 
   describe "compact size variant" do
     test "applies the compact chrome (tighter padding, smaller dot, truncation)" do
-      html = render_pill(%{scope: :acme, size: :compact})
+      html = render_pill(%{scope: "acme", size: :compact})
       assert html =~ "px-1.5"
       assert html =~ "py-px"
       assert html =~ "size-1.5"
@@ -487,18 +497,18 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "drops the border at compact size (a ring reads as noise in a list)" do
-      html = render_pill(%{scope: :acme, size: :compact})
+      html = render_pill(%{scope: "acme", size: :compact})
       refute "border" in chip_classes(html)
       refute html =~ "rounded-full border"
     end
 
     test "keeps text-xs (12px) — density comes from chrome, not type size" do
-      html = render_pill(%{scope: :acme, size: :compact})
+      html = render_pill(%{scope: "acme", size: :compact})
       assert html =~ "text-xs"
     end
 
     test "default size is unchanged (bordered, px-2, size-2 dot)" do
-      html = render_pill(%{scope: :acme, size: :default})
+      html = render_pill(%{scope: "acme", size: :default})
       assert html =~ "rounded-full border"
       assert html =~ "px-2"
       assert html =~ "size-2"
@@ -506,51 +516,51 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "is non-clickable by default (a ~16px tap target fails WCAG 2.5.8)" do
-      html = render_pill(%{scope: :acme, size: :compact})
+      html = render_pill(%{scope: "acme", size: :compact})
       refute html =~ "<button"
       assert html =~ "<span"
       refute html =~ "phx-click"
     end
 
     test "non-clickable compact floors opacity at 0.70 (not 0.55)" do
-      html = render_pill(%{scope: :acme, size: :compact})
+      html = render_pill(%{scope: "acme", size: :compact})
       assert html =~ "opacity-70"
       refute html =~ "opacity-55"
     end
 
     test "explicit clickable={true} opts back into a button with an expanded hit area" do
-      html = render_pill(%{scope: :acme, size: :compact, clickable: true})
+      html = render_pill(%{scope: "acme", size: :compact, clickable: true})
       assert html =~ "<button"
       assert html =~ ~s(phx-click="scope_filter")
       assert html =~ "scope-pill-hit-expand"
     end
 
     test "active compact keeps the dot + full-saturation fill, no check icon" do
-      html = render_pill(%{scope: :acme, size: :compact, active: true})
+      html = render_pill(%{scope: "acme", size: :compact, active: true})
       refute html =~ "hero-check"
       assert "scope-active" in chip_classes(html)
       assert html =~ "size-1.5"
     end
 
     test "propagated collapses to the source chip only at compact size" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :compact})
+      html = render_pill(%{scope: "initech", propagated_to: "acme", size: :compact})
       refute html =~ "hero-arrow-right"
       refute html =~ "scope-pill-propagated"
-      assert html =~ ">Soylent</span>"
+      assert html =~ ">Initech</span>"
       refute html =~ ">Acme</span>"
     end
 
     test "compact propagated preserves full provenance in aria-label and title" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :compact})
-      assert html =~ ~s(aria-label="Soylent scope, propagated to Acme")
-      assert html =~ ~s(title="Soylent → Acme")
+      html = render_pill(%{scope: "initech", propagated_to: "acme", size: :compact})
+      assert html =~ ~s(aria-label="Initech scope, propagated to Acme")
+      assert html =~ ~s(title="Initech → Acme")
     end
 
     test "propagated at default size still renders both chips + arrow (regression)" do
-      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :default})
+      html = render_pill(%{scope: "initech", propagated_to: "acme", size: :default})
       assert html =~ "hero-arrow-right"
       assert html =~ "scope-pill-propagated"
-      assert html =~ ">Soylent</span>"
+      assert html =~ ">Initech</span>"
       assert html =~ ">Acme</span>"
     end
   end
@@ -628,7 +638,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "a propagated pair takes the surface on both chips, the shipped target included" do
       # Until stage 5 the `:acme` target stayed on its legacy classes and
       # ignored the surface. It now wears the -200 pair like the source.
-      html = render_pill_on(:base_200, %{scope: "acme", propagated_to: :acme})
+      html = render_pill_on(:base_200, %{scope: "acme", propagated_to: "acme"})
 
       chips =
         html
@@ -660,9 +670,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
       refute source =~ "legacy_css?"
     end
 
-    test "every shipped scope, as an atom or as its stored slug, on every surface and variant, is var-path only" do
-      for scope <- scopes(),
-          spelling <- [scope, Atom.to_string(scope)],
+    test "every shipped scope, as its stored slug, on every surface and variant, is var-path only" do
+      for spelling <- @shipped,
           surface <- [:base_100, :base_200],
           size <- [:default, :compact],
           active <- [false, true],
@@ -688,13 +697,6 @@ defmodule PlatformWeb.Components.ScopePillTest do
           end
 
         assert expected in chip_classes(html), at
-
-        # And the two spellings are indistinguishable to the stylesheet.
-        assert class_lists(render_pill_on(surface, Map.put(assigns, :scope, scope))) ==
-                 class_lists(
-                   render_pill_on(surface, Map.put(assigns, :scope, Atom.to_string(scope)))
-                 ),
-               at
       end
     end
   end
@@ -930,7 +932,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
     test "the six shipped orgs take the edge and hover edge like any org" do
       # Stage 4 left the six on their 30% alpha borders; stage 5 moves them.
-      for scope <- scopes(),
+      for scope <- @shipped,
           surface <- [:base_100, :base_200],
           size <- [:default, :compact] do
         tokens =
@@ -953,18 +955,40 @@ defmodule PlatformWeb.Components.ScopePillTest do
     alias Platform.Tenancy.ScopeColor
 
     @css_path "assets/css/app.css"
-    @fragments ~w(soylent wayne-tech sxi paragon cyberdyne)
 
+    # The shipped orgs' CSS fragments, read from the colour-pin migration's
+    # own rows at runtime rather than spelled here, so this list cannot drift
+    # from the orgs it is about and names no org in this file.
     setup do
-      %{css: File.read!(@css_path), rules: @css_path |> File.read!() |> CssRules.rules()}
+      Code.require_file(
+        Path.expand(
+          "../../../priv/repo/migrations/20260921190000_add_color_lightness_to_orgs.exs",
+          __DIR__
+        )
+      )
+
+      shipped =
+        Platform.Tenancy.HistoricalRootSlug.relabel(
+          Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs).shipped()
+        )
+
+      %{
+        css: File.read!(@css_path),
+        rules: @css_path |> File.read!() |> CssRules.rules(),
+        shipped: shipped,
+        fragments: Enum.map(shipped, fn {slug, _h, _c, _l} -> String.replace(slug, "_", "-") end)
+      }
     end
 
-    test "every chip-only per-slug utility is deleted", %{rules: rules, css: css} do
+    test "every chip-only per-slug utility is deleted",
+         %{rules: rules, css: css, fragments: fragments} do
       # Leaving them reachable next to the var path would let the cascade
       # decide which one paints a chip. Checked on the raw text as well as
       # the parsed rules, so a selector the parser spells differently
       # (the escaped hover one) cannot slip past.
-      for fragment <- @fragments,
+      assert length(fragments) >= 5, "the shipped rows went missing: #{inspect(fragments)}"
+
+      for fragment <- fragments,
           pattern <- [
             ~r/\.bg-#{fragment}(-active)?\s*\{/,
             ~r/\.border-#{fragment}\s*\{/,
@@ -974,7 +998,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
         refute css =~ pattern, "#{inspect(pattern)} still matches app.css"
       end
 
-      for fragment <- @fragments,
+      for fragment <- fragments,
           selector <- [
             ".bg-#{fragment}",
             ".bg-#{fragment}-active",
@@ -987,63 +1011,49 @@ defmodule PlatformWeb.Components.ScopePillTest do
       end
     end
 
-    test "the two non-chip utilities stay, painting exactly the fill the org row now stores",
-         %{rules: rules} do
-      # `.text-<slug>` is `Tenancy.scope_color/1`'s answer (the inheritance
-      # pill, files, recovery, the tasks sidebar and filter breadcrumb) and
-      # `.bg-<slug>-dot` is `ChatLive.section_dot_class/1`'s (the chat rail's
-      # section dots). Neither is a chip, so neither moved. They are a second
-      # copy of the fill, so they are held to the row's.
-      Code.require_file(
-        Path.expand(
-          "../../../priv/repo/migrations/20260921190000_add_color_lightness_to_orgs.exs",
-          __DIR__
-        )
-      )
+    test "no per-slug utility is left at all: the non-chip ones went too (task 01a14dd9 stage 2)",
+         %{rules: rules, css: css, fragments: fragments} do
+      # `.text-<slug>` (the old `Tenancy.scope_color/1` answer),
+      # `.bg-<slug>-dot` (the old `ChatLive.section_dot_class/1` answer) and
+      # `.channel-section-swatch--<slug>` were a second copy of each org's
+      # fill. They are deleted, and every dot, swatch and accent reads
+      # `--scope-fill` through `data-scope` instead.
+      for fragment <- fragments,
+          selector <- [
+            ".text-#{fragment}",
+            ".bg-#{fragment}-dot",
+            ".channel-section-swatch--#{fragment}"
+          ] do
+        refute Enum.any?(rules, &(&1.selector == selector)), "#{selector} is still in app.css"
+        refute css =~ selector <> " ", "#{selector} still appears in app.css"
+      end
+    end
 
-      pinned =
-        Map.new(
-          Platform.Tenancy.HistoricalRootSlug.relabel(
-            Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs).shipped()
-          ),
-          fn {slug, h, c, l} ->
-            {String.replace(slug, "_", "-"), ScopeColor.derive(h, c, l).fill}
-          end
-        )
-
-      for fragment <- @fragments,
-          {selector, property} <- [
-            {".text-#{fragment}", "color"},
-            {".bg-#{fragment}-dot", "background-color"}
+    test "the slug-agnostic rules that replaced them read the org row's fill", %{rules: rules} do
+      for {selector, property, value} <- [
+            {".channel-section-color-dot--scope", "background-color",
+             "var(--scope-fill, transparent)"},
+            {".channel-section-swatch", "background-color", "var(--scope-fill, transparent)"},
+            {".scope-dot-current", "background-color", "var(--scope-fill, currentColor)"},
+            {".scope-fill-text", "color", "var(--scope-fill)"}
           ] do
         rule = Enum.find(rules, &(&1.selector == selector))
-        assert rule, "#{selector} was deleted, and it has non-chip consumers"
-        value = declared(rule.body, property)
+        assert rule, "#{selector} is missing from app.css"
+        assert declared(rule.body, property) == value, "#{selector}: #{rule.body}"
+      end
 
-        assert ScopeColor.composite_painted(value, 1.0, "#000000") ==
-                 ScopeColor.composite_painted(Map.fetch!(pinned, fragment), 1.0, "#000000"),
-               "#{selector} paints #{value}; the org row stores #{pinned[fragment]}"
+      for gone <- [
+            ".channel-section-swatch--own",
+            ".channel-section-color-dot--unassigned[data-scope]"
+          ] do
+        refute Enum.any?(rules, &(&1.selector == gone)), "#{gone} is still in app.css"
       end
     end
 
     test "the root org has no per-slug utility: it is coloured from its row (task 01a116de stage 3)",
          %{rules: rules} do
-      # The shipped root slug's three hand-authored rules are deleted; its dot
-      # and swatch read `--scope-fill` through `data-scope` instead.
       for selector <- [".text-legacy", ".bg-legacy-dot", ".channel-section-swatch--legacy"] do
         refute Enum.any?(rules, &(&1.selector == selector)), "#{selector} is still in app.css"
-      end
-
-      for {selector, property, value} <- [
-            {".channel-section-color-dot--unassigned[data-scope]", "background-color",
-             "var(--scope-fill, transparent)"},
-            {".channel-section-swatch--own", "background-color",
-             "var(--scope-fill, transparent)"},
-            {".scope-dot-current", "background-color", "var(--scope-fill, currentColor)"}
-          ] do
-        rule = Enum.find(rules, &(&1.selector == selector))
-        assert rule, "#{selector} is missing from app.css"
-        assert declared(rule.body, property) == value
       end
     end
   end

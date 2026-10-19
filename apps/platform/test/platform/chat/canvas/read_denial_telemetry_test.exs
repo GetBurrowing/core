@@ -68,7 +68,7 @@ defmodule Platform.Chat.Canvas.ReadDenialTelemetryTest do
 
   setup do
     Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
-    %{org_a: Tenancy.get_org_by_slug!("sxi"), org_b: Tenancy.get_org_by_slug!("soylent")}
+    %{org_a: Tenancy.get_org_by_slug!("globex"), org_b: Tenancy.get_org_by_slug!("initech")}
   end
 
   # ── Fixtures ──────────────────────────────────────────────────────────────

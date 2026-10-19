@@ -4,6 +4,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
 
   alias Platform.Access.{IdpGroupRoles, RoleAssignment, Roles}
   alias Platform.Chat
+  alias Platform.OIDC
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.ExternalGrants
@@ -68,18 +69,22 @@ defmodule Platform.Access.IdpGroupRolesTest do
     assert assignment_ids(user_id) == before
   end
 
-  test "implicit sxi-external and stored guest groups hold without assigning custom roles", %{
+  test "implicit external marker and stored guest groups hold without assigning custom roles", %{
     conn: conn,
     root: root
   } do
     {:ok, role} = Roles.create_custom_role(root, %{name: "UnappliedGuestRole"})
 
     {:ok, _} =
-      IdpGroupRoles.create(%{group_value: "sxi-external", role_key: role.key, org_id: root.id})
+      IdpGroupRoles.create(%{
+        group_value: OIDC.external_group(),
+        role_key: role.key,
+        org_id: root.id
+      })
 
-    assert IdpGroupRoles.guest_group?([" SXI-EXTERNAL "])
+    assert IdpGroupRoles.guest_group?([" #{String.upcase(OIDC.external_group())} "])
 
-    conn = callback(conn, ["sxi-external"])
+    conn = callback(conn, [OIDC.external_group()])
     assert redirected_to(conn, 302) == "/welcome"
     user_id = get_session(conn, :current_user_id)
     assert %{state: :holding} = get_session(conn, :external_admission)
@@ -107,7 +112,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
              })
 
     assert {:error, :implicit_mapping} =
-             IdpGroupRoles.create(%{group_value: "sxi-external", role_key: "guest"})
+             IdpGroupRoles.create(%{group_value: OIDC.external_group(), role_key: "guest"})
 
     {:ok, mapping} = IdpGroupRoles.create(%{group_value: "partners-ext", role_key: "guest"})
     assert Enum.any?(IdpGroupRoles.mappings(), &(&1.group_value == "partners-ext"))
@@ -116,7 +121,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
     refute IdpGroupRoles.guest_group?(["partners-ext"])
   end
 
-  test "pre-staged sxi-external login is full but its other mapped roles are not synced",
+  test "pre-staged external-marker login is full but its other mapped roles are not synced",
        %{conn: conn, root: root} do
     {:ok, role} = Roles.create_custom_role(root, %{name: "GuestOtherGroup"})
 
@@ -142,11 +147,42 @@ defmodule Platform.Access.IdpGroupRolesTest do
         dm_allowlist_org_ids: [root.id]
       })
 
-    conn = callback(conn, ["sxi-external", "other-group"])
+    conn = callback(conn, [OIDC.external_group(), "other-group"])
     assert redirected_to(conn, 302) == "/"
     user_id = get_session(conn, :current_user_id)
     assert get_session(conn, :external_admission) == nil
     assert assignments(user_id, "idp") == MapSet.new()
+  end
+
+  describe "with no external marker configured (task 01a14dd9)" do
+    setup do
+      original = Application.get_env(:platform, :oidc, [])
+      Application.put_env(:platform, :oidc, Keyword.put(original, :external_group, nil))
+      on_exit(fn -> Application.put_env(:platform, :oidc, original) end)
+      :ok
+    end
+
+    test "mappings/0 has no implicit row and no group counts as guest" do
+      assert OIDC.external_group() == nil
+      refute Enum.any?(IdpGroupRoles.mappings(), &Map.get(&1, :implicit?, false))
+      refute IdpGroupRoles.guest_group?(["globex-external"])
+      refute IdpGroupRoles.guest_group?([nil, ""])
+    end
+
+    test "the former marker value can be stored as an ordinary guest mapping" do
+      assert {:ok, mapping} =
+               IdpGroupRoles.create(%{group_value: "globex-external", role_key: "guest"})
+
+      assert IdpGroupRoles.guest_group?(["globex-external"])
+      assert {:ok, _} = IdpGroupRoles.delete(mapping)
+    end
+
+    test "a guest mapping with no group fails validation, not as :implicit_mapping" do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               IdpGroupRoles.create(%{role_key: "guest"})
+
+      assert changeset.errors[:group_value]
+    end
   end
 
   defp assignments(user_id, source) do

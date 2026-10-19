@@ -52,7 +52,7 @@ defmodule PlatformWeb.AdminOrgsLive do
 
   A hex input cannot express either constraint that governs this choice. It
   cannot tell an operator that the yellow they just typed will be invisible
-  on white, and it cannot tell them that the blue is already Wayne-Tech's.
+  on white, and it cannot tell them that the blue is already Vandelay-Ind's.
   Both failures are silent and both are found by somebody else, later, on
   the scope rail. The ring shows the hues already taken as notches, warns
   within #{@proximity_degrees}° of one — and does NOT block, because two
@@ -315,7 +315,7 @@ defmodule PlatformWeb.AdminOrgsLive do
   Uses the org's `color_chroma` when it has one, and #{@chroma} otherwise —
   the same fallback `Tenancy.scope_slug_entries/1` applies — and the org's
   `color_lightness` when it has one, so the swatch matches what the rail
-  paints for the six shipped orgs (paragon's fill is 80%, not the 72%
+  paints for the six shipped orgs (hooli's fill is 80%, not the 72%
   default; task 01a09333-d374 stage 5).
   """
   def org_fill(%{color_hue: hue} = org) when is_integer(hue) do

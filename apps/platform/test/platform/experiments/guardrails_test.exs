@@ -26,7 +26,7 @@ defmodule Platform.Experiments.GuardrailsTest do
 
   setup do
     TestSurfaces.register()
-    %{org_a: tenant_org_id("soylent"), org_b: tenant_org_id("sxi")}
+    %{org_a: tenant_org_id("initech"), org_b: tenant_org_id("globex")}
   end
 
   defp guardrail!(attrs) do
@@ -100,7 +100,7 @@ defmodule Platform.Experiments.GuardrailsTest do
     end
 
     test "an agent start under the default launches (no pending step)" do
-      experiment = experiment!(%{org_id: tenant_org_id("soylent")})
+      experiment = experiment!(%{org_id: tenant_org_id("initech")})
 
       assert {:ok, %Experiment{status: "running", approval_state: "not_required"}} =
                Experiments.start(experiment, :agent)

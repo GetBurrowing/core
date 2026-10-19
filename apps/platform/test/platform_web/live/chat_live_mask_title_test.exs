@@ -8,8 +8,8 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
   Stage 5's job was to walk the running app with masking on and enumerate every
   surface that still spells a real org name. The first one found was the one
   that matters most: `<title>`. `space_page_title/4` builds the tab from the
-  open channel's name, so with `#wayne-tech` open the rail read `Workspace B`
-  while the tab read `# wayne-tech` — and the tab survives WINDOW-share mode,
+  open channel's name, so with `#vandelay-ind` open the rail read `Workspace B`
+  while the tab read `# vandelay-ind` — and the tab survives WINDOW-share mode,
   where the rail is not even captured. A masked rail beside an unmasked tab is
   worse than no masking, because the presenter believes they are covered.
 
@@ -26,7 +26,7 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
 
   ## The named limitation is pinned, not just described
 
-  `#orion` is a project-code channel: its name is not the org's name or slug,
+  `#atlas` is a project-code channel: its name is not the org's name or slug,
   so no rule that infers from org names can catch it, and a hardcoded keyword
   list would be stale the day a new client arrives. The test asserting it stays
   VISIBLE is deliberate. It states the limitation in a form that goes red if
@@ -42,7 +42,7 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
   alias Platform.Chat
   alias Platform.Repo
 
-  @org "Wayne-Tech"
+  @org "Vandelay-Ind"
 
   defp authenticated_conn(conn, suffix) do
     user =
@@ -69,7 +69,7 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
   # rail is not a single row.
   defp fixture(conn, suffix) do
     create_channel("general", "General")
-    channel = create_channel("wayne-tech", @org)
+    channel = create_channel("vandelay-ind", @org)
     {:ok, view, html} = live(authenticated_conn(conn, suffix), ~p"/chat/#{channel.slug}")
     {view, html}
   end
@@ -185,19 +185,19 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
     test "a channel whose name is not its org's name stays visible, masked or not",
          %{conn: conn} do
       create_channel("general", "General")
-      orion = create_channel("orion", "Orion")
+      atlas = create_channel("atlas", "Atlas")
 
       {:ok, view, _html} =
-        live(authenticated_conn(conn, "orion"), ~p"/chat/#{orion.slug}")
+        live(authenticated_conn(conn, "atlas"), ~p"/chat/#{atlas.slug}")
 
       toggle_mask(view)
 
-      # NOT a bug and NOT an oversight: `orion` is neither the name nor the
+      # NOT a bug and NOT an oversight: `atlas` is neither the name nor the
       # slug of any org, so no rule inferring from org names can reach it. The
       # PR body lists this as uncovered. If this assertion ever goes red
       # because a keyword list was added, the enumeration is stale and must be
       # revised in the same change.
-      assert String.downcase(page_title(view)) =~ "orion"
+      assert String.downcase(page_title(view)) =~ "atlas"
     end
   end
 end

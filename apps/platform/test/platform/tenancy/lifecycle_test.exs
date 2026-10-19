@@ -117,10 +117,10 @@ defmodule Platform.Tenancy.LifecycleTest do
       acme_id = Tenancy.get_org_by_slug!("acme").id
 
       assert {:ok, %Org{} = org} =
-               Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+               Tenancy.create_org(admin, %{name: "Wonka", slug: "wonka"})
 
-      assert org.name == "Cyberdyne"
-      assert org.slug == "cyberdyne"
+      assert org.name == "Wonka"
+      assert org.slug == "wonka"
       assert org.parent_org_id == acme_id
       assert Tenancy.tier(org) == :tenant
       assert is_nil(org.archived_at)
@@ -128,7 +128,7 @@ defmodule Platform.Tenancy.LifecycleTest do
 
       # Re-read from the DB, not the returned struct: a create that returned
       # {:ok, org} without inserting would pass every assertion above.
-      persisted = Tenancy.get_org_by_slug("cyberdyne")
+      persisted = Tenancy.get_org_by_slug("wonka")
       assert %Org{} = persisted
       assert persisted.id == org.id
       assert persisted.parent_org_id == acme_id
@@ -154,25 +154,25 @@ defmodule Platform.Tenancy.LifecycleTest do
     # and :slug-key assertions — "something went wrong" would pass on a raise.
     test "duplicate slug returns a changeset error on :slug and inserts no row" do
       admin = admin_user!()
-      assert {:ok, _first} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+      assert {:ok, _first} = Tenancy.create_org(admin, %{name: "Wonka", slug: "wonka"})
 
       before = org_count()
 
       assert {:error, %Ecto.Changeset{} = changeset} =
-               Tenancy.create_org(admin, %{name: "Cyberdyne Two", slug: "cyberdyne"})
+               Tenancy.create_org(admin, %{name: "Wonka Two", slug: "wonka"})
 
       assert %{slug: ["has already been taken"]} = errors_on(changeset)
       assert org_count() == before
-      assert [_only_one] = Repo.all(from(o in Org, where: o.slug == "cyberdyne"))
+      assert [_only_one] = Repo.all(from(o in Org, where: o.slug == "wonka"))
     end
 
     test "rejects malformed slugs on the format rule" do
       admin = admin_user!()
       before = org_count()
 
-      for bad <- ["Cyberdyne", "1cyberdyne", "war balloon", "-cyberdyne", "war/balloon"] do
+      for bad <- ["Wonka", "1wonka", "wonka factory", "-wonka", "wonka/factory"] do
         assert {:error, %Ecto.Changeset{} = changeset} =
-                 Tenancy.create_org(admin, %{name: "Cyberdyne", slug: bad}),
+                 Tenancy.create_org(admin, %{name: "Wonka", slug: bad}),
                "expected slug #{inspect(bad)} to be rejected"
 
         assert %{slug: ["must start with a lowercase letter and contain only [a-z0-9_-]"]} =
@@ -242,10 +242,10 @@ defmodule Platform.Tenancy.LifecycleTest do
       before = org_count()
 
       assert {:error, :unauthorized} =
-               Tenancy.create_org(nil, %{name: "Cyberdyne", slug: "cyberdyne"})
+               Tenancy.create_org(nil, %{name: "Wonka", slug: "wonka"})
 
       assert org_count() == before
-      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+      assert is_nil(Tenancy.get_org_by_slug("wonka"))
     end
 
     test "a non-admin org member is unauthorized and writes nothing" do
@@ -253,19 +253,19 @@ defmodule Platform.Tenancy.LifecycleTest do
       before = org_count()
 
       assert {:error, :unauthorized} =
-               Tenancy.create_org(member, %{name: "Cyberdyne", slug: "cyberdyne"})
+               Tenancy.create_org(member, %{name: "Wonka", slug: "wonka"})
 
       assert org_count() == before
-      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+      assert is_nil(Tenancy.get_org_by_slug("wonka"))
     end
 
     test "a user with no membership at all is unauthorized" do
       stranger = create_user!()
 
       assert {:error, :unauthorized} =
-               Tenancy.create_org(stranger, %{name: "Cyberdyne", slug: "cyberdyne"})
+               Tenancy.create_org(stranger, %{name: "Wonka", slug: "wonka"})
 
-      assert is_nil(Tenancy.get_org_by_slug("cyberdyne"))
+      assert is_nil(Tenancy.get_org_by_slug("wonka"))
     end
   end
 
@@ -671,7 +671,7 @@ defmodule Platform.Tenancy.LifecycleTest do
 
       admin = admin_user!()
 
-      assert {:ok, org} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
+      assert {:ok, org} = Tenancy.create_org(admin, %{name: "Wonka", slug: "wonka"})
 
       assert_receive {[:platform, :tenancy, :org_created], ^ref, _m, meta}
       assert meta.actor_id == admin.id
@@ -685,8 +685,8 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert event.resource_type == "org"
       assert event.resource_id == org.id
       assert event.action == "org_created"
-      assert event.metadata["org_slug"] == "cyberdyne"
-      assert event.metadata["org_name"] == "Cyberdyne"
+      assert event.metadata["org_slug"] == "wonka"
+      assert event.metadata["org_name"] == "Wonka"
     end
 
     test "a rejected create writes no audit row" do

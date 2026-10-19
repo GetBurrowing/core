@@ -407,7 +407,7 @@ defmodule PlatformWeb.AppIntentsControllerTest do
       user: user,
       space: space
     } do
-      org = Platform.Tenancy.get_org_by_slug!("sxi")
+      org = Platform.Tenancy.get_org_by_slug!("globex")
       plain_member!(user, org)
 
       {:ok, project} =
@@ -575,7 +575,7 @@ defmodule PlatformWeb.AppIntentsControllerTest do
   # ── Task 01a111bb: projects, call invitees, Create Task ──────────────
 
   defp org_project!(user) do
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     plain_member!(user, org)
 
     {:ok, project} =
@@ -774,7 +774,7 @@ defmodule PlatformWeb.AppIntentsControllerTest do
       user: user
     } do
       # An org the caller holds no membership in.
-      other_org = Platform.Tenancy.get_org_by_slug!("soylent")
+      other_org = Platform.Tenancy.get_org_by_slug!("initech")
 
       {:ok, hidden} =
         Tasks.create_project(%{

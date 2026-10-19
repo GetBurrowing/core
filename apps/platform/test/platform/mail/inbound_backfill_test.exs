@@ -188,7 +188,7 @@ defmodule Platform.Mail.InboundBackfillTest do
   end
 
   setup do
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
     n = System.unique_integer([:positive])
 
     {:ok, space} =

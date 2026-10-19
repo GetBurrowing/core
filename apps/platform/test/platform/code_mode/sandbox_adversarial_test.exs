@@ -115,7 +115,7 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
     end
 
     test "an external-principal runtime reaches only chat tools" do
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
       external = World.create_user!()
       {:ok, _} = Tenancy.mark_membership_external(%{user_id: external.id, org_id: org.id})
 

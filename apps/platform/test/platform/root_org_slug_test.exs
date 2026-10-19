@@ -285,15 +285,15 @@ defmodule Platform.RootOrgSlugTest do
       set_root_row_slug!("zz-root")
 
       slugs = Tenancy.list_orgs_in_priority_order() |> Enum.map(& &1.slug)
-      assert Enum.take(slugs, 5) == ["zz-root", "soylent", "wayne_tech", "sxi", "paragon"]
+      assert Enum.take(slugs, 5) == ["zz-root", "initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "Projects.group_by_org/1 puts the root's bucket first whatever its slug" do
       set_root_row_slug!("zz-root")
       root = Tenancy.get_root_org()
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
 
-      {:ok, _} = Tasks.create_project(%{name: "Soylent Order Probe", org_id: soylent.id})
+      {:ok, _} = Tasks.create_project(%{name: "Initech Order Probe", org_id: initech.id})
       {:ok, _} = Tasks.create_project(%{name: "Root Order Probe", org_id: root.id})
 
       slugs =
@@ -301,7 +301,7 @@ defmodule Platform.RootOrgSlugTest do
         |> Platform.Projects.group_by_org()
         |> Enum.map(fn {slug, _name, _ps} -> slug end)
 
-      assert Enum.take(slugs, 2) == ["zz-root", "soylent"]
+      assert Enum.take(slugs, 2) == ["zz-root", "initech"]
     end
   end
 

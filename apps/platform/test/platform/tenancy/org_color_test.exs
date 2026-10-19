@@ -102,9 +102,9 @@ defmodule Platform.Tenancy.OrgColorTest do
       # later stages that read the column regress the scope rail. The test
       # root is the neutral `acme` fixture (task 01a116de stage 4), which is
       # not one of the six, so this reads a shipped tenant instead.
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      assert sxi.color_hue == 162
-      assert sxi.color_chroma == 0.15
+      globex = Tenancy.get_org_by_slug!("globex")
+      assert globex.color_hue == 162
+      assert globex.color_chroma == 0.15
 
       acme = Tenancy.get_org_by_slug!("acme")
       assert acme.color_hue == nil

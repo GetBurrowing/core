@@ -1,6 +1,6 @@
 # External Users (scoped chat guests)
 
-How an operator brings a **scoped external user** online — the SXI tenant
+How an operator brings a **scoped external user** online — the Globex tenant
 is the first — and how an admin recovers, and later offboards, one.
 
 ## Context
@@ -32,10 +32,12 @@ host-constrained.
 - Burrow admin access (to pre-stage the grant and to use the recovery queue at
   `/admin/external-logins`).
 - The value of `OIDC_EXTERNAL_GROUP` for this deployment — the Pocket-ID group
-  whose members Burrow treats as external. Default: `"sxi-external"`.
-  - Config default lives in `apps/platform/config/config.exs`
-    (`external_group: "sxi-external"`); prod threads it via
-    `OIDC_EXTERNAL_GROUP` in `apps/platform/config/runtime.exs`.
+  whose members Burrow treats as external. **REQUIRED for external users; it
+  has no default.**
+  - `apps/platform/config/runtime.exs` threads `OIDC_EXTERNAL_GROUP`; config.exs
+    sets no `external_group`. Unset or blank means nil, and a nil group flags
+    nobody as external, so an install that admits external users MUST set it
+    (task 01a14dd9).
 - The `target_org`, the space IDs the user may see, and the org IDs whose
   members they may DM.
 
@@ -47,7 +49,7 @@ host-constrained.
 
 Create the account **in Pocket-ID** — through the admin UI or a signup-token
 link — and stamp the external **group claim** on it (the group whose value
-matches `OIDC_EXTERNAL_GROUP`, default `"sxi-external"`).
+matches `OIDC_EXTERNAL_GROUP`, which has no default and must be set).
 
 This is the only step performed against the IdP, and Burrow is not involved in
 it. **Burrow makes ZERO outbound calls to Pocket-ID.** On login, Burrow reads
@@ -79,8 +81,8 @@ Create it via `Platform.Tenancy.ExternalGrants.create_grant/1`
 
 ```elixir
 Platform.Tenancy.ExternalGrants.create_grant(%{
-  email: "guest@sxi.example",
-  target_org_id: sxi_org_id,
+  email: "guest@globex.example",
+  target_org_id: globex_org_id,
   space_grants: [%{"space_id" => shared_space_id, "role" => "member"}],
   dm_allowlist_org_ids: [our_org_id]
 })
@@ -150,7 +152,7 @@ linking to `/admin/external-logins`.
 
 ### Unknown logins are fail-closed, not a hole
 
-A truly-unknown login — a valid Pocket-ID account with no `sxi-external`
+A truly-unknown login — a valid Pocket-ID account with no `globex-external`
 intent — gets the **same** zero-access holding state (reason `:missing_claim`)
 and is just a row in the recovery queue to **ignore**. The security property
 (no grant → no scoped access) is achieved by the holding state, not by a hard

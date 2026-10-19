@@ -29,9 +29,11 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
       Each is pinned by whole-file sha256 with a reason.
 
   Task A3b (01a14dce-d2d8-7000-becf-79544fe7cf98) emptied and deleted the
-  fourth list, the files it was to rewrite. Those 40 paths now carry a
-  SECOND denylist instead, the scanner's scoped client set (two client
-  digests, applied to those paths only; read the scanner's moduledoc).
+  fourth list, the files it was to rewrite. Task A3c
+  (01a14dd9-7172-7000-874c-b9ae3d4c1c83) deleted the scoped client set A3b
+  left on 40 of those paths: the tenant and client digests are on the one
+  tree-wide denylist now, pinned by the literal list in `TENANT AND CLIENT
+  DIGESTS` below.
 
   A pinned file that changes fails as a STALE PIN naming it: an edit to it
   is exactly the moment to remove its hits, or to re-pin it deliberately
@@ -78,12 +80,11 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
       {:ok, files} ->
         %{
           tracked: {:ok, files},
-          counts: Scanner.counts(@repo_root, files),
-          scoped_preimages: scoped_preimages(files)
+          counts: Scanner.counts(@repo_root, files)
         }
 
       {:error, message} ->
-        %{tracked: {:error, message}, counts: nil, scoped_preimages: %{}}
+        %{tracked: {:error, message}, counts: nil}
     end
   end
 
@@ -214,14 +215,11 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
           do: "#{rel} (#{n})"
 
     assert found == []
-    # Not vacuous: each source exists and is read as text. Neither source is
-    # a scoped path, so the scoped client set is checked here explicitly.
+    # Not vacuous: each source exists and is read as text.
     for rel <- @guard_sources do
       bin = File.read!(Path.join(@repo_root, rel))
       assert Scanner.text?(bin)
       assert byte_size(bin) > 1000
-      assert Scanner.count(bin, :scoped) == 0, "#{rel} spells a scoped client term"
-      assert Scanner.count(rel, :scoped) == 0
     end
   end
 
@@ -312,141 +310,70 @@ defmodule Platform.Regression.InstallIdentityGuardTest do
     assert counts[rel] == 3
   end
 
-  # -- the scoped client set (task 01a14dce stage 4) ---------------------------
+  # -- tenant and client terms (task A3c 01a14dd9 stage 5) ---------------------
 
-  # Each scoped term is derived from the tracked tree, never spelled: the
-  # first token in a tracked file OUTSIDE the scoped set whose digest is the
-  # scoped digest. Both terms are in the tree today (the org in the tenant
-  # list, the contact in a test fixture). When task A3c sweeps them out, this
-  # flunks: move the digests to the general list there and take the fixtures
-  # from the reviewer.
-  defp scoped_preimages(files) do
-    wanted = Scanner.scoped_digests()
+  # The eight tenant and client term digests, LITERALLY. A derived set would
+  # not catch a digest deleted from the scanner: LIB POSITIVE CONTROL below
+  # plants an older term and stays green with all eight removed (stage 5,
+  # mutation m3). In order: tenant slug 1, the part of slug 2 after its `_`,
+  # the client org (slug 3), slug 4, the fifth org, the client's product, the
+  # client's hyphenated full name, the client's contact.
+  @tenant_client_digests [
+    "1b52d98ac973dc62528babc79163ab13f455755d1b3835992cfec045ff751c0b",
+    "a4914116477206d6766723e306a2fe39e4b97c3cabfce141310622adbb33d34e",
+    "3cf2fb332fb3792a8205afc17b4207c37b0d149891b6eb8b1a7cb9503aaf0f3d",
+    "d0a708d7a9b0c25273ca7f43937716d81397b5a7052b6ef000267913d62aea2c",
+    "71ce8a1658507fc4e432cb3621322632972d9256e652b1dee92af6528719216f",
+    "4de7d59fd6866c46855c913fe9c7e498228200fdfcbb326f80062bdde43f4b51",
+    "fb3a3f5343ca1ff87236fb75ad0f48987d0fd0f4d15b787fb59057e37186f2a0",
+    "17d93b3e93059e01484fabea3489be14fc463ea0998b183a3360489e812fbf2c"
+  ]
 
-    files
-    |> Enum.reject(&Scanner.scoped_path?/1)
-    |> Enum.reduce_while(%{}, fn rel, acc ->
-      acc = Map.merge(preimages(rel, wanted), acc)
-      if map_size(acc) == MapSet.size(wanted), do: {:halt, acc}, else: {:cont, acc}
-    end)
-  end
+  test "TENANT AND CLIENT DIGESTS: all eight are on the tree-wide denylist" do
+    assert length(@tenant_client_digests) == 8
+    assert length(Enum.uniq(@tenant_client_digests)) == 8
+    assert Enum.all?(@tenant_client_digests, &(&1 =~ ~r/\A[0-9a-f]{64}\z/))
 
-  defp scoped_terms!(ctx) do
-    tracked!(ctx)
-    wanted = Scanner.scoped_digests()
-    found = ctx.scoped_preimages
+    missing = Enum.reject(@tenant_client_digests, &Scanner.listed_digest?/1)
+    assert missing == [], "not on the denylist: " <> Enum.join(missing, ", ")
 
-    assert map_size(found) == MapSet.size(wanted),
-           "no preimage left in the tracked tree for #{MapSet.size(wanted) - map_size(found)} " <>
-             "scoped digest(s): fixtures for the scoped tests must come from the reviewer"
+    assert MapSet.size(Scanner.digests()) == 29
 
-    wanted |> Enum.sort() |> Enum.map(&Map.fetch!(found, &1))
-  end
+    # Every term digest the shipped-org records carry is listed, and the
+    # records name no term outside the root and these eight.
+    record_terms = Platform.Tenancy.HistoricalRootSlug.term_digests()
+    unlisted = Enum.reject(record_terms, &Scanner.listed_digest?/1)
 
-  defp preimages(rel, wanted) do
-    case File.read(Path.join(@repo_root, rel)) do
-      {:ok, bin} ->
-        if Scanner.text?(bin) do
-          for [tok] <- Regex.scan(~r/[a-z0-9]+/, String.downcase(bin, :ascii)),
-              d = Scanner.digest(tok),
-              MapSet.member?(wanted, d),
-              into: %{},
-              do: {d, tok}
-        else
-          %{}
-        end
+    assert unlisted == [],
+           "record term digests not on the denylist: " <> Enum.join(unlisted, ", ")
 
-      {:error, _} ->
-        %{}
-    end
-  end
+    assert MapSet.subset?(MapSet.new(@tenant_client_digests), MapSet.new(record_terms))
 
-  @inside "apps/platform/test/platform/meetings/intent_eval/harness_test.exs"
-  @outside "apps/platform/lib/platform/tenancy.ex"
-
-  test "SCOPED SET: two term digests and 40 path digests, none in the general set", ctx do
-    terms = Scanner.scoped_digests()
-    paths = Scanner.scoped_paths()
-
-    assert MapSet.size(terms) == 2
-    assert MapSet.size(paths) == 40
-    assert Enum.all?(MapSet.union(terms, paths), &(&1 =~ ~r/\A[0-9a-f]{64}\z/))
-    refute Enum.any?(terms, &Scanner.listed_digest?/1)
-
-    # 29 of the 40 are tracked today; the other 11 are the pre-rename run
-    # files stage 2 deleted, still scoped should one be re-created.
-    tracked = Enum.filter(tracked!(ctx), &Scanner.scoped_path?/1)
-    assert length(tracked) == 29
-    assert Enum.all?(tracked, &(not listed?(&1)))
-
-    assert Scanner.scoped_path?(@inside)
-    assert Scanner.scoped_path?("apps/platform/priv/intent_eval/slices/control_60.jsonl")
-
-    assert Scanner.scoped_path?(
-             "clients/android/android/app/src/test/java/com/koboai/burrow/InstallStoreTest.kt"
-           )
-
-    assert Scanner.scoped_path?("clients/ios/ios/App/AppTests/InstallStoreTests.swift")
-    refute Scanner.scoped_path?(@outside)
-    refute Scanner.scoped_path?("apps/platform/priv/intent_eval/README")
+    # The scoped set A3b left is gone, not merely emptied.
+    refute function_exported?(Scanner, :scoped_digests, 0)
+    refute function_exported?(Scanner, :scoped_paths, 0)
+    refute function_exported?(Scanner, :scoped_path?, 1)
+    refute function_exported?(Scanner, :hits, 2)
+    refute function_exported?(Scanner, :count, 2)
   end
 
   @tag :tmp_dir
-  test "SCOPED: a client term, alone or camelCased, is a hit at a scoped path",
+  test "LIB POSITIVE CONTROL: a term planted in a copy of projects.ex is named, and only it",
        %{tmp_dir: dir} = ctx do
-    terms = scoped_terms!(ctx)
-    assert length(terms) == 2
+    rel = "apps/platform/lib/platform/projects.ex"
+    planted_root = Path.join(dir, "repo")
+    planted = Path.join(planted_root, rel)
+    File.mkdir_p!(Path.dirname(planted))
 
-    for term <- terms do
-      camel = String.capitalize(term) <> "Admin"
+    # No preimage of the eight is left in the tree (stage 4), so the plant is
+    # the operator org token derived from the shipped identifiers.
+    original = File.read!(Path.join(@repo_root, rel))
+    assert Scanner.count(original) == 0
+    File.write!(planted, original <> "# #{Scanner.published_org_token()}\n")
 
-      for {text, n} <- [
-            {term, 1},
-            {String.upcase(term), 1},
-            {camel, 1},
-            {"# #{camel} and #{term}\n", 2}
-          ] do
-        write!(dir, @inside, text)
-        assert Scanner.count_file(dir, @inside) == n, "scoped plant not counted #{n}x"
-      end
+    counts = Map.merge(counts!(ctx), Scanner.counts(planted_root, [rel]))
+    named = for {path, n} <- Enum.sort(counts), not listed?(path), do: {path, n}
 
-      # whole tokens only, as in the general set
-      write!(dir, @inside, term <> "ish")
-      assert Scanner.count_file(dir, @inside) == 0
-    end
-  end
-
-  @tag :tmp_dir
-  test "SCOPE: the same client terms OUTSIDE the scoped paths are not hits",
-       %{tmp_dir: dir} = ctx do
-    text =
-      ctx |> scoped_terms!() |> Enum.map_join("\n", &(String.capitalize(&1) <> "Admin " <> &1))
-
-    write!(dir, @inside, text)
-    assert Scanner.count_file(dir, @inside) == 4
-
-    write!(dir, @outside, text)
-    assert Scanner.count_file(dir, @outside) == 0
-    assert Scanner.count(text) == 0
-    assert Scanner.count(text, :scoped) == 4
-  end
-
-  @tag :tmp_dir
-  test "SCOPED POSITIVE CONTROL: a planted client term in a real scoped file is named",
-       %{tmp_dir: dir} = ctx do
-    [term | _] = scoped_terms!(ctx)
-    write!(dir, @inside, File.read!(Path.join(@repo_root, @inside)) <> "# " <> term <> "\n")
-
-    counts = Map.merge(counts!(ctx), Scanner.counts(dir, [@inside]))
-    named = for {path, _} <- counts, not listed?(path), do: path
-
-    assert named == [@inside]
-    assert counts[@inside] == 1
-  end
-
-  defp write!(dir, rel, text) do
-    abs = Path.join(dir, rel)
-    File.mkdir_p!(Path.dirname(abs))
-    File.write!(abs, text)
+    assert named == [{rel, 1}]
   end
 end

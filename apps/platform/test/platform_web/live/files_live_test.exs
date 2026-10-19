@@ -79,12 +79,12 @@ defmodule PlatformWeb.FilesLiveTest do
       conn = authenticated_conn(conn)
 
       _acme = seed_project("acme", "Files Mount Acme")
-      _gen = seed_project("soylent", "Files Mount Gen")
+      _gen = seed_project("initech", "Files Mount Gen")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
       assert html =~ ~s(data-role="files-project-group" data-org-slug="acme")
-      assert html =~ ~s(data-role="files-project-group" data-org-slug="soylent")
+      assert html =~ ~s(data-role="files-project-group" data-org-slug="initech")
       assert html =~ "Files Mount Acme"
       assert html =~ "Files Mount Gen"
     end
@@ -127,7 +127,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a plain member does not see a foreign org's project name", %{conn: conn} do
       own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
-      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+      foreign = seed_project("globex", "Foreign Project #{System.unique_integer([:positive])}")
 
       user = scoped_user!("member", acme_org_id())
       refute Tenancy.root_admin?(user)
@@ -143,7 +143,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "an Acme root admin sees both orgs' projects", %{conn: conn} do
       own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
-      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+      foreign = seed_project("globex", "Foreign Project #{System.unique_integer([:positive])}")
 
       admin = scoped_user!("admin", acme_org_id())
       assert Tenancy.root_admin?(admin) == true
@@ -172,15 +172,15 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a member of exactly two orgs sees exactly those two sections", %{conn: conn} do
       own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
-      gen = seed_project("soylent", "Soylent Files #{System.unique_integer([:positive])}")
-      foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
+      gen = seed_project("initech", "Initech Files #{System.unique_integer([:positive])}")
+      foreign = seed_project("globex", "Foreign Project #{System.unique_integer([:positive])}")
 
       user = scoped_user!("member", acme_org_id())
 
       %OrgMembership{}
       |> OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: tenant_org_id("soylent"),
+        org_id: tenant_org_id("initech"),
         role: "member"
       })
       |> Repo.insert!()
@@ -191,12 +191,12 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, _view, html} = live(conn, ~p"/files")
 
       # Positive control — rendering ZERO sections must fail this.
-      assert files_section_slugs(html) == ["acme", "soylent"]
+      assert files_section_slugs(html) == ["acme", "initech"]
 
       picker = picker_text(html)
 
-      for absent <- ["wayne_tech", "sxi", "paragon"] do
-        refute picker =~ Tenancy.scope_label(absent)
+      for absent <- ["vandelay_ind", "globex", "hooli"] do
+        refute picker =~ Tenancy.get_org_by_slug!(absent).name
       end
 
       assert picker =~ own.name

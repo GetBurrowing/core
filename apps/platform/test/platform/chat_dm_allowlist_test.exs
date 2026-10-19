@@ -6,7 +6,7 @@ defmodule Platform.ChatDmAllowlistTest do
   predicate:
 
     * stage 1 — the predicate itself (internal always allowed; external
-      allowed only into an allowlisted org; agent target denied; SXI↔SXI)
+      allowed only into an allowlisted org; agent target denied; Globex↔Globex)
     * stage 2 — the CREATE seam (`find_or_create_dm/4`,
       `create_group_conversation/3`) rejects a denied target with NO rows
       materialized
@@ -124,7 +124,7 @@ defmodule Platform.ChatDmAllowlistTest do
       refute Chat.external_dm_permitted?(ext.id, "agent", Ecto.UUID.generate())
     end
 
-    test "external initiator permitted to a second external user in the same allowlisted org (SXI↔SXI)" do
+    test "external initiator permitted to a second external user in the same allowlisted org (Globex↔Globex)" do
       org_a = tenant_org!()
       u1 = external_user!(org_a)
       u2 = external_user!(org_a)

@@ -1,69 +1,101 @@
 defmodule Platform.ScopeRegistryConsistencyTest do
   @moduledoc """
-  Cross-source consistency guard for the sub-org scope enum.
+  Guard: NO compiled list of tenant org scopes exists (task 01a14dd9 stage 2).
 
-  The scope enum is redeclared in more than a dozen places (see the inventory
-  comment in `PlatformWeb.Live.TasksLive.active_scope_keys/1`). Half of those
-  sources are programmatically comparable — those are pinned here. The rest
-  (component `attr … values:` lists, the non-total `ScopePill.slug/1` and
-  `scope_label/1`, the `~w(...)` swatch palette in `chat_live.html.heex`) are
-  covered at render level in `scope_pill_test.exs` and the chat LiveView tests.
+  This file used to pin a five-atom scope enum across `Platform.Tasks`,
+  `Platform.Tenancy` and `PlatformWeb.Components.ScopePill`, so that adding a
+  sixth atom to only some of them failed here. Stage 2 deleted every one of
+  those lists: scope pills, section dots, recolor swatches and the scope
+  filter are driven by `orgs` rows through the slug-agnostic `data-scope`
+  path. So the guard now asserts the lists are GONE, and that the row-driven
+  replacements answer for a runtime org no code has ever heard of.
 
-  Adding a SIXTH compiled atom to only some of these sources must fail here
-  rather than half-landing. The root org is NOT a compiled atom (task
-  01a116de stage 3): it is install data, resolved from its row.
+  A list coming back under a new name is the failure this cannot see; the
+  render-level tests (`scope_pill_test.exs`, the chat LiveView tests) and the
+  install-identity guard cover that from the other side.
   """
-  use ExUnit.Case, async: true
+  use Platform.DataCase, async: true
 
-  alias Platform.Tasks
   alias Platform.Tenancy
-  alias PlatformWeb.Components.ScopePill
+  alias Platform.Tenancy.Org
 
-  @expected [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+  describe "the compiled lists are gone" do
+    test "Tasks.scope_keys/0 does not exist" do
+      Code.ensure_loaded!(Platform.Tasks)
+      refute function_exported?(Platform.Tasks, :scope_keys, 0)
+    end
 
-  test "Tasks.scope_keys/0 is the canonical enum, in order" do
-    assert Tasks.scope_keys() == @expected
-  end
+    test "ScopePill.scopes/0 does not exist" do
+      Code.ensure_loaded!(PlatformWeb.Components.ScopePill)
+      refute function_exported?(PlatformWeb.Components.ScopePill, :scopes, 0)
+    end
 
-  test "ScopePill.scopes/0 matches Tasks.scope_keys/0 exactly, order included" do
-    assert ScopePill.scopes() == Tasks.scope_keys()
-  end
+    test "Tenancy.scope_color/1 and scope_label/1 do not exist" do
+      Code.ensure_loaded!(Tenancy)
+      refute function_exported?(Tenancy, :scope_color, 1)
+      refute function_exported?(Tenancy, :scope_label, 1)
+    end
 
-  test "Tenancy scope-class and scope-label maps cover exactly the enum" do
-    for scope <- @expected do
-      assert Tenancy.scope_color(scope) == "text-#{String.replace(to_string(scope), "_", "-")}",
-             "Tenancy.@scope_classes is missing or wrong for #{inspect(scope)}"
+    test "ChatLive's compiled section helpers do not exist" do
+      Code.ensure_loaded!(PlatformWeb.ChatLive)
 
-      refute Tenancy.scope_label(scope) in [nil, ""],
-             "Tenancy.@scope_labels is missing #{inspect(scope)}"
+      for {fun, arity} <- [
+            sibling_scope_tokens: 0,
+            section_scope_atom: 1,
+            section_dot_class: 1,
+            parse_scope: 1
+          ] do
+        refute function_exported?(PlatformWeb.ChatLive, fun, arity), "#{fun}/#{arity}"
+      end
+    end
+
+    test "no source file under lib/ declares one of the retired attributes" do
+      offenders =
+        "lib/**/*.{ex,heex}"
+        |> Path.wildcard()
+        |> Enum.filter(fn path ->
+          File.read!(path) =~
+            ~r/@(scope_keys|scope_classes|scope_labels|sibling_scope_tokens)\s+(\[|%\{|~w)/
+        end)
+
+      assert offenders == []
     end
   end
 
-  test "every enum member has a Tenancy label and it is not the unknown fallback" do
-    assert Tenancy.scope_label(:cyberdyne) == "Cyberdyne"
-    assert Tenancy.scope_color(:cyberdyne) == "text-cyberdyne"
-  end
+  describe "the row-driven replacements answer for a runtime org" do
+    setup do
+      parent = Tenancy.get_root_org()
 
-  test "tenant_priority/0 is deliberately NOT extended for cyberdyne" do
-    # Decision recorded on task 019ffe9d stage 3: `tenant_priority/0` is a
-    # curation list, not a registration requirement. An unknown slug gets the
-    # 9_999 sentinel from `tenant_priority_index/1` and sorts last, then
-    # alphabetically — which is the honest position for a new client and
-    # already matches cyberdyne's position at the tail of `scope_keys/0`.
-    refute "cyberdyne" in Tenancy.tenant_priority()
-    assert Tenancy.tenant_priority_index("cyberdyne") == 9_999
-  end
+      {:ok, org} =
+        %Org{}
+        |> Org.changeset(%{
+          name: "Newco Runtime",
+          slug: "newco_runtime",
+          parent_org_id: parent && parent.id,
+          color_hue: 30,
+          color_chroma: 0.14,
+          color_lightness: 0.7
+        })
+        |> Repo.insert()
 
-  test "cyberdyne is appended, not inserted — existing rail order is unchanged" do
-    # The append-don't-insert invariant (tasks_live.ex) protects the rail order
-    # for the five pre-existing tenants. Assert the prefix explicitly so a
-    # mid-list insertion fails here rather than silently reordering the board.
-    assert Enum.take(Tasks.scope_keys(), 4) == [:soylent, :wayne_tech, :sxi, :paragon]
-    assert List.last(Tasks.scope_keys()) == :cyberdyne
+      %{org: org}
+    end
 
-    # `tenant_priority/0` lists TENANTS only (task 01a116de): the root sorts
-    # first structurally and has no compiled scope key at all (stage 3).
-    assert Enum.slice(Tasks.scope_keys(), 0..3) |> Enum.map(&Atom.to_string/1) ==
-             Tenancy.tenant_priority()
+    test "css_slug/1 is the section-token form of a slug" do
+      assert Tenancy.css_slug("newco_runtime") == "newco-runtime"
+      assert Tenancy.css_slug(nil) == nil
+    end
+
+    test "the recolor palette includes a coloured org created at runtime", %{org: org} do
+      assert %{token: "newco-runtime", slug: "newco_runtime"} =
+               Enum.find(Tenancy.scope_palette(), &(&1.slug == org.slug))
+    end
+
+    test "the token index resolves the runtime org's token to its row", %{org: org} do
+      index = Tenancy.scope_token_index(Tenancy.list_orgs())
+
+      assert %{slug: "newco_runtime", hue: 30, archived?: false} = index["newco-runtime"]
+      assert index["newco-runtime"].slug == org.slug
+    end
   end
 end

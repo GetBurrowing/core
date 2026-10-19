@@ -93,7 +93,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooksJunkBatchTest do
         action_items: [
           %{title: "Ship mobile app v2.3"},
           %{title: "Rotate S3 access keys"},
-          %{title: "Draft SXI engagement letter"}
+          %{title: "Draft Globex engagement letter"}
         ]
       )
 

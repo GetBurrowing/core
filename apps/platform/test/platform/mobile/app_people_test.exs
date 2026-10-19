@@ -72,7 +72,7 @@ defmodule Platform.Mobile.AppPeopleTest do
 
     test "carries the person's org names and their existing DM with the caller" do
       t = token()
-      org = Platform.Tenancy.get_org_by_slug!("sxi")
+      org = Platform.Tenancy.get_org_by_slug!("globex")
       me = create_user!(%{name: "#{t} Me"})
       dana = create_user!(%{name: "#{t} Dana"})
       plain_member!(dana, org)
@@ -180,7 +180,7 @@ defmodule Platform.Mobile.AppPeopleTest do
 
   describe "directory (scope: \"directory\", task 01a111bb stage 7)" do
     test "recent collaborators, space mates and org mates, with no shared space needed" do
-      org = Platform.Tenancy.get_org_by_slug!("sxi")
+      org = Platform.Tenancy.get_org_by_slug!("globex")
       me = create_user!(%{name: "Dir Me"})
       plain_member!(me, org)
       recent = create_user!(%{name: "Dir Recent"})

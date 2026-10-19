@@ -58,9 +58,9 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
   Chrome's compositor take different sides of the tie:
 
       cell                                   here      Chrome    byte
-      soylent light base-100 :compact       2.7146    2.7357    label G 132.5
-      soylent dark  base-200 :compact       3.0999    3.1116    label R 108.5
-      sxi      dark  base-200 :compact       4.0319    4.0297    tint  B  16.5
+      initech light base-100 :compact       2.7146    2.7357    label G 132.5
+      initech dark  base-200 :compact       3.0999    3.1116    label R 108.5
+      globex      dark  base-200 :compact       4.0319    4.0297    tint  B  16.5
 
   Largest disagreement 0.021, and no cell changes its side of the AA line. This
   is the same one-byte family `composite_painted/3` documents under "What this
@@ -69,7 +69,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
 
   ## The one cell that is not below AA
 
-  `paragon` on the DARK rail at `:compact` reads 5.1049:1. The dark rail
+  `hooli` on the DARK rail at `:compact` reads 5.1049:1. The dark rail
   ground is near black, so a 0.70 composite barely moves the near-black tint
   while the bright yellow label stays bright. It is still a LOSS: the same
   cell reads 9.4420:1 clickable. Every one of the forty-eight cells loses
@@ -89,7 +89,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
                     __DIR__
                   )
 
-  @six ~w(legacy soylent wayne_tech sxi paragon cyberdyne)
+  @six ~w(legacy initech vandelay_ind globex hooli wonka)
   @surfaces ["base-100", "base-200"]
   @sizes [:default, :compact]
   @aa 4.5
@@ -106,20 +106,20 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
   # find out which and record why.
   @static_light %{
     "legacy" => {2.2100, 2.8291, 2.2136, 2.8330},
-    "soylent" => {2.1286, 2.7146, 2.1560, 2.7646},
-    "wayne_tech" => {2.1876, 2.7714, 2.1967, 2.8059},
-    "sxi" => {2.2112, 2.7966, 2.1796, 2.7919},
-    "paragon" => {2.1374, 2.7036, 2.1131, 2.6924},
-    "cyberdyne" => {2.2293, 2.8547, 2.2581, 2.8811}
+    "initech" => {2.1286, 2.7146, 2.1560, 2.7646},
+    "vandelay_ind" => {2.1876, 2.7714, 2.1967, 2.8059},
+    "globex" => {2.2112, 2.7966, 2.1796, 2.7919},
+    "hooli" => {2.1374, 2.7036, 2.1131, 2.6924},
+    "wonka" => {2.2293, 2.8547, 2.2581, 2.8811}
   }
 
   @static_dark %{
     "legacy" => {2.6036, 3.4314, 2.7700, 3.8769},
-    "soylent" => {2.3206, 2.9620, 2.2979, 3.0999},
-    "wayne_tech" => {2.4856, 3.2569, 2.6278, 3.6519},
-    "sxi" => {2.6812, 3.5254, 2.8727, 4.0319},
-    "paragon" => {3.2614, 4.4018, 3.4946, 5.1049},
-    "cyberdyne" => {2.2907, 2.9331, 2.3142, 3.1527}
+    "initech" => {2.3206, 2.9620, 2.2979, 3.0999},
+    "vandelay_ind" => {2.4856, 3.2569, 2.6278, 3.6519},
+    "globex" => {2.6812, 3.5254, 2.8727, 4.0319},
+    "hooli" => {3.2614, 4.4018, 3.4946, 5.1049},
+    "wonka" => {2.2907, 2.9331, 2.3142, 3.1527}
   }
 
   # The clickable chip's figure — the same label and tint with no opacity
@@ -178,7 +178,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
                "#{inspect(for {at, s, _} <- results, s >= @aa, do: at)}"
 
       # And the one that clears is named, not merely counted.
-      assert {"paragon", :dark, "base-200", :compact} not in below
+      assert {"hooli", :dark, "base-200", :compact} not in below
     end
 
     test "the alpha every figure above was computed at is read from the component, not typed" do
@@ -220,7 +220,7 @@ defmodule PlatformWeb.Components.ScopePillStaticOpacityTest do
     assigns = %{size: size}
 
     rendered_to_string(~H"""
-    <.scope_pill scope={:legacy} clickable={false} size={@size} />
+    <.scope_pill scope="legacy" clickable={false} size={@size} />
     """)
   end
 

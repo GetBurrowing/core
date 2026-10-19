@@ -172,7 +172,7 @@ defmodule PlatformWeb.ChatLiveMobileNoSpacesTest do
     test "keeps the normal mobile browser trigger and does not get the pane",
          %{conn: conn} do
       {conn, _user} = admin_conn(conn)
-      _space = channel!("paragon")
+      _space = channel!("hooli")
 
       html = mount_chat(conn)
 
@@ -186,7 +186,7 @@ defmodule PlatformWeb.ChatLiveMobileNoSpacesTest do
     test "an ARCHIVED-only user gets neither — an archive proves you are not new",
          %{conn: conn} do
       {conn, admin} = admin_conn(conn)
-      space = channel!("paragon")
+      space = channel!("hooli")
       {:ok, _} = Chat.archive_space(admin, space)
 
       html = mount_chat(conn)

@@ -1597,10 +1597,13 @@ defmodule Platform.Tasks.TasksContextTest do
       end
     end
 
-    test "scope_keys/0 matches the canonical PlatformWeb.Components.ScopePill list" do
-      # Single source of truth — if the rail's scope list ever drifts from
-      # the foundation component's list the rail can't render correctly.
-      assert Tasks.scope_keys() == PlatformWeb.Components.ScopePill.scopes()
+    test "no compiled scope list exists: scope_keys/0 and ScopePill.scopes/0 are gone" do
+      # Task 01a14dd9 stage 2. The rail reads org rows; a compiled list here
+      # would be a second source of truth that a runtime org falls out of.
+      Code.ensure_loaded!(Tasks)
+      Code.ensure_loaded!(PlatformWeb.Components.ScopePill)
+      refute function_exported?(Tasks, :scope_keys, 0)
+      refute function_exported?(PlatformWeb.Components.ScopePill, :scopes, 0)
     end
 
     test ~s(today-state: all tasks fold under "acme", other sub-orgs are 0), %{project: project} do
@@ -1613,10 +1616,10 @@ defmodule Platform.Tasks.TasksContextTest do
       counts = Tasks.count_by_scope()
 
       assert counts["acme"] >= 3
-      assert counts["soylent"] == 0
-      assert counts["wayne_tech"] == 0
-      assert counts["sxi"] == 0
-      assert counts["paragon"] == 0
+      assert counts["initech"] == 0
+      assert counts["vandelay_ind"] == 0
+      assert counts["globex"] == 0
+      assert counts["hooli"] == 0
     end
 
     test ~s(soft-deleted tasks are excluded from the "acme" count), %{project: project} do

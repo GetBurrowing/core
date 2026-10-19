@@ -50,7 +50,7 @@ defmodule Platform.ProjectsTest do
 
   describe "group_by_org/1" do
     test "buckets active projects under their owning org in tenant-priority order" do
-      {:ok, _} = Tasks.create_project(%{name: "Soylent Tool", org_id: tenant_org_id("soylent")})
+      {:ok, _} = Tasks.create_project(%{name: "Initech Tool", org_id: tenant_org_id("initech")})
       {:ok, _} = Tasks.create_project(%{name: "Acme Tool", org_id: acme_org_id()})
 
       slugs =
@@ -60,7 +60,7 @@ defmodule Platform.ProjectsTest do
 
       # The root (parent_org_id nil) sorts ahead of every tenant regardless
       # of insertion order; root_org_slug_test.exs covers a non-acme slug.
-      assert slugs == ["acme", "soylent"]
+      assert slugs == ["acme", "initech"]
     end
 
     test "excludes an archived project but keeps its active siblings" do
@@ -88,7 +88,9 @@ defmodule Platform.ProjectsTest do
     end
 
     test "drops an org bucket entirely once its only project is archived" do
-      {:ok, only} = Tasks.create_project(%{name: "Lonely SXI", org_id: tenant_org_id("sxi")})
+      {:ok, only} =
+        Tasks.create_project(%{name: "Lonely Globex", org_id: tenant_org_id("globex")})
+
       archive_project!(only)
 
       slugs =
@@ -96,7 +98,7 @@ defmodule Platform.ProjectsTest do
         |> Projects.group_by_org()
         |> Enum.map(fn {slug, _name, _ps} -> slug end)
 
-      refute "sxi" in slugs
+      refute "globex" in slugs
     end
 
     test "regression: Tasks.list_projects_unscoped/1 STILL returns archived projects for all-rows callers" do
@@ -114,49 +116,51 @@ defmodule Platform.ProjectsTest do
       slugs = active_section_slugs()
 
       assert "acme" in slugs
-      assert "soylent" in slugs
-      assert "sxi" in slugs
-      assert "wayne_tech" in slugs
-      assert "paragon" in slugs
+      assert "initech" in slugs
+      assert "globex" in slugs
+      assert "vandelay_ind" in slugs
+      assert "hooli" in slugs
       assert Enum.all?(active_sections(), fn {_s, _n, ps} -> ps == [] end)
     end
 
     test "keeps an org's header (empty) after its only project is archived" do
-      {:ok, only} = Tasks.create_project(%{name: "Lonely SXI", org_id: tenant_org_id("sxi")})
+      {:ok, only} =
+        Tasks.create_project(%{name: "Lonely Globex", org_id: tenant_org_id("globex")})
+
       archive_project!(only)
 
-      # This is the reported bug: group_by_org/1 would DROP sxi here
+      # This is the reported bug: group_by_org/1 would DROP globex here
       # (proven by the sibling test above); group_by_active_org/2 keeps it.
-      assert {"sxi", _name, []} = active_section("sxi")
+      assert {"globex", _name, []} = active_section("globex")
     end
 
     test "keeps the surviving sibling when one of two projects is archived" do
-      {:ok, _keep} = Tasks.create_project(%{name: "Keep Me", org_id: tenant_org_id("soylent")})
-      {:ok, gone} = Tasks.create_project(%{name: "Archive Me", org_id: tenant_org_id("soylent")})
+      {:ok, _keep} = Tasks.create_project(%{name: "Keep Me", org_id: tenant_org_id("initech")})
+      {:ok, gone} = Tasks.create_project(%{name: "Archive Me", org_id: tenant_org_id("initech")})
       archive_project!(gone)
 
-      {"soylent", _name, projects} = active_section("soylent")
+      {"initech", _name, projects} = active_section("initech")
       assert Enum.map(projects, & &1.name) == ["Keep Me"]
     end
 
     test "emits sections only for orgs in active_orgs — a project of an excluded org can't resurrect it" do
-      # active_orgs omitting sxi is exactly what list_active_tenants_unscoped/0 returns
-      # once sxi is archived; its still-active project must not bring it back.
-      {:ok, _stray} = Tasks.create_project(%{name: "Stray", org_id: tenant_org_id("sxi")})
+      # active_orgs omitting globex is exactly what list_active_tenants_unscoped/0 returns
+      # once globex is archived; its still-active project must not bring it back.
+      {:ok, _stray} = Tasks.create_project(%{name: "Stray", org_id: tenant_org_id("globex")})
       projects = Tasks.list_projects_unscoped(preload: :org)
-      active_orgs = Enum.reject(Tenancy.list_active_tenants_unscoped(), &(&1.slug == "sxi"))
+      active_orgs = Enum.reject(Tenancy.list_active_tenants_unscoped(), &(&1.slug == "globex"))
 
       slugs = Projects.group_by_active_org(projects, active_orgs) |> Enum.map(&elem(&1, 0))
-      refute "sxi" in slugs
+      refute "globex" in slugs
     end
 
     test "leads with Acme and preserves tenant-priority order regardless of insertion order" do
-      {:ok, _} = Tasks.create_project(%{name: "A", org_id: tenant_org_id("paragon")})
+      {:ok, _} = Tasks.create_project(%{name: "A", org_id: tenant_org_id("hooli")})
       {:ok, _} = Tasks.create_project(%{name: "B", org_id: acme_org_id()})
 
       # Acme first; then canonical tenant priority (excludes the trailing
       # _unassigned bucket, which only appears for org-less projects).
-      assert active_section_slugs() == ["acme", "soylent", "wayne_tech", "sxi", "paragon"]
+      assert active_section_slugs() == ["acme", "initech", "vandelay_ind", "globex", "hooli"]
     end
 
     test "folds org-less projects into a trailing _unassigned bucket" do

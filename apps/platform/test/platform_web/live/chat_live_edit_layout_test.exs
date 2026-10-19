@@ -47,7 +47,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
 
   # Create a channel and assign it to a specific org so it resolves under
   # that org's seeded section. `org_slug` is one of the seeded tenant slugs
-  # (acme / paragon / soylent / wayne_tech / sxi).
+  # (acme / globex / hooli / initech / vandelay_ind).
   defp create_channel(slug, org_slug) do
     {:ok, ch} =
       Chat.create_space(%{name: String.capitalize(slug), slug: slug, kind: "channel"})
@@ -171,33 +171,35 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
          %{conn: conn} do
       user = insert_user("move")
       conn = authenticated_conn(conn, user)
-      # One channel defaulting to the Acme section; we try to move it to SXI.
+      # One channel defaulting to the Acme section; we try to move it to Globex.
       channel = create_channel("roamer", "acme")
       acme_section = section_id_for_org("acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
 
       {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # Precondition: the channel renders inside the Acme section, not SXI.
+      # Precondition: the channel renders inside the Acme section, not Globex.
       assert section_fragment(sidebar, acme_section) =~ ~s(data-channel-id="#{channel.id}")
-      refute section_fragment(sidebar, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
+      refute section_fragment(sidebar, globex_section) =~ ~s(data-channel-id="#{channel.id}")
 
       # The drag hook no longer offers this drop; a forged event still can.
       html_after =
         render_hook(view, "channel_moved", %{
           "channel_id" => channel.id,
-          "target_section_id" => sxi_section,
+          "target_section_id" => globex_section,
           "ordered_ids" => [channel.id]
         })
 
       sidebar_after = desktop_sidebar(html_after)
-      # Still under Acme, still absent from SXI.
+      # Still under Acme, still absent from Globex.
       assert section_fragment(sidebar_after, acme_section) =~ ~s(data-channel-id="#{channel.id}")
-      refute section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
 
-      # A refused move writes NOTHING — not a placement under SXI, and not an
-      # empty SXI entry either. Asserting only "the channel is not under SXI"
+      refute section_fragment(sidebar_after, globex_section) =~
+               ~s(data-channel-id="#{channel.id}")
+
+      # A refused move writes NOTHING — not a placement under Globex, and not an
+      # empty Globex entry either. Asserting only "the channel is not under Globex"
       # would be satisfied by a handler that still called
       # `Sidebar.put_channel_order/3` with an empty list, which touches the
       # user's prefs and announces a move that never happened.
@@ -232,11 +234,11 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       # `channel_id` names a channel that legitimately lives in Acme, so a
       # guard reading only that half of the payload would let this through —
       # and `Sidebar.put_channel_order/3` writes `ordered_ids` verbatim, so
-      # the smuggled id would be filed under Acme and stripped from SXI.
+      # the smuggled id would be filed under Acme and stripped from Globex.
       resident = create_channel("resident", "acme")
-      outsider = create_channel("outsider", "sxi")
+      outsider = create_channel("outsider", "globex")
       acme_section = section_id_for_org("acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -248,7 +250,10 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
         })
 
       sidebar_after = desktop_sidebar(html_after)
-      assert section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{outsider.id}")
+
+      assert section_fragment(sidebar_after, globex_section) =~
+               ~s(data-channel-id="#{outsider.id}")
+
       refute section_fragment(sidebar_after, acme_section) =~ ~s(data-channel-id="#{outsider.id}")
 
       cco = Accounts.get_user_preferences(user.id)["chat_channel_order"] || %{}
@@ -284,23 +289,23 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       user = insert_user("hide")
       conn = authenticated_conn(conn, user)
       create_channel("general", "acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
 
       {:ok, view, html} = live_following_redirect(conn)
-      assert desktop_sidebar(html) =~ ~s(id="section-#{sxi_section}")
+      assert desktop_sidebar(html) =~ ~s(id="section-#{globex_section}")
 
-      # Enter edit mode (via the overflow menu) then hide the SXI section.
+      # Enter edit mode (via the overflow menu) then hide the Globex section.
       enter_personal_edit(view)
 
       html_hidden =
         render_hook(view, "toggle_section_hidden", %{
-          "section_id" => sxi_section,
+          "section_id" => globex_section,
           "hidden" => "true"
         })
 
       sidebar_hidden = desktop_sidebar(html_hidden)
-      refute sidebar_hidden =~ ~s(id="section-#{sxi_section}")
-      assert Accounts.get_user_preferences(user.id)["chat_hidden_sections"] == [sxi_section]
+      refute sidebar_hidden =~ ~s(id="section-#{globex_section}")
+      assert Accounts.get_user_preferences(user.id)["chat_hidden_sections"] == [globex_section]
 
       # Reset restores the hidden section.
       html_reset =
@@ -309,7 +314,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
         |> render_click()
 
       sidebar_reset = desktop_sidebar(html_reset)
-      assert sidebar_reset =~ ~s(id="section-#{sxi_section}")
+      assert sidebar_reset =~ ~s(id="section-#{globex_section}")
       assert Accounts.get_user_preferences(user.id)["chat_hidden_sections"] == []
     end
   end
@@ -336,14 +341,14 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       })
 
       render_hook(view, "section_reordered", %{
-        "from" => section_id_for_slug("sxi"),
-        "to" => section_id_for_slug("paragon")
+        "from" => section_id_for_slug("hooli"),
+        "to" => section_id_for_slug("globex")
       })
 
       enter_personal_edit(view)
 
       render_hook(view, "toggle_section_hidden", %{
-        "section_id" => section_id_for_org("soylent"),
+        "section_id" => section_id_for_org("initech"),
         "hidden" => "true"
       })
 

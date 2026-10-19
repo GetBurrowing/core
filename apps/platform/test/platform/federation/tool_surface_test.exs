@@ -7016,7 +7016,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   describe "context read tools" do
     setup do
       agent = create_agent()
-      org = Tenancy.get_org_by_slug!("sxi")
+      org = Tenancy.get_org_by_slug!("globex")
       owner = insert_user_for_sponsor()
       Platform.ExternalUserFixtures.plain_member!(owner, org)
       space = create_space(%{name: "Read Space", description: "A test space", org_id: org.id})
@@ -7482,11 +7482,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
 
     test "canvas_get denied for canvas in non-member space", ctx do
-      # In the runtime owner's org (sxi): the owner is a sub-org-only member,
+      # In the runtime owner's org (globex): the owner is a sub-org-only member,
       # so an org-less space is outside the owner's org fence (ticket
       # 01a14721) and would answer not-found before the rule under test.
       other_space =
-        create_space(%{name: "Locked Space", org_id: Tenancy.get_org_by_slug!("sxi").id})
+        create_space(%{name: "Locked Space", org_id: Tenancy.get_org_by_slug!("globex").id})
 
       other_participant = create_participant(other_space.id)
 
@@ -7519,11 +7519,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # that instruction was false until this stage.
 
     test "canvas_get resolves for an agent bound to the attached task, not the space", ctx do
-      # In the runtime owner's org (sxi): the owner is a sub-org-only member,
+      # In the runtime owner's org (globex): the owner is a sub-org-only member,
       # so an org-less space is outside the owner's org fence (ticket
       # 01a14721) and would answer not-found before the rule under test.
       designer_space =
-        create_space(%{name: "Designer Space", org_id: Tenancy.get_org_by_slug!("sxi").id})
+        create_space(%{name: "Designer Space", org_id: Tenancy.get_org_by_slug!("globex").id})
 
       designer = create_participant(designer_space.id, %{display_name: "Saru"})
 
@@ -7565,8 +7565,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # roster is in another org holds no grant on either side, so the widening
     # must not have opened a cross-tenant read.
     test "canvas_get denies an agent whose only roster is in another org", ctx do
-      org_a = Tenancy.get_org_by_slug!("sxi")
-      org_b = Tenancy.get_org_by_slug!("soylent")
+      org_a = Tenancy.get_org_by_slug!("globex")
+      org_b = Tenancy.get_org_by_slug!("initech")
 
       space_a = create_space(%{name: "Org A Channel", org_id: org_a.id})
       author = create_participant(space_a.id)

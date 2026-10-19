@@ -6,28 +6,33 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
   alias PlatformWeb.Tasks.TaskDisplay
 
   # `project_sections/2` yields `{org_slug, org_name, [project]}` three-tuples.
-  # The rail renders `Tenancy.scope_label(org_slug)` for the header and
+  # The rail renders the tuple's `org_name` for the header and
   # `project.name` for each row, so those are the two real names under test.
   defp project(id, name), do: %{id: id, name: name}
 
+  defp org_name(slug) do
+    {^slug, name, _projects} = Enum.find(sections(), &(elem(&1, 0) == slug))
+    name
+  end
+
   defp sections do
     [
-      {"cyberdyne", "Cyberdyne", [project("p1", "Orbit"), project("p2", "Ascent")]},
-      {"wayne_tech", "Wayne-Tech", [project("p3", "Shieldwall")]},
-      {"sxi", "Small Business Solutions", [project("p4", "Orion")]}
+      {"wonka", "Wonka", [project("p1", "Orbit"), project("p2", "Ascent")]},
+      {"vandelay_ind", "Vandelay-Ind", [project("p3", "Shieldwall")]},
+      {"globex", "Globex Corporation", [project("p4", "Atlas")]}
     ]
   end
 
   # Every real name the rail would render unmasked, in every surface.
   defp real_names do
     [
-      "Cyberdyne",
-      "Wayne-Tech",
-      "Small Business Solutions",
+      "Wonka",
+      "Vandelay-Ind",
+      "Globex Corporation",
       "Orbit",
       "Ascent",
       "Shieldwall",
-      "Orion"
+      "Atlas"
     ]
   end
 
@@ -35,13 +40,14 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
     test "every key resolves to the real name the rail would otherwise render" do
       labels = TaskDisplay.mask_labels(sections(), false, MapSet.new())
 
-      # Org display name is scope_label(slug), NOT the tuple's org_name.
-      assert labels[{:org, "cyberdyne"}] == Platform.Tenancy.scope_label("cyberdyne")
-      assert labels[{:org, "wayne_tech"}] == Platform.Tenancy.scope_label("wayne_tech")
+      # Org display name is the tuple's org_name, the row's `name` (task
+      # 01a14dd9 stage 2 deleted the compiled scope_label/1 map).
+      assert labels[{:org, "wonka"}] == org_name("wonka")
+      assert labels[{:org, "vandelay_ind"}] == org_name("vandelay_ind")
 
       assert labels[{:project, "p1"}] == "Orbit"
       assert labels[{:project, "p3"}] == "Shieldwall"
-      assert labels[{:project, "p4"}] == "Orion"
+      assert labels[{:project, "p4"}] == "Atlas"
     end
 
     test "the map covers every org and every project — one entry each, no more" do
@@ -51,9 +57,9 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
 
       assert Map.keys(labels) |> Enum.sort() ==
                Enum.sort([
-                 {:org, "cyberdyne"},
-                 {:org, "wayne_tech"},
-                 {:org, "sxi"},
+                 {:org, "wonka"},
+                 {:org, "vandelay_ind"},
+                 {:org, "globex"},
                  {:project, "p1"},
                  {:project, "p2"},
                  {:project, "p3"},
@@ -67,8 +73,8 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
       labels = TaskDisplay.mask_labels(sections(), true, MapSet.new())
 
       # Not a spot check: every value against every fixture name, through the
-      # helper that also covers the underscore/hyphen slug forms. `wayne_tech`
-      # rendered as `wayne-tech` is exactly the leak a display-form refute misses.
+      # helper that also covers the underscore/hyphen slug forms. `vandelay_ind`
+      # rendered as `vandelay-ind` is exactly the leak a display-form refute misses.
       for {_key, value} <- labels, name <- real_names() do
         MaskAssertions.refute_name_anywhere(value, name)
       end
@@ -89,9 +95,9 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
     test "orgs letter in section order under the Workspace prefix" do
       labels = TaskDisplay.mask_labels(sections(), true, MapSet.new())
 
-      assert labels[{:org, "cyberdyne"}] == "Workspace A"
-      assert labels[{:org, "wayne_tech"}] == "Workspace B"
-      assert labels[{:org, "sxi"}] == "Workspace C"
+      assert labels[{:org, "wonka"}] == "Workspace A"
+      assert labels[{:org, "vandelay_ind"}] == "Workspace B"
+      assert labels[{:org, "globex"}] == "Workspace C"
     end
 
     test "projects letter in FLATTENED rail order across orgs, from A" do
@@ -107,7 +113,7 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
     test "the two kinds letter independently — both start at A" do
       labels = TaskDisplay.mask_labels(sections(), true, MapSet.new())
 
-      assert labels[{:org, "cyberdyne"}] == "Workspace A"
+      assert labels[{:org, "wonka"}] == "Workspace A"
       assert labels[{:project, "p1"}] == "Project A"
     end
 
@@ -135,29 +141,29 @@ defmodule PlatformWeb.Tasks.TaskDisplayMaskTest do
 
   describe "mask_labels/3 — per-item reveal" do
     test "a MapSet reveals only the listed id" do
-      labels = TaskDisplay.mask_labels(sections(), true, MapSet.new(["wayne_tech", "p1"]))
+      labels = TaskDisplay.mask_labels(sections(), true, MapSet.new(["vandelay_ind", "p1"]))
 
-      assert labels[{:org, "wayne_tech"}] == Platform.Tenancy.scope_label("wayne_tech")
+      assert labels[{:org, "vandelay_ind"}] == org_name("vandelay_ind")
       assert labels[{:project, "p1"}] == "Orbit"
 
       # Everything else stays masked.
-      assert labels[{:org, "cyberdyne"}] == "Workspace A"
-      assert labels[{:org, "sxi"}] == "Workspace C"
+      assert labels[{:org, "wonka"}] == "Workspace A"
+      assert labels[{:org, "globex"}] == "Workspace C"
       assert labels[{:project, "p2"}] == "Project B"
       assert labels[{:project, "p3"}] == "Project C"
     end
 
     test "a plain LIST reveals the same ids as the equivalent MapSet" do
-      from_list = TaskDisplay.mask_labels(sections(), true, ["wayne_tech", "p1"])
-      from_set = TaskDisplay.mask_labels(sections(), true, MapSet.new(["wayne_tech", "p1"]))
+      from_list = TaskDisplay.mask_labels(sections(), true, ["vandelay_ind", "p1"])
+      from_set = TaskDisplay.mask_labels(sections(), true, MapSet.new(["vandelay_ind", "p1"]))
 
       assert from_list == from_set
     end
 
     test "revealing an org does NOT reveal its projects" do
-      labels = TaskDisplay.mask_labels(sections(), true, MapSet.new(["cyberdyne"]))
+      labels = TaskDisplay.mask_labels(sections(), true, MapSet.new(["wonka"]))
 
-      assert labels[{:org, "cyberdyne"}] == Platform.Tenancy.scope_label("cyberdyne")
+      assert labels[{:org, "wonka"}] == org_name("wonka")
       assert labels[{:project, "p1"}] == "Project A"
       assert labels[{:project, "p2"}] == "Project B"
     end

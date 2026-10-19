@@ -99,15 +99,12 @@ defmodule Platform.Tenancy.Lifecycle do
   the event is registered in `Platform.Audit.TelemetryHandler` `@events`
   so it bridges to an audit row.
 
-  ## What this does NOT do
+  ## No registration step
 
-  It does not register the new org in the scope enums
-  (`Platform.Tasks.scope_keys/0`, `PlatformWeb.Components.ScopePill.scopes/0`)
-  or give it a colour ramp, both of which are hand-authored code literals.
-  An org created here is real and selectable but gets no chip on the tasks
-  scope rail until that follow-up lands — `TasksLive.active_scope_keys/1`
-  intersects the viewer's orgs against the enum and filters out anything
-  absent from it.
+  There is no compiled scope enum to register the new org in (task 01a14dd9
+  stage 2 deleted the last one). Its scope chip, chat section dot and recolor
+  swatch are driven by its row: it is coloured once an admin sets its
+  `color_hue`.
   """
   @spec create_org(actor(), map()) ::
           {:ok, Org.t()} | {:error, :unauthorized | Ecto.Changeset.t()}

@@ -247,8 +247,8 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       # Removing the allowlist widened the rail's INPUT. Viewer scoping is
       # the only thing still narrowing it, so assert it explicitly here
       # rather than trusting the tenant read it inherited.
-      assert Tenancy.get_org_by_slug!("soylent").archived_at == nil
-      refute "soylent" in chips
+      assert Tenancy.get_org_by_slug!("initech").archived_at == nil
+      refute "initech" in chips
       assert chips == [@new_slug]
     end
   end
@@ -260,34 +260,36 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
     # `data-scope` and the var-path classes. The byte-level gate on the
     # emitted values is `ScopeColorStylesShippedSixTest`; this is the proof
     # that the page actually reads the row.
-    test "sxi and wayne_tech are coloured from their rows at their shipped fills", %{conn: conn} do
-      {conn, user} = member_conn(conn, ["acme", "sxi", "wayne_tech", "paragon"])
+    test "globex and vandelay_ind are coloured from their rows at their shipped fills", %{
+      conn: conn
+    } do
+      {conn, user} = member_conn(conn, ["acme", "globex", "vandelay_ind", "hooli"])
 
       entries = Tenancy.scope_slug_entries(user)
-      sxi = Enum.find(entries, &(&1.slug == "sxi"))
-      assert %{hue: 162, chroma: 0.15, lightness: 0.7} = sxi
+      globex = Enum.find(entries, &(&1.slug == "globex"))
+      assert %{hue: 162, chroma: 0.15, lightness: 0.7} = globex
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render(view)
 
-      # The fill at the SHIPPED lightness, not the 72% default: paragon's
+      # The fill at the SHIPPED lightness, not the 72% default: hooli's
       # 80% is the one furthest from it.
-      assert html =~ ~s|[data-scope="sxi"]{--scope-fill:oklch(70% 0.15 162);|
-      assert html =~ ~s|[data-scope="wayne_tech"]{--scope-fill:oklch(68% 0.15 240);|
-      assert html =~ ~s|[data-scope="paragon"]{--scope-fill:oklch(80% 0.16 95);|
+      assert html =~ ~s|[data-scope="globex"]{--scope-fill:oklch(70% 0.15 162);|
+      assert html =~ ~s|[data-scope="vandelay_ind"]{--scope-fill:oklch(68% 0.15 240);|
+      assert html =~ ~s|[data-scope="hooli"]{--scope-fill:oklch(80% 0.16 95);|
 
-      # The painted pre-move tint for sxi on the page ground, byte for byte.
-      assert html =~ ~r/\[data-scope="sxi"\]\{[^}]*--scope-tint-100:#e3f7f0;/
+      # The painted pre-move tint for globex on the page ground, byte for byte.
+      assert html =~ ~r/\[data-scope="globex"\]\{[^}]*--scope-tint-100:#e3f7f0;/
 
-      for slug <- ~w(sxi wayne_tech paragon) do
+      for slug <- ~w(globex vandelay_ind hooli) do
         assert html =~ ~s(data-scope="#{slug}" class=),
                "no #{slug} chip element carries data-scope"
       end
 
       # And none of the retired per-slug classes is emitted for them.
-      refute html =~ ~r/[\s"]bg-sxi[\s"]/
-      refute html =~ "text-sxi-label"
-      refute html =~ ~r/[\s"]border-wayne-tech[\s"]/
+      refute html =~ ~r/[\s"]bg-globex[\s"]/
+      refute html =~ "text-globex-label"
+      refute html =~ ~r/[\s"]border-vandelay-ind[\s"]/
     end
   end
 end

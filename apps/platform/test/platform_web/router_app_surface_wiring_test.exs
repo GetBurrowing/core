@@ -66,7 +66,7 @@ defmodule PlatformWeb.RouterAppSurfaceWiringTest do
 
     # Seeded tenant org: its slug atom is pre-registered, which TasksLive's
     # scope rail requires (`String.to_existing_atom` over active tenants).
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})

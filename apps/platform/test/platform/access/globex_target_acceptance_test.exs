@@ -1,8 +1,8 @@
-defmodule Platform.Access.SbsTargetAcceptanceTest do
+defmodule Platform.Access.GlobexTargetAcceptanceTest do
   @moduledoc """
   The combined target state of task 01a14721 (stage 3): the ORG FENCE
   (stage 1) plus MODULE LOCKS (stage 2) and channel denies, end to end, for
-  the shape the post-deploy data steps build for SXI.
+  the shape the post-deploy data steps build for Globex.
 
   The world: root org R (a project with a task titled LEGACY-SECRET, two
   channels, an execution space) and sub-org S (project P with two tasks,
@@ -46,9 +46,9 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
 
     u =
       Repo.insert!(%User{
-        email: "sxi-target-#{tag}-#{n}@example.com",
-        name: "SXI target #{tag} #{n}",
-        oidc_sub: "sxi-target-#{tag}-#{n}"
+        email: "globex-target-#{tag}-#{n}@example.com",
+        name: "Globex target #{tag} #{n}",
+        oidc_sub: "globex-target-#{tag}-#{n}"
       })
 
     %OrgMembership{}
@@ -72,8 +72,8 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
     %Space{}
     |> Space.changeset(%{
       kind: kind,
-      name: "sxi-#{kind}-#{n}",
-      slug: "sxi-#{kind}-#{n}",
+      name: "globex-#{kind}-#{n}",
+      slug: "globex-#{kind}-#{n}",
       org_id: org,
       metadata: metadata
     })
@@ -94,7 +94,7 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
     rt =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
-        runtime_id: "sxi-target-rt-#{uniq()}",
+        runtime_id: "globex-target-rt-#{uniq()}",
         owner_user_id: owner.id,
         auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
         status: "active"
@@ -128,20 +128,20 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
 
   setup do
     r = acme_org_id()
-    s = tenant_org_id("sxi_target_#{uniq()}")
+    s = tenant_org_id("globex_target_#{uniq()}")
     n = uniq()
 
     u = member!(s, "u")
     v = member!(s, "v")
     rm = member!(r, "rm")
 
-    pr = project!(r, "sxi-pr")
+    pr = project!(r, "globex-pr")
     secret = task!(pr, "LEGACY-SECRET #{n}")
     r_channels = for _ <- 1..2, do: space!("channel", r)
     er = space!("execution", r, %{"task_id" => secret.id})
 
-    p = project!(s, "sxi-p")
-    p_tasks = for i <- 1..2, do: task!(p, "SXI P task #{i} #{n}")
+    p = project!(s, "globex-p")
+    p_tasks = for i <- 1..2, do: task!(p, "Globex P task #{i} #{n}")
     s_channels = for _ <- 1..7, do: space!("channel", s)
     {denied, open} = Enum.split(s_channels, 5)
 
@@ -274,7 +274,7 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
     apply_target!(ctx)
     assert Access.org_fence(scope(ctx.u)) == [ctx.s]
 
-    slugs = [hd(ctx.r_channels).slug, "sxi-never-#{uniq()}", ctx.er.slug]
+    slugs = [hd(ctx.r_channels).slug, "globex-never-#{uniq()}", ctx.er.slug]
 
     outcomes =
       for slug <- slugs do
@@ -297,7 +297,7 @@ defmodule Platform.Access.SbsTargetAcceptanceTest do
   test "positive control: an unfenced root member opening a never-existing slug still bootstraps it",
        ctx do
     assert Access.org_fence(scope(ctx.rm)) == :unfenced
-    slug = "sxi-never-#{uniq()}"
+    slug = "globex-never-#{uniq()}"
     spaces_before = space_count()
     participants_before = participant_count()
 

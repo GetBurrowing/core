@@ -399,7 +399,7 @@ defmodule Platform.Meetings.InviteDeliveryTest do
       {:ok, _membership} =
         Tenancy.mark_membership_external(%{
           user_id: user.id,
-          org_id: tenant_org_id("soylent")
+          org_id: tenant_org_id("initech")
         })
 
       assert Platform.Tenancy.external_user?(%{id: user.id})

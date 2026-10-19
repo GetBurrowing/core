@@ -35,15 +35,15 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
   ## Fixture names
 
   The seeded root orgs (`priv/repo/migrations/20260519143620_seed_root_orgs.exs`)
-  are Acme, Soylent, Wayne-Tech, SXI and Paragon. Those are the production-shaped
-  strings, so they are what the assertions bite on. `Cyberdyne` is not a seeded
+  are Acme, Initech, Vandelay-Ind, Globex and Hooli. Those are the production-shaped
+  strings, so they are what the assertions bite on. `Wonka` is not a seeded
   org on this branch and is not invented here — a fixture the app never renders
   would make every refute about it vacuously true.
 
-  `SXI` was checked before being trusted: three uppercase letters can collide
+  `Globex` was checked before being trusted: three uppercase letters can collide
   with unrelated markup, base64 or class fragments, and a refute failing for a
   reason unrelated to masking is a false RED that trains people to loosen the
-  assertion. Rendered unmasked, `sxi` occurs exactly 7 times and every one is a
+  assertion. Rendered unmasked, `globex` occurs exactly 7 times and every one is a
   section-header surface (`data-section-key`, `data-section-slug`, the section
   `aria-label`, the collapse toggle, the visible label, the reorder handle).
   No collisions, so it stays.
@@ -59,8 +59,8 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
 
   # Three seeded orgs whose display form, hyphen slug and underscore slug are
   # not all the same string — which is the property that makes a three-form
-  # assertion able to catch what `refute html =~ "Wayne-Tech"` sails past.
-  @orgs ["Wayne-Tech", "SXI", "Soylent"]
+  # assertion able to catch what `refute html =~ "Vandelay-Ind"` sails past.
+  @orgs ["Vandelay-Ind", "Globex", "Initech"]
 
   defp insert_user(suffix) do
     Repo.insert!(%User{
@@ -200,7 +200,7 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
 
       revealed_name = section_name(unmasked, section_id)
 
-      assert revealed_name in @orgs or revealed_name == "Acme" or revealed_name == "Paragon",
+      assert revealed_name in @orgs or revealed_name == "Acme" or revealed_name == "Hooli",
              "expected the first rail section to be a seeded org, got #{inspect(revealed_name)}"
 
       html =

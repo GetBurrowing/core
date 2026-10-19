@@ -121,8 +121,8 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
 
   describe "absence of the real name" do
     # Stage 3 finding: this file's original anti-vacuity assertion was written
-    # as `refute html =~ "Wayne-Tech"`, which PASSES while
-    # `data-section-slug="wayne-tech"` sits in the DOM in plain sight. Slugs are
+    # as `refute html =~ "Vandelay-Ind"`, which PASSES while
+    # `data-section-slug="vandelay-ind"` sits in the DOM in plain sight. Slugs are
     # stored underscored and rendered hyphenated, so a display-form assertion
     # says nothing about the attribute surface. Replaced with the three-form,
     # case-insensitive helper — and the desktop rail now masks
@@ -130,11 +130,11 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
     test "the rail carries no spelling of a masked org name, attributes included", %{conn: conn} do
       {view, html} = conn |> authenticated_conn() |> mounted_view()
 
-      assert_name_anywhere(desktop_sidebar(html), "Wayne-Tech")
+      assert_name_anywhere(desktop_sidebar(html), "Vandelay-Ind")
 
       sidebar = view |> toggle_mask() |> desktop_sidebar()
 
-      for name <- ["Wayne-Tech", "Soylent", "Paragon", "Acme"] do
+      for name <- ["Vandelay-Ind", "Initech", "Hooli", "Acme"] do
         refute_name_anywhere(sidebar, name)
       end
     end
@@ -146,7 +146,7 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
 
       # The revealed section is first in rail order; the rest stay gone in
       # every spelling.
-      refute_name_anywhere(sidebar, "Wayne-Tech")
+      refute_name_anywhere(sidebar, "Vandelay-Ind")
     end
   end
 
@@ -176,7 +176,10 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
       sidebar = view |> toggle_mask() |> desktop_sidebar()
 
       assert sidebar =~ "channel-section-color-dot"
-      assert sidebar =~ "bg-sxi-dot"
+      assert sidebar =~ "channel-section-color-dot--scope"
+      # Masked, a coloured dot keeps its slug-agnostic class but drops its
+      # `data-scope` (the slug spells the org), so it renders uncoloured:
+      # the cost a masked scope chip already pays (task 01a14dd9 stage 2).
       assert sidebar =~ "channel-section-color-dot--unassigned"
     end
 
@@ -200,7 +203,7 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
       sidebar = view |> toggle_mask() |> desktop_sidebar()
 
       refute sidebar =~ "Workspace A"
-      assert sidebar =~ "Wayne-Tech"
+      assert sidebar =~ "Vandelay-Ind"
     end
   end
 

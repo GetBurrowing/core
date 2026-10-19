@@ -103,7 +103,7 @@ defmodule Platform.Chat.Sidebar do
   seed, which covered the orgs that existed on 2026-06-04. Every org created
   after that date had no section, so `default_section_id/3` fell through to
   `fallback_section_id/1` and its channels rendered under whichever section
-  happened to hold the lowest `position`. That is the Cyberdyne symptom.
+  happened to hold the lowest `position`. That is the Wonka symptom.
 
   `name` is stored NULL (task 01a08212): a new org's section follows its
   org's name from birth, so a later rename of the org is picked up with no
@@ -115,10 +115,10 @@ defmodule Platform.Chat.Sidebar do
   org is a no-op that still returns the existing row.
 
   `color` mirrors the seed migration EXACTLY: the org slug with `_` → `-`.
-  Org slugs are stored underscore-form (`wayne_tech`) while section colour
-  tokens and the `.bg-<token>-dot` CSS classes are hyphen-form; reversing the
-  replace yields a section whose `section_dot_class/1` lookup misses and whose
-  dot silently disappears.
+  Org slugs are stored underscore-form (`vandelay_ind`) while section colour
+  tokens are hyphen-form (`Platform.Tenancy.css_slug/1`); reversing the
+  replace yields a section whose token matches no org row
+  (`ChatLive.section_dot_scope/2` misses) and whose dot renders hollow.
 
   `position` is `max(position) + 1`. Two concurrent creates can read the same
   max and land on the same position; `org_id` is what's unique, so the conflict
@@ -180,7 +180,7 @@ defmodule Platform.Chat.Sidebar do
     with_admin(actor, fn -> update_section(section_id, %{name: name}) end)
   end
 
-  @doc "Recolor an org-default section (root-admin only). `color` is a scope token, e.g. \"sxi\"."
+  @doc "Recolor an org-default section (root-admin only). `color` is a scope token, e.g. \"globex\"."
   @spec recolor_section(map(), binary(), String.t()) ::
           {:ok, Section.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
   def recolor_section(actor, section_id, color) when is_binary(color) do

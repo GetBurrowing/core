@@ -130,8 +130,8 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
     # test that only asserts absence would pass on a completely broken
     # function.
     setup do
-      home = Tenancy.get_org_by_slug!("sxi")
-      foreign = Tenancy.get_org_by_slug!("soylent")
+      home = Tenancy.get_org_by_slug!("globex")
+      foreign = Tenancy.get_org_by_slug!("initech")
 
       viewer = create_user!()
       colleague = create_user!()
@@ -574,8 +574,8 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       # A `:none`-only test can be made green by special-casing `:none` inside
       # `Tenancy.scope/3` while leaving the fence intact for every other
       # visibility. This is the test that reds on that quiet re-fence.
-      home = Tenancy.get_org_by_slug!("sxi")
-      foreign = Tenancy.get_org_by_slug!("soylent")
+      home = Tenancy.get_org_by_slug!("globex")
+      foreign = Tenancy.get_org_by_slug!("initech")
 
       viewer = create_user!()
       member!(viewer, home)
@@ -669,8 +669,8 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       # THE IDENTITY BOUNDARY. This is the test that reds when someone later
       # optimises `Chat.Presence.list_online_for_viewer/1` to reuse the set the
       # shell already subscribed instead of re-deriving its own fenced one.
-      home = Tenancy.get_org_by_slug!("sxi")
-      foreign = Tenancy.get_org_by_slug!("soylent")
+      home = Tenancy.get_org_by_slug!("globex")
+      foreign = Tenancy.get_org_by_slug!("initech")
 
       viewer = create_user!()
       member!(viewer, home)

@@ -55,9 +55,9 @@ defmodule Platform.Tasks.ProjectTest do
     end
 
     test "honors an explicitly-passed tenant org_id" do
-      tenant_id = tenant_org_id("soylent")
+      tenant_id = tenant_org_id("initech")
 
-      assert {:ok, project} = Tasks.create_project(%{name: "Soylent Tool", org_id: tenant_id})
+      assert {:ok, project} = Tasks.create_project(%{name: "Initech Tool", org_id: tenant_id})
       assert project.org_id == tenant_id
     end
 

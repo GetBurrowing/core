@@ -46,14 +46,14 @@ defmodule Platform.Tenancy.ScopeTest do
 
   describe "visibility/1" do
     test "a plain member of one tenant org resolves to {:orgs, [that_id]}" do
-      sxi = tenant_org_id("sxi")
-      user = user!() |> member!(sxi)
+      globex = tenant_org_id("globex")
+      user = user!() |> member!(globex)
 
       # Precondition: this user must NOT be a root admin, or the assertion
       # below would pass for the wrong reason.
       refute Tenancy.root_admin?(user)
 
-      assert Tenancy.visibility(user) == {:orgs, [sxi]}
+      assert Tenancy.visibility(user) == {:orgs, [globex]}
     end
 
     test "a root-org member (role: member) is :root_all but NOT a acme admin" do
@@ -82,8 +82,8 @@ defmodule Platform.Tenancy.ScopeTest do
     end
 
     test "ids are sorted and deduped so the value is comparable" do
-      a = tenant_org_id("sxi")
-      b = tenant_org_id("soylent")
+      a = tenant_org_id("globex")
+      b = tenant_org_id("initech")
       user = user!() |> member!(a) |> member!(b)
 
       assert {:orgs, ids} = Tenancy.visibility(user)
@@ -91,7 +91,7 @@ defmodule Platform.Tenancy.ScopeTest do
     end
 
     test "the preloaded and non-preloaded resolution paths agree" do
-      plain = user!() |> member!(tenant_org_id("sxi"))
+      plain = user!() |> member!(tenant_org_id("globex"))
       root = user!() |> member!(acme_org_id(), "member")
       orphan = user!()
 
@@ -107,7 +107,7 @@ defmodule Platform.Tenancy.ScopeTest do
 
   describe "scope/3" do
     test ":none returns zero rows from a fixture proven to hold rows" do
-      project!(tenant_org_id("sxi"))
+      project!(tenant_org_id("globex"))
 
       # ANTI-VACUITY: without this, the assertion below passes on an empty DB.
       assert Repo.aggregate(Project, :count) > 0
@@ -116,8 +116,8 @@ defmodule Platform.Tenancy.ScopeTest do
     end
 
     test "{:orgs, [a]} returns org A's project and NOT org B's" do
-      a = tenant_org_id("sxi")
-      b = tenant_org_id("soylent")
+      a = tenant_org_id("globex")
+      b = tenant_org_id("initech")
       pa = project!(a)
       pb = project!(b)
 
@@ -128,8 +128,8 @@ defmodule Platform.Tenancy.ScopeTest do
     end
 
     test ":root_all returns both orgs' projects, queryable untouched" do
-      pa = project!(tenant_org_id("sxi"))
-      pb = project!(tenant_org_id("soylent"))
+      pa = project!(tenant_org_id("globex"))
+      pb = project!(tenant_org_id("initech"))
 
       ids = Project |> Tenancy.scope(:root_all) |> Repo.all() |> Enum.map(& &1.id)
 
@@ -138,7 +138,7 @@ defmodule Platform.Tenancy.ScopeTest do
     end
 
     test "an empty allow-list fails closed rather than returning everything" do
-      project!(tenant_org_id("sxi"))
+      project!(tenant_org_id("globex"))
       assert Repo.aggregate(Project, :count) > 0
 
       assert Repo.aggregate(Tenancy.scope(Project, {:orgs, []}), :count) == 0
@@ -147,8 +147,8 @@ defmodule Platform.Tenancy.ScopeTest do
     test ":binding targets a named join so tasks can be scoped through projects" do
       import Ecto.Query
 
-      a = tenant_org_id("sxi")
-      b = tenant_org_id("soylent")
+      a = tenant_org_id("globex")
+      b = tenant_org_id("initech")
       pa = project!(a)
       pb = project!(b)
 
@@ -169,7 +169,7 @@ defmodule Platform.Tenancy.ScopeTest do
   describe "root_member_preloaded?/1" do
     test "mirrors root_member?/1 and stays distinct from root_admin_preloaded?/1" do
       root_member = user!() |> member!(acme_org_id(), "member") |> with_preloads()
-      tenant_member = user!() |> member!(tenant_org_id("sxi")) |> with_preloads()
+      tenant_member = user!() |> member!(tenant_org_id("globex")) |> with_preloads()
 
       assert Tenancy.root_member_preloaded?(root_member)
       refute Tenancy.root_admin_preloaded?(root_member)

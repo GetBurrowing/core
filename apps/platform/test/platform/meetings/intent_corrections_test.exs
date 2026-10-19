@@ -83,27 +83,27 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
     test "two meetings in different orgs derive different org_ids" do
       acme = acme_org_id()
-      sxi = tenant_org_id("sxi")
+      globex = tenant_org_id("globex")
 
       acme_meeting = create_meeting!(acme)
-      sxi_meeting = create_meeting!(sxi)
+      globex_meeting = create_meeting!(globex)
 
       {:ok, acme_correction} =
         IntentCorrections.create_correction(correction_attrs(acme_meeting.id))
 
-      {:ok, sxi_correction} =
-        IntentCorrections.create_correction(correction_attrs(sxi_meeting.id))
+      {:ok, globex_correction} =
+        IntentCorrections.create_correction(correction_attrs(globex_meeting.id))
 
       assert acme_correction.org_id == acme
-      assert sxi_correction.org_id == sxi
-      refute acme_correction.org_id == sxi_correction.org_id
+      assert globex_correction.org_id == globex
+      refute acme_correction.org_id == globex_correction.org_id
     end
 
     test "an explicit org_id wins over derivation" do
       # The stage-7 UI already holds an org and should not pay for a
       # lookup it can answer itself.
       meeting = create_meeting!(acme_org_id())
-      explicit = tenant_org_id("paragon")
+      explicit = tenant_org_id("hooli")
 
       {:ok, correction} =
         IntentCorrections.create_correction(correction_attrs(meeting.id, %{org_id: explicit}))
@@ -157,7 +157,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
   describe "org_id_for_meeting/1" do
     test "walks meetings.project_id -> projects.org_id" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = create_meeting!(org_id)
 
       assert IntentCorrections.org_id_for_meeting(meeting.id) == org_id
@@ -205,7 +205,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "orders by inserted_at desc across the whole set" do
-      org_id = tenant_org_id("wayne_tech")
+      org_id = tenant_org_id("vandelay_ind")
       seed_exemplars!(org_id, ~w(a b c d))
 
       intents = Enum.map(IntentCorrections.recent_exemplars(org_id), & &1.classified_intent)
@@ -214,7 +214,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "honours the limit" do
-      org_id = tenant_org_id("paragon")
+      org_id = tenant_org_id("hooli")
       seed_exemplars!(org_id, ~w(a b c d e))
 
       assert length(IntentCorrections.recent_exemplars(org_id, 2)) == 2
@@ -222,7 +222,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "the limit keeps the NEWEST rows, not an arbitrary two" do
-      org_id = tenant_org_id("sxi")
+      org_id = tenant_org_id("globex")
       seed_exemplars!(org_id, ~w(oldest middle newest))
 
       intents =
@@ -236,7 +236,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     test "defaults to the documented window" do
       assert IntentCorrections.default_exemplar_limit() == 10
 
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       seed_exemplars!(org_id, Enum.map(1..15, &"intent_#{&1}"))
 
       assert length(IntentCorrections.recent_exemplars(org_id)) == 10
@@ -244,15 +244,15 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
     test "never returns another org's corrections" do
       acme = acme_org_id()
-      sxi = tenant_org_id("sxi")
+      globex = tenant_org_id("globex")
 
       seed_exemplars!(acme, ~w(acme_only))
-      seed_exemplars!(sxi, ~w(sxi_only))
+      seed_exemplars!(globex, ~w(globex_only))
 
       acme_intents = Enum.map(IntentCorrections.recent_exemplars(acme), & &1.classified_intent)
 
       assert "acme_only" in acme_intents
-      refute "sxi_only" in acme_intents
+      refute "globex_only" in acme_intents
     end
 
     test "a nil org returns [] rather than every org's corrections" do
@@ -270,7 +270,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
   describe "exemplars_for_meeting/2" do
     test "resolves the meeting's org and returns only that org's exemplars" do
       acme = acme_org_id()
-      sxi = tenant_org_id("sxi")
+      globex = tenant_org_id("globex")
 
       acme_meeting = create_meeting!(acme)
 
@@ -279,11 +279,11 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
           correction_attrs(acme_meeting.id, %{classified_intent: "acme_intent"})
         )
 
-      sxi_meeting = create_meeting!(sxi)
+      globex_meeting = create_meeting!(globex)
 
       {:ok, _} =
         IntentCorrections.create_correction(
-          correction_attrs(sxi_meeting.id, %{classified_intent: "sxi_intent"})
+          correction_attrs(globex_meeting.id, %{classified_intent: "globex_intent"})
         )
 
       intents =
@@ -292,13 +292,13 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
         |> Enum.map(& &1.classified_intent)
 
       assert "acme_intent" in intents
-      refute "sxi_intent" in intents
+      refute "globex_intent" in intents
     end
 
     test "sees corrections written from OTHER meetings in the same org" do
       # The corpus is org-scoped, not meeting-scoped: a correction made
       # in yesterday's meeting must tune today's.
-      org_id = tenant_org_id("wayne_tech")
+      org_id = tenant_org_id("vandelay_ind")
       yesterday = create_meeting!(org_id)
       today = create_meeting!(org_id)
 

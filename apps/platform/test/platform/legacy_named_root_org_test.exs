@@ -23,8 +23,8 @@ defmodule Platform.LegacyNamedRootOrgTest do
 
   ## Why 4 tenants, and why real membership rows
 
-  The original hardcoded migration seeded exactly Soylent, Wayne-Tech,
-  SXI, and Paragon under Legacy — all 4 are reproduced here so "untouched"
+  The original hardcoded migration seeded exactly Initech, Vandelay-Ind,
+  Globex, and Hooli under Legacy — all 4 are reproduced here so "untouched"
   is checked against the actual historical shape, not a partial stand-in.
   Two pre-existing `org_memberships` rows (one admin, one member) stand in
   for real production membership history; the byte-for-byte assertions
@@ -117,10 +117,13 @@ defmodule Platform.LegacyNamedRootOrgTest do
     end)
 
     legacy = insert_org!(%{name: "Legacy", slug: "legacy", parent_org_id: nil})
-    soylent = insert_org!(%{name: "Soylent", slug: "soylent", parent_org_id: legacy.id})
-    wayne_tech = insert_org!(%{name: "Wayne-Tech", slug: "wayne_tech", parent_org_id: legacy.id})
-    sxi = insert_org!(%{name: "SXI", slug: "sxi", parent_org_id: legacy.id})
-    paragon = insert_org!(%{name: "Paragon", slug: "paragon", parent_org_id: legacy.id})
+    initech = insert_org!(%{name: "Initech", slug: "initech", parent_org_id: legacy.id})
+
+    vandelay_ind =
+      insert_org!(%{name: "Vandelay-Ind", slug: "vandelay_ind", parent_org_id: legacy.id})
+
+    globex = insert_org!(%{name: "Globex", slug: "globex", parent_org_id: legacy.id})
+    hooli = insert_org!(%{name: "Hooli", slug: "hooli", parent_org_id: legacy.id})
 
     admin_user = insert_user!("alex.rivera@example.net", "oidc-legacy-admin")
     admin_membership = insert_membership!(admin_user.id, legacy.id, "admin")
@@ -130,10 +133,10 @@ defmodule Platform.LegacyNamedRootOrgTest do
 
     %{
       legacy: legacy,
-      soylent: soylent,
-      wayne_tech: wayne_tech,
-      sxi: sxi,
-      paragon: paragon,
+      initech: initech,
+      vandelay_ind: vandelay_ind,
+      globex: globex,
+      hooli: hooli,
       admin_user: admin_user,
       admin_membership: admin_membership,
       member_user: member_user,
@@ -149,10 +152,10 @@ defmodule Platform.LegacyNamedRootOrgTest do
   test "everything pre-existing is byte-for-byte unchanged after exercising the stage-1 code",
        %{
          legacy: legacy,
-         soylent: soylent,
-         wayne_tech: wayne_tech,
-         sxi: sxi,
-         paragon: paragon,
+         initech: initech,
+         vandelay_ind: vandelay_ind,
+         globex: globex,
+         hooli: hooli,
          admin_user: admin_user,
          admin_membership: admin_membership,
          member_membership: member_membership
@@ -186,10 +189,10 @@ defmodule Platform.LegacyNamedRootOrgTest do
     # Named checks, not just the bulk comparison above, so a failure here
     # points straight at what changed.
     assert Repo.get(Org, legacy.id) == legacy
-    assert Repo.get(Org, soylent.id) == soylent
-    assert Repo.get(Org, wayne_tech.id) == wayne_tech
-    assert Repo.get(Org, sxi.id) == sxi
-    assert Repo.get(Org, paragon.id) == paragon
+    assert Repo.get(Org, initech.id) == initech
+    assert Repo.get(Org, vandelay_ind.id) == vandelay_ind
+    assert Repo.get(Org, globex.id) == globex
+    assert Repo.get(Org, hooli.id) == hooli
     assert Repo.get(OrgMembership, admin_membership.id) == admin_membership
     assert Repo.get(OrgMembership, member_membership.id) == member_membership
     assert length(orgs_after) == 5

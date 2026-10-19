@@ -126,24 +126,24 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
 
   setup do
     acme = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-files-e2e-#{u()}", acme)
-    wayne_tech = ensure_tenant_org("wayne-tech-files-e2e-#{u()}", acme)
+    globex = ensure_tenant_org("globex-files-e2e-#{u()}", acme)
+    vandelay_ind = ensure_tenant_org("vandelay-ind-files-e2e-#{u()}", acme)
 
-    {:ok, project_sxi} = Tasks.create_project(%{name: "SXI-#{u()}", org_id: sxi.id})
-    {:ok, project_pt} = Tasks.create_project(%{name: "PT-#{u()}", org_id: wayne_tech.id})
+    {:ok, project_globex} = Tasks.create_project(%{name: "Globex-#{u()}", org_id: globex.id})
+    {:ok, project_pt} = Tasks.create_project(%{name: "PT-#{u()}", org_id: vandelay_ind.id})
 
-    agent_sxi = create_agent("sxi-agent", %{"org_id" => sxi.id})
-    _agent_pt = create_agent("pt-agent", %{"org_id" => wayne_tech.id})
+    agent_globex = create_agent("globex-agent", %{"org_id" => globex.id})
+    _agent_pt = create_agent("pt-agent", %{"org_id" => vandelay_ind.id})
     agent_root = create_agent("root-agent", %{"org_id" => acme.id})
 
     {:ok,
      %{
        acme: acme,
-       sxi: sxi,
-       wayne_tech: wayne_tech,
-       project_sxi: project_sxi,
+       globex: globex,
+       vandelay_ind: vandelay_ind,
+       project_globex: project_globex,
        project_pt: project_pt,
-       agent_sxi: agent_sxi,
+       agent_globex: agent_globex,
        agent_root: agent_root
      }}
   end
@@ -154,7 +154,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
     setup :with_tmp_storage_root
 
     test "5 KB text round-trip: add → metadata → get_text returns verbatim body",
-         %{agent_sxi: agent, project_sxi: project} do
+         %{agent_globex: agent, project_globex: project} do
       install_memory_stub([])
 
       body = String.duplicate("Lorem ipsum dolor sit amet, consectetur. ", 128)
@@ -268,7 +268,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
 
     @tag :files_service
     test "file_get_text on uploaded PDF returns the verbatim phrase from files-service",
-         %{agent_sxi: agent, project_sxi: project} do
+         %{agent_globex: agent, project_globex: project} do
       files_service_url = System.get_env("FILES_SERVICE_URL")
 
       if is_nil(files_service_url) or files_service_url == "" do
@@ -349,18 +349,18 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
   describe "[Case C] cross-org auth rejection across all 5 tools" do
     setup :with_tmp_storage_root
 
-    test "SXI agent gets unauthorized envelope on all 5 tools targeting Wayne-tech file",
+    test "Globex agent gets unauthorized envelope on all 5 tools targeting Vandelay-ind file",
          %{
-           agent_sxi: agent_sxi,
+           agent_globex: agent_globex,
            agent_root: agent_root,
            project_pt: project_pt
          } do
       install_memory_stub([%{entry_id: "stub", score: 0.5}])
 
-      body = "off-limits Wayne-tech body #{u()}"
+      body = "off-limits Vandelay-ind body #{u()}"
       filename = "pt-only-#{u()}.txt"
 
-      # ROOT uploads into Wayne-tech — root-equivalent agent.
+      # ROOT uploads into Vandelay-ind — root-equivalent agent.
       assert {:ok, %{id: pt_file_id}} =
                ToolSurface.execute(
                  "file_add",
@@ -373,7 +373,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
                  context_for(agent_root)
                )
 
-      # All five tools against the Wayne-tech file must reject with
+      # All five tools against the Vandelay-ind file must reject with
       # unauthorized + recoverable: false.
       unauthorized_calls = [
         {"file_list", %{"project_id" => project_pt.id}},
@@ -384,7 +384,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
       ]
 
       for {tool, args} <- unauthorized_calls do
-        result = ToolSurface.execute(tool, args, context_for(agent_sxi))
+        result = ToolSurface.execute(tool, args, context_for(agent_globex))
 
         assert {:error, %{error: msg, recoverable: false}} = result,
                "tool #{tool} should return error envelope, got: #{inspect(result)}"
@@ -397,7 +397,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
                "tool #{tool} leaked existence with empty result"
       end
 
-      # Final assertion: the Wayne-tech file row still exists — root re-reads it.
+      # Final assertion: the Vandelay-ind file row still exists — root re-reads it.
       assert {:ok, %{file_id: ^pt_file_id}} =
                ToolSurface.execute(
                  "file_get_metadata",
@@ -413,7 +413,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
     setup :with_tmp_storage_root
 
     test "file_search returns exactly the matching files with snippet containing query",
-         %{agent_sxi: agent, project_sxi: project} do
+         %{agent_globex: agent, project_globex: project} do
       # Three files: a + b contain 'cinnabar', c does not.
       file_a =
         create_file_with_text(project, "alpha beta cinnabar", filename: "file_a-#{u()}.txt")
@@ -502,7 +502,7 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
     setup :with_tmp_storage_root
 
     test "first delete OK, second delete :not_found, get_metadata :not_found, bytes retained",
-         %{agent_sxi: agent, project_sxi: project, storage_root: storage_root} do
+         %{agent_globex: agent, project_globex: project, storage_root: storage_root} do
       install_memory_stub([])
 
       body = "case-e-body-#{u()}"

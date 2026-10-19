@@ -212,7 +212,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       {conn, user} = authenticated_conn(conn)
       enable_flag()
 
-      space = create_space(goal: "Get SXI to a good state")
+      space = create_space(goal: "Get Globex to a good state")
       add_user(space, user)
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
@@ -267,7 +267,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       # Drive the same event the pencil drives. `can_edit_goal?` is false for
       # this non-admin user, so the write is REFUSED — which is the gate the
       # affordance sits over, asserted here rather than assumed.
-      render_change(view, "save_goal", %{"goal" => "Get SXI to a good state"})
+      render_change(view, "save_goal", %{"goal" => "Get Globex to a good state"})
 
       assert Repo.reload!(space).goal == "Close backlog items in Suite"
     end
@@ -278,7 +278,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       assert Sidebar.goal_panel(space).measurement.missing? == false
 
-      {:ok, updated} = Chat.update_space(space, %{goal: "Get SXI to a good state"})
+      {:ok, updated} = Chat.update_space(space, %{goal: "Get Globex to a good state"})
 
       assert Sidebar.goal_panel(updated).measurement.missing? == true
     end
@@ -376,9 +376,9 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       refute Sidebar.first_goal_offered?(agents)
 
       {:ok, view, _html} = live_at(conn, "/chat/#{agents.slug}")
-      render_change(view, "save_goal", %{"goal" => "Get SXI to a good state"})
+      render_change(view, "save_goal", %{"goal" => "Get Globex to a good state"})
 
-      assert Repo.reload!(agents).goal == "Get SXI to a good state"
+      assert Repo.reload!(agents).goal == "Get Globex to a good state"
     end
   end
 
@@ -737,7 +737,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
   end
 
   describe "the goal editor's project select (task 01a0cef1 stage 2)" do
-    # Fixture (seeded orgs: A = "soylent", B = "wayne_tech"): a channel S in
+    # Fixture (seeded orgs: A = "initech", B = "vandelay_ind"): a channel S in
     # org A with goal "Close backlog items"; P1 (A: 2 open + 1 done), P2 (A:
     # 5 open), PF (B: 3 open). No migration seeds projects or tasks, so the
     # install-wide open count is 2 + 5 + 3 = 10.
@@ -752,8 +752,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
         :member -> acme_member(user)
       end
 
-      a = Platform.Tenancy.get_org_by_slug!("soylent")
-      b = Platform.Tenancy.get_org_by_slug!("wayne_tech")
+      a = Platform.Tenancy.get_org_by_slug!("initech")
+      b = Platform.Tenancy.get_org_by_slug!("vandelay_ind")
       n = System.unique_integer([:positive])
 
       p1 = scope_project!("P1 #{n}", a)

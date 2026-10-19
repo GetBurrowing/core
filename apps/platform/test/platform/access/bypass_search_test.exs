@@ -80,7 +80,7 @@ defmodule Platform.Access.BypassSearchTest do
 
   test "message tools return the non-participant envelope after a space deny" do
     n = System.unique_integer([:positive])
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     owner = Platform.ExternalUserFixtures.create_user!()
     Platform.ExternalUserFixtures.plain_member!(owner, org)
 

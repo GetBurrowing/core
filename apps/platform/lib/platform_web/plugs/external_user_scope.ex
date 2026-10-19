@@ -242,7 +242,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
   #
   # Same resolution ChatLive `handle_params/3` uses, all three steps of it:
   #
-  #   1. org-scoped slug lookup against the external user's SXI org — this is
+  #   1. org-scoped slug lookup against the external user's Globex org — this is
   #      the ADR-0042 disambiguator ("#general" in one tenant vs another) and
   #      stays FIRST so an ambiguous user-created slug still resolves to the
   #      caller's own tenant;

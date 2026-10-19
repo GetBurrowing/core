@@ -62,8 +62,8 @@ defmodule Platform.Mail.AccountsTest do
   end
 
   setup do
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
     admin = user!() |> member!(org_id, "admin")
     other_admin = user!() |> member!(other_org_id, "admin")
     %{org_id: org_id, other_org_id: other_org_id, admin: admin, other_admin: other_admin}

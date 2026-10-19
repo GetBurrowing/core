@@ -424,12 +424,14 @@ config :phoenix, :filter_parameters, [
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
 # `external_group`/`external_claim` (rbac-external-users M2 stage 1): the
-# STATIC id-token claim NAME + value that marks a login as an SXI-external
+# STATIC id-token claim NAME + value that marks a login as an external
 # user. Read-only token consumption — ADR-0004 (no outbound IdP call).
-# runtime.exs threads the prod value via OIDC_EXTERNAL_GROUP.
+# `external_group` is deliberately UNSET here (task 01a14dd9): runtime.exs
+# threads OIDC_EXTERNAL_GROUP, which has no default. A nil group flags nobody
+# (`Platform.OIDC.external_claim?/1`), so an install with external users MUST
+# set it.
 config :platform, :oidc,
   http_adapter: Assent.HTTPAdapter.Httpc,
-  external_group: "sxi-external",
   external_claim: "groups"
 
 # App-surface host fence (task 019fcf22 stage 4). `:on` makes
@@ -444,6 +446,12 @@ config :platform, :oidc,
 # ROLLBACK is this one line — set it back to `:off`. Nothing else in stages
 # 1-3 has to be touched, which is why enforcement is a flag at all.
 config :platform, :host_surface_enforcement, :on
+
+# Tenant display priority: deliberately UNSET here (task 01a14dd9).
+# `Platform.Tenancy.tenant_priority/0` reads `:tenant_priority` at runtime;
+# runtime.exs threads TENANT_ORG_PRIORITY when an install sets it, and
+# otherwise every tenant sorts slug-alphabetically after the root. A literal
+# default here named one install's tenants in every install's config.
 
 # Root org slug: deliberately UNSET here (task 01a116de). Every code path that
 # needs "the org a write lands in when the caller named none" resolves it

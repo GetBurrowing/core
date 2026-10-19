@@ -9,7 +9,7 @@ defmodule Platform.Chat.ExternalAttachmentScopeTest do
       membership gate and the internal/agent pass-through are unchanged.
     * stage 2 — WRITE gate: `post_message_with_attachments/3` refuses an external
       poster a space they are not a member of — a file only ever lands in an
-      allowlisted (SXI) space — while internal/agent/system posters pass through.
+      allowlisted (Globex) space — while internal/agent/system posters pass through.
     * stage 3 — PRESIGN gate: `ToolHandlers.upload_start/2` mints no URL and
       reserves no pending row for an out-of-scope user principal; size caps are
       principal-agnostic (the same `check_upload_size` path for all callers).

@@ -623,8 +623,8 @@ defmodule PlatformWeb.ChatLive do
         )
       )
       # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter, all
-      # sub-org sections render. An atom (one of @scope atoms) narrows the
-      # rail to the matching sub-org section only. Toggled by clicking a
+      # sub-org sections render. An org slug (a binary, see `parse_scope/2`)
+      # narrows the rail to the sections wearing that org's token. Toggled by clicking a
       # scope-pill via the `scope_filter` handler below.
       |> assign(:scope_filter, nil)
       # Desktop "Edit layout" mode (chat sidebar Stage 5). When true the
@@ -1699,8 +1699,8 @@ defmodule PlatformWeb.ChatLive do
   # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
   # sectioned rail (or the chat-header pill) narrows the visible sub-org
   # sections to just that scope. Clicking the same scope again clears the
-  # filter (toggle semantics). Payload `scope` is the atom name as a
-  # string (e.g. "sxi", "wayne_tech"). Unknown values clear the filter.
+  # filter (toggle semantics). Payload `scope` is the org slug as stored
+  # (e.g. "vandelay_ind"). Values naming no org clear the filter.
   #
   # Future hook: Stack B (MT/RBAC) will replace the in-template filter
   # with a `?scope=` query-string patch so the filter state is shareable.
@@ -1708,7 +1708,12 @@ defmodule PlatformWeb.ChatLive do
   # required, and the per-tab volatility matches the rest of the rail's
   # ephemeral UI state.
   def handle_event("scope_filter", %{"scope" => raw}, socket) when is_binary(raw) do
-    incoming = parse_scope(raw)
+    incoming =
+      parse_scope(
+        raw,
+        socket.assigns |> Map.get(:channel_sections, %{}) |> Map.get(:bucket_orgs, %{})
+      )
+
     current = socket.assigns.scope_filter
 
     next =
@@ -1848,7 +1853,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Recolor an org-default section (admin-edit). `color` is one of the five
-  # sibling scope tokens (soylent / wayne-tech / sxi / paragon / cyberdyne) or
+  # sibling scope tokens (initech / vandelay-ind / globex / hooli / wonka) or
   # the section's OWN org token — the compact palette in the section header.
   def handle_event(
         "recolor_section_default",
@@ -2018,7 +2023,12 @@ defmodule PlatformWeb.ChatLive do
        assign(socket, :reassign_picker, %{
          channel_id: channel.id,
          channel_name: channel.name,
-         destinations: reassign_destinations(socket.assigns.sidebar_sections, channel.org_id)
+         destinations:
+           reassign_destinations(
+             socket.assigns.sidebar_sections,
+             channel.org_id,
+             socket.assigns |> Map.get(:channel_sections, %{}) |> Map.get(:scope_orgs, %{})
+           )
        })}
     else
       _ -> {:noreply, assign(socket, :reassign_picker, nil)}
@@ -3604,7 +3614,11 @@ defmodule PlatformWeb.ChatLive do
   # Every section a channel can be moved TO: the rail minus where it already
   # is. Built from the channel's `org_id` rather than the section it renders
   # under so a personal placement override cannot offer a no-op destination.
-  defp reassign_destinations(sidebar_sections, org_id) do
+  #
+  # `scope` is the `data-scope` that colours the destination's dot, resolved
+  # from the section's colour token through the same org index the rail uses
+  # (`section_dot_scope/2`); nil leaves the dot out.
+  defp reassign_destinations(sidebar_sections, org_id, scope_orgs) do
     sidebar_sections
     |> Enum.map(& &1.section)
     |> Enum.reject(&(&1.org_id == org_id))
@@ -3613,7 +3627,7 @@ defmodule PlatformWeb.ChatLive do
         section_id: &1.id,
         org_id: &1.org_id,
         name: Section.display_name(&1),
-        dot: section_dot_class(&1.color)
+        scope: section_dot_scope(&1, scope_orgs)
       }
     )
   end
@@ -3655,18 +3669,16 @@ defmodule PlatformWeb.ChatLive do
   # inbound color so a forged payload can't write an arbitrary string onto a
   # section's `color` (defense-in-depth on top of the admin gate).
   #
-  # The palette is the five compiled sibling tokens plus the section's OWN
-  # org token (task 01a116de stage 3). The root org has no compiled token:
-  # it is install data, so its swatch is read off its row and an admin can
-  # always put a section back on its own org's colour.
-  @sibling_scope_tokens ~w(soylent wayne-tech sxi paragon cyberdyne)
-
-  @doc false
-  @spec sibling_scope_tokens() :: [String.t()]
-  def sibling_scope_tokens, do: @sibling_scope_tokens
-
+  # The palette is computed from the org ROWS (`Tenancy.scope_palette/0`:
+  # every non-archived org with a colour) plus the section's OWN org token,
+  # so an admin can always put a section back on its own org's colour (task
+  # 01a14dd9 stage 2; it was five compiled tokens before). Read fresh at
+  # event time rather than from the rendered assign, so a palette that went
+  # stale on screen can neither admit an archived org's token nor refuse a
+  # new org's.
   defp valid_scope_token?(color, section_id, sidebar_sections) do
-    color in @sibling_scope_tokens or color == own_scope_token(sidebar_sections, section_id)
+    color == own_scope_token(sidebar_sections, section_id) or
+      Enum.any?(Platform.Tenancy.scope_palette(), &(&1.token == color))
   end
 
   defp own_scope_token(sidebar_sections, section_id) do
@@ -3674,6 +3686,23 @@ defmodule PlatformWeb.ChatLive do
       %{section: %{id: ^section_id} = section} -> section_own_token(section)
       _ -> nil
     end)
+  end
+
+  @doc """
+  The swatches a section's recolor palette renders: `palette` (from
+  `Platform.Tenancy.scope_palette/1`, carried on `@channel_sections`), with
+  the section's OWN org token first when the palette lacks it (an own org
+  with no colour, which renders a hollow swatch). Each entry is
+  `%{token:, slug:}`: `token` is the payload, `slug` the `data-scope`.
+  """
+  @spec section_palette(map(), [map()]) :: [%{token: String.t(), slug: String.t()}]
+  def section_palette(section, palette) when is_list(palette) do
+    own_token = section_own_token(section)
+    entries = Enum.map(palette, &%{token: &1.token, slug: &1.slug})
+
+    if is_binary(own_token) and not Enum.any?(entries, &(&1.token == own_token)),
+      do: [%{token: own_token, slug: Map.get(section, :org_slug)} | entries],
+      else: entries
   end
 
   @doc """
@@ -3686,23 +3715,55 @@ defmodule PlatformWeb.ChatLive do
 
   @doc """
   The `data-scope` value that colours a section's header dot through the
-  slug-agnostic var path (`PlatformWeb.Components.ScopeColorStyles`), or
-  `nil` when the dot takes a compiled `bg-<token>-dot` class instead or the
-  section wears a colour that is not its own org's.
+  slug-agnostic var path (`PlatformWeb.Components.ScopeColorStyles`): the
+  slug, as stored, of the org whose `css_slug/1` token the section's `color`
+  is. `nil` when no org has that token, which renders the hollow dot.
 
-  This is how the root org's dot is coloured: it has no compiled class, so
-  its colour comes from its own row (`color_hue` / `color_chroma` /
-  `color_lightness`), whatever the root is called on this install.
+  `scope_orgs` is `Platform.Tenancy.scope_token_index/1` over every org,
+  ARCHIVED ONES INCLUDED, so a section wearing an archived org's token still
+  resolves (task 01a14dd9 stage 2). There is no compiled token list: every
+  section, the root's included, is coloured from an org row.
   """
-  @spec section_dot_scope(map()) :: String.t() | nil
-  def section_dot_scope(section) do
-    color = Map.get(section, :color)
-    org_slug = Map.get(section, :org_slug)
+  @spec section_dot_scope(map(), map()) :: String.t() | nil
+  def section_dot_scope(section, scope_orgs) when is_map(scope_orgs) do
+    case Map.get(scope_orgs, Map.get(section, :color)) do
+      %{slug: slug} when is_binary(slug) -> slug
+      _ -> nil
+    end
+  end
 
-    if is_nil(section_dot_class(color)) and is_binary(org_slug) and
-         css_slug(org_slug) == color,
-       do: org_slug,
-       else: nil
+  @doc """
+  The modifier class a section's header dot wears:
+  `channel-section-color-dot--scope` when its colour token names an org row
+  WITH a `color_hue` (the dot reads `--scope-fill` through `data-scope`), and
+  `channel-section-color-dot--unassigned` otherwise, the hollow ring for a
+  token no row has, a nil colour, or an org with no colour set.
+  """
+  @spec section_dot_modifier(map(), map()) :: String.t()
+  def section_dot_modifier(section, scope_orgs) when is_map(scope_orgs) do
+    case Map.get(scope_orgs, Map.get(section, :color)) do
+      %{hue: hue} when is_integer(hue) -> "channel-section-color-dot--scope"
+      _ -> "channel-section-color-dot--unassigned"
+    end
+  end
+
+  @doc """
+  The scope-colour entries a set of rendered sections needs beyond the
+  shell's `<style>` block: one per org whose token a section in `sections`
+  wears, archived orgs included. `Tenancy.scope_color_entries/1` is active,
+  viewer-visible orgs only, so without these a section wearing an archived
+  org's token would lose its colour.
+  """
+  @spec section_scope_entries([map()], map()) :: [map()]
+  def section_scope_entries(sections, scope_orgs) when is_map(scope_orgs) do
+    sections
+    |> Enum.flat_map(fn section ->
+      case Map.get(scope_orgs, Map.get(section, :color)) do
+        %{} = entry -> [entry]
+        _ -> []
+      end
+    end)
+    |> Enum.uniq_by(& &1.slug)
   end
 
   # Shared tail for every successful admin-default write: broadcast the
@@ -4375,7 +4436,7 @@ defmodule PlatformWeb.ChatLive do
       # to that lookup — which is how navigating to an existing channel could
       # silently INSERT a duplicate of it. The lookup is `org_id IS NULL`
       # specifically, NOT the unscoped oldest-row branch, so ADR-0042 per-org
-      # slug scoping ("#general" in Acme vs in SXI) is untouched: a channel
+      # slug scoping ("#general" in Acme vs in Globex) is untouched: a channel
       # belonging to ANOTHER org still bootstraps a fresh one for this org.
       #
       # The adopted row is returned AS IS, not stamped with the active org.
@@ -4422,7 +4483,7 @@ defmodule PlatformWeb.ChatLive do
   # migration; meeting/dm/group spaces intentionally cross-org). The
   # org-scoped `get_space_by_slug/2` filters them out; fall back to an
   # unscoped lookup, guarded by the reserved-prefix list so the ADR-0042
-  # per-org channel-slug scoping ("#general" in Acme vs "#general" in SXI)
+  # per-org channel-slug scoping ("#general" in Acme vs "#general" in Globex)
   # is NEVER weakened for user-created channel slugs.
   defp system_prefix_fallback(slug) when is_binary(slug) do
     if Chat.reserved_slug_prefix?(slug) do
@@ -4626,7 +4687,7 @@ defmodule PlatformWeb.ChatLive do
   # Screen-share name masking (task 01a00c66 stage 5).
   #
   # The browser tab is the surface that most needs this and was the last to get
-  # it. A rail reading `Workspace B` next to a tab reading `# wayne-tech` has not
+  # it. A rail reading `Workspace B` next to a tab reading `# vandelay-ind` has not
   # masked anything — worse, it gives the presenter false confidence. The tab
   # also survives WINDOW-share mode, where the rail may not be captured at all,
   # so it is the one surface that can leak on a share that shows nothing else.
@@ -4787,11 +4848,11 @@ defmodule PlatformWeb.ChatLive do
   #       pinned:   [Space.t()],          # empty until channel-level pinning ships
   #       dms:      [Space.t()],          # kind in ["dm", "group"]
   #       sub_orgs: %{
-  #         "Paragon" => [Space.t()],
-  #         "Soylent" => [Space.t()],
+  #         "Hooli" => [Space.t()],
+  #         "Initech" => [Space.t()],
   #         "Root Org" => [Space.t()],    # the root org's own name: catch-all for anything unmatched
-  #         "Wayne-Tech" => [Space.t()],
-  #         "SXI"      => [Space.t()]
+  #         "Vandelay-Ind" => [Space.t()],
+  #         "Globex"      => [Space.t()]
   #       }
   #     }
   #
@@ -4820,7 +4881,7 @@ defmodule PlatformWeb.ChatLive do
   # `@sub_org_slug_to_bucket` / `@sub_org_buckets` module attributes matched the
   # CHANNEL's own slug against a hardcoded six-org list and are DELETED — they
   # were two of four hardcoded org lists that had already drifted apart (the
-  # bucket list was missing Cyberdyne while the three sibling maps had it).
+  # bucket list was missing Wonka while the three sibling maps had it).
   # Do not reintroduce a literal org list here: a new org must need no code
   # change to appear. The historical comment naming `Platform.Orgs` was stale;
   # that module never existed. The real API is `Platform.Tenancy`.
@@ -4858,7 +4919,9 @@ defmodule PlatformWeb.ChatLive do
           dms: [Platform.Chat.Space.t()],
           sub_orgs: %{String.t() => [Platform.Chat.Space.t()]},
           hidden_sub_orgs: %{String.t() => [Platform.Chat.Space.t()]},
-          bucket_orgs: %{String.t() => bucket_org()}
+          bucket_orgs: %{String.t() => bucket_org()},
+          scope_orgs: %{String.t() => map()},
+          scope_palette: [map()]
         }
   def channel_sections(
         channels,
@@ -4887,7 +4950,12 @@ defmodule PlatformWeb.ChatLive do
     # ROW behind each bucket, so the rail can render a bucket's scope pill from
     # the org's slug and name instead of a closed map keyed on six display
     # names. Do NOT add a second `list_orgs/0` call for it.
-    {org_buckets, bucket_orgs, default_bucket} = org_indexes()
+    #
+    # It also yields `scope_orgs` and `scope_palette` (task 01a14dd9 stage 2):
+    # the colour token -> org index the section dots resolve through, archived
+    # orgs included, and the recolor palette. Same rows, no second read.
+    orgs = Platform.Tenancy.list_orgs()
+    {org_buckets, bucket_orgs, default_bucket} = org_indexes(orgs)
     empty_buckets = Map.new(bucket_names(org_buckets, default_bucket), fn name -> {name, []} end)
 
     sub_orgs =
@@ -4933,7 +5001,9 @@ defmodule PlatformWeb.ChatLive do
       dms: open_dms,
       sub_orgs: visible_sub_orgs,
       hidden_sub_orgs: hidden_sub_orgs,
-      bucket_orgs: bucket_orgs
+      bucket_orgs: bucket_orgs,
+      scope_orgs: Platform.Tenancy.scope_token_index(orgs),
+      scope_palette: Platform.Tenancy.scope_palette(orgs)
     }
   end
 
@@ -5177,35 +5247,6 @@ defmodule PlatformWeb.ChatLive do
     end)
   end
 
-  # Map a section's `color` token (CSS form, e.g. "wayne-tech") to the scope
-  # atom the `scope_pill` component takes. Unknown tokens return `nil` so the
-  # template can fall back to a plain header without a pill rather than
-  # crashing on an unrecognized scope.
-  @doc false
-  @spec section_scope_atom(String.t() | nil) :: atom() | nil
-  def section_scope_atom("paragon"), do: :paragon
-  def section_scope_atom("soylent"), do: :soylent
-  def section_scope_atom("wayne-tech"), do: :wayne_tech
-  def section_scope_atom("sxi"), do: :sxi
-  def section_scope_atom("cyberdyne"), do: :cyberdyne
-  def section_scope_atom(_), do: nil
-
-  # Map a section's `color` token (CSS form, e.g. "wayne-tech") to its color-only
-  # dot utility class (`bg-<token>-dot`, defined in app.css). Used by the
-  # section header to render a decorative color swatch WITHOUT a text label —
-  # the section's identity text comes solely from `section.name`. Decoupling the
-  # swatch from the scope enum is the fix for "recolor renames the chip": the
-  # dot reflects color only, never a name. Unknown tokens return `nil` so the
-  # template omits the dot rather than rendering a class-less span.
-  @doc false
-  @spec section_dot_class(String.t() | nil) :: String.t() | nil
-  def section_dot_class("paragon"), do: "bg-paragon-dot"
-  def section_dot_class("soylent"), do: "bg-soylent-dot"
-  def section_dot_class("wayne-tech"), do: "bg-wayne-tech-dot"
-  def section_dot_class("sxi"), do: "bg-sxi-dot"
-  def section_dot_class("cyberdyne"), do: "bg-cyberdyne-dot"
-  def section_dot_class(_), do: nil
-
   # ── The one org index (task 01a00910 stage 3) ──────────────────────────
   #
   # SOURCE OF TRUTH for sub-org bucketing is the orgs table, reached through
@@ -5215,8 +5256,8 @@ defmodule PlatformWeb.ChatLive do
   #
   # `org_bucket_index/0` is `org_id => display name`. `bucket_slug_index/0` is
   # the CSS-token form of the org slug => the same display name. Org slugs are
-  # stored UNDERSCORE-form (`wayne_tech`); section colour tokens and CSS classes
-  # are HYPHEN-form (`wayne-tech`), so every lookup normalizes `_` -> `-` at the
+  # stored UNDERSCORE-form (`vandelay_ind`); section colour tokens and CSS classes
+  # are HYPHEN-form (`vandelay-ind`), so every lookup normalizes `_` -> `-` at the
   # boundary. Skipping that replace misses on exactly one org, which reads as
   # "works for five, mysteriously broken for the sixth".
   @spec org_bucket_index() :: %{binary() => String.t()}
@@ -5227,7 +5268,7 @@ defmodule PlatformWeb.ChatLive do
 
   # What `channel_sections/5` knows about the org behind a bucket. `scope` is
   # the value `scope_pill`'s `scope` attr takes — see `org_scope/1`.
-  @type bucket_org :: %{slug: String.t(), name: String.t(), scope: atom() | String.t()}
+  @type bucket_org :: %{slug: String.t(), name: String.t(), scope: String.t()}
 
   # BOTH org indexes, and the default bucket, from ONE `Tenancy.list_orgs/0`
   # read:
@@ -5244,9 +5285,11 @@ defmodule PlatformWeb.ChatLive do
   # collision rather than introducing a new one.
   @spec org_indexes() ::
           {%{binary() => String.t()}, %{String.t() => bucket_org()}, String.t()}
-  defp org_indexes do
-    orgs = Platform.Tenancy.list_orgs()
+  defp org_indexes, do: org_indexes(Platform.Tenancy.list_orgs())
 
+  @spec org_indexes([Platform.Tenancy.Org.t()]) ::
+          {%{binary() => String.t()}, %{String.t() => bucket_org()}, String.t()}
+  defp org_indexes(orgs) do
     {
       Map.new(orgs, fn org -> {org.id, org.name} end),
       Map.new(orgs, fn org -> {org.name, bucket_org(org)} end),
@@ -5268,25 +5311,16 @@ defmodule PlatformWeb.ChatLive do
   defp bucket_org(org), do: %{slug: org.slug, name: org.name, scope: org_scope(org.slug)}
 
   @doc false
-  # An org slug -> the value `scope_pill`'s `scope` attr takes (task 01a0938b
-  # stage 1). The six shipped slugs keep their existing atoms; every other org
-  # gets its slug BINARY AS STORED (`"new_client"`).
-  #
-  # Why not a binary for all of them: `@scope_filter` holds atoms (the
-  # `parse_scope/1` whitelist) and the header computes
-  # `active={@scope_filter == header_scope}`, so turning the six into binaries
-  # would silently break their active-filter state.
+  # An org slug -> the value `scope_pill`'s `scope` attr takes: the slug
+  # BINARY AS STORED, for every org (task 01a14dd9 stage 2; the five compiled
+  # sibling atoms are gone). `@scope_filter` holds the same binary
+  # (`parse_scope/2`), so the header's `active={@scope_filter == header_scope}`
+  # compares like with like.
   #
   # NEVER `String.to_atom/1` / `String.to_existing_atom/1` a slug here: slugs
   # are runtime data, and the atom table is not garbage-collected.
-  #
-  # KNOWN LIMITATION: filtering BY a runtime org is out of scope. Its pill is
-  # clickable, `parse_scope/1` returns nil for its slug, and the scope_filter
-  # handler therefore clears any filter rather than applying one.
-  @spec org_scope(String.t() | nil) :: atom() | String.t() | nil
-  def org_scope(slug) when is_binary(slug) do
-    section_scope_atom(css_slug(slug)) || slug
-  end
+  @spec org_scope(String.t() | nil) :: String.t() | nil
+  def org_scope(slug) when is_binary(slug), do: slug
 
   def org_scope(_), do: nil
 
@@ -5319,10 +5353,7 @@ defmodule PlatformWeb.ChatLive do
     |> Map.new(fn org -> {css_slug(org.slug), org.name} end)
   end
 
-  defp css_slug(slug) when is_binary(slug),
-    do: slug |> String.downcase() |> String.replace("_", "-")
-
-  defp css_slug(_), do: nil
+  defp css_slug(slug), do: Platform.Tenancy.css_slug(slug)
 
   # Every bucket key the rail can render: one per org, plus the default bucket
   # so the `org_id: nil` fallback always has somewhere to land even on an
@@ -5411,32 +5442,30 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Map a Space to the scope atom the `scope_pill` component takes.
+  # Map a Space to the scope value the `scope_pill` component takes: its
+  # org's slug as stored.
   #
   # SOURCE OF TRUTH is the space's `org_id` (post-ADR-0042). We load the
-  # owning org and map its slug to a scope atom — the SAME org the sidebar
-  # rail buckets channels on (`Platform.Chat.Sidebar`), so the header pill and
-  # the rail can never disagree about which org a channel belongs to.
+  # owning org and take its slug — the SAME org the sidebar rail buckets
+  # channels on (`Platform.Chat.Sidebar`), so the header pill and the rail can
+  # never disagree about which org a channel belongs to.
   #
   # Do NOT go back to matching the *channel's own* slug here: that made every
-  # channel whose name wasn't a literal org slug (e.g. "orion") fall through
+  # channel whose name wasn't a literal org slug (e.g. "atlas") fall through
   # to a compiled root-org default and mislabel its org (task 019fa0ac).
   #
-  # Org slugs are stored underscore-form (`wayne_tech`); `section_scope_atom/1`
-  # speaks the CSS-token form (`wayne-tech`), so normalize `_` -> `-` at the
-  # boundary. DMs/groups (`kind in ["dm", "group"]`) and any space whose org
-  # can't be resolved return `nil`, so the caller suppresses the pill rather
-  # than showing a wrong one.
+  # DMs/groups (`kind in ["dm", "group"]`) and any space whose org can't be
+  # resolved return `nil`, so the caller suppresses the pill rather than
+  # showing a wrong one.
   #
   # Resolved at assign time only (see `assign_active_space/2`) — never inline
   # in the template — because `Platform.Tenancy.get_org/1` is a DB read and the
   # chat header re-renders on every message.
   #
-  # Task 01a0938b stage 1: the slug goes through `org_scope/1`, not straight
-  # into `section_scope_atom/1`, so a runtime-created org yields its slug
-  # binary instead of nil (the six shipped orgs keep their atoms).
+  # The name is historical: since task 01a14dd9 stage 2 every org yields its
+  # slug binary through `org_scope/1`, and no scope is an atom.
   @doc false
-  @spec space_scope_atom(map() | nil) :: atom() | String.t() | nil
+  @spec space_scope_atom(map() | nil) :: String.t() | nil
   def space_scope_atom(space), do: space |> space_org() |> org_scope_of()
 
   # The org row a space belongs to, or nil for DMs/groups and any space whose
@@ -5534,23 +5563,26 @@ defmodule PlatformWeb.ChatLive do
   @spec space_nav_target(map()) :: String.t()
   def space_nav_target(space), do: Chat.space_path_segment(space)
 
-  # Parse the inbound `scope_filter` payload's string scope name back into
-  # an atom. Returns nil for any value not in the canonical scope set so
-  # a stale/malformed client payload silently clears the filter rather than
-  # crashing the LV. Whitelist (no String.to_existing_atom) keeps the surface
-  # impervious to atom-table flooding.
+  # Parse the inbound `scope_filter` payload back into the org slug the
+  # filter holds. Returns the slug BINARY when it names an org in the loaded
+  # org index (`@channel_sections.bucket_orgs`, built from the `orgs` rows),
+  # and nil for anything else, so a stale or malformed client payload clears
+  # the filter rather than crashing the LV. It never creates or looks up an
+  # atom: slugs are runtime data and the atom table is not collected (see
+  # the warning on `Platform.Tenancy.list_active_tenants_unscoped/0`).
   @doc false
-  @spec parse_scope(String.t()) :: atom() | nil
-  def parse_scope("paragon"), do: :paragon
-  def parse_scope("soylent"), do: :soylent
-  def parse_scope("wayne_tech"), do: :wayne_tech
-  def parse_scope("sxi"), do: :sxi
-  def parse_scope("cyberdyne"), do: :cyberdyne
-  def parse_scope(_), do: nil
+  @spec parse_scope(String.t(), map()) :: String.t() | nil
+  def parse_scope(raw, bucket_orgs) when is_binary(raw) and is_map(bucket_orgs) do
+    if Enum.any?(bucket_orgs, fn {_name, org} -> Map.get(org, :slug) == raw end),
+      do: raw,
+      else: nil
+  end
+
+  def parse_scope(_raw, _bucket_orgs), do: nil
 
   # `section_slug/1` (bucket-name → slug) was retired in Stage 4: the
   # resolver-driven rail sets `data-section-slug` directly from a section's
-  # `color` token (already in CSS slug form, e.g. "wayne-tech"), so the
+  # `color` token (already in CSS slug form, e.g. "vandelay-ind"), so the
   # name→slug mapping is no longer needed. Its inverse `bucket_from_slug/1`
   # is kept below — the Stage 3 `section_reordered` handler still translates
   # the JS hook's slug payload back to the section name.

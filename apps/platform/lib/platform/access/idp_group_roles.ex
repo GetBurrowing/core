@@ -38,7 +38,7 @@ defmodule Platform.Access.IdpGroupRoles do
       key == "guest" and not is_nil(org_id) ->
         {:error, :guest_has_no_org}
 
-      key == "guest" and group == normalize(OIDC.external_group()) ->
+      key == "guest" and implicit_group?(group) ->
         {:error, :implicit_mapping}
 
       key == "guest" ->
@@ -158,6 +158,17 @@ defmodule Platform.Access.IdpGroupRoles do
       implicit,
       &(&1.group_value == mapping.group_value and &1.role_key == mapping.role_key)
     )
+  end
+
+  # The implicit marker exists only when OIDC_EXTERNAL_GROUP is configured.
+  # With no marker (the default since task 01a14dd9) a nil `group` must not
+  # compare equal to the nil marker, or a blank guest mapping would be refused
+  # as `:implicit_mapping` instead of failing changeset validation.
+  defp implicit_group?(group) do
+    case normalize(OIDC.external_group()) do
+      nil -> false
+      implicit -> group == implicit
+    end
   end
 
   defp normalize(value) when is_binary(value) do

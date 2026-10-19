@@ -23,18 +23,27 @@ defmodule Platform.Repo.Migrations.AddColorToOrgs do
   insert, and only the changeset produces a form error.
 
   The six shipped orgs are backfilled from the oklch() literals already in
-  app.css so nothing regresses: the root org 50/0.16, paragon 95/0.16, sxi
-  162/0.15, wayne_tech 240/0.15, soylent 295/0.20, cyberdyne 340/0.19.
+  app.css so nothing regresses: the root org 50/0.16, hooli 95/0.16, globex
+  162/0.15, vandelay_ind 240/0.15, initech 295/0.20, wonka 340/0.19.
   """
 
+  # Keyed by the sha256 of each slug, so the tree does not spell an
+  # install's org names (root: task 01a14b9e stage 5; tenants: task 01a14dd9
+  # stage 3). The comment above each row names it by its placeholder slug.
   @backfill [
     {{:sha256, "9cfdc719f125bfd24830658f109d785ecca57a0c05022add0f6cf4aaec5dc25c"}, 50, 0.16},
-    {"paragon", 95, 0.16},
-    {"sxi", 162, 0.15},
-    {"wayne_tech", 240, 0.15},
-    {"wayne-tech", 240, 0.15},
-    {"soylent", 295, 0.20},
-    {"cyberdyne", 340, 0.19}
+    # hooli
+    {{:sha256, "d0a708d7a9b0c25273ca7f43937716d81397b5a7052b6ef000267913d62aea2c"}, 95, 0.16},
+    # globex
+    {{:sha256, "3cf2fb332fb3792a8205afc17b4207c37b0d149891b6eb8b1a7cb9503aaf0f3d"}, 162, 0.15},
+    # vandelay_ind
+    {{:sha256, "6033c506fee05cd2e9291a63854efcd0357866cb82dd5b6fceac7916f74cfdb3"}, 240, 0.15},
+    # vandelay-ind
+    {{:sha256, "f80cf60200f6c7c32e92dae3c84a45a76d7cc8468ddb679983582805ac8d4a4b"}, 240, 0.15},
+    # initech
+    {{:sha256, "1b52d98ac973dc62528babc79163ab13f455755d1b3835992cfec045ff751c0b"}, 295, 0.20},
+    # wonka
+    {{:sha256, "71ce8a1658507fc4e432cb3621322632972d9256e652b1dee92af6528719216f"}, 340, 0.19}
   ]
 
   def up do
@@ -60,13 +69,12 @@ defmodule Platform.Repo.Migrations.AddColorToOrgs do
     end
   end
 
-  # The root org's historical slug is matched by its sha256 digest so the
-  # public tree does not spell it (task 01a14b9e stage 5); the predicate is
-  # true for exactly the rows the literal `slug = '<slug>'` matched.
+  # Every slug is matched by its sha256 digest so the public tree does not
+  # spell it (the root by task 01a14b9e stage 5, the tenants by task 01a14dd9
+  # stage 3); the predicate is true for exactly the rows the literal
+  # `slug = '<slug>'` matched.
   defp slug_match({:sha256, hex}),
     do: "encode(sha256(convert_to(slug, 'UTF8')), 'hex') = '#{hex}'"
-
-  defp slug_match(slug) when is_binary(slug), do: "slug = '#{slug}'"
 
   def down do
     drop(constraint(:orgs, :orgs_color_hue_range))

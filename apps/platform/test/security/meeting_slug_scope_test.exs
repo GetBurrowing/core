@@ -282,7 +282,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       end
     end)
 
-    org_id = tenant_org_id("soylent")
+    org_id = tenant_org_id("initech")
 
     %{
       org_id: org_id,
@@ -318,17 +318,17 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # ── 1. Non-member denial ──────────────────────────────────────────────────
 
   describe "cross-org denial" do
-    test "a Soylent member cannot open a Wayne-Tech meeting by slug", %{conn: conn} do
-      meeting = meeting_in_org(tenant_org_id("wayne_tech"), "Wayne-Tech Only")
-      viewer = user_in_org(tenant_org_id("soylent"))
+    test "a Initech member cannot open a Vandelay-Ind meeting by slug", %{conn: conn} do
+      meeting = meeting_in_org(tenant_org_id("vandelay_ind"), "Vandelay-Ind Only")
+      viewer = user_in_org(tenant_org_id("initech"))
 
       assert {:error, {:live_redirect, %{to: "/meetings"}}} =
                live(sign_in(conn, viewer), ~p"/meetings/#{meeting.slug}")
     end
 
     test "the denial is indistinguishable from a slug that does not exist", %{conn: conn} do
-      meeting = meeting_in_org(tenant_org_id("wayne_tech"), "Existence Oracle")
-      viewer = user_in_org(tenant_org_id("soylent"))
+      meeting = meeting_in_org(tenant_org_id("vandelay_ind"), "Existence Oracle")
+      viewer = user_in_org(tenant_org_id("initech"))
       conn = sign_in(conn, viewer)
 
       assert {:error, {:live_redirect, %{to: "/meetings", flash: denied}}} =
@@ -342,8 +342,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     end
 
     test "denial is a clean redirect — no crash, no Ecto exception", %{conn: conn} do
-      meeting = meeting_in_org(tenant_org_id("wayne_tech"), "Clean Denial")
-      viewer = user_in_org(tenant_org_id("soylent"))
+      meeting = meeting_in_org(tenant_org_id("vandelay_ind"), "Clean Denial")
+      viewer = user_in_org(tenant_org_id("initech"))
 
       result =
         try do
@@ -360,13 +360,13 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
   describe "denied mount reaches none of the success body" do
     setup %{conn: conn} do
-      org_id = tenant_org_id("wayne_tech")
+      org_id = tenant_org_id("vandelay_ind")
       meeting = meeting_in_org(org_id, "Side Effect Probe")
 
       %{
         meeting: meeting,
         topics: meeting_topics(meeting),
-        outsider: sign_in(conn, user_in_org(tenant_org_id("soylent"))),
+        outsider: sign_in(conn, user_in_org(tenant_org_id("initech"))),
         insider: sign_in(conn, user_in_org(org_id))
       }
     end
@@ -446,9 +446,9 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # ── 3. Allow — the fix did not over-deny ──────────────────────────────────
 
   describe "entitled viewers still mount" do
-    test "a Wayne-Tech member opens the Wayne-Tech meeting and sees its name", %{conn: conn} do
-      org_id = tenant_org_id("wayne_tech")
-      meeting = meeting_in_org(org_id, "Wayne-Tech Weekly")
+    test "a Vandelay-Ind member opens the Vandelay-Ind meeting and sees its name", %{conn: conn} do
+      org_id = tenant_org_id("vandelay_ind")
+      meeting = meeting_in_org(org_id, "Vandelay-Ind Weekly")
       viewer = user_in_org(org_id)
 
       assert {:ok, _view, html} = live(sign_in(conn, viewer), ~p"/meetings/#{meeting.slug}")
@@ -460,37 +460,37 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
   describe "one slug, two orgs" do
     setup do
-      soylent_id = tenant_org_id("soylent")
-      wayne_tech_id = tenant_org_id("wayne_tech")
+      initech_id = tenant_org_id("initech")
+      vandelay_ind_id = tenant_org_id("vandelay_ind")
 
       # Identical names in two projects yield an identical slug — legal,
       # because the unique index is on (project_id, slug), not slug alone.
-      soylent_meeting = meeting_in_org(soylent_id, "Shared Slug Standup")
-      wayne_tech_meeting = meeting_in_org(wayne_tech_id, "Shared Slug Standup")
+      initech_meeting = meeting_in_org(initech_id, "Shared Slug Standup")
+      vandelay_ind_meeting = meeting_in_org(vandelay_ind_id, "Shared Slug Standup")
 
-      assert soylent_meeting.slug == wayne_tech_meeting.slug
-      refute soylent_meeting.id == wayne_tech_meeting.id
+      assert initech_meeting.slug == vandelay_ind_meeting.slug
+      refute initech_meeting.id == vandelay_ind_meeting.id
 
       %{
-        soylent_id: soylent_id,
-        wayne_tech_id: wayne_tech_id,
-        soylent_meeting: soylent_meeting,
-        wayne_tech_meeting: wayne_tech_meeting,
-        slug: soylent_meeting.slug
+        initech_id: initech_id,
+        vandelay_ind_id: vandelay_ind_id,
+        initech_meeting: initech_meeting,
+        vandelay_ind_meeting: vandelay_ind_meeting,
+        slug: initech_meeting.slug
       }
     end
 
     test "the same URL resolves per viewer, and neither sees the other's meeting",
          %{conn: conn} = ctx do
-      soylent_viewer = user_in_org(ctx.soylent_id)
-      wayne_tech_viewer = user_in_org(ctx.wayne_tech_id)
+      initech_viewer = user_in_org(ctx.initech_id)
+      vandelay_ind_viewer = user_in_org(ctx.vandelay_ind_id)
 
       # Before this task BOTH of these mounts raised Ecto.MultipleResultsError.
       assert {:ok, view_a, html_a} =
-               live(sign_in(conn, soylent_viewer), ~p"/meetings/#{ctx.slug}")
+               live(sign_in(conn, initech_viewer), ~p"/meetings/#{ctx.slug}")
 
       assert {:ok, view_b, html_b} =
-               live(sign_in(conn, wayne_tech_viewer), ~p"/meetings/#{ctx.slug}")
+               live(sign_in(conn, vandelay_ind_viewer), ~p"/meetings/#{ctx.slug}")
 
       # The rendered name is identical by construction (same name, two orgs),
       # so assert on identity instead: each viewer's LiveView joined its OWN
@@ -503,8 +503,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       # viewer-independent pick, unrelated to this route's gate (and a sibling
       # of the unscoped `:index` listing already TODO'd in `meeting_live.ex`).
       # Asserting on it would be asserting on the shell sidebar.
-      a_topics = meeting_topics(ctx.soylent_meeting)
-      b_topics = meeting_topics(ctx.wayne_tech_meeting)
+      a_topics = meeting_topics(ctx.initech_meeting)
+      b_topics = meeting_topics(ctx.vandelay_ind_meeting)
 
       _ = render(view_a)
       _ = render(view_b)
@@ -519,13 +519,13 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       refute view_b.pid in subscribers(a_topics.meeting)
       refute view_b.pid in subscribers(a_topics.presence)
 
-      assert html_a =~ ctx.soylent_meeting.name
-      assert html_b =~ ctx.wayne_tech_meeting.name
+      assert html_a =~ ctx.initech_meeting.name
+      assert html_b =~ ctx.vandelay_ind_meeting.name
     end
 
     test "a viewer entitled to both is told the link is ambiguous, not handed one",
          %{conn: conn} = ctx do
-      viewer = ctx.soylent_id |> user_in_org() |> member!(ctx.wayne_tech_id)
+      viewer = ctx.initech_id |> user_in_org() |> member!(ctx.vandelay_ind_id)
 
       assert {:error, {:live_redirect, %{to: "/meetings", flash: flash}}} =
                live(sign_in(conn, viewer), ~p"/meetings/#{ctx.slug}")
@@ -535,7 +535,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
       # An ambiguous mount is a refusal too — it must not have subscribed to
       # either candidate on the way to deciding.
-      for meeting <- [ctx.soylent_meeting, ctx.wayne_tech_meeting],
+      for meeting <- [ctx.initech_meeting, ctx.vandelay_ind_meeting],
           {_name, topic} <- meeting_topics(meeting) do
         assert subscribers(topic) == []
       end
@@ -547,7 +547,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   describe "Acme root admin" do
     test "an admin of the root org opens a tenant-org meeting they are not a member of",
          %{conn: conn} do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = meeting_in_org(org_id, "Root Reach")
       admin = user_in_org(acme_org_id(), role: "admin")
 
@@ -578,7 +578,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     # detail: org membership ALONE must not admit an external user.
 
     test "the HTTP layer 403s an external user off /meetings/:slug entirely", %{conn: conn} do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = meeting_in_org(org_id, "Fenced Off")
       external = user_in_org(org_id, external: true)
 
@@ -595,7 +595,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     end
 
     test "org membership alone does not admit an external user; a participant row does" do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       meeting = meeting_in_org(org_id, "Internal Working Session")
       external = user_in_org(org_id, external: true)
 
@@ -637,7 +637,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     end
 
     test "an anonymous mount is never authorized", %{conn: conn} do
-      meeting = meeting_in_org(tenant_org_id("soylent"), "No Session")
+      meeting = meeting_in_org(tenant_org_id("initech"), "No Session")
 
       assert {:error, :not_found} = Meetings.fetch_meeting_for_user(nil, meeting.slug)
 
@@ -687,11 +687,11 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   describe "cross-org denial on the /meetings index" do
     test "a foreign-org meeting is absent from the list AND from the rendered week",
          %{conn: conn} do
-      foreign = scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Wayne-Tech Index Only")
-      own = scheduled_meeting_in_org(tenant_org_id("soylent"), "Soylent Index Standup", 11)
+      foreign = scheduled_meeting_in_org(tenant_org_id("vandelay_ind"), "Vandelay-Ind Index Only")
+      own = scheduled_meeting_in_org(tenant_org_id("initech"), "Initech Index Standup", 11)
 
-      viewer = user_in_org(tenant_org_id("soylent"))
-      insider = user_in_org(tenant_org_id("wayne_tech"))
+      viewer = user_in_org(tenant_org_id("initech"))
+      insider = user_in_org(tenant_org_id("vandelay_ind"))
 
       # CONTEXT layer.
       ids = listed_ids(viewer)
@@ -720,8 +720,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     end
 
     test "a viewer with no memberships gets an empty index, not everyone's", %{conn: conn} do
-      meeting = scheduled_meeting_in_org(tenant_org_id("soylent"), "Membership Gated Sync")
-      insider = user_in_org(tenant_org_id("soylent"))
+      meeting = scheduled_meeting_in_org(tenant_org_id("initech"), "Membership Gated Sync")
+      insider = user_in_org(tenant_org_id("initech"))
 
       orphan =
         Repo.insert!(%User{
@@ -747,8 +747,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
   describe "the index bypass and the index floor" do
     test "an Acme root admin still sees every org's meetings, at both layers", %{conn: conn} do
-      a = scheduled_meeting_in_org(tenant_org_id("soylent"), "Root Index Reach A", 9)
-      b = scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Root Index Reach B", 13)
+      a = scheduled_meeting_in_org(tenant_org_id("initech"), "Root Index Reach A", 9)
+      b = scheduled_meeting_in_org(tenant_org_id("vandelay_ind"), "Root Index Reach B", 13)
       admin = user_in_org(acme_org_id(), role: "admin")
 
       assert Tenancy.root_admin?(admin)
@@ -763,8 +763,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
     test "a nil / anonymous viewer sees nothing an authenticated viewer does see",
          %{conn: conn} do
-      meeting = scheduled_meeting_in_org(tenant_org_id("soylent"), "Anonymous Floor Sync")
-      insider = user_in_org(tenant_org_id("soylent"))
+      meeting = scheduled_meeting_in_org(tenant_org_id("initech"), "Anonymous Floor Sync")
+      insider = user_in_org(tenant_org_id("initech"))
 
       assert meeting.id in listed_ids(insider), "positive control"
       assert Meetings.list_meetings_for_user(nil) == []
@@ -939,11 +939,13 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   describe "the archive is scoped the way the index is" do
     test "an internal viewer's archive excludes another org's ended meetings",
          %{conn: conn} do
-      own = tenant_org_id("soylent") |> meeting_in_org("Soylent Archived Retro") |> ended!()
-      foreign = tenant_org_id("wayne_tech") |> meeting_in_org("Wayne-Tech Archived Retro") |> ended!()
+      own = tenant_org_id("initech") |> meeting_in_org("Initech Archived Retro") |> ended!()
 
-      viewer = user_in_org(tenant_org_id("soylent"))
-      insider = user_in_org(tenant_org_id("wayne_tech"))
+      foreign =
+        tenant_org_id("vandelay_ind") |> meeting_in_org("Vandelay-Ind Archived Retro") |> ended!()
+
+      viewer = user_in_org(tenant_org_id("initech"))
+      insider = user_in_org(tenant_org_id("vandelay_ind"))
 
       ids = archived_ids(viewer)
       assert own.id in ids, "positive control"
@@ -961,8 +963,8 @@ defmodule Platform.Security.MeetingSlugScopeTest do
     end
 
     test "an Acme root admin's archive spans orgs; a nil viewer's is empty", %{conn: conn} do
-      a = tenant_org_id("soylent") |> meeting_in_org("Archive Root Reach A") |> ended!()
-      b = tenant_org_id("wayne_tech") |> meeting_in_org("Archive Root Reach B") |> ended!()
+      a = tenant_org_id("initech") |> meeting_in_org("Archive Root Reach A") |> ended!()
+      b = tenant_org_id("vandelay_ind") |> meeting_in_org("Archive Root Reach B") |> ended!()
       admin = user_in_org(acme_org_id(), role: "admin")
 
       ids = archived_ids(admin)
@@ -1082,14 +1084,14 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   describe "a broadcast does not re-leak into a correctly mounted index" do
     test "a meeting-created event for a foreign meeting leaves the index unchanged",
          %{conn: conn} do
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
       viewer = user_in_org(org_id)
 
       {view, html} = index_html(conn, viewer)
       refute html =~ "Broadcast Foreign Meeting"
 
       foreign =
-        scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Broadcast Foreign Meeting", 9)
+        scheduled_meeting_in_org(tenant_org_id("vandelay_ind"), "Broadcast Foreign Meeting", 9)
 
       # The handler re-queries the whole list, so delivering the message is
       # enough to exercise the refresh regardless of which topics this mount

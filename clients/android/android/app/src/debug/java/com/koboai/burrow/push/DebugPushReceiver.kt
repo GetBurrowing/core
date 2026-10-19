@@ -204,7 +204,7 @@ class DebugPushReceiver : BroadcastReceiver() {
 
         private const val STUB_SPACES =
             """{"spaces":[
-            {"id":"0192f0a1-s1","name":"Internal Acme SXI","path_segment":"internal-acme-sxi","agents":[{"id":"a1","name":"Higgins"}]},
+            {"id":"0192f0a1-s1","name":"Internal Acme Globex","path_segment":"internal-acme-globex","agents":[{"id":"a1","name":"Higgins"}]},
             {"id":"0192f0a1-s2","name":"Launch room","path_segment":"launch-room","agents":[]}]}"""
 
         /** The FCM data map from a base64 JSON payload, or null when it is not one. */

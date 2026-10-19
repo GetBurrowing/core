@@ -16,7 +16,7 @@ rollback, verification.
   — Cutover, verification, and zero-gap rotation of the HMAC secret behind
   `/api/webhooks/github` (fail-closed as of task `019f9b11`).
 - [`external_users.md`](external_users.md)
-  — Onboard, recover, and offboard scoped external (SXI) chat users
+  — Onboard, recover, and offboard scoped external (Globex) chat users
   (Pocket-ID OIDC + pre-staged grants, admin recovery queue, archival).
 - [`onboard_tenant_org.md`](onboard_tenant_org.md)
   — Add a new client org: the `/admin/orgs` form for the row, memberships,

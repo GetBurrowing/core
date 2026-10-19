@@ -46,7 +46,7 @@ defmodule Platform.Chat.CanvasAccessTest do
   alias Platform.Tenancy.OrgMembership
 
   setup do
-    %{org_a: Tenancy.get_org_by_slug!("sxi"), org_b: Tenancy.get_org_by_slug!("soylent")}
+    %{org_a: Tenancy.get_org_by_slug!("globex"), org_b: Tenancy.get_org_by_slug!("initech")}
   end
 
   # ── Builders ──────────────────────────────────────────────────────────────

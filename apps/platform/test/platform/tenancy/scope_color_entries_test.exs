@@ -8,7 +8,7 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
   built from `scope_slug_entries/1`, the Tasks rail's list, which narrows a
   Acme member who is not an admin to the orgs they belong to. Chat shows
   that same member every org's channels, each with a header chip, so their
-  SXI chip rendered with no colour at all. Admins never saw it, because an
+  Globex chip rendered with no colour at all. Admins never saw it, because an
   admin's rail list is every org.
 
   The root org is in the list for every viewer (task 01a116de gate-fix
@@ -21,7 +21,7 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.{Org, OrgMembership}
 
-  @seeded ~w(acme soylent wayne_tech sxi paragon)
+  @seeded ~w(acme initech vandelay_ind globex hooli)
 
   defp user! do
     n = System.unique_integer([:positive])
@@ -63,22 +63,22 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
   end
 
   test "a member of one tenant gets that tenant's colour and the root's, and no other tenant's" do
-    user = user!() |> member!("sxi")
+    user = user!() |> member!("globex")
     root = Tenancy.get_root_org()
 
     # The root is always emitted (task 01a116de gate-fix stage): its section
     # and pill reach non-root viewers, and its colour is not tenant-private.
-    assert slugs(Tenancy.scope_color_entries(user)) == MapSet.new(["sxi", root.slug])
+    assert slugs(Tenancy.scope_color_entries(user)) == MapSet.new(["globex", root.slug])
   end
 
   test "an archived org has no colour, and a viewer with no memberships gets none" do
     admin = user!() |> member!("acme", "admin")
 
-    Repo.update_all(from(o in Org, where: o.slug == "paragon"),
+    Repo.update_all(from(o in Org, where: o.slug == "hooli"),
       set: [archived_at: DateTime.utc_now()]
     )
 
-    refute "paragon" in slugs(Tenancy.scope_color_entries(admin))
+    refute "hooli" in slugs(Tenancy.scope_color_entries(admin))
 
     # A viewer with no visibility of any org still gets the root, and only
     # the root.
@@ -99,8 +99,8 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
 
   test "each entry carries the stored fill lightness the six are solved at" do
     user = user!() |> member!("acme")
-    sxi = Enum.find(Tenancy.scope_color_entries(user), &(&1.slug == "sxi"))
+    globex = Enum.find(Tenancy.scope_color_entries(user), &(&1.slug == "globex"))
 
-    assert %{hue: 162, chroma: 0.15, lightness: 0.7, label: "SXI"} = sxi
+    assert %{hue: 162, chroma: 0.15, lightness: 0.7, label: "Globex"} = globex
   end
 end

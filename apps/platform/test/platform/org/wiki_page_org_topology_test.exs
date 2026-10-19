@@ -28,7 +28,7 @@ defmodule Platform.Org.WikiPageOrgTopologyTest do
     end
 
     test "preserves an explicitly-supplied tenant org_id" do
-      tenant_id = tenant_org_id("soylent")
+      tenant_id = tenant_org_id("initech")
 
       changeset =
         WikiPage.changeset(%WikiPage{}, %{

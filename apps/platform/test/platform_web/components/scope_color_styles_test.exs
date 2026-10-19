@@ -208,8 +208,8 @@ defmodule PlatformWeb.Components.ScopeColorStylesTest do
       end
     end
 
-    test "sxi, the shipped hue, is emitted at AA on both surfaces in both themes" do
-      # sxi is called out by name because it is where a recomputation went
+    test "globex, the shipped hue, is emitted at AA on both surfaces in both themes" do
+      # globex is called out by name because it is where a recomputation went
       # wrong: at oklch(51% 0.15 162) the linear-sRGB red channel is
       # -0.041996, i.e. outside the sRGB gamut, and `ScopeColor`'s private
       # `encode/1` used to fold that sign with `abs/1` instead of clipping
@@ -217,12 +217,12 @@ defmodule PlatformWeb.Components.ScopeColorStylesTest do
       # measures 4.56. Stage 4 fixed it to clip; 4.37 is withdrawn and is
       # asserted against in ScopeColorTest.
       #
-      # Since task 01a09333-d374 stage 5 sxi is solved at its SHIPPED fill
+      # Since task 01a09333-d374 stage 5 globex is solved at its SHIPPED fill
       # lightness, 70%, carried on its row as `color_lightness`. The full
-      # gate for the six, sxi's figures included, is
+      # gate for the six, globex's figures included, is
       # `ScopeColorStylesShippedSixTest`.
       ramp = ScopeColor.derive(162, 0.15, 0.70)
-      html = render([%{slug: "sxi", label: "SXI", hue: 162, chroma: 0.15, lightness: 0.70}])
+      html = render([%{slug: "globex", label: "Globex", hue: 162, chroma: 0.15, lightness: 0.70}])
 
       assert html =~ "--scope-fill:oklch(70% 0.15 162)"
 

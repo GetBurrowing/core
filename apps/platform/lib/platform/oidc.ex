@@ -40,7 +40,12 @@ defmodule Platform.OIDC do
   #
   # These READ a static id-token claim — no outbound IdP call (ADR-0004).
 
-  @doc "The claim VALUE that marks a login as SXI-external (e.g. `\"sxi-external\"`)."
+  @doc """
+  The claim VALUE that marks a login as external (e.g. `"globex-external"`).
+
+  Install config with NO default: `OIDC_EXTERNAL_GROUP` (task 01a14dd9).
+  `nil` when unset, and a nil group flags nobody as external.
+  """
   def external_group, do: config(:external_group)
 
   @doc "The claim NAME to inspect for the external marker (default `\"groups\"`)."

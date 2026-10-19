@@ -573,7 +573,7 @@ defmodule Platform.CodeMode.ReturnContractTest do
   describe "space_get_messages" do
     setup do
       agent = agent!()
-      org = Platform.Tenancy.get_org_by_slug!("sxi")
+      org = Platform.Tenancy.get_org_by_slug!("globex")
 
       {:ok, space} =
         Chat.create_space(%{

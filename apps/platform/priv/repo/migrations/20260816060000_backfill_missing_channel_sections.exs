@@ -9,7 +9,7 @@ defmodule Platform.Repo.Migrations.BackfillMissingChannelSections do
   The seed only covered the orgs that existed on 2026-06-04, and nothing in
   `apps/platform/lib` created a section afterwards (fixed in the same task by
   `Platform.Chat.Sidebar.ensure_default_section/1`). Every org created through
-  `/admin/orgs` since then — Cyberdyne among them — has no section, so
+  `/admin/orgs` since then — Wonka among them — has no section, so
   `Sidebar.default_section_id/3` falls through to `fallback_section_id/1` and
   its channels render under whichever section holds the lowest `position`.
   This migration is what actually puts those orgs on the rail in production.

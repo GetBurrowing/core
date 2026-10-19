@@ -76,7 +76,7 @@ final class ExtensionRenderTests: XCTestCase {
             BurrowSpace.self,
             from: Data(
                 """
-                {"id":"s1","name":"Internal Legacy SXI","slug":"sxi","kind":"channel","agents":[{"id":"a1","name":"Saru","slug":"saru"}]}
+                {"id":"s1","name":"Internal Legacy Globex","slug":"globex","kind":"channel","agents":[{"id":"a1","name":"Saru","slug":"saru"}]}
                 """.utf8))
     ]
 
@@ -96,7 +96,7 @@ final class ExtensionRenderTests: XCTestCase {
                 $0.payload = url
                 $0.debugSet(phase: .ready, spaces: spaces)
                 $0.selectedSpaceID = "s1"
-                $0.debugSet(phase: .sent(spaceName: "Internal Legacy SXI"))
+                $0.debugSet(phase: .sent(spaceName: "Internal Legacy Globex"))
             }, size: size)
         try snapshot(
             "share-failed",
@@ -305,7 +305,7 @@ final class ExtensionRenderTests: XCTestCase {
             )
         }
         let summary = WaitingSummary(
-            approvals: [row(1, "Burrow iOS intents plan", "Burrow iOS"), row(2, "Banner copy review", "Internal Legacy SXI")],
+            approvals: [row(1, "Burrow iOS intents plan", "Burrow iOS"), row(2, "Banner copy review", "Internal Legacy Globex")],
             tasks: [
                 BurrowTask(id: "t1", title: "Ship the widget confirm strip", status: "in_progress", projectName: "Burrow iOS"),
                 BurrowTask(id: "t2", title: "Rotate the APNs key", status: "todo", projectName: "Infrastructure"),
@@ -361,7 +361,7 @@ final class ExtensionRenderTests: XCTestCase {
     ) -> ApprovalsEntry {
         let titles = [
             ("Burrow iOS intents plan", "Burrow iOS", "Add App Intents, entities and Spotlight"),
-            ("Banner copy review", "Internal Legacy SXI", "Final wording for the launch banner"),
+            ("Banner copy review", "Internal Legacy Globex", "Final wording for the launch banner"),
             ("Rotate the APNs key", "Infrastructure", "Move to the new team key before expiry"),
             ("Android share target", "Burrow Android", "Share sheet and Glance widgets"),
             ("Meeting notes export", "Meetings", "Export transcripts as Markdown"),

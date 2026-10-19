@@ -98,7 +98,7 @@ defmodule PlatformWeb.ChatLiveDrawerSearchTest do
       view = open_mobile_browser(conn)
 
       # Baseline: empty org sections render their headers + empty hints.
-      assert has_element?(view, "#mobile-channel-browser", "Paragon")
+      assert has_element?(view, "#mobile-channel-browser", "Hooli")
       assert has_element?(view, "#mobile-channel-browser", "No channels yet")
 
       search(view, "gener")
@@ -108,7 +108,10 @@ defmodule PlatformWeb.ChatLiveDrawerSearchTest do
              "Matching channel row should stay visible"
 
       # Zero-match sections vanish entirely — headers AND empty hints.
-      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="SXI channels"])),
+      refute has_element?(
+               view,
+               ~s(#mobile-channel-browser section[aria-label="Globex channels"])
+             ),
              "Zero-match section should drop out"
 
       refute has_element?(view, "#mobile-channel-browser nav", "No channels yet"),
@@ -122,13 +125,16 @@ defmodule PlatformWeb.ChatLiveDrawerSearchTest do
       view = open_mobile_browser(conn)
       search(view, "zzz-no-match")
 
-      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="SXI channels"]))
+      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="Globex channels"]))
 
       view
       |> element(~s(#mobile-channel-browser button[aria-label="Clear search"]))
       |> render_click()
 
-      assert has_element?(view, ~s(#mobile-channel-browser section[aria-label="SXI channels"])),
+      assert has_element?(
+               view,
+               ~s(#mobile-channel-browser section[aria-label="Globex channels"])
+             ),
              "Clear must restore the full sectioned browse list"
     end
   end
@@ -274,12 +280,15 @@ defmodule PlatformWeb.ChatLiveDrawerSearchTest do
       view = open_mobile_browser(conn)
       search(view, "gener")
 
-      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="SXI channels"]))
+      refute has_element?(view, ~s(#mobile-channel-browser section[aria-label="Globex channels"]))
 
       enter_sidebar_edit(view)
 
       # Query cleared server-side: full list back, reorder affordances usable.
-      assert has_element?(view, ~s(#mobile-channel-browser section[aria-label="SXI channels"])),
+      assert has_element?(
+               view,
+               ~s(#mobile-channel-browser section[aria-label="Globex channels"])
+             ),
              "Edit mode must clear the search so the FULL list is editable"
 
       assert has_element?(view, "#mobile-channel-browser .channel-section-drag-handle--touch")

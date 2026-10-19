@@ -93,7 +93,7 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
     test "does NOT show once a channel is archived — an archive proves you're not new",
          %{conn: conn} do
       {conn, admin} = admin_conn(conn)
-      space = channel!("paragon")
+      space = channel!("hooli")
 
       # Active channel: no welcome (there are spaces).
       refute mount_chat(conn) =~ @welcome
@@ -109,9 +109,9 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
          %{conn: conn} do
       # Robin's exact path: archive the org, not the channel.
       {conn, admin} = admin_conn(conn)
-      _space = channel!("paragon")
+      _space = channel!("hooli")
 
-      {:ok, _} = Tenancy.archive_org(admin, Tenancy.get_org_by_slug!("paragon"))
+      {:ok, _} = Tenancy.archive_org(admin, Tenancy.get_org_by_slug!("hooli"))
 
       refute mount_chat(conn) =~ @welcome
     end
@@ -119,7 +119,7 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
     test "restoring the channel leaves the welcome hidden — there IS a space again",
          %{conn: conn} do
       {conn, admin} = admin_conn(conn)
-      space = channel!("paragon")
+      space = channel!("hooli")
       {:ok, archived} = Chat.archive_space(admin, space)
 
       refute mount_chat(conn) =~ @welcome

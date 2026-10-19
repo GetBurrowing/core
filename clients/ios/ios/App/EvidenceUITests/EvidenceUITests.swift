@@ -78,7 +78,7 @@ final class EvidenceUITests: XCTestCase {
         shot("picker-cant-reach")
         app.buttons["Choose another install"].tap()
 
-        app.staticTexts["burrow.example.net"].firstMatch.tap()
+        app.staticTexts["burrow.example.com"].firstMatch.tap()
         app.buttons["Continue"].tap()
         // ASWebAuthenticationSession's consent alert belongs to springboard.
         let consent = consentButton(app, "Continue")
@@ -96,7 +96,7 @@ final class EvidenceUITests: XCTestCase {
     }
 
     func test2LoginProbe() {
-        let app = launch(["-BurrowLoginProbe", "burrow.example.org"])
+        let app = launch(["-BurrowLoginProbe", "login.example.com"])
         let signIn = app.webViews.buttons["Sign in"]
         XCTAssertTrue(signIn.waitForExistence(timeout: 30))
         shot("probe-1-pocket-id-in-wkwebview")
@@ -240,7 +240,7 @@ final class EvidenceUITests: XCTestCase {
 
         // The confirmation card against a live install: its own logo, name and host.
         app = freshAddFlow()
-        type(app, "https://burrow-exp.example.org/chat ")
+        type(app, "https://burrow-exp.example.com/chat ")
         app.buttons["Continue"].tap()
         XCTAssertTrue(app.buttons["Continue to sign in"].waitForExistence(timeout: 20))
         // The install's logo loads after the card appears.
@@ -254,7 +254,7 @@ final class EvidenceUITests: XCTestCase {
 
         // Not found: a host that does not resolve.
         app = freshAddFlow()
-        type(app, "acme.burow.app")
+        type(app, "notfound.example.com")
         app.buttons["Continue"].tap()
         XCTAssertTrue(
             app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'No Burrow install answered'")).firstMatch
@@ -265,7 +265,7 @@ final class EvidenceUITests: XCTestCase {
 
         // Offline, through the DEBUG probe seam.
         app = freshAddFlow(["-BurrowAddInstallProbe", "offline"])
-        type(app, "acme.burrow.app")
+        type(app, "offline.example.com")
         app.buttons["Continue"].tap()
         XCTAssertTrue(app.staticTexts["You're offline. Connect and try again."].waitForExistence(timeout: 10))
         sleep(1)
@@ -273,7 +273,7 @@ final class EvidenceUITests: XCTestCase {
         app.terminate()
 
         // The switcher's Add install sheet: the same flow.
-        app = launch(["-BurrowEvidenceReset", "YES", "-BurrowExtraInstall", "burrow-exp.example.org"])
+        app = launch(["-BurrowEvidenceReset", "YES", "-BurrowExtraInstall", "burrow-exp.example.com"])
         XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 20))
         app.buttons["Add an install"].tap()
         XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 5))

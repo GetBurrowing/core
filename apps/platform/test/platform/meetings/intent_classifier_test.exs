@@ -2745,7 +2745,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
 
     test "an empty corpus renders the stable sentinel, not an empty block" do
-      meeting = create_meeting_in_org!(tenant_org_id("paragon"))
+      meeting = create_meeting_in_org!(tenant_org_id("hooli"))
 
       prompt = capture_prompt_for!(meeting, "room-exemplars-empty")
 
@@ -2765,7 +2765,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
         corrected_intent: "brief_worthy"
       })
 
-      meeting = create_meeting_in_org!(tenant_org_id("soylent"))
+      meeting = create_meeting_in_org!(tenant_org_id("initech"))
       prompt = capture_prompt_for!(meeting, "room-exemplars-cross-org")
 
       refute prompt =~ "globex-only utterance nobody else may see",
@@ -2775,7 +2775,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
 
     test "the exemplar block is bounded by the configured limit" do
-      meeting = create_meeting_in_org!(tenant_org_id("wayne_tech"))
+      meeting = create_meeting_in_org!(tenant_org_id("vandelay_ind"))
 
       for n <- 1..6 do
         record_correction!(meeting.id, %{
@@ -2966,12 +2966,12 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
       assert content =~ "{{agent_roster}}"
 
-      roster_agent = create_agent!(%{slug: "orion-db", name: "Orion"})
+      roster_agent = create_agent!(%{slug: "atlas-db", name: "Atlas"})
       {:ok, _} = Roles.assign_role("designer", roster_agent.id)
 
       prompt = capture_roster_prompt!("room-roster-db")
 
-      assert prompt =~ "- \"Orion\" (slug `orion-db`) serves the `designer` role",
+      assert prompt =~ "- \"Atlas\" (slug `atlas-db`) serves the `designer` role",
              "the roster line must appear in the prompt rendered from the migrated row"
 
       # Anchors that are in the MIGRATED body and NOT in the inline

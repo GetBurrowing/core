@@ -29,11 +29,11 @@ defmodule PlatformWeb.RouterExternalScopeTest do
     |> Repo.insert!()
   end
 
-  # Use a SEEDED tenant org (the plan's "SXI org"): its slug atom is
+  # Use a SEEDED tenant org (the plan's "Globex org"): its slug atom is
   # pre-registered, so TasksLive's scope-rail (`String.to_existing_atom`
   # over every active tenant) renders for the internal-user regression case.
   # A raw-inserted org with a novel slug would crash that unrelated path.
-  defp sxi_org, do: Tenancy.get_org_by_slug!("sxi")
+  defp globex_org, do: Tenancy.get_org_by_slug!("globex")
 
   defp membership!(user, org, role) do
     %OrgMembership{}
@@ -67,7 +67,7 @@ defmodule PlatformWeb.RouterExternalScopeTest do
   end
 
   setup %{conn: conn} do
-    org = sxi_org()
+    org = globex_org()
 
     ext = create_user!()
     {:ok, _} = Tenancy.mark_membership_external(%{user_id: ext.id, org_id: org.id})

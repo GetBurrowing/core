@@ -117,15 +117,15 @@ defmodule PlatformWeb.ControlCenter.AgentConfigFieldScopeTest do
 
       html =
         view
-        |> form("#federated-identity-form", config: %{name: "Orion"})
+        |> form("#federated-identity-form", config: %{name: "Atlas"})
         |> render_submit()
 
-      assert html =~ "Updated Orion"
+      assert html =~ "Updated Atlas"
 
       updated = Repo.get!(Agent, agent.id)
 
       # The edit the human actually made landed...
-      assert updated.name == "Orion"
+      assert updated.name == "Atlas"
       # ...and nothing they could not see from that screen was touched.
       assert_routing_intact(updated)
     end
@@ -162,7 +162,7 @@ defmodule PlatformWeb.ControlCenter.AgentConfigFieldScopeTest do
       {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
 
       view
-      |> form("#federated-identity-form", config: %{name: "Orion"})
+      |> form("#federated-identity-form", config: %{name: "Atlas"})
       |> render_submit()
 
       updated = Repo.get!(Agent, agent.id)

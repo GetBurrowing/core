@@ -33,7 +33,7 @@ defmodule Platform.Mobile.NativeCallTest do
 
     on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
 
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     user = create_user!()
     plain_member!(user, org)
 
@@ -119,7 +119,7 @@ defmodule Platform.Mobile.NativeCallTest do
     end
 
     test "another org's meeting, an unknown id and a malformed id are all :not_found", ctx do
-      other = meeting!(Tenancy.get_org_by_slug!("soylent"))
+      other = meeting!(Tenancy.get_org_by_slug!("initech"))
 
       assert {:error, :not_found} = NativeCall.join(ctx.user, other.id)
       assert {:error, :not_found} = NativeCall.join(ctx.user, Ecto.UUID.generate())
@@ -141,7 +141,7 @@ defmodule Platform.Mobile.NativeCallTest do
     end
 
     test "another org's meeting is :not_found", ctx do
-      other = meeting!(Tenancy.get_org_by_slug!("soylent"))
+      other = meeting!(Tenancy.get_org_by_slug!("initech"))
       assert {:error, :not_found} = NativeCall.leave(ctx.user, other.id)
     end
   end

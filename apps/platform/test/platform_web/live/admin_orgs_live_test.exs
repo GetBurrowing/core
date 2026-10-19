@@ -209,7 +209,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       warned = warning_html(view)
       assert warned =~ "Acme"
       assert warned =~ "12"
-      refute warned =~ "Soylent"
+      refute warned =~ "Initech"
 
       # WARNS, never blocks: the same form still creates the org.
       view
@@ -292,7 +292,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
 
     test "a list swatch uses the org's stored fill lightness, else the 72% default" do
       # Task 01a09333-d374 stage 5: the six shipped orgs carry the fill
-      # lightness they shipped at (paragon 80%), because the runtime path
+      # lightness they shipped at (hooli 80%), because the runtime path
       # now paints them from their rows. The list swatch has to agree with
       # the rail, so it reads the same column.
       assert PlatformWeb.AdminOrgsLive.org_fill(%Org{
@@ -351,8 +351,8 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       {:ok, _} =
         Tenancy.create_org(admin, %{name: "Vermilion", slug: "vermilion", color_hue: 350})
 
-      # soylent sits at 295 and must NOT be picked up at this distance.
-      assert Tenancy.get_org_by_slug!("soylent").color_hue == 295
+      # initech sits at 295 and must NOT be picked up at this distance.
+      assert Tenancy.get_org_by_slug!("initech").color_hue == 295
 
       view = open_sheet(conn, admin_user!())
 
@@ -368,7 +368,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       warned = warning_html(view)
       assert warned =~ "Vermilion"
       assert warned =~ "15"
-      refute warned =~ "Soylent"
+      refute warned =~ "Initech"
     end
 
     test "the preview prints the WORST cell, names it, and computes it server-side",

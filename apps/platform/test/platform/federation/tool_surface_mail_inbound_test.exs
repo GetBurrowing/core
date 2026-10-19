@@ -33,7 +33,7 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
   alias Platform.Tenancy.OrgMembership
 
   @tools ~w(mail_inbound_list mail_inbound_get)
-  @to "ops@soylent.test"
+  @to "ops@initech.test"
   @cap 32_768
 
   # ── fixtures ──────────────────────────────────────────────────────────────
@@ -183,8 +183,8 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
 
     set_flag(true)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
     admin = admin!(org_id)
     space = space!()
     account = account!(admin, org_id, space.id)
@@ -306,7 +306,7 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
 
     test "a row from a real backfill run is listed and readable" do
       # Rebuild the rig with a polled cursor so `start_backfill/4` imports.
-      org_id = Tenancy.get_org_by_slug!("soylent").id
+      org_id = Tenancy.get_org_by_slug!("initech").id
       admin = admin!(org_id)
       space = space!()
       account = account!(admin, org_id, space.id)

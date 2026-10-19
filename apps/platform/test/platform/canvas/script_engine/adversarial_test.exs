@@ -55,7 +55,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
   end
 
   setup do
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     space = space!(org, "Hostile")
 
     alice = create_user!(%{name: "Alice"})

@@ -80,7 +80,7 @@ defmodule PlatformWeb.FilesLiveSupersessionTest do
     {:ok, project} =
       Tasks.create_project(%{
         name: "Supersession UI #{System.unique_integer([:positive])}",
-        org_id: tenant_org_id("sxi")
+        org_id: tenant_org_id("globex")
       })
 
     original = ingested_file!(project, "Order Form.pdf", "Order form, June.")

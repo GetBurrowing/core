@@ -12917,8 +12917,8 @@ defmodule Platform.Federation.ToolSurface do
   # default the filter to a tenant-scoped allow-list `[home_org,
   # root_org]`. Without this default, a tenant-pinned agent calling
   # memory_search with no filter gets unscoped cross-tenant results —
-  # which is exactly what the V4 validation caught (a SXI-pinned agent
-  # seeing Wayne-Tech content). Root-equivalent callers (no metadata
+  # which is exactly what the V4 validation caught (a Globex-pinned agent
+  # seeing Vandelay-Ind content). Root-equivalent callers (no metadata
   # pin, or pinned to the root) keep the legacy "see everything"
   # behavior.
   defp search_opts_from(args, agent) do

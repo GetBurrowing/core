@@ -185,7 +185,7 @@ defmodule PlatformWeb.EmailLiveBackfillTest do
       end
     end)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
     n = System.unique_integer([:positive])
 
     {:ok, space} =

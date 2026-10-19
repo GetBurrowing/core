@@ -60,14 +60,14 @@ defmodule Platform.Files.CatalogerTest do
   describe "tenancy — a card lands under its own project, not the root org" do
     test "the written row carries the project's real org_id and a non-nil project_id" do
       # THE test for this stage's blocker. `Wiki.upsert_page/3` used to
-      # read only :content and :updated_by, so a page written at an SXI
+      # read only :content and :updated_by, so a page written at an Globex
       # project path was stored as an Acme row with a nil project_id and
       # `update_changeset/2` could never repair it.
       #
       # Note what is NOT asserted here on its own: that a page exists at
       # the right file_key. That assertion passes against the broken
       # code — the path was always right; the row was always wrong.
-      project = sxi_project!("Tenancy Card")
+      project = globex_project!("Tenancy Card")
       file = ingested_file!(project, "Contract.pdf", "A signed services contract.")
 
       stub_llm!(self(), "A services contract between two parties.\nSUPERSEDES: none")
@@ -76,12 +76,12 @@ defmodule Platform.Files.CatalogerTest do
 
       row = Repo.get!(WikiPage, page.id)
 
-      assert row.org_id == tenant_org_id("sxi"),
+      assert row.org_id == tenant_org_id("globex"),
              "the card row's org_id must be the project's org, not whatever " <>
                "`maybe_default_org_id/1` fell back to"
 
       refute row.org_id == acme_org_id(),
-             "the card landed in the root Acme org — the path says SXI and the row says Acme"
+             "the card landed in the root Acme org — the path says Globex and the row says Acme"
 
       assert row.project_id == project.id
       refute is_nil(row.project_id)
@@ -91,7 +91,7 @@ defmodule Platform.Files.CatalogerTest do
       # `update_changeset/2` cast neither column before this stage, which
       # is what made the Acme default permanent rather than merely wrong.
       # Simulate the legacy row, then catalog over it.
-      project = sxi_project!("Repair Card")
+      project = globex_project!("Repair Card")
       file = ingested_file!(project, "Brief.pdf", "A project brief.")
 
       key = Cataloger.card_file_key(file)
@@ -105,7 +105,7 @@ defmodule Platform.Files.CatalogerTest do
       assert {:ok, _page} = Cataloger.catalog_file(file)
 
       row = Repo.get_by!(WikiPage, file_key: key)
-      assert row.org_id == tenant_org_id("sxi")
+      assert row.org_id == tenant_org_id("globex")
       assert row.project_id == project.id
       assert row.version == 2, "precondition: this went through the UPDATE path, not an insert"
     end
@@ -139,7 +139,7 @@ defmodule Platform.Files.CatalogerTest do
       # authorization and never consults `Wiki.Routing`. The
       # `:historian_required` gate lives at the MCP tool surface, which
       # a server-side emitter never crosses.
-      project = sxi_project!("Gate Card")
+      project = globex_project!("Gate Card")
 
       # A positive trace rather than "the page is absent": `upsert_page/3`
       # emits an index event on every write, so no event means no write.
@@ -152,7 +152,7 @@ defmodule Platform.Files.CatalogerTest do
                Cataloger.write_card(
                  "org/page/identity.md",
                  "clobbered",
-                 tenant_org_id("sxi"),
+                 tenant_org_id("globex"),
                  project.id
                )
 
@@ -164,32 +164,32 @@ defmodule Platform.Files.CatalogerTest do
     test "refuses a well-formed card path belonging to a DIFFERENT project" do
       # The shape a mixed-up file_id or a stale struct produces. The path
       # is a perfectly valid card path — just not this project's.
-      mine = sxi_project!("Gate Mine")
-      theirs = sxi_project!("Gate Theirs")
+      mine = globex_project!("Gate Mine")
+      theirs = globex_project!("Gate Theirs")
 
       foreign_key = "project/#{theirs.id}/page/files/something-abcd1234.md"
 
       Phoenix.PubSub.subscribe(Platform.PubSub, Wiki.index_topic())
 
       assert {:error, {:refused_path, ^foreign_key}} =
-               Cataloger.write_card(foreign_key, "body", tenant_org_id("sxi"), mine.id)
+               Cataloger.write_card(foreign_key, "body", tenant_org_id("globex"), mine.id)
 
       refute_receive {:wiki_page_written, _}, 200
       assert is_nil(Wiki.get_page(foreign_key))
     end
 
     test "refuses a traversal dressed up as a slug" do
-      project = sxi_project!("Gate Traversal")
+      project = globex_project!("Gate Traversal")
       key = "project/#{project.id}/page/files/../../../org/page/identity.md"
 
       assert {:error, {:refused_path, ^key}} =
-               Cataloger.write_card(key, "body", tenant_org_id("sxi"), project.id)
+               Cataloger.write_card(key, "body", tenant_org_id("globex"), project.id)
     end
 
     test "accepts the card path it builds for itself" do
       # Positive control. Without this, the gate could refuse everything
       # and all three tests above would still pass.
-      project = sxi_project!("Gate Positive")
+      project = globex_project!("Gate Positive")
       file = ingested_file!(project, "Ok.pdf", "text")
 
       assert Cataloger.card_path?(Cataloger.card_file_key(file), project.id)
@@ -198,24 +198,26 @@ defmodule Platform.Files.CatalogerTest do
 
   describe "the LLM pass and supersession resolution" do
     test "records a supersession claim that resolves to a real sibling" do
-      project = sxi_project!("Supersession Resolves")
-      original = ingested_file!(project, "Acme x SXI (Order Form).pdf", "Order form, June.")
-      revision = ingested_file!(project, "Acme x SXI (Order Form) v1.3.pdf", "Order form, July.")
+      project = globex_project!("Supersession Resolves")
+      original = ingested_file!(project, "Acme x Globex (Order Form).pdf", "Order form, June.")
+
+      revision =
+        ingested_file!(project, "Acme x Globex (Order Form) v1.3.pdf", "Order form, July.")
 
       stub_llm!(
         self(),
-        "A revised order form.\nSUPERSEDES: Acme x SXI (Order Form).pdf"
+        "A revised order form.\nSUPERSEDES: Acme x Globex (Order Form).pdf"
       )
 
       assert {:ok, page} = Cataloger.catalog_file(revision)
 
       assert page.frontmatter["supersedes_file_id"] == original.id
-      assert page.frontmatter["supersedes_filename"] == "Acme x SXI (Order Form).pdf"
+      assert page.frontmatter["supersedes_filename"] == "Acme x Globex (Order Form).pdf"
 
       assert page.frontmatter["supersession_ruling"] == "unruled",
              "the claim is recorded immediately as visible metadata and never blocks the card"
 
-      assert page.content =~ "Supersedes: Acme x SXI (Order Form).pdf"
+      assert page.content =~ "Supersedes: Acme x Globex (Order Form).pdf"
     end
 
     test "DROPS a claim naming a document that is not in the sibling set" do
@@ -223,13 +225,13 @@ defmodule Platform.Files.CatalogerTest do
       # isolation it guesses from the filename. An unresolvable claim
       # written into a card is a dangling reference in the one artifact
       # whose entire value is being trustworthy. A dropped claim is not.
-      project = sxi_project!("Supersession Drops")
-      _sibling = ingested_file!(project, "Acme x SXI (Order Form).pdf", "Order form, June.")
+      project = globex_project!("Supersession Drops")
+      _sibling = ingested_file!(project, "Acme x Globex (Order Form).pdf", "Order form, June.")
       subject = ingested_file!(project, "Statement of Work.pdf", "An SOW.")
 
       stub_llm!(
         self(),
-        "A statement of work.\nSUPERSEDES: Acme x SXI (Master Services Agreement) v2.pdf"
+        "A statement of work.\nSUPERSEDES: Acme x Globex (Master Services Agreement) v2.pdf"
       )
 
       assert {:ok, page} = Cataloger.catalog_file(subject)
@@ -248,8 +250,8 @@ defmodule Platform.Files.CatalogerTest do
       # costs more than the filename and date together, and matching on
       # the string the model was SHOWN is stricter than matching on one
       # it was asked to copy.
-      project = sxi_project!("Roster Shape")
-      sibling = ingested_file!(project, "Acme x SXI (Order Form).pdf", "June.")
+      project = globex_project!("Roster Shape")
+      sibling = ingested_file!(project, "Acme x Globex (Order Form).pdf", "June.")
       subject = ingested_file!(project, "Statement of Work.pdf", "An SOW.")
 
       stub_llm!(self(), "An SOW.\nSUPERSEDES: none")
@@ -259,7 +261,7 @@ defmodule Platform.Files.CatalogerTest do
       assert_received {:llm_body, body}
       prompt = Enum.map_join(body["messages"], "\n", & &1["content"])
 
-      assert prompt =~ "Acme x SXI (Order Form).pdf"
+      assert prompt =~ "Acme x Globex (Order Form).pdf"
       assert prompt =~ Date.to_iso8601(DateTime.to_date(sibling.inserted_at))
 
       refute prompt =~ sibling.id,
@@ -267,7 +269,7 @@ defmodule Platform.Files.CatalogerTest do
     end
 
     test "stamps card_file_key and card_generated_at back onto the row" do
-      project = sxi_project!("Backlink")
+      project = globex_project!("Backlink")
       file = ingested_file!(project, "Notes.md", "Some notes.")
 
       stub_llm!(self(), "Notes.\nSUPERSEDES: none")
@@ -284,8 +286,8 @@ defmodule Platform.Files.CatalogerTest do
       # The seam is a disclosure boundary. This module re-checks it
       # rather than trusting its caller, because a boundary that trusts
       # its input is not one.
-      project = sxi_project!("Withheld")
-      file = ingested_file!(project, "orion_prompts.mjs", "SECRET-MARKER")
+      project = globex_project!("Withheld")
+      file = ingested_file!(project, "atlas_prompts.mjs", "SECRET-MARKER")
       {:ok, withheld} = Files.set_ingest_intent(file, "human_only")
 
       stub_llm!(self(), "should never be produced\nSUPERSEDES: none")
@@ -306,7 +308,7 @@ defmodule Platform.Files.CatalogerTest do
       # one.
       allow_hash_twins!()
 
-      project = sxi_project!("Dedup Copy")
+      project = globex_project!("Dedup Copy")
       hash = content_hash("shared-bytes")
 
       origin = ingested_file!(project, "Order Form.pdf", "The order form text.", hash: hash)
@@ -328,7 +330,7 @@ defmodule Platform.Files.CatalogerTest do
       assert dup_page.frontmatter["file_id"] == duplicate.id
       assert dup_page.frontmatter["copied_from_file_id"] == origin.id
 
-      assert dup_page.org_id == tenant_org_id("sxi")
+      assert dup_page.org_id == tenant_org_id("globex")
       assert dup_page.project_id == project.id
 
       assert reload(duplicate).card_file_key == dup_page.file_key
@@ -339,7 +341,7 @@ defmodule Platform.Files.CatalogerTest do
       # after a successful run) carries `dedup: true` and
       # `chunk_count: 0` exactly like a real dedup. Conflating the two
       # rewrites a card that has no new information behind it.
-      project = sxi_project!("Dedup Self")
+      project = globex_project!("Dedup Self")
       file = ingested_file!(project, "Stable.pdf", "Stable text.")
 
       stub_llm!(self(), "The only card body.\nSUPERSEDES: none")
@@ -373,7 +375,7 @@ defmodule Platform.Files.CatalogerTest do
       # you resolve the origin by content hash alone.
       allow_hash_twins!()
 
-      project = sxi_project!("Dedup Twin")
+      project = globex_project!("Dedup Twin")
       hash = content_hash("twin-bytes")
 
       origin = ingested_file!(project, "Twin A.pdf", "Twin text.", hash: hash)
@@ -395,7 +397,7 @@ defmodule Platform.Files.CatalogerTest do
     test "a dedup whose origin has no card yet writes nothing and leaves it to the backfill" do
       allow_hash_twins!()
 
-      project = sxi_project!("Dedup No Origin")
+      project = globex_project!("Dedup No Origin")
       hash = content_hash("uncatalogued-bytes")
 
       _origin = ingested_file!(project, "Uncatalogued.pdf", "text", hash: hash)
@@ -445,11 +447,11 @@ defmodule Platform.Files.CatalogerTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp sxi_project!(name) do
+  defp globex_project!(name) do
     {:ok, project} =
       Tasks.create_project(%{
         name: "#{name} #{System.unique_integer([:positive])}",
-        org_id: tenant_org_id("sxi")
+        org_id: tenant_org_id("globex")
       })
 
     project

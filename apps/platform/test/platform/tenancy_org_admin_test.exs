@@ -34,8 +34,8 @@ defmodule Platform.TenancyOrgAdminTest do
 
   setup do
     %{
-      org_id: Tenancy.get_org_by_slug!("soylent").id,
-      other_org_id: Tenancy.get_org_by_slug!("sxi").id,
+      org_id: Tenancy.get_org_by_slug!("initech").id,
+      other_org_id: Tenancy.get_org_by_slug!("globex").id,
       acme_id: Tenancy.get_org_by_slug!("acme").id
     }
   end
@@ -82,7 +82,7 @@ defmodule Platform.TenancyOrgAdminTest do
   test "garbage input returns false and never raises", %{org_id: org_id} do
     user = user!()
     member!(user, org_id, "admin")
-    refute Tenancy.org_admin?(user, "soylent")
+    refute Tenancy.org_admin?(user, "initech")
     refute Tenancy.org_admin?(user, "not-a-uuid")
     refute Tenancy.org_admin?(nil, org_id)
     refute Tenancy.org_admin?(%{id: "not-a-uuid"}, org_id)

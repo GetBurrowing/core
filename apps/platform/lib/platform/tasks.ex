@@ -6826,33 +6826,14 @@ defmodule Platform.Tasks do
 
   # ── Scope-filter rail (Stage 3 of Tasks v2 plan, 2026-05-19) ──────────────
   #
-  # Five compiled sibling scopes — soylent, wayne_tech, sxi, paragon,
-  # cyberdyne — match the canonical scope list in
-  # `PlatformWeb.Components.ScopePill` (futureproof seam for the MT/RBAC
-  # stack 019e3c49). The root org is NOT among them: it is install data,
-  # resolved from its row (`Tenancy.root_org_slug/0`), never a compiled atom
-  # (task 01a116de stage 3). Today, `tasks` has no `org_id` column, so we
-  # can't bucket tasks per-org from the DB. The today-state contract (per the
-  # Stage 3 dispatch + the MT/RBAC plan) is to fold every task under the
-  # root org's slug and report 0 for the others. Once `tasks.org_id` lands
-  # the body of `count_by_scope/0` becomes a `group_by org_id` query.
-  @scope_keys [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
-
-  @doc """
-  Returns the canonical list of the five COMPILED sibling scope atoms. The
-  root org has none; it is addressed by its slug string.
-
-  > #### No longer the scope rail's source {: .warning}
-  >
-  > The Tasks rail intersected this list until task 01a09287 stage 2, which
-  > is why standing up a tenant needed a deploy to get a chip. The rail now
-  > reads `Platform.Tenancy.scope_slug_entries/1` — active orgs, as strings,
-  > straight off the rows. This list is retained for the callers that still
-  > hold the enum (`ScopePill.scopes/0` consistency checks,
-  > `AdminOrgsLive`), and it is NOT a registration requirement for a new org.
-  """
-  @spec scope_keys() :: [atom()]
-  def scope_keys, do: @scope_keys
+  # There is no compiled list of scope keys (task 01a14dd9 stage 2 deleted
+  # `scope_keys/0`). The rail reads `Platform.Tenancy.scope_slug_entries/1`,
+  # active orgs as strings straight off the rows. Today, `tasks` has no
+  # `org_id` column, so we can't bucket tasks per-org from the DB. The
+  # today-state contract (per the Stage 3 dispatch + the MT/RBAC plan) is to
+  # fold every task under the root org's slug and report 0 for the others.
+  # Once `tasks.org_id` lands the body of `count_by_scope/0` becomes a
+  # `group_by org_id` query.
 
   @doc """
   Count tasks per sub-org scope.
@@ -6860,17 +6841,17 @@ defmodule Platform.Tasks do
   Returns a map keyed by ORG SLUG AS A STRING — one key per active org —
   with non-negative integer values.
 
-  ## Keyed on the rows, not on `scope_keys/0`
+  ## Keyed on the rows, not on a compiled list
 
-  It used to return exactly the six `@scope_keys` atoms, which meant a
+  It used to return exactly six compiled scope atoms, which meant a
   seventh org's chip rendered its count through `Map.get(counts, slug, 0)`
   and got the default forever. Keying on `orgs` makes a new tenant's bucket
   appear the moment the row does, with no deploy (task 01a09287 stage 2).
 
   The keys are strings for the same reason the rail's are: an org slug is
   user input and may never have been compiled as an atom, so there is no
-  safe conversion. Callers doing `counts.sxi` must become
-  `counts["sxi"]`.
+  safe conversion. Callers doing `counts.globex` must become
+  `counts["globex"]`.
 
   ## Today-state (pre-MT/RBAC-on-Tasks)
 

@@ -49,10 +49,10 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
 
   setup do
     acme = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-transitions-#{u()}", acme)
-    wayne_tech = ensure_tenant_org("wayne-tech-transitions-#{u()}", acme)
+    globex = ensure_tenant_org("globex-transitions-#{u()}", acme)
+    vandelay_ind = ensure_tenant_org("vandelay-ind-transitions-#{u()}", acme)
 
-    {:ok, project} = Tasks.create_project(%{name: "Transitions Proj #{u()}", org_id: sxi.id})
+    {:ok, project} = Tasks.create_project(%{name: "Transitions Proj #{u()}", org_id: globex.id})
 
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Moved Task"})
     # A real status change through the real changeset — this is what writes the
@@ -65,8 +65,8 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
     %{
       task: task,
       quiet_task: quiet_task,
-      agent_sxi: create_agent("sxi-agent", %{"org_id" => sxi.id}),
-      agent_pt: create_agent("pt-agent", %{"org_id" => wayne_tech.id}),
+      agent_globex: create_agent("globex-agent", %{"org_id" => globex.id}),
+      agent_pt: create_agent("pt-agent", %{"org_id" => vandelay_ind.id}),
       agent_root: create_agent("root-agent", %{"org_id" => acme.id})
     }
   end
@@ -104,7 +104,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
                ToolSurface.execute(
                  "task_transition_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.task_id == ctx.task.id
@@ -127,7 +127,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
                ToolSurface.execute(
                  "task_transition_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 3
@@ -159,7 +159,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
                ToolSurface.execute(
                  "task_transition_list",
                  %{"task_id" => ctx.quiet_task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 0
@@ -177,14 +177,14 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
         ToolSurface.execute(
           "task_transition_list",
           %{"task_id" => ctx.task.id},
-          context_for(ctx.agent_sxi)
+          context_for(ctx.agent_globex)
         )
 
       {:ok, empty} =
         ToolSurface.execute(
           "task_transition_list",
           %{"task_id" => ctx.quiet_task.id},
-          context_for(ctx.agent_sxi)
+          context_for(ctx.agent_globex)
         )
 
       refute populated.note == empty.note
@@ -220,7 +220,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
                ToolSurface.execute(
                  "task_transition_list",
                  %{"task_id" => Ecto.UUID.generate()},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.recoverable == false
@@ -231,7 +231,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
     # shape — a confident answer about a task the caller never identified.
     test "an absent task_id is refused, not answered with the zero-row shape", ctx do
       assert {:error, envelope} =
-               ToolSurface.execute("task_transition_list", %{}, context_for(ctx.agent_sxi))
+               ToolSurface.execute("task_transition_list", %{}, context_for(ctx.agent_globex))
 
       assert envelope.error =~ "task_id"
       refute Map.has_key?(envelope, :count)
@@ -243,7 +243,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
                ToolSurface.execute(
                  "task_transition_list",
                  %{"task_id" => "not-a-uuid"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.recoverable == false

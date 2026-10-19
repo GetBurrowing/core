@@ -15,9 +15,9 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
 
   ## The absence assertions are three-form and case-insensitive
 
-  `refute html =~ "Wayne-Tech"` PASSES while `data-section-slug="wayne-tech"` sits
-  in the DOM in plain sight: org slugs are stored underscored (`wayne_tech`) and
-  rendered hyphenated (`wayne-tech`), so a display-form absence assertion proves
+  `refute html =~ "Vandelay-Ind"` PASSES while `data-section-slug="vandelay-ind"` sits
+  in the DOM in plain sight: org slugs are stored underscored (`vandelay_ind`) and
+  rendered hyphenated (`vandelay-ind`), so a display-form absence assertion proves
   nothing about the attribute surface. `refute_name_anywhere/2` checks all
   three forms over the whole rendered blob, attributes included. It lives in
   `Platform.MaskAssertions` so the desktop file uses the same one — an
@@ -36,7 +36,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
   # The org this file uses as the canary. Its display form, hyphen slug and
   # underscore slug are all DIFFERENT strings, which is exactly the property
   # that makes it able to catch the hole a single-form assertion leaves.
-  @canary "Wayne-Tech"
+  @canary "Vandelay-Ind"
 
   defp insert_chat_user do
     Repo.insert!(%User{
@@ -151,8 +151,8 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       # The strong form: the real name is gone from the drawer in every
       # spelling, attributes included.
       refute_name_anywhere(masked, @canary)
-      refute_name_anywhere(masked, "Soylent")
-      refute_name_anywhere(masked, "Paragon")
+      refute_name_anywhere(masked, "Initech")
+      refute_name_anywhere(masked, "Hooli")
     end
 
     test "the per-item reveal is a real focusable control, not a hover treatment",
@@ -194,14 +194,14 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "a channel named after its own org masks to the section placeholder",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("wayne_tech", @canary)
+      create_channel("vandelay_ind", @canary)
       view = open_drawer(conn)
 
       assert_name_anywhere(view |> render() |> drawer(), @canary)
 
       masked = view |> toggle_mask() |> drawer()
 
-      # Masking the header and leaving `#wayne-tech` under it is the same leak
+      # Masking the header and leaving `#vandelay-ind` under it is the same leak
       # with an extra step.
       refute_name_anywhere(masked, @canary)
       assert masked =~ "workspace-"
@@ -211,7 +211,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
   describe "drawer search must not become an oracle" do
     test "typing a real org name while masked surfaces nothing", %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("wayne_tech", @canary)
+      create_channel("vandelay_ind", @canary)
       view = open_drawer(conn)
 
       # Unmasked, the search finds it — otherwise the masked assertion below
@@ -240,7 +240,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
 
     test "searching the placeholder still finds the masked row", %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("wayne_tech", @canary)
+      create_channel("vandelay_ind", @canary)
       view = open_drawer(conn)
       toggle_mask(view)
 
@@ -255,9 +255,9 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "both the compact mobile pill and the prominent header pill mask text AND aria-label",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("wayne_tech")
+      create_channel("vandelay_ind")
 
-      {:ok, view, html} = live(conn, ~p"/chat/wayne_tech")
+      {:ok, view, html} = live(conn, ~p"/chat/vandelay_ind")
 
       assert html =~ "chat-header-scope-pill"
       assert html =~ "chat-header-scope-pill-mobile"
@@ -292,7 +292,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
   describe "hidden-channels drawer groupings" do
     test "the org grouping heading masks", %{conn: conn} do
       {conn, user} = authenticated_conn(conn)
-      channel = create_channel("wayne_tech")
+      channel = create_channel("vandelay_ind")
       create_channel("acme")
       {:ok, _} = Platform.Accounts.hide_channel(user.id, channel.id)
 

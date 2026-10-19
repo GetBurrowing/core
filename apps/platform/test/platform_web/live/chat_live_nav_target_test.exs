@@ -8,7 +8,7 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
     * v1 (PR #441) made Chat.get_space_by_slug/2 org-aware, but every
       sidebar link still emitted the slug for org-scoped channels. The
       URL handler then resolved the active org from the user's primary
-      membership (Acme for multi-org users), so clicking the Soylent-
+      membership (Acme for multi-org users), so clicking the Initech-
       section General sidebar entry still routed to Acme's General.
     * v2 closes the gap: for any space with a non-nil :org_id, the
       sidebar emits /chat/<space_id> (UUID-form). The URL handler's
@@ -86,14 +86,14 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
     setup %{conn: conn} do
       # Three tenant Generals — the canonical reproduction triple.
       acme_general = ensure_general_for_org("acme")
-      soylent_general = ensure_general_for_org("soylent")
-      sxi_general = ensure_general_for_org("sxi")
+      initech_general = ensure_general_for_org("initech")
+      globex_general = ensure_general_for_org("globex")
 
       # User is a member of all three orgs (multi-org admin shape).
       user = create_user!("multi-org-nav")
       membership!(user, Tenancy.get_org_by_slug!("acme"))
-      membership!(user, Tenancy.get_org_by_slug!("soylent"))
-      membership!(user, Tenancy.get_org_by_slug!("sxi"))
+      membership!(user, Tenancy.get_org_by_slug!("initech"))
+      membership!(user, Tenancy.get_org_by_slug!("globex"))
 
       conn = init_test_session(conn, current_user_id: user.id)
 
@@ -101,16 +101,16 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
         conn: conn,
         user: user,
         acme_general: acme_general,
-        soylent_general: soylent_general,
-        sxi_general: sxi_general
+        initech_general: initech_general,
+        globex_general: globex_general
       }
     end
 
     test "each tenant's General is linked by its UUID, not the colliding slug", %{
       conn: conn,
       acme_general: k,
-      soylent_general: g,
-      sxi_general: s
+      initech_general: g,
+      globex_general: s
     } do
       # Land on the bare /chat — landing redirect should pick the first
       # channel; mount the sidebar render either way.
@@ -132,8 +132,8 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
     test "direct UUID navigation mounts the clicked tenant's General", %{
       conn: conn,
       acme_general: k,
-      soylent_general: g,
-      sxi_general: s
+      initech_general: g,
+      globex_general: s
     } do
       {:ok, _view, html_g} = live(conn, ~p"/chat/#{g.id}")
 

@@ -24,7 +24,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   ## Events the host LiveView must handle
 
     * `"toggle_lifecycle_menu"` — `%{"key" => key}` (the menu's own key,
-      e.g. `"org:soylent"`); toggle `@lifecycle_menu_key`.
+      e.g. `"org:initech"`); toggle `@lifecycle_menu_key`.
     * `"archive_container"` — `%{"type" => "org"|"project", "id" =>, "name" =>}`;
       set `@undo_archive` and render `archive_undo_toast/1`.
     * `"undo_archive"` / `"dismiss_undo_archive"` — the toast's two actions.
@@ -44,7 +44,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   """
   attr :key, :string,
     required: true,
-    doc: "Unique menu key, e.g. \"org:soylent\" or \"project:<uuid>\"."
+    doc: "Unique menu key, e.g. \"org:initech\" or \"project:<uuid>\"."
 
   attr :open, :boolean, default: false, doc: "Whether this menu is the currently-open one."
   attr :type, :string, required: true, values: ~w(org project)

@@ -13,11 +13,11 @@ defmodule Platform.Files.Cataloger do
   ## Tenancy — the thing that had to be fixed before any card existed
 
   `Platform.Org.Wiki.upsert_page/3` used to read only `:content` and
-  `:updated_by`. A card written at an SXI project path therefore landed
+  `:updated_by`. A card written at a Globex project path therefore landed
   as a root-org row with a nil `project_id` — `WikiPage.changeset/2`
   fills a nil `org_id` with the root org by design, and
   `update_changeset/2` cast neither column, so nothing could repair it
-  afterwards. The path said SXI, the row said the root org, permanently.
+  afterwards. The path said Globex, the row said the root org, permanently.
 
   Stage 2 widened both changesets to accept the pair, and this module
   always passes it: the `org_id` comes from the card's own project, not

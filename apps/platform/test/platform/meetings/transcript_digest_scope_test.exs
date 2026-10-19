@@ -33,7 +33,7 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: TenancyFixtures.tenant_org_id("sxi")
+        org_id: TenancyFixtures.tenant_org_id("globex")
       })
 
     user
@@ -90,7 +90,7 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
       add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       add_user!(external.id, ext.id)
       complete_transcript!(external.id, "external meeting")
 
@@ -112,7 +112,7 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
       add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       add_user!(external.id, ext.id)
       complete_transcript!(external.id, "external meeting")
 
@@ -134,7 +134,7 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
       add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
-      external = create_space!("sxi-support")
+      external = create_space!("globex-support")
       add_user!(external.id, ext.id)
       complete_transcript!(external.id, "external meeting")
 

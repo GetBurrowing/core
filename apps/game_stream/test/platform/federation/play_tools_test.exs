@@ -121,7 +121,7 @@ defmodule Platform.Federation.PlayToolsTest do
 
   defp runtime(modules) do
     owner = Platform.ExternalUserFixtures.create_user!()
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     Platform.ExternalUserFixtures.plain_member!(owner, org)
     {:ok, project} = Tasks.create_project(%{name: "Play permission #{unique()}", org_id: org.id})
 

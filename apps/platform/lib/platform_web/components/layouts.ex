@@ -12,8 +12,8 @@ defmodule PlatformWeb.Layouts do
   import PlatformWeb.Components.MoreSheet
 
   # Server-rendered <style> block carrying each active org's scope colour as
-  # CSS custom properties — the runtime replacement for the build-time
-  # `.text-<slug>` utilities. Rendered once from shell.html.heex.
+  # CSS custom properties — the runtime replacement for build-time per-slug
+  # utilities. Rendered once from shell.html.heex.
   import PlatformWeb.Components.ScopeColorStyles
 
   # Embed all files in layouts/* within this module.

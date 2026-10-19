@@ -47,10 +47,10 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
 
   setup do
     acme = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-ledger-#{u()}", acme)
-    wayne_tech = ensure_tenant_org("wayne-tech-ledger-#{u()}", acme)
+    globex = ensure_tenant_org("globex-ledger-#{u()}", acme)
+    vandelay_ind = ensure_tenant_org("vandelay-ind-ledger-#{u()}", acme)
 
-    {:ok, project} = Tasks.create_project(%{name: "Ledger Proj #{u()}", org_id: sxi.id})
+    {:ok, project} = Tasks.create_project(%{name: "Ledger Proj #{u()}", org_id: globex.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Ledger Task"})
     # A real status change through the real changeset writes the transition row.
     {:ok, task} = Tasks.update_task(task, %{status: "planning"})
@@ -77,24 +77,24 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
       architecture_verdict: %{"state" => "rejected", "source" => "mcp"}
     })
 
-    agent_sxi = create_agent("sxi-ledger", %{"org_id" => sxi.id})
-    agent_pt = create_agent("pt-ledger", %{"org_id" => wayne_tech.id})
+    agent_globex = create_agent("globex-ledger", %{"org_id" => globex.id})
+    agent_pt = create_agent("pt-ledger", %{"org_id" => vandelay_ind.id})
     owner = Platform.ExternalUserFixtures.create_user!()
-    Platform.ExternalUserFixtures.plain_member!(owner, sxi)
+    Platform.ExternalUserFixtures.plain_member!(owner, globex)
 
     {:ok, space} =
       Chat.create_space(%{
         name: "Ledger Space",
         slug: "ledger-#{u()}",
         kind: "channel",
-        org_id: sxi.id
+        org_id: globex.id
       })
 
     {:ok, participant} =
       Chat.add_participant(space.id, %{
         participant_type: "agent",
-        participant_id: agent_sxi.id,
-        display_name: agent_sxi.name,
+        participant_id: agent_globex.id,
+        display_name: agent_globex.name,
         joined_at: DateTime.utc_now()
       })
 
@@ -109,7 +109,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
     {:ok, runtime} =
       Platform.Federation.register_runtime(owner.id, %{
         runtime_id: "ledger-#{u()}",
-        agent_id: agent_sxi.id
+        agent_id: agent_globex.id
       })
 
     {:ok, _} =
@@ -127,7 +127,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
       space: space,
       participant: participant,
       runtime_id: runtime.runtime_id,
-      agent_sxi: agent_sxi,
+      agent_globex: agent_globex,
       agent_pt: agent_pt
     }
   end
@@ -135,7 +135,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
   describe "PART B — permitted calls, bodies recorded" do
     test "every capability answers a real execute/3 call", ctx do
       permitted = %{
-        agent_id: ctx.agent_sxi.id,
+        agent_id: ctx.agent_globex.id,
         agent_participant_id: ctx.participant.id,
         runtime_id: ctx.runtime_id
       }
@@ -316,7 +316,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
     # sibling, it does not break the capability stage 3 shipped.
     test "plan_get still answers the own-org agent with the rejected plan's prose", ctx do
       permitted = %{
-        agent_id: ctx.agent_sxi.id,
+        agent_id: ctx.agent_globex.id,
         agent_participant_id: ctx.participant.id,
         runtime_id: ctx.runtime_id
       }
@@ -344,7 +344,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
         Tasks.create_task(%{project_id: ctx.task.project_id, title: "No Plan #{u()}"})
 
       permitted = %{
-        agent_id: ctx.agent_sxi.id,
+        agent_id: ctx.agent_globex.id,
         agent_participant_id: ctx.participant.id,
         runtime_id: ctx.runtime_id
       }

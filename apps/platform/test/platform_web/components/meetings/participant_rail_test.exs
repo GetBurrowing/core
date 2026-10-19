@@ -916,7 +916,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       # Agents publish audio, and `meeting_client.js` reports an agent that
       # has published no mic at all as muted ("no publication reads as
       # off"), so this slot is a real signal rather than decoration.
-      html = media_rail([agent("Saru", "a-1"), agent("Orion", "a-2")], muted: ["agent:a-2"])
+      html = media_rail([agent("Saru", "a-1"), agent("Atlas", "a-2")], muted: ["agent:a-2"])
 
       assert attr(slot(row_for(html, "agent:a-2"), "mic-indicator"), "data-mic-state") == "off"
       assert attr(slot(row_for(html, "agent:a-1"), "mic-indicator"), "data-mic-state") == "on"

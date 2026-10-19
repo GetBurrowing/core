@@ -32,8 +32,8 @@ defmodule Platform.Projects do
   tuples in canonical tenant-priority order.
 
   Order is the root org first (structurally: `parent_org_id` is `nil`,
-  whatever its slug), then `Tenancy.tenant_priority/0` (Soylent →
-  Wayne-Tech → SXI → Paragon → unknown tenants alphabetically). Inside each bucket
+  whatever its slug), then `Tenancy.tenant_priority/0` (Initech →
+  Vandelay-Ind → Globex → Hooli → unknown tenants alphabetically). Inside each bucket
   projects keep the caller's existing order (typically alphabetical via
   `Platform.Tasks.list_projects_unscoped/1`).
 

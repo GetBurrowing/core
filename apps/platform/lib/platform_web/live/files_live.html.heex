@@ -21,7 +21,7 @@
 
     <div class="flex-1 overflow-y-auto" data-role="files-project-picker">
       <details
-        :for={{org_slug, _org_name, org_projects} <- @project_sections}
+        :for={{org_slug, org_name, org_projects} <- @project_sections}
         open
         class="group"
         data-role="files-project-group"
@@ -29,11 +29,11 @@
       >
         <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
           <span
-            class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+            class="size-2 rounded-full scope-dot-current"
             data-scope={org_slug}
           >
           </span>
-          <span>{Tenancy.scope_label(org_slug)}</span>
+          <span>{org_name}</span>
           <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
             {length(org_projects)}
           </span>
@@ -78,7 +78,7 @@
           class="flex items-center gap-1 text-xs text-base-content/60"
           data-role="files-breadcrumb"
         >
-          <span class={"font-medium #{org_color_for(@selected_project)}"}>
+          <span class="font-medium scope-fill-text" data-scope={org_scope_for(@selected_project)}>
             {org_label_for(@selected_project)}
           </span>
           <span :if={@selected_project.org} class="text-base-content/40">/</span>

@@ -206,7 +206,7 @@ defmodule Mix.Tasks.Platform.IntentEval.SampleTest do
       insert_transcript("room-secrets", [
         segment(
           "Alex",
-          "the account is 123456789012 and the role is arn:aws:iam::123456789012:role/orion-apply",
+          "the account is 123456789012 and the role is arn:aws:iam::123456789012:role/atlas-apply",
           1000
         )
       ])

@@ -67,7 +67,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
     end
 
     test "marks the measurement slot uncounted for a goal with no derivable number" do
-      _space = space_with_goal("Get SXI to a good state")
+      _space = space_with_goal("Get Globex to a good state")
 
       {:ok, context} = Handler.gather_context(nil, %{})
 
@@ -266,7 +266,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatTest do
 
       {:ok, _first} = Handler.gather_context(nil, %{})
 
-      new_goal = "Close the SXI backlog this sprint"
+      new_goal = "Close the Globex backlog this sprint"
       {:ok, _} = Chat.update_space(space, %{goal: new_goal})
 
       {:ok, second} = Handler.gather_context(nil, %{})

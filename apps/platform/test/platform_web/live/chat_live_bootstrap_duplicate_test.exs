@@ -12,7 +12,7 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       row that was just created, and INSERTS A SECOND channel.
 
   The reviewer observed both rows 244ms apart, and — worse — a duplicate
-  `orion` row minted *merely by navigating to an existing org-less channel*.
+  `atlas` row minted *merely by navigating to an existing org-less channel*.
 
   Both cases below assert on the **row count in `chat_spaces`**, never on the
   struct a `Repo.insert` hands back: an insert returns a struct whether or not
@@ -88,8 +88,10 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
     test "a per-org slug collision is NOT adopted across orgs", %{conn: conn} do
       slug = "org-scoped-dup-chan"
 
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      {:ok, sxi_chan} = Chat.create_channel(%{name: "Org Scoped", slug: slug, org_id: sxi.id})
+      globex = Tenancy.get_org_by_slug!("globex")
+
+      {:ok, globex_chan} =
+        Chat.create_channel(%{name: "Org Scoped", slug: slug, org_id: globex.id})
 
       user = create_user!("acme-collide")
       acme = Tenancy.get_org_by_slug!("acme")
@@ -99,11 +101,11 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
 
       # ADR-0042 per-org slug scoping is NOT weakened by the adoption guard:
-      # an SXI channel is not handed to an Acme member, so Acme gets its own.
+      # an Globex channel is not handed to an Acme member, so Acme gets its own.
       rows = rows_for(slug)
       assert length(rows) == 2
-      assert Enum.sort(Enum.map(rows, & &1.org_id)) == Enum.sort([sxi.id, acme.id])
-      assert Enum.any?(rows, &(&1.id == sxi_chan.id))
+      assert Enum.sort(Enum.map(rows, & &1.org_id)) == Enum.sort([globex.id, acme.id])
+      assert Enum.any?(rows, &(&1.id == globex_chan.id))
     end
   end
 

@@ -4,7 +4,7 @@ defmodule Platform.Chat.Section do
   v2, Stage 2). One row per org; `org_id` is the section's owning org and the
   default-grouping key (a channel renders under the section whose `org_id`
   matches `chat_spaces.org_id`). `color` is a scope token in CSS form
-  (e.g. `wayne-tech`); `position` is the admin default order.
+  (e.g. `vandelay-ind`); `position` is the admin default order.
 
   ## `name` is a label override, not a copy of the org name
 

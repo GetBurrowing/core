@@ -35,7 +35,7 @@ defmodule Platform.Security.ExternalDmScopeTest do
       refute Chat.external_dm_permitted?(ctx.ext.id, "agent", Ecto.UUID.generate())
     end
 
-    test "external → second external user in the same allowlisted org is permitted (SXI↔SXI)",
+    test "external → second external user in the same allowlisted org is permitted (Globex↔Globex)",
          ctx do
       assert Chat.external_dm_permitted?(ctx.ext.id, "user", ctx.ext2.id)
     end
@@ -72,7 +72,7 @@ defmodule Platform.Security.ExternalDmScopeTest do
       assert Enum.sort(users) == Enum.sort([ctx.ext.id, ctx.m.id])
     end
 
-    test "SXI↔SXI DM (external → second external in the same org) is allowed", ctx do
+    test "Globex↔Globex DM (external → second external in the same org) is allowed", ctx do
       assert {:ok, %Space{kind: "dm"}} =
                Chat.find_or_create_dm(ctx.ext.id, "user", ctx.ext2.id)
     end

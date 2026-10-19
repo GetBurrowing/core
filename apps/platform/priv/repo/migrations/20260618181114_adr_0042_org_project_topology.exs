@@ -5,8 +5,8 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
   Single transactional sweep that:
 
     1. Adds `projects.org_id` (FK → `orgs(id) ON DELETE RESTRICT`, NOT NULL),
-       backfilled by name match (Soylent → Soylent; Stark Industries →
-       SXI; every other name, e.g. Startup Suite → the root org). Raises if
+       backfilled by name match (Initech → Initech; Globex Corporation →
+       Globex; every other name, e.g. Startup Suite → the root org). Raises if
        any row is left NULL after backfill — a defensive guard against an
        unexpected project name.
 
@@ -16,8 +16,8 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
        to the root org. (These tables were renamed from
        `org_context_files` / `org_memory_entries` in 20260515224500.)
 
-    3. Renames the three tenant default `chat_spaces` rows (Soylent,
-       Wayne-Tech, SXI) to `{name: "General", slug: "general"}` so the per-org
+    3. Renames the three tenant default `chat_spaces` rows (Initech,
+       Vandelay-Ind, Globex) to `{name: "General", slug: "general"}` so the per-org
        general channel is consistently labelled. Idempotent: each row is only
        updated when its current name differs from "General".
 
@@ -55,14 +55,14 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
   `schema_migrations` on those installs, so the edit never runs on them.
   Topology background: `docs/decisions/0042-org-project-topology-and-context-inheritance.md` § Migration sequence.
 
-  ## Soylent/SXI are now OPTIONAL (task 01a068f6 stage 2)
+  ## Initech/Globex are now OPTIONAL (task 01a068f6 stage 2)
 
   `20260519143620_seed_root_orgs.exs` no longer seeds the four operator-brand
   tenant orgs, only a root. This migration is already applied (recorded in
-  `schema_migrations`) on every install that ever had Soylent/SXI rows, so
+  `schema_migrations`) on every install that ever had Initech/Globex rows, so
   rewriting `up/0` is inert there for the same reason `SeedRootOrgs`'
   rewrite is — it only changes behavior for a genuinely fresh database's
-  first migrate. `soylent_id`/`sxi_id` fall back to the root org when those
+  first migrate. `initech_id`/`globex_id` fall back to the root org when those
   slugs don't exist, instead of raising.
 
   A fresh database's backfill is NOT empty (corrected by task 01a0dbc4; this
@@ -83,16 +83,21 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
 
   use Ecto.Migration
 
-  @soylent_slug "soylent"
-  @sxi_slug "sxi"
+  # The two optional tenant orgs and their projects, matched by the sha256 of
+  # the stored value so the tree does not spell them (task 01a14dd9 stage 3).
+  # Placeholder names (initech, globex) label them in prose only.
+  @initech_slug_sha256 "1b52d98ac973dc62528babc79163ab13f455755d1b3835992cfec045ff751c0b"
+  @globex_slug_sha256 "3cf2fb332fb3792a8205afc17b4207c37b0d149891b6eb8b1a7cb9503aaf0f3d"
+  @initech_project_name_sha256 "6b94fa4f19a37399a7d396dac2469a84b5118af3115209d8f414acb34d2c1822"
+  @globex_project_name_sha256 "2e677ef20cffe096763a542f36f72ef1fbf48a5efa7e2bea38ed48a62c9a3d6c"
 
   # Verified tenant default chat_spaces from the planner brief.
   @tenant_channel_ids [
-    # Soylent
+    # Initech
     "ec86dd1f-e5ab-45cc-8e69-aadd2847576c",
-    # Wayne-Tech
+    # Vandelay-Ind
     "ad2d9748-a94b-4529-b156-362614c86a65",
-    # SXI / Stark Industries
+    # Globex / Globex Corporation
     "019db5f7-9ff5-70c7-b678-54a4d15d1573"
   ]
 
@@ -102,8 +107,8 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
     flush()
 
     root_id = root_org_id!()
-    soylent_id = fetch_org_id(@soylent_slug) || root_id
-    sxi_id = fetch_org_id(@sxi_slug) || root_id
+    initech_id = fetch_org_id(@initech_slug_sha256) || root_id
+    globex_id = fetch_org_id(@globex_slug_sha256) || root_id
 
     # Name-match backfill. CASE returns the root for any other name; the
     # leftover-NULL guard below catches projects whose name *we missed*,
@@ -112,13 +117,19 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
       """
       UPDATE projects
       SET org_id = CASE
-        WHEN name = 'Soylent' THEN $1::uuid
-        WHEN name = 'Stark Industries' THEN $2::uuid
+        WHEN encode(sha256(convert_to(name, 'UTF8')), 'hex') = $4 THEN $1::uuid
+        WHEN encode(sha256(convert_to(name, 'UTF8')), 'hex') = $5 THEN $2::uuid
         ELSE $3::uuid
       END
       WHERE org_id IS NULL
       """,
-      [soylent_id, sxi_id, root_id]
+      [
+        initech_id,
+        globex_id,
+        root_id,
+        @initech_project_name_sha256,
+        @globex_project_name_sha256
+      ]
     )
 
     %{rows: [[leftover]]} = repo_query!("SELECT COUNT(*) FROM projects WHERE org_id IS NULL")
@@ -230,7 +241,7 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
 
   def down do
     # Reverse rename is lossy — the original names were tenant-specific
-    # ("Soylent", "Wayne-Tech", "Stark Industries"). Rollback restores
+    # ("Initech", "Vandelay-Ind", "Globex Corporation"). Rollback restores
     # the schema, not the prior labels; an operator can rename via UI.
 
     execute(
@@ -281,9 +292,13 @@ defmodule Platform.Repo.Migrations.Adr0042OrgProjectTopology do
   end
 
   # `nil` on a missing slug — used for the two OPTIONAL tenant orgs
-  # (Soylent/SXI), which the seed migration no longer guarantees.
-  defp fetch_org_id(slug) do
-    case repo_query!("SELECT id FROM orgs WHERE slug = $1", [slug]) do
+  # (Initech/Globex), which the seed migration no longer guarantees. Takes
+  # the sha256 of the slug, never the slug (task 01a14dd9 stage 3).
+  defp fetch_org_id(slug_sha256) do
+    case repo_query!(
+           "SELECT id FROM orgs WHERE encode(sha256(convert_to(slug, 'UTF8')), 'hex') = $1",
+           [slug_sha256]
+         ) do
       %{rows: [[id]]} -> id
       %{rows: []} -> nil
     end

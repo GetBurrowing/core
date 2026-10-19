@@ -34,7 +34,7 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
   @vote "(event, ctx) => { ctx.increment('votes.' + event.args.option) }"
 
   setup do
-    org = Tenancy.get_org_by_slug!("sxi")
+    org = Tenancy.get_org_by_slug!("globex")
     n = System.unique_integer([:positive, :monotonic])
 
     {:ok, space} =

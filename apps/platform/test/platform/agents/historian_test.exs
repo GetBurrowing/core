@@ -1420,7 +1420,7 @@ defmodule Platform.Agents.HistorianTest do
     {:ok, _} =
       Platform.Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.tenant_org_id("sxi")
+        org_id: Platform.TenancyFixtures.tenant_org_id("globex")
       })
 
     {:ok, participant} =
@@ -1444,7 +1444,7 @@ defmodule Platform.Agents.HistorianTest do
       insert_message_at!(internal.id, ip.id, "internal-msg", today)
       insert_transcript_at!(%{space_id: internal.id, summary: "internal-mtg"}, today)
 
-      external = insert_channel_space("sxi-support")
+      external = insert_channel_space("globex-support")
       ep = insert_external_participant(external.id)
       insert_message_at!(external.id, ep.id, String.duplicate("E", 200), today)
       insert_transcript_at!(%{space_id: external.id, summary: String.duplicate("X", 200)}, today)
@@ -1480,7 +1480,7 @@ defmodule Platform.Agents.HistorianTest do
       ip = insert_user_participant(internal.id, "Acme")
       insert_message_at!(internal.id, ip.id, "internal-msg", today)
 
-      external = insert_channel_space("sxi-support")
+      external = insert_channel_space("globex-support")
       ep = insert_external_participant(external.id)
       insert_message_at!(external.id, ep.id, String.duplicate("E", 200), today)
 

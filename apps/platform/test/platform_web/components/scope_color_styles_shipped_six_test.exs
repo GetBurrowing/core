@@ -5,7 +5,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
 
   Robin's ruling, 2026-09-13: "You can move the existing 6 org pills. Ensure
   the move does not cause regressions for the existing systems, especially
-  tasks in flight for projects like SXI." This file is what makes the move
+  tasks in flight for projects like Globex." This file is what makes the move
   checkable. Everything here is asserted on the CSS the emitter actually
   writes for the six, built from the values the stage 5 migration stores,
   so the chain under test is row values -> `ScopeColorStyles.css_for/1` ->
@@ -21,9 +21,9 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
       Every label slot's L is pinned, with the moves against the shipped
       single label named.
     * `--scope-active-content` is the emitter's measured choice. It keeps
-      dark text on four orgs and flips soylent and wayne-tech from white to
+      dark text on four orgs and flips initech and vandelay-ind from white to
       dark: pinned as a named delta.
-    * sxi, the thinnest margin, by name with its figures.
+    * globex, the thinnest margin, by name with its figures.
     * The four base-100 label cells the stage 6 behavioural gate flagged for
       moving off the browser's pre-retrofit bytes: pinned by byte and by
       contrast, with the approval that allows the move named (stage 7).
@@ -46,11 +46,11 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # Row slug -> the kebab fragment the painted fixture was measured under.
   @fixture_slug %{
     "legacy" => "legacy",
-    "soylent" => "soylent",
-    "wayne_tech" => "wayne-tech",
-    "sxi" => "sxi",
-    "paragon" => "paragon",
-    "cyberdyne" => "cyberdyne"
+    "initech" => "initech",
+    "vandelay_ind" => "vandelay-ind",
+    "globex" => "globex",
+    "hooli" => "hooli",
+    "wonka" => "wonka"
   }
 
   @six Map.keys(@fixture_slug)
@@ -58,22 +58,22 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # The shipped fills and active-pill text, pasted from app.css at 98eb79ab.
   @shipped %{
     "legacy" => %{fill: "oklch(72% 0.16 50)", active: "oklch(15% 0 0)"},
-    "soylent" => %{fill: "oklch(65% 0.20 295)", active: "oklch(98% 0 0)"},
-    "wayne_tech" => %{fill: "oklch(68% 0.15 240)", active: "oklch(98% 0 0)"},
-    "sxi" => %{fill: "oklch(70% 0.15 162)", active: "oklch(15% 0 0)"},
-    "paragon" => %{fill: "oklch(80% 0.16 95)", active: "oklch(15% 0 0)"},
-    "cyberdyne" => %{fill: "oklch(66% 0.19 340)", active: "oklch(15% 0 0)"}
+    "initech" => %{fill: "oklch(65% 0.20 295)", active: "oklch(98% 0 0)"},
+    "vandelay_ind" => %{fill: "oklch(68% 0.15 240)", active: "oklch(98% 0 0)"},
+    "globex" => %{fill: "oklch(70% 0.15 162)", active: "oklch(15% 0 0)"},
+    "hooli" => %{fill: "oklch(80% 0.16 95)", active: "oklch(15% 0 0)"},
+    "wonka" => %{fill: "oklch(66% 0.19 340)", active: "oklch(15% 0 0)"}
   }
 
   # The single label each org wore on BOTH surfaces before the move, as
   # app.css declared it at 98eb79ab: {light L, dark L}.
   @shipped_label_l %{
     "legacy" => {55.0, 72.0},
-    "soylent" => {55.0, 67.0},
-    "wayne_tech" => {52.0, 68.0},
-    "sxi" => {51.0, 70.0},
-    "paragon" => {54.0, 80.0},
-    "cyberdyne" => {55.5, 67.5}
+    "initech" => {55.0, 67.0},
+    "vandelay_ind" => {52.0, 68.0},
+    "globex" => {51.0, 70.0},
+    "hooli" => {54.0, 80.0},
+    "wonka" => {55.5, 67.5}
   }
 
   # Every label slot after the move, as L percent:
@@ -81,21 +81,21 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # fill's in every slot (asserted below), so L is the whole of the change.
   #
   # Against the shipped single label:
-  #   * light base-100: legacy, paragon, cyberdyne unchanged; sxi one 0.5%
-  #     step DARKER (51 -> 50.5, it had no margin); soylent and wayne-tech one
+  #   * light base-100: legacy, hooli, wonka unchanged; globex one 0.5%
+  #     step DARKER (51 -> 50.5, it had no margin); initech and vandelay-ind one
   #     step LIGHTER (55 -> 55.5, 52 -> 52.5), because the solver walks down
   #     from the fill and stops at the first L that holds its margin.
   #   * light base-200 (the rail): all six darker, the defect this task fixes.
   #   * dark base-100: all six unchanged.
-  #   * dark base-200 (the rail): soylent 67 -> 65 and cyberdyne
+  #   * dark base-200 (the rail): initech 67 -> 65 and wonka
   #     67.5 -> 66, both walking back to their fill; the rest unchanged.
   @label_l %{
     "legacy" => {55.0, 52.5, 72.0, 72.0},
-    "soylent" => {55.5, 53.0, 67.0, 65.0},
-    "wayne_tech" => {52.5, 49.5, 68.0, 68.0},
-    "sxi" => {50.5, 48.0, 70.0, 70.0},
-    "paragon" => {54.0, 52.0, 80.0, 80.0},
-    "cyberdyne" => {55.5, 53.0, 67.5, 66.0}
+    "initech" => {55.5, 53.0, 67.0, 65.0},
+    "vandelay_ind" => {52.5, 49.5, 68.0, 68.0},
+    "globex" => {50.5, 48.0, 70.0, 70.0},
+    "hooli" => {54.0, 52.0, 80.0, 80.0},
+    "wonka" => {55.5, 53.0, 67.5, 66.0}
   }
 
   # ── the four base-100 labels the behavioural gate flagged ─────────────
@@ -107,20 +107,20 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
   # 151c8f6d:
   #
   #   cell                 was       now       delta (r,g,b)  before -> after
-  #   soylent light-100   #7e4ed7   #7f50d9   {+1, +2, +2}   4.6668 -> 4.5589
-  #   wayne_tech light-100   #0070b5   #0072b7   { 0, +2, +2}   4.6738 -> 4.5530
-  #   sxi      light-100   #007f4a   #007d49   { 0, -2, -1}   4.5539 -> 4.6725
-  #   wayne_tech dark-100    #19a2eb   #1aa2eb   {+1,  0,  0}   5.112  -> 5.1137
+  #   initech light-100   #7e4ed7   #7f50d9   {+1, +2, +2}   4.6668 -> 4.5589
+  #   vandelay_ind light-100   #0070b5   #0072b7   { 0, +2, +2}   4.6738 -> 4.5530
+  #   globex      light-100   #007f4a   #007d49   { 0, -2, -1}   4.5539 -> 4.6725
+  #   vandelay_ind dark-100    #19a2eb   #1aa2eb   {+1,  0,  0}   5.112  -> 5.1137
   #
   # All four still clear 4.5:1 against their own tint, so AA is what binds
   # and byte identity is not; the clause was written before the measurement
-  # and is stale. sxi, the slug the constraint exists to protect, is the one
+  # and is stale. globex, the slug the constraint exists to protect, is the one
   # cell that GAINS margin. Alex Rivera approved the move with it
   # disclosed in these words on 2026-09-23, review request
   # 01a0c74f-ab00-7001-9666-7ff46eb41f6a, item "What changes, your choices,
   # and one question":
   #
-  #   "Page labels, light theme: SXI slightly darker. Soylent and Wayne-Tech
+  #   "Page labels, light theme: Globex slightly darker. Initech and Vandelay-Ind
   #    slightly lighter (the plan said darker; measuring said lighter),
   #    still passing 4.5:1."
   #
@@ -145,18 +145,18 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
 
   # `{slug, theme}` => `{contrast after, green floor after}` on base-100.
   @flagged_after %{
-    {"soylent", :light} => {4.5589, 4.5260},
-    {"wayne_tech", :light} => {4.5530, 4.5030},
-    {"sxi", :light} => {4.6725, 4.6143},
-    {"wayne_tech", :dark} => {5.1137, 5.0653}
+    {"initech", :light} => {4.5589, 4.5260},
+    {"vandelay_ind", :light} => {4.5530, 4.5030},
+    {"globex", :light} => {4.6725, 4.6143},
+    {"vandelay_ind", :dark} => {5.1137, 5.0653}
   }
 
   # Light base-100 only: `{now minus was per channel, the contrast the
   # painted label held against the emitted tint}`.
   @flagged_light %{
-    "soylent" => {{1, 2, 2}, 4.6668},
-    "wayne_tech" => {{0, 2, 2}, 4.6738},
-    "sxi" => {{0, -2, -1}, 4.5539}
+    "initech" => {{1, 2, 2}, 4.6668},
+    "vandelay_ind" => {{0, 2, 2}, 4.6738},
+    "globex" => {{0, -2, -1}, 4.5539}
   }
 
   setup_all do
@@ -326,9 +326,9 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
       end
     end
 
-    test "active-pill text keeps dark on four orgs and flips soylent and wayne-tech from white to dark" do
+    test "active-pill text keeps dark on four orgs and flips initech and vandelay-ind from white to dark" do
       # The emitter picks the higher-contrast of the two tokens the shipped
-      # blocks used. On soylent and wayne-tech the hand-picked white measures
+      # blocks used. On initech and vandelay-ind the hand-picked white measures
       # 3.30 and 2.67 against the fill, under AA; dark measures 5.62 and 6.95.
       # Pinned as a named delta so a change in either direction is red.
       emitted = emitted()
@@ -338,7 +338,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
             slot(emitted, slug, :light, "--scope-active-content") != @shipped[slug].active,
             do: slug
 
-      assert Enum.sort(flipped) == ["soylent", "wayne_tech"]
+      assert Enum.sort(flipped) == ["initech", "vandelay_ind"]
 
       for slug <- @six do
         now = slot(emitted, slug, :light, "--scope-active-content")
@@ -347,7 +347,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
         assert ScopeColor.contrast(now, fill) > ScopeColor.contrast("oklch(98% 0 0)", fill), slug
       end
 
-      for {slug, white, dark} <- [{"soylent", 3.3033, 5.6218}, {"wayne_tech", 2.6727, 6.9481}] do
+      for {slug, white, dark} <- [{"initech", 3.3033, 5.6218}, {"vandelay_ind", 2.6727, 6.9481}] do
         fill = @shipped[slug].fill
         assert_in_delta ScopeColor.contrast("oklch(98% 0 0)", fill), white, 0.00005, slug
         assert_in_delta ScopeColor.contrast("oklch(15% 0 0)", fill), dark, 0.00005, slug
@@ -392,19 +392,19 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
       assert moved ==
                MapSet.new([
                  # base-100, light: one darker, two lighter.
-                 {"sxi", "light-100", 51.0, 50.5},
-                 {"soylent", "light-100", 55.0, 55.5},
-                 {"wayne_tech", "light-100", 52.0, 52.5},
+                 {"globex", "light-100", 51.0, 50.5},
+                 {"initech", "light-100", 55.0, 55.5},
+                 {"vandelay_ind", "light-100", 52.0, 52.5},
                  # the rail, light: all six darker.
                  {"legacy", "light-200", 55.0, 52.5},
-                 {"soylent", "light-200", 55.0, 53.0},
-                 {"wayne_tech", "light-200", 52.0, 49.5},
-                 {"sxi", "light-200", 51.0, 48.0},
-                 {"paragon", "light-200", 54.0, 52.0},
-                 {"cyberdyne", "light-200", 55.5, 53.0},
+                 {"initech", "light-200", 55.0, 53.0},
+                 {"vandelay_ind", "light-200", 52.0, 49.5},
+                 {"globex", "light-200", 51.0, 48.0},
+                 {"hooli", "light-200", 54.0, 52.0},
+                 {"wonka", "light-200", 55.5, 53.0},
                  # the rail, dark: two walk back to their fill.
-                 {"soylent", "dark-200", 67.0, 65.0},
-                 {"cyberdyne", "dark-200", 67.5, 66.0}
+                 {"initech", "dark-200", 67.0, 65.0},
+                 {"wonka", "dark-200", 67.5, 66.0}
                ])
     end
 
@@ -448,28 +448,28 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
     end
   end
 
-  describe "sxi, by name" do
-    # Stark Industries is a live client and held the thinnest margin of
+  describe "globex, by name" do
+    # Globex Corporation is a live client and held the thinnest margin of
     # the six: its shipped label painted 4.5539 against its tint, and a
     # single +1 on the label's green took it to 4.4974, under AA. After the
-    # move every sxi label clears 4.5 under a +/-1 move on its green (the
+    # move every globex label clears 4.5 under a +/-1 move on its green (the
     # solver's margin) AND under a +/-1 move on every channel at once (the
     # stricter test), on both surfaces in both themes. Figures are read off
     # the EMITTED bytes: label hex against tint hex.
-    @sxi %{
+    @globex %{
       {:light, "100"} => {4.6725, 4.6143, 4.6098},
       {:light, "200"} => {4.6030, 4.5443, 4.5398},
       {:dark, "100"} => {5.6959, 5.6388, 5.6337},
       {:dark, "200"} => {7.2567, 7.1839, 7.1775}
     }
 
-    test "every sxi label holds 4.5 under both perturbations, at the recorded figures" do
+    test "every globex label holds 4.5 under both perturbations, at the recorded figures" do
       emitted = emitted()
 
-      for {{theme, n}, {nominal, green, all_channel}} <- @sxi do
-        label = slot(emitted, "sxi", theme, "--scope-label-#{n}")
-        tint = slot(emitted, "sxi", theme, "--scope-tint-#{n}")
-        at = "sxi #{theme} base-#{n}"
+      for {{theme, n}, {nominal, green, all_channel}} <- @globex do
+        label = slot(emitted, "globex", theme, "--scope-label-#{n}")
+        tint = slot(emitted, "globex", theme, "--scope-tint-#{n}")
+        at = "globex #{theme} base-#{n}"
 
         assert_in_delta ScopeColor.contrast(label, tint), nominal, 0.00005, at
         assert_in_delta green_floor(label, tint), green, 0.00005, at
@@ -478,21 +478,21 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
         assert green >= 4.5 and all_channel >= 4.5, at
       end
 
-      # The thinnest sxi cell is the light rail, 0.0398 above AA on the
+      # The thinnest globex cell is the light rail, 0.0398 above AA on the
       # strict test. The shipped label had -0.0026 on the single-channel one.
-      assert @sxi |> Map.values() |> Enum.map(&elem(&1, 2)) |> Enum.min() == 4.5398
+      assert @globex |> Map.values() |> Enum.map(&elem(&1, 2)) |> Enum.min() == 4.5398
     end
 
-    test "sxi's light base-100 label is darker than it shipped, and its tint is the painted byte" do
+    test "globex's light base-100 label is darker than it shipped, and its tint is the painted byte" do
       emitted = emitted()
 
-      assert slot(emitted, "sxi", :light, "--scope-tint-100") ==
+      assert slot(emitted, "globex", :light, "--scope-tint-100") ==
                "#e3f7f0"
 
-      assert slot(emitted, "sxi", :light, "--scope-label-100") ==
+      assert slot(emitted, "globex", :light, "--scope-label-100") ==
                painted_hex("oklch(50.5% 0.15 162)")
 
-      assert ScopeColor.contrast(slot(emitted, "sxi", :light, "--scope-label-100"), "#e3f7f0") >
+      assert ScopeColor.contrast(slot(emitted, "globex", :light, "--scope-label-100"), "#e3f7f0") >
                ScopeColor.contrast("#007f4a", "#e3f7f0")
     end
   end
@@ -531,7 +531,7 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
       end
     end
 
-    test "wayne_tech's dark base-100 label is the shipped oklch, repainted by the solver" do
+    test "vandelay_ind's dark base-100 label is the shipped oklch, repainted by the solver" do
       # Its L never moved (68%, see @label_l), so this cell is not a colour
       # change at all. The browser used to convert `oklch(68% 0.15 240)`
       # itself and painted #19a2eb; the emitter now hands it the bytes the
@@ -542,13 +542,13 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
       # three channels clears 4.5, a set that contains it, and a stricter
       # bound than the solver's own green-only margin.
       emitted = emitted()
-      {hue, chroma} = hue_and_chroma("wayne_tech")
-      {_shipped_light_l, shipped_dark_l} = @shipped_label_l["wayne_tech"]
+      {hue, chroma} = hue_and_chroma("vandelay_ind")
+      {_shipped_light_l, shipped_dark_l} = @shipped_label_l["vandelay_ind"]
 
-      assert elem(@label_l["wayne_tech"], 2) == shipped_dark_l
+      assert elem(@label_l["vandelay_ind"], 2) == shipped_dark_l
 
-      label = slot(emitted, "wayne_tech", :dark, "--scope-label-100")
-      tint = slot(emitted, "wayne_tech", :dark, "--scope-tint-100")
+      label = slot(emitted, "vandelay_ind", :dark, "--scope-label-100")
+      tint = slot(emitted, "vandelay_ind", :dark, "--scope-tint-100")
 
       assert label ==
                painted_hex("oklch(#{fmt(shipped_dark_l)}% #{fmt(chroma)} #{hue})")
@@ -571,14 +571,14 @@ defmodule PlatformWeb.Components.ScopeColorStylesShippedSixTest do
         assert green >= 4.5, at
       end
 
-      # sxi holds the thinnest margin of the six and is the slug the AA
+      # globex holds the thinnest margin of the six and is the slug the AA
       # constraint exists to protect. It is the one flagged cell that GAINS:
       # pinning these labels back to the base bytes would return it to the
       # tightest figure in the set.
-      {_delta, sxi_before} = @flagged_light["sxi"]
-      {sxi_after, _green} = @flagged_after[{"sxi", :light}]
+      {_delta, globex_before} = @flagged_light["globex"]
+      {globex_after, _green} = @flagged_after[{"globex", :light}]
 
-      assert sxi_after > sxi_before
+      assert globex_after > globex_before
     end
   end
 

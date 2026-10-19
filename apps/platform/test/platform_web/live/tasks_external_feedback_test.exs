@@ -33,8 +33,8 @@ defmodule PlatformWeb.TasksExternalFeedbackTest do
   setup do
     Platform.TelemetryHelpers.ensure_boot_handler!(TelemetryHandler)
 
-    org_id = TenancyFixtures.tenant_org_id("soylent")
-    other_org_id = TenancyFixtures.tenant_org_id("paragon")
+    org_id = TenancyFixtures.tenant_org_id("initech")
+    other_org_id = TenancyFixtures.tenant_org_id("hooli")
 
     {:ok, project} =
       Tasks.create_project(%{

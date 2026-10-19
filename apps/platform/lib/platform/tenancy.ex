@@ -19,20 +19,25 @@ defmodule Platform.Tenancy do
 
     * Root org — `parent_org_id IS NULL`. Exactly one row, enforced
       at the DB level via a partial unique index.
-    * Tenant orgs (Soylent, Wayne-Tech, SXI, Paragon, future tenants) —
+    * Tenant orgs (Initech, Vandelay-Ind, Globex, Hooli, future tenants) —
       `parent_org_id` references the root.
 
   ## Scope display helpers
 
-  `scope_color/1` and `scope_label/1` are **pure functions** — they
-  consult a static map keyed by slug atom. They do NOT hit the DB. This
-  makes them safe to call from hot LiveView render paths (e.g. activity
-  feeds, task lists). Adding a new tenant slug requires:
+  Every scope colour and label comes from the `orgs` ROW: `color_hue`,
+  `color_chroma`, `color_lightness` and `name`. There is no compiled list of
+  org slugs anywhere in this module (task 01a14dd9 stage 2). The colour
+  reaches the page through `PlatformWeb.Components.ScopeColorStyles`, keyed
+  on a `data-scope` attribute carrying the slug as stored, and the label is
+  the row's `name`. Adding a tenant is a row, never a deploy.
 
-    1. seeding the org row (data migration)
-    2. adding the slug → class / label entries below
-    3. (later, when the design-system token lands) adding the
-       `text-<slug>` and `bg-<slug>` utilities to `app.css`.
+    * `scope_slug_entries/1` and `scope_color_entries/1` — the rows a page
+      needs colours and labels for.
+    * `css_slug/1` — the CSS-token form (`_` -> `-`) a chat section's
+      `color` stores.
+    * `scope_token_index/1` — that token -> the org entry behind it, for
+      every org passed in, archived ones included.
+    * `scope_palette/0,1` — the chat recolor palette.
 
   ## Email-domain admin rule (Stage 2 self-healing hook)
 
@@ -287,13 +292,12 @@ defmodule Platform.Tenancy do
   > `^[a-z][a-z0-9_-]*$` and the query above filters only on `archived_at`,
   > so a returned slug may be arbitrary user input.
   >
-  > Callers must therefore NOT assume a returned slug has a static entry in
-  > `@scope_labels`/`@scope_classes` (or in `ScopePill`'s `scope_label/1` /
-  > `slug/1`, which are non-total), and must NOT feed these slugs to
-  > `String.to_existing_atom/1` — it raises `ArgumentError` for any slug
-  > never compiled as an atom. Filter against the canonical allowlist
-  > (`Platform.Tasks.scope_keys/0`) comparing as strings instead; see
-  > `TasksLive.active_scope_keys/1`. An earlier version of this docstring
+  > Callers must therefore NOT assume a returned slug is known at compile
+  > time (no compiled list of org slugs exists since task 01a14dd9 stage 2),
+  > and must NOT feed these slugs to `String.to_existing_atom/1` — it raises
+  > `ArgumentError` for any slug never compiled as an atom. Keep slugs as
+  > strings end to end; see `TasksLive.active_scope_keys/1`. An earlier
+  > version of this docstring
   > asserted the opposite invariant and that false claim took `/tasks` down
   > for every user in the deployment (task 019fa209).
 
@@ -394,23 +398,50 @@ defmodule Platform.Tenancy do
   @doc """
   Canonical TENANT ordering for UI surfaces (ADR-0042).
 
-  Returns tenant slugs in their original seed insertion order:
-  `soylent, wayne_tech, sxi, paragon`. This is the "tenant-priority"
-  ordering that both the sidebar project picker and the project-create FAB
-  should agree on, rather than alphabetizing-by-name (which moves Paragon
-  to the front) or alphabetizing-by-slug (which moves paragon to the front).
+  Install config, read at RUNTIME on every call (never `compile_env`):
+  `Application.get_env(:platform, :tenant_priority, [])`. An install sets it
+  with the `TENANT_ORG_PRIORITY` env var, a comma-separated list of tenant
+  slugs in display order (`config/runtime.exs` parses it with
+  `parse_tenant_priority/1`). config.exs sets no default, so a fresh install
+  gets `[]` (task 01a14dd9).
+
+  This is the ordering the sidebar project picker and the project-create FAB
+  agree on, rather than alphabetizing by name or by slug.
 
   The ROOT org is deliberately not in this list: it sorts first
   structurally (`parent_org_id IS NULL`), whatever its slug, in
-  `sort_by_tenant_priority/2` and `Platform.Projects.group_by_org/1`. Until
-  task 01a116de the list named one install's root slug literally, so every
-  other install's root fell to the alphabetical tail.
+  `sort_by_tenant_priority/2` and `Platform.Projects.group_by_org/1`.
 
-  Unknown slugs fall to the end in slug-alphabetical order so adding a
-  new tenant without updating this list still produces a stable sort.
+  Slugs not listed (every slug, when the key is unset) get the `9_999`
+  sentinel from `tenant_priority_index/1` and fall to the end in
+  slug-alphabetical order, so adding a tenant without updating the list
+  still produces a stable sort.
   """
   @spec tenant_priority() :: [String.t()]
-  def tenant_priority, do: ["soylent", "wayne_tech", "sxi", "paragon"]
+  def tenant_priority, do: Application.get_env(:platform, :tenant_priority, [])
+
+  @doc """
+  Parse a `TENANT_ORG_PRIORITY` value into the `:tenant_priority` list.
+
+  Comma-separated; each entry is trimmed, blank entries are dropped and the
+  order is kept. Returns `[]` for `nil`, `""` or a value with no non-blank
+  entry; `config/runtime.exs` writes the key only for a non-empty result.
+
+      iex> Platform.Tenancy.parse_tenant_priority(" a , ,b ")
+      ["a", "b"]
+
+      iex> Platform.Tenancy.parse_tenant_priority(nil)
+      []
+  """
+  @spec parse_tenant_priority(String.t() | nil) :: [String.t()]
+  def parse_tenant_priority(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  def parse_tenant_priority(_value), do: []
 
   @doc """
   Index helper for `tenant_priority/0`. Returns the position of a slug in the
@@ -1301,7 +1332,7 @@ defmodule Platform.Tenancy do
   ## Example
 
       iex> lookup = fn org, :skill -> Map.fetch(skills_by_org_id, org.id) end
-      iex> Tenancy.effective_value(soylent, :skill, "fallback", lookup_fn: lookup)
+      iex> Tenancy.effective_value(initech, :skill, "fallback", lookup_fn: lookup)
       {:inherited, %Org{slug: "acme"}, "acme-default-skill"}
 
   """
@@ -1347,27 +1378,11 @@ defmodule Platform.Tenancy do
     end
   end
 
-  # ── Scope display (pure, DB-free) ─────────────────────────────────────
-
-  # The root org has no entry: it is install data, not a compiled atom, and
-  # reaches its colour through the `data-scope` var path
-  # (`PlatformWeb.Components.ScopeColorStyles`) instead (task 01a116de
-  # stage 3). The five siblings are the inventory FOLLOW-UP.
-  @scope_classes %{
-    soylent: "text-soylent",
-    wayne_tech: "text-wayne-tech",
-    sxi: "text-sxi",
-    paragon: "text-paragon",
-    cyberdyne: "text-cyberdyne"
-  }
-
-  @scope_labels %{
-    soylent: "Soylent",
-    wayne_tech: "Wayne-Tech",
-    sxi: "SXI",
-    paragon: "Paragon",
-    cyberdyne: "Cyberdyne"
-  }
+  # ── Scope display (row-driven) ────────────────────────────────────────
+  #
+  # There is no compiled map of org slugs here (task 01a14dd9 stage 2, the
+  # FOLLOW-UP named by task 01a116de). A scope's colour and label are read off
+  # its `orgs` row; see "Scope display helpers" in the moduledoc.
 
   # NOT a literal. `Platform.Tenancy.ScopeColor` is where the colour
   # constants live and this is the third of three readers; it used to be a
@@ -1385,11 +1400,10 @@ defmodule Platform.Tenancy do
   conversion safe; entries are STRINGS end to end, so no conversion — and no
   allowlist — is needed. Adding a tenant is a row, not a deploy.
 
-      [%{slug: "sxi", label: "SXI", hue: 162, chroma: 0.15, lightness: 0.7}, ...]
+      [%{slug: "globex", label: "Globex", hue: 162, chroma: 0.15, lightness: 0.7}, ...]
 
-  `label` is the org's own `name`, NOT `@scope_labels`: a map keyed on five
-  compiled atoms cannot name a seventh org, and the row already carries the
-  name an admin typed. `hue` is `nil` when the org has no colour set (the
+  `label` is the org's own `name`: the row carries the name an admin typed,
+  and no compiled map of org names exists. `hue` is `nil` when the org has no colour set (the
   caller decides the fallback); `chroma` falls back to #{@default_chroma},
   the mid-range value `Platform.Tenancy.ScopeColor` is tuned around.
   `lightness` is the org's fill lightness, or `nil` for the solver's
@@ -1479,60 +1493,70 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  Tailwind text-color class for a scope slug.
+  The CSS-token form of an org slug: lowercased, `_` -> `-`.
 
-  > #### Deprecated {: .warning}
-  >
-  > Keyed on the five compiled sibling scope atoms (the root org has none),
-  > so it returns `"text-muted"` for the root org and for any org added
-  > after this module was written. New callers want
-  > `scope_slug_entries/1` plus `Platform.Tenancy.ScopeColor.derive/2`.
-  > Retained because existing callers (`files_live`, `inheritance_pill`,
-  > `recovery_live`) still read it.
-
-  Returns the fallback `"text-muted"` for unknown slugs (including unknown
-  binaries that would otherwise blow up `String.to_existing_atom/1`).
+  It is what a chat section's `color` column stores (`Platform.Chat.Sidebar`
+  seeds it with the same rule), so `css_slug(org.slug) == section.color` is
+  how a section's colour token is matched back to the org whose colour it
+  wears. `nil` for anything that is not a binary.
   """
-  @spec scope_color(atom() | String.t()) :: String.t()
-  def scope_color(slug) when is_atom(slug), do: Map.get(@scope_classes, slug, "text-muted")
-  def scope_color(slug) when is_binary(slug), do: scope_color(safe_atom(slug))
-  def scope_color(_), do: "text-muted"
+  @spec css_slug(String.t() | nil) :: String.t() | nil
+  def css_slug(slug) when is_binary(slug),
+    do: slug |> String.downcase() |> String.replace("_", "-")
+
+  def css_slug(_), do: nil
 
   @doc """
-  Human-readable label for a scope slug.
+  Every org in `orgs` keyed by its `css_slug/1` token, as a
+  `scope_color_entries/1`-shaped entry plus `:token` and `:archived?`.
 
-  > #### Deprecated {: .warning}
-  >
-  > Same limitation as `scope_color/1`: a seventh org falls through to a
-  > capitalised echo of its slug rather than the name its admin typed. Use
-  > `scope_slug_entries/1`, whose `label` is `Org.name`.
+  ARCHIVED ORGS ARE INCLUDED on purpose. A section of an active org may wear
+  the token of an org that has since been archived, and that section still
+  has to render the archived org's colour; `scope_color_entries/1` is active
+  orgs only, so it cannot answer for it.
 
-  Unknown slugs fall back to a capitalised echo of the input so UIs
-  don't render an empty string. (`String.capitalize/1` doesn't know
-  about hyphens — that's fine here, the unknown-slug path is a
-  defensive fallback only.)
+  Pure: pass the rows you already loaded (`Platform.Tenancy.list_orgs/0`).
+  When two slugs share a token (`a_b` and `a-b`), the first in `orgs` wins.
   """
-  @spec scope_label(atom() | String.t()) :: String.t()
-  def scope_label(slug) when is_atom(slug),
-    do: Map.get(@scope_labels, slug, slug |> to_string() |> String.capitalize())
+  @spec scope_token_index([Org.t()]) :: %{String.t() => map()}
+  def scope_token_index(orgs) when is_list(orgs) do
+    Enum.reduce(orgs, %{}, fn %Org{} = org, acc ->
+      entry =
+        org
+        |> scope_entry()
+        |> Map.merge(%{token: css_slug(org.slug), archived?: not is_nil(org.archived_at)})
 
-  def scope_label(slug) when is_binary(slug) do
-    case safe_atom(slug) do
-      :__unknown__ -> String.capitalize(slug)
-      atom -> Map.get(@scope_labels, atom, String.capitalize(slug))
-    end
+      Map.put_new(acc, entry.token, entry)
+    end)
   end
 
-  def scope_label(_), do: ""
+  @doc """
+  The chat section recolor palette: one entry per NON-ARCHIVED org that has a
+  `color_hue`, in canonical tenant-priority order (root first).
 
-  # Convert a binary slug to its atom representation IF the atom already
-  # exists in the runtime; otherwise return `:__unknown__` so the
-  # caller's fallback can fire. Using `String.to_existing_atom/1`
-  # prevents atom-table pollution from unbounded user input.
-  defp safe_atom(s) do
-    String.to_existing_atom(s)
-  rescue
-    ArgumentError -> :__unknown__
+  Each entry is `%{token: css_slug(slug), slug: slug, name: name}`. `token` is
+  the value a recolor writes onto `channel_sections.color`; `slug` is the
+  `data-scope` that colours the swatch.
+
+  This is the ONE list. The chat rail renders it and `ChatLive` validates an
+  inbound recolor token against it server-side, so a forged payload carrying
+  any other string is refused. A section's own org token is always allowed
+  as well (an org with no colour can still be put back on its own token);
+  that is the caller's addition, not this list's.
+
+  `scope_palette/0` reads the rows; `scope_palette/1` takes rows already
+  loaded.
+  """
+  @spec scope_palette() :: [%{token: String.t(), slug: String.t(), name: String.t()}]
+  def scope_palette, do: scope_palette(list_orgs())
+
+  @spec scope_palette([Org.t()]) :: [%{token: String.t(), slug: String.t(), name: String.t()}]
+  def scope_palette(orgs) when is_list(orgs) do
+    orgs
+    |> Enum.filter(&(is_nil(&1.archived_at) and is_integer(&1.color_hue)))
+    |> sort_by_tenant_priority(& &1.slug)
+    |> Enum.map(&%{token: css_slug(&1.slug), slug: &1.slug, name: &1.name})
+    |> Enum.uniq_by(& &1.token)
   end
 
   # ── Email-domain admin rule (Stage 2 self-healing hook) ──────────────

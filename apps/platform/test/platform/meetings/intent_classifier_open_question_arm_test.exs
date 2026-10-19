@@ -328,8 +328,8 @@ defmodule Platform.Meetings.IntentClassifierOpenQuestionArmTest do
   describe "an org-scoped experiment (the only kind a tenant-pinned scientist can make)" do
     test "assigns an in-org meeting to the imp arm and leaves an out-of-org meeting on prompt",
          ctx do
-      org = Platform.TenancyFixtures.tenant_org_id("soylent")
-      other = Platform.TenancyFixtures.tenant_org_id("wayne_tech")
+      org = Platform.TenancyFixtures.tenant_org_id("initech")
+      other = Platform.TenancyFixtures.tenant_org_id("vandelay_ind")
       experiment = running_imp_experiment!("baseline_v0.json", %{org_id: org})
       assert experiment.org_id == org
       Process.put(:oq_arm_stub, stub_fun(self(), "off_topic"))

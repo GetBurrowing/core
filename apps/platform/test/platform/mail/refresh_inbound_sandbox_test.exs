@@ -75,7 +75,7 @@ defmodule Platform.Mail.RefreshInboundSandboxTest do
   end
 
   setup do
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
     admin = admin!(org_id)
     space = space!()
     %{org_id: org_id, admin: admin, space: space}

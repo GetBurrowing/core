@@ -25,11 +25,11 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
   # the light `.text-<slug>-label`.
   @orgs %{
     "legacy" => {"oklch(72% 0.16 50)", "oklch(55% 0.16 50)"},
-    "soylent" => {"oklch(65% 0.20 295)", "oklch(55% 0.20 295)"},
-    "wayne-tech" => {"oklch(68% 0.15 240)", "oklch(52% 0.15 240)"},
-    "sxi" => {"oklch(70% 0.15 162)", "oklch(51% 0.15 162)"},
-    "paragon" => {"oklch(80% 0.16 95)", "oklch(54% 0.16 95)"},
-    "cyberdyne" => {"oklch(66% 0.19 340)", "oklch(55.5% 0.19 340)"}
+    "initech" => {"oklch(65% 0.20 295)", "oklch(55% 0.20 295)"},
+    "vandelay-ind" => {"oklch(68% 0.15 240)", "oklch(52% 0.15 240)"},
+    "globex" => {"oklch(70% 0.15 162)", "oklch(51% 0.15 162)"},
+    "hooli" => {"oklch(80% 0.16 95)", "oklch(54% 0.16 95)"},
+    "wonka" => {"oklch(66% 0.19 340)", "oklch(55.5% 0.19 340)"}
   }
 
   defp fill(slug), do: @orgs |> Map.fetch!(slug) |> elem(0)
@@ -55,8 +55,8 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
     end
 
     test "alpha 1.0 is the fill alone, and alpha 0.0 is the surface alone" do
-      assert ScopeColor.composite_painted(label("sxi"), 1.0, @base_100).rgb == {0, 127, 74}
-      assert ScopeColor.composite_painted(fill("sxi"), 0.0, @base_200).rgb == {242, 242, 242}
+      assert ScopeColor.composite_painted(label("globex"), 1.0, @base_100).rgb == {0, 127, 74}
+      assert ScopeColor.composite_painted(fill("globex"), 0.0, @base_200).rgb == {242, 242, 242}
     end
   end
 
@@ -93,7 +93,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
       end
     end
 
-    test "2. quantises once, at the end: fill-first rounding moves wayne-tech and only wayne-tech" do
+    test "2. quantises once, at the end: fill-first rounding moves vandelay-ind and only vandelay-ind" do
       fill_first = fn slug ->
         fill_bytes = ScopeColor.composite_painted(fill(slug), 1.0, @base_100).rgb
         ScopeColor.composite_painted(hex(fill_bytes), 0.12, @base_100).hex
@@ -101,13 +101,13 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
 
       once = fn slug -> ScopeColor.composite_painted(fill(slug), 0.12, @base_100).hex end
 
-      # wayne-tech's float red is 227.465 and rounds to E3. Rounding the fill
+      # vandelay-ind's float red is 227.465 and rounds to E3. Rounding the fill
       # first (red 25.54 -> 26) lands on 227.52 and rounds to E4.
-      assert once.("wayne-tech") == "#e3f4fd"
-      assert fill_first.("wayne-tech") == "#e4f4fd"
+      assert once.("vandelay-ind") == "#e3f4fd"
+      assert fill_first.("vandelay-ind") == "#e4f4fd"
 
       moved = for slug <- Map.keys(@orgs), once.(slug) != fill_first.(slug), do: slug
-      assert moved == ["wayne-tech"]
+      assert moved == ["vandelay-ind"]
     end
 
     test "3. clips each linear channel, then encodes (the Chrome-measured bytes)" do
@@ -255,11 +255,11 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
     # The recorded divergence, per channel, as computed minus painted.
     #
     # (a) The spec for this stage expected a different set: ten exact and
-    #     two misses, wayne-tech over base-100 (`#E4F4FD` computed) and
-    #     soylent over base-100. wayne-tech's `#E4F4FD` is what you get by
+    #     two misses, vandelay-ind over base-100 (`#E4F4FD` computed) and
+    #     initech over base-100. vandelay-ind's `#E4F4FD` is what you get by
     #     quantising the FILL first (red 25.54 -> 26, then 227.52 -> 228),
     #     which convention 2 forbids. Composited in float and rounded once,
-    #     wayne-tech's red is 227.465 and matches the painted `E3`.
+    #     vandelay-ind's red is 227.465 and matches the painted `E3`.
     # (b) The 10+2 figure was corrected to 7+5 on 2026-09-21, on two
     #     independent float paths agreeing on all twelve cells (this module
     #     and `Platform.Design.WcagContrast`), and the CSS Color 4 matrices
@@ -268,7 +268,7 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
     # (d) Mechanisms proposed for the byte and refuted out of sample; do not
     #     re-run them:
     #       * plain, floor, or round-half-even rounding of the float: fails
-    #         within a single colour (soylent red 243 fits, green 237 does
+    #         within a single colour (initech red 243 fits, green 237 does
     #         not);
     #       * 8-bit quantisation of the ALPHA before compositing: fit 18/18
     #         channels over base-100, then 5/12 on held-out alphas (22% and
@@ -341,15 +341,15 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
     # The moduledoc's margin table: painted label vs painted 12% tint over
     # base-100, and the worst single +-1 move. `floor_contrast/2` is the
     # green-channel move, so it is asserted against the table only where
-    # green IS the worst axis. cyberdyne's worst axis is not green; the
+    # green IS the worst axis. wonka's worst axis is not green; the
     # table says 4.5854 and the green floor is 4.5920. That figure is pinned
     # separately so the moduledoc's claim about it stays true.
     @green_worst %{
       "legacy" => 4.5804,
-      "soylent" => 4.6042,
-      "wayne-tech" => 4.6224,
-      "sxi" => 4.4974,
-      "paragon" => 4.6265
+      "initech" => 4.6042,
+      "vandelay-ind" => 4.6224,
+      "globex" => 4.4974,
+      "hooli" => 4.6265
     }
 
     @painted_base_100 (for {slug, label} <- ScopeColorPaintedFixture.labels(), into: %{} do
@@ -372,15 +372,15 @@ defmodule Platform.Tenancy.ScopeColorPaintedTest do
       end
     end
 
-    test "sxi crosses AA under a single one-unit move up on the label's green" do
-      assert green_floor("sxi") < 4.5
+    test "globex crosses AA under a single one-unit move up on the label's green" do
+      assert green_floor("globex") < 4.5
       assert ScopeColor.contrast(hex({0, 128, 74}), "#E3F7F0") < 4.5
       assert ScopeColor.contrast(hex({0, 127, 74}), "#E3F7F0") >= 4.5
     end
 
-    test "cyberdyne: the green-only floor is 4.5920, above the table's non-green 4.5854" do
-      assert_in_delta green_floor("cyberdyne"), 4.5920, 0.00005
-      assert green_floor("cyberdyne") > 4.5854
+    test "wonka: the green-only floor is 4.5920, above the table's non-green 4.5854" do
+      assert_in_delta green_floor("wonka"), 4.5920, 0.00005
+      assert green_floor("wonka") > 4.5854
     end
   end
 end

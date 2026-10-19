@@ -65,7 +65,7 @@ defmodule Platform.Access.EquivalenceTest do
     root = acme_org_id()
     org_a = w.org_a.id
     org_b = w.org_b.id
-    foreign = tenant_org_id("wayne_tech")
+    foreign = tenant_org_id("vandelay_ind")
 
     root_admin = human!(fn u -> member!(u, root, "admin") end)
     root_member = human!(fn u -> member!(u, root, "member") end)

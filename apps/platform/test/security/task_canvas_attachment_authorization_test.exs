@@ -146,7 +146,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     # denial-row assertions would be testing an emit nobody listens to.
     Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
 
-    %{org_a: Tenancy.get_org_by_slug!("sxi"), org_b: Tenancy.get_org_by_slug!("soylent")}
+    %{org_a: Tenancy.get_org_by_slug!("globex"), org_b: Tenancy.get_org_by_slug!("initech")}
   end
 
   # ── fixtures ──────────────────────────────────────────────────────────────

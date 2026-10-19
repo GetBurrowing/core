@@ -339,7 +339,7 @@ defmodule Platform.CodeMode.DocsTest do
   end
 
   defp external_runtime!(bundles) do
-    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    org = Platform.Tenancy.get_org_by_slug!("globex")
     external = Platform.ExternalUserFixtures.create_user!()
 
     {:ok, _} =

@@ -64,7 +64,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
 
   defp seed do
     acme_org_id = Platform.TenancyFixtures.acme_org_id()
-    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+    tenant_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
     own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
@@ -80,12 +80,12 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
     # project and make this absence assertion unsatisfiable by design. Only a
     # non-root viewer exercises the org filter.
     test "a plain member does not see a foreign org's project name", %{conn: conn} do
-      own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
+      own_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
       own = project!(own_org_id, "Own Tenant Project #{System.unique_integer([:positive])}")
 
       foreign =
         project!(
-          Platform.TenancyFixtures.tenant_org_id("sxi"),
+          Platform.TenancyFixtures.tenant_org_id("globex"),
           "Foreign Project #{System.unique_integer([:positive])}"
         )
 
@@ -189,8 +189,8 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
     end
 
     test "a member sees own-org meetings and not a foreign org's", %{conn: conn} do
-      own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
-      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+      own_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
+      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
       {_own_project, own_meeting} = meeting!(own_org_id, "Own")
       {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")
@@ -223,8 +223,8 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
 
     test "a peer broadcast does not re-leak a foreign meeting into a scoped index",
          %{conn: conn} do
-      own_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
-      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
+      own_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
+      foreign_org_id = Platform.TenancyFixtures.tenant_org_id("globex")
 
       {own_project, own_meeting} = meeting!(own_org_id, "Own")
       {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")

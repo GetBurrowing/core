@@ -139,7 +139,11 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
           dm_allowlist_org_ids: [root.id]
         })
 
-      full = oidc_callback(conn, "accept-guest", "accept-guest@example.com", ["sxi-external"])
+      full =
+        oidc_callback(conn, "accept-guest", "accept-guest@example.com", [
+          Platform.OIDC.external_group()
+        ])
+
       assert redirected_to(full, 302) == "/"
       user_id = get_session(full, :current_user_id)
       assert get_session(full, :external_admission) == nil
@@ -159,7 +163,7 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
           Phoenix.ConnTest.build_conn(),
           "accept-no-grant",
           "accept-no-grant@example.com",
-          ["sxi-external"]
+          [Platform.OIDC.external_group()]
         )
 
       assert redirected_to(holding, 302) == "/welcome"

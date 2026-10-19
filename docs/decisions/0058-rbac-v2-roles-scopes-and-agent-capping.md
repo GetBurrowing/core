@@ -106,7 +106,7 @@ readings of the source. Except where stated, nothing here was observed on a runn
   (`lib/platform/tasks.ex:7378-7379`, OR root admin).
 
 **OIDC external marker.**
-- `OIDC_EXTERNAL_GROUP` is read at `config/runtime.exs:180` and defaults to `sxi-external`;
+- `OIDC_EXTERNAL_GROUP` is read at `config/runtime.exs:180` and defaults to `globex-external`;
   `OIDC_EXTERNAL_CLAIM` (`:181`) names the claim and defaults to `groups`.
 - The predicate is `Platform.OIDC.external_claim?/1` (`lib/platform/oidc.ex:59`).
   `claim_groups/1` (`oidc.ex:92`) returns the multi-valued group list that
@@ -212,7 +212,7 @@ orthogonal flag that silently subtracts permissions would leave a second restric
 the model, and that path could not be:
 - inspected in the Access panel;
 - explained in a denial ("which rule?");
-- targeted by an IdP group mapping, which is how `sxi-external` generalizes.
+- targeted by an IdP group mapping, which is how `globex-external` generalizes.
 
 Rows 5 and 6 also show that the flag is enforced unevenly today. `org_admin?/2` honours it.
 `root_admin?/1` and `visibility/1` do not, and only the HTTP plug and `ExternalScope` make up the
@@ -937,7 +937,7 @@ Every route in the `:admin` live_session (`router.ex:933-983`) and the `:admin_s
 - `normalize_oidc_user/1` carries it on every login.
 
 The rules:
-- **`sxi-external` stays mapped to guest by default.** `mappings/0` is the implicit
+- **`globex-external` stays mapped to guest by default.** `mappings/0` is the implicit
   `%{group_value: OIDC.external_group(), role_key: "guest", org_id: nil}` plus every DB row, so
   the env var keeps working with no row. The env var is not renamed or removed.
 - **Guest mappings mark the login external.** A login whose groups match any guest mapping takes

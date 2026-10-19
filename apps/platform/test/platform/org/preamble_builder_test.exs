@@ -6,7 +6,7 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   Coverage:
 
-    (a) tenant-SXI task preamble contains SXI + Acme (root super-context)
+    (a) tenant-Globex task preamble contains Globex + Acme (root super-context)
         files, NOT sibling tenants' files
     (b) root-Acme no-task call returns Acme full + descendant
         IDENTITY.md summaries + TENANTS_SUMMARY.md if seeded; NOT full
@@ -92,34 +92,39 @@ defmodule Platform.Org.PreambleBuilderTest do
     project
   end
 
-  # ── (a) tenant scope: SXI gets SXI + Acme, NOT WayneTech ─────────────────
+  # ── (a) tenant scope: Globex gets Globex + Acme, NOT VandelayInd ─────────────────
 
   test "tenant task preamble = own pages + root super-context, no siblings" do
     acme = Tenancy.get_org_by_slug!("acme")
-    sxi = Tenancy.get_org_by_slug!("sxi")
-    wayne_tech = Tenancy.get_org_by_slug!("wayne_tech")
+    globex = Tenancy.get_org_by_slug!("globex")
+    vandelay_ind = Tenancy.get_org_by_slug!("vandelay_ind")
 
     seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
     seed_page!("org/acme/MEMORY.md", preamble_body("# Acme memory"), acme.id)
-    seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI identity"), sxi.id)
-    seed_page!("org/wayne_tech/IDENTITY.md", preamble_body("# Wayne-Tech identity"), wayne_tech.id)
+    seed_page!("org/globex/IDENTITY.md", preamble_body("# Globex identity"), globex.id)
 
-    project = seed_project!(sxi.id, "sxi-#{System.unique_integer([:positive])}")
+    seed_page!(
+      "org/vandelay_ind/IDENTITY.md",
+      preamble_body("# Vandelay-Ind identity"),
+      vandelay_ind.id
+    )
+
+    project = seed_project!(globex.id, "globex-#{System.unique_integer([:positive])}")
     task = build_task!(project.id)
 
     result = PreambleBuilder.build(task, nil)
 
     keys = Map.keys(result)
-    assert "org/sxi/IDENTITY.md" in keys
+    assert "org/globex/IDENTITY.md" in keys
     assert "org/acme/IDENTITY.md" in keys
     assert "org/acme/MEMORY.md" in keys
     # Sibling tenant — explicitly excluded by ADR 0042 §3.
-    refute "org/wayne_tech/IDENTITY.md" in keys
+    refute "org/vandelay_ind/IDENTITY.md" in keys
 
     # Sanity: content is annotated with the BEGIN/END markers.
     assert String.contains?(
-             result["org/sxi/IDENTITY.md"],
-             ~s(<!-- BEGIN org-preamble page="org/sxi/IDENTITY.md")
+             result["org/globex/IDENTITY.md"],
+             ~s(<!-- BEGIN org-preamble page="org/globex/IDENTITY.md")
            )
   end
 
@@ -127,8 +132,8 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   test "root no-task call returns Acme full + descendant IDENTITY summaries" do
     acme = Tenancy.get_org_by_slug!("acme")
-    sxi = Tenancy.get_org_by_slug!("sxi")
-    soylent = Tenancy.get_org_by_slug!("soylent")
+    globex = Tenancy.get_org_by_slug!("globex")
+    initech = Tenancy.get_org_by_slug!("initech")
 
     # Acme's own pages — should appear in full.
     seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
@@ -138,18 +143,23 @@ defmodule Platform.Org.PreambleBuilderTest do
     # we don't need to run the curator.
     seed_page!(
       "org/acme/TENANTS_SUMMARY.md",
-      preamble_body("## SXI\n\nSBS does things.\n"),
+      preamble_body("## Globex\n\nGlobex does things.\n"),
       acme.id
     )
 
     # Descendants: IDENTITY only should surface, MEMORY explicitly NOT.
-    seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI identity"), sxi.id)
-    seed_page!("org/sxi/MEMORY.md", preamble_body("# SXI memory — do NOT load at root"), sxi.id)
+    seed_page!("org/globex/IDENTITY.md", preamble_body("# Globex identity"), globex.id)
 
     seed_page!(
-      "org/soylent/IDENTITY.md",
-      preamble_body("# Soylent identity"),
-      soylent.id
+      "org/globex/MEMORY.md",
+      preamble_body("# Globex memory — do NOT load at root"),
+      globex.id
+    )
+
+    seed_page!(
+      "org/initech/IDENTITY.md",
+      preamble_body("# Initech identity"),
+      initech.id
     )
 
     result = PreambleBuilder.build(nil, nil, org_id: acme.id)
@@ -158,11 +168,11 @@ defmodule Platform.Org.PreambleBuilderTest do
     assert "org/acme/IDENTITY.md" in keys
     assert "org/acme/MEMORY.md" in keys
     assert "org/acme/TENANTS_SUMMARY.md" in keys
-    assert "org/sxi/IDENTITY.md" in keys
-    assert "org/soylent/IDENTITY.md" in keys
+    assert "org/globex/IDENTITY.md" in keys
+    assert "org/initech/IDENTITY.md" in keys
     # The whole point of super-context-at-root: descendants summarize,
     # they don't dump.
-    refute "org/sxi/MEMORY.md" in keys
+    refute "org/globex/MEMORY.md" in keys
   end
 
   # ── (b2) root scope + project task: include project/<id>/* too ────────
@@ -173,10 +183,10 @@ defmodule Platform.Org.PreambleBuilderTest do
     # because the root branch of collect_entries/4 never called
     # project_entries/2.
     acme = Tenancy.get_org_by_slug!("acme")
-    sxi = Tenancy.get_org_by_slug!("sxi")
+    globex = Tenancy.get_org_by_slug!("globex")
 
     seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
-    seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI identity"), sxi.id)
+    seed_page!("org/globex/IDENTITY.md", preamble_body("# Globex identity"), globex.id)
 
     project = seed_project!(acme.id, "acme-#{System.unique_integer([:positive])}")
 
@@ -199,21 +209,21 @@ defmodule Platform.Org.PreambleBuilderTest do
     # Root super-context still applies.
     assert "org/acme/IDENTITY.md" in keys
     # Descendant tenant IDENTITY.md still surfaces (super-context-at-root).
-    assert "org/sxi/IDENTITY.md" in keys
+    assert "org/globex/IDENTITY.md" in keys
   end
 
   # ── (c) project-scoped pages gated on task.project_id ─────────────────
 
   test "project-scoped pages load only when task.project_id matches" do
-    sxi = Tenancy.get_org_by_slug!("sxi")
-    project_a = seed_project!(sxi.id, "a-#{System.unique_integer([:positive])}")
-    project_b = seed_project!(sxi.id, "b-#{System.unique_integer([:positive])}")
+    globex = Tenancy.get_org_by_slug!("globex")
+    project_a = seed_project!(globex.id, "a-#{System.unique_integer([:positive])}")
+    project_b = seed_project!(globex.id, "b-#{System.unique_integer([:positive])}")
 
     # Project A page: should appear when task is scoped to A.
     seed_page!(
       "project/#{project_a.id}/decisions.md",
       preamble_body("# Project A decisions"),
-      sxi.id,
+      globex.id,
       project_id: project_a.id
     )
 
@@ -221,13 +231,13 @@ defmodule Platform.Org.PreambleBuilderTest do
     seed_page!(
       "project/#{project_b.id}/decisions.md",
       preamble_body("# Project B decisions"),
-      sxi.id,
+      globex.id,
       project_id: project_b.id
     )
 
     # Also seed a tenant-level page so the result isn't empty even if
     # the project filter accidentally excludes everything.
-    seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI"), sxi.id)
+    seed_page!("org/globex/IDENTITY.md", preamble_body("# Globex"), globex.id)
 
     task = build_task!(project_a.id)
 
@@ -236,15 +246,15 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     assert "project/#{project_a.id}/decisions.md" in keys
     refute "project/#{project_b.id}/decisions.md" in keys
-    assert "org/sxi/IDENTITY.md" in keys
+    assert "org/globex/IDENTITY.md" in keys
   end
 
   # ── (d) eviction order + telemetry ────────────────────────────────────
 
   test "tight budget evicts in documented order and fires telemetry" do
-    sxi = Tenancy.get_org_by_slug!("sxi")
+    globex = Tenancy.get_org_by_slug!("globex")
     acme = Tenancy.get_org_by_slug!("acme")
-    project = seed_project!(sxi.id, "evict-#{System.unique_integer([:positive])}")
+    project = seed_project!(globex.id, "evict-#{System.unique_integer([:positive])}")
     space_id = Ecto.UUID.generate()
 
     # Four entries, one per priority band. Each is ~400 chars → ~100
@@ -255,12 +265,12 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     seed_page!("space/#{space_id}/notes.md", preamble_body(big), acme.id)
     seed_page!("org/acme/IDENTITY.md", preamble_body(big), acme.id)
-    seed_page!("org/sxi/IDENTITY.md", preamble_body(big), sxi.id)
+    seed_page!("org/globex/IDENTITY.md", preamble_body(big), globex.id)
 
     seed_page!(
       "project/#{project.id}/decisions.md",
       preamble_body(big),
-      sxi.id,
+      globex.id,
       project_id: project.id
     )
 
@@ -318,8 +328,8 @@ defmodule Platform.Org.PreambleBuilderTest do
     end
 
     defp tenant_task! do
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      project = seed_project!(sxi.id, "burrow-#{System.unique_integer([:positive])}")
+      globex = Tenancy.get_org_by_slug!("globex")
+      project = seed_project!(globex.id, "burrow-#{System.unique_integer([:positive])}")
       build_task!(project.id)
     end
 
@@ -367,15 +377,15 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     test "under a budget that forces eviction, org and project pages evict before the index" do
       acme = Tenancy.get_org_by_slug!("acme")
-      sxi = Tenancy.get_org_by_slug!("sxi")
-      project = seed_project!(sxi.id, "burrow-evict-#{System.unique_integer([:positive])}")
+      globex = Tenancy.get_org_by_slug!("globex")
+      project = seed_project!(globex.id, "burrow-evict-#{System.unique_integer([:positive])}")
       big = String.duplicate("x", 400)
 
       seed_burrow!(@index, preamble_body(big))
       seed_page!("org/acme/IDENTITY.md", preamble_body(big), acme.id)
-      seed_page!("org/sxi/IDENTITY.md", preamble_body(big), sxi.id)
+      seed_page!("org/globex/IDENTITY.md", preamble_body(big), globex.id)
 
-      seed_page!("project/#{project.id}/decisions.md", preamble_body(big), sxi.id,
+      seed_page!("project/#{project.id}/decisions.md", preamble_body(big), globex.id,
         project_id: project.id
       )
 

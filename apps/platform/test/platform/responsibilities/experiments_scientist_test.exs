@@ -62,7 +62,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
   end
 
   setup do
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
     %{org_id: org_id}
   end
 
@@ -376,7 +376,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
     test "a tenant-pinned scientist sees its own org and install-wide rows, never another org",
          ctx do
       org_a = ctx.org_id
-      org_b = Tenancy.get_org_by_slug!("paragon").id
+      org_b = Tenancy.get_org_by_slug!("hooli").id
 
       goal_a = goal!(org_a)
       experiment_a = running_experiment!(goal_a, org_a)
@@ -411,7 +411,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
 
     test "an unpinned scientist is install-wide and sees both orgs (the same data can leak)",
          ctx do
-      org_b = Tenancy.get_org_by_slug!("paragon").id
+      org_b = Tenancy.get_org_by_slug!("hooli").id
       goal!(ctx.org_id)
       experiment_b = org_b_world!(org_b)
       scientist!()

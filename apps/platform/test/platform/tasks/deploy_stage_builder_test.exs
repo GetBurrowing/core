@@ -137,7 +137,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       strategy = %{
         "type" => "docker_deploy",
         "config" => %{
-          "host" => "dev@192.0.2.234",
+          "host" => "queen@192.0.2.234",
           "image" => "ghcr.io/org/app:latest"
         }
       }
@@ -148,7 +148,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.position == 5
       assert result.validations == [%{kind: "ci_passed"}, %{kind: "test_pass"}]
       assert result.description =~ "Docker"
-      assert result.description =~ "dev@192.0.2.234"
+      assert result.description =~ "queen@192.0.2.234"
       assert result.description =~ "ghcr.io/org/app:latest"
     end
 
@@ -545,8 +545,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert msg =~ "require_ci_pass is not expressible for Startup-Suite/openclaw-suite-channel"
     end
 
-    # `ci: "unenforced"` (Stark Industries/orion's actual live state:
-    # `gh api repos/Stark Industries/orion/branches/main` reports
+    # `ci: "unenforced"` (Globex-Corporation/atlas's actual live state:
+    # `gh api repos/Globex-Corporation/atlas/branches/main` reports
     # `protected: false`, `required_status_checks.contexts: []`, while its
     # CI workflows genuinely run and pass) mirrors `ci: "none"` here for the
     # same reason: nothing is REQUIRED, so nothing exists for auto-merge or
@@ -556,7 +556,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "type" => "pr_merge",
         "repos" => [
           %{
-            "repo_url" => "https://github.com/Stark Industries/orion",
+            "repo_url" => "https://github.com/Globex-Corporation/atlas",
             "ci" => "unenforced",
             "config" => %{"auto_merge" => true}
           }
@@ -564,7 +564,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       }
 
       assert {:error, msg} = DeployStageBuilder.validate_strategy(strategy)
-      assert msg =~ "auto_merge is not expressible for Stark Industries/orion"
+      assert msg =~ "auto_merge is not expressible for Globex-Corporation/atlas"
       assert msg =~ "nothing was required to pass, not that checks passed"
     end
 
@@ -573,7 +573,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "type" => "pr_merge",
         "repos" => [
           %{
-            "repo_url" => "Stark Industries/orion",
+            "repo_url" => "Globex-Corporation/atlas",
             "ci" => "unenforced",
             "config" => %{"require_ci_pass" => true}
           }
@@ -581,7 +581,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       }
 
       assert {:error, msg} = DeployStageBuilder.validate_strategy(strategy)
-      assert msg =~ "require_ci_pass is not expressible for Stark Industries/orion"
+      assert msg =~ "require_ci_pass is not expressible for Globex-Corporation/atlas"
       assert msg =~ "nothing was required to pass, not that checks passed"
     end
 
@@ -592,7 +592,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "repos" => [
           %{"repo_url" => "Startup-Suite/core", "ci" => "required"},
           %{
-            "repo_url" => "Stark Industries/orion",
+            "repo_url" => "Globex-Corporation/atlas",
             "ci" => "unenforced",
             "config" => %{"auto_merge" => false}
           }
@@ -688,12 +688,12 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       "config" => %{"auto_merge" => false}
     }
 
-    # `ci: "unenforced"` (Stark Industries/orion's actual live state:
+    # `ci: "unenforced"` (Globex-Corporation/atlas's actual live state:
     # workflows genuinely run and pass, but `branches/main` reports
     # `protected: false` and `required_status_checks.contexts: []`).
-    @orion %{
-      "repo_url" => "https://github.com/Stark Industries/orion",
-      "slug" => "Stark Industries/orion",
+    @atlas %{
+      "repo_url" => "https://github.com/Globex-Corporation/atlas",
+      "slug" => "Globex-Corporation/atlas",
       "ci" => "unenforced",
       "role" => "secondary",
       "config" => %{}
@@ -850,8 +850,8 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
         "repos" => [
           @core,
           %{
-            "repo_url" => "https://github.com/Stark Industries/orion",
-            "slug" => "Stark Industries/orion",
+            "repo_url" => "https://github.com/Globex-Corporation/atlas",
+            "slug" => "Globex-Corporation/atlas",
             "ci" => "unenforced",
             "role" => "secondary",
             "config" => %{}
@@ -861,12 +861,12 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
 
-      [core_gate, orion_gate] = result.validations
+      [core_gate, atlas_gate] = result.validations
 
       assert core_gate.evaluation_payload["ci"] == "required"
-      assert orion_gate.evaluation_payload["ci"] == "unenforced"
+      assert atlas_gate.evaluation_payload["ci"] == "unenforced"
 
-      assert orion_gate.evaluation_payload["auto_merge"] == false,
+      assert atlas_gate.evaluation_payload["auto_merge"] == false,
              "a repo with nothing required has nothing for auto-merge to wait on"
     end
 
@@ -912,10 +912,10 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.description =~ "CI is required and enforced by branch protection"
     end
 
-    test "ci: unenforced single-repo gate (orion's shape) renders the NEW claim via the single-repo path, and neither the none nor the required claim" do
+    test "ci: unenforced single-repo gate (atlas's shape) renders the NEW claim via the single-repo path, and neither the none nor the required claim" do
       result =
         DeployStageBuilder.build_stage(
-          %{"type" => "pr_merge", "config" => %{}, "repos" => [@orion]},
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@atlas]},
           1,
           @recorded_branch
         )
@@ -933,7 +933,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     test "ci: required and ci: unenforced both render their claims via repo_sentence/1 in a two-repo scenario" do
       result =
         DeployStageBuilder.build_stage(
-          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @orion]},
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @atlas]},
           1,
           @recorded_branch
         )
@@ -942,10 +942,10 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
                "Startup-Suite/core: CI is required and enforced by branch protection"
 
       assert result.description =~
-               "Stark Industries/orion: CI runs on this repo but is NOT required"
+               "Globex-Corporation/atlas: CI runs on this repo but is NOT required"
 
-      refute result.description =~ "Stark Industries/orion has no required status checks"
-      refute result.description =~ "Stark Industries/orion: CI is required and enforced"
+      refute result.description =~ "Globex-Corporation/atlas has no required status checks"
+      refute result.description =~ "Globex-Corporation/atlas: CI is required and enforced"
     end
 
     test "ci: none still renders unchanged in both the single-repo path and repo_sentence/1 (regression guard)" do
@@ -999,14 +999,14 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       single_unenforced =
         DeployStageBuilder.build_stage(
-          %{"type" => "pr_merge", "config" => %{}, "repos" => [@orion]},
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@atlas]},
           1,
           @recorded_branch
         ).description
 
       multi =
         DeployStageBuilder.build_stage(
-          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel, @orion]},
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel, @atlas]},
           1,
           @recorded_branch
         ).description

@@ -692,7 +692,7 @@ defmodule Platform.Tasks.CanvasAttachmentsTest do
   # that task.
   describe "attach_canvas/4 authorizes the attacher against the task" do
     setup do
-      %{org_a: org!("sxi"), org_b: org!("soylent")}
+      %{org_a: org!("globex"), org_b: org!("initech")}
     end
 
     test "an agent with no binding to the task is denied and no row is written", ctx do

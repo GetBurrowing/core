@@ -9,7 +9,7 @@ defmodule Platform.Files.CardBackfill do
   somebody uploads something.
 
   That is not a cold-start nicety. The design canvas's worked example of
-  supersession is the pair of order forms in the SXI corpus, and **both of
+  supersession is the pair of order forms in the Globex corpus, and **both of
   them are already ingested** — a future-only catalog cannot demonstrate
   the feature it was built for.
 
@@ -37,7 +37,7 @@ defmodule Platform.Files.CardBackfill do
   requires `--write`. Two defaults rather than one because the expensive
   direction is the one a typo should not reach: this loop spends real
   provider money per file, and a caller who forgot the option gets a
-  census, not a bill. Sized against the SXI corpus the full run is roughly
+  census, not a bill. Sized against the Globex corpus the full run is roughly
   a dollar (~39 documents, image-heavy PDF whose extracted text is far
   below its ~35MB of source bytes), which is cheap enough to run and
   expensive enough that it should be asked for.

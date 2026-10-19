@@ -48,7 +48,7 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: TenancyFixtures.tenant_org_id("sxi")
+        org_id: TenancyFixtures.tenant_org_id("globex")
       })
 
     user
@@ -81,7 +81,7 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     |> Repo.insert!()
   end
 
-  # Internal-only #acme-eng, fully-external #sxi-support, mixed #sxi-shared.
+  # Internal-only #acme-eng, fully-external #globex-support, mixed #globex-shared.
   defp seed_three_spaces do
     acme = World.create_user!()
     ext = external_user!()
@@ -91,12 +91,12 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     post_msg!(internal.id, kp.id, "engmsg-internal-secret")
     transcript!(internal.id, "eng-transcript-internal")
 
-    external = World.channel!(%{name: "sxi-support-m15"})
+    external = World.channel!(%{name: "globex-support-m15"})
     ep = World.add_user!(external.id, ext.id)
     post_msg!(external.id, ep.id, "supportmsg-external-secret")
     transcript!(external.id, "support-transcript-external")
 
-    mixed = World.channel!(%{name: "sxi-shared-m15"})
+    mixed = World.channel!(%{name: "globex-shared-m15"})
     mk = World.add_user!(mixed.id, acme.id)
     _me = World.add_user!(mixed.id, ext.id)
     post_msg!(mixed.id, mk.id, "sharedmsg-mixed-secret")
@@ -212,7 +212,7 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
       backdate_message(im, one_hour_ago)
       transcript!(internal.id, "internal-hist-mtg")
 
-      external = World.channel!(%{name: "sxi-support-bytes"})
+      external = World.channel!(%{name: "globex-support-bytes"})
       ext = external_user!()
       ep = World.add_user!(external.id, ext.id)
       em = post_msg!(external.id, ep.id, String.duplicate("E", 200))

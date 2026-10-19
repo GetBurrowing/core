@@ -88,8 +88,8 @@ final class IntentsTests: XCTestCase {
 
     private func space(_ host: String) -> SpaceEntity {
         SpaceEntity(
-            id: EntityRef(host: host, uuid: "5a000000-0000-4000-8000-000000000001").id, name: "Internal Legacy SXI", isDirectMessage: false,
-            pathSegment: "sxi", subtitle: "Space")
+            id: EntityRef(host: host, uuid: "5a000000-0000-4000-8000-000000000001").id, name: "Internal Legacy Globex", isDirectMessage: false,
+            pathSegment: "globex", subtitle: "Space")
     }
 
     private func agent(_ host: String) -> AgentEntity {
@@ -187,7 +187,7 @@ final class IntentsTests: XCTestCase {
             [
                 "Approve the plan Burrow iOS: App Intents in Burrow iOS on a.example.com? Agents start building as soon as you approve.",
                 "Reject the review Burrow iOS: App Intents in Burrow iOS on a.example.com? It goes back to the agent with your note.",
-                "Send \"On my way\" to Internal Legacy SXI on a.example.com?",
+                "Send \"On my way\" to Internal Legacy Globex on a.example.com?",
             ])
     }
 
@@ -209,8 +209,8 @@ final class IntentsTests: XCTestCase {
         StubURLProtocol.respond = { _ in (201, self.json(#"{"message":{"id":"m1"}}"#)) }
         var prompt = ""
         let text = try await actions.send(space(a), message: "On my way") { prompt = $0 }
-        XCTAssertEqual(prompt, "Send \"On my way\" to Internal Legacy SXI?")
-        XCTAssertEqual(text, "Sent to Internal Legacy SXI.")
+        XCTAssertEqual(prompt, "Send \"On my way\" to Internal Legacy Globex?")
+        XCTAssertEqual(text, "Sent to Internal Legacy Globex.")
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.path, "/api/app/spaces/5a000000-0000-4000-8000-000000000001/messages")
         XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
     }
@@ -469,7 +469,7 @@ final class IntentsTests: XCTestCase {
         multi.installs.updateName("Legacy Burrow", for: b)
         XCTAssertEqual(
             AgentEntity(BurrowAgent(id: "g1", name: "Saru", slug: nil, role: "historian"), host: b, env: multi).subtitle, "Agent, historian, Legacy Burrow")
-        XCTAssertEqual(SpaceEntity(BurrowSpace(id: "s2", name: "SXI", kind: "channel"), host: b, env: multi).id, "\(b)|s2")
+        XCTAssertEqual(SpaceEntity(BurrowSpace(id: "s2", name: "Globex", kind: "channel"), host: b, env: multi).id, "\(b)|s2")
     }
 
     func testEntityRefParsesOnlyHostPipeUUID() {
@@ -486,7 +486,7 @@ final class IntentsTests: XCTestCase {
         let id = "5a000000-0000-4000-8000-000000000001"
         let page = { (path: String) in URL(string: "https://\(self.a)\(path)") }
         XCTAssertEqual(EntityActivity.target(for: page("/chat/\(id)"), host: a, spaceIDsBySegment: [:]), .space(id: "\(a)|\(id)"))
-        XCTAssertEqual(EntityActivity.target(for: page("/chat/sxi"), host: a, spaceIDsBySegment: ["sxi": id]), .space(id: "\(a)|\(id)"))
+        XCTAssertEqual(EntityActivity.target(for: page("/chat/globex"), host: a, spaceIDsBySegment: ["globex": id]), .space(id: "\(a)|\(id)"))
         XCTAssertNil(EntityActivity.target(for: page("/chat/unknown"), host: a, spaceIDsBySegment: [:]))
         XCTAssertEqual(EntityActivity.target(for: page("/tasks/\(id)"), host: a, spaceIDsBySegment: [:]), .task(id: "\(a)|\(id)"))
         XCTAssertNil(EntityActivity.target(for: page("/tasks"), host: a, spaceIDsBySegment: [:]))

@@ -11,9 +11,9 @@ defmodule Platform.Chat.SidebarMaskTest do
     test "letters follow the given display order, not id order or name order" do
       # Ids and names are both deliberately anti-sorted against display order.
       sections = [
-        resolved("zzz", "Cyberdyne"),
-        resolved("aaa", "Wayne-Tech"),
-        resolved("mmm", "SXI")
+        resolved("zzz", "Wonka"),
+        resolved("aaa", "Vandelay-Ind"),
+        resolved("mmm", "Globex")
       ]
 
       assert SidebarMask.placeholders(sections) == %{
@@ -24,7 +24,7 @@ defmodule Platform.Chat.SidebarMaskTest do
     end
 
     test "a section keeps its letter across repeated calls" do
-      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("b", "Globex")]
 
       assert SidebarMask.placeholders(sections) == SidebarMask.placeholders(sections)
       assert SidebarMask.placeholders(sections)["b"] == "Workspace B"
@@ -47,104 +47,115 @@ defmodule Platform.Chat.SidebarMaskTest do
 
   describe "label/4" do
     setup do
-      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("b", "Globex")]
       %{placeholders: SidebarMask.placeholders(sections), sections: sections}
     end
 
     test "returns the real name when masking is off", %{placeholders: p} do
-      assert SidebarMask.label(p, section("a", "Wayne-Tech"), false, MapSet.new()) == "Wayne-Tech"
+      assert SidebarMask.label(p, section("a", "Vandelay-Ind"), false, MapSet.new()) ==
+               "Vandelay-Ind"
     end
 
     test "returns the placeholder when masking is on", %{placeholders: p} do
-      assert SidebarMask.label(p, section("a", "Wayne-Tech"), true, MapSet.new()) == "Workspace A"
-      assert SidebarMask.label(p, section("b", "SXI"), true, MapSet.new()) == "Workspace B"
+      assert SidebarMask.label(p, section("a", "Vandelay-Ind"), true, MapSet.new()) ==
+               "Workspace A"
+
+      assert SidebarMask.label(p, section("b", "Globex"), true, MapSet.new()) == "Workspace B"
     end
 
     test "returns the real name for a revealed id while masking is still on", %{placeholders: p} do
       revealed = MapSet.new(["a"])
 
-      assert SidebarMask.label(p, section("a", "Wayne-Tech"), true, revealed) == "Wayne-Tech"
+      assert SidebarMask.label(p, section("a", "Vandelay-Ind"), true, revealed) == "Vandelay-Ind"
       # One reveal must not leak the rest.
-      assert SidebarMask.label(p, section("b", "SXI"), true, revealed) == "Workspace B"
+      assert SidebarMask.label(p, section("b", "Globex"), true, revealed) == "Workspace B"
     end
 
     test "an unknown section falls back to the generic placeholder, never the real name" do
-      assert SidebarMask.label(%{}, section("ghost", "Cyberdyne"), true, MapSet.new()) ==
+      assert SidebarMask.label(%{}, section("ghost", "Wonka"), true, MapSet.new()) ==
                "Workspace"
     end
   end
 
   # ── Stage 6 regression: derived channel names ────────────────────────────
   #
-  # Stages 2-5 matched by EXACT normalised equality, so `#cyberdyne`
-  # masked and `#cyberdyne-builds` rendered verbatim — in the rail, the
+  # Stages 2-5 matched by EXACT normalised equality, so `#wonka`
+  # masked and `#wonka-builds` rendered verbatim — in the rail, the
   # drawer, the drawer's SEARCH results, the composer placeholder and the
-  # browser tab. The tab read `# cyberdyne-builds` directly above a chat
+  # browser tab. The tab read `# wonka-builds` directly above a chat
   # header reading `Workspace F`. These tests go red against a53c7e6f.
   describe "names_org?/2 — leading-token match (stage 6)" do
     test "matches a channel derived from the org name by a leading token" do
-      cyberdyne = section("w", "Cyberdyne")
+      wonka = section("w", "Wonka")
 
       # The pre-stage-6 behaviour, still correct.
-      assert SidebarMask.names_org?("cyberdyne", cyberdyne)
+      assert SidebarMask.names_org?("wonka", wonka)
 
       # The leak stage 6 closes.
-      assert SidebarMask.names_org?("cyberdyne-builds", cyberdyne)
-      assert SidebarMask.names_org?("Cyberdyne Builds", cyberdyne)
-      assert SidebarMask.names_org?("cyberdyne_builds_qa", cyberdyne)
+      assert SidebarMask.names_org?("wonka-builds", wonka)
+      assert SidebarMask.names_org?("Wonka Builds", wonka)
+      assert SidebarMask.names_org?("wonka_builds_qa", wonka)
     end
 
     test "matches against the colour slug too, not only the display name" do
-      section = %{id: "s", name: "Small Business Solutions", color: "sxi"}
+      section = %{id: "s", name: "Globex Corporation", color: "globex"}
 
-      assert SidebarMask.names_org?("sxi-crosspost", section)
+      assert SidebarMask.names_org?("globex-crosspost", section)
     end
 
     test "is a LEADING token only — not a free substring match" do
-      cyberdyne = section("w", "Cyberdyne")
+      wonka = section("w", "Wonka")
 
-      refute SidebarMask.names_org?("builds-cyberdyne", cyberdyne)
-      refute SidebarMask.names_org?("retro-cyberdyne-notes", cyberdyne)
-      # No token boundary: `cyberdyneery` is a different word, not a
+      refute SidebarMask.names_org?("builds-wonka", wonka)
+      refute SidebarMask.names_org?("retro-wonka-notes", wonka)
+      # No token boundary: `unwonkaish` is a different word, not a
       # channel derived from the org.
-      refute SidebarMask.names_org?("cyberdyneery", cyberdyne)
+      refute SidebarMask.names_org?("unwonkaish", wonka)
     end
 
     test "an empty candidate never matches — a section with no colour is not a wildcard" do
       refute SidebarMask.names_org?("anything", %{id: "s", name: "", color: nil})
     end
 
-    test "#orion stays unmasked — pinning the named limitation against a keyword list" do
-      # `#orion` is a PROJECT CODE. It shares no token with any org name, so
+    test "#atlas stays unmasked — pinning the named limitation against a keyword list" do
+      # `#atlas` is a PROJECT CODE. It shares no token with any org name, so
       # no inference rule reaches it, and the documented residual says so. If
       # this ever goes green, someone has added the hardcoded keyword list the
       # moduledoc refuses — which reads as coverage the feature does not have
       # and is stale the day a new client arrives.
-      for org <- ["Cyberdyne", "Wayne-Tech", "SXI", "Soylent", "Paragon"] do
-        refute SidebarMask.names_org?("orion", section("s", org)),
-               "#orion must not mask under #{org} — no rule can infer it"
-
-        refute SidebarMask.names_org?("stark-industries", section("s", org))
+      for org <- ["Wonka", "Vandelay-Ind", "Globex", "Initech", "Hooli"] do
+        refute SidebarMask.names_org?("atlas", section("s", org)),
+               "#atlas must not mask under #{org} — no rule can infer it"
       end
+
+      # The client's full name shares no token with the other orgs either.
+      # Under Globex it is not a limitation case: the placeholder full name
+      # (Globex Corporation) LEADS with that org's token, so the leading-token
+      # rule rightly masks it there.
+      for org <- ["Wonka", "Vandelay-Ind", "Initech", "Hooli"] do
+        refute SidebarMask.names_org?("globex-corporation", section("s", org))
+      end
+
+      assert SidebarMask.names_org?("globex-corporation", section("s", "Globex"))
     end
 
     test "channel_label/3 renders the derived channel as the section placeholder" do
-      sections = [resolved("a", "Wayne-Tech"), resolved("w", "Cyberdyne")]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("w", "Wonka")]
       ctx = SidebarMask.context(sections, true, MapSet.new())
 
-      assert SidebarMask.channel_label(ctx, section("w", "Cyberdyne"), "cyberdyne-builds") ==
+      assert SidebarMask.channel_label(ctx, section("w", "Wonka"), "wonka-builds") ==
                "workspace-b"
 
-      # …and #orion in that same section still renders verbatim.
-      assert SidebarMask.channel_label(ctx, section("w", "Cyberdyne"), "orion") == "orion"
+      # …and #atlas in that same section still renders verbatim.
+      assert SidebarMask.channel_label(ctx, section("w", "Wonka"), "atlas") == "atlas"
     end
 
     test "space_label/3 masks the derived name for the tab title and chat header" do
-      sections = [resolved("a", "Wayne-Tech"), resolved("w", "Cyberdyne")]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("w", "Wonka")]
       ctx = SidebarMask.context(sections, true, MapSet.new())
 
-      assert SidebarMask.space_label(ctx, sections, "cyberdyne-builds") == "workspace-b"
-      assert SidebarMask.space_label(ctx, sections, "orion") == "orion"
+      assert SidebarMask.space_label(ctx, sections, "wonka-builds") == "workspace-b"
+      assert SidebarMask.space_label(ctx, sections, "atlas") == "atlas"
     end
   end
 
@@ -156,7 +167,7 @@ defmodule Platform.Chat.SidebarMaskTest do
   # `label/5` rather than a forked module.
   describe "placeholders/2 — id + prefix" do
     test "letters follow given display order under a caller-supplied prefix" do
-      entries = [{"zzz", "Cyberdyne"}, {"aaa", "Wayne-Tech"}, {"mmm", "SXI"}]
+      entries = [{"zzz", "Wonka"}, {"aaa", "Vandelay-Ind"}, {"mmm", "Globex"}]
 
       assert SidebarMask.placeholders(entries, "Workspace") == %{
                "zzz" => "Workspace A",
@@ -193,8 +204,8 @@ defmodule Platform.Chat.SidebarMaskTest do
     end
 
     test "agrees with placeholders/1 for the chat shape" do
-      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
-      entries = [{"a", "Wayne-Tech"}, {"b", "SXI"}]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("b", "Globex")]
+      entries = [{"a", "Vandelay-Ind"}, {"b", "Globex"}]
 
       assert SidebarMask.placeholders(sections) ==
                SidebarMask.placeholders(entries, "Workspace")
@@ -204,18 +215,19 @@ defmodule Platform.Chat.SidebarMaskTest do
   describe "label/5 — id + name" do
     setup do
       %{
-        workspace: SidebarMask.placeholders([{"a", "Wayne-Tech"}, {"b", "SXI"}], "Workspace"),
+        workspace:
+          SidebarMask.placeholders([{"a", "Vandelay-Ind"}, {"b", "Globex"}], "Workspace"),
         project: SidebarMask.placeholders([{"p1", "Orbit"}, {"p2", "Ascent"}], "Project")
       }
     end
 
     test "returns the real name when masking is off", %{workspace: p} do
-      assert SidebarMask.label(p, "a", "Wayne-Tech", false, MapSet.new()) == "Wayne-Tech"
+      assert SidebarMask.label(p, "a", "Vandelay-Ind", false, MapSet.new()) == "Vandelay-Ind"
     end
 
     test "returns the prefixed placeholder when masking is on", %{workspace: w, project: pr} do
-      assert SidebarMask.label(w, "a", "Wayne-Tech", true, MapSet.new()) == "Workspace A"
-      assert SidebarMask.label(w, "b", "SXI", true, MapSet.new()) == "Workspace B"
+      assert SidebarMask.label(w, "a", "Vandelay-Ind", true, MapSet.new()) == "Workspace A"
+      assert SidebarMask.label(w, "b", "Globex", true, MapSet.new()) == "Workspace B"
       assert SidebarMask.label(pr, "p1", "Orbit", true, MapSet.new()) == "Project A"
       assert SidebarMask.label(pr, "p2", "Ascent", true, MapSet.new()) == "Project B"
     end
@@ -223,30 +235,30 @@ defmodule Platform.Chat.SidebarMaskTest do
     test "a revealed id shows its real name; the rest stay masked", %{workspace: p} do
       revealed = MapSet.new(["a"])
 
-      assert SidebarMask.label(p, "a", "Wayne-Tech", true, revealed) == "Wayne-Tech"
-      assert SidebarMask.label(p, "b", "SXI", true, revealed) == "Workspace B"
+      assert SidebarMask.label(p, "a", "Vandelay-Ind", true, revealed) == "Vandelay-Ind"
+      assert SidebarMask.label(p, "b", "Globex", true, revealed) == "Workspace B"
     end
 
     test "a plain LIST of revealed ids behaves like the MapSet", %{workspace: p} do
-      assert SidebarMask.label(p, "a", "Wayne-Tech", true, ["a"]) == "Wayne-Tech"
-      assert SidebarMask.label(p, "b", "SXI", true, ["a"]) == "Workspace B"
+      assert SidebarMask.label(p, "a", "Vandelay-Ind", true, ["a"]) == "Vandelay-Ind"
+      assert SidebarMask.label(p, "b", "Globex", true, ["a"]) == "Workspace B"
     end
 
     test "FAIL CLOSED: an unknown id returns the bare prefix, never the real name",
          %{workspace: w, project: pr} do
-      assert SidebarMask.label(w, "ghost", "Cyberdyne", true, MapSet.new()) == "Workspace"
-      assert SidebarMask.label(pr, "ghost", "Cyberdyne", true, MapSet.new()) == "Project"
+      assert SidebarMask.label(w, "ghost", "Wonka", true, MapSet.new()) == "Workspace"
+      assert SidebarMask.label(pr, "ghost", "Wonka", true, MapSet.new()) == "Project"
     end
 
     test "FAIL CLOSED against an empty placeholder map too" do
-      assert SidebarMask.label(%{}, "ghost", "Cyberdyne", true, MapSet.new()) == "Workspace"
+      assert SidebarMask.label(%{}, "ghost", "Wonka", true, MapSet.new()) == "Workspace"
     end
 
     test "agrees with label/4 for the chat shape" do
-      sections = [resolved("a", "Wayne-Tech"), resolved("b", "SXI")]
+      sections = [resolved("a", "Vandelay-Ind"), resolved("b", "Globex")]
       p = SidebarMask.placeholders(sections)
 
-      for masked? <- [true, false], id_name <- [{"a", "Wayne-Tech"}, {"b", "SXI"}] do
+      for masked? <- [true, false], id_name <- [{"a", "Vandelay-Ind"}, {"b", "Globex"}] do
         {id, name} = id_name
 
         assert SidebarMask.label(p, section(id, name), masked?, MapSet.new()) ==

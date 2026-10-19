@@ -2098,14 +2098,14 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
-  # Any OTHER org — not just the five that used to be listed here by atom.
-  # Task 01a09287 stage 2 turned `@scope_filter` into an org slug string and
-  # removed the fixed enum, so this has to be keyed on "is a scope that is
-  # not the root" rather than on a membership list that a new tenant falls
+  # Any OTHER org. Task 01a09287 stage 2 turned `@scope_filter` into an org
+  # slug string, and task 01a14dd9 stage 2 removed the last compiled atom
+  # list from this guard, so it accepts binaries only: "is a scope that is
+  # not the root" rather than a membership list that a new tenant falls
   # out of. Falling out of it silently returned the FULL board under the
   # other clause below, i.e. a new org's chip would have shown every task.
   defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope, _sort, _data)
-       when is_binary(scope) or scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
+       when is_binary(scope) do
     []
   end
 

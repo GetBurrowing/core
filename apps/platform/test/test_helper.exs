@@ -121,7 +121,7 @@ end
 # PRODUCTION install must not come up owned by one customer's org structure,
 # which is the whole point of that migration's rewrite. But this suite's own
 # history runs the other direction: well over a hundred existing test files
-# assert directly against the literal "soylent"/"wayne_tech"/"sxi"/"paragon"
+# assert directly against the literal "initech"/"vandelay_ind"/"globex"/"hooli"
 # slugs (`Tenancy.get_org_by_slug!/1` and friends), independent of
 # `Platform.TenancyFixtures.tenant_org_id/1`'s per-test get-or-create
 # fallback, and a downstream migration (`20260618181114_adr_0042_org_project_topology`)
@@ -131,18 +131,27 @@ end
 # a migration a fresh install actually runs. Raw SQL, `ON CONFLICT DO
 # NOTHING`: the exact shape `SeedRootOrgs` used, just relocated out of
 # `priv/repo/migrations` into test-only setup.
+#
+# Seeded tenants as an ORDERED list of {slug, name}, in display-priority
+# order (a map would iterate alphabetically). `Platform.Tenancy.tenant_priority/0`
+# is install config with no default since task 01a14dd9, so the suite pins it
+# from this same list: renaming a seeded tenant here carries the pin with it.
+seeded_tenants = [
+  {"initech", "Initech"},
+  {"vandelay_ind", "Vandelay-Ind"},
+  {"globex", "Globex"},
+  {"hooli", "Hooli"}
+]
+
+Application.put_env(:platform, :tenant_priority, Enum.map(seeded_tenants, &elem(&1, 0)))
+
 if Process.whereis(Platform.Repo) do
   root_row =
     Platform.Repo.query!("SELECT id, name FROM orgs WHERE parent_org_id IS NULL LIMIT 1")
 
   case root_row.rows do
     [[root_id, _root_name]] ->
-      for {slug, name} <- %{
-            "soylent" => "Soylent",
-            "wayne_tech" => "Wayne-Tech",
-            "sxi" => "SXI",
-            "paragon" => "Paragon"
-          } do
+      for {slug, name} <- seeded_tenants do
         org_id = Ecto.UUID.dump!(Platform.Types.UUIDv7.generate())
 
         Platform.Repo.query!(
@@ -194,11 +203,11 @@ if Process.whereis(Platform.Repo) do
 
   # `20260921190000_add_color_lightness_to_orgs.exs` (and
   # `20260911220000_add_color_to_orgs.exs` before it) pin the shipped
-  # hue/chroma/lightness for legacy/soylent/wayne_tech/sxi/paragon/cyberdyne —
+  # hue/chroma/lightness for legacy/initech/vandelay_ind/globex/hooli/wonka —
   # but they ran during `mix ecto.migrate`, BEFORE the tenant orgs seeded
   # just above existed, so their no-op-on-missing-slug tolerance (by
-  # design — see that migration's own test) means soylent/wayne_tech/sxi/
-  # paragon came out of the loop above with no colour. Re-running the
+  # design — see that migration's own test) means initech/vandelay_ind/globex/
+  # hooli came out of the loop above with no colour. Re-running the
   # migration's own idempotent `pin_shipped_colours/1` here (its test
   # asserts a second run changes nothing) paints them exactly as it would
   # have if it had run after the seed, instead of duplicating its pinned
@@ -211,7 +220,14 @@ if Process.whereis(Platform.Repo) do
     ])
 
   Code.require_file(color_migration_path)
-  Platform.Repo.Migrations.AddColorLightnessToOrgs.pin_shipped_colours(Platform.Repo)
+  color_migration = Platform.Repo.Migrations.AddColorLightnessToOrgs
+
+  # The migration keys the shipped tenant rows by slug digest; the seeded
+  # tenants above carry placeholder slugs, so relabel the rows onto them.
+  color_migration.pin_shipped_colours(
+    Platform.Repo,
+    Platform.Tenancy.HistoricalRootSlug.relabel(color_migration.shipped())
+  )
 end
 
 if Process.whereis(Platform.Repo) do

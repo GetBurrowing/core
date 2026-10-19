@@ -38,7 +38,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerExperimentSurfacesTest do
 
   setup do
     :ok = PromptTemplates.seed_defaults()
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
     {:ok, p} = Tasks.create_project(%{name: "Job Hunt #{unique()}", org_id: org})
     {:ok, q} = Tasks.create_project(%{name: "Other #{unique()}", org_id: org})
     %{org: org, p: p, q: q}

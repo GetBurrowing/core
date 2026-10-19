@@ -15,15 +15,15 @@ defmodule Platform.ExternalUserFixtures do
 
   ## The world (`external_world/0`)
 
-    * `orgA` — the SXI org EXT belongs to, DM-allowlisted for EXT (seeded
-      tenant `"sxi"`, so its slug atom exists for TasksLive's scope-rail on the
+    * `orgA` — the Globex org EXT belongs to, DM-allowlisted for EXT (seeded
+      tenant `"globex"`, so its slug atom exists for TasksLive's scope-rail on the
       internal-user regression path — a raw-inserted novel slug would crash it).
-    * `orgB` — a second SXI org NOT allowlisted for EXT (seeded tenant
-      `"soylent"`, same scope-rail safety).
+    * `orgB` — a second tenant org NOT allowlisted for EXT (seeded tenant
+      `"initech"`, same scope-rail safety).
     * `ext` — the EXTERNAL user (org_memberships row marked external via
       `Tenancy.mark_membership_external/1`), `allow_dm`'d to `orgA`. Member of
       channel `A` only.
-    * `ext2` — a second external user in `orgA` (the SXI↔SXI DM case).
+    * `ext2` — a second external user in `orgA` (the Globex↔Globex DM case).
     * `int` — an INTERNAL user (plain member of `orgA`, `external` false).
       Member of channel `A` (so `/chat/<A.slug>` dead-renders for the
       internal-user regression).
@@ -50,8 +50,8 @@ defmodule Platform.ExternalUserFixtures do
 
   @doc "Seed and return the canonical adversarial external-user world."
   def external_world do
-    org_a = Tenancy.get_org_by_slug!("sxi")
-    org_b = Tenancy.get_org_by_slug!("soylent")
+    org_a = Tenancy.get_org_by_slug!("globex")
+    org_b = Tenancy.get_org_by_slug!("initech")
 
     ext = create_user!()
     {:ok, _} = Tenancy.mark_membership_external(%{user_id: ext.id, org_id: org_a.id})

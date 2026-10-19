@@ -187,12 +187,12 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
 
     test "the default bucket is the root's name, and `Channels` with no root row" do
       assert PlatformWeb.ChatLive.default_bucket([
-               %{parent_org_id: "tenant-parent", name: "Soylent"},
+               %{parent_org_id: "tenant-parent", name: "Initech"},
                %{parent_org_id: nil, name: "Root Org"}
              ]) == "Root Org"
 
       assert PlatformWeb.ChatLive.default_bucket([
-               %{parent_org_id: "tenant-parent", name: "Soylent"}
+               %{parent_org_id: "tenant-parent", name: "Initech"}
              ]) == "Channels"
 
       assert PlatformWeb.ChatLive.default_bucket([]) == "Channels"
@@ -200,13 +200,13 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   end
 
   describe "(b) a root that is literally Legacy, from data" do
-    test "renders Soylent and Legacy sections, each with its own channels", %{conn: conn} do
+    test "renders Initech and Legacy sections, each with its own channels", %{conn: conn} do
       legacy = make_legacy_legacy_root!()
-      soylent = Tenancy.get_org_by_slug!("soylent")
+      initech = Tenancy.get_org_by_slug!("initech")
       assert {legacy.slug, legacy.name} == {"legacy", "Legacy"}
 
       legacy_channel = create_channel("legacy-general", legacy.id)
-      soylent_channel = create_channel("soylent-general", soylent.id)
+      initech_channel = create_channel("initech-general", initech.id)
       unscoped = create_channel("unscoped-thing", nil)
 
       user = insert_user()
@@ -220,18 +220,18 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
 
       labels = section_labels(html)
       assert "Legacy" in labels
-      assert "Soylent" in labels
+      assert "Initech" in labels
 
       sidebar = desktop_sidebar(html)
       legacy_section = section_html(sidebar, "Legacy")
-      soylent_section = section_html(sidebar, "Soylent")
+      initech_section = section_html(sidebar, "Initech")
 
       assert legacy_section =~ ~s(data-space-id="#{legacy_channel.id}")
       assert legacy_section =~ ~s(data-space-id="#{unscoped.id}")
-      refute legacy_section =~ ~s(data-space-id="#{soylent_channel.id}")
+      refute legacy_section =~ ~s(data-space-id="#{initech_channel.id}")
 
-      assert soylent_section =~ ~s(data-space-id="#{soylent_channel.id}")
-      refute soylent_section =~ ~s(data-space-id="#{legacy_channel.id}")
+      assert initech_section =~ ~s(data-space-id="#{initech_channel.id}")
+      refute initech_section =~ ~s(data-space-id="#{legacy_channel.id}")
 
       # The root's dot is coloured from its row through `data-scope`, with
       # no compiled class.
@@ -254,7 +254,7 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
 
   describe "(c) a non-root internal member sees the root coloured" do
     # Gate case 01a116e6-cd0e-700a, measured at 4c221b7d0: an internal
-    # (external=false) soylent member saw the root section dot with no fill,
+    # (external=false) initech member saw the root section dot with no fill,
     # because the per-viewer `org-scope-colors` block emitted rules only for
     # orgs that viewer could see, and stage 3 had moved the root onto that
     # var path. The root's rule is now emitted for every viewer; other
@@ -268,21 +268,21 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
           set: [color_hue: 50, color_chroma: 0.16]
         )
 
-      soylent = Tenancy.get_org_by_slug!("soylent")
-      sxi = Tenancy.get_org_by_slug!("sxi")
+      initech = Tenancy.get_org_by_slug!("initech")
+      globex = Tenancy.get_org_by_slug!("globex")
       root_channel = create_channel("root-general", root.id)
-      _soylent_channel = create_channel("soylent-general", soylent.id)
+      _initech_channel = create_channel("initech-general", initech.id)
 
       user = insert_user()
 
       membership =
         %OrgMembership{}
-        |> OrgMembership.changeset(%{user_id: user.id, org_id: soylent.id, role: "member"})
+        |> OrgMembership.changeset(%{user_id: user.id, org_id: initech.id, role: "member"})
         |> Repo.insert!()
 
       refute membership.external
       refute Tenancy.root_member?(user)
-      assert Tenancy.visibility(user) == {:orgs, [soylent.id]}
+      assert Tenancy.visibility(user) == {:orgs, [initech.id]}
 
       # A participant row keeps the root channel inside the user's org fence
       # (ticket 01a14721: a sub-org-only member lists only their orgs' spaces
@@ -318,9 +318,9 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
       assert styles =~ ~s([data-scope="#{dot_scope}"]{--scope-fill:),
              "the root dot's data-scope has no fill rule for this viewer"
 
-      assert styles =~ ~s([data-scope="#{soylent.slug}"]{)
+      assert styles =~ ~s([data-scope="#{initech.slug}"]{)
 
-      refute styles =~ ~s([data-scope="#{sxi.slug}"]),
+      refute styles =~ ~s([data-scope="#{globex.slug}"]),
              "a tenant this viewer cannot see was emitted"
     end
   end

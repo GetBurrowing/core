@@ -116,10 +116,10 @@ defmodule Platform.Federation.ReviewReadToolsTest do
 
   setup do
     acme = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-review-#{u()}", acme)
-    wayne_tech = ensure_tenant_org("wayne-tech-review-#{u()}", acme)
+    globex = ensure_tenant_org("globex-review-#{u()}", acme)
+    vandelay_ind = ensure_tenant_org("vandelay-ind-review-#{u()}", acme)
 
-    {:ok, project} = Tasks.create_project(%{name: "Review Proj #{u()}", org_id: sxi.id})
+    {:ok, project} = Tasks.create_project(%{name: "Review Proj #{u()}", org_id: globex.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Review Task"})
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
     {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "UI Stage"})
@@ -143,14 +143,14 @@ defmodule Platform.Federation.ReviewReadToolsTest do
 
     %{
       acme: acme,
-      sxi: sxi,
-      wayne_tech: wayne_tech,
+      globex: globex,
+      vandelay_ind: vandelay_ind,
       task: task,
       validation: validation,
       request: request,
       item: ruled,
-      agent_sxi: create_agent("sxi-agent", %{"org_id" => sxi.id}),
-      agent_pt: create_agent("pt-agent", %{"org_id" => wayne_tech.id}),
+      agent_globex: create_agent("globex-agent", %{"org_id" => globex.id}),
+      agent_pt: create_agent("pt-agent", %{"org_id" => vandelay_ind.id}),
       agent_root: create_agent("root-agent", %{"org_id" => acme.id})
     }
   end
@@ -215,7 +215,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
                ToolSurface.execute(
                  "review_request_get",
                  %{"review_request_id" => ctx.request.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.id == ctx.request.id
@@ -235,7 +235,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
                ToolSurface.execute(
                  "review_request_get",
                  %{"review_request_id" => Ecto.UUID.generate()},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.recoverable == false
@@ -247,7 +247,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
                ToolSurface.execute(
                  "review_request_get",
                  %{"review_request_id" => "not-a-uuid"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.recoverable == false
@@ -260,7 +260,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
                ToolSurface.execute(
                  "review_item_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.task_id == ctx.task.id
@@ -289,7 +289,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
                ToolSurface.execute(
                  "review_item_list",
                  %{"task_id" => Ecto.UUID.generate()},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.recoverable == false

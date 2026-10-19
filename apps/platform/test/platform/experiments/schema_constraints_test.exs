@@ -75,8 +75,8 @@ defmodule Platform.Experiments.SchemaConstraintsTest do
     end
 
     test "a second row for the same org fails; rows for two different orgs both succeed" do
-      org_a = tenant_org_id("soylent")
-      org_b = tenant_org_id("sxi")
+      org_a = tenant_org_id("initech")
+      org_b = tenant_org_id("globex")
 
       assert {:ok, _} = insert_guardrail(%{org_id: org_a})
       assert {:ok, _} = insert_guardrail(%{org_id: org_b})
@@ -119,7 +119,7 @@ defmodule Platform.Experiments.SchemaConstraintsTest do
 
     test "an org's history is separate from the install-wide history" do
       t = target()
-      org = tenant_org_id("soylent")
+      org = tenant_org_id("initech")
 
       assert {:ok, _} = insert_default(t, 1, %{"content" => "install-wide"})
       assert {:ok, _} = insert_default(t, 1, %{"content" => "org"}, org)

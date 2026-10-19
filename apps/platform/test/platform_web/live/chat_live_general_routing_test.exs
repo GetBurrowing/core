@@ -8,7 +8,7 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       each scoped to that org via `chat_spaces.org_id`. Acme also has its
       own General (`org_id = acme_id`).
     * The previous `Chat.get_space_by_slug/1` returned `order_by inserted_at
-      asc, limit 1`, so a Soylent member clicking the Soylent-section
+      asc, limit 1`, so a Initech member clicking the Initech-section
       "General" sidebar entry would always land in Acme's General — the
       oldest matching row.
 
@@ -67,13 +67,13 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
   end
 
   describe "GET /chat/general routes to the user's tenant General" do
-    test "Soylent member lands on Soylent's General, not Acme's", %{conn: conn} do
+    test "Initech member lands on Initech's General, not Acme's", %{conn: conn} do
       acme_general = ensure_general_for_org("acme")
-      soylent_general = ensure_general_for_org("soylent")
-      refute acme_general.id == soylent_general.id
+      initech_general = ensure_general_for_org("initech")
+      refute acme_general.id == initech_general.id
 
-      user = create_user!("soylent")
-      membership!(user, Tenancy.get_org_by_slug!("soylent"))
+      user = create_user!("initech")
+      membership!(user, Tenancy.get_org_by_slug!("initech"))
 
       conn = init_test_session(conn, current_user_id: user.id)
 
@@ -83,29 +83,29 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       # the most precise observable signal that the lookup picked the
       # tenant's row and not Acme's. (Post-ADR-0042 both spaces are named
       # "General", so a title match alone wouldn't distinguish them.)
-      assert html =~ "data-draft-key=\"chat-draft:#{soylent_general.id}\""
+      assert html =~ "data-draft-key=\"chat-draft:#{initech_general.id}\""
       refute html =~ "data-draft-key=\"chat-draft:#{acme_general.id}\""
     end
 
-    test "SXI member lands on SXI's General when hitting /chat/general", %{conn: conn} do
+    test "Globex member lands on Globex's General when hitting /chat/general", %{conn: conn} do
       _acme_general = ensure_general_for_org("acme")
-      _soylent_general = ensure_general_for_org("soylent")
-      sxi_general = ensure_general_for_org("sxi")
+      _initech_general = ensure_general_for_org("initech")
+      globex_general = ensure_general_for_org("globex")
 
-      user = create_user!("sxi")
-      membership!(user, Tenancy.get_org_by_slug!("sxi"))
+      user = create_user!("globex")
+      membership!(user, Tenancy.get_org_by_slug!("globex"))
 
       conn = init_test_session(conn, current_user_id: user.id)
 
       {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-      assert html =~ "data-draft-key=\"chat-draft:#{sxi_general.id}\""
+      assert html =~ "data-draft-key=\"chat-draft:#{globex_general.id}\""
     end
 
     test "Acme member lands on Acme's General (back-compat with the legacy path)",
          %{conn: conn} do
       acme_general = ensure_general_for_org("acme")
-      _soylent_general = ensure_general_for_org("soylent")
+      _initech_general = ensure_general_for_org("initech")
 
       user = create_user!("acme")
       membership!(user, Tenancy.get_org_by_slug!("acme"))

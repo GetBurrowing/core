@@ -578,7 +578,16 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # on the listed-channel reads (2) and the archived read's fenced scope
   # binding (2). The fence helpers themselves live in
   # `PlatformWeb.ChatLive.ReadScope`, not here.
-  @chat_live_code_line_count 2582
+  # Task 01a14dd9 stage 2 (the compiled scope palette to org rows): +17. Out
+  # went `@sibling_scope_tokens` / `sibling_scope_tokens/0`, the five-clause
+  # `section_scope_atom/1`, `section_dot_class/1` and `parse_scope/1`, and
+  # `org_scope/1`'s atom lookup. In came `section_palette/2`,
+  # `section_dot_scope/2`, `section_dot_modifier/2`, `section_scope_entries/2`,
+  # `parse_scope/2` over the loaded org index, `org_indexes/1` threading the
+  # one `list_orgs/0` read into `channel_sections/5`'s new `scope_orgs` and
+  # `scope_palette` keys, and the reassign picker's `scope` lookup.
+  # 2582 + 17 = 2599, measured by this guard on the formatted file.
+  @chat_live_code_line_count 2599
 
   @doc """
   Count the CODE lines of a source file.

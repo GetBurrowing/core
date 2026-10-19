@@ -427,10 +427,10 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
 
       render_hook(view, "recolor_section_default", %{
         "section_id" => acme_section,
-        "color" => "paragon"
+        "color" => "hooli"
       })
 
-      assert Repo.get!(Section, acme_section).color == "paragon"
+      assert Repo.get!(Section, acme_section).color == "hooli"
     end
 
     test "recolor with an unknown token is ignored (whitelist guard)",
@@ -492,16 +492,16 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       admin = admin_user!("reassign")
       conn = authenticated_conn(conn, admin)
       channel = create_channel("roamer", "acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
       acme_org_id = Tenancy.get_org_by_slug!("acme").id
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
-      to_label = displayed_name(sxi_section)
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
+      to_label = displayed_name(globex_section)
       from_label = displayed_name(section_id_for_org("acme"))
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       # Driven through the REAL controls, not forged events: the row's trigger
-      # renders the popover, the popover's SXI entry opens the confirmation.
+      # renders the popover, the popover's Globex entry opens the confirmation.
       # A handler test alone would pass for a control nothing is wired to.
       open_move_menu(view, channel.id)
 
@@ -509,10 +509,10 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # already in — a destination that writes nothing is not a destination.
       # Matched by selector rather than by substring, so the assertion does
       # not depend on the order HEEx happens to emit the attributes in.
-      assert has_element?(view, destination_selector(sxi_section))
+      assert has_element?(view, destination_selector(globex_section))
       refute has_element?(view, destination_selector(section_id_for_org("acme")))
 
-      html = pick_move_destination(view, channel.id, sxi_section)
+      html = pick_move_destination(view, channel.id, globex_section)
 
       # All four lines, verbatim. The canvas line in particular is a verified
       # fact about `CanvasAccess.org_readable_space?/2` and an earlier draft of
@@ -532,7 +532,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Step 2 writes.
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      assert Chat.get_space(channel.id).org_id == globex_org_id
     end
 
     test "a confirmed move repaints the acting admin's rail: the row lands in the destination section and leaves the source",
@@ -549,8 +549,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       conn = authenticated_conn(conn, admin)
       channel = create_channel("repainter", "acme")
       acme_section = section_id_for_org("acme")
-      sxi_section = section_id_for_org("sxi")
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      globex_section = section_id_for_org("globex")
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -561,20 +561,20 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(view, row_selector(channel.id, acme_section)),
              "the row must start under its source section, or the assertions below are vacuous"
 
-      refute has_element?(view, row_selector(channel.id, sxi_section))
+      refute has_element?(view, row_selector(channel.id, globex_section))
 
       open_move_menu(view, channel.id)
-      pick_move_destination(view, channel.id, sxi_section)
+      pick_move_destination(view, channel.id, globex_section)
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       # Sanity, not the point: the write landed, so a failure below is a repaint
       # failure and cannot be misread as a failed move.
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      assert Chat.get_space(channel.id).org_id == globex_org_id
 
       # Both halves. Absence from the source alone would also pass for a rail
       # that dropped the row entirely, which is a worse bug than the one being
       # fixed.
-      assert has_element?(view, row_selector(channel.id, sxi_section)),
+      assert has_element?(view, row_selector(channel.id, globex_section)),
              "after the move the row must render under the destination section without a reload"
 
       refute has_element?(view, row_selector(channel.id, acme_section)),
@@ -594,8 +594,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       admin = admin_user!("reassign_broadcast_admin")
       channel = create_channel("broadcaster", "acme")
       acme_section = section_id_for_org("acme")
-      sxi_section = section_id_for_org("sxi")
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      globex_section = section_id_for_org("globex")
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
 
       # Session one: the admin who will perform the move.
       {:ok, actor_view, _html} = live_following_redirect(authenticated_conn(conn, admin))
@@ -614,20 +614,20 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(observer_view, row_selector(channel.id, acme_section)),
              "session two must start with the row under its source section, or the assertions below are vacuous"
 
-      refute has_element?(observer_view, row_selector(channel.id, sxi_section))
+      refute has_element?(observer_view, row_selector(channel.id, globex_section))
 
       # Session one moves the channel through the same three real controls.
       open_move_menu(actor_view, channel.id)
-      pick_move_destination(actor_view, channel.id, sxi_section)
+      pick_move_destination(actor_view, channel.id, globex_section)
       actor_view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       # Sanity, not the point: the write landed, so a failure below is a repaint
       # failure in session two and cannot be misread as a failed move.
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      assert Chat.get_space(channel.id).org_id == globex_org_id
 
       # Both halves, from session two's re-rendered markup, on the strength of
       # the broadcast alone.
-      assert has_element?(observer_view, row_selector(channel.id, sxi_section)),
+      assert has_element?(observer_view, row_selector(channel.id, globex_section)),
              "session two must draw the row under the destination section after the broadcast, with no re-mount"
 
       refute has_element?(observer_view, row_selector(channel.id, acme_section)),
@@ -648,20 +648,20 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       conn = authenticated_conn(conn, admin)
       channel = create_channel("collapsed_lander", "acme")
       acme_section = section_id_for_org("acme")
-      sxi_section = section_id_for_org("sxi")
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      globex_section = section_id_for_org("globex")
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
 
       # The precondition, written before the mount so the resolver reads it.
       # ONLY the destination is collapsed: the source stays expanded so the
       # positive control below still means something.
-      {:ok, _} = Sidebar.set_section_collapsed(admin.id, sxi_section, true)
+      {:ok, _} = Sidebar.set_section_collapsed(admin.id, globex_section, true)
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       # Precondition asserted from the markup, not from the write. If the
       # destination renders EXPANDED here the setup has failed and everything
       # after it is a stage-1 repaint test wearing a stage-3 name.
-      assert has_element?(view, collapse_toggle_selector(sxi_section, false)),
+      assert has_element?(view, collapse_toggle_selector(globex_section, false)),
              "the destination section must start collapsed, or this case is a duplicate of the repaint test"
 
       # The other half of the precondition: no unread on the moved channel. With
@@ -674,20 +674,20 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(view, row_selector(channel.id, acme_section)),
              "the row must start under its source section, or the assertions below are vacuous"
 
-      refute has_element?(view, row_selector(channel.id, sxi_section))
+      refute has_element?(view, row_selector(channel.id, globex_section))
 
       open_move_menu(view, channel.id)
-      pick_move_destination(view, channel.id, sxi_section)
+      pick_move_destination(view, channel.id, globex_section)
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       # Sanity, not the point: the write landed, so a failure below is a
       # visibility failure and cannot be misread as a failed move.
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      assert Chat.get_space(channel.id).org_id == globex_org_id
 
       # Both halves, from the re-rendered markup. The destination half is the
       # one that fails without the expansion: the row is not merely folded out
       # of sight, it is not in the document.
-      assert has_element?(view, row_selector(channel.id, sxi_section)),
+      assert has_element?(view, row_selector(channel.id, globex_section)),
              "after the move the row must render under the destination section even though it was collapsed"
 
       refute has_element?(view, row_selector(channel.id, acme_section)),
@@ -697,7 +697,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # why the row draws. The other way the assertion above could pass is a
       # collapsed section that started drawing quiet rows, which would be a
       # regression in `section_channel_rows/3` rather than this fix working.
-      assert has_element?(view, collapse_toggle_selector(sxi_section, true)),
+      assert has_element?(view, collapse_toggle_selector(globex_section, true)),
              "confirming the move must expand the destination section for the acting admin"
     end
 
@@ -717,9 +717,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       admin = admin_user!("reassign_confirmation")
       conn = authenticated_conn(conn, admin)
       channel = create_channel("confirmer", "acme")
-      sxi_section = section_id_for_org("sxi")
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
-      to_label = displayed_name(sxi_section)
+      globex_section = section_id_for_org("globex")
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
+      to_label = displayed_name(globex_section)
 
       expected = "Moved ##{channel.name} to #{to_label}."
 
@@ -733,12 +733,12 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
              "the rail must carry no move confirmation before a move"
 
       open_move_menu(view, channel.id)
-      pick_move_destination(view, channel.id, sxi_section)
+      pick_move_destination(view, channel.id, globex_section)
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       # Sanity, not the point: the write landed, so a failure below is a missing
       # confirmation and cannot be misread as a failed move.
-      assert Chat.get_space(channel.id).org_id == sxi_org_id
+      assert Chat.get_space(channel.id).org_id == globex_org_id
 
       assert move_toast_html(view) =~ expected,
              "the rail must state the move in one sentence naming both the channel and the destination"
@@ -772,8 +772,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       hidden_first = create_channel("hidden-first", "acme")
       moved = create_channel("moved-second", "acme")
       hidden_last = create_channel("hidden-last", "acme")
-      sxi_section = section_id_for_org("sxi")
-      to_label = displayed_name(sxi_section)
+      globex_section = section_id_for_org("globex")
+      to_label = displayed_name(globex_section)
 
       expected_move = "Moved ##{moved.name} to #{to_label}."
 
@@ -786,7 +786,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
              "the hide raised no line of its own, so the survival assertions below are vacuous"
 
       open_move_menu(view, moved.id)
-      pick_move_destination(view, moved.id, sxi_section)
+      pick_move_destination(view, moved.id, globex_section)
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
       assert move_toast_html(view) =~ expected_move,
@@ -809,13 +809,13 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       admin = admin_user!("reassign_cancel")
       conn = authenticated_conn(conn, admin)
       channel = create_channel("stayer", "acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
       acme_org_id = Tenancy.get_org_by_slug!("acme").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       open_move_menu(view, channel.id)
-      pick_move_destination(view, channel.id, sxi_section)
+      pick_move_destination(view, channel.id, globex_section)
 
       html = view |> element(~s(button[data-role="move-to-org-cancel"])) |> render_click()
 
@@ -829,16 +829,16 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       conn = authenticated_conn(conn, admin)
       approved = create_channel("approved", "acme")
       bystander = create_channel("bystander", "acme")
-      sxi_section = section_id_for_org("sxi")
-      soylent_section = section_id_for_org("soylent")
+      globex_section = section_id_for_org("globex")
+      initech_section = section_id_for_org("initech")
       acme_org_id = Tenancy.get_org_by_slug!("acme").id
-      sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
+      globex_org_id = Tenancy.get_org_by_slug!("globex").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
-      # The admin approves ONE move: #approved to SXI.
+      # The admin approves ONE move: #approved to Globex.
       open_move_menu(view, approved.id)
-      pick_move_destination(view, approved.id, sxi_section)
+      pick_move_destination(view, approved.id, globex_section)
 
       # The confirm event then arrives naming a DIFFERENT channel and a
       # DIFFERENT destination. This is the whole point of the two-step split:
@@ -848,11 +848,11 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # authorization check would let this through.
       render_hook(view, "confirm_channel_reassign", %{
         "channel_id" => bystander.id,
-        "target_section_id" => soylent_section
+        "target_section_id" => initech_section
       })
 
       # The approved move happened, exactly as approved.
-      assert Chat.get_space(approved.id).org_id == sxi_org_id
+      assert Chat.get_space(approved.id).org_id == globex_org_id
       # The channel named in the forged payload did not move.
       assert Chat.get_space(bystander.id).org_id == acme_org_id
     end
@@ -917,7 +917,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       forged =
         render_hook(view, "request_channel_reassign", %{
           "channel_id" => unfiled.id,
-          "target_section_id" => section_id_for_org("sxi")
+          "target_section_id" => section_id_for_org("globex")
         })
 
       refute forged =~ ~s(data-role="move-to-org-dialog")
@@ -933,15 +933,15 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # shape of this data, so `chat_spaces_unique_org_slug` fires in routine
       # use rather than as an edge case.
       mover = create_channel("general", "acme")
-      _blocker = create_channel("general", "sxi")
-      sxi_section = section_id_for_org("sxi")
+      _blocker = create_channel("general", "globex")
+      globex_section = section_id_for_org("globex")
       acme_org_id = Tenancy.get_org_by_slug!("acme").id
-      to_label = displayed_name(sxi_section)
+      to_label = displayed_name(globex_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       open_move_menu(view, mover.id)
-      pick_move_destination(view, mover.id, sxi_section)
+      pick_move_destination(view, mover.id, globex_section)
 
       html = view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
 
@@ -957,7 +957,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   # Regression for the user-reported BUG (task 019e467d): the section header
   # used to render a `<.scope_pill scope={section_scope_atom(section.color)}>`,
   # so the pill's VISIBLE TEXT was derived from the section's COLOR. Recoloring
-  # a section (e.g. Acme → yellow/paragon) flipped the chip text to "Paragon"
+  # a section (e.g. Acme → yellow/hooli) flipped the chip text to "Hooli"
   # even though the section's real name was still "Acme" — the recolor looked
   # like a rename. The fix renders a COLOR-ONLY dot keyed off `section.color`;
   # identity text comes solely from `section.name`. These tests assert on the
@@ -984,25 +984,25 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Before the recolor the root section header carries its own-org dot and
       # the rename input shows its real name. The root has no compiled dot
       # class since task 01a116de stage 3: the dot is coloured from the org
-      # row through `data-scope`. (The recolor target — paragon — must NOT
+      # row through `data-scope`. (The recolor target — hooli — must NOT
       # already be the root dot's color.)
       assert sidebar_before =~
                ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
 
       assert sidebar_before =~ ~s(aria-label="Collapse #{original_name}")
 
-      # Recolor Acme → paragon (the "yellow" swatch in the palette).
+      # Recolor Acme → hooli (the "yellow" swatch in the palette).
       html_after =
         render_hook(view, "recolor_section_default", %{
           "section_id" => acme_section,
-          "color" => "paragon"
+          "color" => "hooli"
         })
 
       sidebar_after = desktop_sidebar(html_after)
 
-      # The dot color changed to paragon…
-      assert sidebar_after =~ "bg-paragon-dot",
-             "Recoloring to paragon should change the section's color dot"
+      # The dot color changed to hooli…
+      assert sidebar_after =~ ~r/channel-section-color-dot--scope"\s+data-scope="hooli"/,
+             "Recoloring to hooli should change the section's color dot"
 
       refute sidebar_after =~
                ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
@@ -1025,8 +1025,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
              "Recolor must not change the rendered section name"
 
       # And crucially the header NEVER renders the color-derived scope label
-      # ("Paragon scope") — the bug was that the pill text tracked the color.
-      refute sidebar_after =~ ~s(aria-label="Paragon scope"),
+      # ("Hooli scope") — the bug was that the pill text tracked the color.
+      refute sidebar_after =~ ~s(aria-label="Hooli scope"),
              "Section header must not render a color-derived scope label after recolor"
     end
   end
@@ -1124,7 +1124,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
 
       render_hook(view, "recolor_section_default", %{
         "section_id" => acme_section,
-        "color" => "paragon"
+        "color" => "hooli"
       })
 
       assert Repo.get!(Section, acme_section).color == original.color
@@ -1182,7 +1182,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       member = member_user!("reassign_reject")
       conn = authenticated_conn(conn, member)
       channel = create_channel("roamer", "acme")
-      sxi_section = section_id_for_org("sxi")
+      globex_section = section_id_for_org("globex")
       acme_org_id = Tenancy.get_org_by_slug!("acme").id
 
       {:ok, view, _html} = live_following_redirect(conn)
@@ -1209,7 +1209,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       html =
         render_hook(view, "request_channel_reassign", %{
           "channel_id" => channel.id,
-          "target_section_id" => sxi_section
+          "target_section_id" => globex_section
         })
 
       refute html =~ ~s(data-role="move-to-org-dialog")
@@ -1218,7 +1218,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # `Sidebar.reassign_channel/3` re-checks `root_admin?` underneath.
       render_hook(view, "confirm_channel_reassign", %{
         "channel_id" => channel.id,
-        "target_section_id" => sxi_section
+        "target_section_id" => globex_section
       })
 
       assert Chat.get_space(channel.id).org_id == acme_org_id

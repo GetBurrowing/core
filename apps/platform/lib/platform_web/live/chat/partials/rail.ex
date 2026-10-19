@@ -178,6 +178,8 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           active_space={@active_space}
           unread_counts={@unread_counts}
           root_admin?={@root_admin?}
+          scope_orgs={Map.get(@channel_sections, :scope_orgs, %{})}
+          scope_palette={Map.get(@channel_sections, :scope_palette, [])}
           tenant_org_ids={@tenant_org_ids}
           lifecycle_menu_key={@lifecycle_menu_key}
         />
@@ -961,6 +963,14 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:tenant_org_ids, :any, required: true)
   attr(:lifecycle_menu_key, :any, required: true)
 
+  # The org rows behind section colours (task 01a14dd9 stage 2), both off
+  # `@channel_sections`: `scope_orgs` is `Tenancy.scope_token_index/1` (colour
+  # token -> org entry, archived orgs included) and `scope_palette` is
+  # `Tenancy.scope_palette/1`. Defaulted so a render without them draws
+  # hollow dots and an empty palette rather than crashing.
+  attr(:scope_orgs, :map, default: %{})
+  attr(:scope_palette, :list, default: [])
+
   # THE MASK ATTRS. `mask_ctx` below is built from these three by
   # `SidebarMask.context/3`, and every section header, `data-section-key`,
   # `data-section-slug`, `aria-label` and channel-row label in this component
@@ -986,14 +996,17 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
            header + an empty-state hint so the rail's structure stays visible.
 
            Filtered by @scope_filter when set (Stage 4): nil → all sections;
-           an atom filter → only the section whose color matches that scope.
-           The filter is toggled by clicking the chat-header scope-pill. --%>
+           an org slug → only the sections whose colour token is that org's
+           (`Tenancy.css_slug/1`). The filter is toggled by clicking the
+           chat-header scope-pill. --%>
     <% visible_sections =
       if is_nil(@scope_filter) do
         @sidebar_sections
       else
+        filter_token = Platform.Tenancy.css_slug(@scope_filter)
+
         Enum.filter(@sidebar_sections, fn %{section: section} ->
-          PlatformWeb.ChatLive.section_scope_atom(section.color) == @scope_filter
+          section.color == filter_token
         end)
       end %>
     <%!-- Screen-share masking (task 01a00c66). Placeholders are derived from
@@ -1032,6 +1045,34 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
            reads now: admin-edit used to hand it a second, cross-org meaning
            via `data-admin-edit`, and that path was retired in favour of the
            explicit "Move to organisation…" action (task 019fd76a). --%>
+    <%!-- Section colours the shell's `<style>` cannot supply (task 01a14dd9
+           stage 2). The shell emits active orgs the viewer can see; a section
+           may wear the token of an ARCHIVED org (or of one outside that
+           list), and every dot and swatch is now coloured only through
+           `data-scope`, so the rail emits a rule for each org a rendered
+           section or swatch names. Masked sections contribute nothing: a rule
+           spells the org's slug. Duplicating a shell rule is harmless, the
+           values are identical. --%>
+    <% unmasked_sections =
+      for %{section: section, revealed?: revealed?} <- visible_sections,
+          not @mask_names? or revealed?,
+          do: section
+
+    palette_entries =
+      if @sidebar_admin_edit and unmasked_sections != [],
+        do: Enum.flat_map(@scope_palette, &List.wrap(Map.get(@scope_orgs, &1.token))),
+        else: []
+
+    rail_scope_entries =
+      Enum.uniq_by(
+        PlatformWeb.ChatLive.section_scope_entries(unmasked_sections, @scope_orgs) ++
+          palette_entries,
+        & &1.slug
+      ) %>
+    <PlatformWeb.Components.ScopeColorStyles.scope_color_styles
+      id="chat-rail-scope-colors"
+      entries={rail_scope_entries}
+    />
     <div
       id="channel-membership-drag"
       phx-hook="ChannelMembershipDrag"
@@ -1045,12 +1086,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
              the two answers genuinely differ and one flag cannot carry
              both. --%>
       <%!-- `data-section-slug` follows the LABEL, not the record, while the
-             mask is on: the colour token IS the org slug ("wayne-tech"), so an
+             mask is on: the colour token IS the org slug ("vandelay-ind"), so an
              unmasked attribute spells the real name in the page source beside a
              header reading `Workspace B` — a leak that any assertion written
              against visible text passes straight over. Nothing reads the
              attribute at runtime (SectionReorder keys off `data-section-id`;
-             the dot colour comes from `section_dot_class/1`). --%>
+             the dot colour comes from `data-scope`). --%>
       <section
         :for={
           %{
@@ -1166,41 +1207,32 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                  the section's COLOR and nothing else. Previously this slot held
                  a `<.scope_pill>` whose VISIBLE TEXT was derived from the color
                  token via the scope enum, so recoloring a section (e.g. the
-                 root org → yellow) silently relabeled the chip to "Paragon". Decoupling:
+                 root org → yellow) silently relabeled the chip to "Hooli". Decoupling:
                  a recolor now changes ONLY this dot, never any name/label. The
                  dot is decorative (aria-hidden) — `section.name` beside it is
                  the text identity. --%>
-          <%!-- The span ALWAYS renders (task 01a00910 stage 4). Since buckets
-                 derive from the orgs table, a section can carry a colour token
-                 the vocabulary has never heard of, and `section_dot_class/1`
-                 returns nil for it BY DESIGN — that nil is the signal, not a
-                 missing clause, which is why there is no seventh clause over
-                 there. Rendering nothing would slide this header's text one
-                 dot-width left and ragged-edge the column, making the newest
-                 org the one that looks broken; so the slot is reserved and the
-                 dot is drawn hollow instead. `aria-hidden` in BOTH branches —
-                 the dot is decorative either way, `section.name` is the text
-                 identity.
+          <%!-- The span ALWAYS renders (task 01a00910 stage 4). A section can
+                 carry a colour token no org row has, and `section_dot_scope/2`
+                 returns nil for it BY DESIGN. Rendering nothing would slide this
+                 header's text one dot-width left and ragged-edge the column, so
+                 the slot is reserved and the dot is drawn hollow instead.
+                 `aria-hidden` in BOTH branches — the dot is decorative either
+                 way, `section.name` is the text identity.
 
-                 A section wearing its OWN org's colour with no compiled class
-                 (the root org on every install, and any org created at
-                 runtime) also carries `data-scope` = its org slug, so the
-                 slug-agnostic var path fills the hollow ring from the org's
-                 row (task 01a116de stage 3). An org with no `color_hue`
-                 emits no rule and stays hollow. Suppressed while the section
-                 is masked: the slug is a spelling of the org's name. --%>
+                 Every coloured dot takes the slug-agnostic var path (task
+                 01a14dd9 stage 2; the root since 01a116de stage 3):
+                 `data-scope` is the slug of the org whose token the section
+                 wears, archived orgs included, and `--scope-fill` comes from
+                 that org's row. A token whose org has no `color_hue` keeps the
+                 `--unassigned` modifier and stays hollow. `data-scope` is suppressed while the section is
+                 masked: the slug is a spelling of the org's name. --%>
+          <% dot_scope = PlatformWeb.ChatLive.section_dot_scope(section, @scope_orgs) %>
           <span
             class={[
               "channel-section-color-dot",
-              PlatformWeb.ChatLive.section_dot_class(section.color) ||
-                "channel-section-color-dot--unassigned"
+              PlatformWeb.ChatLive.section_dot_modifier(section, @scope_orgs)
             ]}
-            data-scope={
-              if(@mask_names? and not revealed?,
-                do: nil,
-                else: PlatformWeb.ChatLive.section_dot_scope(section)
-              )
-            }
+            data-scope={if(@mask_names? and not revealed?, do: nil, else: dot_scope)}
             aria-hidden="true"
           >
           </span>
@@ -1289,59 +1321,43 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             Use organisation name
           </button>
         </p>
-        <%!-- Admin-edit (Stage 6): compact recolor palette — the five
-               sibling scope tokens plus the section's OWN org token ARE the
-               palette (no free-form color picker). The own-org swatch is
-               coloured through `data-scope` from the org's row, which is how
-               the root org gets a swatch with no compiled colour class (task
-               01a116de stage 3); it is omitted while the section is masked. Each swatch
+        <%!-- Admin-edit (Stage 6): compact recolor palette — the org rows
+               with a colour (`Tenancy.scope_palette/1`) plus the section's OWN
+               org token ARE the palette (no free-form color picker; task
+               01a14dd9 stage 2 replaced five compiled tokens). Every swatch is
+               coloured through `data-scope` from its org's row, so a runtime
+               org gets a swatch with no deploy. The swatches are omitted while
+               the section is masked: each one spells an org slug. Each swatch
                posts `recolor_section_default` with the section id + token; the
                active token is marked so the admin sees the current color. The
-               server whitelist-validates the token and re-checks root_admin?
-               before writing `channel_sections.color`. --%>
+               server whitelist-validates the token against the same rows and
+               re-checks root_admin? before writing `channel_sections.color`. --%>
         <div
           :if={@sidebar_admin_edit}
           class="channel-section-palette"
           role="group"
           aria-label={"Set color for #{display_name} section"}
         >
-          <% own_token = PlatformWeb.ChatLive.section_own_token(section)
-
-          own_swatch? =
-            is_binary(own_token) and
-              own_token not in PlatformWeb.ChatLive.sibling_scope_tokens() and
-              not (@mask_names? and not revealed?) %>
           <button
-            :if={own_swatch?}
+            :for={
+              swatch <-
+                if(@mask_names? and not revealed?,
+                  do: [],
+                  else: PlatformWeb.ChatLive.section_palette(section, @scope_palette)
+                )
+            }
             type="button"
             phx-click="recolor_section_default"
             phx-value-section_id={section.id}
-            phx-value-color={own_token}
-            data-scope={section.org_slug}
+            phx-value-color={swatch.token}
+            data-scope={swatch.slug}
             class={[
               "channel-section-swatch",
-              "channel-section-swatch--own",
-              section.color == own_token && "channel-section-swatch--active"
+              section.color == swatch.token && "channel-section-swatch--active"
             ]}
-            aria-pressed={to_string(section.color == own_token)}
-            aria-label={"Color: #{own_token}"}
-            title={own_token}
-          >
-          </button>
-          <button
-            :for={token <- PlatformWeb.ChatLive.sibling_scope_tokens()}
-            type="button"
-            phx-click="recolor_section_default"
-            phx-value-section_id={section.id}
-            phx-value-color={token}
-            class={[
-              "channel-section-swatch",
-              "channel-section-swatch--#{token}",
-              section.color == token && "channel-section-swatch--active"
-            ]}
-            aria-pressed={to_string(section.color == token)}
-            aria-label={"Color: #{token}"}
-            title={token}
+            aria-pressed={to_string(section.color == swatch.token)}
+            aria-label={"Color: #{swatch.token}"}
+            title={swatch.token}
           >
           </button>
         </div>
@@ -1799,9 +1815,8 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
               <div class="channel-hidden-drawer-group-label">
                 <%!-- Each bucket is an org NAME, and `bucket_orgs` (task 01a0938b)
                      maps it to that org's row: its slug, its name and the
-                     value `scope_pill`'s `scope` attr takes (one of the six
-                     compiled atoms, or the slug binary as stored for any org
-                     created at runtime). Every org row therefore renders a
+                     value `scope_pill`'s `scope` attr takes (the slug binary
+                     as stored). Every org row therefore renders a
                      pill, whatever its slug. `scope_pill` is total since
                      01a09287 stage 2: `scope_label/1` title-cases any slug,
                      the var-path colour classes are slug-agnostic, and a

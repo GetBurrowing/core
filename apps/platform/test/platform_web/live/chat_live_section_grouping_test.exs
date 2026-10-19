@@ -11,8 +11,8 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
   own slug, so the helper reads orgs once per call and the case needs a
   sandboxed DB connection. The `channel/2` fixture below therefore resolves the
   org whose slug matches the name it is handed, which keeps every assertion in
-  this file testing what it always meant — "a Soylent channel buckets under
-  Soylent" — rather than the slug coincidence that used to implement it.
+  this file testing what it always meant — "a Initech channel buckets under
+  Initech" — rather than the slug coincidence that used to implement it.
   """
 
   use Platform.DataCase, async: true
@@ -60,30 +60,30 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
   end
 
   describe "channel_sections/3 — sub-org bucketing by org_id" do
-    test "a channel in the Soylent org lands in the Soylent bucket" do
-      ch = channel("soylent")
+    test "a channel in the Initech org lands in the Initech bucket" do
+      ch = channel("initech")
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["Soylent"] == [ch]
+      assert result.sub_orgs["Initech"] == [ch]
       assert result.sub_orgs["Acme"] == []
     end
 
-    test "a channel in the Wayne-Tech org (slug `wayne_tech`) lands in the Wayne-Tech bucket" do
-      ch = channel("wayne-tech")
+    test "a channel in the Vandelay-Ind org (slug `vandelay_ind`) lands in the Vandelay-Ind bucket" do
+      ch = channel("vandelay-ind")
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["Wayne-Tech"] == [ch]
+      assert result.sub_orgs["Vandelay-Ind"] == [ch]
       assert result.sub_orgs["Acme"] == []
     end
 
-    test "a channel in the SXI org lands in the SXI bucket" do
-      ch = channel("sxi")
+    test "a channel in the Globex org lands in the Globex bucket" do
+      ch = channel("globex")
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["SXI"] == [ch]
+      assert result.sub_orgs["Globex"] == [ch]
       assert result.sub_orgs["Acme"] == []
     end
 
@@ -96,38 +96,38 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
     end
 
     test "a channel whose org cannot be resolved falls through to Acme" do
-      # `soylent-news` names no org, so the fixture leaves org_id nil and the
+      # `initech-news` names no org, so the fixture leaves org_id nil and the
       # channel takes the explicit default-bucket clause. Nothing about the
       # channel's own slug is consulted any more — this used to pass because
       # slug matching was exact rather than prefix, and it now passes for the
       # stronger reason that slugs are not read at all.
-      ch = channel("soylent-news")
+      ch = channel("initech-news")
 
       result = ChatLive.channel_sections([ch], [])
 
       assert result.sub_orgs["Acme"] == [ch]
-      assert result.sub_orgs["Soylent"] == []
+      assert result.sub_orgs["Initech"] == []
     end
 
     test "the channel's own slug casing is irrelevant — the org decides" do
-      # Same Soylent org, a channel slug in a different case. Before stage 3
+      # Same Initech org, a channel slug in a different case. Before stage 3
       # this exercised case-insensitive slug matching; now it proves the
       # bucket is chosen without looking at the slug at all.
-      ch = channel("SOYLENT")
+      ch = channel("INITECH")
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["Soylent"] == [ch]
+      assert result.sub_orgs["Initech"] == [ch]
     end
   end
 
   describe "channel_sections/3 — empty buckets + shape stability" do
-    test "the Paragon bucket is empty when no Paragon-org channel exists" do
-      channels = [channel("soylent"), channel("general")]
+    test "the Hooli bucket is empty when no Hooli-org channel exists" do
+      channels = [channel("initech"), channel("general")]
 
       result = ChatLive.channel_sections(channels, [])
 
-      assert result.sub_orgs["Paragon"] == []
+      assert result.sub_orgs["Hooli"] == []
     end
 
     test "sub_orgs map preserves a key per org even when most buckets are empty" do
@@ -138,7 +138,7 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
     end
 
     test "sub_orgs map preserves a key per org when only some are populated" do
-      result = ChatLive.channel_sections([channel("soylent")], [])
+      result = ChatLive.channel_sections([channel("initech")], [])
 
       assert Map.keys(result.sub_orgs) |> Enum.sort() == sub_org_keys()
     end
@@ -172,13 +172,13 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
     end
 
     test "DMs and channels coexist without cross-contamination" do
-      ch = channel("soylent")
+      ch = channel("initech")
       conversation = dm()
 
       result = ChatLive.channel_sections([ch], [conversation])
 
       assert result.dms == [conversation]
-      assert result.sub_orgs["Soylent"] == [ch]
+      assert result.sub_orgs["Initech"] == [ch]
     end
   end
 
@@ -189,31 +189,31 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       # read that as "above," not "duplicated"). If product flips this, change
       # the helper's `Enum.split_with/2` to `Enum.partition`-then-keep-both and
       # update this assertion.
-      ch = channel("soylent")
+      ch = channel("initech")
       pinned_ids = MapSet.new([ch.id])
 
       result = ChatLive.channel_sections([ch], [], pinned_ids)
 
       assert result.pinned == [ch]
-      assert result.sub_orgs["Soylent"] == []
+      assert result.sub_orgs["Initech"] == []
     end
 
     test "non-pinned channels still bucket normally when pinned set is non-empty" do
-      pinned_ch = channel("soylent")
-      other_ch = channel("sxi")
+      pinned_ch = channel("initech")
+      other_ch = channel("globex")
       pinned_ids = MapSet.new([pinned_ch.id])
 
       result = ChatLive.channel_sections([pinned_ch, other_ch], [], pinned_ids)
 
       assert result.pinned == [pinned_ch]
-      assert result.sub_orgs["SXI"] == [other_ch]
-      assert result.sub_orgs["Soylent"] == []
+      assert result.sub_orgs["Globex"] == [other_ch]
+      assert result.sub_orgs["Initech"] == []
     end
 
     test "default (no pinned_channel_ids arg) returns an empty :pinned list" do
       # The default arg lets every existing call site keep working until
       # channel-level pinning ships. Verify the contract.
-      result = ChatLive.channel_sections([channel("soylent")], [])
+      result = ChatLive.channel_sections([channel("initech")], [])
 
       assert result.pinned == []
     end
@@ -252,21 +252,21 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       end)
     end
 
-    test "Fixture C: a channel slugged `bug-reports` under the SXI org buckets under SXI" do
-      sxi = Platform.Tenancy.get_org_by_slug!("sxi")
-      ch = org_channel("bug-reports", sxi.id)
+    test "Fixture C: a channel slugged `bug-reports` under the Globex org buckets under Globex" do
+      globex = Platform.Tenancy.get_org_by_slug!("globex")
+      ch = org_channel("bug-reports", globex.id)
 
-      assert hidden_bucket_of(ch) == "SXI",
-             "channel with org_id = SXI bucketed by its slug instead of its org"
+      assert hidden_bucket_of(ch) == "Globex",
+             "channel with org_id = Globex bucketed by its slug instead of its org"
     end
 
-    test "Fixture D: a channel slugged `cyberdyne` under the Acme org buckets under Acme" do
+    test "Fixture D: a channel slugged `wonka` under the Acme org buckets under Acme" do
       acme = Platform.Tenancy.get_org_by_slug!("acme")
-      ch = org_channel("cyberdyne", acme.id)
+      ch = org_channel("wonka", acme.id)
 
       assert hidden_bucket_of(ch) == "Acme",
-             "slug match beat org_id: an Acme channel slugged `cyberdyne` " <>
-               "was filed under Cyberdyne"
+             "slug match beat org_id: an Acme channel slugged `wonka` " <>
+               "was filed under Wonka"
     end
 
     test "Fixture E: a channel with org_id: nil lands in the root org's own bucket" do
@@ -308,16 +308,16 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
   # assertions cover the behaviour the deletion had to preserve.
   describe "bucket_from_slug/1 — derived from the orgs table" do
     test "resolves a CSS-form slug to the org's display name" do
-      sxi = Platform.Tenancy.get_org_by_slug!("sxi")
+      globex = Platform.Tenancy.get_org_by_slug!("globex")
 
-      assert ChatLive.bucket_from_slug("sxi") == sxi.name
+      assert ChatLive.bucket_from_slug("globex") == globex.name
     end
 
     test "resolves an underscore-slugged org through its hyphen CSS token" do
       # The one org that catches a missing `_` -> `-` normalization.
-      wayne_tech = Platform.Tenancy.get_org_by_slug!("wayne_tech")
+      vandelay_ind = Platform.Tenancy.get_org_by_slug!("vandelay_ind")
 
-      assert ChatLive.bucket_from_slug("wayne-tech") == wayne_tech.name
+      assert ChatLive.bucket_from_slug("vandelay-ind") == vandelay_ind.name
     end
 
     test "an org created after this code shipped resolves with no code change" do

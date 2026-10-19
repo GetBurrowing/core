@@ -106,7 +106,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   #   * `ci: "required"` + `require_ci_pass: true`  — there is CI and we gate on it.
   #   * `ci: "required"` + `require_ci_pass: false` — there IS CI and we choose not to gate.
   #   * `ci: "unenforced"`                           — CI runs (workflows exist and execute,
-  #     e.g. Stark Industries/orion: `branches/main` reports `protected: false` and
+  #     e.g. Globex-Corporation/atlas: `branches/main` reports `protected: false` and
   #     `required_status_checks.contexts: []`), but nothing about it is required or
   #     blocking, so there is nothing for auto-merge or a CI gate to wait on.
   #   * `ci: "none"`                                — there is NO CI at all to gate on.
@@ -354,7 +354,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
         "repos" => [
           %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
           %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"},
-          %{"repo_url" => "Stark Industries/orion", "ci" => "unenforced"}
+          %{"repo_url" => "Globex-Corporation/atlas", "ci" => "unenforced"}
         ]}
 
   Each entry's own `"config"` overrides the strategy-level `"config"`.
@@ -364,7 +364,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   repository, because on a repo with zero required checks there is nothing
   for auto-merge to wait for — whether that's because no CI runs at all
   (`"none"`) or because CI runs but nothing about it is required or
-  blocking (`"unenforced"`, e.g. `Stark Industries/orion`: workflows
+  blocking (`"unenforced"`, e.g. `Globex-Corporation/atlas`: workflows
   genuinely run and pass, but `branches/main` reports `protected: false`
   and `required_status_checks.contexts: []`).
   """
@@ -677,7 +677,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # the COMMON case (most tasks resolve to exactly one repo via
   # `Tasks.resolve_deploy_strategy_with_repos/1`), so the single-repo path
   # never reached ci-aware code at all — on a repo like
-  # Stark Industries/orion (`ci: "unenforced"`) it asserted an
+  # Globex-Corporation/atlas (`ci: "unenforced"`) it asserted an
   # enforcement claim that is false. Route through the SAME claim helper
   # `repo_sentence/1` uses instead, keyed on this entry's own `ci`.
   defp pr_merge_description(config, [entry]) do
@@ -752,7 +752,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   end
 
   # `ci: "unenforced"` means CI genuinely runs (workflows exist and execute,
-  # e.g. Stark Industries/orion) but nothing about it is required or
+  # e.g. Globex-Corporation/atlas) but nothing about it is required or
   # blocking, so MERGEABLE/CLEAN means "nothing blocks the merge", not
   # "checks passed" — the same shape of lie `ci: "none"` guards against
   # above, but for the opposite reason (CI exists here; it just isn't

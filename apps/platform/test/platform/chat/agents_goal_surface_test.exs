@@ -107,7 +107,7 @@ defmodule Platform.Chat.AgentsGoalSurfaceTest do
 
       # The same single operation the LiveView's `save_goal` runs — no
       # insert-vs-update split, no first-time path.
-      {:ok, updated} = Chat.update_space(space, %{goal: "Get SXI to a good state"})
+      {:ok, updated} = Chat.update_space(space, %{goal: "Get Globex to a good state"})
 
       unmeasurable = Sidebar.goal_panel(updated)
       assert unmeasurable.measurement.missing? == true

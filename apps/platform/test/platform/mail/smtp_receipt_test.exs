@@ -106,7 +106,7 @@ defmodule Platform.Mail.SmtpReceiptTest do
     end)
 
     n = System.unique_integer([:positive])
-    org_id = Tenancy.get_org_by_slug!("soylent").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
 
     admin =
       %User{}

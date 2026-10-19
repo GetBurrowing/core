@@ -772,8 +772,8 @@ defmodule Platform.Org.Wiki.SearchTest do
     end
 
     test "an untagged page in another org is not returned under org_id / project_id scoping" do
-      other_org = tenant_org_id("soylent")
-      mine = tenant_org_id("sxi")
+      other_org = tenant_org_id("initech")
+      mine = tenant_org_id("globex")
 
       foreign =
         %WikiPage{}

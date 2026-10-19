@@ -7,7 +7,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatScopeWriteTest do
   against that list, and `Sidebar.save_goal/3` writes goal text and scope
   in one update onto a freshly re-read space.
 
-  Fixture (seeded orgs: R = "acme" root, A = "soylent", B = "wayne_tech"):
+  Fixture (seeded orgs: R = "acme" root, A = "initech", B = "vandelay_ind"):
   P1 (A: 2 open + 1 done + 1 cancelled), P2 (A: 5 open), PF (B: 3 open),
   PR (R: 1 open), P_arch (A, archived, 4 open). No migration seeds
   projects or tasks, so the sandbox holds exactly these and the
@@ -28,8 +28,8 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatScopeWriteTest do
 
   setup do
     r = Tenancy.get_org_by_slug!("acme")
-    a = Tenancy.get_org_by_slug!("soylent")
-    b = Tenancy.get_org_by_slug!("wayne_tech")
+    a = Tenancy.get_org_by_slug!("initech")
+    b = Tenancy.get_org_by_slug!("vandelay_ind")
     n = System.unique_integer([:positive])
 
     p1 = project!("P1 #{n}", a)

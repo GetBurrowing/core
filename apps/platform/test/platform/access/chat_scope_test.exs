@@ -27,7 +27,7 @@ defmodule Platform.Access.ChatScopeTest do
 
   setup do
     _root = acme_org_id()
-    %{org: tenant_org_id("sxi")}
+    %{org: tenant_org_id("globex")}
   end
 
   defp user!(tag) do

@@ -4010,7 +4010,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # sit outside the viewer's org (pre-backfill `org_id = NULL`, or an
   # intentional cross-org access like an @-mentioned bystander opening
   # the sponsor's exec space). Non-reserved slugs are UNTOUCHED — the
-  # ADR-0042 per-org channel-slug scoping (`#general` in Acme vs SXI)
+  # ADR-0042 per-org channel-slug scoping (`#general` in Acme vs Globex)
   # must not be weakened.
   describe "system_prefix_fallback slug resolution" do
     defp insert_org!(slug \\ nil) do
@@ -4264,15 +4264,15 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "cross-org channel slug scoping preserved (ADR-0042 regression fence)",
          %{conn: conn} do
-      # Two orgs (acme-flavoured + sxi-flavoured sub-orgs), each with its
+      # Two orgs (acme-flavoured + globex-flavoured sub-orgs), each with its
       # own `#general` channel. Viewer in the acme-flavoured org must
-      # land on THEIR `#general`, not the sxi-flavoured one. `general`
+      # land on THEIR `#general`, not the globex-flavoured one. `general`
       # is not a reserved system-managed prefix (`task-exec-`, `meeting-`,
       # `dm-`, `group-`), so the stage-3 safety-net MUST NOT fire — the
       # org-scoped lookup wins, and ADR-0042 per-org channel-slug scoping
       # stays intact.
       acme_side = insert_org!("acme-nav-#{System.unique_integer([:positive])}")
-      sxi_side = insert_org!("sxi-nav-#{System.unique_integer([:positive])}")
+      globex_side = insert_org!("globex-nav-#{System.unique_integer([:positive])}")
 
       {:ok, acme_general} =
         Chat.create_space(%{
@@ -4282,12 +4282,12 @@ defmodule PlatformWeb.ChatLiveTest do
           org_id: acme_side.id
         })
 
-      {:ok, sxi_general} =
+      {:ok, globex_general} =
         Chat.create_space(%{
           name: "General",
           slug: "general",
           kind: "channel",
-          org_id: sxi_side.id
+          org_id: globex_side.id
         })
 
       user =
@@ -4302,7 +4302,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       active_space = :sys.get_state(view.pid).socket.assigns.active_space
       assert active_space.id == acme_general.id
-      refute active_space.id == sxi_general.id
+      refute active_space.id == globex_general.id
       assert active_space.org_id == acme_side.id
     end
 

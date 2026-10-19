@@ -135,21 +135,24 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
       assert html =~ ~s|[data-scope="new_client"]{|
     end
 
-    test "clicking the runtime org's header pill does not crash the view", %{conn: conn} do
+    test "clicking the runtime org's header pill applies the filter to that org", %{conn: conn} do
       {conn, user} = member_conn(conn)
       org = insert_newclient()
       visible = org_fixture(org, user, "newclient")
 
       {:ok, view, _html} = live(conn, ~p"/chat/#{visible.id}")
 
-      # Named limitation (stage 1): `parse_scope/1` does not know runtime
-      # slugs, so the click clears any filter rather than applying one. What
-      # is pinned here is only that it is survivable.
+      # Stage 1 named a limitation here: `parse_scope/1` knew only five
+      # compiled slugs, so this click CLEARED the filter. Since task 01a14dd9
+      # stage 2 `parse_scope/2` accepts any slug in the loaded org index, so
+      # a runtime org filters like any other.
       view
       |> element(~s(.chat-header-scope-pill button[phx-click="scope_filter"]))
       |> render_click()
 
-      assert render(view) =~ ~s(data-scope="new_client")
+      pill = extract(render(view), ".chat-header-scope-pill")
+      assert pill =~ ~s(data-scope="new_client")
+      assert pill =~ ~s(aria-pressed="true")
     end
 
     test "a rename reaches every pill, with the slug and colour unchanged", %{conn: conn} do
@@ -179,38 +182,46 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
   end
 
   describe "the six shipped orgs (regression)" do
-    test "Wayne-Tech's header pills and drawer chip keep their spelling and bytes",
+    test "Vandelay-Ind's header pills and drawer chip keep their spelling and bytes",
          %{conn: conn} do
       {conn, user} = member_conn(conn)
-      wayne_tech = Tenancy.get_org_by_slug!("wayne_tech")
+      vandelay_ind = Tenancy.get_org_by_slug!("vandelay_ind")
 
       # The contract labels from the org row, so the shipped bytes survive
       # only if the row carries the compiled label. Assert that rather than
       # assume it.
-      assert wayne_tech.name == "Wayne-Tech"
+      assert vandelay_ind.name == "Vandelay-Ind"
 
-      visible = org_fixture(wayne_tech, user, "pt")
+      visible = org_fixture(vandelay_ind, user, "pt")
       {:ok, _view, html} = live(conn, ~p"/chat/#{visible.id}")
 
       drawer = extract(html, @drawer_label)
-      assert drawer =~ ~s(data-scope="wayne_tech")
-      assert drawer =~ ">Wayne-Tech</span>"
-      assert drawer =~ ~s(aria-label="Wayne-Tech scope")
+      assert drawer =~ ~s(data-scope="vandelay_ind")
+      assert drawer =~ ">Vandelay-Ind</span>"
+      assert drawer =~ ~s(aria-label="Vandelay-Ind scope")
 
       for selector <- @header_pills do
         pill = extract(html, selector)
-        assert pill =~ ~s(data-scope="wayne_tech")
-        assert pill =~ ~s(phx-value-scope="wayne_tech")
-        assert pill =~ ">Wayne-Tech</span>"
-        assert pill =~ ~s(aria-label="Filter by Wayne-Tech scope")
+        assert pill =~ ~s(data-scope="vandelay_ind")
+        assert pill =~ ~s(phx-value-scope="vandelay_ind")
+        assert pill =~ ">Vandelay-Ind</span>"
+        assert pill =~ ~s(aria-label="Filter by Vandelay-Ind scope")
       end
 
-      # Byte-for-byte against the chip a bare `scope={:wayne_tech}` renders,
-      # which is what these call sites rendered before the org-row contract
-      # (`label` false unmasked, no `value`).
+      # Byte-for-byte against the chip the org-row contract renders from the
+      # bare component: the stored slug as `scope` and `value`, the row's name
+      # as `label` (task 01a14dd9 stage 2 removed the compiled atom the bare
+      # call used to take).
+      %{slug: shipped_slug, name: shipped_name} = vandelay_ind
+
       expected = fn attrs ->
         (&ScopePill.scope_pill/1)
-        |> render_component(Map.merge(%{scope: :wayne_tech, active: false}, attrs))
+        |> render_component(
+          Map.merge(
+            %{scope: shipped_slug, value: shipped_slug, label: shipped_name, active: false},
+            attrs
+          )
+        )
         |> chip()
       end
 

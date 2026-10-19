@@ -39,10 +39,10 @@ defmodule Platform.TenancyFixtures do
   alias Platform.Tenancy.OrgMembership
 
   @tenant_names %{
-    "soylent" => "Soylent",
-    "wayne_tech" => "Wayne-Tech",
-    "sxi" => "SXI",
-    "paragon" => "Paragon"
+    "initech" => "Initech",
+    "vandelay_ind" => "Vandelay-Ind",
+    "globex" => "Globex",
+    "hooli" => "Hooli"
   }
 
   @doc """
@@ -65,7 +65,7 @@ defmodule Platform.TenancyFixtures do
   Return the id of a seeded tenant org by slug, creating it on demand
   parented to this install's root org.
 
-  Well-known slugs (`"soylent"`, `"wayne_tech"`, `"sxi"`, `"paragon"`) get
+  Well-known slugs (`"initech"`, `"vandelay_ind"`, `"globex"`, `"hooli"`) get
   their historical display name; any other slug is created with a
   humanized version of the slug as its name.
   """

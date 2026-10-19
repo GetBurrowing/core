@@ -216,7 +216,7 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
     user = create_user(name)
 
     {:ok, _membership} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: tenant_org_id("sxi")})
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: tenant_org_id("globex")})
 
     assert Tenancy.external_user?(%{id: user.id})
     user

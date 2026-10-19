@@ -11,30 +11,30 @@ class PushPayloadTest {
     private val mention =
         mapOf(
             "kind" to "chat_mention",
-            "title" to "Sam in Internal Legacy SXI",
+            "title" to "Sam in Internal Legacy Globex",
             "body" to "@Robin can you check the banner copy",
-            "url" to "/chat/internal-legacy-sxi?message=0192-m",
+            "url" to "/chat/internal-legacy-globex?message=0192-m",
             "category" to "SUITE_MENTION",
             "thread_id" to "0192-s",
             "space_id" to "0192-s",
             "message_id" to "0192-m",
             "install_host" to "burrow.example.com",
             "author_name" to "Sam",
-            "space_name" to "Internal Legacy SXI",
+            "space_name" to "Internal Legacy Globex",
         )
 
     @Test
     fun `parses every field from FCM string values`() {
         val p = PushPayload.from(mention)
         assertEquals("chat_mention", p.kind)
-        assertEquals("Sam in Internal Legacy SXI", p.title)
+        assertEquals("Sam in Internal Legacy Globex", p.title)
         assertEquals("@Robin can you check the banner copy", p.body)
-        assertEquals("/chat/internal-legacy-sxi?message=0192-m", p.url)
+        assertEquals("/chat/internal-legacy-globex?message=0192-m", p.url)
         assertEquals("0192-s", p.spaceId)
         assertEquals("0192-m", p.messageId)
         assertEquals("burrow.example.com", p.installHost)
         assertEquals("Sam", p.authorName)
-        assertEquals("Internal Legacy SXI", p.spaceName)
+        assertEquals("Internal Legacy Globex", p.spaceName)
         assertTrue(p.isMention)
         assertTrue(p.canReply)
     }
@@ -99,13 +99,13 @@ class PushPayloadTest {
     fun `summary text`() {
         val review = PushPayload.from(mapOf("kind" to "review_request_pending"))
         assertEquals("3 approvals", PushPayload.summaryText(review, 3))
-        assertEquals("4 new in Internal Legacy SXI", PushPayload.summaryText(PushPayload.from(mention), 4))
+        assertEquals("4 new in Internal Legacy Globex", PushPayload.summaryText(PushPayload.from(mention), 4))
     }
 
     @Test
     fun `the Open guard keeps a local path and sends anything else to the root`() {
         assertEquals("/chat/0192-s?message=m", PushPayload.safePath("/chat/0192-s?message=m"))
-        assertEquals("/chat/internal-legacy-sxi?message=0192-m", PushPayload.from(mention).openPath)
+        assertEquals("/chat/internal-legacy-globex?message=0192-m", PushPayload.from(mention).openPath)
         assertEquals("/", PushPayload.safePath("https://evil.example/chat"))
         assertEquals("/", PushPayload.safePath("//evil.example/chat"))
         assertEquals("/", PushPayload.safePath("/\\evil.example"))

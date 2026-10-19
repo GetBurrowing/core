@@ -63,7 +63,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       conn: conn
     } do
       {conn, _user} = acme_admin_conn(conn)
-      project = create_project("soylent")
+      project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -83,33 +83,33 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       conn: conn
     } do
       {conn, _user} = acme_admin_conn(conn)
-      _project = create_project("soylent")
+      _project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Scope rail shows soylent before, gone after archiving the org.
-      assert has_element?(view, "[data-scope-chip='soylent']")
+      # Scope rail shows initech before, gone after archiving the org.
+      assert has_element?(view, "[data-scope-chip='initech']")
 
-      org_menu = "[data-menu-key='org:soylent']"
+      org_menu = "[data-menu-key='org:initech']"
       view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
       view |> element("#{org_menu} [data-role=lifecycle-archive]") |> render_click()
 
-      refute has_element?(view, "[data-scope-chip='soylent']")
-      assert Repo.get_by(Org, slug: "soylent").archived_at
+      refute has_element?(view, "[data-scope-chip='initech']")
+      assert Repo.get_by(Org, slug: "initech").archived_at
     end
 
     test "archiving an org's LAST project keeps the org header, kebab, and scope chip (regression: task 019f4eaa)",
          %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      # Soylent with exactly one project — the reported case (Robin, 2026-07-16).
-      project = create_project("soylent")
+      # Initech with exactly one project — the reported case (Robin, 2026-07-16).
+      project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Present before: sidebar header, org kebab, scope chip.
-      assert has_element?(view, "[data-role=project-group][data-org-slug='soylent']")
-      assert has_element?(view, "[data-menu-key='org:soylent']")
-      assert has_element?(view, "[data-scope-chip='soylent']")
+      assert has_element?(view, "[data-role=project-group][data-org-slug='initech']")
+      assert has_element?(view, "[data-menu-key='org:initech']")
+      assert has_element?(view, "[data-scope-chip='initech']")
 
       # Archive the org's ONLY project (not the org itself).
       menu = "[data-menu-key='project:#{project.id}']"
@@ -119,15 +119,15 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # The project row leaves the sidebar...
       refute has_element?(view, menu)
 
-      # ...but soylent is still an ACTIVE org, so its header + kebab survive.
+      # ...but initech is still an ACTIVE org, so its header + kebab survive.
       # Pre-fix the header was project-derived and vanished with the last
       # project — taking the org's own archive control with it — while the
       # scope chip (org-derived) stayed, so the surface contradicted itself.
-      assert has_element?(view, "[data-role=project-group][data-org-slug='soylent']")
-      assert has_element?(view, "[data-menu-key='org:soylent']")
-      assert has_element?(view, "[data-scope-chip='soylent']")
+      assert has_element?(view, "[data-role=project-group][data-org-slug='initech']")
+      assert has_element?(view, "[data-menu-key='org:initech']")
+      assert has_element?(view, "[data-scope-chip='initech']")
       # The org row itself is untouched — only the project was archived.
-      refute Repo.get_by(Org, slug: "soylent").archived_at
+      refute Repo.get_by(Org, slug: "initech").archived_at
     end
   end
 
@@ -135,7 +135,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "the confirm modal opens on 'Schedule deletion…' and confirming schedules the project",
          %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      project = create_project("sxi")
+      project = create_project("globex")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -174,7 +174,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # this pins the specific mistake structurally instead. Real visibility
       # proof lives in the browser e2e cases.
       {conn, _admin} = acme_admin_conn(conn)
-      project = create_project("sxi")
+      project = create_project("globex")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -197,7 +197,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "Cancel closes the modal without scheduling", %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      project = create_project("sxi")
+      project = create_project("globex")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       menu = "[data-menu-key='project:#{project.id}']"
@@ -215,7 +215,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "the mobile project sheet renders the same lifecycle kebab, wired to the same archive event",
          %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      project = create_project("soylent")
+      project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -223,7 +223,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # with the desktop sidebar's data-menu-key in the DOM.
       mobile_menu = "[data-menu-key='mobile-project:#{project.id}']"
       assert has_element?(view, mobile_menu)
-      assert has_element?(view, "[data-menu-key='mobile-org:soylent']")
+      assert has_element?(view, "[data-menu-key='mobile-org:initech']")
 
       # Same event path as desktop: open the mobile kebab, click Archive.
       view |> element("#{mobile_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
@@ -237,7 +237,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
   describe "non-admin" do
     test "does NOT see the lifecycle controls on either surface", %{conn: conn} do
       {conn, _user} = member_conn(conn)
-      _project = create_project("soylent")
+      _project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -260,8 +260,8 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "archiving an org shows what it took, and Undo puts it all back", %{conn: conn} do
       {conn, _admin} = acme_admin_conn(conn)
-      org = Tenancy.get_org_by_slug!("paragon")
-      project = create_project("paragon")
+      org = Tenancy.get_org_by_slug!("hooli")
+      project = create_project("hooli")
       {:ok, _} = Tasks.update_project(project, %{name: "Site Expansion"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -274,7 +274,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
       toast = view |> element("[data-role=archive-undo-toast]") |> render()
       assert toast =~ "Archived"
-      assert toast =~ "Paragon"
+      assert toast =~ "Hooli"
       # It names what the cascade took, not just a count.
       assert toast =~ "Site Expansion"
 
@@ -290,10 +290,10 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "dismissing leaves the archive in place — dismiss is not undo", %{conn: conn} do
       {conn, _admin} = acme_admin_conn(conn)
-      org = Tenancy.get_org_by_slug!("soylent")
+      org = Tenancy.get_org_by_slug!("initech")
       # The Tasks sidebar only renders orgs that HAVE projects, so an org with
       # none has no kebab to click.
-      _project = create_project("soylent")
+      _project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -329,7 +329,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "falls back to All Projects instead of selecting it", %{conn: conn} do
       {conn, admin} = acme_admin_conn(conn)
-      project = create_project("paragon")
+      project = create_project("hooli")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -347,7 +347,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "an active project is still selectable", %{conn: conn} do
       {conn, _admin} = acme_admin_conn(conn)
-      project = create_project("soylent")
+      project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -361,7 +361,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
   describe "acme admin — org delete surface & choose" do
     defp open_org_delete_modal(view) do
-      org_menu = "[data-menu-key='org:soylent']"
+      org_menu = "[data-menu-key='org:initech']"
       view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
       view |> element("#{org_menu} [data-role=lifecycle-schedule-delete]") |> render_click()
       view
@@ -370,8 +370,8 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "the org delete confirm lists children as a checklist, Delete gated until acknowledged",
          %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      swept = create_project("soylent")
-      kept = create_project("soylent")
+      swept = create_project("initech")
+      kept = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       open_org_delete_modal(view)
@@ -386,8 +386,8 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "keeping a child spares it while the org + the rest are scheduled", %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      swept = create_project("soylent")
-      kept = create_project("soylent")
+      swept = create_project("initech")
+      kept = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       open_org_delete_modal(view)
@@ -401,7 +401,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       refute has_element?(view, "[data-role=schedule-delete-modal]")
 
       # Org + the un-kept project are scheduled …
-      assert Repo.get_by(Org, slug: "soylent").deletion_scheduled_at
+      assert Repo.get_by(Org, slug: "initech").deletion_scheduled_at
       assert Repo.get(Project, swept.id).deletion_scheduled_at
       # … the kept project is spared (no clock, survives as its own archived row).
       refute Repo.get(Project, kept.id).deletion_scheduled_at
@@ -411,7 +411,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       conn: conn
     } do
       {conn, _user} = acme_admin_conn(conn)
-      project = create_project("soylent")
+      project = create_project("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       open_org_delete_modal(view)
@@ -421,7 +421,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       render_submit(modal)
 
       assert has_element?(view, "[data-role=schedule-delete-modal]")
-      refute Repo.get_by(Org, slug: "soylent").deletion_scheduled_at
+      refute Repo.get_by(Org, slug: "initech").deletion_scheduled_at
       refute Repo.get(Project, project.id).deletion_scheduled_at
     end
   end
@@ -538,7 +538,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "archiving an org still drops its chip while a bad-slug org exists", %{conn: conn} do
       {conn, _user} = acme_admin_conn(conn)
-      _project = create_project("soylent")
+      _project = create_project("initech")
 
       # Deliberately mount BEFORE the bad-slug org exists. That makes this
       # case discriminate the `refresh_containers/1` call site SPECIFICALLY:
@@ -547,20 +547,20 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # bad org already present would crash in `mount/3` and prove nothing
       # about the second call site — cases 1 and 2 already cover mount.)
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      assert has_element?(view, "[data-scope-chip='soylent']")
+      assert has_element?(view, "[data-scope-chip='initech']")
 
       # Shared-mode sandbox (`async: false`), so the LiveView process sees
       # this insert on its next query.
       insert_tenant_org("e2e-target-323", "E2E Target 323")
 
-      org_menu = "[data-menu-key='org:soylent']"
+      org_menu = "[data-menu-key='org:initech']"
       view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
       view |> element("#{org_menu} [data-role=lifecycle-archive]") |> render_click()
 
       # `refresh_containers/1` is a SECOND, independent call site of
       # `active_scope_keys/0` — a mount-only fix would still crash the socket
       # here.
-      refute has_element?(view, "[data-scope-chip='soylent']")
+      refute has_element?(view, "[data-scope-chip='initech']")
       assert has_element?(view, "[data-scope-chip='acme']")
 
       # The org inserted mid-session appears on the re-read, which is the
@@ -599,7 +599,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "a plain member sees chips for their orgs and NOT for an org they don't belong to", %{
       conn: conn
     } do
-      {conn, user} = member_of_conn(conn, ["acme", "soylent"])
+      {conn, user} = member_of_conn(conn, ["acme", "initech"])
 
       # Premise, asserted rather than assumed: an Acme admin bypasses the
       # membership filter BY DESIGN, so an admin viewer would make a broken
@@ -617,12 +617,12 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # Prove the org-chip list is non-empty and correct before reading any
       # absence as evidence.
       assert "acme" in chips
-      assert "soylent" in chips
+      assert "initech" in chips
 
       # The leak itself, asserted BEFORE the count so a regression reports the
       # foreign org by name rather than "left: 5, right: 2".
-      assert Tenancy.get_org_by_slug!("wayne_tech").archived_at == nil
-      refute "wayne_tech" in chips
+      assert Tenancy.get_org_by_slug!("vandelay_ind").archived_at == nil
+      refute "vandelay_ind" in chips
 
       assert length(chips) == 2
     end

@@ -10,11 +10,11 @@
 
 Burrow has two parallel hierarchies in the schema that don't intersect:
 
-1. **Orgs** (`orgs`): hierarchical via `parent_org_id`, with a partial unique index (`orgs_single_root`) enforcing **exactly one root**. Today: `Acme` (root) → 4 tenant children (`Soylent`, `Wayne-Tech`, `SXI`, `Paragon`). Membership lives in `org_memberships(user_id, org_id, role)` with `role ∈ {admin, member}` and a `roles_locked_at` lock against the email-domain auto-promote rule (ADR-adjacent — see migration `20260519160000_refine_root_admin_membership_by_email_domain.exs`).
+1. **Orgs** (`orgs`): hierarchical via `parent_org_id`, with a partial unique index (`orgs_single_root`) enforcing **exactly one root**. Today: `Acme` (root) → 4 tenant children (`Initech`, `Vandelay-Ind`, `Globex`, `Hooli`). Membership lives in `org_memberships(user_id, org_id, role)` with `role ∈ {admin, member}` and a `roles_locked_at` lock against the email-domain auto-promote rule (ADR-adjacent — see migration `20260519160000_refine_root_admin_membership_by_email_domain.exs`).
 
-2. **Projects** (`projects`): flat — **no `org_id` FK, no `parent_project_id`**. Today: `Soylent`, `Startup Suite`, `Stark Industries`. The cascade chain is project → epics / tasks / task_stacks / meetings. All work units hang off a project.
+2. **Projects** (`projects`): flat — **no `org_id` FK, no `parent_project_id`**. Today: `Initech`, `Startup Suite`, `Globex Corporation`. The cascade chain is project → epics / tasks / task_stacks / meetings. All work units hang off a project.
 
-The naming overlap between projects and tenant orgs (`Soylent` project / `Soylent` org; `Stark Industries` project / `SXI` org) is **coincidence/convention only** — the database doesn't know they're related.
+The naming overlap between projects and tenant orgs (`Initech` project / `Initech` org; `Globex Corporation` project / `Globex` org) is **coincidence/convention only** — the database doesn't know they're related.
 
 `chat_spaces` does have `org_id` (`ON DELETE SET NULL`), so chat is org-scoped. So we already have one piece of UX that's org-scoped (chat) and one that's project-scoped (tasks/epics/meetings). They speak past each other.
 
@@ -36,8 +36,8 @@ Add `projects.org_id uuid NOT NULL` with FK → `orgs(id) ON DELETE RESTRICT`.
 
 **Backfill rules** for existing projects (by name match):
 - `Startup Suite` → Acme (root)
-- `Soylent` project → Soylent org
-- `Stark Industries` project → SXI org
+- `Initech` project → Initech org
+- `Globex Corporation` project → Globex org
 
 All three match cleanly today. No orphans.
 
@@ -52,7 +52,7 @@ ADR 0041's deferred namespacing lands. The scope levels:
 | Level | Path prefix | Cardinality |
 |-------|-------------|-------------|
 | Root org | `org/acme/` | 1 (the root) |
-| Tenant org | `org/<tenant-slug>/` | N (Soylent, SXI, Wayne-Tech, Paragon, …) |
+| Tenant org | `org/<tenant-slug>/` | N (Initech, Globex, Vandelay-Ind, Hooli, …) |
 | Project | `project/<project-id>/` | M per tenant |
 | Space | `space/<space-id>/` | K per project (or per tenant for non-project spaces) |
 
@@ -68,7 +68,7 @@ Context flows **upward** in the org tree (a child inherits its ancestors' contex
 
 - **Operating at root Acme (no scoped tenant org):** preamble loads `org/acme/*` (full) + a summary surface for each descendant (`org/<tenant>/IDENTITY.md` + a single auto-curated `org/acme/TENANTS_SUMMARY.md` paragraph per tenant). Full per-tenant memory loads only on explicit search via `memory_search` filtered by `org_id`. This avoids blowing the 4096-token preamble budget with N×tenant-full-context.
 
-- **Operating in a tenant org (e.g. SXI) on a tenant project (e.g. Orion):** preamble loads `project/<orion_id>/*` + `org/sxi/*` + inherited `org/acme/*` (root). Sibling-org content (`org/wayne-tech/*`) is **excluded** — strict tenant isolation between siblings.
+- **Operating in a tenant org (e.g. Globex) on a tenant project (e.g. Atlas):** preamble loads `project/<atlas_id>/*` + `org/globex/*` + inherited `org/acme/*` (root). Sibling-org content (`org/vandelay-ind/*`) is **excluded** — strict tenant isolation between siblings.
 
 - **Operating in a tenant org with no specific project context:** `org/<tenant>/*` + inherited `org/acme/*`. No project memory loaded.
 
@@ -90,9 +90,9 @@ All tenant-org default channels rename to `General` (display name) with slug `ge
 | Org | Current default channel | Becomes |
 |-----|------------------------|---------|
 | Acme | "General" / `general` | unchanged |
-| Soylent | "Soylent" / `soylent` | "General" / `general` |
-| Wayne-Tech | "Wayne-Tech" / `wayne-tech` | "General" / `general` |
-| SXI | "Stark Industries" / `stark-industries` | "General" / `general` |
+| Initech | "Initech" / `initech` | "General" / `general` |
+| Vandelay-Ind | "Vandelay-Ind" / `vandelay-ind` | "General" / `general` |
+| Globex | "Globex Corporation" / `globex-corporation` | "General" / `general` |
 
 The existing unique index `chat_spaces_unique_slug` on `(workspace_id, slug)` is partial: since all four rows have `workspace_id IS NULL`, PostgreSQL treats each NULL as distinct under the btree default and allows multiple `(NULL, 'general')` rows. The rename is safe under the current schema.
 
@@ -117,12 +117,12 @@ The existing unique index `chat_spaces_unique_slug` on `(workspace_id, slug)` is
 ```
 Acme (root org)                    ← "super-context" vantage point
 ├── Suite (project)                ← internal Acme work
-├── Soylent (tenant org)
-│   └── Soylent (project)         ← moved under Soylent org
-├── SXI (tenant org)
-│   └── Stark Industries (project — Orion work)
-├── Wayne-Tech (tenant org)
-└── Paragon (tenant org)
+├── Initech (tenant org)
+│   └── Initech (project)         ← moved under Initech org
+├── Globex (tenant org)
+│   └── Globex Corporation (project — Atlas work)
+├── Vandelay-Ind (tenant org)
+└── Hooli (tenant org)
 ```
 
 ---

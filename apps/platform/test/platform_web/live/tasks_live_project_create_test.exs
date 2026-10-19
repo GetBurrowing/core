@@ -57,15 +57,15 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
 
       assert select_html, "expected org select to render in opened sheet"
       assert select_html =~ "Acme"
-      assert select_html =~ "Soylent"
-      assert select_html =~ "Wayne-Tech"
-      assert select_html =~ "SXI"
-      assert select_html =~ "Paragon"
+      assert select_html =~ "Initech"
+      assert select_html =~ "Vandelay-Ind"
+      assert select_html =~ "Globex"
+      assert select_html =~ "Hooli"
     end
 
     test "submit creates a project owned by the chosen org", %{conn: conn} do
       conn = authenticated_conn(conn)
-      org_id = tenant_org_id("soylent")
+      org_id = tenant_org_id("initech")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 

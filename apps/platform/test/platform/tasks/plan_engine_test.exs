@@ -1920,8 +1920,8 @@ defmodule Platform.Tasks.PlanEngineTest do
       # DISCARDED the resolved entry's `ci` and fell back to the same
       # config-only renderer the truly-repo-less catch-all uses, so the two
       # calls were coincidentally identical for every ci state, including
-      # ones where that shared text was a false claim (Stark Industries/
-      # orion's `ci: "unenforced"`). This task's PlanEngine resolution DOES
+      # ones where that shared text was a false claim (Globex-Corporation/
+      # atlas's `ci: "unenforced"`). This task's PlanEngine resolution DOES
       # carry a repo identity (`Tasks.resolve_deploy_strategy_with_repos/1`
       # synthesizes one from `project.repo_url`, `ci: "required"` here), and
       # the injected description now makes the claim that identity is

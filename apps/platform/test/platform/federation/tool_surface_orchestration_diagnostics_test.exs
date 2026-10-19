@@ -41,10 +41,10 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
   setup do
     acme = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-diag-#{u()}", acme)
-    wayne_tech = ensure_tenant_org("wayne-tech-diag-#{u()}", acme)
+    globex = ensure_tenant_org("globex-diag-#{u()}", acme)
+    vandelay_ind = ensure_tenant_org("vandelay-ind-diag-#{u()}", acme)
 
-    {:ok, project} = Tasks.create_project(%{name: "Diag Proj #{u()}", org_id: sxi.id})
+    {:ok, project} = Tasks.create_project(%{name: "Diag Proj #{u()}", org_id: globex.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Watched Task"})
     {:ok, quiet_task} = Tasks.create_task(%{project_id: project.id, title: "Untouched Task"})
 
@@ -68,8 +68,8 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
       quiet_task: quiet_task,
       stage_id: stage_id,
       lease: lease,
-      agent_sxi: create_agent("sxi-agent", %{"org_id" => sxi.id}),
-      agent_pt: create_agent("pt-agent", %{"org_id" => wayne_tech.id})
+      agent_globex: create_agent("globex-agent", %{"org_id" => globex.id}),
+      agent_pt: create_agent("pt-agent", %{"org_id" => vandelay_ind.id})
     }
   end
 
@@ -126,7 +126,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.task_id == ctx.task.id
@@ -151,7 +151,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"task_id" => ctx.task.id, "event_type" => "execution.acked"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 1
@@ -165,7 +165,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"task_id" => ctx.task.id, "limit" => 5000},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.limit == 200
@@ -176,7 +176,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"task_id" => ctx.task.id, "limit" => 1},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.limit == 1
@@ -187,7 +187,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
     test "an absent task_id is refused, not answered with a zero-row shape", ctx do
       assert {:error, envelope} =
-               ToolSurface.execute("runtime_event_list", %{}, context_for(ctx.agent_sxi))
+               ToolSurface.execute("runtime_event_list", %{}, context_for(ctx.agent_globex))
 
       assert envelope.error =~ "task_id"
       refute Map.has_key?(envelope, :count)
@@ -199,7 +199,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.error =~ "task_id"
@@ -212,7 +212,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 1
@@ -236,7 +236,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "status" => "blocked"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert blocked.count == 1
@@ -245,7 +245,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "status" => "active"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert active.count == 0
@@ -260,7 +260,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "status" => "blokced"},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.error =~ "status"
@@ -285,7 +285,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "runtime_event_list",
                  %{"task_id" => ctx.quiet_task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert events.count == 1
@@ -294,7 +294,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.quiet_task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert leases.count == 0
@@ -303,7 +303,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
     test "an absent task_id is refused", ctx do
       assert {:error, envelope} =
-               ToolSurface.execute("execution_lease_list", %{}, context_for(ctx.agent_sxi))
+               ToolSurface.execute("execution_lease_list", %{}, context_for(ctx.agent_globex))
 
       assert envelope.error =~ "task_id"
       refute Map.has_key?(envelope, :leases)
@@ -354,7 +354,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                  ToolSurface.execute(
                    tool,
                    %{"task_id" => "not-a-uuid"},
-                   context_for(ctx.agent_sxi)
+                   context_for(ctx.agent_globex)
                  )
 
         assert envelope.recoverable == false
@@ -414,7 +414,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == Diagnostics.default_limit()
@@ -427,7 +427,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "limit" => 500},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == Diagnostics.max_limit()
@@ -444,7 +444,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "limit" => 5},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 5
@@ -470,7 +470,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "status" => "blocked", "limit" => 2},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert result.count == 2
@@ -496,7 +496,7 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
                ToolSurface.execute(
                  "execution_lease_list",
                  %{"task_id" => ctx.task.id, "status" => "blokced", "limit" => 2},
-                 context_for(ctx.agent_sxi)
+                 context_for(ctx.agent_globex)
                )
 
       assert envelope.error =~ "status"

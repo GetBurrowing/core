@@ -92,7 +92,7 @@ class ReplyTest {
             assertEquals(R.drawable.ic_stat_error, n.smallIcon.resId)
             assertEquals(0, n.flags and Notification.FLAG_AUTO_CANCEL)
             assertEquals(
-                "/chat/internal-legacy-sxi?message=0192-m",
+                "/chat/internal-legacy-globex?message=0192-m",
                 shadowOf(n.contentIntent).savedIntent.getStringExtra(NotificationPresenter.EXTRA_PATH),
             )
         }

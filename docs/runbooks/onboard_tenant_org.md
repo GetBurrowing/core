@@ -3,7 +3,7 @@
 Ops procedure for adding a new client org (a "tenant" of the Acme root org).
 
 Introduced by task `019ffe9d`, which added `Tenancy.create_org/2`, the
-`/admin/orgs` surface that calls it, and the `cyberdyne` scope ramp.
+`/admin/orgs` surface that calls it, and the `wonka` scope ramp.
 
 ---
 
@@ -12,15 +12,15 @@ Introduced by task `019ffe9d`, which added `Tenancy.create_org/2`, the
 **`019ffe9d` ships a capability, a form and a colour ramp. It creates no org
 rows.** Every org in the running system still comes from the seed migration
 `20260519143620_seed_root_orgs.exs`, which seeds exactly five:
-`acme`, `soylent`, `wayne_tech`, `sxi`, `paragon`.
+`acme`, `initech`, `vandelay_ind`, `globex`, `hooli`.
 
-In particular: **Cyberdyne does not exist in production after this branch
-deploys.** The diff registers `cyberdyne` as a scope — a label, a magenta
+In particular: **Wonka does not exist in production after this branch
+deploys.** The diff registers `wonka` as a scope — a label, a magenta
 colour ramp, and an entry in every scope literal — so that *when* the org is
 created it is visible. Registering the scope is not creating the org.
 
 Somebody has to do step 1 below, by hand, once, after deploy. Reading the
-merged diff and concluding "Cyberdyne is already there" is the specific
+merged diff and concluding "Wonka is already there" is the specific
 mistake this section exists to prevent.
 
 Deliberately **not** done by migration: the fixtures in
@@ -41,7 +41,7 @@ same `:ensure_admin` gate as `/admin/users`.
 
 1. Go to `/admin/orgs`.
 2. **New org**.
-3. Fill **Name** (display name, e.g. `Cyberdyne`) and **Slug**.
+3. Fill **Name** (display name, e.g. `Wonka`) and **Slug**.
 4. **Create org**.
 
 Slug rules (`Platform.Tenancy.Org`, `@slug_format`): `^[a-z][a-z0-9_-]*$` —
@@ -106,15 +106,19 @@ chip tint in **both** themes — light over `#FFFFFF`, dark over `#171b25`.
 The full-saturation `text-<slug>` token is tuned for the dot and the active
 fill, *not* for label text; that is what the separate `text-<slug>-label`
 values are for. Measure, don't eyeball: whole-percent lightness steps can
-overshoot the band (cyberdyne needed 55.5% / 67.5% at hue 340).
+overshoot the band (wonka needed 55.5% / 67.5% at hue 340).
 
 ### Rail position
 
 `Tenancy.tenant_priority/0` is a **curation list**, deliberately not extended
-for every new org. `tenant_priority_index/1` returns a `9_999` sentinel for
-unknown slugs, so an unlisted org sorts last, deterministically, with ties
-broken slug-alphabetically. Add a slug to `tenant_priority/0` only when you
-want it to jump the queue.
+for every new org. It is install config, not code (task 01a14dd9): set the
+`TENANT_ORG_PRIORITY` env var to a comma-separated list of tenant slugs in
+display order (entries are trimmed, blank entries dropped, order kept). It has
+no default; unset, every tenant sorts slug-alphabetically after the root.
+`tenant_priority_index/1` returns a `9_999` sentinel for unlisted slugs, so an
+unlisted org sorts last, deterministically, with ties broken
+slug-alphabetically. Add a slug to `TENANT_ORG_PRIORITY` only when you want it
+to jump the queue; the value takes effect at the next restart.
 
 ---
 

@@ -180,8 +180,8 @@ defmodule PlatformWeb.EmailLiveTest do
       Application.put_env(:platform, :memory_service, previous_memory)
     end)
 
-    org_id = Tenancy.get_org_by_slug!("soylent").id
-    other_org_id = Tenancy.get_org_by_slug!("sxi").id
+    org_id = Tenancy.get_org_by_slug!("initech").id
+    other_org_id = Tenancy.get_org_by_slug!("globex").id
 
     admin = user!("admin") |> member!(org_id, "admin")
     member = user!("member") |> member!(org_id, "member")

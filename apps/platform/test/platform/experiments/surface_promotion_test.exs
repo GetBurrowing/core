@@ -120,7 +120,7 @@ defmodule Platform.Experiments.SurfacePromotionTest do
 
   test "an org's history is separate from the install-wide history" do
     t = target()
-    org = tenant_org_id("soylent")
+    org = tenant_org_id("initech")
 
     in_org = running_with_arm(t, 2, org)
 

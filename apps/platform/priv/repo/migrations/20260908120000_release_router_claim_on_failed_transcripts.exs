@@ -12,7 +12,7 @@ defmodule Platform.Repo.Migrations.ReleaseRouterClaimOnFailedTranscripts do
   the retry path refuses to re-dispatch a claimed row — so those rows are
   permanently un-retryable. That includes the production row that
   motivated the ticket: transcript 01a0626d-0fe3-7001-99c1-c2f8b75b932c
-  (2026-09-02 SXI client workshop), failed with
+  (2026-09-02 Globex client workshop), failed with
   `{:llm_failed, %Req.TransportError{reason: :timeout}}`.
 
   The UPDATE touches only terminal-failed rows, so it cannot disturb a
