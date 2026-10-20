@@ -525,7 +525,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         })
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           note: "pre-plan design direction",
           attached_by: %{kind: "agent", id: participant.id}
         )

@@ -121,7 +121,7 @@ defmodule Platform.Orchestration.TaskRouterDesignCanvasesTest do
       })
 
     {:ok, _} =
-      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+      CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
         attached_by: %{kind: "user", id: participant.id}
       )
 

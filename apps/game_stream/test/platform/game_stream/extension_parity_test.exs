@@ -185,6 +185,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"stack_attach_canvas", "task"},
+      {"stack_detach_canvas", "task"},
       {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
@@ -373,8 +375,21 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # B", "a human editor"), so the two tool-definition digests move. The
     # summaries, schemas and metrics digests are unchanged. Measured on the
     # test rig at the A3 branch after merging main (fb3332ff).
-    @main_tool_digest_off "45abbab343801ca17cc799b2df73ccf67b94f74cdc458d5ccdb6a2287b866bce"
-    @main_tool_digest_on "d6d663e20cf1062de27c84a91702a898c540b12ed64aba926b892d68daa3d449"
+    #
+    # Re-pinned by task 01a1559a stage 1: the `limitations` prose of
+    # task_attach_canvas, task_detach_canvas and task_list_canvases names the
+    # new gate (`tasks.write` / `tasks.read` in the task's org), so both
+    # tool-definition digests move. Names, bundles, summaries, schemas and
+    # metrics are unchanged. Measured on the test rig at the stage's branch
+    # (81a96d91).
+    #
+    # Re-pinned by task 01a1559a stage 2: `stack_attach_canvas` and
+    # `stack_detach_canvas` in the `task` bundle after `stack_assign_agents`
+    # (the name list above carries them), so both tool-definition digests
+    # move. Summaries, schemas and metrics are unchanged. Measured on the test rig at
+    # the stage's branch (d8f4696c).
+    @main_tool_digest_off "bb26b35b7d27ed046783c6c64ca38f469d81096b5cb3c4a69bbdfca42a6caacf"
+    @main_tool_digest_on "8f53387abc86f20545f7c7f155a8cb8a4b0a91ff3bdf2c3dce1284c527da7b6c"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

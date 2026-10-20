@@ -338,7 +338,10 @@ defmodule PlatformWeb.CanvasLiveTest do
         Platform.Tasks.create_task(%{project_id: project.id, title: "Canvas close task"})
 
       {:ok, _attachment} =
-        Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        Platform.Tasks.CanvasAttachments.attach_canvas(
+          Platform.Access.Scope.system(),
+          task.id,
+          canvas.id,
           attached_by: %{kind: "user", id: Ecto.UUID.generate()}
         )
 

@@ -245,7 +245,7 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
         })
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           note: "first draft",
           attached_by: %{kind: "user", id: participant.id}
         )
@@ -289,7 +289,7 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
         })
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           note: "will rot",
           attached_by: %{kind: "user", id: participant.id}
         )

@@ -4402,6 +4402,33 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The most recently edited live canvases across `space_ids`, newest first,
+  capped by `:limit` (default 25), loaded WITHOUT `document` (`id`, `title`,
+  `space_id`, `updated_at`, `inserted_at` only). The empty-query state of the task canvas
+  picker (`PlatformWeb.Tasks.CanvasPickerComponent`, task 01a1559a stage 3).
+
+  Like `search_canvases/3` it is NOT cast-safe on `space_ids`: every id must be
+  DB-derived. `:access_scope` drops every canvas a `canvas.read` deny covers
+  (`scope_by/3`), exactly as in `list_canvases/2`.
+  """
+  @spec list_recent_canvases([binary()], keyword()) :: [Canvas.t()]
+  def list_recent_canvases(space_ids, opts \\ [])
+
+  def list_recent_canvases([], _opts), do: []
+
+  def list_recent_canvases(space_ids, opts) when is_list(space_ids) do
+    from(c in Canvas,
+      where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+      limit: ^Keyword.get(opts, :limit, 25),
+      # The picker renders a title and a meta line; the document stays behind.
+      select: struct(c, [:id, :title, :space_id, :updated_at, :inserted_at])
+    )
+    |> canvas_order(:updated_desc)
+    |> maybe_scope_canvases(canvas_access_scope(opts))
+    |> Repo.all()
+  end
+
+  @doc """
   Restrict a `Space` or `Canvas` query (its root binding) by explicit grants
   (task 01a1386d-e528 stage 3,
   `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).

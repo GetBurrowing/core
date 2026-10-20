@@ -42,6 +42,7 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"task_detail_component", "plan_submit_reject_with_feedback"},
     # task detail (server-held selection)
     {"task_detail_component", "detail_detach_canvas"},
+    {"task_detail_component", "detail_attach_canvas"},
     {"task_detail_component", "detail_save_description"},
     {"task_detail_component", "detail_save_description"},
     {"task_detail_component", "detail_confirm_delete"},
@@ -64,6 +65,13 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"stacks_component", "stack_start_planning"},
     {"stacks_component", "stack_save_assignees"},
     {"stacks_component", "stack_clear_member_override"},
+    # Task 01a1559a stage 4: the stack canvases section. The pick and the
+    # Detach prompt only read counts, but they put a canvas title on screen
+    # and park the target the confirm line writes, so they re-ask too.
+    {"stacks_component", "stack_canvas_pick"},
+    {"stacks_component", "stack_canvas_detach_prompt"},
+    {"stacks_component", "stack_canvas_attach"},
+    {"stacks_component", "stack_canvas_detach"},
     # sidebar (sidebar_select_project is guarded in the shell's handle_info)
     {"sidebar_component", "sidebar_select_project"},
     {"sidebar_component", "sidebar_create_project"},
@@ -151,6 +159,7 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"stacks_component", "stack_set_assignee_modal_mode"},
     {"stacks_component", "stack_open_graph_expand"},
     {"stacks_component", "stack_close_graph_expand"},
+    {"stacks_component", "stack_canvas_confirm_cancel"},
     {"steering_component", "toggle_execution_log"},
     {"steering_component", "steering_changed"},
     {"steering_component", "cancel_steering_upload"},
@@ -188,7 +197,14 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"task_detail_component", "plan_toggle_reject_feedback"},
     {"task_detail_component", "plan_update_reject_feedback_text"},
     {"task_detail_component", "plan_expand"},
-    {"task_detail_component", "plan_collapse"}
+    {"task_detail_component", "plan_collapse"},
+    # The canvas picker (task 01a1559a stage 3) writes nothing: picking pushes
+    # `detail_attach_canvas` (guarded above). Its search takes only a query;
+    # every space id it reads is DB-derived from the viewer's own spaces.
+    {"canvas_picker_component", "picker_open"},
+    {"canvas_picker_component", "picker_close"},
+    {"canvas_picker_component", "picker_search"},
+    {"canvas_picker_component", "picker_search"}
   ]
 
   defp files do

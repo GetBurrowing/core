@@ -6432,8 +6432,8 @@ defmodule Platform.Tasks do
   end
 
   # The executor under judgement is the task's EXECUTION-PHASE assignee, the
-  # same resolver (and the same `{id, "agent"}` comparison) as
-  # `Platform.Tasks.TaskAccess.phase_assignee?/2`. An agentless (operator)
+  # same resolver (and the same `{id, "agent"}` comparison) the per-phase
+  # dispatch uses (`assignee_for_phase/2`). An agentless (operator)
   # call carries a nil agent_id and is never the executor.
   defp amender_is_executor?(%Task{} = task, agent_id) when is_binary(agent_id),
     do: assignee_for_phase(task, "execution") == {agent_id, "agent"}

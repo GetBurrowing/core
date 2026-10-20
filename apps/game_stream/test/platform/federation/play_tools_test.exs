@@ -56,6 +56,8 @@ defmodule Platform.Federation.PlayToolsTest do
   # (task 01a131c5 stage 1).
   # 131 with both (rollup merge of stack prototype-runtime onto main).
   # 135 with the four access tools (RBAC v2 agent-first Access UI).
+  # 137 with `stack_attach_canvas` and `stack_detach_canvas` after
+  # `stack_assign_agents` (task 01a1559a stage 2).
   @main_tool_names ~w(
     canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions
     canvas_restore send_media react project_list org_list_descendants project_update epic_list
@@ -65,7 +67,7 @@ defmodule Platform.Federation.PlayToolsTest do
     task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list
     stack_add stack_add_dependency stack_remove_dependency stack_eject stack_abandon
     stack_complete stack_start stack_retry_member_merge stack_start_planning stack_assign_agents
-    janitor_hand_back
+    stack_attach_canvas stack_detach_canvas janitor_hand_back
     plan_create plan_update plan_get plan_submit plan_approve plan_reject validation_payload_amend
     plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate
     validation_pass stage_complete report_blocker validation_list prompt_template_list
@@ -159,8 +161,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 135, in order" do
-      assert length(@main_tool_names) == 135
+    test "tool_definitions/0 names equal main's 137, in order" do
+      assert length(@main_tool_names) == 137
       assert catalogue_names() == @main_tool_names
     end
 
@@ -269,51 +271,19 @@ defmodule Platform.Federation.PlayToolsTest do
     end
 
     test "play_session_start starts, creates and attaches the canvas; stop ends it" do
-      user =
-        Repo.insert!(%User{
-          email: "pt-#{unique()}@example.com",
-          name: "PT User",
-          oidc_sub: "pt-#{unique()}"
-        })
+      %{task: task, agent: agent, space: space, context: context} =
+        play_world!(["play", "task"])
 
-      {:ok, agent} =
-        %Agent{}
-        |> Agent.changeset(%{slug: "pt-agent-#{unique()}", name: "PT Agent", status: "active"})
-        |> Repo.insert()
-
-      {:ok, project} =
-        Tasks.create_project(%{
-          name: "Voltron #{unique()}",
-          repo_url: "https://github.com/example/voltron"
-        })
-
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Play #{unique()}"})
-      task = task |> Ecto.Changeset.change(status: "in_review") |> Repo.update!()
-      Process.put(:stub_heads, %{("task/" <> task.id) => @sha})
-      Application.put_env(:platform, :branch_provisioner, runner: StubRunner)
-
-      # The caller works on the task: a participant in its execution space.
-      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      # The canvas lands in the task's execution space, so the caller must be
+      # able to READ it to attach it (the canvas conjunct). The task conjunct is
+      # the runtime's `tasks.write`, not this row.
       {:ok, _p} = Chat.add_agent_participant(space.id, agent, display_name: agent.name)
-
-      host_id = "play-host-#{unique()}"
-
-      {:ok, host} =
-        Federation.register_runtime(user.id, %{
-          runtime_id: host_id,
-          tool_profile: [],
-          metadata: %{"client_info" => %{"features" => ["game_stream_host"]}}
-        })
-
-      {:ok, _host, _token} = Federation.activate_runtime(host)
-      RuntimePresence.track(host_id)
-      on_exit(fn -> RuntimePresence.untrack(host_id) end)
 
       assert {:ok, result} =
                ToolSurface.execute(
                  "play_session_start",
                  %{"task_id" => task.id},
-                 %{agent_id: agent.id}
+                 context
                )
 
       assert result.review_sha == @sha
@@ -338,7 +308,7 @@ defmodule Platform.Federation.PlayToolsTest do
                ToolSurface.execute(
                  "play_session_status",
                  %{"session_id" => result.session_id},
-                 %{agent_id: agent.id}
+                 context
                )
 
       # No force_relay argument: the viewer may use every candidate type.
@@ -348,7 +318,7 @@ defmodule Platform.Federation.PlayToolsTest do
                ToolSurface.execute(
                  "play_session_stop",
                  %{"session_id" => result.session_id},
-                 %{agent_id: agent.id}
+                 context
                )
 
       # force_relay: true reaches the session the viewer attaches to (stage 5).
@@ -356,10 +326,41 @@ defmodule Platform.Federation.PlayToolsTest do
                ToolSurface.execute(
                  "play_session_start",
                  %{"task_id" => task.id, "force_relay" => true},
-                 %{agent_id: agent.id}
+                 context
                )
 
       assert {:ok, %{force_relay: true}} = Platform.GameStream.status(relayed.session_id)
+    end
+
+    # Task 01a1559a stage 1: the attach runs as the CALLER's Scope, never as
+    # `Scope.system/0`, so `play.use` alone starts the session but does not
+    # attach the canvas. Before, an agent holding play.use and bound to the
+    # task (assignee, phase assignee or execution-space participant) got the
+    # attach; now it needs `tasks.write` in the task's org. The refusal is the
+    # path this tool already had for an attach that fails: the session runs,
+    # `canvas_id` is nil and `canvas_error` names why.
+    test "play_session_start without tasks.write starts the session but attaches nothing" do
+      %{task: task, agent: agent, space: space, context: context} = play_world!(["play"])
+
+      # Bound to the task the old way, which no longer decides anything.
+      {:ok, _p} = Chat.add_agent_participant(space.id, agent, display_name: agent.name)
+
+      assert {:ok, result} =
+               ToolSurface.execute("play_session_start", %{"task_id" => task.id}, context)
+
+      assert result.review_sha == @sha
+      assert result.state == "building"
+      assert result.canvas_id == nil
+      assert result.view_url == nil
+      assert result.canvas_error == "task_forbidden"
+      assert CanvasAttachments.list_task_canvases(task.id) == []
+
+      assert {:ok, %{state: "ended"}} =
+               ToolSurface.execute(
+                 "play_session_stop",
+                 %{"session_id" => result.session_id},
+                 context
+               )
     end
 
     test "refusals are structured: missing args, no branch, no host, unknown session" do
@@ -379,5 +380,66 @@ defmodule Platform.Federation.PlayToolsTest do
       assert {:error, %{code: :unknown_tool}} =
                ToolSurface.execute("play_session_nope", %{}, %{})
     end
+  end
+
+  # A task in review with a provisioned branch, a live game_stream host, and a
+  # calling agent whose runtime carries `profile`. Its owner is a member of the
+  # task's project org, so `["play", "task"]` holds `tasks.write` there and
+  # `["play"]` does not (task 01a1559a stage 1: the canvas attach is gated on
+  # the caller's Scope holding `tasks.write` in the task's org).
+  defp play_world!(profile) do
+    user =
+      Repo.insert!(%User{
+        email: "pt-#{unique()}@example.com",
+        name: "PT User",
+        oidc_sub: "pt-#{unique()}"
+      })
+
+    {:ok, agent} =
+      %Agent{}
+      |> Agent.changeset(%{slug: "pt-agent-#{unique()}", name: "PT Agent", status: "active"})
+      |> Repo.insert()
+
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Voltron #{unique()}",
+        repo_url: "https://github.com/example/voltron"
+      })
+
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Play #{unique()}"})
+    task = task |> Ecto.Changeset.change(status: "in_review") |> Repo.update!()
+    Process.put(:stub_heads, %{("task/" <> task.id) => @sha})
+    Application.put_env(:platform, :branch_provisioner, runner: StubRunner)
+
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    host_id = "play-host-#{unique()}"
+
+    {:ok, host} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: host_id,
+        tool_profile: [],
+        metadata: %{"client_info" => %{"features" => ["game_stream_host"]}}
+      })
+
+    {:ok, _host, _token} = Federation.activate_runtime(host)
+    RuntimePresence.track(host_id)
+    on_exit(fn -> RuntimePresence.untrack(host_id) end)
+
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: user.id,
+      org_id: project.org_id,
+      role: "member"
+    })
+
+    caller =
+      Platform.RuntimeProfileFixtures.runtime!(user.id, profile, %{agent_id: agent.id})
+
+    %{
+      task: task,
+      agent: agent,
+      space: space,
+      context: %{runtime_id: caller.runtime_id, agent_id: agent.id}
+    }
   end
 end

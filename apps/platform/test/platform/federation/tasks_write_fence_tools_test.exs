@@ -84,8 +84,10 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     stack_add
     stack_add_dependency
     stack_assign_agents
+    stack_attach_canvas
     stack_complete
     stack_create
+    stack_detach_canvas
     stack_eject
     stack_remove_dependency
     stack_retry_member_merge
@@ -420,6 +422,13 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     do: %{"stack_id" => i.stack, "from_task_id" => i.member, "to_task_id" => i.task}
 
   defp args_for("stack_assign_agents", i), do: %{"stack_id" => i.stack}
+
+  defp args_for("stack_attach_canvas", i),
+    do: %{"stack_id" => i.stack, "canvas_id" => @canvas_id}
+
+  defp args_for("stack_detach_canvas", i),
+    do: %{"stack_id" => i.stack, "canvas_id" => @canvas_id}
+
   defp args_for("stack_complete", i), do: %{"stack_id" => i.stack}
 
   defp args_for("stack_create", i),
@@ -827,7 +836,7 @@ defmodule Platform.Federation.TasksWriteFenceToolsTest do
     test "the raw ToolPermissions list equals @mcp_guarded ++ @mcp_exempt" do
       raw = permission_source_names(["tasks.write", "tasks.manage"])
 
-      assert length(raw) == 41
+      assert length(raw) == 43
       assert Enum.sort(raw) == Enum.sort(@mcp_guarded ++ @mcp_exempt)
 
       for name <- raw,

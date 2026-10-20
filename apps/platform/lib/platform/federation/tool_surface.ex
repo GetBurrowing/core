@@ -2595,12 +2595,15 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{attachment_id, task_id, canvas_id, note}",
         limitations:
-          "Two independent authorization conjuncts, checked in this order: you must be able to " <>
-            "TOUCH THE TASK (assignee or phase assignee, participant in its execution space, " <>
-            "sponsor, or member of its project's org) and you must be able to READ THE CANVAS. " <>
-            "Neither implies the other, so the four refusals are named separately. " <>
-            "`task_forbidden` names `task_design_decline` as the exit for a design dispatch you " <>
-            "cannot deliver. `canvas_forbidden` means you cannot read the canvas. " <>
+          "Two independent authorization conjuncts, checked in this order: you must hold " <>
+            "`tasks.write` on THE TASK in its org (the same rule as `task_update`; you do not " <>
+            "have to be its assignee, phase assignee or an execution-space participant) and you " <>
+            "must be able to READ THE CANVAS. Neither implies the other, so the four refusals " <>
+            "are named separately. A task outside your org answers exactly as an unknown id " <>
+            "does (`task_not_found`), so a foreign task cannot be told from a missing one. " <>
+            "`task_forbidden` is the task-gate refusal for a caller with no resolvable scope, " <>
+            "and names `task_design_decline` as the exit for a design dispatch you cannot " <>
+            "deliver. `canvas_forbidden` means you cannot read the canvas. " <>
             "`canvas_not_found` means the canvas is unknown or was soft-deleted upstream. " <>
             "`task_not_found` (\"Task not found\") covers a task that is unknown, malformed or " <>
             "soft-deleted, for everyone including grant-holders. Of the four only " <>
@@ -2694,9 +2697,10 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{detached: true}",
         limitations:
-          "Gated on the TASK: you must be able to touch it (assignee or phase assignee, " <>
-            "participant in its execution space, sponsor, or member of its project's org), and " <>
-            "a denial is `task_forbidden`, delivered as a machine-readable `code` key. There is " <>
+          "Gated on the TASK: you must hold `tasks.write` on it in its org (the same rule as " <>
+            "`task_update`). A task outside your org answers exactly as an unknown id does " <>
+            "(`task_not_found`); `task_forbidden`, delivered as a machine-readable `code` key, " <>
+            "is the refusal for a caller with no resolvable scope. There is " <>
             "no canvas-side check — detaching revokes a read grant rather than conferring one, " <>
             "so a canvas you cannot read is still yours to unstaple from a task you own. The " <>
             "other two refusals are prose in `error` with no `code`: `not_found` if no matching " <>
@@ -2734,10 +2738,8 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{canvases: [%{attachment_id, canvas_id, title, note, attached_at, canvas_present: bool}], total, has_more}. `total` is the number of attachments returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. `canvas_present: false` means the underlying canvas was soft-deleted upstream — call `task_detach_canvas` to clean up the stale row.",
         limitations:
-          "Gated on the TASK, same standing as the two writes: you must be its assignee or " <>
-            "phase assignee, a participant in its execution space, its sponsor, or a member of " <>
-            "its project's org. A denial is `task_forbidden`, delivered as a machine-readable " <>
-            "`code` key, and it is a REFUSAL. It is never disguised as an empty list, so an " <>
+          "Gated on the TASK: you must hold `tasks.read` on it in its org. A denial is " <>
+            "`task_forbidden`, delivered as a machine-readable `code` key, and it is a REFUSAL. It is never disguised as an empty list, so an " <>
             "empty list always means the task has no attachments. `task_not_found` " <>
             "(\"Task not found\", prose in `error` with no `code`) covers a task that is " <>
             "unknown, malformed or soft-deleted, for everyone including grant-holders. Over the " <>
@@ -3116,6 +3118,63 @@ defmodule Platform.Federation.ToolSurface do
           "Provide either `assignee_id` (simple) or per-phase ids (advanced) — if any per-phase id is given, `assignee_id` is ignored. Members with `metadata.assignee_override == true` are never overwritten; clear the override first to make them inherit again. Partial per-phase updates are merged phase-by-phase onto the existing stack default.",
         when_to_use:
           "When you want to assign agents once at the stack level instead of drilling into each member task individually."
+      },
+      # Task 01a1559a stage 2: attach or detach a canvas across a whole stack,
+      # backed by `CanvasAttachments.attach_canvas_to_stack/4` and
+      # `detach_canvas_from_stack/3`.
+      %{
+        name: "stack_attach_canvas",
+        description:
+          "Attach a canvas to every member task of a stack in one call, so it rides along in each member's dispatch payload. Idempotent: a member that already carries the canvas is skipped and its existing attachment (note, attribution) is left exactly as it was. Attaching never starts, moves or dispatches any member.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to attach to"},
+          canvas_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The canvas to attach. Unknown or soft-deleted canvas ids are rejected with `canvas_not_found`."
+          },
+          note: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional note recorded on each NEW attachment. Existing attachments keep theirs."
+          }
+        },
+        returns:
+          "%{stack_id, canvas_id, member_count, attached_count, skipped_count, attached_task_ids, skipped_task_ids}. `attached_*` are the members that gained the canvas on this call; `skipped_*` are members that already had it. A second identical call returns attached_count 0. An empty stack returns zeros.",
+        limitations:
+          "All-or-nothing authorization: you must hold `tasks.write` on the stack AND on every " <>
+            "member in its org (the same rule as `task_update`; you need not be any member's " <>
+            "assignee, phase assignee or execution-space participant), and you must be able to " <>
+            "READ the canvas. A stack outside your org answers exactly as an unknown id does " <>
+            "(`stack_not_found`, a machine-readable `code`), so a foreign stack cannot be told " <>
+            "from a missing one. `task_forbidden` (a `code`) means the stack or one member " <>
+            "refused you; nothing was written. `canvas_forbidden` means you cannot read the " <>
+            "canvas and `canvas_not_found` that it is unknown or soft-deleted; both are prose " <>
+            "in `error`. Members are the stack's non-deleted tasks at call time. Unlike " <>
+            "`task_attach_canvas`, this never closes a member's pre-plan design step.",
+        when_to_use:
+          "When one canvas (a design direction, a spec, an evidence sheet) is context for every task in a stack, instead of calling task_attach_canvas once per member."
+      },
+      %{
+        name: "stack_detach_canvas",
+        description:
+          "Detach a canvas from every member task of a stack in one call. Idempotent: members that do not carry the canvas are reported as skipped. Does not delete the canvas itself, and never moves any member.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to detach from"},
+          canvas_id: %{type: "string", required: true, description: "The canvas to detach"}
+        },
+        returns:
+          "%{stack_id, canvas_id, member_count, detached_count, skipped_count, detached_task_ids, skipped_task_ids}. A second identical call returns detached_count 0.",
+        limitations:
+          "All-or-nothing authorization: you must hold `tasks.write` on the stack AND on every " <>
+            "member in its org. There is no canvas-side check: detaching revokes a read grant " <>
+            "rather than conferring one. A stack outside your org answers exactly as an unknown " <>
+            "id does (`stack_not_found`, a machine-readable `code`). `task_forbidden` (a " <>
+            "`code`) means the stack or one member refused you; nothing was deleted.",
+        when_to_use:
+          "When a canvas attached across a stack (for example with stack_attach_canvas) should no longer ride along with any member's dispatch payload."
       },
       # Task 019fa1ac-6685 stage 3: the janitor's escalation path, backed by
       # `Platform.Responsibilities.Janitor.hand_back/3`.
@@ -4009,8 +4068,10 @@ defmodule Platform.Federation.ToolSurface do
     "stack_add" => [stack: "stack_id", task: "task_id"],
     "stack_add_dependency" => [stack: "stack_id", task: "from_task_id", task: "to_task_id"],
     "stack_assign_agents" => [stack: "stack_id"],
+    "stack_attach_canvas" => [stack: "stack_id"],
     "stack_complete" => [stack: "stack_id"],
     "stack_create" => [project: "project_id", epic: "epic_id"],
+    "stack_detach_canvas" => [stack: "stack_id"],
     "stack_eject" => [stack: "stack_id", task: "task_id"],
     "stack_remove_dependency" => [stack: "stack_id", task: "from_task_id", task: "to_task_id"],
     "stack_retry_member_merge" => [task: "task_id"],
@@ -5724,11 +5785,11 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         attached_by = resolve_attached_by(context)
 
-        # `attached_by` is attribution; `canvas_authorization_actor/1` is the
+        # `attached_by` is attribution; `canvas_attachment_scope/1` is the
         # authorization subject. Same context, deliberately read twice —
         # conflating the two is exactly the bug this gate closes.
         case CanvasAttachments.attach_canvas(
-               canvas_authorization_actor(context),
+               canvas_attachment_scope(context),
                task_id,
                canvas_id,
                note: note,
@@ -5766,11 +5827,11 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: false,
                task_id: task_id,
                suggestion:
-                 "Attaching a canvas to a task is a write to that task, so you must already be " <>
-                   "working on it: its assignee or phase assignee, a participant in its " <>
-                   "execution space, its sponsor, or a member of its project's org. If you were " <>
-                   "dispatched to give this task design direction and cannot deliver, close " <>
-                   "your step with task_design_decline instead of waiting out the design hold."
+                 "Attaching a canvas to a task is a write to that task, so it needs the " <>
+                   "tasks.write permission in the task's org, the same rule as task_update. If " <>
+                   "you were dispatched to give this task design direction and cannot deliver, " <>
+                   "close your step with task_design_decline instead of waiting out the design " <>
+                   "hold."
              }}
 
           {:error, :canvas_not_found} ->
@@ -5805,6 +5866,75 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # Task 01a1559a stage 2: the stack-wide pair. Required arguments are
+  # enforced by `ToolArguments.validate/2`; a cross-org `stack_id` is swapped
+  # by the `@task_write_targets` intercept and lands on the not-found arm
+  # below, the same answer a random UUID gets. `attached_by` is attribution
+  # (the acting agent), `canvas_attachment_scope/1` the authorization subject.
+  def execute("stack_attach_canvas", args, context) do
+    stack_id = Map.get(args, "stack_id")
+    canvas_id = Map.get(args, "canvas_id")
+
+    case CanvasAttachments.attach_canvas_to_stack(
+           canvas_attachment_scope(context),
+           stack_id,
+           canvas_id,
+           note: Map.get(args, "note"),
+           attached_by: resolve_attached_by(context)
+         ) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, :canvas_not_found} ->
+        {:error,
+         %{
+           error: "Canvas not found or soft-deleted: #{canvas_id}",
+           recoverable: false,
+           suggestion:
+             "Verify the canvas_id is correct and the canvas has not been soft-deleted upstream"
+         }}
+
+      {:error, :canvas_forbidden} ->
+        {:error,
+         %{
+           error:
+             "Access denied: you cannot attach canvas #{canvas_id} because you cannot read it.",
+           recoverable: false,
+           canvas_id: canvas_id,
+           suggestion:
+             "Attaching a canvas to a stack grants everyone who can read its tasks the ability to read the canvas, so you must be able to read it yourself first. Join the canvas's space, or attach a canvas you created."
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error,
+         %{
+           error: "Failed to attach canvas: #{inspect_errors(changeset)}",
+           recoverable: true,
+           suggestion:
+             "stack_attach_canvas requires the caller to be identifiable — pass `agent_id` (or `user_id`) in the tool context."
+         }}
+
+      {:error, reason} ->
+        {:error, stack_canvas_gate_error(reason, "attach a canvas to", stack_id)}
+    end
+  end
+
+  def execute("stack_detach_canvas", args, context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case CanvasAttachments.detach_canvas_from_stack(
+           canvas_attachment_scope(context),
+           stack_id,
+           Map.get(args, "canvas_id")
+         ) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, reason} ->
+        {:error, stack_canvas_gate_error(reason, "detach a canvas from", stack_id)}
+    end
+  end
+
   # ADR-0046 member 7, task `019fa504` stage 2 — the designer's decline.
   #
   # Argument shape is checked BEFORE the lookup, so a caller that sends a
@@ -5820,8 +5950,8 @@ defmodule Platform.Federation.ToolSurface do
 
   # `context` was ignored here until task 019fb581 stage 3: detach is a WRITE
   # to the task's grant graph and was reachable by any runtime that knew two
-  # ids. It now resolves its subject through the same
-  # `canvas_authorization_actor/1` seam `task_attach_canvas` uses.
+  # ids. It resolves its subject through the same `canvas_attachment_scope/1`
+  # seam `task_attach_canvas` uses.
   def execute("task_detach_canvas", args, context) do
     task_id = Map.get(args, "task_id")
     canvas_id = Map.get(args, "canvas_id")
@@ -5845,7 +5975,7 @@ defmodule Platform.Federation.ToolSurface do
 
       true ->
         case CanvasAttachments.detach_canvas(
-               canvas_authorization_actor(context),
+               canvas_attachment_scope(context),
                task_id,
                canvas_id
              ) do
@@ -5876,16 +6006,16 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: false,
                task_id: task_id,
                suggestion:
-                 "Detaching is a write to the task, so you must already be working on it: its " <>
-                   "assignee or phase assignee, a participant in its execution space, its " <>
-                   "sponsor, or a member of its project's org."
+                 "Detaching is a write to the task, so it needs the tasks.write permission in " <>
+                   "the task's org, the same rule as task_update."
              }}
         end
     end
   end
 
   # `context` was ignored here until task 019fb581 stage 4. Same door as the
-  # two writes above, through `CanvasAttachments.ensure_task_touchable/3`.
+  # two writes above, through `CanvasAttachments.ensure_task_touchable/3`,
+  # with `tasks.read` in place of `tasks.write` (task 01a1559a stage 1).
   #
   # DEFENCE IN DEPTH, stated honestly rather than oversold: this tool returns
   # attachment METADATA (`attachment_id`, `canvas_id`, `title`, `note`,
@@ -5895,8 +6025,8 @@ defmodule Platform.Federation.ToolSurface do
   # task the caller has nothing to do with, and the titles that come with it.
   #
   # A DENIAL, NOT AN EMPTY LIST. The reasoning, and the `task_get` coupling it
-  # rests on, are recorded in `Platform.Tasks.TaskAccess`'s moduledoc; the
-  # coupling is pinned by a test rather than left to prose.
+  # rests on, are recorded in `Platform.Tasks.CanvasAttachments`' moduledoc;
+  # the coupling is pinned by a test rather than left to prose.
   def execute("task_list_canvases", args, context) do
     task_id = Map.get(args, "task_id")
 
@@ -5911,9 +6041,10 @@ defmodule Platform.Federation.ToolSurface do
 
       true ->
         case CanvasAttachments.ensure_task_touchable(
+               canvas_attachment_scope(context),
                task_id,
-               canvas_authorization_actor(context),
-               "task_list_canvases"
+               permission: "tasks.read",
+               tool: "task_list_canvases"
              ) do
           :ok ->
             # RBAC v2 (task 01a1386e-45a5 stage 1): a canvas the caller's
@@ -5961,10 +6092,9 @@ defmodule Platform.Federation.ToolSurface do
                task_id: task_id,
                suggestion:
                  "Attachments name canvases that may live in spaces you are nowhere near, so " <>
-                   "reading the list requires the same standing the writes do: the task's " <>
-                   "assignee or phase assignee, a participant in its execution space, its " <>
-                   "sponsor, or a member of its project's org. This is a refusal, not an empty " <>
-                   "list. An empty list means the task has no attachments."
+                   "reading the list needs the tasks.read permission in the task's org. This " <>
+                   "is a refusal, not an empty list. An empty list means the task has no " <>
+                   "attachments."
              }}
         end
     end
@@ -9920,23 +10050,45 @@ defmodule Platform.Federation.ToolSurface do
 
   defp resolve_attached_by(_), do: %{}
 
-  # The AUTHORIZATION subject for canvas-touching task tools (task 019e2c4b
-  # stage 2). Shaped like `resolve_attached_by/1` and read from the same
-  # context, but kept separate on purpose: that one produces the attribution
-  # recorded on the row, which is caller-supplied metadata, while this one
-  # answers "who is asking".
+  # The AUTHORIZATION subject for the canvas-attachment tools (task 01a1559a
+  # stage 1): the caller's Scope, from `memory_access_opts/1` (an in-process
+  # `:access_scope`, else the calling runtime's `Scope.for_runtime/1`). Read
+  # from the same context as `resolve_attached_by/1` but kept separate on
+  # purpose: that one produces the attribution recorded on the row, which is
+  # caller-supplied metadata, while this one answers "who is asking".
   #
-  # Neither key present → `nil`, which `Platform.Chat.CanvasAccess` treats as
-  # no principal and denies. It deliberately does not fall back to `:system`.
-  defp canvas_authorization_actor(context) when is_map(context) do
-    cond do
-      is_binary(Map.get(context, :agent_id)) -> {:agent, Map.get(context, :agent_id)}
-      is_binary(Map.get(context, :user_id)) -> {:user, Map.get(context, :user_id)}
-      true -> nil
-    end
+  # No resolvable Scope → `nil`, which `Platform.Tasks.CanvasAttachments`
+  # refuses with `:task_forbidden`. It deliberately does not fall back to
+  # `Scope.system/0`.
+  defp canvas_attachment_scope(context) when is_map(context),
+    do: context |> memory_access_opts() |> Keyword.get(:access_scope)
+
+  defp canvas_attachment_scope(_), do: nil
+
+  # The two gate refusals the stack canvas tools share (task 01a1559a stage
+  # 2). `stack_not_found` is worded and coded as `stack_update`'s, so the
+  # fenced answer is the random-UUID answer every other stack tool gives.
+  defp stack_canvas_gate_error(:stack_not_found, _verb, stack_id) do
+    %{
+      code: "stack_not_found",
+      error: "Stack not found: #{inspect(stack_id)}",
+      recoverable: false,
+      suggestion: "Use stack_list to find available stacks"
+    }
   end
 
-  defp canvas_authorization_actor(_), do: nil
+  defp stack_canvas_gate_error(:task_forbidden, verb, stack_id) do
+    %{
+      error: "Access denied: you cannot #{verb} stack #{stack_id}.",
+      code: :task_forbidden,
+      recoverable: false,
+      stack_id: stack_id,
+      suggestion:
+        "This is a write to every member task, so it needs the tasks.write permission " <>
+          "in the stack's org on the stack and on each of its members, the same rule as " <>
+          "task_update. Nothing was written."
+    }
+  end
 
   # ── The canvas-attachment refusal taxonomy (task 019fb581 stage 5) ───────
 
@@ -9964,7 +10116,14 @@ defmodule Platform.Federation.ToolSurface do
       :canvas_not_found
     ],
     "task_detach_canvas" => [:task_forbidden, :task_not_found, :not_found],
-    "task_list_canvases" => [:task_forbidden, :task_not_found]
+    "task_list_canvases" => [:task_forbidden, :task_not_found],
+    "stack_attach_canvas" => [
+      :stack_not_found,
+      :task_forbidden,
+      :canvas_forbidden,
+      :canvas_not_found
+    ],
+    "stack_detach_canvas" => [:stack_not_found, :task_forbidden]
   }
 
   # THE ASYMMETRY, DECLARED RATHER THAN DISCOVERED. Only `:task_forbidden`
@@ -9978,7 +10137,12 @@ defmodule Platform.Federation.ToolSurface do
   # catches wrongness rather than the stage that introduces it. Recorded here
   # and pinned by a test so the next person decides it deliberately instead of
   # inheriting it. Raised to the review stage of task 019fb581.
-  @canvas_attachment_coded_errors [:task_forbidden]
+  #
+  # Task 01a1559a stage 2 added `:stack_not_found`, coded for the two stack
+  # tools exactly as every other `stack_*` tool already codes it, so a stack
+  # caller can branch on the stack gate and the task gate without reading
+  # prose. The four task-tool atoms above are unchanged.
+  @canvas_attachment_coded_errors [:task_forbidden, :stack_not_found]
 
   @doc """
   The closed set of refusal atoms each canvas-attachment tool must handle.

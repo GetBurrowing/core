@@ -268,6 +268,53 @@ defmodule Platform.Orchestration.ExecutionSpace do
   end
 
   @doc """
+  The task id an execution space belongs to, read from its `metadata`
+  `task_id` (the key `find_by_task_id/1` resolves through), or `nil` for any
+  space that is not `kind: "execution"` or carries no valid id.
+  """
+  @spec task_id(Space.t() | map()) :: binary() | nil
+  def task_id(%{kind: "execution", metadata: %{"task_id" => task_id}}) when is_binary(task_id) do
+    if Platform.UUID.valid?(task_id), do: task_id
+  end
+
+  def task_id(_space), do: nil
+
+  @doc """
+  `%{space_id => task_title}` for every execution space in `spaces` whose task
+  is live (not soft-deleted). One query. Spaces of any other kind, and
+  execution spaces whose task is gone, are absent from the map.
+
+  The task canvas picker (task 01a1559a stage 3) shows this title in place of
+  an execution space's name, which is the same opaque `task-exec-<hex>` for
+  every one of them.
+  """
+  @spec task_titles([Space.t() | map()]) :: %{binary() => String.t()}
+  def task_titles(spaces) when is_list(spaces) do
+    # A task can own more than one execution space (an archived one and its
+    # successor), so each task id maps to a LIST of space ids.
+    by_task =
+      spaces
+      |> Enum.filter(&task_id/1)
+      |> Enum.group_by(&task_id/1, & &1.id)
+
+    case Map.keys(by_task) do
+      [] ->
+        %{}
+
+      task_ids ->
+        from(t in Platform.Tasks.Task,
+          where: t.id in ^task_ids and is_nil(t.deleted_at),
+          select: {t.id, t.title}
+        )
+        |> Repo.all()
+        |> Enum.flat_map(fn {task_id, title} ->
+          for space_id <- Map.fetch!(by_task, task_id), do: {space_id, title}
+        end)
+        |> Map.new()
+    end
+  end
+
+  @doc """
   List messages in an execution space with participant info joined.
 
   Returns a list of maps ordered chronologically (oldest first) with keys:

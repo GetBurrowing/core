@@ -117,18 +117,20 @@ defmodule Platform.Chat.CanvasAccess do
   `:task_reader` and `:task_agent` both derive a read grant from a
   `task_canvas_attachments` row, so an unauthorized attach is a self-service
   grant of read on someone else's canvas.
-  `Platform.Tasks.CanvasAttachments.attach_canvas/4` therefore takes an actor
-  and calls `fetch_for_viewer/3` on the attacher before the row is written: you
-  cannot confer a read grant on a canvas you could not read.
+  `Platform.Tasks.CanvasAttachments.attach_canvas/4` therefore takes the
+  attacher's `%Platform.Access.Scope{}` and calls `fetch_for_viewer/3` on its
+  principal before the row is written: you cannot confer a read grant on a
+  canvas you could not read.
 
   Keep that gate in place. Anything that reintroduces an unauthenticated attach
   reopens both as a privilege-escalation path.
 
-  Only the CANVAS half of that precondition is closed. `task_attach_canvas`
-  (`Platform.Federation.ToolSurface`) never authorizes the caller against the
-  TASK, because no such primitive exists in `apps/platform/lib/platform/tasks/`
-  yet. Filed as task `019fb581-8a1f-7c49-ba42-72f4ab29e758`; see the comment on
-  the `:task_agent` arm below for what that means and why it was accepted.
+  The TASK half is gated too: `attach_canvas/4` requires `tasks.write` on the
+  task through `Platform.Access.task_target/3` (task 019fb581 added a task
+  gate; task 01a1559a stage 1 made it the `task_update` rule). Its moduledoc
+  records the one cross-org consequence: a runtime whose owner is a root-org
+  member is unfenced, so it can attach a canvas it reads onto another org's
+  task, which grants that org `:task_reader` here.
 
   ## `:not_found` and `:forbidden` are distinct, and that is the point
 
@@ -403,16 +405,14 @@ defmodule Platform.Chat.CanvasAccess do
   # Task 019fb01b stage 2. The canvas is attached to a live task and the
   # calling agent is bound to that task by `phase_assignees`.
   #
-  # ACCEPTED RESIDUAL RISK, filed as task
-  # `019fb581-8a1f-7c49-ba42-72f4ab29e758` and knowingly accepted at plan time
-  # — this must not be rediscovered later as a surprise. `task_attach_canvas`
-  # never authorizes its caller against the TASK (no such primitive exists in
-  # `apps/platform/lib/platform/tasks/` yet), so an agent holding read on
-  # canvas C can staple C onto any task and hand it to that task's agents.
-  # `:task_agent` widens who that reaches from "humans in the task's project
-  # org" to "those humans plus every agent in `phase_assignees`". It is a PUSH,
-  # not a pull: the attacher must already be able to read C, so it cannot
-  # exfiltrate a canvas it cannot see. 019fb581 closes the task half.
+  # ACCEPTED RESIDUAL RISK, stated so it is not rediscovered as a surprise.
+  # `task_attach_canvas` authorizes its caller against the TASK with
+  # `tasks.write` (task 01a1559a stage 1), so an agent holding read on canvas
+  # C and `tasks.write` in a task's org can staple C onto that task and hand
+  # it to that task's agents. `:task_agent` widens who that reaches from
+  # "humans in the task's project org" to "those humans plus every agent in
+  # `phase_assignees`". It is a PUSH, not a pull: the attacher must already
+  # be able to read C, so it cannot exfiltrate a canvas it cannot see.
 
   defp agent_grant(%Canvas{} = canvas, {:agent, agent_id}) when is_binary(agent_id) do
     if task_agent?(canvas, agent_id), do: :task_agent

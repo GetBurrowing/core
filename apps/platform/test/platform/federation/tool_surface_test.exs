@@ -71,7 +71,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Design direction task"})
 
     {:ok, _attachment} =
-      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+      CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
         attached_by: %{kind: "user", id: Ecto.UUID.generate()}
       )
 
@@ -185,7 +185,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 131 as of the stack prototype-runtime rollup: three `prototype.*` tools
       # (01a1316b-4e46) plus `vault_fetch` and `vault_list` (01a131c5).
       # Four optional access consent tools (task 01a1386e-72e1).
-      assert length(tools) == 135
+      # 137 as of task 01a1559a stage 2: `stack_attach_canvas` and
+      # `stack_detach_canvas` in `task`. Genuinely new tools, no new bundle.
+      assert length(tools) == 137
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names
@@ -245,6 +247,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # executor-without-declaration cannot pass.
       assert "stack_retry_member_merge" in tool_names
       assert "stack_assign_agents" in tool_names
+      # Task 01a1559a stage 2 — the stack-wide canvas attach and detach.
+      assert "stack_attach_canvas" in tool_names
+      assert "stack_detach_canvas" in tool_names
       assert "meeting_create" in tool_names
       # Task 01a07400 stage 1 — self-declared agent activity in a meeting.
       assert "meeting_activity_push" in tool_names
@@ -7878,24 +7883,20 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
   describe "task_attach_canvas / task_detach_canvas / task_list_canvases" do
     setup do
-      project = create_project()
-      agent_id = Ecto.UUID.generate()
+      org = Repo.get!(Tenancy.Org, Platform.TenancyFixtures.tenant_org_id("globex"))
+      project = create_project(%{org_id: org.id})
 
-      # The calling agent is the task's assignee. Task 019fb581 stage 3 gates
-      # both writes on `Platform.Tasks.TaskAccess`, so an agent with no
-      # binding to the task can no longer attach to it OR detach from it —
-      # asserted in the denial tests at the end of this block. Without a
-      # grant here every test in the block would be denied at the first door
-      # and would assert nothing about the canvas half.
-      {:ok, task} =
-        Tasks.create_task(%{
-          project_id: project.id,
-          title: "Attach me",
-          assignee_type: "agent",
-          assignee_id: agent_id
-        })
+      # Task 01a1559a stage 1: both writes require `tasks.write` on the task in
+      # its org, through `Platform.Access.task_target/3` on the caller's Scope
+      # (the read requires `tasks.read`). The calling runtime below holds the
+      # `task` bundle and its owner is a member of the task's org; it is NOT
+      # the assignee, a phase assignee or an execution-space participant, and
+      # it does not need to be.
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Attach me"})
 
-      space = create_space()
+      # In the task's org: the canvas conjunct reads with the caller's Scope,
+      # and a canvas outside a fenced caller's org fence reads as not found.
+      space = create_space(%{org_id: org.id})
       participant = create_participant(space.id)
 
       {:ok, canvas} =
@@ -7905,15 +7906,22 @@ defmodule Platform.Federation.ToolSurfaceTest do
           "title" => "Evidence canvas"
         })
 
+      {runtime, agent_id} = canvas_runtime!(org)
+
       # …and a participant of the canvas's space. Task 019e2c4b stage 2
-      # authorizes the attacher against the canvas, so an agent that was
-      # never in that space can no longer attach it. The two conjuncts are
-      # independent, which is why the setup has to mint both.
+      # authorizes the attacher against the canvas too. The two conjuncts are
+      # independent, which is why the setup mints both.
       create_participant(space.id, %{participant_type: "agent", participant_id: agent_id})
 
-      context = %{agent_id: agent_id, space_id: space.id, agent_participant_id: participant.id}
+      context = %{
+        runtime_id: runtime.runtime_id,
+        agent_id: agent_id,
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
 
       %{
+        org: org,
         project: project,
         task: task,
         space: space,
@@ -7924,15 +7932,43 @@ defmodule Platform.Federation.ToolSurfaceTest do
       }
     end
 
-    # Mint a `TaskAccess` grant for a principal WITHOUT touching the task's
-    # assignee columns: `Tasks.set_phase_assignees/2` re-derives the
-    # top-level assignee from the current phase and would silently strip the
-    # setup agent's own grant. `:space_member` is also the path stage 2 mints
-    # for a dispatched designer, so this is the production shape.
-    defp grant_task_access(task, kind, id) do
-      {:ok, space} = Platform.Orchestration.ExecutionSpace.find_or_create(task.id)
+    # A runtime bound to a fresh agent, owned by a fresh member of `org`,
+    # carrying `profile` (the `task` bundle holds tasks.read and tasks.write).
+    defp canvas_runtime!(org, profile \\ ["task"]) do
+      owner =
+        Repo.insert!(%Platform.Accounts.User{
+          email: "ts-canvas-#{System.unique_integer([:positive])}@example.com",
+          name: "TS canvas owner",
+          oidc_sub: "ts-canvas-#{System.unique_integer([:positive])}"
+        })
 
-      create_participant(space.id, %{participant_type: kind, participant_id: id})
+      Repo.insert!(%Tenancy.OrgMembership{user_id: owner.id, org_id: org.id, role: "member"})
+
+      agent =
+        Repo.insert!(%Agent{
+          slug: "ts-canvas-agent-#{System.unique_integer([:positive])}",
+          name: "TS canvas agent",
+          status: "active"
+        })
+
+      runtime = Platform.RuntimeProfileFixtures.runtime!(owner.id, profile, %{agent_id: agent.id})
+      {runtime, agent.id}
+    end
+
+    defp runtime_context({runtime, agent_id}, space_id),
+      do: %{runtime_id: runtime.runtime_id, agent_id: agent_id, space_id: space_id}
+
+    # A runtime with tasks.write whose owner belongs to another org only.
+    defp fenced_context(ctx) do
+      org_b = Repo.get!(Tenancy.Org, Platform.TenancyFixtures.tenant_org_id("initech"))
+      ctx_b = runtime_context(canvas_runtime!(org_b), ctx.space.id)
+
+      create_participant(ctx.space.id, %{
+        participant_type: "agent",
+        participant_id: ctx_b.agent_id
+      })
+
+      ctx_b
     end
 
     test "task_attach_canvas happy round-trip via ToolSurface.execute/3", ctx do
@@ -7951,6 +7987,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.task_id == ctx.task.id
       assert result.canvas_id == ctx.canvas.id
       assert result.note == "first attach"
+
+      # Attribution is the acting agent, recorded from the same context.
+      [row] = CanvasAttachments.list_task_canvases(ctx.task.id)
+      assert row.attachment.attached_by_kind == "agent"
+      assert row.attachment.attached_by_id == ctx.agent_id
     end
 
     test "task_attach_canvas idempotent re-attach returns same id with updated note", ctx do
@@ -8028,17 +8069,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # everyone who can read that task. Without this gate, any agent could
     # staple a stranger's canvas onto a task in its own org and read it.
     test "task_attach_canvas denies an agent that cannot read the canvas", ctx do
-      # Bound to the TASK (so the first door opens) but never in the canvas's
-      # space. Without the task binding this would be denied one door earlier
-      # and would prove nothing about the canvas conjunct.
-      stranger_id = Ecto.UUID.generate()
-      grant_task_access(ctx.task, "agent", stranger_id)
-
-      stranger = %{
-        agent_id: stranger_id,
-        space_id: ctx.space.id,
-        agent_participant_id: ctx.participant.id
-      }
+      # Holds tasks.write in the task's org (so the first door opens) but was
+      # never in the canvas's space. Without the task standing this would be
+      # denied one door earlier and would prove nothing about the canvas.
+      stranger = runtime_context(canvas_runtime!(ctx.org), ctx.space.id)
 
       {:error, error} =
         ToolSurface.execute(
@@ -8058,31 +8092,72 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert canvases == []
     end
 
-    # ── The task conjunct (task 019fb581 stage 3) ────────────────────────
-    #
-    # `task_attach_canvas` mints a `:task_reader` grant. Until this stage any
-    # runtime holding a canvas could staple it onto any task it could name.
-    test "task_attach_canvas denies an agent with no binding to the task", ctx do
-      # Reads the canvas fine — it is in the canvas's space. The ONLY thing
-      # it lacks is a relationship with the task.
-      stranger_id = Ecto.UUID.generate()
-      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: stranger_id})
+    # ── The task conjunct: tasks.write (task 01a1559a stage 1) ───────────
+    test "task_attach_canvas admits a tasks.write holder bound to nothing on the task", ctx do
+      task = Repo.get!(Platform.Tasks.Task, ctx.task.id)
+      refute task.assignee_id == ctx.agent_id
+      assert task.phase_assignees in [nil, %{}]
 
+      assert {:ok, %{task_id: task_id}} =
+               ToolSurface.execute(
+                 "task_attach_canvas",
+                 %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+                 ctx.context
+               )
+
+      assert task_id == ctx.task.id
+    end
+
+    # Cross-org: the write intercept answers with the handler's own not-found
+    # path, so a foreign task cannot be told from a missing one.
+    test "task_attach_canvas gives a fenced runtime the random-UUID answer", ctx do
+      fenced = fenced_context(ctx)
+
+      refused =
+        ToolArguments.dispatch(
+          "task_attach_canvas",
+          %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+          fenced
+        )
+
+      random = Ecto.UUID.generate()
+
+      missing =
+        ToolArguments.dispatch(
+          "task_attach_canvas",
+          %{"task_id" => random, "canvas_id" => ctx.canvas.id},
+          fenced
+        )
+
+      assert {:error, %{error: "Task not found: " <> _} = refused_error} = refused
+      {:error, missing_error} = missing
+
+      assert refused_error ==
+               Map.new(missing_error, fn
+                 {k, v} when is_binary(v) -> {k, String.replace(v, random, ctx.task.id)}
+                 kv -> kv
+               end)
+
+      assert CanvasAttachments.list_task_canvases(ctx.task.id) == []
+    end
+
+    # The handler's own `:task_forbidden` arm: an in-process caller with no
+    # Scope (no `:access_scope`, no `:runtime_id`). The denial is a RECOVERY
+    # MECHANISM, so it still names `task_design_decline`.
+    test "task_attach_canvas denies a caller with no scope, naming the decline exit", ctx do
       {:error, error} =
         ToolSurface.execute(
           "task_attach_canvas",
           %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
-          %{agent_id: stranger_id, space_id: ctx.space.id}
+          %{agent_id: ctx.agent_id, space_id: ctx.space.id}
         )
 
       assert error.code == :task_forbidden
       assert error.error =~ "Access denied"
       assert error.task_id == ctx.task.id
       assert error.recoverable == false
-
-      # The denial is a RECOVERY MECHANISM: a designer who reads it can close
-      # her own design step in one call instead of burning the 30-minute hold.
       assert error.suggestion =~ "task_design_decline"
+      assert error.suggestion =~ "tasks.write"
 
       {:ok, %{canvases: canvases}} =
         ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, ctx.context)
@@ -8098,28 +8173,46 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      # `canvas_authorization_actor/1` returns nil for a context with neither
-      # key, and nil is no principal at BOTH doors. The task door is first.
+      # No Scope resolves for a context with neither `:access_scope` nor
+      # `:runtime_id`, and a nil scope is refused at the task door, first.
       assert error.code == :task_forbidden
       assert error.error =~ "Access denied"
     end
 
-    # The gate reads `:agent_id` / `:user_id` as the SUBJECT; `attached_by` is
-    # attribution and is recorded from the same context but never consulted for
-    # authorization.
-    test "task_attach_canvas authorizes a participating user via :user_id", ctx do
-      user_id = Ecto.UUID.generate()
-      create_participant(ctx.space.id, %{participant_id: user_id})
-      grant_task_access(ctx.task, "user", user_id)
+    # The gate reads the caller's Scope as the SUBJECT; `attached_by` is
+    # attribution and is recorded from the same context but never consulted
+    # for authorization. An in-process user caller carries `:access_scope`.
+    test "task_attach_canvas authorizes a user through an in-process :access_scope", ctx do
+      user =
+        Repo.insert!(%Platform.Accounts.User{
+          email: "ts-canvas-user-#{System.unique_integer([:positive])}@example.com",
+          name: "TS canvas user",
+          oidc_sub: "ts-canvas-user-#{System.unique_integer([:positive])}"
+        })
+
+      Repo.insert!(%Tenancy.OrgMembership{user_id: user.id, org_id: ctx.org.id, role: "member"})
+      create_participant(ctx.space.id, %{participant_id: user.id})
 
       assert {:ok, result} =
                ToolSurface.execute(
                  "task_attach_canvas",
                  %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
-                 %{user_id: user_id}
+                 %{access_scope: Platform.Access.Scope.for_user(user), user_id: user.id}
                )
 
       assert result.canvas_id == ctx.canvas.id
+
+      [row] = CanvasAttachments.list_task_canvases(ctx.task.id)
+      assert row.attachment.attached_by_kind == "user"
+      assert row.attachment.attached_by_id == user.id
+
+      # A bare `:user_id` is attribution, not a principal: refused.
+      assert {:error, %{code: :task_forbidden}} =
+               ToolSurface.execute(
+                 "task_detach_canvas",
+                 %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+                 %{user_id: user.id}
+               )
     end
 
     test "task_list_canvases returns hydrated rows after attach", ctx do
@@ -8209,11 +8302,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == false
     end
 
-    # ── The detach gate (task 019fb581 stage 3) ──────────────────────────
+    # ── The detach gate (task 019fb581 stage 3; tasks.write since 01a1559a) ─
     #
-    # This clause ignored its `context` entirely until stage 3: any runtime
+    # This clause ignored its `context` entirely until 019fb581: any runtime
     # that knew a task id and a canvas id could revoke the attachment.
-    test "task_detach_canvas denies an agent with no binding to the task", ctx do
+    test "task_detach_canvas refuses a fenced runtime and the row survives", ctx do
       {:ok, _} =
         ToolSurface.execute(
           "task_attach_canvas",
@@ -8221,22 +8314,17 @@ defmodule Platform.Federation.ToolSurfaceTest do
           ctx.context
         )
 
-      stranger_id = Ecto.UUID.generate()
-      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: stranger_id})
-
       {:error, error} =
         ToolSurface.execute(
           "task_detach_canvas",
           %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
-          %{agent_id: stranger_id, space_id: ctx.space.id}
+          fenced_context(ctx)
         )
 
-      assert error.code == :task_forbidden
-      assert error.error =~ "Access denied"
-      assert error.task_id == ctx.task.id
+      assert error.error =~ "Task not found"
       assert error.recoverable == false
 
-      # The attachment survived — a denial is not a silent no-op.
+      # The attachment survived — a refusal is not a silent no-op.
       {:ok, %{canvases: canvases}} =
         ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, ctx.context)
 
@@ -8273,13 +8361,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == false
     end
 
-    # ── The read gate (task 019fb581 stage 4) ────────────────────────────
+    # ── The read gate (task 019fb581 stage 4; tasks.read since 01a1559a) ─
     #
-    # `task_list_canvases` ignored its `context` until stage 4. It returns
-    # attachment metadata rather than canvas documents, so this is defence in
-    # depth: what it closes is enumerating which canvases hang off a task the
-    # caller has nothing to do with, and the titles that ride along.
-    test "task_list_canvases denies an agent with no binding to the task", ctx do
+    # `task_list_canvases` returns attachment metadata rather than canvas
+    # documents, so this is defence in depth: what it closes is enumerating
+    # which canvases hang off a task in an org the caller cannot read, and the
+    # titles that ride along. It is not behind the write intercept, so a
+    # refusal is the gate's own `task_forbidden`.
+    test "task_list_canvases refuses a fenced runtime", ctx do
       {:ok, _} =
         ToolSurface.execute(
           "task_attach_canvas",
@@ -8287,23 +8376,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
           ctx.context
         )
 
-      # Reads the canvas fine, since it is in the canvas's space. The only thing it
-      # lacks is a relationship with the TASK, which is the whole gate here.
-      stranger_id = Ecto.UUID.generate()
-      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: stranger_id})
-
       result =
         ToolSurface.execute(
           "task_list_canvases",
           %{"task_id" => ctx.task.id},
-          %{agent_id: stranger_id, space_id: ctx.space.id}
+          fenced_context(ctx)
         )
 
-      # THE DECISION, PINNED: a denial, never an empty list disguised as an
-      # answer. An empty list is indistinguishable from "this task has no
-      # attachments" and would make the tool's own `returns` contract false
-      # for a task that carries one. See `Platform.Tasks.TaskAccess`'s
-      # moduledoc for the full reasoning.
+      # THE DECISION, PINNED: a refusal, never an empty list disguised as an
+      # answer. See `Platform.Tasks.CanvasAttachments`' moduledoc.
       refute match?({:ok, %{canvases: []}}, result)
 
       assert {:error, error} = result
@@ -8312,8 +8393,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.task_id == ctx.task.id
       assert error.recoverable == false
 
-      # And the row it refused to show is really there. Otherwise this test
-      # would pass against a task with nothing attached.
+      # And the row it refused to show is really there.
       {:ok, %{canvases: [_row]}} =
         ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, ctx.context)
     end
@@ -8322,14 +8402,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
     #
     # The standing objection to an authorization denial is that it is an
     # existence oracle. It is not one HERE, because `task_get` is deliberately
-    # ungated (see the NON-SCOPE section in `Platform.Tasks.TaskAccess`) and
-    # hands the same caller full task existence in one call from the same
-    # bundle. This test fails the day somebody gates `task_get`, which is the
-    # day the denial decision above needs re-deciding rather than inheriting.
-    test "the actor task_list_canvases denies can still read the task via task_get", ctx do
-      stranger_id = Ecto.UUID.generate()
-      create_participant(ctx.space.id, %{participant_type: "agent", participant_id: stranger_id})
-      stranger = %{agent_id: stranger_id, space_id: ctx.space.id}
+    # ungated (see `Platform.Tasks.CanvasAttachments`' moduledoc) and hands the
+    # same caller full task existence in one call from the same bundle. This
+    # test fails the day somebody gates `task_get`, which is the day the
+    # denial decision above needs re-deciding rather than inheriting.
+    test "the caller task_list_canvases denies can still read the task via task_get", ctx do
+      stranger = %{agent_id: Ecto.UUID.generate(), space_id: ctx.space.id}
 
       assert {:error, %{code: :task_forbidden}} =
                ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, stranger)
@@ -8337,9 +8415,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert {:ok, task} = ToolSurface.execute("task_get", %{"task_id" => ctx.task.id}, stranger)
       assert task.id == ctx.task.id
 
-      # The disjointness claim the same moduledoc makes: `serialize_task/1`
-      # carries no canvas data, so `task_list_canvases` is not a wrapper over
-      # `task_get` and gating one without the other is coherent.
+      # `serialize_task/1` carries no canvas data, so `task_list_canvases` is
+      # not a wrapper over `task_get` and gating one without the other is
+      # coherent.
       refute Enum.any?(Map.keys(task), &(&1 |> Atom.to_string() |> String.contains?("canvas")))
     end
 
@@ -8351,12 +8429,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Access denied"
     end
 
-    # Positive control for the gate: a principal with a `:space_member` grant
-    # and NO canvas-side standing still lists. The read gate is task-only by
-    # design: `CanvasAccess`'s `:task_reader` path already says anyone who
-    # can read the task may read its attached canvases, so adding a canvas
-    # conjunct here would contradict the grant it is guarding.
-    test "task_list_canvases allows an execution-space member of the task", ctx do
+    # Positive control for the gate: a tasks.read holder with NO canvas-side
+    # standing still lists. The read gate is task-only by design:
+    # `CanvasAccess`'s `:task_reader` path already says anyone who can read
+    # the task may read its attached canvases.
+    test "task_list_canvases allows a tasks.read holder with no canvas standing", ctx do
       {:ok, _} =
         ToolSurface.execute(
           "task_attach_canvas",
@@ -8364,15 +8441,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
           ctx.context
         )
 
-      member_id = Ecto.UUID.generate()
-      grant_task_access(ctx.task, "agent", member_id)
+      reader = runtime_context(canvas_runtime!(ctx.org), nil)
 
       assert {:ok, %{canvases: [row]}} =
-               ToolSurface.execute(
-                 "task_list_canvases",
-                 %{"task_id" => ctx.task.id},
-                 %{agent_id: member_id}
-               )
+               ToolSurface.execute("task_list_canvases", %{"task_id" => ctx.task.id}, reader)
 
       assert row.canvas_id == ctx.canvas.id
       assert row.note == "shared"

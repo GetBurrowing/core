@@ -528,7 +528,7 @@ attacher = %{kind: "user", id: dev_user.id}
 
 for canvas <- exec_canvases do
   {:ok, _attachment} =
-    CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+    CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
       attached_by: attacher,
       note: "Seeded by seed_canvas_explorer_fixture.exs"
     )

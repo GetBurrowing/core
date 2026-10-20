@@ -705,6 +705,8 @@ defmodule Platform.ExtensionsTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"stack_attach_canvas", "task"},
+      {"stack_detach_canvas", "task"},
       {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
@@ -890,7 +892,19 @@ defmodule Platform.ExtensionsTest do
     # `agent-1.host-a`, `infra` (test rig, ...), "a human picks option A or
     # B", "a human editor"). Names, bundles and schemas are unchanged.
     # Re-measured on the test rig after merging main (A2) into the stage branch.
-    @main_tool_digest_off "9512b484ba74ab3e1e07711d2b91a3d4784d870299fd380d71ecd204fb763097"
+    #
+    # Re-pinned by task 01a1559a stage 1: the `limitations` prose of
+    # task_attach_canvas, task_detach_canvas and task_list_canvases names the
+    # new gate (`tasks.write` / `tasks.read` in the task's org) in place of
+    # the deleted assignee / phase assignee / space participant / sponsor /
+    # org member rule. Names, bundles and schemas are unchanged. Measured on the
+    # test rig at the stage's branch (19ff66f7).
+    #
+    # Re-pinned by task 01a1559a stage 2: `stack_attach_canvas` and
+    # `stack_detach_canvas` in the `task` bundle, after `stack_assign_agents`
+    # (the name list above carries them). Summaries and schemas are unchanged.
+    # Measured on the test rig at the stage's branch (d8f4696c).
+    @main_tool_digest_off "3b16396c380b1ca9212ba79256dceda3f5cf507308773d23947019b094fae793"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

@@ -122,7 +122,32 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         socket
       end
 
-    {:ok, assign_can_promote(socket)}
+    {:ok, socket |> assign_can_promote() |> assign_can_attach_canvas()}
+  end
+
+  # Whether to RENDER the '+ Attach canvas' row (task 01a1559a stage 3): the
+  # viewer may `tasks.write` the selected task. Display only, like
+  # `assign_can_promote/1`: `detail_attach_canvas` re-asks through
+  # `Selection.writable_selected_task/1`, and `CanvasAttachments` asks again.
+  # Re-derived only when the task or the scope changes, because this
+  # component is updated on every shell render.
+  defp assign_can_attach_canvas(socket) do
+    key = {selected_task_id(socket), socket.assigns[:access_scope]}
+
+    if socket.assigns[:can_attach_canvas_key] == key do
+      socket
+    else
+      socket
+      |> assign(:can_attach_canvas_key, key)
+      |> assign(:can_attach_canvas?, Selection.writable_selected_task(socket) != nil)
+    end
+  end
+
+  defp selected_task_id(socket) do
+    case socket.assigns[:selected_task] do
+      %{id: id} -> id
+      _ -> nil
+    end
   end
 
   # The promote handler re-reads the row by id; a malformed id is "not found"
@@ -209,17 +234,49 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # broadcasts `:task_updated` on the board topic so any sibling LiveView
   # session viewing the same task re-renders its strip within the 2s
   # budget. Idempotent — `{:error, :not_found}` from a duplicate click is a
-  # no-op. `{:error, :task_forbidden}` lands in the same no-op arm.
+  # no-op. `{:error, :task_forbidden}` lands in the same no-op arm. The
+  # context re-checks `tasks.write` against the viewer's own Scope (task
+  # 01a1559a stage 1), the same rule `writable_selected_task/1` applied.
   def handle_event("detail_detach_canvas", %{"canvas-id" => canvas_id}, socket) do
     case Selection.writable_selected_task(socket) do
       %Task{id: task_id} = task ->
-        actor = {:user, socket.assigns[:current_user_id]}
-        _ = CanvasAttachments.detach_canvas(actor, task_id, canvas_id)
+        _ = CanvasAttachments.detach_canvas(socket.assigns[:access_scope], task_id, canvas_id)
         Tasks.broadcast_board({:task_updated, task})
         request_refresh()
         {:noreply, socket}
 
       _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # The '+ Attach canvas' row's pick (task 01a1559a stage 3), the mirror of
+  # `detail_detach_canvas` above. The task is the SERVER-HELD selection,
+  # re-checked for `tasks.write`; only the canvas id comes from the client,
+  # and `CanvasAttachments.attach_canvas/4` gates it twice more under the
+  # viewer's own Scope: `tasks.write` on the task, then a READ of the canvas,
+  # so nobody can attach (and so grant the task's org) a canvas they cannot
+  # read. `attached_by` is attribution only.
+  def handle_event("detail_attach_canvas", %{"canvas-id" => canvas_id}, socket)
+      when is_binary(canvas_id) do
+    with %Task{id: task_id} = task <- Selection.writable_selected_task(socket),
+         {:ok, _attachment} <-
+           CanvasAttachments.attach_canvas(socket.assigns[:access_scope], task_id, canvas_id,
+             attached_by: %{kind: "user", id: socket.assigns[:current_user_id]}
+           ) do
+      Tasks.broadcast_board({:task_updated, task})
+      request_refresh()
+      {:noreply, socket}
+    else
+      {:error, reason} when reason in [:canvas_not_found, :canvas_forbidden] ->
+        flash(:error, "That canvas can't be attached: it was not found or you can't read it.")
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        flash(:error, "Could not attach the canvas.")
+        {:noreply, socket}
+
+      nil ->
         {:noreply, socket}
     end
   end
@@ -1376,7 +1433,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                  The × button posts `detach_canvas` which calls the context +
                  broadcasts :task_updated for sibling sessions. --%>
           <div
-            :if={@selected_task_canvases != []}
+            :if={@selected_task_canvases != [] or @can_attach_canvas?}
             class="flex flex-wrap items-center gap-2"
             data-role="linked-canvases-strip"
           >
@@ -1417,6 +1474,25 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 <span class="hero-x-mark size-3"></span>
               </button>
             </span>
+            <%!-- '+ Attach canvas' (task 01a1559a stage 3): the LAST row of the
+                 strip, full width, a row and not a chip, rendered only for a
+                 viewer who may write the task. The picker pushes
+                 `detail_attach_canvas` back here, so the write and its gate
+                 stay in this component. --%>
+            <div :if={@can_attach_canvas?} class="w-full" data-role="linked-canvas-attach-row">
+              <.live_component
+                module={PlatformWeb.Tasks.CanvasPickerComponent}
+                id={"task-canvas-picker-#{@selected_task.id}"}
+                mode={:task}
+                label="Attach canvas"
+                attached={Map.new(@selected_task_canvases, &{&1.canvas_id, 1})}
+                member_count={1}
+                pick_event="detail_attach_canvas"
+                pick_target={@myself}
+                access_scope={@access_scope}
+                current_user_id={@current_user_id}
+              />
+            </div>
           </div>
 
           <%!-- Priority + deploy_target metadata.

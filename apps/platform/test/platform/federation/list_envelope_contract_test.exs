@@ -1142,6 +1142,10 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       %{space: space, participant: participant, ctx: ctx} = message_space!()
       {:ok, project} = Tasks.create_project(%{name: "Env TLC #{u()}"})
 
+      # The list gate is `tasks.read` on the task through the caller's Scope
+      # (task 01a1559a stage 1), not the assignee binding below.
+      ctx = Map.put(ctx, :access_scope, Platform.Access.Scope.system())
+
       {:ok, task} =
         Tasks.create_task(%{
           project_id: project.id,
@@ -1152,7 +1156,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
       for canvas <- canvases!(space, participant, 3) do
         {:ok, _} =
-          CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+          CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
             attached_by: %{kind: "user", id: Ecto.UUID.generate()}
           )
       end

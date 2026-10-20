@@ -12128,7 +12128,7 @@ defmodule PlatformWeb.TasksLiveTest do
         })
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           attached_by: %{kind: "user", id: user.id}
         )
 
@@ -12223,11 +12223,12 @@ defmodule PlatformWeb.TasksLiveTest do
       |> render_click()
 
       rendered_after = render(view)
-      # Strip wrapper hides entirely once the last chip is gone (the `:if`
-      # gate on `@selected_task_canvases != []`). Chip-specific markers
-      # disappear; the task title may still appear elsewhere (kanban card)
-      # which is irrelevant to this assertion.
-      refute rendered_after =~ "data-role=\"linked-canvases-strip\""
+      # Since task 01a1559a stage 3 the strip stays for a viewer who may write
+      # the task, holding only the '+ Attach canvas' row once the last chip is
+      # gone. The chip itself disappears.
+      assert rendered_after =~ "data-role=\"linked-canvases-strip\""
+      assert has_element?(view, ~s|[data-role="linked-canvas-attach-row"]|)
+      refute has_element?(view, ~s|[data-role="linked-canvas-chip"]|)
       refute rendered_after =~ ~s|data-canvas-id="#{canvas.id}"|
 
       assert CanvasAttachments.list_task_canvases(task.id) == []
@@ -12256,6 +12257,316 @@ defmodule PlatformWeb.TasksLiveTest do
       # Either the persisted title surfaces in error styling, or the
       # nil-title fallback fires — at least one path is exercised.
       assert rendered =~ "Was a real canvas" or rendered =~ "(deleted canvas)"
+    end
+  end
+
+  describe "the '+ Attach canvas' row and the canvas picker (task 01a1559a stage 3)" do
+    # A channel the viewer participates in, so every canvas in it is one the
+    # viewer may read (`CanvasAccess`'s `:member` path) and the picker lists.
+    defp picker_space!(user, name) do
+      i = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{name: name, slug: "pick-#{i}", kind: "channel"})
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name || "Picker",
+          joined_at: DateTime.utc_now()
+        })
+
+      {space, participant}
+    end
+
+    defp picker_canvas!({space, participant}, title) do
+      Repo.insert!(%Canvas{
+        space_id: space.id,
+        created_by: participant.id,
+        title: title,
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{"id" => "root", "type" => "stack", "props" => %{}, "children" => []},
+          "theme" => %{},
+          "bindings" => %{},
+          "meta" => %{}
+        }
+      })
+    end
+
+    defp open_picker(view) do
+      view
+      |> element(~s|#tasks-detail [data-role="canvas-picker-trigger"]|)
+      |> render_click()
+
+      assert has_element?(view, ~s|[data-role="canvas-picker"]|)
+      view
+    end
+
+    defp picker_meta(view, canvas) do
+      view
+      |> element(~s|[data-canvas-id="#{canvas.id}"] [data-role="canvas-picker-row-meta"]|)
+      |> render()
+      |> String.replace(~r/<[^>]*>/, "")
+      |> String.trim()
+    end
+
+    defp attach_rows(task_id) do
+      Repo.all(
+        from(a in Platform.Tasks.CanvasAttachment, where: a.task_id == ^task_id, select: a)
+      )
+    end
+
+    test "a writer with no attachments sees the strip with only the attach row", %{conn: conn} do
+      {conn, _user} = authenticated_conn_with_user(conn)
+      task = create_task(create_project(), %{title: "Nothing attached yet"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      assert has_element?(view, ~s|[data-role="linked-canvases-strip"]|)
+      assert has_element?(view, ~s|[data-role="linked-canvas-attach-row"]|)
+      refute has_element?(view, ~s|[data-role="linked-canvas-chip"]|)
+
+      trigger = view |> element(~s|[data-role="canvas-picker-trigger"]|) |> render()
+      assert trigger =~ "Attach canvas"
+      assert trigger =~ "hero-plus"
+      # A row, not a chip.
+      refute trigger =~ "badge"
+      assert trigger =~ "w-full"
+    end
+
+    test "attaching through the picker writes one row attributed to the viewer and the chip appears",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      task = create_task(create_project(), %{title: "Attach through picker"})
+      canvas = picker_canvas!(picker_space!(user, "frontend-design"), "Burrow redesign masters")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+      view = open_picker(view)
+
+      assert view
+             |> element(~s|[data-role="canvas-picker-search"]|)
+             |> render() =~ ~s|placeholder="Search canvases…"|
+
+      view
+      |> element(~s|[data-role="canvas-picker-row"][data-canvas-id="#{canvas.id}"]|)
+      |> render_click()
+
+      assert [row] = attach_rows(task.id)
+      assert row.canvas_id == canvas.id
+      assert row.attached_by_kind == "user"
+      assert row.attached_by_id == user.id
+
+      _ = render(view)
+
+      assert has_element?(
+               view,
+               ~s|[data-role="linked-canvas-chip"][data-canvas-id="#{canvas.id}"]|
+             )
+
+      # The pick closed the picker.
+      refute has_element?(view, ~s|[data-role="canvas-picker"]|)
+    end
+
+    test "two canvases with the same title in different spaces render different meta",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      task = create_task(create_project(), %{title: "Look-alike task"})
+
+      a = picker_canvas!(picker_space!(user, "frontend-design"), "Design direction: tokens")
+      b = picker_canvas!(picker_space!(user, "brand-review"), "Design direction: tokens")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+      view = open_picker(view)
+
+      # Empty query: the recent list.
+      meta_a = picker_meta(view, a)
+      meta_b = picker_meta(view, b)
+      edited = Calendar.strftime(a.updated_at, "%b %-d")
+
+      assert meta_a == "#frontend-design · edited #{edited}"
+      assert meta_b == "#brand-review · edited #{Calendar.strftime(b.updated_at, "%b %-d")}"
+      assert meta_a != meta_b
+
+      # A typed query goes through `Chat.search_canvases/3`; both stay
+      # visible and still differ.
+      view
+      |> element(~s|[data-role="canvas-picker"] form|)
+      |> render_change(%{"query" => "Design direction"})
+
+      assert picker_meta(view, a) == meta_a
+      assert picker_meta(view, b) == meta_b
+
+      meta_html =
+        view
+        |> element(~s|[data-canvas-id="#{a.id}"] [data-role="canvas-picker-row-meta"]|)
+        |> render()
+
+      assert meta_html =~ "tabular-nums"
+      assert meta_html =~ "canvas-picker-meta"
+      refute meta_html =~ "truncate"
+
+      title_html =
+        view
+        |> element(~s|[data-canvas-id="#{a.id}"] [data-role="canvas-picker-row-title"]|)
+        |> render()
+
+      assert title_html =~ "min-w-0 truncate"
+    end
+
+    test "an execution-space canvas's meta shows the owning task's title", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+      task = create_task(project, %{title: "The task being organised"})
+      owner = create_task(project, %{title: "Owner of the execution space"})
+
+      {:ok, exec_space} = ExecutionSpace.find_or_create(owner.id)
+
+      {:ok, participant} =
+        Chat.add_participant(exec_space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      canvas = picker_canvas!({exec_space, participant}, "Evidence from the run")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+      view = open_picker(view)
+
+      meta = picker_meta(view, canvas)
+      assert String.starts_with?(meta, "#Owner of the execution space · edited ")
+      refute meta =~ exec_space.name
+    end
+
+    test "an already-attached canvas stays listed, checked and disabled", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      task = create_task(create_project(), %{title: "Already attached task"})
+      # `seed_attached_canvas/3` puts the canvas in the task's execution space
+      # with the viewer as a participant, so the picker lists it.
+      attached = seed_attached_canvas(task, user, "Already here")
+      free = picker_canvas!(picker_space!(user, "general"), "Not yet here")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+      view = open_picker(view)
+
+      row =
+        view
+        |> element(~s|[data-role="canvas-picker-row-attached"][data-canvas-id="#{attached.id}"]|)
+        |> render()
+
+      assert row =~ ~s|aria-disabled="true"|
+      assert row =~ "hero-check"
+      assert row =~ "Already here"
+      refute row =~ "phx-click"
+
+      refute has_element?(
+               view,
+               ~s|[data-role="canvas-picker-row"][data-canvas-id="#{attached.id}"]|
+             )
+
+      # POSITIVE CONTROL: the unattached canvas in the same list IS clickable.
+      assert view
+             |> element(~s|[data-role="canvas-picker-row"][data-canvas-id="#{free.id}"]|)
+             |> render() =~ "phx-click"
+    end
+
+    test "a viewer without tasks.write gets no attach row and a forged event writes nothing",
+         %{conn: conn} do
+      {reader_conn, reader} = authenticated_conn_with_user(conn)
+      project = create_project()
+      task = create_task(project, %{title: "Read-only for this viewer"})
+      canvas = picker_canvas!(picker_space!(reader, "general"), "Readable but not attachable")
+
+      {:ok, _} =
+        Platform.Access.Grants.deny(%{
+          principal: reader,
+          permission: "tasks.write",
+          resource: project
+        })
+
+      {:ok, view, _html} = live(reader_conn, ~p"/tasks?task_id=#{task.id}")
+      assert render(view) =~ "Read-only for this viewer"
+      refute has_element?(view, ~s|[data-role="linked-canvas-attach-row"]|)
+      refute has_element?(view, ~s|[data-role="linked-canvases-strip"]|)
+
+      view
+      |> with_target("#tasks-detail")
+      |> render_hook("detail_attach_canvas", %{"canvas-id" => canvas.id})
+
+      _ = render(view)
+      assert attach_rows(task.id) == []
+
+      # POSITIVE CONTROL: the identical forged hook from a writer who can read
+      # the same canvas writes the row.
+      {writer_conn, writer} = authenticated_conn_with_user(build_conn())
+      shared = picker_canvas!(picker_space!(writer, "writer-space"), "Writer canvas")
+
+      {:ok, writer_view, _html} = live(writer_conn, ~p"/tasks?task_id=#{task.id}")
+
+      writer_view
+      |> with_target("#tasks-detail")
+      |> render_hook("detail_attach_canvas", %{"canvas-id" => shared.id})
+
+      assert [%{canvas_id: canvas_id}] = attach_rows(task.id)
+      assert canvas_id == shared.id
+    end
+
+    test "a forged canvas id the viewer cannot read writes nothing", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      task = create_task(create_project(), %{title: "Unreadable canvas target"})
+
+      # A channel with NO org and the viewer NOT a participant: no grant path.
+      {:ok, foreign_space} =
+        Chat.create_space(%{
+          name: "elsewhere",
+          slug: "elsewhere-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, author} =
+        Chat.add_participant(foreign_space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Someone else",
+          joined_at: DateTime.utc_now()
+        })
+
+      foreign = picker_canvas!({foreign_space, author}, "Not yours")
+      readable = picker_canvas!(picker_space!(user, "mine"), "Yours")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+      view = open_picker(view)
+
+      # Not offered by the picker...
+      refute has_element?(view, ~s|[data-canvas-id="#{foreign.id}"]|)
+
+      # ...and a forged pick of it writes nothing and says so.
+      view
+      |> with_target("#tasks-detail")
+      |> render_hook("detail_attach_canvas", %{"canvas-id" => foreign.id})
+
+      html = render(view)
+      assert attach_rows(task.id) == []
+      assert html =~ "can&#39;t be attached" or html =~ "can't be attached"
+
+      # A malformed id is the same no-row answer, not a crash.
+      view
+      |> with_target("#tasks-detail")
+      |> render_hook("detail_attach_canvas", %{"canvas-id" => "not-a-uuid"})
+
+      assert attach_rows(task.id) == []
+
+      # POSITIVE CONTROL: the same forged hook with a canvas the viewer reads.
+      view
+      |> with_target("#tasks-detail")
+      |> render_hook("detail_attach_canvas", %{"canvas-id" => readable.id})
+
+      assert [%{canvas_id: canvas_id}] = attach_rows(task.id)
+      assert canvas_id == readable.id
     end
   end
 

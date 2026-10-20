@@ -209,8 +209,9 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
        "Authorizes BOTH halves now. The canvas half is CanvasAttachments." <>
          "attach_canvas/4 calling fetch_for_viewer/3 before writing the row; " <>
          "the task half is ensure_task_touchable/3, which task 019fb581 added " <>
-         "over Platform.Tasks.TaskAccess.fetch_for_actor/3. An outsider can no " <>
-         "longer staple a canvas it CAN read onto someone else's task."},
+         "and task 01a1559a made tasks.write through Access.task_target/3. An " <>
+         "outsider can no longer staple a canvas it CAN read onto someone " <>
+         "else's task."},
     "task_detach_canvas" =>
       {:task_gated,
        "Was _context and no authorization at all; task 019fb581 put it behind " <>
@@ -222,7 +223,19 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
          "every attached canvas to anyone holding a task id. Task 019fb581 " <>
          "gated it on ensure_task_touchable/3. Titles are not documents, but " <>
          "they were the strongest hint this surface leaked, so the denial is " <>
-         "driven below rather than trusted."}
+         "driven below rather than trusted."},
+    "stack_attach_canvas" =>
+      {:task_gated,
+       "Task 01a1559a stage 2. Both halves, as task_attach_canvas: tasks.write " <>
+         "through Access.task_target/3 on the stack AND on every member, " <>
+         "all-or-nothing, then the canvas conjunct (fetch_for_viewer/3 under " <>
+         "the caller's Scope) once. You cannot confer a read you do not hold, " <>
+         "on one task or on a whole stack."},
+    "stack_detach_canvas" =>
+      {:task_gated,
+       "Task 01a1559a stage 2. tasks.write on the stack and every member, " <>
+         "no canvas conjunct: removing attachments revokes a read grant " <>
+         "rather than conferring one, the same asymmetry as task_detach_canvas."}
   }
 
   setup do
@@ -522,8 +535,9 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       # task_list_canvases took `_context` and authorized nothing against the
       # TASK, so anyone holding a task id could staple, unstaple, or read the
       # titles of its attachments. Task 019fb581 closed it with
-      # `CanvasAttachments.ensure_task_touchable/3` over
-      # `Platform.Tasks.TaskAccess.fetch_for_actor/3`, so the pin is inverted
+      # `CanvasAttachments.ensure_task_touchable/3` (tasks.write / tasks.read
+      # through `Platform.Access.task_target/3` since task 01a1559a), so the
+      # pin is inverted
       # here rather than deleted: the @canvas_reach claim stays DRIVEN, and a
       # reclassification that outran the code fails here instead of reading as
       # coverage.
@@ -532,18 +546,22 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       task = task_in!(org_a)
       attach!(task, canvas)
 
+      # The stack tools (task 01a1559a stage 2) take a `stack_id`; the task is
+      # the stack's one member, so every tool is driven at the same task.
+      stack = stack_of!(task)
+
       names = classified(:task_gated)
       refute names == [], "no tool is classified :task_gated, so nothing is being driven"
 
-      # No binding to the task, its execution space, its sponsor slot, or its
-      # project's org — none of the six TaskAccess grant paths can answer.
+      # A runtime id that resolves to no runtime: no Scope at all, so neither
+      # the write intercept nor the task gate can answer for it.
       stranger = federation_context(UUID.generate())
 
       for name <- names do
         assert {:error, payload} =
                  ToolSurface.execute(
                    name,
-                   %{"task_id" => task.id, "canvas_id" => canvas.id},
+                   %{"task_id" => task.id, "stack_id" => stack.id, "canvas_id" => canvas.id},
                    stranger
                  ),
                "#{name} is classified :task_gated but answered a caller with no standing on the task"
@@ -814,9 +832,27 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
     task
   end
 
+  defp stack_of!(task) do
+    slug = "enum-stack-#{System.unique_integer([:positive])}"
+
+    {:ok, stack} =
+      Platform.Tasks.Stacks.create_stack(%{
+        project_id: task.project_id,
+        slug: slug,
+        name: "Enum Stack",
+        rollup_branch: "stack/#{slug}"
+      })
+
+    {:ok, _} = Platform.Tasks.Stacks.add_task(stack, task)
+    stack
+  end
+
   defp attach!(task, canvas) do
     {:ok, _attachment} =
-      Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+      Platform.Tasks.CanvasAttachments.attach_canvas(
+        Platform.Access.Scope.system(),
+        task.id,
+        canvas.id,
         attached_by: %{kind: "user", id: UUID.generate()}
       )
 

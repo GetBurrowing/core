@@ -319,17 +319,18 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
       # it: she is not `tasks.assignee_id`, she is not in `phase_assignees`,
       # and `responsibilities` is a registry rather than a dispatch log, so
       # there is no per-fire row either. Her binding exists only inside the
-      # prompt text she was handed, and `Platform.Tasks.TaskAccess` is built
-      # from assignee + phase_assignees + space participation, so without the
-      # participant row this mints it DENIES the flagship consumer of
-      # `task_attach_canvas`. The step fires once, holds 30 minutes and never
-      # redelivers (ADR-0046), so that denial is unrecoverable within it.
+      # prompt text she was handed, so the participant row this mints is how
+      # she reaches the task's execution space at all. (`task_attach_canvas`
+      # itself is gated on `tasks.write` in the task's org since task
+      # 01a1559a, not on space participation.) The step fires once, holds 30
+      # minutes and never redelivers (ADR-0046), so a denial is unrecoverable
+      # within it.
       dispatch_space_id: dispatch_space_id(task)
     }
   end
 
   # Resolved through `ExecutionSpace.find_by_task_id/1` — the SAME resolver
-  # `TaskAccess.space_member?/2` reads the grant back through, and the same one
+  # every execution-space read goes through, and the same one
   # `resolve_space/1` delivers into on the external path. A second resolution
   # path is how a row gets written into a space the gate does not look in.
   #
@@ -657,9 +658,10 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirection do
   # would therefore deny — and ADR-0046's pre-plan design step fires once with
   # no redelivery, so it would not fail loudly, it would silently never deliver.
   #
-  # The platform is the actor here; it created the canvas one call ago.
+  # The platform is the actor here; it created the canvas one call ago, so it
+  # attaches with `Platform.Access.Scope.system/0`.
   defp attach(task_id, canvas_id, agent_id) do
-    case CanvasAttachments.attach_canvas(:system, task_id, canvas_id,
+    case CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task_id, canvas_id,
            note: @attachment_note,
            attached_by: %{kind: "agent", id: agent_id}
          ) do

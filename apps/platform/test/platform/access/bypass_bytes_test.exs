@@ -186,7 +186,7 @@ defmodule Platform.Access.BypassBytesTest do
   defp canvas!(space, author, title),
     do: Repo.insert!(%Canvas{space_id: space.id, created_by: author.id, title: title})
 
-  defp runtime!(owner, spaces) do
+  defp runtime!(owner, spaces, profile \\ AgentRuntime.default_tool_profile()) do
     n = System.unique_integer([:positive])
 
     {:ok, agent} =
@@ -211,10 +211,8 @@ defmodule Platform.Access.BypassBytesTest do
     {:ok, _profile} =
       Platform.Access.RuntimeProfiles.create_for_runtime(
         rt,
-        AgentRuntime.default_tool_profile(),
-        Platform.Access.RuntimeProfiles.translated_permissions(
-          AgentRuntime.default_tool_profile()
-        )
+        profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(profile)
       )
 
     Map.put(rt, :plain_token, token)
@@ -614,24 +612,29 @@ defmodule Platform.Access.BypassBytesTest do
       refute leaks?(denied)
     end
 
+    # The list gate is `tasks.read` on the task (task 01a1559a stage 1), so
+    # the caller here is a runtime of the same member carrying the `task`
+    # bundle; the default profile `ctx.a` carries no tasks.read.
     test "task_list_canvases drops a canvas a canvas.read deny covers", ctx do
+      a = runtime!(ctx.m, [ctx.eq, ctx.ep], AgentRuntime.default_tool_profile() ++ ["task"])
+
       for c <- [ctx.k, ctx.k2] do
         {:ok, _} =
-          CanvasAttachments.attach_canvas(:system, ctx.tq.id, c.id,
+          CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), ctx.tq.id, c.id,
             attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
           )
       end
 
       assert {:ok, %{canvases: before}} =
-               call(ctx.a, "task_list_canvases", %{"task_id" => ctx.tq.id})
+               call(a, "task_list_canvases", %{"task_id" => ctx.tq.id})
 
       assert MapSet.new(before, & &1.canvas_id) == MapSet.new([ctx.k.id, ctx.k2.id])
       assert leaks?(before)
 
-      deny!({:agent, ctx.a.agent_id}, "canvas.read", ctx.k)
+      deny!({:agent, a.agent_id}, "canvas.read", ctx.k)
 
       assert {:ok, %{canvases: after_deny} = result} =
-               call(ctx.a, "task_list_canvases", %{"task_id" => ctx.tq.id})
+               call(a, "task_list_canvases", %{"task_id" => ctx.tq.id})
 
       assert Enum.map(after_deny, & &1.canvas_id) == [ctx.k2.id]
       refute leaks?(result)

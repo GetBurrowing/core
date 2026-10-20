@@ -413,7 +413,10 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
         })
 
       {:ok, _} =
-        Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        Platform.Tasks.CanvasAttachments.attach_canvas(
+          Platform.Access.Scope.system(),
+          task.id,
+          canvas.id,
           note: "prior art",
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )
@@ -437,8 +440,8 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
     # and `DispatchMembership.ensure_writable/3` mints the participant row from
     # it. Without the key the funnel takes the `:no_space_named` skip and the
     # designer is not a participant of the space her own prompt tells her to
-    # write into — and `Platform.Tasks.TaskAccess` then denies the
-    # `task_attach_canvas` call that is this step's only way to deliver.
+    # write into. (`task_attach_canvas` itself is gated on `tasks.write` in the
+    # task's org since task 01a1559a, not on this row.)
     #
     # The mechanism is OPT-IN, so a test that only asserted the funnel behaves
     # correctly would stay green with this handler silently not opting in.
@@ -452,9 +455,9 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
 
       assert context.dispatch_space_id == space.id
 
-      # Resolved through the SAME resolver `TaskAccess.space_member?/2` reads
-      # the grant back through. A row written via a second resolution path is
-      # how a grant lands in a space the gate does not look in.
+      # Resolved through the SAME resolver every execution-space read goes
+      # through. A row written via a second resolution path lands in a space
+      # nothing else looks in.
       assert %{id: gate_space_id} =
                Platform.Orchestration.ExecutionSpace.find_by_task_id(task.id)
 

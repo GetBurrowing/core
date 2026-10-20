@@ -774,7 +774,10 @@ defmodule PlatformWeb.Chat.CanvasSearchDrawerTest do
     attacher = %{kind: "agent", id: Ecto.UUID.generate()}
 
     for c <- canvases do
-      {:ok, _} = CanvasAttachments.attach_canvas(:system, task.id, c.id, attached_by: attacher)
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, c.id,
+          attached_by: attacher
+        )
     end
 
     doomed = List.last(canvases)

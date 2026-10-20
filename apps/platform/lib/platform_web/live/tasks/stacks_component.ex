@@ -28,9 +28,10 @@ defmodule PlatformWeb.Tasks.StacksComponent do
 
   ## Events
 
-  All 18 events carry the `stack_` prefix, renamed at extraction time with
-  their templates and tests in the same commit. There are no back-compat
-  aliases. `stack_clear_member_override` (formerly `clear_member_override`)
+  Every event carries the `stack_` prefix (18 renamed at extraction time
+  with their templates and tests in the same commit; the five
+  `stack_canvas_*` events of task 01a1559a stage 4 were born with it).
+  There are no back-compat aliases. `stack_clear_member_override` (formerly `clear_member_override`)
   lives HERE and not in the Assignees concern: it is only reachable from
   stack detail and it reads `selected_stack_members`.
 
@@ -44,7 +45,8 @@ defmodule PlatformWeb.Tasks.StacksComponent do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{ReviewRequests, Stack, Stacks}
+  alias Platform.Chat.CanvasAccess
+  alias Platform.Tasks.{CanvasAttachments, ReviewRequests, Stack, Stacks}
   alias PlatformWeb.Tasks.Selection
 
   import Platform.Tasks.StackGraph,
@@ -93,6 +95,9 @@ defmodule PlatformWeb.Tasks.StacksComponent do
      |> assign(:stack_feedback_reject_text, %{})
      |> assign(:stack_feedback_reject_error, %{})
      |> assign(:stack_graph_expanded, false)
+     |> assign(:selected_stack_canvases, [])
+     |> assign(:stack_can_write?, false)
+     |> assign(:stack_canvas_confirm, nil)
      |> assign(:stack_review_request_subscriptions, MapSet.new())}
   end
 
@@ -540,6 +545,100 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               </div>
             </div>
           </div>
+          <%!-- Canvases on this stack (task 01a1559a stage 4, inventory rows
+             8-12 of design canvas 01a1559b). One row per canvas attached to
+             any member, with its TRUE coverage ("on 25 of 28 tasks"), so a
+             stack where someone detached from one task does not read as
+             fully covered. Then the '+ Attach canvas to all tasks' row.
+             Nothing is written on pick: the confirm line states the counts
+             first (`CanvasAttachments.stack_coverage/2`), and only its
+             Attach / Remove button writes. Controls render only for a
+             viewer holding tasks.write on the stack (`@stack_can_write?`);
+             every write handler re-asks anyway. Remove is the only
+             error-toned button here: the per-row Detach is a plain ghost. --%>
+          <section
+            class="shrink-0 border-t border-edge px-4 py-3"
+            data-role="stack-detail-canvases"
+            aria-labelledby={"stack-detail-canvases-#{@selected_stack.id}"}
+          >
+            <h3
+              id={"stack-detail-canvases-#{@selected_stack.id}"}
+              class="pb-1 text-xs font-semibold uppercase tracking-wider text-base-content/60"
+            >
+              Canvases
+            </h3>
+            <p
+              :if={@selected_stack_canvases == [] and not @stack_can_write?}
+              class="canvas-picker-meta px-2 py-1.5 text-xs"
+              data-role="stack-detail-canvases-empty"
+            >
+              No canvases on this stack.
+            </p>
+            <ul class="flex flex-col divide-y divide-edge">
+              <li
+                :for={row <- @selected_stack_canvases}
+                data-role="stack-detail-canvas-row"
+                data-canvas-id={row.canvas_id}
+              >
+                <div class="flex min-h-9 min-w-0 items-center gap-3 px-2 py-1.5">
+                  <span
+                    class={[
+                      "min-w-0 flex-1 truncate text-sm font-medium",
+                      if(row.canvas, do: "text-base-content", else: "text-base-content/60 italic")
+                    ]}
+                    data-role="stack-detail-canvas-title"
+                    title={stack_canvas_title(row)}
+                  >
+                    {stack_canvas_title(row)}
+                  </span>
+                  <span
+                    class="canvas-picker-meta shrink-0 text-xs font-normal tabular-nums"
+                    data-role="stack-detail-canvas-coverage"
+                  >
+                    on {row.attached_count} of {row.member_count} tasks
+                  </span>
+                  <button
+                    :if={@stack_can_write?}
+                    type="button"
+                    class="btn btn-ghost btn-xs shrink-0"
+                    phx-click="stack_canvas_detach_prompt"
+                    phx-target={@myself}
+                    phx-value-canvas-id={row.canvas_id}
+                    data-role="stack-detail-canvas-detach"
+                  >
+                    Detach
+                  </button>
+                </div>
+                <.stack_canvas_confirm
+                  :if={confirm_for?(@stack_canvas_confirm, :detach, row.canvas_id)}
+                  confirm={@stack_canvas_confirm}
+                  myself={@myself}
+                />
+              </li>
+              <li
+                :if={@stack_can_write? and @selected_stack_members != []}
+                data-role="stack-detail-canvas-attach-row"
+              >
+                <.live_component
+                  module={PlatformWeb.Tasks.CanvasPickerComponent}
+                  id={"stack-canvas-picker-#{@selected_stack.id}"}
+                  mode={:stack}
+                  label="Attach canvas to all tasks"
+                  attached={Map.new(@selected_stack_canvases, &{&1.canvas_id, &1.attached_count})}
+                  member_count={length(@selected_stack_members)}
+                  pick_event="stack_canvas_pick"
+                  pick_target={@myself}
+                  access_scope={@access_scope}
+                  current_user_id={@current_user_id}
+                />
+                <.stack_canvas_confirm
+                  :if={confirm_for?(@stack_canvas_confirm, :attach, nil)}
+                  confirm={@stack_canvas_confirm}
+                  myself={@myself}
+                />
+              </li>
+            </ul>
+          </section>
         </div>
 
         <%!-- Action row: Abandon (ghost) + View rollup PR (primary).
@@ -1218,6 +1317,8 @@ defmodule PlatformWeb.Tasks.StacksComponent do
          |> assign(:selected_stack_members, members)
          |> assign(:selected_stack_member_review_counts, counts)
          |> assign_stack_review_state(stack)
+         |> assign_stack_canvases(stack)
+         |> assign(:stack_canvas_confirm, nil)
          |> assign(:show_stack_feedback_overlay, false)
          |> assign(:show_stack_detail, true)}
     end
@@ -1479,6 +1580,92 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     {:noreply, assign(socket, :stack_graph_expanded, false)}
   end
 
+  # ── Stack canvases (task 01a1559a stage 4) ─────────────────────────────
+  #
+  # Pick -> confirm -> write. The pick and the Detach prompt only READ: they
+  # take the counts from `CanvasAttachments.stack_coverage/2` and park them in
+  # `:stack_canvas_confirm`, which the confirm line renders. Only the confirm
+  # line's Attach / Remove writes, and it acts on the parked canvas id, never
+  # on a client one. Every handler re-asks `tasks.write` on the stack
+  # (`writable_selected_stack/1`); the context's own stack gate asks again.
+
+  def handle_event("stack_canvas_pick", %{"canvas-id" => canvas_id}, socket)
+      when is_binary(canvas_id) do
+    with %Stack{} = stack <- writable_selected_stack(socket),
+         {:ok, title} <- readable_canvas_title(socket, canvas_id) do
+      coverage = CanvasAttachments.stack_coverage(stack.id, canvas_id)
+
+      {:noreply,
+       assign(socket, :stack_canvas_confirm, %{
+         action: :attach,
+         stack_id: stack.id,
+         canvas_id: canvas_id,
+         title: title,
+         count: coverage.to_attach_count,
+         already: coverage.already_count
+       })}
+    else
+      nil ->
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        send(
+          self(),
+          {:stacks_flash, :error,
+           "That canvas can't be attached: it was not found or you can't read it."}
+        )
+
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("stack_canvas_detach_prompt", %{"canvas-id" => canvas_id}, socket)
+      when is_binary(canvas_id) do
+    row = Enum.find(socket.assigns.selected_stack_canvases, &(&1.canvas_id == canvas_id))
+
+    case {writable_selected_stack(socket), row} do
+      {%Stack{} = stack, %{} = row} ->
+        coverage = CanvasAttachments.stack_coverage(stack.id, canvas_id)
+
+        {:noreply,
+         assign(socket, :stack_canvas_confirm, %{
+           action: :detach,
+           stack_id: stack.id,
+           canvas_id: canvas_id,
+           title: stack_canvas_title(row),
+           count: coverage.already_count,
+           already: 0
+         })}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("stack_canvas_confirm_cancel", _params, socket) do
+    {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+  end
+
+  def handle_event("stack_canvas_attach", _params, socket) do
+    case confirmed(socket, :attach) do
+      {%Stack{} = stack, confirm} ->
+        stack_canvas_attach(socket, stack, confirm)
+
+      nil ->
+        {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+    end
+  end
+
+  def handle_event("stack_canvas_detach", _params, socket) do
+    case confirmed(socket, :detach) do
+      {%Stack{} = stack, confirm} ->
+        stack_canvas_detach(socket, stack, confirm)
+
+      nil ->
+        {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+    end
+  end
+
   defp writable_selected_stack(socket) do
     case socket.assigns[:selected_stack] do
       %Stack{id: id} = stack -> if Selection.permits?(socket, {:stack, id}), do: stack
@@ -1591,6 +1778,213 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     end
   end
 
+  # ── Stack canvases helpers (task 01a1559a stage 4) ─────────────────────
+
+  # The parked confirm, only while it still names the open stack and the
+  # viewer may still write it.
+  defp confirmed(socket, action) do
+    with %{action: ^action, stack_id: stack_id} = confirm <- socket.assigns[:stack_canvas_confirm],
+         %Stack{id: ^stack_id} = stack <- writable_selected_stack(socket) do
+      {stack, confirm}
+    else
+      _ -> nil
+    end
+  end
+
+  defp stack_canvas_attach(socket, stack, confirm) do
+    case CanvasAttachments.attach_canvas_to_stack(
+           socket.assigns[:access_scope],
+           stack.id,
+           confirm.canvas_id,
+           attached_by: %{kind: "user", id: socket.assigns[:current_user_id]}
+         ) do
+      {:ok, result} ->
+        broadcast_members(socket, result.attached_task_ids)
+
+        send(
+          self(),
+          {:stacks_flash, :info,
+           attach_result_text(confirm.title, result.attached_count, result.skipped_count)}
+        )
+
+        {:noreply, socket |> assign(:stack_canvas_confirm, nil) |> reload_selected_stack()}
+
+      {:error, reason} when reason in [:canvas_not_found, :canvas_forbidden] ->
+        send(
+          self(),
+          {:stacks_flash, :error,
+           "That canvas can't be attached: it was not found or you can't read it."}
+        )
+
+        {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+
+      {:error, _reason} ->
+        send(self(), {:stacks_flash, :error, "Could not attach the canvas to this stack."})
+        {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+    end
+  end
+
+  defp stack_canvas_detach(socket, stack, confirm) do
+    case CanvasAttachments.detach_canvas_from_stack(
+           socket.assigns[:access_scope],
+           stack.id,
+           confirm.canvas_id
+         ) do
+      {:ok, result} ->
+        broadcast_members(socket, result.detached_task_ids)
+
+        send(
+          self(),
+          {:stacks_flash, :info, detach_result_text(confirm.title, result.detached_count)}
+        )
+
+        {:noreply, socket |> assign(:stack_canvas_confirm, nil) |> reload_selected_stack()}
+
+      {:error, _reason} ->
+        send(self(), {:stacks_flash, :error, "Could not remove the canvas from this stack."})
+        {:noreply, assign(socket, :stack_canvas_confirm, nil)}
+    end
+  end
+
+  # One `{:task_updated, member}` per member whose attachments changed, so an
+  # open task-detail strip and every other stack-view session re-read.
+  defp broadcast_members(socket, task_ids) do
+    changed = MapSet.new(task_ids)
+
+    socket.assigns.selected_stack_members
+    |> Enum.filter(&MapSet.member?(changed, &1.id))
+    |> Enum.each(&Tasks.broadcast_board({:task_updated, &1}))
+  end
+
+  # The canvas title for the confirm line, only for a canvas the viewer may
+  # read: a forged id must not echo another space's title back.
+  defp readable_canvas_title(socket, canvas_id) do
+    opts =
+      case socket.assigns[:access_scope] do
+        %Platform.Access.Scope{} = scope -> [audit: false, access_scope: scope]
+        _ -> [audit: false]
+      end
+
+    case socket.assigns[:current_user_id] do
+      user_id when is_binary(user_id) ->
+        case CanvasAccess.fetch_for_viewer(canvas_id, {:user, user_id}, opts) do
+          {:ok, %{deleted_at: nil} = canvas, _level} -> {:ok, canvas.title || "(untitled)"}
+          {:ok, _deleted, _level} -> {:error, :canvas_not_found}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        {:error, :forbidden}
+    end
+  end
+
+  defp assign_stack_canvases(socket, %Stack{id: id}) do
+    socket
+    |> assign(:selected_stack_canvases, CanvasAttachments.list_stack_canvases(id))
+    |> assign(:stack_can_write?, Selection.permits?(socket, {:stack, id}))
+  end
+
+  defp stack_canvas_title(%{canvas: %{title: title}}) when is_binary(title) and title != "",
+    do: title
+
+  defp stack_canvas_title(%{canvas: %{}}), do: "(untitled)"
+  defp stack_canvas_title(_row), do: "(deleted canvas)"
+
+  defp confirm_for?(%{action: :attach}, :attach, _canvas_id), do: true
+  defp confirm_for?(%{action: :detach, canvas_id: id}, :detach, id), do: true
+  defp confirm_for?(_confirm, _action, _canvas_id), do: false
+
+  @doc false
+  # The confirm line's copy (design canvas 01a1559b, inventory row 10). One
+  # sentence stating exactly what Attach will write: N is the members that
+  # do not have the canvas yet, K the members that already do. K = 0 drops
+  # the second sentence; N = 1 reads "1 task"; K = 1 reads "1 already has it".
+  def attach_confirm_text(title, count, already) do
+    ~s(Attach "#{title}" to #{task_count(count)}.) <>
+      case already do
+        0 -> ""
+        1 -> " 1 already has it."
+        k -> " #{k} already have it."
+      end
+  end
+
+  @doc false
+  # Inventory row 11: the stack-wide detach names its count the same way.
+  def detach_confirm_text(count), do: "Remove from #{task_count(count)}."
+
+  # The flash after the write reports what the context RETURNED, which can
+  # differ from the confirm line when another writer raced the pick.
+  defp attach_result_text(title, attached, skipped) do
+    ~s(Attached "#{title}" to #{task_count(attached)}.) <>
+      case skipped do
+        0 -> ""
+        k -> " #{k} already had it."
+      end
+  end
+
+  defp detach_result_text(title, detached),
+    do: ~s(Removed "#{title}" from #{task_count(detached)}.)
+
+  defp task_count(1), do: "1 task"
+  defp task_count(n), do: "#{n} tasks"
+
+  attr :confirm, :map, required: true
+  attr :myself, :any, required: true
+
+  # The confirm line. Attach is the one btn-primary; Remove is the one
+  # btn-error in this feature. Cancel is a ghost. No per-task checkboxes.
+  defp stack_canvas_confirm(assigns) do
+    ~H"""
+    <div
+      class="mx-2 mb-2 mt-1 flex flex-col gap-2 rounded-box border border-edge bg-base-200 px-3 py-2 sm:flex-row sm:items-center"
+      role="group"
+      aria-label={if @confirm.action == :attach, do: "Confirm attach", else: "Confirm remove"}
+      data-role="stack-canvas-confirm"
+      data-action={@confirm.action}
+    >
+      <p
+        class="min-w-0 flex-1 text-sm text-base-content tabular-nums"
+        data-role="stack-canvas-confirm-text"
+      >
+        {if @confirm.action == :attach,
+          do: attach_confirm_text(@confirm.title, @confirm.count, @confirm.already),
+          else: detach_confirm_text(@confirm.count)}
+      </p>
+      <div class="flex shrink-0 justify-end gap-2">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          phx-click="stack_canvas_confirm_cancel"
+          phx-target={@myself}
+          data-role="stack-canvas-confirm-cancel"
+        >
+          Cancel
+        </button>
+        <button
+          :if={@confirm.action == :attach}
+          type="button"
+          class="btn btn-primary btn-sm"
+          phx-click="stack_canvas_attach"
+          phx-target={@myself}
+          data-role="stack-canvas-confirm-submit"
+        >
+          Attach
+        </button>
+        <button
+          :if={@confirm.action == :detach}
+          type="button"
+          class="btn btn-error btn-sm"
+          phx-click="stack_canvas_detach"
+          phx-target={@myself}
+          data-role="stack-canvas-confirm-submit"
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+    """
+  end
+
   # ── Panel state helpers ────────────────────────────────────────────────
 
   defp assign_stack_panel(socket, %Stack{} = stack) do
@@ -1601,6 +1995,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     |> assign(:selected_stack_members, members)
     |> assign(:selected_stack_member_review_counts, counts)
     |> assign_stack_review_state(stack)
+    |> assign_stack_canvases(stack)
   end
 
   defp close_stack_panel(socket) do
@@ -1609,6 +2004,9 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     |> assign(:selected_stack_members, [])
     |> assign(:selected_stack_member_review_counts, %{})
     |> assign_stack_review_state(nil)
+    |> assign(:selected_stack_canvases, [])
+    |> assign(:stack_can_write?, false)
+    |> assign(:stack_canvas_confirm, nil)
     |> assign(:show_stack_feedback_overlay, false)
     |> assign(:show_stack_detail, false)
     |> assign(:stack_graph_expanded, false)

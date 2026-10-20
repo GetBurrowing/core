@@ -538,6 +538,32 @@ defmodule PlatformWeb.TasksWriteFenceTest do
     canvas.id
   end
 
+  # A canvas in a channel of the world's org with `reader` as a participant,
+  # NOT attached to anything: what the attach picker offers.
+  defp readable_canvas!(w, reader) do
+    i = n()
+
+    space =
+      %Platform.Chat.Space{}
+      |> Platform.Chat.Space.changeset(%{
+        kind: "channel",
+        name: "wfence-pick-#{i}",
+        slug: "wfence-pick-#{i}",
+        org_id: w.org
+      })
+      |> Repo.insert!()
+
+    {:ok, _} =
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: reader.id,
+        display_name: reader.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Platform.Chat.Canvas{space_id: space.id, title: "wfence pick #{i}"}).id
+  end
+
   defp skill! do
     {:ok, skill} = Skills.create_skill(%{name: "wfence skill #{n()}", content: "x"})
     skill
@@ -554,6 +580,12 @@ defmodule PlatformWeb.TasksWriteFenceTest do
       {"detail_detach_canvas", "#tasks-detail",
        fn w -> Process.put(:wfence_canvas, canvas!(w)) end, [],
        fn _w -> %{"canvas-id" => Process.get(:wfence_canvas)} end},
+      # Task 01a1559a stage 3. The canvas is one X can READ (a participant of
+      # its channel), so the positive control writes and the refusal after
+      # the fence is the task gate's, not the canvas conjunct's.
+      {"detail_attach_canvas", "#tasks-detail",
+       fn w -> Process.put(:wfence_attach_canvas, readable_canvas!(w, x)) end, [],
+       fn _w -> %{"canvas-id" => Process.get(:wfence_attach_canvas)} end},
       {"detail_save_description", "#tasks-detail", fn _w -> :ok end,
        [{"detail_toggle_edit_mode", %{}}], fn _w -> %{"description" => "new #{n()}"} end},
       {"detail_confirm_delete", "#tasks-detail", fn w -> set_status(w.task, "backlog") end, [],
@@ -696,6 +728,92 @@ defmodule PlatformWeb.TasksWriteFenceTest do
     control = if snapshot(w) != before_w, do: [], else: [{event, :control_wrote_nothing}]
 
     wrote ++ answer ++ control
+  end
+
+  # ── stack canvases confirm (task 01a1559a stage 4) ─────────────────────
+
+  # The confirm line parks its target at pick time and writes on Attach /
+  # Remove. X picks while unfenced, is fenced by a live scope change, then
+  # confirms: nothing is written and the answer equals the nothing-selected
+  # one. The canvas is one X can READ, so the refusal is the stack gate's.
+  describe "stack canvases confirm on @selected_stack" do
+    test "a live scope change between pick and Attach / Remove writes nothing", ctx do
+      x = x!(ctx)
+
+      defects =
+        for {prompt, confirm} <- [
+              {"stack_canvas_pick", "stack_canvas_attach"},
+              {"stack_canvas_detach_prompt", "stack_canvas_detach"}
+            ],
+            defect <- stack_canvas_refusal(ctx, x, prompt, confirm),
+            do: defect
+
+      assert defects == []
+    end
+
+    test "positive control: the same pick and confirm write while X is unfenced", ctx do
+      x = x!(ctx)
+
+      silent =
+        for {prompt, confirm} <- [
+              {"stack_canvas_pick", "stack_canvas_attach"},
+              {"stack_canvas_detach_prompt", "stack_canvas_detach"}
+            ],
+            not stack_canvas_writes?(ctx, x, prompt, confirm),
+            do: confirm
+
+      assert silent == [], "wrote nothing for unfenced X: #{inspect(silent)}"
+    end
+  end
+
+  # The canvas the prompt names: for detach it is already on the member.
+  defp stack_canvas_target!(w, x, "stack_canvas_detach_prompt") do
+    canvas_id = readable_canvas!(w, x)
+
+    Repo.insert!(%CanvasAttachment{
+      task_id: w.member.id,
+      canvas_id: canvas_id,
+      attached_by_kind: "user",
+      attached_by_id: Ecto.UUID.generate()
+    })
+
+    canvas_id
+  end
+
+  defp stack_canvas_target!(w, x, _prompt), do: readable_canvas!(w, x)
+
+  defp stack_canvas_writes?(ctx, x, prompt, confirm) do
+    w = world!(ctx.root, "W")
+    canvas_id = stack_canvas_target!(w, x, prompt)
+    view = open(x, "/tasks")
+    render_hook(at(view, "#tasks-stacks"), "stack_open_detail", %{"id" => w.stack.id})
+    render_hook(at(view, "#tasks-stacks"), prompt, %{"canvas-id" => canvas_id})
+    before = snapshot(w)
+    _ = push(view, "#tasks-stacks", [], confirm, %{})
+    snapshot(w) != before
+  end
+
+  defp stack_canvas_refusal(ctx, x, prompt, confirm) do
+    r = world!(ctx.root, "R")
+    canvas_id = stack_canvas_target!(r, x, prompt)
+    view = open(x, "/tasks")
+
+    assert render_hook(at(view, "#tasks-stacks"), "stack_open_detail", %{"id" => r.stack.id}) =~
+             r.stack.name
+
+    render_hook(at(view, "#tasks-stacks"), prompt, %{"canvas-id" => canvas_id})
+    true = has_element?(view, ~s|[data-role="stack-canvas-confirm"]|)
+
+    view = fence!(view, x, ctx.root)
+    before = snapshot(r)
+    {fenced, _} = push(view, "#tasks-stacks", [], confirm, %{})
+    wrote = if snapshot(r) == before, do: [], else: [{confirm, :wrote_after_fence}]
+
+    {nothing, _} = ctx.m |> open("/tasks") |> push("#tasks-stacks", [], confirm, %{})
+    answer = if fenced == nothing, do: [], else: [{confirm, {:flash, fenced, nothing}}]
+
+    membership!(x, ctx.root)
+    wrote ++ answer
   end
 
   # ── a root member's own deny is honoured (bounded, not an exception) ────

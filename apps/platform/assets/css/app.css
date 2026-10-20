@@ -1982,6 +1982,21 @@ body, .font-suite {
   }
 }
 
+/* Canvas picker meta line ("#space · edited Oct 13", task 01a1559a stage 3).
+   The design direction names `neutral` at text-xs and requires 4.5:1. Light
+   uses the token raw (7.18:1 on base-100 per the `.reaction-picker` measurement
+   in this file); dark takes the same 50% base-content mix as `.message-context-label`,
+   because raw neutral is 1.86:1 on the dark panel. */
+.canvas-picker-meta { color: var(--color-neutral); }
+[data-theme="dark"] .canvas-picker-meta {
+  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .canvas-picker-meta {
+    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
+  }
+}
+
 /* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
    The way back to the tip of a conversation for a reader who scrolled up
    into history.

@@ -103,7 +103,7 @@ defmodule Platform.Chat.CanvasAccessTest do
 
   defp attach!(task, canvas) do
     {:ok, attachment} =
-      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+      CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
         attached_by: %{kind: "user", id: UUID.generate()}
       )
 
@@ -114,7 +114,7 @@ defmodule Platform.Chat.CanvasAccessTest do
   # the attachment row gets nothing from having put the row there.
   defp attach_as_agent!(task, canvas, agent_id) do
     {:ok, attachment} =
-      CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+      CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
         attached_by: %{kind: "agent", id: agent_id}
       )
 
@@ -560,7 +560,7 @@ defmodule Platform.Chat.CanvasAccessTest do
       # FIRST argument; driving that gate is the job of
       # task_canvas_attachment_authorization_test.exs, so this setup step opts
       # out of it rather than restating it.
-      :ok = CanvasAttachments.detach_canvas(:system, task.id, canvas.id)
+      :ok = CanvasAttachments.detach_canvas(Platform.Access.Scope.system(), task.id, canvas.id)
 
       assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, {:agent, agent_id})
     end

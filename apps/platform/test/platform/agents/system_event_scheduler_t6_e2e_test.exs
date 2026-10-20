@@ -753,7 +753,11 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # merged: stack prototype-runtime rollup onto main (+3 prototype, +2 vault -> 131)
     # RBAC member9 appends four authorized tools in the optional access bundle;
     # scheduler T6 adds none. Pin the complete catalogue including that addition.
-    @t6_baseline_tool_count 135
+    # bumped by task 01a1559a stage 2 — `stack_attach_canvas` and
+    # `stack_detach_canvas` in the `task` bundle beside `stack_assign_agents`;
+    # no schedule, no trigger and no historian surface.
+    # (+stack_attach_canvas, +stack_detach_canvas -> 137)
+    @t6_baseline_tool_count 137
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

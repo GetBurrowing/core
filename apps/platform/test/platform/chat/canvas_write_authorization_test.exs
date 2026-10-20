@@ -168,7 +168,7 @@ defmodule Platform.Chat.CanvasWriteAuthorizationTest do
       task = task_in!(org_a)
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           attached_by: %{kind: "user", id: UUID.generate()}
         )
 

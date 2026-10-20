@@ -176,13 +176,16 @@ defmodule Platform.Audit.TelemetryHandler do
     # capability bundle, one level earlier and on a different question.
     [:platform, :chat, :canvas_read_denied],
     # Task 019fb581 stage 1 — task access DENIED. Emitted by
-    # `Platform.Tasks.TaskAccess.fetch_for_actor/3` on the `{:error, :forbidden}`
-    # arm only; grants are deliberately not audited (they are the common path
+    # `Platform.Tasks.CanvasAttachments.ensure_task_touchable/3` (since task
+    # 01a1559a stage 1) on the `{:error, :task_forbidden}` arm only; grants are deliberately not audited (they are the common path
     # and would bury the signal), and a `{:error, :not_found}` emits nothing so
     # the audit stream is not an existence oracle. Metadata carries actor_id,
     # actor_type ("user" | "agent" | "anonymous"), resource_type "task",
     # resource_id (task id), action "denied", plus project_id and the attempted
-    # tool name. Sync (default handle_event clause) so tests can assert the row
+    # tool name. Since task 01a1559a stage 2 the stack canvas tools emit it
+    # too, with resource_type "stack" when the stack itself is refused and
+    # "task" naming the refused member otherwise; same metadata. Sync (default
+    # handle_event clause) so tests can assert the row
     # immediately after the call returns.
     [:platform, :tasks, :access_denied],
     # Task 019f5bc4 — historian dispatch pipeline audit trail. Emitters at
@@ -477,7 +480,7 @@ defmodule Platform.Audit.TelemetryHandler do
   # `INSERT INTO audit_events` arrives as a process EXIT — and `:telemetry`
   # responds to an exiting handler by DETACHING it for the whole VM. Measured
   # on this branch: one such orphan reddened 7 unrelated audit tests later in
-  # the run (TaskAccessTest, CanvasAttachmentsTest, ExternalAdmissionTest,
+  # the run (the task-access test, CanvasAttachmentsTest, ExternalAdmissionTest,
   # CanvasLiveTest) with zero rows, which reads identically to a missing
   # registration.
   #

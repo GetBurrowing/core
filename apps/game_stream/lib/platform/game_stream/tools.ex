@@ -22,8 +22,14 @@ defmodule Platform.GameStream.Tools do
   `play_session_start` creates a canvas in the task's execution space whose
   root is a `stack` holding one `game_stream` node, and attaches it to the
   task through `Platform.Tasks.CanvasAttachments.attach_canvas/4` — the
-  function `task_attach_canvas` calls, with the caller as the authorization
-  subject. The canvas is created WITHOUT a companion chat message
+  function `task_attach_canvas` calls, with the CALLER's Scope as the
+  authorization subject (task 01a1559a stage 1): an in-process
+  `:access_scope`, else the calling runtime's `Scope.for_runtime/1`, exactly
+  as `task_attach_canvas` resolves it. The attach therefore needs
+  `tasks.write` in the task's org, the one rule every canvas attach is held
+  to; `play.use` alone starts the session but does not attach the canvas.
+  It never attaches as `Scope.system/0`, which would let any `play.use`
+  holder attach to any task in any org. The canvas is created WITHOUT a companion chat message
   (`Chat.create_canvas/1`), so starting a session posts nothing an
   attention router could route to an agent. A canvas that cannot be created
   or attached does not stop the session: the result carries
@@ -32,6 +38,8 @@ defmodule Platform.GameStream.Tools do
 
   require Logger
 
+  alias Platform.Access.Scope
+  alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.Chat.Canvas.Links
   alias Platform.Chat.CanvasDocument
@@ -158,7 +166,7 @@ defmodule Platform.GameStream.Tools do
            }),
          {:ok, _attachment} <-
            CanvasAttachments.attach_canvas(
-             attach_actor(context),
+             caller_scope(context),
              status.task_id,
              canvas.id,
              note: "Playable review build #{status.review_sha}",
@@ -200,8 +208,19 @@ defmodule Platform.GameStream.Tools do
   end
 
   # The same two readings `ToolSurface.task_attach_canvas` makes of one
-  # context: the authorization subject and the attribution.
-  defp attach_actor(context), do: actor(context)
+  # context: the authorization subject (the caller's Scope, resolved the way
+  # `ToolSurface`'s `memory_access_opts/1` does) and the attribution. No
+  # resolvable Scope is `nil`, which the attach refuses; never `Scope.system/0`.
+  defp caller_scope(%{access_scope: %Scope{} = scope}), do: scope
+
+  defp caller_scope(%{runtime_id: runtime_id}) when is_binary(runtime_id) do
+    case Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
+      %AgentRuntime{} = runtime -> Scope.for_runtime(runtime)
+      _ -> nil
+    end
+  end
+
+  defp caller_scope(_context), do: nil
 
   defp attached_by(context) do
     case actor(context) do

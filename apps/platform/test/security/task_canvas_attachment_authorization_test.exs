@@ -1,113 +1,50 @@
 defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   @moduledoc """
-  Stage 5 of task 019fb581 — the adversarial suite for the canvas-attachment
-  task gate.
+  The adversarial suite for the canvas-attachment task gate, driven over the
+  real `/mcp` transport.
 
-  Stages 3 and 4 put `Platform.Tasks.TaskAccess` in front of
-  `task_attach_canvas`, `task_detach_canvas` and `task_list_canvases`, and
-  tested it by calling `ToolSurface.execute/3` with a hand-written context map.
-  This file exists because that is exactly the shape of test that can pass
-  while the shipped system is wrong: the context is BUILT by the transport
-  (`PlatformWeb.MCPController.build_context/2`), so a test that writes its own
-  cannot see a context that stops carrying `agent_id` — or one that never
-  carried the key the gate reads in the first place.
+  History. Task 019fb581 put a six-path binding rule (assignee, phase
+  assignee, execution-space participant, sponsor, project-org member,
+  `:system`) in front of `task_attach_canvas`, `task_detach_canvas` and
+  `task_list_canvases`. Task 01a1559a stage 1 deleted that rule and its
+  module: the gate is now the rule every Tasks write is held to,
+  `Platform.Access.task_target(scope, {:task, id}, "tasks.write")` on the
+  caller's `%Platform.Access.Scope{}` (`"tasks.read"` for the list). Over
+  federation that Scope is the calling runtime's `Scope.for_runtime/1`,
+  fenced by its OWNER's org membership. An agent no longer has to be bound to
+  the task to attach to it.
 
-  Every authorization assertion below therefore drives `POST /mcp` with a real
-  runtime bearer token. The unit tests keep the `CanvasAttachments` boundary
-  honest; this file keeps the WIRE honest.
+  Every authorization assertion below drives `POST /mcp` with a real runtime
+  bearer token, because the context is BUILT by the transport
+  (`PlatformWeb.MCPController.build_context/2`) and a test that writes its own
+  context map cannot see what the transport actually carries.
 
-  ## What driving the real transport caught that the unit tests could not
+  ## What the wire shows that `execute/3` cannot
 
-  Three things, all live on `main` after stage 4 and none visible from
-  `execute/3`:
-
-    0. **The `task_id` key stage 3 added to every denial never reaches an HTTP
-       caller.** `MCPController.error_envelope/1` is a fixed four-key allowlist
-       (`error`, `code`, `recoverable`, `suggestion`) and discards the rest, so
-       `task_id` — and `canvas_id` on the older canvas refusal — are dropped on
-       `/mcp` while the WebSocket runtime channel pushes the map intact.
-       `tool_surface_test.exs` asserts `error.task_id == ctx.task.id` and
-       passes, because it reads the handler's return value rather than the
-       wire. Pinned by the `"the hosted transport drops the id keys"` block,
-       and NOT fixed here: widening that allowlist changes the refusal envelope
-       of every tool in the surface.
-
-    1. **Two of the six advertised grant paths are unreachable over federation.**
-       `build_context/2` (`mcp_controller.ex:116-126`) and
-       `RuntimeChannel.execute_tool_call/4` (`runtime_channel.ex:566-571`) both
-       build a context carrying `agent_id` and never `user_id`, so
-       `ToolSurface.canvas_authorization_actor/1` can only ever produce
-       `{:agent, _}` or `nil` on a federated call. `TaskAccess` short-circuits
-       `{:agent, _}` after path 4 BY DESIGN (agents have no org membership), so
-       `:sponsor` and `:project_member` are dead over both transports — while
-       all three tools' `limitations` prose advertises them to the agent
-       reading it. Pinned by `"the sponsor and project-member grant paths are
-       unreachable over federation"` below.
-
-       `tool_surface_test.exs`'s `"authorizes a participating user via
-       :user_id"` passes against a context shape no transport produces. It is
-       not wrong — the `:user_id` branch is real for in-process callers — but
-       it is not evidence about the hosted surface, and stage 3 read it as if
-       it were.
-
-    2. **A runtime with no `agent_id` is denied on all three tools.**
-       `agent_runtimes.agent_id` is nullable and unset by default
-       (`agent_runtime.ex:24`, absent from `validate_required/2`), and such a
-       runtime authenticates fine and passes `ToolAuthorization`. Before stage
-       3 it could detach and list freely because those clauses ignored their
-       context. It now has no principal at all. Pinned below.
-
-  ## Verification labels
-
-  DETECTOR where the assertion detonates against pre-stage-3 behaviour (every
-  denial test: the gates did not exist). GUARD where it pins behaviour that is
-  new in this stack and has no prior state to be wrong (the taxonomy contract).
+    * **A foreign task is indistinguishable from a missing one on the two
+      writes.** Both are in `@task_write_targets`, so the write intercept
+      replaces a task id the caller may not write with a fresh UUID before the
+      handler runs: a fenced runtime gets exactly the random-UUID answer
+      ("Task not found"), and no denial event. The handler's own
+      `:task_forbidden` arm is therefore unreachable over `/mcp` for those two
+      tools; it is still live for an in-process caller with no scope, which is
+      where the taxonomy sweep drives it.
+    * **The read is not intercepted**, so a fenced runtime's
+      `task_list_canvases` is refused by the gate itself: `task_forbidden`, as
+      a machine-readable `code`, with one denial event. A refusal, never an
+      empty list.
+    * **The participant row the pre-plan design dispatch mints no longer
+      decides anything** on these tools, in either direction (section 6).
+    * **A runtime with no `agent_id` passes the task gate on its owner's
+      standing** and is refused at the canvas conjunct, which has no principal
+      to read the canvas with.
 
   ## Positive controls
 
-  This file's own instruction, and the one most easily skipped. An absence
-  assertion with nothing proving the probe could have fired passes vacuously.
-  Every `refute` / `== 0` / `== nil` below is paired, in the same test, with a
-  positive control that fires the same probe against a granted call:
-
-    * no attachment row → the granted attach writes one, counted the same way
-    * no denial telemetry on success → the denied call emits exactly one,
-      through the same handler
-    * the settler did not run → the granted attach runs it, through the same
-      injected stub
-    * the design step stayed open → the granted attach closes it
-    * `limitations` is absent from the wire → `description` is present on the
-      same payload, and `limitations` is present in `tool_definitions/0`
-
-  ## Two corrections to the stage-5 brief, recorded rather than silently applied
-
-    * The brief asks for the designer's participant row to be asserted with
-      `attention_mode == "mention"`. It is `"all"`:
-      `DispatchMembership.attention_mode/1` (`dispatch_membership.ex:355-356`)
-      returns `"all"` for `kind == "execution"`, and an execution space is
-      exactly what the pre-plan designer is bound to. The value is also moot
-      post-ADR-0027, which is why the assertion below pins the row's EXISTENCE
-      and its EFFECT (it grants the attach) and records the string only as
-      current data.
-    * The brief justifies the taxonomy contract with "remote runtimes branch
-      on it". They cannot: `MCPController.to_mcp_tool/1` forwards only `name`,
-      `description` and `inputSchema`, so `limitations` reaches nobody over
-      `/mcp`. Stage 4 found this and recorded it in a comment; this file makes
-      it an executable claim instead, so the day someone widens the forwarder
-      the decision gets re-read rather than silently reversed.
-
-  ## Scope fence, demonstrated and NOT papered over
-
-  `architecture.review_plan` and `architecture.audit_diff` fire against a task
-  they have no binding to. Neither handler sets `:dispatch_space_id`, so
-  `Router.put_dispatch_space/2` writes no `metadata.space_id`,
-  `AgentResponder.dispatch_space_id/1` reads nil and no participant row is ever
-  minted for them. That is the opt-in design working as intended — granting one
-  would hand them the execution space's whole message history — and they are
-  therefore denied by this gate. It is a known open decision owned by Robin,
-  not a bug for this stage to fix by widening grants. The test named for it
-  below asserts the denial as the CURRENT contract so the decision stays
-  visible; it does not assert that the denial is correct.
+  An absence assertion with nothing proving the probe could have fired passes
+  vacuously. Every `refute` / `== []` / `== nil` below is paired, in the same
+  test, with a positive control that fires the same probe against a granted
+  call.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -185,12 +122,17 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     |> Repo.update!()
   end
 
-  defp canvas_space! do
+  # `org` matters for a FENCED caller: the canvas conjunct reads with the
+  # caller's Scope as `:access_scope` (task 01a1559a), and a canvas outside the
+  # fence reads as not found. Org-less is fine for an unfenced (root-owned)
+  # runtime.
+  defp canvas_space!(org \\ nil) do
     {:ok, space} =
       Chat.create_space(%{
         name: "TCAA canvas #{n()}",
         slug: "tcaa-canvas-#{n()}",
-        kind: "channel"
+        kind: "channel",
+        org_id: org && org.id
       })
 
     space
@@ -215,20 +157,28 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     canvas
   end
 
-  # An MCP runtime bound to `agent` and owned by a root admin. The owner's
-  # grants cover the requested tools so these tests reach the task gate.
-  # `tool_profile` is a LITERAL list rather
-  # than `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about authorization, and
-  # a capability refusal (`-32001`) would be a different failure wearing the
-  # same red.
-  defp runtime_token!(agent, bundles \\ ["task", "canvas"]) do
+  # An MCP runtime bound to `agent`. By default it is owned by a root admin,
+  # so its Scope is unfenced and holds `tasks.write` everywhere: the gate
+  # passes and the test reaches whatever it is about. `owner: user` makes it
+  # owned by that user instead, so its fence is that user's org membership
+  # (see `fenced_token!/2`). `tool_profile` is a LITERAL list rather than
+  # `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about
+  # authorization, and a capability refusal (`-32001`) would be a different
+  # failure wearing the same red.
+  defp runtime_token!(agent, bundles \\ ["task", "canvas"], opts \\ []) do
+    {_runtime, raw} = runtime_with_token!(agent, bundles, opts)
+    raw
+  end
+
+  defp runtime_with_token!(agent, bundles, opts) do
     raw = AgentRuntime.generate_token()
+    owner = Keyword.get_lazy(opts, :owner, &Platform.TenancyFixtures.root_admin!/0)
 
     {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "tcaa-rt-#{n()}",
-        owner_user_id: Platform.TenancyFixtures.root_admin!().id,
+        owner_user_id: owner.id,
         agent_id: agent && agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw),
         status: "active"
@@ -242,7 +192,16 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         Platform.Access.RuntimeProfiles.translated_permissions(bundles)
       )
 
-    raw
+    {runtime, raw}
+  end
+
+  # A runtime whose owner is a plain member of `org` and nothing else: fenced
+  # to `org` through the runtime's `owner_cap`. Same bundles as the default,
+  # so the ONLY thing that can refuse it on another org's task is the fence.
+  defp fenced_token!(agent, org) do
+    owner = user!()
+    Platform.ExternalUserFixtures.plain_member!(owner, org)
+    runtime_token!(agent, ["task", "canvas"], owner: owner)
   end
 
   # THE TRANSPORT. Everything authorization-shaped in this file goes through
@@ -290,11 +249,9 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
   # ── grant minting ─────────────────────────────────────────────────────────
 
-  # `:space_member`, via the task's execution space. This is the shape stage 2
-  # mints for a dispatched pre-plan designer, and it is minted WITHOUT touching
-  # the assignee columns: `Tasks.set_phase_assignees/2` re-derives the
-  # top-level assignee from the current phase and would strip a grant set that
-  # way.
+  # A participant row in the task's execution space. Since task 01a1559a it
+  # grants NOTHING on the canvas-attachment tools (the gate is `tasks.write`
+  # in the task's org); kept so section 6 can show exactly that.
   defp grant_space_member!(task, agent) do
     {:ok, space} = ExecutionSpace.find_or_create(task.id)
     {:ok, participant} = Chat.add_agent_participant(space.id, agent)
@@ -302,11 +259,48 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   end
 
   # The canvas conjunct, which `task_attach_canvas` needs on top of the task
-  # one. Kept separate from `grant_space_member!/2` because the whole point of
-  # the attach gate is that the two are independent.
+  # one. The two are independent.
   defp grant_canvas_read!(space, agent) do
     {:ok, participant} = Chat.add_agent_participant(space.id, agent)
     participant
+  end
+
+  # The answer the same token gets for a fresh random task id, read back as
+  # `real_id`: what a refused id must be indistinguishable from.
+  defp random_task_answer(conn, token, tool, real_id, extra) do
+    random = Ecto.UUID.generate()
+
+    conn
+    |> call(token, tool, Map.put(extra, "task_id", random))
+    |> unwrap()
+    |> swap_id(random, real_id)
+  end
+
+  defp swap_id(term, from, to) when is_binary(term), do: String.replace(term, from, to)
+  defp swap_id(term, from, to) when is_list(term), do: Enum.map(term, &swap_id(&1, from, to))
+
+  defp swap_id(term, from, to) when is_tuple(term),
+    do: term |> Tuple.to_list() |> swap_id(from, to) |> List.to_tuple()
+
+  defp swap_id(term, from, to) when is_map(term),
+    do: Map.new(term, fn {k, v} -> {swap_id(k, from, to), swap_id(v, from, to)} end)
+
+  defp swap_id(term, _from, _to), do: term
+
+  # A stack in `project` holding `task` as its only member.
+  defp stack_with!(project, task) do
+    slug = "tcaa-stack-#{n()}"
+
+    {:ok, stack} =
+      Platform.Tasks.Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "TCAA Stack",
+        rollup_branch: "stack/#{slug}"
+      })
+
+    {:ok, _} = Platform.Tasks.Stacks.add_task(stack, task)
+    stack
   end
 
   # ── probes ────────────────────────────────────────────────────────────────
@@ -325,9 +319,9 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   defp design_entry(task), do: (reload(task).planning_step_outcomes || %{})["design"]
 
   # Count raw `[:platform, :tasks, :access_denied]` emissions for the duration
-  # of `fun`. The RAW event rather than the audit row: `TaskAccess`'s moduledoc
-  # records that a denial naming an agent by slug fails the audit changeset and
-  # is logged instead of persisted, so counting rows would make the cardinality
+  # of `fun`. The RAW event rather than the audit row: a denial naming an agent
+  # by slug fails the audit changeset (`audit_events.actor_id` is a UUID) and is
+  # logged instead of persisted, so counting rows would make the cardinality
   # assertion depend on a known-lossy sink.
   defp count_denials(fun) do
     id = "tcaa-denials-#{n()}"
@@ -395,344 +389,216 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     PreplanStep.settle(task_id, attachment)
   end
 
+  # `:task_forbidden` on the two WRITES is unreachable over /mcp since task
+  # 01a1559a: the write intercept and the handler's gate are the same
+  # `tasks.write` rule, and the intercept answers first with the not-found
+  # path. The arm is still live for an in-process caller with no scope
+  # (the context `ToolSurface` sees when neither `:access_scope` nor
+  # `:runtime_id` is set), so it is driven there, through
+  # `ToolArguments.dispatch/3`, and the wire half is pinned separately.
+  defp in_process_forbidden(tool, args, agent) do
+    {:error, envelope} =
+      Platform.Federation.ToolArguments.dispatch(tool, args, %{agent_id: agent.id})
+
+    assert envelope.code == :task_forbidden
+    :task_forbidden
+  end
+
   # ══════════════════════════════════════════════════════════════════════════
-  # 1. What the real transport caught and `execute/3` could not
+  # 1. The gate reads the runtime's Scope, not the context's keys
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "the federated context is the gate's only input" do
-    # DETECTOR against the stage-3/4 test strategy rather than against its
-    # code: `tool_surface_test.exs` proves the `:user_id` branch works by
-    # writing `%{user_id: ...}` itself. No transport does.
-    test "the sponsor and project-member grant paths are unreachable over federation",
+  describe "the federated gate is the runtime's Scope" do
+    # The rule since task 01a1559a stage 1: `tasks.write` on the task in its
+    # org, decided on the calling runtime's `Scope.for_runtime/1` (fenced by
+    # its owner). The agent need not be bound to the task in any way.
+    test "a runtime holding tasks.write in the task's org attaches with no binding at all",
          %{org_a: org_a, conn: conn} do
-      project = project!(org_a)
-      sponsor = user!()
-
-      # A user who holds BOTH user-only grants: sponsor of the task, and a
-      # member of its project's org.
-      Platform.ExternalUserFixtures.plain_member!(sponsor, org_a)
-      task = task!(project, %{sponsor_user_id: sponsor.id})
-
-      space = canvas_space!()
+      task = task!(project!(org_a))
+      space = canvas_space!(org_a)
       canvas = canvas!(space)
-
-      # In-process, that user is authorized — twice over. This is the POSITIVE
-      # CONTROL for the refutation below: it proves the grants are real and the
-      # probe is capable of resolving them.
-      assert {:ok, _task, :sponsor} =
-               Platform.Tasks.TaskAccess.fetch_for_actor(task.id, {:user, sponsor.id})
-
-      other_member = user!()
-      Platform.ExternalUserFixtures.plain_member!(other_member, org_a)
-
-      assert {:ok, _task, :project_member} =
-               Platform.Tasks.TaskAccess.fetch_for_actor(task.id, {:user, other_member.id})
-
-      # Over the wire, the SAME human cannot exercise either. A runtime is
-      # owned by a user, and that ownership is what makes this sharp: the
-      # runtime below is owned by the sponsor, and `build_context/2` still
-      # never puts `owner_user_id` in the context.
       agent = agent!()
       grant_canvas_read!(space, agent)
-      raw = AgentRuntime.generate_token()
 
-      {:ok, rt} =
-        %AgentRuntime{}
-        |> AgentRuntime.changeset(%{
-          runtime_id: "tcaa-rt-#{n()}",
-          owner_user_id: sponsor.id,
-          agent_id: agent.id,
-          auth_token_hash: AgentRuntime.hash_token(raw),
-          status: "active"
-        })
-        |> Repo.insert()
+      owner = user!()
+      Platform.ExternalUserFixtures.plain_member!(owner, org_a)
+      token = runtime_token!(agent, ["task", "canvas"], owner: owner)
 
-      {:ok, _profile} =
-        Platform.Access.RuntimeProfiles.create_for_runtime(
-          rt,
-          ["task", "canvas"],
-          Platform.Access.RuntimeProfiles.translated_permissions(["task", "canvas"])
-        )
+      assert task.assignee_id != agent.id
+      assert {:ok, exec_space} = ExecutionSpace.find_or_create(task.id)
+      assert is_nil(Chat.get_agent_participant(exec_space.id, agent.id))
 
-      assert {:error, envelope} = attach(conn, raw, task, canvas)
-      assert envelope["code"] == "task_forbidden"
+      assert {:ok, ok} = attach(conn, token, task, canvas)
+      assert ok["task_id"] == task.id
 
-      # …and the tools tell the agent otherwise, in all three `limitations`.
-      # Pinned so that closing the gap (either by carrying the owner into the
-      # context, or by deleting the claim) has to touch this test.
+      assert [row] = attachment_rows(task.id)
+      assert row.attached_by_kind == "agent"
+      assert row.attached_by_id == agent.id
+
+      assert {:ok, %{"canvases" => [_]}} = list(conn, token, task.id)
+      assert {:ok, %{"detached" => true}} = detach(conn, token, task, canvas)
+
+      # …and the tools say so, rather than advertising the old binding rule.
       for name <- ~w(task_attach_canvas task_detach_canvas task_list_canvases) do
         tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == name))
-        assert tool.limitations =~ "sponsor"
-        assert tool.limitations =~ "org"
+        refute tool.limitations =~ "sponsor"
+        assert tool.limitations =~ "tasks."
       end
     end
 
-    # DETECTOR. Before stage 3 this runtime could detach and list freely,
-    # because both clauses ignored their context entirely.
-    test "a runtime with no agent_id has no principal on any of the three tools",
+    # The Scope, not `agent_id`, is the authorization subject. A runtime with
+    # no agent passes the task gate on its owner's standing and is then
+    # refused at the canvas conjunct, which has no principal to read with.
+    test "a runtime with no agent_id passes the task gate and has no canvas principal",
          %{org_a: org_a, conn: conn} do
-      project = project!(org_a)
-      task = task!(project)
+      task = task!(project!(org_a))
       space = canvas_space!()
       canvas = canvas!(space)
-
-      # `agent_id` is nullable and unset by default — this is a legal, active,
-      # authenticating runtime, not a malformed fixture.
       token = runtime_token!(nil)
 
-      assert {:error, %{"code" => "task_forbidden"}} = attach(conn, token, task, canvas)
-      assert {:error, %{"code" => "task_forbidden"}} = detach(conn, token, task, canvas)
-      assert {:error, %{"code" => "task_forbidden"}} = list(conn, token, task.id)
+      assert {:error, envelope} = attach(conn, token, task, canvas)
+      assert envelope["error"] =~ "cannot read it"
+      assert attachment_rows(task.id) == []
 
-      # POSITIVE CONTROL: the same runtime authenticates and is capability-
-      # authorized, so the three refusals above are authorization decisions
-      # rather than a 401 or a `-32001` wearing the same red.
-      %{"result" => %{"isError" => false}} =
-        call(conn, token, "task_get", %{"task_id" => task.id})
+      assert {:ok, %{"canvases" => []}} = list(conn, token, task.id)
+
+      assert {:error, %{"error" => "No attachment found" <> _}} =
+               detach(conn, token, task, canvas)
     end
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 2. Cross-org and cross-project, and the three refusals kept distinct
+  # 2. Cross-org: the fence, and a foreign task indistinguishable from none
   # ══════════════════════════════════════════════════════════════════════════
 
   describe "cross-boundary attach" do
     setup %{org_a: org_a, org_b: org_b} do
       target = task!(project!(org_a))
 
-      # The caller is a fully legitimate agent — assignee of its OWN task in
-      # another org, and a reader of the canvas. The only thing it lacks is a
-      # binding to `target`.
+      # The caller is a fully legitimate agent: assignee of its OWN task in
+      # org_b, a reader of the canvas, and its runtime holds tasks.write. Its
+      # owner belongs to org_b only, so it is fenced out of org_a.
       agent = agent!()
       own_task = task!(project!(org_b), %{assignee_type: "agent", assignee_id: agent.id})
 
-      space = canvas_space!()
+      space = canvas_space!(org_b)
       canvas = canvas!(space)
       grant_canvas_read!(space, agent)
 
-      %{target: target, own_task: own_task, agent: agent, canvas: canvas, space: space}
+      %{
+        target: target,
+        own_task: own_task,
+        agent: agent,
+        canvas: canvas,
+        space: space,
+        token: fenced_token!(agent, org_b)
+      }
     end
 
-    # DETECTOR: pre-stage-3 this attach succeeded.
-    test "an agent bound to a task in another org cannot attach to this one", ctx do
-      token = runtime_token!(ctx.agent)
+    test "a fenced runtime gets the random-UUID answer for another org's task", ctx do
+      args = %{"canvas_id" => ctx.canvas.id}
 
-      assert {:error, envelope} = attach(ctx.conn, token, ctx.target, ctx.canvas)
-      assert envelope["code"] == "task_forbidden"
-      assert envelope["recoverable"] == false
-      assert envelope["error"] =~ "Access denied"
-      assert envelope["suggestion"] =~ "task_design_decline"
+      for tool <- ~w(task_attach_canvas task_detach_canvas) do
+        refused =
+          ctx.conn |> call(ctx.token, tool, Map.put(args, "task_id", ctx.target.id)) |> unwrap()
 
-      # The task id stage 3 put there now reaches the caller as a key, and
-      # still appears in the sentence. Both are asserted: the sentence is what
-      # kept this refusal actionable while the transport dropped the key, and
-      # shortening it would go red in section 8b regardless.
-      assert envelope["task_id"] == ctx.target.id
-      assert envelope["error"] =~ ctx.target.id
+        assert {:error, %{"error" => "Task not found: " <> _}} = refused
+        assert refused == random_task_answer(ctx.conn, ctx.token, tool, ctx.target.id, args)
+      end
 
-      # POSITIVE CONTROL: the same agent, same token, same canvas, against the
-      # task it IS bound to. Without this the denial could be a broken caller.
-      assert {:ok, ok} = attach(ctx.conn, token, ctx.own_task, ctx.canvas)
+      assert attachment_rows(ctx.target.id) == []
+
+      # POSITIVE CONTROL: the same agent, same token, same canvas, against a
+      # task in its own org. Without this the refusal could be a broken caller.
+      assert {:ok, ok} = attach(ctx.conn, ctx.token, ctx.own_task, ctx.canvas)
       assert ok["task_id"] == ctx.own_task.id
     end
 
-    test "an agent bound to a task in another project of the SAME org is still denied",
-         %{org_a: org_a, conn: conn} do
-      agent = agent!()
-      target = task!(project!(org_a))
-      own = task!(project!(org_a), %{assignee_type: "agent", assignee_id: agent.id})
+    # Being the task's assignee does not carry across the fence: the old
+    # binding rule would have let this agent in; the one rule does not.
+    test "an assignee whose runtime is fenced to another org is refused", ctx do
+      bound = task!(project!(ctx.org_a), %{assignee_type: "agent", assignee_id: ctx.agent.id})
 
-      space = canvas_space!()
-      canvas = canvas!(space)
-      grant_canvas_read!(space, agent)
-      token = runtime_token!(agent)
+      assert {:error, %{"error" => "Task not found: " <> _}} =
+               attach(ctx.conn, ctx.token, bound, ctx.canvas)
 
-      assert {:error, %{"code" => "task_forbidden"}} = attach(conn, token, target, canvas)
-
-      # POSITIVE CONTROL, and the sharper half of the claim: same org, same
-      # canvas, same agent — only the task differs.
-      assert {:ok, _} = attach(conn, token, own, canvas)
+      assert attachment_rows(bound.id) == []
     end
 
-    # The brief's requirement, asserted as MUTUAL distinguishability rather
-    # than as three separate shapes: an agent has to be able to tell which of
-    # the three happened from the payload alone.
-    test "task_forbidden, canvas_forbidden and Task not found are three distinct answers", ctx do
-      token = runtime_token!(ctx.agent)
+    test "a runtime holding tasks.write in the org reaches every project in it",
+         %{org_a: org_a, conn: conn} do
+      agent = agent!()
+      owner = user!()
+      Platform.ExternalUserFixtures.plain_member!(owner, org_a)
+      token = runtime_token!(agent, ["task", "canvas"], owner: owner)
 
-      # (a) task denied, canvas readable
-      assert {:error, task_denied} = attach(ctx.conn, token, ctx.target, ctx.canvas)
+      space = canvas_space!(org_a)
+      canvas = canvas!(space)
+      grant_canvas_read!(space, agent)
 
-      # (b) task allowed, canvas unreadable — a canvas in a space this agent
-      # was never in.
-      unreadable = canvas!(canvas_space!())
-      assert {:error, canvas_denied} = attach(ctx.conn, token, ctx.own_task, unreadable)
+      for project <- [project!(org_a), project!(org_a)] do
+        assert {:ok, _} = attach(conn, token, task!(project), canvas)
+      end
+    end
 
-      # (c) no such task
+    # Mutual distinguishability of what an agent CAN act on, and the one pair
+    # that must NOT be distinguishable: a foreign task and a missing task.
+    test "canvas_forbidden and Task not found are distinct; foreign equals absent", ctx do
+      unreadable = canvas!(canvas_space!(ctx.org_b))
+
+      assert {:error, canvas_denied} = attach(ctx.conn, ctx.token, ctx.own_task, unreadable)
+      assert {:error, foreign} = attach(ctx.conn, ctx.token, ctx.target, ctx.canvas)
+
       assert {:error, absent} =
-               ctx.conn
-               |> call(token, "task_attach_canvas", %{
-                 "task_id" => Ecto.UUID.generate(),
+               random_task_answer(ctx.conn, ctx.token, "task_attach_canvas", ctx.target.id, %{
                  "canvas_id" => ctx.canvas.id
                })
-               |> unwrap()
-
-      assert task_denied["code"] == "task_forbidden"
-      assert task_denied["error"] =~ ctx.target.id
 
       refute Map.has_key?(canvas_denied, "code")
       assert canvas_denied["error"] =~ unreadable.id
       assert canvas_denied["error"] =~ "cannot read it"
 
-      refute Map.has_key?(absent, "code")
-      assert absent["error"] =~ "Task not found"
-
-      # No two of the three are confusable on `error` either, which is what a
-      # caller with no `code` key has to fall back on.
-      errors = Enum.map([task_denied, canvas_denied, absent], & &1["error"])
-      assert length(Enum.uniq(errors)) == 3
+      assert foreign["error"] =~ "Task not found"
+      assert foreign == absent
+      refute canvas_denied["error"] == foreign["error"]
     end
 
-    # THE ORDER IS PART OF THE CONTRACT. `CanvasAttachments.attach_canvas/4`
-    # runs the task door FIRST so the attach surface is not an existence oracle
-    # for canvases in spaces the caller is nowhere near.
+    # THE ORDER IS PART OF THE CONTRACT: the task door runs first, so the
+    # attach surface is not an existence oracle for canvases in spaces the
+    # caller is nowhere near.
     test "the task door answers before the canvas door", ctx do
-      token = runtime_token!(ctx.agent)
-      unreadable = canvas!(canvas_space!())
+      unreadable = canvas!(canvas_space!(ctx.org_b))
 
       # Both conjuncts fail. The caller must learn about the TASK.
-      assert {:error, envelope} = attach(ctx.conn, token, ctx.target, unreadable)
-      assert envelope["code"] == "task_forbidden"
+      assert {:error, envelope} = attach(ctx.conn, ctx.token, ctx.target, unreadable)
+      assert envelope["error"] =~ "Task not found"
       refute envelope["error"] =~ unreadable.id
 
       # POSITIVE CONTROL: the canvas half really is unsatisfiable, so the
       # assertion above is about ORDER and not about the canvas being fine.
       assert {:error, %{"error" => canvas_error}} =
-               attach(ctx.conn, token, ctx.own_task, unreadable)
+               attach(ctx.conn, ctx.token, ctx.own_task, unreadable)
 
       assert canvas_error =~ "cannot read it"
     end
 
-    # The scope fence, as the CURRENT contract. Not an endorsement — see the
-    # moduledoc. `architecture.review_plan` and `architecture.audit_diff` fire
-    # with a task_id and no space binding, which is exactly this shape.
-    test "a responsibility holder with a task_id but no space binding is denied", ctx do
-      token = runtime_token!(ctx.agent)
+    # The read is gated with `tasks.read`, and it is not behind the write
+    # intercept, so a fenced runtime gets the handler's own REFUSAL.
+    test "task_list_canvases refuses a fenced runtime with task_forbidden", ctx do
+      assert {:error, envelope} = list(ctx.conn, ctx.token, ctx.target.id)
+      assert envelope["code"] == "task_forbidden"
+      assert envelope["error"] =~ ctx.target.id
 
-      # Neither producer's handler sets `:dispatch_space_id`, so
-      # `AgentResponder.dispatch_space_id/1` reads nil and no participant row is
-      # ever minted. Assert that the space exists and the agent is NOT in it,
-      # rather than assuming absence.
-      {:ok, space} = ExecutionSpace.find_or_create(ctx.target.id)
-      assert is_nil(Chat.get_agent_participant(space.id, ctx.agent.id))
-
-      assert {:error, %{"code" => "task_forbidden"}} =
-               attach(ctx.conn, token, ctx.target, ctx.canvas)
-
-      # POSITIVE CONTROL, and the thing that makes this a fence rather than a
-      # bug report: the SAME agent, once given the participant row the design
-      # step gets and the architecture fires deliberately do not, attaches.
-      # Widening the grant is a one-line change; the decision is Robin's.
-      {:ok, _} = Chat.add_agent_participant(space.id, ctx.agent)
-      assert {:ok, _} = attach(ctx.conn, token, ctx.target, ctx.canvas)
+      assert {:ok, %{"canvases" => []}} = list(ctx.conn, ctx.token, ctx.own_task.id)
     end
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 3. Every grant path that can legitimately attach, still attaching
+  # 4. Side effects of a refusal, each paired with a positive control
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "grant paths reachable over federation" do
-    setup %{org_a: org_a} do
-      space = canvas_space!()
-      %{project: project!(org_a), space: space, canvas: canvas!(space)}
-    end
-
-    test ":assignee attaches", ctx do
-      agent = agent!()
-      task = task!(ctx.project, %{assignee_type: "agent", assignee_id: agent.id})
-      grant_canvas_read!(ctx.space, agent)
-
-      assert {:ok, result} = attach(ctx.conn, runtime_token!(agent), task, ctx.canvas)
-      assert result["canvas_id"] == ctx.canvas.id
-      assert [_row] = attachment_rows(task.id)
-    end
-
-    test ":phase_assignee attaches", ctx do
-      agent = agent!()
-      task = task!(ctx.project)
-
-      {:ok, task} =
-        Tasks.set_phase_assignees(task, %{
-          "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
-        })
-
-      # The task is in `backlog`, whose phase is `planning`, so the top-level
-      # assignee was re-derived away. `:assignee` cannot be what fires here.
-      assert is_nil(task.assignee_id)
-
-      grant_canvas_read!(ctx.space, agent)
-
-      assert {:ok, _} = attach(ctx.conn, runtime_token!(agent), task, ctx.canvas)
-      assert [_row] = attachment_rows(task.id)
-    end
-
-    test ":space_member attaches", ctx do
-      agent = agent!()
-      task = task!(ctx.project)
-      grant_space_member!(task, agent)
-      grant_canvas_read!(ctx.space, agent)
-
-      assert {:ok, _} = attach(ctx.conn, runtime_token!(agent), task, ctx.canvas)
-      assert [_row] = attachment_rows(task.id)
-    end
-
-    test "all three grant paths also open detach and list", ctx do
-      for {label, mint} <- [
-            {:assignee,
-             fn agent -> task!(ctx.project, %{assignee_type: "agent", assignee_id: agent.id}) end},
-            {:phase_assignee,
-             fn agent ->
-               {:ok, t} =
-                 Tasks.set_phase_assignees(task!(ctx.project), %{
-                   "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
-                 })
-
-               t
-             end},
-            {:space_member,
-             fn agent ->
-               task = task!(ctx.project)
-               grant_space_member!(task, agent)
-               task
-             end}
-          ] do
-        agent = agent!()
-        task = mint.(agent)
-        grant_canvas_read!(ctx.space, agent)
-        token = runtime_token!(agent)
-
-        assert {:ok, _} = attach(ctx.conn, token, task, ctx.canvas), "#{label} could not attach"
-
-        assert {:ok, %{"canvases" => [row]}} = list(ctx.conn, token, task.id),
-               "#{label} could not list"
-
-        assert row["canvas_id"] == ctx.canvas.id
-
-        assert {:ok, %{"detached" => true}} = detach(ctx.conn, token, task, ctx.canvas),
-               "#{label} could not detach"
-
-        assert attachment_rows(task.id) == []
-      end
-    end
-  end
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # 4. Side effects of a denial, each paired with a positive control
-  # ══════════════════════════════════════════════════════════════════════════
-
-  describe "a denied attach leaves nothing behind" do
-    setup %{org_a: org_a} do
+  describe "a refused attach leaves nothing behind" do
+    setup %{org_a: org_a, org_b: org_b} do
       project = project!(org_a)
       space = canvas_space!()
       canvas = canvas!(space)
@@ -740,139 +606,118 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       stranger = agent!()
       grant_canvas_read!(space, stranger)
 
-      %{project: project, space: space, canvas: canvas, stranger: stranger}
+      %{
+        project: project,
+        space: space,
+        canvas: canvas,
+        stranger: stranger,
+        fenced: fenced_token!(stranger, org_b),
+        writer: runtime_token!(stranger)
+      }
     end
 
     test "no attachment row is written, and the same probe sees one when granted", ctx do
       denied_task = task!(ctx.project)
-      token = runtime_token!(ctx.stranger)
 
-      assert {:error, %{"code" => "task_forbidden"}} =
-               attach(ctx.conn, token, denied_task, ctx.canvas)
+      assert {:error, %{"error" => "Task not found" <> _}} =
+               attach(ctx.conn, ctx.fenced, denied_task, ctx.canvas)
 
       assert attachment_rows(denied_task.id) == []
 
       # POSITIVE CONTROL for the counting probe itself.
-      granted_task = task!(ctx.project)
-      grant_space_member!(granted_task, ctx.stranger)
-
-      assert {:ok, _} = attach(ctx.conn, token, granted_task, ctx.canvas)
-      assert [_row] = attachment_rows(granted_task.id)
+      assert {:ok, _} = attach(ctx.conn, ctx.writer, denied_task, ctx.canvas)
+      assert [_row] = attachment_rows(denied_task.id)
     end
 
-    test "exactly one denial event fires, and a granted attach fires none", ctx do
-      denied_task = task!(ctx.project)
-      token = runtime_token!(ctx.stranger)
+    # Over /mcp the write intercept answers a fenced attach with the
+    # not-found path, which emits nothing (the audit stream must not be an
+    # existence oracle). The read is not intercepted, so its refusal is the
+    # gate's own and emits exactly one event: the positive control that the
+    # probe is attached and firing.
+    test "a fenced attach emits no denial event; a fenced list emits exactly one", ctx do
+      task = task!(ctx.project)
 
-      {result, denials} =
-        count_denials(fn -> attach(ctx.conn, token, denied_task, ctx.canvas) end)
+      {result, none} = count_denials(fn -> attach(ctx.conn, ctx.fenced, task, ctx.canvas) end)
+      assert {:error, %{"error" => "Task not found" <> _}} = result
+      assert none == []
 
+      {result, denials} = count_denials(fn -> list(ctx.conn, ctx.fenced, task.id) end)
       assert {:error, %{"code" => "task_forbidden"}} = result
 
-      assert length(denials) == 1,
-             "expected exactly one #{inspect(@denial_event)}, got #{length(denials)}"
-
-      [meta] = denials
+      assert [meta] = denials
       assert meta.resource_type == "task"
-      assert meta.resource_id == denied_task.id
+      assert meta.resource_id == task.id
       assert meta.actor_type == "agent"
       assert meta.actor_id == ctx.stranger.id
-      assert meta.tool == "task_attach_canvas"
+      assert meta.tool == "task_list_canvases"
       assert meta.project_id == ctx.project.id
 
-      # POSITIVE CONTROL, both halves: the handler is proven to be attached and
-      # firing (it caught one above), and proven SELECTIVE (a granted call
-      # through the same code path emits nothing). Without the second half
-      # "exactly one" would also hold for a gate that denied everything.
-      granted_task = task!(ctx.project)
-      grant_space_member!(granted_task, ctx.stranger)
-
-      {ok_result, none} =
-        count_denials(fn -> attach(ctx.conn, token, granted_task, ctx.canvas) end)
-
+      # And a granted call through the same code path emits nothing.
+      {ok_result, quiet} = count_denials(fn -> attach(ctx.conn, ctx.writer, task, ctx.canvas) end)
       assert {:ok, _} = ok_result
-      assert none == []
+      assert quiet == []
     end
 
     test "the design settler does not run, and runs for a granted attach", ctx do
       denied_task = ctx.project |> task!() |> open_design_step!()
-      token = runtime_token!(ctx.stranger)
 
       {result, settles} =
-        record_settles(fn -> attach(ctx.conn, token, denied_task, ctx.canvas) end)
+        record_settles(fn -> attach(ctx.conn, ctx.fenced, denied_task, ctx.canvas) end)
 
-      assert {:error, %{"code" => "task_forbidden"}} = result
+      assert {:error, %{"error" => "Task not found" <> _}} = result
       assert settles == []
 
-      # POSITIVE CONTROL: the stub is wired to the REAL seam and does fire —
-      # so the empty list above is an absence rather than a broken injection.
+      # POSITIVE CONTROL: the stub is wired to the REAL seam and does fire.
       granted_task = ctx.project |> task!() |> open_design_step!()
-      grant_space_member!(granted_task, ctx.stranger)
 
       {ok_result, fired} =
-        record_settles(fn -> attach(ctx.conn, token, granted_task, ctx.canvas) end)
+        record_settles(fn -> attach(ctx.conn, ctx.writer, granted_task, ctx.canvas) end)
 
       assert {:ok, _} = ok_result
       assert [{task_id, %CanvasAttachment{}}] = fired
       assert task_id == granted_task.id
     end
 
-    test "a denied detach leaves the attachment row in place", ctx do
+    test "a refused detach leaves the attachment row in place", ctx do
       task = task!(ctx.project)
-      owner = agent!()
-      grant_space_member!(task, owner)
-      grant_canvas_read!(ctx.space, owner)
 
-      assert {:ok, _} = attach(ctx.conn, runtime_token!(owner), task, ctx.canvas)
+      assert {:ok, _} = attach(ctx.conn, ctx.writer, task, ctx.canvas)
       assert [_row] = attachment_rows(task.id)
 
-      # DETECTOR: pre-stage-3, any runtime knowing two ids could delete this.
-      assert {:error, %{"code" => "task_forbidden"}} =
-               detach(ctx.conn, runtime_token!(ctx.stranger), task, ctx.canvas)
+      assert {:error, %{"error" => "Task not found" <> _}} =
+               detach(ctx.conn, ctx.fenced, task, ctx.canvas)
 
       assert [_still_there] = attachment_rows(task.id)
 
       # POSITIVE CONTROL for the deletion probe: the row IS deletable, by the
-      # actor who may.
-      assert {:ok, %{"detached" => true}} =
-               detach(ctx.conn, runtime_token!(owner), task, ctx.canvas)
-
+      # caller who may.
+      assert {:ok, %{"detached" => true}} = detach(ctx.conn, ctx.writer, task, ctx.canvas)
       assert attachment_rows(task.id) == []
     end
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 5. The design step: denied, still open, still closable
+  # 5. The design step: refused, still open; granted, closed
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "a denied designer can still close her own step" do
-    # This is the failure mode stage 3's suggestion string exists for. ADR-0046
-    # fires the design step ONCE, holds 30 minutes and never redelivers, so a
-    # designer who cannot attach and cannot decline burns the hold and the task
-    # records `failed`.
-    test "a denied attach leaves the step open, and task_design_decline closes it",
-         %{org_a: org_a, conn: conn} do
-      project = project!(org_a)
-      task = project |> task!() |> open_design_step!()
+  describe "the pre-plan design step under the tasks.write gate" do
+    # Over /mcp `task_attach_canvas` and `task_design_decline` sit behind the
+    # SAME `tasks.write` write intercept, so a designer is either able to do
+    # both or neither: there is no wire caller left who can decline but not
+    # attach. The refused designer's step stays open for its deadline.
+    test "a designer fenced out of the task's org is refused attach and decline alike",
+         %{org_a: org_a, org_b: org_b, conn: conn} do
+      task = org_a |> project!() |> task!() |> open_design_step!()
 
       space = canvas_space!()
       canvas = canvas!(space)
       designer = agent!()
       grant_canvas_read!(space, designer)
-      token = runtime_token!(designer)
+      token = fenced_token!(designer, org_b)
 
-      assert {:error, envelope} = attach(conn, token, task, canvas)
-      assert envelope["code"] == "task_forbidden"
+      assert {:error, %{"error" => "Task not found" <> _}} = attach(conn, token, task, canvas)
 
-      # STILL OPEN, both halves of "open": the cursor is unmoved and nothing
-      # was recorded under `"design"`.
-      assert reload(task).planning_step == "designing"
-      assert design_entry(task) == nil
-
-      # And the exit the denial names is reachable BY THE SAME TOKEN. The
-      # suggestion is only worth its bytes if this holds — `task_design_decline`
-      # is deliberately not gated on `TaskAccess`.
-      assert {:ok, declined} =
+      assert {:error, _} =
                conn
                |> call(token, "task_design_decline", %{
                  "task_id" => task.id,
@@ -880,27 +725,32 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
                })
                |> unwrap()
 
-      assert declined["outcome"] == "not_applicable"
+      # STILL OPEN, both halves: the cursor is unmoved and nothing recorded.
+      assert reload(task).planning_step == "designing"
+      assert design_entry(task) == nil
 
-      entry = design_entry(task)
-      assert entry["outcome"] == "not_applicable"
-      assert entry["reason"] == "designer_declined"
+      # POSITIVE CONTROL: an in-org designer's decline DOES close a step, so
+      # the nil above is an open step rather than a probe reading the wrong key.
+      other = org_a |> project!() |> task!() |> open_design_step!()
 
-      # POSITIVE CONTROL for the "still open" assertion: the probe can see a
-      # CLOSED step. Without it, `design_entry(task) == nil` would also pass
-      # against a task whose step never opened, or a probe reading the wrong key.
-      assert design_entry(project |> task!() |> open_design_step!()) == nil
+      assert {:ok, %{"outcome" => "not_applicable"}} =
+               conn
+               |> call(runtime_token!(designer), "task_design_decline", %{
+                 "task_id" => other.id,
+                 "reason" => @decline_reason
+               })
+               |> unwrap()
+
+      assert design_entry(other)["reason"] == "designer_declined"
     end
 
-    test "a granted attach closes the step, which is what the denial withheld",
+    test "a granted attach closes the step, with no space binding needed",
          %{org_a: org_a, conn: conn} do
-      project = project!(org_a)
-      task = project |> task!() |> open_design_step!()
+      task = org_a |> project!() |> task!() |> open_design_step!()
 
       space = canvas_space!()
       canvas = canvas!(space)
       designer = agent!()
-      grant_space_member!(task, designer)
       grant_canvas_read!(space, designer)
 
       assert {:ok, _} = attach(conn, runtime_token!(designer), task, canvas)
@@ -912,31 +762,25 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 6. The pre-plan designer's binding, asserted by its EFFECT
+  # 6. The pre-plan designer's participant row no longer decides the attach
   # ══════════════════════════════════════════════════════════════════════════
 
   describe "the pre-plan designer's participant row" do
-    test "the row the dispatch invite mints turns the denial above into an attach",
-         %{org_a: org_a, conn: conn} do
-      project = project!(org_a)
-      task = project |> task!() |> open_design_step!()
+    # Before task 01a1559a the row `DispatchMembership.ensure_writable/3`
+    # mints turned a denial into an attach (the `:space_member` grant). Now
+    # the gate is `tasks.write` in the task's org, so the row changes nothing
+    # in either direction. Both directions are asserted.
+    test "the dispatch invite's row neither grants nor is needed",
+         %{org_a: org_a, org_b: org_b, conn: conn} do
+      task = org_a |> project!() |> task!() |> open_design_step!()
       space = canvas_space!()
       canvas = canvas!(space)
       designer = agent!()
       grant_canvas_read!(space, designer)
-      token = runtime_token!(designer)
+      fenced = fenced_token!(designer, org_b)
 
       {:ok, exec_space} = ExecutionSpace.find_or_create(task.id)
 
-      # BEFORE: no row, and the attach is denied. This is the positive control
-      # for the assertion that follows — it proves the row is what changes the
-      # answer, rather than something else in the setup.
-      assert is_nil(Chat.get_agent_participant(exec_space.id, designer.id))
-      assert {:error, %{"code" => "task_forbidden"}} = attach(conn, token, task, canvas)
-
-      # The binding, minted the way `DispatchMembership.ensure_writable/3`
-      # mints it on the dispatch path once `DesignTaskDirection.gather_context/2`
-      # has opted in with `:dispatch_space_id`.
       assert {:ok, :invited} =
                Platform.Chat.DispatchMembership.ensure_writable(
                  exec_space.id,
@@ -944,31 +788,27 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
                  source: :agent_responder
                )
 
-      # AFTER: same token, same task, same canvas.
-      assert {:ok, _} = attach(conn, token, task, canvas)
-
       row = Chat.get_agent_participant(exec_space.id, designer.id)
       assert %Participant{} = row
-      assert row.participant_id == designer.id
-
-      # PINNING CURRENT DATA, NOT BEHAVIOUR. The stage-5 brief predicted
-      # `"mention"`; `DispatchMembership.attention_mode/1` returns `"all"` for
-      # an execution space, and post-ADR-0027 `resolve_attention_mode/2`
-      # discards the participant anyway, so this value routes nothing. Asserted
-      # only so a change to it is deliberate.
       assert row.attention_mode == "all"
+
+      # The row does not let a fenced runtime in…
+      assert {:error, %{"error" => "Task not found" <> _}} = attach(conn, fenced, task, canvas)
+      assert attachment_rows(task.id) == []
+
+      # …and an in-org runtime needs no row (section 1 shows a task with none).
+      assert {:ok, _} = attach(conn, runtime_token!(designer), task, canvas)
     end
   end
 
   # ══════════════════════════════════════════════════════════════════════════
-  # 7. The two non-MCP paths, unaffected
+  # 7. The two non-MCP paths
   # ══════════════════════════════════════════════════════════════════════════
 
-  describe "the :system responsibility path" do
-    # `DesignTaskDirection` authorizes as `:system` because it creates the
-    # canvas itself and the agent it attributes the work to is frequently not a
-    # participant of the execution space. Stage 3 put a task gate in front of
-    # the same function; `:system` must still pass it.
+  describe "the Scope.system/0 responsibility path" do
+    # `DesignTaskDirection` attaches with `Scope.system/0` because it creates
+    # the canvas itself and the agent it attributes the work to is frequently
+    # not a participant of the execution space.
     test "handle_output/3 still delivers a direction canvas end to end",
          %{org_a: org_a} do
       project = project!(org_a)
@@ -990,25 +830,28 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       canvas = Repo.get!(Platform.Chat.Canvas, attachment.canvas_id)
       assert canvas.space_id == space.id
 
-      # POSITIVE CONTROL that the gate is genuinely being crossed rather than
-      # skipped: the attributed agent is NOT a participant of that space, so an
-      # implementation that authorized as `{:agent, attributed.id}` instead of
-      # `:system` would have been denied here.
+      # The attributed agent is NOT a participant of that space, so an
+      # implementation that authorized the canvas read as that agent instead
+      # of `Scope.system/0` would have been refused here.
       assert is_nil(Chat.get_agent_participant(space.id, attributed.id))
     end
 
-    test ":system attaches to a task nobody is bound to", %{org_a: org_a} do
+    test "Scope.system/0 attaches to a task nobody is bound to", %{org_a: org_a} do
       task = task!(project!(org_a))
       space = canvas_space!()
       canvas = canvas!(space)
 
       assert {:ok, _} =
-               Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+               Platform.Tasks.CanvasAttachments.attach_canvas(
+                 Platform.Access.Scope.system(),
+                 task.id,
+                 canvas.id,
                  attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
                )
 
-      # POSITIVE CONTROL: the same call with no principal is refused, so the
-      # success above is `:system` doing work rather than the gate being absent.
+      # POSITIVE CONTROL: the same call with no scope is refused, so the
+      # success above is the system scope doing work rather than the gate
+      # being absent.
       other = task!(project!(org_a))
 
       assert {:error, :task_forbidden} =
@@ -1019,12 +862,11 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   end
 
   describe "the human LiveView detach path" do
-    # `tasks_live.ex:1380` builds `{:user, socket.assigns[:current_user_id]}`.
-    # Driven through the real LiveView rather than by calling
-    # `detach_canvas/3` with a hand-made actor, because the assign wiring is
-    # the half that a context-map test cannot see — a missing assign yields
-    # `{:user, nil}`, which `TaskAccess.normalize_actor/1` reads as NO
-    # PRINCIPAL and denies, silently, for every human.
+    # `TaskDetailComponent` passes the viewer's `@access_scope`. Driven through
+    # the real LiveView rather than by calling `detach_canvas/3` with a
+    # hand-made scope, because the assign wiring is the half a context-map
+    # test cannot see: a missing assign is a nil scope, which the gate
+    # refuses, silently, for every human.
     test "a project-org member can still detach a chip from the board",
          %{org_a: org_a, conn: conn} do
       project = project!(org_a)
@@ -1033,7 +875,10 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       canvas = canvas!(space)
 
       {:ok, _} =
-        Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        Platform.Tasks.CanvasAttachments.attach_canvas(
+          Platform.Access.Scope.system(),
+          task.id,
+          canvas.id,
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )
 
@@ -1052,9 +897,8 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       assert attachment_rows(task.id) == []
     end
 
-    # The absence half, and the reason the assign matters. A logged-in human
-    # with no standing on the task's project is now refused — the handler
-    # ignores the result, so the chip simply comes back.
+    # The absence half. A logged-in human outside the task's org is refused —
+    # the handler ignores the result, so the chip simply comes back.
     test "a logged-in human with no standing on the task does not detach it",
          %{org_a: org_a, org_b: org_b, conn: conn} do
       project = project!(org_a)
@@ -1063,7 +907,10 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       canvas = canvas!(space)
 
       {:ok, _} =
-        Platform.Tasks.CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        Platform.Tasks.CanvasAttachments.attach_canvas(
+          Platform.Access.Scope.system(),
+          task.id,
+          canvas.id,
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )
 
@@ -1078,8 +925,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       render_hook(detail(view), "detail_detach_canvas", %{"canvas-id" => canvas.id})
 
       # POSITIVE CONTROL is the test above: the identical hook, driven the
-      # identical way, DOES delete the row for a member. So this is a refusal
-      # rather than a hook that never fired.
+      # identical way, DOES delete the row for a member.
       assert [_still_there] = attachment_rows(task.id)
     end
   end
@@ -1089,16 +935,16 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   # ══════════════════════════════════════════════════════════════════════════
 
   describe "GUARD — the closed refusal taxonomy" do
-    setup %{org_a: org_a} do
+    setup %{org_a: org_a, org_b: org_b} do
       project = project!(org_a)
       space = canvas_space!()
       canvas = canvas!(space)
 
-      # An agent that holds the task grant and the canvas grant, so every
+      # An agent whose runtime holds `tasks.write` and the canvas read, so every
       # refusal below is reached deliberately rather than by tripping the first
-      # door every time.
+      # door every time. `fenced` is the same agent fenced to org_b.
       agent = agent!()
-      task = task!(project, %{assignee_type: "agent", assignee_id: agent.id})
+      task = task!(project)
       grant_canvas_read!(space, agent)
 
       %{
@@ -1107,21 +953,16 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         canvas: canvas,
         agent: agent,
         task: task,
-        token: runtime_token!(agent)
+        token: runtime_token!(agent),
+        fenced: fenced_token!(agent, org_b)
       }
     end
 
-    # The `@design_decline_error_codes` pattern, applied to the three tools:
-    # the DECLARED set compared against the set actually driven out of the
-    # clause, rather than either one restated in the test.
     test "task_attach_canvas emits exactly its declared set", ctx do
       declared = ToolSurface.canvas_attachment_error_codes()["task_attach_canvas"]
-
-      stranger_task = task!(ctx.project)
       unreadable = canvas!(canvas_space!())
 
       cases = [
-        {:task_forbidden, %{"task_id" => stranger_task.id, "canvas_id" => ctx.canvas.id}},
         {:task_not_found, %{"task_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}},
         {:task_not_found, %{"task_id" => "not-a-uuid", "canvas_id" => ctx.canvas.id}},
         {:canvas_forbidden, %{"task_id" => ctx.task.id, "canvas_id" => unreadable.id}},
@@ -1129,8 +970,22 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
         {:canvas_not_found, %{"task_id" => ctx.task.id, "canvas_id" => "not-a-uuid"}}
       ]
 
-      observed = drive(ctx.conn, ctx.token, "task_attach_canvas", cases)
+      wire = drive(ctx.conn, ctx.token, "task_attach_canvas", cases)
 
+      # The foreign task, over the wire, is the not-found path.
+      fenced =
+        drive(ctx.conn, ctx.fenced, "task_attach_canvas", [
+          {:task_not_found, %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id}}
+        ])
+
+      forbidden =
+        in_process_forbidden(
+          "task_attach_canvas",
+          %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+          ctx.agent
+        )
+
+      observed = wire |> MapSet.union(fenced) |> MapSet.put(forbidden)
       assert observed == MapSet.new(declared), taxonomy_message(observed, declared)
 
       # PAIRED CONTROL for the whole sweep: a clause that refused EVERYTHING
@@ -1140,17 +995,23 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
     test "task_detach_canvas emits exactly its declared set", ctx do
       declared = ToolSurface.canvas_attachment_error_codes()["task_detach_canvas"]
-      stranger_task = task!(ctx.project)
 
       cases = [
-        {:task_forbidden, %{"task_id" => stranger_task.id, "canvas_id" => ctx.canvas.id}},
         {:task_not_found, %{"task_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}},
         # Task reachable, no such attachment pair.
         {:not_found, %{"task_id" => ctx.task.id, "canvas_id" => Ecto.UUID.generate()}}
       ]
 
-      observed = drive(ctx.conn, ctx.token, "task_detach_canvas", cases)
+      wire = drive(ctx.conn, ctx.token, "task_detach_canvas", cases)
 
+      forbidden =
+        in_process_forbidden(
+          "task_detach_canvas",
+          %{"task_id" => ctx.task.id, "canvas_id" => ctx.canvas.id},
+          ctx.agent
+        )
+
+      observed = MapSet.put(wire, forbidden)
       assert observed == MapSet.new(declared), taxonomy_message(observed, declared)
 
       # PAIRED CONTROL.
@@ -1160,23 +1021,102 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
     test "task_list_canvases emits exactly its declared set", ctx do
       declared = ToolSurface.canvas_attachment_error_codes()["task_list_canvases"]
-      stranger_task = task!(ctx.project)
 
-      cases = [
-        {:task_forbidden, %{"task_id" => stranger_task.id}},
-        {:task_not_found, %{"task_id" => Ecto.UUID.generate()}},
-        {:task_not_found, %{"task_id" => "not-a-uuid"}}
-      ]
+      wire =
+        drive(ctx.conn, ctx.token, "task_list_canvases", [
+          {:task_not_found, %{"task_id" => Ecto.UUID.generate()}},
+          {:task_not_found, %{"task_id" => "not-a-uuid"}}
+        ])
 
-      observed = drive(ctx.conn, ctx.token, "task_list_canvases", cases)
+      fenced =
+        drive(ctx.conn, ctx.fenced, "task_list_canvases", [
+          {:task_forbidden, %{"task_id" => ctx.task.id}}
+        ])
 
+      observed = MapSet.union(wire, fenced)
       assert observed == MapSet.new(declared), taxonomy_message(observed, declared)
 
       # PAIRED CONTROL, and the decision stage 4 recorded: a REFUSAL, never an
-      # empty list. If the clause returned `[]` for a denial the sweep above
-      # would go red on `:task_forbidden`, and this proves `[]` is still the
-      # honest answer for a task with nothing attached.
+      # empty list. `[]` is still the honest answer for a task with nothing
+      # attached.
       assert {:ok, %{"canvases" => []}} = list(ctx.conn, ctx.token, ctx.task.id)
+    end
+
+    # Task 01a1559a stage 2: the stack pair. The fenced caller reaches the
+    # not-found arm through the `@task_write_targets` swap, as on the task
+    # tools, so `:task_forbidden` is driven in-process.
+    test "stack_attach_canvas emits exactly its declared set", ctx do
+      declared = ToolSurface.canvas_attachment_error_codes()["stack_attach_canvas"]
+      stack = stack_with!(ctx.project, ctx.task)
+      unreadable = canvas!(canvas_space!())
+
+      cases = [
+        {:stack_not_found, %{"stack_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}},
+        {:stack_not_found, %{"stack_id" => "not-a-uuid", "canvas_id" => ctx.canvas.id}},
+        {:canvas_forbidden, %{"stack_id" => stack.id, "canvas_id" => unreadable.id}},
+        {:canvas_not_found, %{"stack_id" => stack.id, "canvas_id" => Ecto.UUID.generate()}},
+        {:canvas_not_found, %{"stack_id" => stack.id, "canvas_id" => "not-a-uuid"}}
+      ]
+
+      wire = drive(ctx.conn, ctx.token, "stack_attach_canvas", cases)
+
+      fenced =
+        drive(ctx.conn, ctx.fenced, "stack_attach_canvas", [
+          {:stack_not_found, %{"stack_id" => stack.id, "canvas_id" => ctx.canvas.id}}
+        ])
+
+      forbidden =
+        in_process_forbidden(
+          "stack_attach_canvas",
+          %{"stack_id" => stack.id, "canvas_id" => ctx.canvas.id},
+          ctx.agent
+        )
+
+      observed = wire |> MapSet.union(fenced) |> MapSet.put(forbidden)
+      assert observed == MapSet.new(declared), taxonomy_message(observed, declared)
+
+      # PAIRED CONTROL.
+      assert {:ok, %{"attached_count" => 1}} =
+               ctx.conn
+               |> call(ctx.token, "stack_attach_canvas", %{
+                 "stack_id" => stack.id,
+                 "canvas_id" => ctx.canvas.id
+               })
+               |> unwrap()
+    end
+
+    test "stack_detach_canvas emits exactly its declared set", ctx do
+      declared = ToolSurface.canvas_attachment_error_codes()["stack_detach_canvas"]
+      stack = stack_with!(ctx.project, ctx.task)
+
+      wire =
+        drive(ctx.conn, ctx.token, "stack_detach_canvas", [
+          {:stack_not_found, %{"stack_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}}
+        ])
+
+      fenced =
+        drive(ctx.conn, ctx.fenced, "stack_detach_canvas", [
+          {:stack_not_found, %{"stack_id" => stack.id, "canvas_id" => ctx.canvas.id}}
+        ])
+
+      forbidden =
+        in_process_forbidden(
+          "stack_detach_canvas",
+          %{"stack_id" => stack.id, "canvas_id" => ctx.canvas.id},
+          ctx.agent
+        )
+
+      observed = wire |> MapSet.union(fenced) |> MapSet.put(forbidden)
+      assert observed == MapSet.new(declared), taxonomy_message(observed, declared)
+
+      # PAIRED CONTROL.
+      assert {:ok, %{"detached_count" => 0, "skipped_count" => 1}} =
+               ctx.conn
+               |> call(ctx.token, "stack_detach_canvas", %{
+                 "stack_id" => stack.id,
+                 "canvas_id" => ctx.canvas.id
+               })
+               |> unwrap()
     end
 
     test "every declared code is named in the tool's limitations prose" do
@@ -1197,31 +1137,30 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       end
     end
 
-    # THE ASYMMETRY, PINNED. Only `:task_forbidden` reaches the caller as a
-    # machine-readable `code`; the rest are prose in `error`. Stage 5 did not
-    # widen this (see `@canvas_attachment_coded_errors`), so the point of this
-    # test is that the next person changes it deliberately.
-    test "exactly one declared code arrives as a machine-readable `code` key", ctx do
+    # THE ASYMMETRY, PINNED. Only `:task_forbidden` and, since task 01a1559a
+    # stage 2, the stack tools' `:stack_not_found` reach the caller as a
+    # machine-readable `code`; the rest are prose in `error`.
+    test "exactly the declared codes arrive as a machine-readable `code` key", ctx do
       coded = MapSet.new(ToolSurface.canvas_attachment_coded_errors())
-      stranger_task = task!(ctx.project)
       unreadable = canvas!(canvas_space!())
 
       probes = [
-        {:task_forbidden, "task_attach_canvas",
-         %{"task_id" => stranger_task.id, "canvas_id" => ctx.canvas.id}},
-        {:task_not_found, "task_attach_canvas",
+        {:task_forbidden, ctx.fenced, "task_list_canvases", %{"task_id" => ctx.task.id}},
+        {:stack_not_found, ctx.token, "stack_attach_canvas",
+         %{"stack_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}},
+        {:task_not_found, ctx.token, "task_attach_canvas",
          %{"task_id" => Ecto.UUID.generate(), "canvas_id" => ctx.canvas.id}},
-        {:canvas_forbidden, "task_attach_canvas",
+        {:canvas_forbidden, ctx.token, "task_attach_canvas",
          %{"task_id" => ctx.task.id, "canvas_id" => unreadable.id}},
-        {:canvas_not_found, "task_attach_canvas",
+        {:canvas_not_found, ctx.token, "task_attach_canvas",
          %{"task_id" => ctx.task.id, "canvas_id" => Ecto.UUID.generate()}},
-        {:not_found, "task_detach_canvas",
+        {:not_found, ctx.token, "task_detach_canvas",
          %{"task_id" => ctx.task.id, "canvas_id" => Ecto.UUID.generate()}}
       ]
 
       observed_coded =
-        for {label, tool, args} <- probes,
-            {:error, envelope} = ctx.conn |> call(ctx.token, tool, args) |> unwrap(),
+        for {label, token, tool, args} <- probes,
+            {:error, envelope} = ctx.conn |> call(token, tool, args) |> unwrap(),
             Map.has_key?(envelope, "code"),
             into: MapSet.new() do
           assert envelope["code"] == to_string(label),
@@ -1244,31 +1183,13 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   # ══════════════════════════════════════════════════════════════════════════
 
   describe "the hosted transport carries the id keys" do
-    # THE FINDING THIS FILE EXISTS FOR, and the one no `execute/3` test can
-    # see. `MCPController.error_envelope/1` was a FIXED FOUR-KEY ALLOWLIST —
-    # `error`, `code`, `recoverable`, `suggestion` — that rejected everything
-    # else, so `task_id` (task 019fb581 stage 3, all three denial envelopes)
-    # and `canvas_id` (task 019e2c4b, the canvas denial) reached no HTTP
-    # caller. `tool_surface_test.exs` asserted `error.task_id == ctx.task.id`
-    # and passed, because it reads the map BEFORE the transport touches it.
-    #
-    # The stage that found it declined to widen the allowlist, correctly: that
-    # is a wire change across every tool in the surface and did not belong in
-    # an adversarial test stage. It pinned the drop as the contract and raised
-    # it. Task 01a01b75 did the widening, after `stack_complete`'s `pending`
-    # list — which names the member blocking a close — went the same way and
-    # left a stack frozen with no way to learn what was holding it.
-    #
-    # Why widening does not move the boundary: `RuntimeChannel` pushes the
-    # handler map INTACT to the same class of caller
-    # (`runtime_channel.ex:594`, `error: error`). Every key this test now sees
-    # was already reaching agents on the WebSocket transport. The asymmetry
-    # was the defect; the drop was never the control. What still protects the
-    # id is authorization, and section 8 above is where that is pinned.
-    #
-    # This test keeps its shape: the exact key set, asserted both ways.
+    # `MCPController.error_envelope/1` was once a fixed four-key allowlist that
+    # dropped `task_id` and `canvas_id`; task 01a01b75 widened it. This test
+    # keeps its shape: the exact key set, asserted both ways, on the two
+    # refusals that still reach a hosted caller with an id key — the read's
+    # `task_forbidden` and the attach's `canvas_forbidden`.
     test "task_id and canvas_id are set by the handler and survive /mcp",
-         %{org_a: org_a, conn: conn} do
+         %{org_a: org_a, org_b: org_b, conn: conn} do
       project = project!(org_a)
       target = task!(project)
       space = canvas_space!()
@@ -1276,11 +1197,11 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
       agent = agent!()
       grant_canvas_read!(space, agent)
-      token = runtime_token!(agent)
+      {runtime, token} = runtime_with_token!(agent, ["task", "canvas"], [])
+      fenced = fenced_token!(agent, org_b)
 
-      # POSITIVE CONTROL, and the whole point of the pairing: the handler DOES
-      # set both keys. Read directly off `execute/3`, exactly as the stage-3
-      # unit tests read it.
+      # POSITIVE CONTROL: the handler DOES set both keys. Read directly off
+      # `execute/3`, exactly as the unit tests read it.
       assert {:error, handler_task} =
                ToolSurface.execute(
                  "task_attach_canvas",
@@ -1290,30 +1211,25 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
       assert handler_task.task_id == target.id
 
-      own = task!(project, %{assignee_type: "agent", assignee_id: agent.id})
       unreadable = canvas!(canvas_space!())
 
       assert {:error, handler_canvas} =
                ToolSurface.execute(
                  "task_attach_canvas",
-                 %{"task_id" => own.id, "canvas_id" => unreadable.id},
-                 %{agent_id: agent.id}
+                 %{"task_id" => target.id, "canvas_id" => unreadable.id},
+                 %{runtime_id: runtime.runtime_id, agent_id: agent.id}
                )
 
       assert handler_canvas.canvas_id == unreadable.id
 
-      # …and neither survives the projection.
-      # …and both now survive the projection, carrying the id the CALLER
+      # …and both survive the projection, carrying the id the CALLER
       # supplied — not one it could not already name.
-      assert {:error, wire_task} = attach(conn, token, target, canvas)
+      assert {:error, wire_task} = list(conn, fenced, target.id)
       assert wire_task["task_id"] == target.id
 
-      assert {:error, wire_canvas} = attach(conn, token, own, unreadable)
+      assert {:error, wire_canvas} = attach(conn, token, target, unreadable)
       assert wire_canvas["canvas_id"] == unreadable.id
 
-      # The exact key set, still the real detector. A handler that starts
-      # attaching a key to THIS refusal now reaches the wire, so it has to
-      # be declared here first. Widening the transport did not widen this.
       assert Map.keys(wire_task) |> Enum.sort() ==
                ["code", "error", "recoverable", "suggestion", "task_id"]
 
@@ -1321,12 +1237,10 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
                ["canvas_id", "error", "recoverable", "suggestion"]
     end
 
-    # The consequence, stated as the thing that keeps the denial usable: the
-    # ids are recoverable from the `error` sentence. If someone shortens those
-    # strings, the id becomes unavailable to an HTTP caller by ANY route, and
-    # this goes red.
+    # The ids are recoverable from the `error` sentence. If someone shortens
+    # those strings, the id becomes unavailable by ANY route, and this goes red.
     test "the ids are recoverable from the error sentence on all three tools",
-         %{org_a: org_a, conn: conn} do
+         %{org_a: org_a, org_b: org_b, conn: conn} do
       project = project!(org_a)
       target = task!(project)
       space = canvas_space!()
@@ -1334,7 +1248,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
 
       agent = agent!()
       grant_canvas_read!(space, agent)
-      token = runtime_token!(agent)
+      token = fenced_token!(agent, org_b)
 
       assert {:error, %{"error" => a}} = attach(conn, token, target, canvas)
       assert {:error, %{"error" => d}} = detach(conn, token, target, canvas)

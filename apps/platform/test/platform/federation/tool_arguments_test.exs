@@ -206,7 +206,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # access_apply proposal_id and access_undo change_id/space_id. All seven
   # are HONEST: AgentTools refuses absence under the declared key; none has
   # an alias, a context fallback or an absence default.
-  @surveyed_required_count 187
+  # 191 adds `stack_attach_canvas` and `stack_detach_canvas`'s `stack_id` and
+  # `canvas_id` (task 01a1559a stage 2). All four are HONEST: each handler
+  # reads both under the declared key only and passes them straight to
+  # `CanvasAttachments`; no alias, no context fallback, no absence default.
+  @surveyed_required_count 191
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

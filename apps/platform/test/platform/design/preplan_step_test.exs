@@ -645,7 +645,7 @@ defmodule Platform.Design.PreplanStepTest do
       {canvas, participant} = canvas!()
 
       {:ok, attachment} =
-        CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, canvas.id,
           note: "direction",
           attached_by: %{kind: "user", id: participant.id}
         )
@@ -671,7 +671,10 @@ defmodule Platform.Design.PreplanStepTest do
 
       quietly(fn ->
         assert {:ok, %Platform.Tasks.CanvasAttachment{}} =
-                 CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+                 CanvasAttachments.attach_canvas(
+                   Platform.Access.Scope.system(),
+                   task.id,
+                   canvas.id,
                    attached_by: %{kind: "user", id: participant.id}
                  )
       end)
@@ -692,7 +695,10 @@ defmodule Platform.Design.PreplanStepTest do
       log =
         capture_log(fn ->
           assert {:ok, %Platform.Tasks.CanvasAttachment{canvas_id: attached}} =
-                   CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+                   CanvasAttachments.attach_canvas(
+                     Platform.Access.Scope.system(),
+                     task.id,
+                     canvas.id,
                      note: "still returns",
                      attached_by: %{kind: "user", id: participant.id}
                    )
@@ -713,7 +719,10 @@ defmodule Platform.Design.PreplanStepTest do
 
       quietly(fn ->
         assert {:ok, _} =
-                 CanvasAttachments.attach_canvas(:system, task.id, canvas.id,
+                 CanvasAttachments.attach_canvas(
+                   Platform.Access.Scope.system(),
+                   task.id,
+                   canvas.id,
                    attached_by: %{kind: "user", id: participant.id}
                  )
       end)

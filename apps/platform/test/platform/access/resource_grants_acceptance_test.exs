@@ -292,7 +292,7 @@ defmodule Platform.Access.ResourceGrantsAcceptanceTest do
       k = canvas!(c, "rga attached canvas")
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, t.id, k.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), t.id, k.id,
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )
 
@@ -366,7 +366,7 @@ defmodule Platform.Access.ResourceGrantsAcceptanceTest do
       k2 = canvas!(c, "rga K2")
 
       {:ok, _} =
-        CanvasAttachments.attach_canvas(:system, t.id, k1.id,
+        CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), t.id, k1.id,
           attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
         )
 
@@ -476,7 +476,7 @@ defmodule Platform.Access.ResourceGrantsAcceptanceTest do
             })
 
           {:ok, _} =
-            CanvasAttachments.attach_canvas(:system, task.id, c.id,
+            CanvasAttachments.attach_canvas(Platform.Access.Scope.system(), task.id, c.id,
               attached_by: %{kind: "agent", id: Ecto.UUID.generate()}
             )
 

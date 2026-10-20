@@ -496,6 +496,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`load_parent_plan_entry/1` uses `parent_id` read off the `%Task{}` it already loaded"},
     {"platform/orchestration/execution_space.ex", :get_by, "Participant", 1, :safe_internal,
      "`participant_id` is derived deterministically from space_id by `system_participant_id/1`; `participant_type` is the literal \"agent\""},
+    {"platform/orchestration/execution_space.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`task_id/1` (task 01a1559a stage 3) reads `metadata[\"task_id\"]` off an execution space. `metadata` is a JSONB map with no shape check on that key, so the value is guarded before `task_titles/1` binds it in `where: t.id in ^task_ids`; a malformed value reads as a space with no task (the picker falls back to the space name) rather than raising Ecto.Query.CastError"},
     {"platform/orchestration/phase_runtime.ex", :get, "Agent", 1, :must_cast,
      "task 019fb977 moved this lookup out of `task_router_watcher.ex`, where it was :safe_internal because the id came off the `tasks.assignee_id` COLUMN (a `Platform.Types.UUIDv7` cast at write time). `PhaseRuntime.resolve/1` now prefers `phase_assignees[current_phase(task)][\"assignee_id\"]`, which lives inside a JSONB map that `Task.validate_phase_assignees/1` (`tasks/task.ex:348`) checks only the PHASE KEYS of — never the id shape. An MCP `task_update` carrying `%{\"execution\" => %{\"assignee_id\" => \"higgins\"}}` therefore reaches this call as a raw agent-supplied string. Guarded with `Platform.UUID.valid?/1`, returning the site's existing `{:error, :agent_not_found}` rather than raising `Ecto.Query.CastError` inside the router's dispatch path; covered by `phase_runtime_test.exs` \":agent_not_found — not a raise — for a malformed phase-entry id\""},
     {"platform/orchestration/heartbeat_scheduler.ex", :platform_uuid_guard, "-", 1,
@@ -722,10 +724,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Tasks: not sibling-owned ───────────────────────────────────────
     {"platform/tasks/canvas_attachments.ex", :get, "Canvas", 1, :safe_internal,
      "ensure_canvas_attachable/1 checks Platform.UUID.valid?/1 on the canvas_attach tool argument, folding a malformed id into {:error, :canvas_not_found}"},
-    # NOTE: `canvas_attachments.ex :get "Task"` is deliberately absent. Task
-    # 019fb581 stage 3 deleted `ensure_task_exists/1` — the task load moved
-    # into `Platform.Tasks.TaskAccess.load/1`, which is recorded below and
-    # carries the same Platform.UUID.valid?/1 guard on the same MCP payload.
+    {"platform/tasks/canvas_attachments.ex", :get, "Task", 1, :safe_internal,
+     "load_live_task/1 (task 01a1559a stage 1, the task load that used to live in the deleted task-binding module) checks Platform.UUID.valid?/1 on the task_id before the lookup — a raw task_attach_canvas / task_detach_canvas / task_list_canvases MCP tool argument — folding a malformed id into the same {:error, :task_not_found} an absent or soft-deleted row returns"},
     {"platform/tasks/chat_pins.ex", :get_by, "ChatPin", 1, :safe_internal,
      "keyed `task_id:` + `participant_kind:` + `participant_id:`; `get_pin/3` is only reached from `pin/3`, whose ids the mention resolver already matched to rows"},
     {"platform/tasks/context_hydrator.ex", :get, "Task", 1, :safe_internal,
@@ -764,8 +764,6 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_stack!/1 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     {"platform/tasks/stacks/commencement_gate.ex", :get, "Stack", 1, :safe_internal,
      "`open?/1` is only called with a `stack_id` `Stacks` already resolved to a `%Stack{}`"},
-    {"platform/tasks/task_access.ex", :get, "Task", 1, :safe_internal,
-     "TaskAccess.load/1 checks Platform.UUID.valid?/1 on the task_id before the lookup — a raw task_attach_canvas / task_detach_canvas / task_list_canvases MCP tool argument — folding a malformed id into the same {:error, :not_found} an absent row returns"},
     # ── Tenancy ────────────────────────────────────────────────────────
     {"platform/tenancy.ex", :platform_uuid_guard, "-", 4, :safe_internal,
      "uuid?/1 in member_of?/2 is now Platform.UUID.valid?/1, so a 16-character org slug takes the slug branch instead of being pinned as ^org_id against Org's strict UUIDv7 key; plus the get_org/1 and get_org!/1 guards, plus live_orgs_by_id/1 (task 019ff7ff stage 3), which filters ids read out of audit metadata through Platform.UUID.valid?/1 before pinning them with `o.id in ^valid` — a junk id folds into an absent map key, not a cast error"},
@@ -917,8 +915,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "experiment_subject/1 (task 01a10a44 stage 2) reads `task.id` off the `%Task{}` ContextAssembler loaded by primary key; the guard only keeps a hand-built map out of the experiments resolver, and a failing id falls back to the surface's control keys"},
     {"platform/skills.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_skill/1 and resolve_skills/1. get_skill/1's nil is what routes a slug to the get_by(Skill, slug:) branch, which is designed traffic for skill_get"},
-    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "ensure_canvas_attachable/1 on the canvas_attach MCP payload's canvas_id, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The second is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Was 3 until task 019fb581 stage 3: `ensure_task_exists/1` held the third guard on the task_id and was replaced by `ensure_task_touchable/3`, which delegates to Platform.Tasks.TaskAccess — so the guard did not disappear, it moved one module over and is recorded there"},
+    {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 7, :safe_internal,
+     "ensure_canvas_attachable/1 on the canvas_attach MCP payload's canvas_id, plus list_canvas_tasks/1 (task 019e2c4b stage 1). The second is the same class: its canvas_id reaches the reverse lookup from the /canvases/:id URL segment via Platform.Chat.CanvasAccess, and `where: a.canvas_id == ^id` raises the SAME CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Back to 3 at task 01a1559a stage 1: `load_live_task/1` guards the task_id before the gate (the guard had moved to a task-binding module in task 019fb581 stage 3; that module was deleted and the guard came home). 3 -> 7 at task 01a1559a stage 2: `detach_canvas_from_stack/3` guards the raw `stack_detach_canvas` canvas_id before `where: a.canvas_id == ^canvas_id` (a malformed id detaches nothing), `list_stack_canvases/1` and `stack_coverage/2` guard the stack_id a LiveView param will supply (stage 4) before `where: t.stack_id == ^stack_id`, and `stack_coverage/2` guards the canvas_id before its count; each folds a malformed id into the empty answer"},
     {"platform/tasks/context_hydrator.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "load_task/1's guard on the task_id carried by the run-dispatch payload into hydrate_for_run/2"},
     {"platform/tasks/payload_amendment_notice.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -931,8 +929,6 @@ defmodule Platform.RepoLookupBoundaryTest do
      "list_items_for_task/1 (task 01a00570 stage 1) guards the task_id an agent hands the read tool: it lands in a `where: rr.task_id == ^task_id` that would raise the same CastError a bare Repo.get would, so the guard folds a malformed id into an empty list. Plus get_review_request/1, fetch_item/1, maybe_reopen_manual_approval/1 (stage 4) plus fetch_agent_for_display/1 (stage 5). The fourth guard is what let stage 5 DELETE the bare `rescue _` that used to end requester_display_name/1: with both arms total the function cannot raise, so the rescue had nothing left to absorb"},
     {"platform/tasks/stacks.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_stack/1 and get_stack!/1, behind seven raw stack_id tool arguments"},
-    {"platform/tasks/task_access.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "TaskAccess.load/1's guard on the task_id carried by the canvas-attachment MCP tool payloads — the authorization gate's only untrusted input, and the one place a 16-character slug must not be hex-encoded into a well-formed id and pinned against the tasks UUIDv7 key"},
     {"platform_web/controllers/message_controller.ex", :platform_uuid_guard, "-", 1,
      :safe_internal,
      "fetch_message/1's guard on the message id taken straight off the URL path segment"},
@@ -1595,6 +1591,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `is_binary(task_id)`), i.e. a primary key read back from the column,
     # canonical by construction; no boundary string reaches it.
     "platform/tasks.ex" => 8,
+    # task 01a1559a stage 2: `stack_coverage/2`'s count and
+    # `stack_member_count/1`. Both pin `t.stack_id == ^stack_id` (and the
+    # first `a.canvas_id == ^canvas_id`); every caller has passed
+    # Platform.UUID.valid?/1 on both ids first (the guards counted above).
+    "platform/tasks/canvas_attachments.ex" => 2,
     "platform/tasks/chat_pins.ex" => 1,
     # 0 → 1 for task 019fba18 stage 4's `why_not_live/1`, which names WHY a
     # validation id is not a live reconciler candidate so

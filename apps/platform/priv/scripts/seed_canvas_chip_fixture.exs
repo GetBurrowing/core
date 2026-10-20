@@ -125,7 +125,7 @@ for {kind, title, soft_delete?} <- titles do
 
   # Insert the join row directly rather than through
   # `CanvasAttachments.attach_canvas/4`. That function gates on
-  # `ensure_task_touchable/3`, which rejects a nil actor with
+  # `ensure_task_touchable/3`, which rejects a nil scope with
   # `:task_forbidden` — correct for the MCP surface, but this is a fixture
   # with no acting principal and modelling one would test the seed, not the
   # chip. The read path (`list_task_canvases/1`) takes no actor, so what the
