@@ -32,6 +32,22 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
 
   Mutation (recorded in the stage-1 commit): set dark `--color-success-content`
   back to `oklch(100% 0 0)`. Both halves go red.
+
+  Burrow token schema (task 01a1557a stage 1). daisyUI's slots stay the public
+  API; the only new names are the ones daisyUI has no slot for: `--faint` (the
+  quietest TEXT tier, placeholders and timestamps) and the status `-dim` steps
+  `--info-dim` / `--success-dim` / `--warning-dim` (fills and borders only,
+  never text). Each is declared bare in both theme blocks and mapped to its
+  `--color-*` key in `@theme inline`, like `--edge`. The guards: `--faint`
+  clears 4.5:1 on all three grounds in both themes and stays more than 0.5:1
+  dimmer than muted on base-100; the ratios in its comment are recomputed
+  here; dark on-accent stays a passing (black) label; every new name is
+  mapped; no `-dim` step is painted as text.
+
+  Mutations (recorded in the task 01a1557a stage-1 commit): dark `--faint` back
+  to the masters' `#6f727a`; dark `--color-primary-content` to
+  `oklch(100% 0 0)`; delete the `--color-faint: var(--faint)` mapping line.
+  Each turns this file red.
   """
   use ExUnit.Case, async: true
 
@@ -62,7 +78,11 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       "--color-warning-content" => "#fbfaf9",
       "--color-error-content" => "oklch(0% 0 0)",
       "--edge" => "#d9d3c9",
-      "--focus-ring" => "var(--color-interactive)"
+      "--focus-ring" => "var(--color-interactive)",
+      "--faint" => "#726961",
+      "--info-dim" => "#90d5df",
+      "--success-dim" => "#95d09e",
+      "--warning-dim" => "#ddb77e"
     },
     "dark" => %{
       "--color-base-100" => "#191b20",
@@ -80,7 +100,11 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       "--color-warning" => "#e5a33d",
       "--color-error-content" => "oklch(0% 0 0)",
       "--edge" => "#383b42",
-      "--focus-ring" => "var(--color-primary)"
+      "--focus-ring" => "var(--color-primary)",
+      "--faint" => "#90939b",
+      "--info-dim" => "#175660",
+      "--success-dim" => "#314936",
+      "--warning-dim" => "#5b4522"
     }
   }
 
@@ -104,6 +128,16 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   ]
 
   @grounds ["--color-base-100", "--color-base-200", "--color-base-300"]
+
+  # Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
+  # Each is declared bare in both theme blocks and mapped to a --color-* key in
+  # @theme inline, exactly like --edge.
+  @schema_tokens ["--faint", "--info-dim", "--success-dim", "--warning-dim"]
+  @dim_tokens ["--info-dim", "--success-dim", "--warning-dim"]
+
+  # The faint tier must stay visibly dimmer than muted (--color-secondary) on
+  # the surface, or the two text tiers merge (design canvas 01a15585).
+  @tier_gap 0.5
 
   setup_all do
     {:ok, css: File.read!(@css_path)}
@@ -183,7 +217,120 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
                  "#{@theme} --focus-ring on #{ground} is #{Float.round(r, 4)}:1"
         end
       end
+
+      test "--faint clears #{@aa_text}:1 on all three grounds", %{css: css} do
+        failures =
+          @grounds
+          |> Enum.map(fn ground -> {ground, ratio(css, @theme, "--faint", ground)} end)
+          |> Enum.filter(fn {_, r} -> r < @aa_text end)
+          |> Enum.map(fn {ground, r} -> "--faint on #{ground}: #{Float.round(r, 4)}:1" end)
+
+        assert failures == [],
+               "#{@theme} --faint is a text colour (placeholders, timestamps) and is " <>
+                 "under the #{@aa_text}:1 WCAG AA text floor:\n  " <>
+                 Enum.join(failures, "\n  ")
+      end
+
+      test "--faint is dimmer than muted by more than #{@tier_gap}:1 on base-100", %{css: css} do
+        muted = ratio(css, @theme, "--color-secondary", "--color-base-100")
+        faint = ratio(css, @theme, "--faint", "--color-base-100")
+
+        assert muted - faint > @tier_gap,
+               "#{@theme}: muted #{Float.round(muted, 4)}:1 and faint " <>
+                 "#{Float.round(faint, 4)}:1 on base-100 are " <>
+                 "#{Float.round(muted - faint, 4)} apart; the two text tiers merge " <>
+                 "at #{@tier_gap} or less."
+      end
+
+      # The ratios in the --faint comment are computed, not copied: each is
+      # recomputed here and must appear in the theme block to 4 dp.
+      test "the --faint comment records the computed ratios", %{css: css} do
+        block = theme_block(css, @theme)
+
+        recorded =
+          Enum.map(@grounds, fn g -> {"--faint on #{g}", ratio(css, @theme, "--faint", g)} end) ++
+            [
+              {"--color-secondary on --color-base-100",
+               ratio(css, @theme, "--color-secondary", "--color-base-100")}
+            ]
+
+        missing =
+          for {label, r} <- recorded, not String.contains?(block, fixed4(r) <> ":1") do
+            "#{label}: #{fixed4(r)}:1"
+          end
+
+        assert missing == [],
+               "#{@theme}: the --faint comment does not carry these computed ratios " <>
+                 "(re-derive the comment, do not copy):\n  " <> Enum.join(missing, "\n  ")
+      end
+
+      test "the theme block declares the schema names bare, never as --color-*", %{css: css} do
+        block = theme_block(css, @theme)
+
+        for token <- @schema_tokens do
+          bare = String.trim_leading(token, "--")
+
+          assert declaration(block, token), "#{@theme}: no #{token} in its theme block"
+
+          refute declaration(block, "--color-" <> bare),
+                 "#{@theme} declares --color-#{bare} in its theme block. Declare #{token} " <>
+                   "there; @theme inline maps the --color-* key, and a --color-* name in " <>
+                   "the theme block makes that mapping self-referential."
+        end
+      end
     end
+  end
+
+  test "dark on-accent (primary-content) on the primary clears #{@aa_text}:1", %{css: css} do
+    on_accent = ratio(css, "dark", "--color-primary-content", "--color-primary")
+
+    assert on_accent >= @aa_text,
+           "dark --color-primary-content on --color-primary is " <>
+             "#{Float.round(on_accent, 4)}:1. The Burrow masters' white label is the " <>
+             "AA defect; the label stays black here and theme.js changes, not app.css."
+
+    # The comment beside the dark declaration names the white figure it refuses.
+    white = W.contrast(W.parse!("oklch(100% 0 0)"), resolve!(css, "dark", "--color-primary"))
+
+    assert String.contains?(theme_block(css, "dark"), fixed4(white) <> ":1"),
+           "the dark block no longer records white on the primary (#{fixed4(white)}:1), " <>
+             "the masters' defect this declaration exists to refuse."
+  end
+
+  test "each schema name is mapped to its --color-* key in @theme inline", %{css: css} do
+    block = theme_inline_block(css)
+
+    missing =
+      for token <- @schema_tokens,
+          key <- ["--color-" <> String.trim_leading(token, "--")],
+          declaration(block, key) != "var(#{token})" do
+        "#{key}: var(#{token});"
+      end
+
+    assert missing == [],
+           "@theme inline is missing these mappings; without one Tailwind mints no " <>
+             "utility for the token and every call site falls back to currentColor:\n  " <>
+             Enum.join(missing, "\n  ")
+  end
+
+  test "the status -dim steps are never painted as text", %{css: css} do
+    lib = Path.expand("../../../lib", __DIR__)
+
+    utility_hits =
+      Path.join(lib, "**/*.{ex,heex}")
+      |> Path.wildcard()
+      |> Enum.filter(&Regex.match?(~r/\btext-(info|success|warning)-dim\b/, File.read!(&1)))
+      |> Enum.map(&Path.relative_to(&1, lib))
+
+    css_hits =
+      for token <- @dim_tokens,
+          key <- [token, "--color-" <> String.trim_leading(token, "--")],
+          Regex.match?(~r/(^|[;{\s])color\s*:\s*var\(#{Regex.escape(key)}\)/m, css),
+          do: key
+
+    assert utility_hits == [] and css_hits == [],
+           "a -dim step is painted as text; they are fills and borders only: " <>
+             "lib #{inspect(utility_hits)}, app.css #{inspect(css_hits)}"
   end
 
   test "dark edge is lighter than dark base-100, light edge darker than light", %{css: css} do
@@ -196,6 +343,15 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   # ── extraction ───────────────────────────────────────────────────────────
 
   defp ratio(css, theme, a, b), do: W.contrast(resolve!(css, theme, a), resolve!(css, theme, b))
+
+  defp fixed4(r), do: :erlang.float_to_binary(r, decimals: 4)
+
+  defp theme_inline_block(css) do
+    case blocks_after(css, "@theme inline {") do
+      [block] -> block
+      other -> flunk("expected exactly one `@theme inline {` block, found #{length(other)}")
+    end
+  end
 
   defp expected_interactive_scopes("light"), do: 1
   defp expected_interactive_scopes("dark"), do: 2

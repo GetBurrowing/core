@@ -1197,7 +1197,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
               name="name"
               value={section.name}
               placeholder={section.org_name}
-              class="channel-section-rename-input placeholder:text-base-content/40"
+              class="channel-section-rename-input placeholder:text-faint"
               aria-label={"Sidebar label for #{section.org_name}"}
               maxlength="60"
             />

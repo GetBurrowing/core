@@ -242,7 +242,7 @@ defmodule PlatformWeb.ChatLiveSectionLabelFollowsOrgTest do
       input = label_input_html(view, section_id)
       refute input =~ ~s(value=)
       assert input =~ ~s(placeholder="Newclient")
-      assert input =~ "placeholder:text-base-content/40"
+      assert input =~ "placeholder:text-faint"
 
       hint = hint_html(view, section_id)
       assert hint =~ "Uses the organisation name."

@@ -148,6 +148,27 @@
   --color-primary-content: #fbfaf9;           /* light text on deep orange */
   --color-secondary: #635b53;                 /* warm grey */
   --color-secondary-content: oklch(100% 0 0);
+  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
+     Muted is --color-secondary; daisyUI has no third slot, so this is a new
+     name. Being text, it owes 4.5:1 on every ground, and it must stay more
+     than 0.5:1 dimmer than muted on base-100 or the two tiers merge.
+
+     On the muted tint's own line (the oklch chroma and hue of #635b53, only
+     lightness raised), #726961 is the lightest 8-bit step that clears all
+     three grounds: 5.1536:1 on base-100, 4.8939:1 on base-200 and 4.5302:1 on
+     base-300. Muted measures 6.3911:1 on base-100. Computed through
+     Platform.Design.WcagContrast and recomputed against this comment by
+     test/platform/design/burrow_palette_guard_test.exs.
+
+     Declared --faint, never --color-faint: the @theme inline block below maps
+     the --color-* key, as it does for --edge. */
+  --faint: #726961;
+  /* Status -dim steps (task 01a1557a; values from the project's
+     design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. The
+     burrow_palette_guard test fails if one is painted as a text colour. */
+  --info-dim: #90d5df;
+  --success-dim: #95d09e;
+  --warning-dim: #ddb77e;
   /* Accent has always held the same value as primary in both themes, so it
      follows primary here. Its five consumers are chat/canvas/theme.ex:85,
      planning_step_extension.ex:197, :198, :454 and board_component.ex:1134;
@@ -228,9 +249,31 @@
   /* Burrow bright orange. A different value from light's #ad4b07; see the
      light block. Black on it measures 7.5073:1. */
   --color-primary: #f47721;                   /* renders #f47721 */
+  /* On-accent stays black (task 01a1557a). The Burrow masters' theme.js
+     labels this orange in white, which measures 2.7973:1: that is the AA
+     defect, and theme.js must change to match this declaration, not the
+     other way round. Black measures 7.5073:1. */
   --color-primary-content: oklch(0% 0 0);     /* black text on orange */
   --color-secondary: #a9abb2;
   --color-secondary-content: oklch(0% 0 0);
+  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
+     The masters' #6f727a failed AA on all three grounds. #8a8d95, the lowest
+     step on the same tint that clears them, painted 4.1987:1 on the thread
+     composer's #252c3d fill (stage 2, measured on screenshot pixels), so
+     faint went up the same tint (+6 per channel) to #90939b, the lowest step
+     that also clears that fill: 5.6053:1 on base-100, 6.0981:1 on base-200,
+     4.8674:1 on base-300 and 4.5360:1 on #252c3d. Muted measures 7.5105:1
+     on base-100, so faint stays visibly dimmer. Computed through
+     Platform.Design.WcagContrast and recomputed against this comment by
+     test/platform/design/burrow_palette_guard_test.exs and
+     faint_adoption_test.exs. Declared --faint, never --color-faint; see the
+     @theme inline block below. */
+  --faint: #90939b;
+  /* Status -dim steps (task 01a1557a; values from the project's
+     design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. */
+  --info-dim: #175660;
+  --success-dim: #314936;
+  --warning-dim: #5b4522;
   --color-accent: #f47721;                    /* renders #f47721; follows primary */
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(40% 0.01 0);         /* #6A6A6A */
@@ -292,6 +335,14 @@
      ring-focus-ring utility for the WCAG 2.2 SC 1.4.11 focus indicator.
      Without it every ring-focus-ring call site falls back to currentColor. */
   --color-focus-ring: var(--focus-ring);
+  /* Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
+     The theme blocks declare --faint and the three status -dim steps; these
+     mappings mint text-faint and the bg-/border- utilities for the -dim
+     steps. The -dim steps are fills and borders only, never text. */
+  --color-faint: var(--faint);
+  --color-info-dim: var(--info-dim);
+  --color-success-dim: var(--success-dim);
+  --color-warning-dim: var(--warning-dim);
 }
 
 /* Add variants based on LiveView classes */
@@ -1515,7 +1566,13 @@ body, .font-suite {
   border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
-.thread-input::placeholder { color: #666; }
+/* Faint, the quietest text tier (task 01a1557a stage 2). #666 painted
+   2.4329:1 on the #252c3d fill and the light #888 3.5449:1 on #ffffff; both
+   fail AA. --faint resolves per theme, so one rule serves both and the light
+   override is gone. The #252c3d fill is darker-blue than every theme ground
+   and is what set the dark --faint value; faint_adoption_test.exs holds
+   faint at 4.5:1 on it. */
+.thread-input::placeholder { color: var(--faint); }
 .thread-send {
   width: 30px;
   height: 30px;
@@ -1535,9 +1592,8 @@ body, .font-suite {
 [data-theme="light"] .thread-input {
   background: #FFFFFF;
   border-color: #E0E0E0;
-  color: #000;
+  color: var(--color-base-content);
 }
-[data-theme="light"] .thread-input::placeholder { color: #888; }
 
 /* Thread collapse button */
 .thread-collapse {
@@ -2647,6 +2703,14 @@ body, .font-suite {
   color: inherit;
   font-size: 14px;
   line-height: 1.5;
+}
+
+/* The composer placeholder (task 01a1557a stage 2), the design direction's
+   signature element: a quiet invitation that still reads as live text, not
+   a disabled control. Without this rule it painted Tailwind preflight's 50%
+   currentColor. --faint resolves per theme. */
+.compose-pill-bar textarea::placeholder {
+  color: var(--faint);
 }
 
 /* iOS Safari auto-zooms any input with font-size < 16px on focus, and

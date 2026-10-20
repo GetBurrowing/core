@@ -299,7 +299,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               spellcheck="false"
               enterkeyhint="go"
               aria-label="Find a conversation"
-              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-base-content/40 focus:border-primary focus:outline-none"
+              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-faint focus:border-primary focus:outline-none"
             />
             <button
               :if={@drawer_query != ""}
