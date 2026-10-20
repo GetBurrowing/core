@@ -154,12 +154,12 @@ defmodule Platform.Role.PeerTest do
       assert LeaseManager.get(task_id) == lease
     end
 
-    test "record_ack/3 and silence/3 go to the peer and read an unreachable one as no lease" do
+    test "record_ack/3 and silence/3 go to the peer and name an unreachable one, not a missing lease" do
       ExUnit.CaptureLog.capture_log(fn ->
-        assert LeaseManager.record_ack(id(), "rt", "sub") == {:error, :not_found}
+        assert LeaseManager.record_ack(id(), "rt", "sub") == {:error, :peer_unreachable}
 
         assert LeaseManager.silence(id(), DateTime.add(DateTime.utc_now(), 600), "reason here") ==
-                 {:error, :not_found}
+                 {:error, :peer_unreachable}
       end)
     end
   end

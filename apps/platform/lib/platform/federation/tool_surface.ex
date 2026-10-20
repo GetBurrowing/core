@@ -10656,6 +10656,13 @@ defmodule Platform.Federation.ToolSurface do
         )
 
         persist_task_ack(task_id, stage_id, acked_at, attrs)
+
+      {:error, :peer_unreachable} ->
+        Logger.warning(
+          "[ToolSurface.task_ack] task #{task_id} stage #{stage_id} — LeaseManager.record_ack/3 returned :peer_unreachable: this web node could not reach its cluster peer, so the lease was not updated; the durable execution.acked row is still being written for LateAckReconcile. Check the cluster link (PLATFORM_CLUSTER_PEER)."
+        )
+
+        persist_task_ack(task_id, stage_id, acked_at, attrs)
     end
   end
 
@@ -10774,6 +10781,16 @@ defmodule Platform.Federation.ToolSurface do
            recoverable: true,
            suggestion:
              "Wait for the router to arm liveness (typically <1s post-dispatch) then retry."
+         }}
+
+      {:error, :peer_unreachable} ->
+        {:error,
+         %{
+           error:
+             "This node could not reach its cluster peer, which holds the lease for task #{task_id}; nothing was silenced.",
+           recoverable: true,
+           suggestion:
+             "Retry shortly. If it persists, the web node's cluster link (PLATFORM_CLUSTER_PEER) is down: call alarm_silence against the full node instead."
          }}
 
       {:error, :invalid_until} ->

@@ -65,6 +65,21 @@ block. Under `PLATFORM_ROLE=web` it:
 
 The dev branch-preview path (no `PLATFORM_ROLE`) is unchanged.
 
+**Rule: distribution ports are never published.** EPMD (4369) and the
+Erlang distribution ports stay unpublished on BOTH nodes, prod and exp,
+reachable only inside the container network the two share. Each container
+publishes its HTTP port and nothing else. A published distribution port
+plus the shared cookie is remote code execution inside prod's BEAM for
+anyone who can reach the host (see the trust note above). After exp boots,
+check from the host that nothing listens on 4369 or in the distribution
+range outside the container network, and that each container's port map
+lists only its HTTP port:
+
+```sh
+ss -ltn | grep -E ':4369\b'                        # expect nothing
+podman port <prod container>; podman port <exp container>   # HTTP only
+```
+
 ```diff
 --- a/exp-entrypoint.sh
 +++ b/exp-entrypoint.sh
@@ -271,16 +286,25 @@ ALTER ROLE burrow_web SET log_statement = 'mod';
 ```
 
 With the global setting `none`, only `burrow_web` sessions log, so any
-`statement: INSERT`, `UPDATE`, `DELETE` (or DDL) line in the Postgres log
-during the window is the exp node's. Boot exp, sign in once to confirm it
-serves, close every browser tab, then leave it idle for 30 minutes:
+INSERT, UPDATE, DELETE (or DDL) line in the Postgres log during the window
+is the exp node's. Ecto runs its queries as prepared statements, which
+Postgres logs as `execute <name>: INSERT ...`, not `statement: INSERT ...`;
+a grep for `statement:` alone reads 0 while exp is writing. The pattern
+below matches both forms. Boot exp, sign in once to confirm it serves,
+close every browser tab, then leave it idle for 30 minutes:
 
 ```sh
 podman logs --since 30m <prod db container> 2>&1 \
-  | grep -E 'statement: (INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)' \
+  | grep -E '(statement|execute [^:]*): *(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)' \
   | wc -l
 # expect 0
 ```
+
+A 0 only means something if the same command can read non-zero. Before the
+window, make one deliberate write as `burrow_web` (for example an rpc on the
+exp node that updates a scratch row and reverts it) and confirm the grep
+counts it. Prod's own writes do not show up here, because the global setting
+is `none`.
 
 `runtime_events` has no origin-node column, so a row count there cannot
 tell exp's writes from prod's; the role-scoped statement log can. Turn the

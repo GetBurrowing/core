@@ -285,9 +285,16 @@ defmodule Platform.Orchestration.LeaseManager do
   (e.g. router hasn't recorded a dispatch yet). Direct callers
   (the `task_ack` MCP tool in stage 5) treat this as a soft failure —
   belt-and-braces write that races the router boot.
+
+  On a web node (`Platform.Role`) the call goes to the cluster peer, and
+  an unreachable peer returns `{:error, :peer_unreachable}` — distinct
+  from `:not_found`, so a caller can tell "no such lease" from "could not
+  ask".
   """
   @spec record_ack(binary(), binary() | nil, binary() | nil) ::
-          :ok | {:error, :not_found} | {:error, {:not_owner, binary() | nil}}
+          :ok
+          | {:error, :not_found | :peer_unreachable}
+          | {:error, {:not_owner, binary() | nil}}
   def record_ack(task_id, caller_runtime_id, subagent_id \\ nil) when is_binary(task_id) do
     peer_call({:record_ack, task_id, caller_runtime_id, subagent_id})
   end
@@ -321,10 +328,12 @@ defmodule Platform.Orchestration.LeaseManager do
 
   Returns `:ok` on success, `{:error, :not_found}` when no lease
   exists (the router hasn't recorded the dispatch yet — MCP tool
-  callers surface this as a recoverable retry hint).
+  callers surface this as a recoverable retry hint), and
+  `{:error, :peer_unreachable}` on a web node whose cluster peer did not
+  answer.
   """
   @spec silence(binary(), DateTime.t(), binary()) ::
-          :ok | {:error, :not_found | :invalid_until | :cap_exceeded}
+          :ok | {:error, :not_found | :peer_unreachable | :invalid_until | :cap_exceeded}
   def silence(task_id, %DateTime{} = until, reason)
       when is_binary(task_id) and is_binary(reason) do
     peer_call({:silence, task_id, until, reason})
@@ -333,9 +342,10 @@ defmodule Platform.Orchestration.LeaseManager do
   # Task 01a155a6 stage 4. `record_ack/3` and `silence/3` are reached from
   # the MCP request path (`task_ack`, `alarm_silence`), which a web node also
   # serves. The leases live with the routers on the full node, so a web node
-  # with a cluster peer sends the call there; an unreachable peer reads as
-  # no lease, which both MCP tools already surface as recoverable. On a full
-  # node this is the plain local call it always was.
+  # with a cluster peer sends the call there. An unreachable peer returns
+  # `{:error, :peer_unreachable}`, never `:not_found`: reading it as "no
+  # such lease" told an acking runtime something false about the lease. On a
+  # full node this is the plain local call it always was.
   defp peer_call(request) do
     if Peer.remote?() do
       try do
@@ -346,7 +356,7 @@ defmodule Platform.Orchestration.LeaseManager do
             "[LeaseManager] #{elem(request, 0)} not applied: peer unreachable (#{inspect(reason, limit: 5)})"
           )
 
-          {:error, :not_found}
+          {:error, :peer_unreachable}
       end
     else
       GenServer.call(__MODULE__, request)
