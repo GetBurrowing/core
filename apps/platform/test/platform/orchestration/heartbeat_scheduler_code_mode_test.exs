@@ -49,7 +49,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # (-239) plus the federation preamble's infra and test-rig sentences
     # (-142 against A2's preamble), computed from the source before the run.
     # Measured on the test rig at fb3332ff.
-    planning: {"c9383577d00e4311684faf89f94c7d0cd48afd4f4fb810f24ae6f29249c31c52", 29_187},
+    #
+    # Repinned by task 01a156cb stage 3 (parallel-UI rule in
+    # dispatch.planning): +508 bytes, exactly the 507-byte
+    # `planning_parallel_ui_rule/0` plus its line break, computed from the
+    # source; measured on the test rig at 97c7e037. in_progress / in_review
+    # unchanged.
+    planning: {"bea0daec5f6be9285c81df807c096a019ec80717e55ad5fee0a5df35ef42da48", 29_695},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.

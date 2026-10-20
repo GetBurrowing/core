@@ -1436,6 +1436,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     no_ack_notice = PromptTemplates.planning_no_ack_notice()
     experiment_surface_notice = PromptTemplates.planning_experiment_surface_notice()
     ci_evidence_section = PromptTemplates.planning_ci_evidence_section()
+    parallel_ui_rule = PromptTemplates.planning_parallel_ui_rule()
     design_fidelity_section = PromptTemplates.planning_design_fidelity_section()
 
     """
@@ -1512,6 +1513,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     binding constraints inside its stage descriptions has already lost them.
 
     #{ci_evidence_section}
+    #{parallel_ui_rule}
     ## Validation kinds
 
     Per-stage:

@@ -646,6 +646,30 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec planning_ci_evidence_section() :: String.t()
   def planning_ci_evidence_section, do: @planning_ci_evidence_section
 
+  # Task 01a156cb stage 3 (Parallel-UI debt ledger). The planner-side half of
+  # `Platform.ParallelUI`: a stage that keeps a legacy surface alive for a
+  # parallel UI must register it in the same commit, or the cutover task has
+  # no ledger to work from. Same single-source shape as the sections above:
+  # the `dispatch.planning` descriptor and
+  # `HeartbeatScheduler.hardcoded_dispatch_planning/4` both interpolate it.
+  # Placeholders are written `<id>`, which the ParallelUI id grammar cannot
+  # match, so this text is never read as a live marker. Edit it HERE; a
+  # row-only edit is lost to the next force-update migration for this slug.
+  @planning_parallel_ui_rule """
+  ## Parallel-UI shims are registered in the same commit
+
+  A stage that keeps a legacy event, field, column, dual write or route alive so an old UI keeps working beside a new one must, in its description, tell the executor to add the `Platform.ParallelUI` entry and the `# parallel-ui: <id>` markers in the same commit (for a column, also the `COMMENT ON COLUMN <table>.<column> IS 'parallel-ui: <id>'` migration). `mix parallel_ui.report` lists every registered shim, and the cutover task is planned from it.
+  """
+
+  @doc """
+  The `## Parallel-UI shims are registered in the same commit` rule of the
+  planning dispatch (task 01a156cb). Shared by the `dispatch.planning`
+  descriptor and the hardcoded planning fallback so the two routes carry the
+  same text.
+  """
+  @spec planning_parallel_ui_rule() :: String.t()
+  def planning_parallel_ui_rule, do: @planning_parallel_ui_rule
+
   # Task 01a13ae7 stage 2 (Design fidelity). The planner used to read an
   # attached design canvas and paraphrase it into stage prose, which loses
   # spacing, hierarchy, states and copy; the executor then built from the
@@ -1107,6 +1131,7 @@ defmodule Platform.Orchestration.PromptTemplates do
     planning_no_ack_notice = @planning_no_ack_notice
     planning_experiment_surface_notice = @planning_experiment_surface_notice
     planning_ci_evidence_section = @planning_ci_evidence_section
+    planning_parallel_ui_rule = @planning_parallel_ui_rule
     planning_design_fidelity_section = @planning_design_fidelity_section
     in_progress_design_fidelity_section = @in_progress_design_fidelity_section
     review_e2e_design_fidelity_section = @review_e2e_design_fidelity_section
@@ -1210,6 +1235,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         This rule applies to itself: a planner that reads it and does not restate the ticket's binding constraints inside its stage descriptions has already lost them.
 
         #{planning_ci_evidence_section}
+        #{planning_parallel_ui_rule}
         ## Validation kinds
 
         Per-stage validations (attach to the implementation stage they protect):
