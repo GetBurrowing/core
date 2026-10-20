@@ -46,9 +46,9 @@ write_files:
       BUN_VERSION=1.4.2
       CLAUDE_CODE_VERSION=2.1.295
       CODEX_VERSION=0.162.0
-      # burrow-cli v0.10.1 (GetBurrowing/burrow-cli 9e444ad, PR #43): no `suite` alias, plus pane-status, onboarding skip and needs_login.
-      BURROW_CLI_REF=9e444ade4c52192934567443289e1f9371fc4d87
-      SUITE_CLI_REF=9e444ade4c52192934567443289e1f9371fc4d87
+      # burrow-cli v0.10.3 (GetBurrowing/burrow-cli 1fcb69e, PR #45): agent-root suite.* files renamed to burrow.* (0.10.2); an attach never renames a running agent's root (0.10.3).
+      BURROW_CLI_REF=1fcb69e315a21f3f793955281911f108d9689f58
+      SUITE_CLI_REF=1fcb69e315a21f3f793955281911f108d9689f58
   - path: "/etc/sudoers.d/burrow-agents"
     owner: "root:root"
     permissions: "0440"
