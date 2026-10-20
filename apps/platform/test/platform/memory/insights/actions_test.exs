@@ -60,7 +60,7 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
   defp ingest!(content, journal \\ @journal) do
     before = Repo.all(from(i in Insight, select: i.id))
-    {:ok, 1} = Insights.ingest_from_journal(nil, journal, content)
+    {:ok, 1} = Insights.ingest_from_journal(nil, journal, content, nil)
     Repo.one!(from(i in Insight, where: i.id not in ^before))
   end
 

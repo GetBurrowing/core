@@ -3,8 +3,11 @@ defmodule Platform.Memory.JournalSweep do
   Post-append `<synthesis-insight>` sweep for journal writes.
 
   Since task 01a13867 stage 1 this ingests insights via
-  `Platform.Memory.Insights.ingest_from_journal/3`; `<synthesis-proposal>`
-  blocks are no longer ingested. The history below is why the sweep exists
+  `Platform.Memory.Insights.ingest_from_journal/4`; `<synthesis-proposal>`
+  blocks are no longer ingested. Since task 01a15587 stage 2 it passes the
+  entry's `authored_by`, so each insight records who wrote its block: only
+  a block written by the `memory.dreaming` holder is eligible for unattended
+  action. The history below is why the sweep exists
   at all, and it applies unchanged to insights.
 
   ## Why this module exists
@@ -59,7 +62,12 @@ defmodule Platform.Memory.JournalSweep do
     file_key = Journal.virtual_file_key(namespace, entry.date)
 
     if Insights.journal_path?(file_key) do
-      case Insights.ingest_from_journal(entry.workspace_id, file_key, entry.content) do
+      case Insights.ingest_from_journal(
+             entry.workspace_id,
+             file_key,
+             entry.content,
+             entry.authored_by
+           ) do
         {:ok, count} when count > 0 ->
           Logger.debug(
             "[memory.insights] ingested #{count} block(s) from #{file_key} " <>

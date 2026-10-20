@@ -71,8 +71,9 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.CodeMode,
     Platform.Experiments.Surfaces.AgentToolProfile,
     # Task 01a13867 stage 1: the dreaming run's insight-synthesis directive
-    # and dissemination threshold. The control is no directive and
-    # min_confidence "high"; nothing is seeded.
+    # and dissemination thresholds. The control is no directive,
+    # min_confidence "high" and (task 01a15587) auto_apply_min_confidence
+    # "medium"; nothing is seeded.
     Platform.Experiments.Surfaces.InsightSynthesis
   ]
 

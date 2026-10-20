@@ -8,7 +8,17 @@ defmodule Platform.Memory.Insights.BriefingCard do
   ## Sections
 
     * **Already done** — delivered `briefing` lines, each with Looks right
-      (`insight_ok:<node_key>`) and Flag (`insight_flag:<node_key>`).
+      (`insight_ok:<node_key>`) and Flag (`insight_flag:<node_key>`); and
+      `page_edit` / `task` insights the Disseminator applied unattended
+      (task `01a15587-afc8-7000-b76d-4e1c48eee5ed`, stages 3 and 4), each
+      as a text line (`applied-<node_key>`) and a control row
+      (`applied-actions-<node_key>`):
+        * a page edit: Revert (`insight_revert:<node_key>`) and Flag;
+        * a filed task: a link to the task (`applied-link-<node_key>`,
+          see below), Delete task (`insight_delete_task:<node_key>`) and
+          Flag.
+      Revert and Delete task undo only that insight's own artefact; see
+      `Platform.Memory.Insights.Actions` ("Undo from the briefing").
     * **Needs your call** — `needs_call` insights, for root admins only
       (`admin?: true`), with one link to `/memory/insights`. Never executed
       from here.
@@ -23,8 +33,27 @@ defmodule Platform.Memory.Insights.BriefingCard do
   the `value` of a `text` node, which the canvas renders as literal text. It
   never enters a `markdown` node, an `action_row`, a form title or label, a
   node id or the document meta, so a hostile body cannot add a link, a
-  button or an action value. The one `markdown` node (the Insights tab link)
-  is a constant.
+  button or an action value. The `markdown` nodes are platform-built: the
+  Insights tab link is a constant, and a filed task's link is the constant
+  shape `[Open task](/tasks/<uuid>)` whose uuid is read from the insight's
+  `artefact_ref` (`"task:<uuid>"`, written by the platform when it filed
+  the task) and checked with `Platform.UUID.valid?/1` (`filed_task_id/1`).
+  Neither the body nor the agent-written `action` map ever reaches it; a
+  ref that is not a valid uuid renders no link. The link is how the task
+  is EDITED: under the clicker's ordinary task access, not the briefing's.
+
+  ## How long an undo lasts
+
+  Revert and Delete task live as long as the insight row: its TTL is 7
+  days (`Platform.Memory.Insight`'s `@default_ttl_days`), after which
+  `Platform.Memory.Insights.Purger` deletes the row whatever its state.
+  Pages have no revision table, so the row's `pre_image` is the only copy
+  of the content a Revert writes back; once the row is purged a re-render
+  of the day's canvas drops the item (`Disseminator` skips purged
+  insights) and its buttons go with it, and a click on an old canvas finds
+  no insight and changes nothing. Delete task needs no pre-image, but its
+  authority (which task, filed by whom) is also read from the row, so it
+  ends with the row too. The TTL is not extended for this.
 
   ## Action values carry a node key, never an insight id
 
@@ -64,11 +93,13 @@ defmodule Platform.Memory.Insights.BriefingCard do
     settled = Keyword.get(opts, :settled, %{})
     {needs_call, executable} = Enum.split_with(entries, &needs_call?/1)
 
-    briefings = Enum.filter(executable, fn {_k, i} -> i.action_type == "briefing" end)
+    done =
+      Enum.filter(executable, fn {_k, i} -> i.action_type in ["briefing", "page_edit", "task"] end)
+
     questions = Enum.filter(executable, fn {_k, i} -> i.action_type == "question" end)
 
     sections =
-      section("done", "Already done", Enum.map(briefings, &or_settled(&1, settled, :line))) ++
+      section("done", "Already done", Enum.map(done, &or_settled(&1, settled, :line))) ++
         if(admin?,
           do: section("call", "Needs your call", needs_call_items(needs_call, settled)),
           else: []
@@ -101,6 +132,21 @@ defmodule Platform.Memory.Insights.BriefingCard do
     }
   end
 
+  @doc """
+  The id of the task a `task` insight filed, read from its `artefact_ref`
+  (`"task:<uuid>"`) and checked with `Platform.UUID.valid?/1`; nil for
+  anything else. The one reader of that ref, for the briefing link and for
+  `Platform.Memory.Insights.Actions.delete_filed_task/3`.
+  """
+  @spec filed_task_id(Insight.t()) :: binary() | nil
+  def filed_task_id(%Insight{action_type: "task", artefact_ref: "task:" <> task_id}) do
+    if Platform.UUID.valid?(task_id), do: task_id, else: nil
+  end
+
+  def filed_task_id(_insight), do: nil
+
+  defp task_link(task_id), do: "[Open task](/tasks/" <> task_id <> ")"
+
   defp needs_call?({_key, %Insight{tier: "needs_call"}}), do: true
   defp needs_call?(_entry), do: false
 
@@ -121,10 +167,47 @@ defmodule Platform.Memory.Insights.BriefingCard do
   defp or_settled({key, _insight} = entry, settled, kind) do
     case Map.get(settled, key) do
       [_ | _] = nodes -> nodes
-      _ when kind == :line -> briefing_line(entry)
+      _ when kind == :line -> done_line(entry)
       _ -> question(entry)
     end
   end
+
+  defp done_line({key, %Insight{action_type: "page_edit"} = insight}) do
+    [
+      text("applied-" <> key, insight.body || ""),
+      node("action_row", "applied-actions-" <> key, %{
+        "actions" => [
+          %{"label" => "Revert", "value" => "insight_revert:" <> key, "variant" => "outline"},
+          %{"label" => "Flag", "value" => "insight_flag:" <> key, "variant" => "ghost"}
+        ]
+      })
+    ]
+  end
+
+  defp done_line({key, %Insight{action_type: "task"} = insight}) do
+    link =
+      case filed_task_id(insight) do
+        nil -> []
+        task_id -> [node("markdown", "applied-link-" <> key, %{"content" => task_link(task_id)})]
+      end
+
+    [text("applied-" <> key, insight.body || "")] ++
+      link ++
+      [
+        node("action_row", "applied-actions-" <> key, %{
+          "actions" => [
+            %{
+              "label" => "Delete task",
+              "value" => "insight_delete_task:" <> key,
+              "variant" => "outline"
+            },
+            %{"label" => "Flag", "value" => "insight_flag:" <> key, "variant" => "ghost"}
+          ]
+        })
+      ]
+  end
+
+  defp done_line(entry), do: briefing_line(entry)
 
   defp briefing_line({key, %Insight{} = insight}) do
     [

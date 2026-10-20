@@ -1121,6 +1121,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_canvas_action_value("insight_flag:" <> key, canvas, socket),
     do: insight_card_action(:open_flag, key, nil, canvas, socket)
 
+  # Task 01a15587 stage 4: undo a page edit or a task the platform applied
+  # unattended. Same authority as above: the key resolves only through the
+  # clicked canvas's briefing row, and only that row's user may press it.
+  defp handle_canvas_action_value("insight_revert:" <> key, canvas, socket),
+    do: insight_card_action(:revert, key, nil, canvas, socket)
+
+  defp handle_canvas_action_value("insight_delete_task:" <> key, canvas, socket),
+    do: insight_card_action(:delete_task, key, nil, canvas, socket)
+
   # Unrecognized action values: keep the generic emit-only contract.
   # Agent-side subscribers still see the click via the CanvasServer.emit_event
   # broadcast above.
@@ -1175,6 +1184,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
           :flag ->
             Insights.flag(insight_id, input, scope: human)
 
+          :revert ->
+            Insights.revert_from_briefing(insight_id, human)
+
+          :delete_task ->
+            Insights.delete_task_from_briefing(insight_id, human)
+
           :answer ->
             Insights.answer(insight_id, human, input, canvas_id: canvas.id)
         end
@@ -1195,6 +1210,8 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp insight_card_message(:looks_right), do: "Thanks. Marked as right."
   defp insight_card_message(:flag), do: "Flagged. Your reason will teach dreaming."
   defp insight_card_message(:answer), do: "Answer saved to the journal."
+  defp insight_card_message(:revert), do: "Reverted. The page is back to how it was."
+  defp insight_card_message(:delete_task), do: "Task deleted."
   defp insight_card_message(_action), do: "Done."
 
   defp insight_card_error(:expired), do: "This item expired. Nothing was changed."
@@ -1202,6 +1219,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp insight_card_error(:blank), do: "Write an answer first."
   defp insight_card_error(:not_found), do: "This item was already handled."
   defp insight_card_error(:unauthorized), do: "You cannot act on this item."
+
+  defp insight_card_error(:stale),
+    do: "The page changed after this edit, so it was not reverted. Nothing was changed."
+
+  defp insight_card_error(:not_revertible), do: "This edit can no longer be reverted."
+
+  defp insight_card_error(:not_retractable),
+    do: "This task has been picked up or already removed, so it was not deleted."
+
   defp insight_card_error(%Ecto.Changeset{}), do: "Give a reason to flag this."
   defp insight_card_error(_reason), do: "That did not work. Nothing was changed."
 

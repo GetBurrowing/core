@@ -31,6 +31,30 @@ defmodule Platform.Memory.Insights.Disseminator do
 
   `digest_date` is the America/Chicago calendar date of the run, so the
   07:00 run and any manual run later that day share one canvas.
+
+  ## Page edits and tasks are applied before they are rendered
+
+  Task `01a15587-afc8-7000-b76d-4e1c48eee5ed`, stage 3. The digest selects a
+  `page_edit` or `task` only when its toggle is on and it is eligible for
+  unattended action (see `Platform.Memory.Insights.Digest`). Before a
+  person's briefing is rendered, each such insight is run through
+  `Platform.Memory.Insights.Actions.apply_unattended/2`:
+
+    * `{:ok, acted}` — the edit or task exists; the insight is rendered under
+      "Already done" and marked delivered.
+    * `{:ok, :downgraded, question}` — the source no longer resolves and
+      nothing was written; the question is rendered under "Questions" only
+      when `deliver_questions` is on and it still routes `reversible` to this
+      person, else it waits, open and undelivered, for a later run.
+    * `{:error, reason}` — nothing written, NOT rendered, the insight stays
+      open and undelivered; a warning names the insight and the reason.
+
+  One apply that raises or exits is logged and treated as an error, so the
+  rest of the person's briefing is still delivered. A same-day re-run never
+  applies an insight twice: the first apply leaves it `done`, which the
+  digest does not select and `apply_unattended/2` refuses (`:not_open`).
+  Applying happens only on the `run/1` path; `deliver_now/3` (a person
+  asked) is unchanged and never applies anything.
   """
 
   use GenServer
@@ -46,9 +70,11 @@ defmodule Platform.Memory.Insights.Disseminator do
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
+  alias Platform.Memory.Insights.Actions
   alias Platform.Memory.Insights.BriefingCard
   alias Platform.Memory.Insights.Briefings
   alias Platform.Memory.Insights.Digest
+  alias Platform.Memory.Insights.Settings
   alias Platform.Push.Notification
   alias Platform.Repo
   alias Platform.Responsibilities.Cron
@@ -101,9 +127,14 @@ defmodule Platform.Memory.Insights.Disseminator do
     date = local_date(now)
     notifications = Keyword.get(opts, :notifications_module, Platform.Notifications)
 
+    settings = Settings.get()
+
     digest
     |> Enum.map(fn {user_id, insights} ->
-      deliver(user_id, insights, agent, date, now, notifications)
+      case apply_unattended(user_id, insights, settings, now) do
+        [] -> {:ok, 0}
+        insights -> deliver(user_id, insights, agent, date, now, notifications)
+      end
     end)
     |> Enum.reduce({:ok, %{users: 0, items: 0}}, fn
       {:ok, 0}, acc ->
@@ -115,6 +146,47 @@ defmodule Platform.Memory.Insights.Disseminator do
       {:error, _}, acc ->
         acc
     end)
+  end
+
+  # ── Unattended page edits and tasks (task 01a15587 stage 3) ──────────
+
+  @unattended_types ["page_edit", "task"]
+
+  # Apply each selected page_edit / task (see the moduledoc) and keep what
+  # is to be rendered, in order. Every other insight passes through.
+  defp apply_unattended(user_id, insights, settings, now) do
+    Enum.flat_map(insights, fn
+      %Insight{action_type: type} = insight when type in @unattended_types ->
+        case safe_apply(insight, now) do
+          {:ok, %Insight{} = acted} ->
+            [%{acted | tier: "reversible"}]
+
+          {:ok, :downgraded, %Insight{} = question} ->
+            if settings.deliver_questions and question.tier == "reversible" and
+                 question.addressee_user_id == user_id,
+               do: [question],
+               else: []
+
+          {:error, reason} ->
+            Logger.warning(
+              "[insight_disseminator] insight #{insight.id} (#{type}) not applied: " <>
+                inspect(reason)
+            )
+
+            []
+        end
+
+      insight ->
+        [insight]
+    end)
+  end
+
+  defp safe_apply(insight, now) do
+    Actions.apply_unattended(insight, now: now)
+  rescue
+    error -> {:error, {:raised, Exception.message(error)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   @doc "The America/Chicago calendar date of `now`."

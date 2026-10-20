@@ -15,9 +15,18 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesisTest do
     assert {:ok, _} = Jason.encode(S.payload_schema())
   end
 
-  test "the control is no directive and min_confidence high" do
-    assert {:ok, %{"directive" => nil, "min_confidence" => "high"}} =
-             S.control_payload("memory.dreaming")
+  test "the control is no directive, min_confidence high and auto_apply_min_confidence medium" do
+    assert {:ok,
+            %{
+              "directive" => nil,
+              "min_confidence" => "high",
+              "auto_apply_min_confidence" => "medium"
+            } = control} = S.control_payload("memory.dreaming")
+
+    assert map_size(control) == 3
+
+    assert S.payload_schema()["properties"]["auto_apply_min_confidence"]["enum"] ==
+             ~w(high medium low)
 
     assert S.render_directive(%{"directive" => nil, "min_confidence" => "high"}) == nil
   end
@@ -28,6 +37,27 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesisTest do
 
     assert {:ok, %{"directive" => nil, "min_confidence" => "low"}} =
              S.validate_payload(%{"directive" => "   ", "min_confidence" => "low"})
+
+    assert {:ok, %{"auto_apply_min_confidence" => "high"}} =
+             S.validate_payload(%{
+               "min_confidence" => "high",
+               "auto_apply_min_confidence" => "high"
+             })
+
+    # Absent means the control's value, so a variant written before the key
+    # existed stays valid.
+    assert {:ok, %{"auto_apply_min_confidence" => "medium"}} =
+             S.validate_payload(%{"min_confidence" => "high"})
+  end
+
+  test "an invalid auto_apply_min_confidence is refused" do
+    for bad <- ["certain", nil, 3] do
+      assert {:error, ["auto_apply_min_confidence must be one of: high, medium, low"]} =
+               S.validate_payload(%{
+                 "min_confidence" => "high",
+                 "auto_apply_min_confidence" => bad
+               })
+    end
   end
 
   test "validate_payload refuses bad payloads" do

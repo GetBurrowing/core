@@ -101,6 +101,135 @@ defmodule Platform.Memory.Insights.BriefingCardTest do
     refute ("call-" <> ck) in member_ids
   end
 
+  # Task 01a15587 stage 4: page edits and tasks the platform applied.
+  defp applied(type, body, artefact_ref, action \\ %{}) do
+    %Insight{
+      id: Ecto.UUID.generate(),
+      action_type: type,
+      tier: "reversible",
+      state: "done",
+      body: body,
+      action: action,
+      artefact_ref: artefact_ref
+    }
+  end
+
+  test "applied page_edit and task lines carry Revert, Delete task and Flag" do
+    task_id = Ecto.UUID.generate()
+    edit = applied("page_edit", "The deploy host moved.", "page:org/page/a.md@v2")
+    filed = applied("task", "Rotate the deploy key.", "task:" <> task_id)
+    [{ek, _}, {tk, _}] = all = entries([edit, filed])
+
+    document = BriefingCard.document(@date, all)
+    assert {:ok, _} = CanvasDocument.validate(document)
+
+    done = CanvasDocument.get_node(document, "section-done")
+    ids = Enum.map(done["children"], & &1["id"])
+
+    assert ids == [
+             "applied-" <> ek,
+             "applied-actions-" <> ek,
+             "applied-" <> tk,
+             "applied-link-" <> tk,
+             "applied-actions-" <> tk
+           ]
+
+    assert %{"type" => "text", "props" => %{"value" => "The deploy host moved."}} =
+             CanvasDocument.get_node(document, "applied-" <> ek)
+
+    actions = fn id ->
+      %{"type" => "action_row", "props" => %{"actions" => actions}} =
+        CanvasDocument.get_node(document, id)
+
+      Enum.map(actions, &{&1["label"], &1["value"]})
+    end
+
+    assert actions.("applied-actions-" <> ek) ==
+             [{"Revert", "insight_revert:" <> ek}, {"Flag", "insight_flag:" <> ek}]
+
+    assert actions.("applied-actions-" <> tk) ==
+             [{"Delete task", "insight_delete_task:" <> tk}, {"Flag", "insight_flag:" <> tk}]
+
+    assert %{"type" => "markdown", "props" => %{"content" => content}} =
+             CanvasDocument.get_node(document, "applied-link-" <> tk)
+
+    assert content == "[Open task](/tasks/#{task_id})"
+
+    # Action values carry node keys, never the insight ids.
+    for {_label, value} <-
+          actions.("applied-actions-" <> ek) ++ actions.("applied-actions-" <> tk),
+        insight <- [edit, filed] do
+      refute value =~ insight.id
+    end
+  end
+
+  test "applied lines render agent prose only in text nodes" do
+    task_id = Ecto.UUID.generate()
+
+    insights = [
+      applied("page_edit", @hostile, "page:org/page/a.md@v2"),
+      applied("task", @hostile, "task:" <> task_id)
+    ]
+
+    document = BriefingCard.document(@date, entries(insights))
+    assert {:ok, _} = CanvasDocument.validate(document)
+
+    hits =
+      for node <- all_nodes(document), Jason.encode!(node["props"] || %{}) =~ "evil", do: node
+
+    assert length(hits) == 2
+    assert Enum.all?(hits, &(&1["type"] == "text" and &1["props"]["value"] == @hostile))
+
+    for node <- all_nodes(document), node["type"] != "text" do
+      refute Jason.encode!(Map.delete(node, "children")) =~ "evil"
+    end
+  end
+
+  test "the task link is built from artefact_ref, never the body or the action" do
+    real = Ecto.UUID.generate()
+    decoy = Ecto.UUID.generate()
+
+    filed =
+      applied(
+        "task",
+        "See [the task](/tasks/#{decoy}) and /tasks/#{decoy}.",
+        "task:" <> real,
+        %{"target" => decoy, "project_id" => decoy, "title" => "/tasks/#{decoy}"}
+      )
+
+    [{key, _}] = all = entries([filed])
+    document = BriefingCard.document(@date, all)
+
+    assert %{"props" => %{"content" => content}} =
+             CanvasDocument.get_node(document, "applied-link-" <> key)
+
+    assert content == "[Open task](/tasks/#{real})"
+
+    for node <- all_nodes(document), node["type"] != "text" do
+      refute Jason.encode!(Map.delete(node, "children")) =~ decoy
+    end
+
+    assert BriefingCard.filed_task_id(filed) == real
+
+    # A ref that is not a canonical uuid renders no link at all; the
+    # controls are still there.
+    for bad <- [
+          "task:#{real})[x](http://evil",
+          "task:not-a-uuid",
+          "task:",
+          "page:org/page/a.md@v2",
+          nil
+        ] do
+      broken = %{filed | artefact_ref: bad}
+      [{k, _}] = one = entries([broken])
+      doc = BriefingCard.document(@date, one)
+      assert BriefingCard.filed_task_id(broken) == nil
+      refute CanvasDocument.get_node(doc, "applied-link-" <> k)
+      assert CanvasDocument.get_node(doc, "applied-actions-" <> k)
+      refute Jason.encode!(doc) =~ "evil"
+    end
+  end
+
   test "node_key is stable and opaque" do
     id = Ecto.UUID.generate()
     assert BriefingCard.node_key(id) == BriefingCard.node_key(id)

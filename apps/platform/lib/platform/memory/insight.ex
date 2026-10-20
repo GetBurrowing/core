@@ -53,6 +53,12 @@ defmodule Platform.Memory.Insight do
     field(:disseminable, :boolean, default: false)
     field(:origin, :string, default: "dreaming")
     field(:expires_at, :utc_datetime_usec)
+    # Who wrote the block (task 01a15587 stage 2): the journal entry's
+    # `authored_by`, an agent id OR a user id, nil when unknown. No foreign
+    # key: it is only compared for equality with the `memory.dreaming`
+    # holder (`Platform.Memory.Insights.Unattended.eligible?/1`), never
+    # joined on.
+    field(:authored_by, :binary_id)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -60,7 +66,7 @@ defmodule Platform.Memory.Insight do
   @required ~w(journal_path block_hash run_id action_type confidence body)a
   @optional ~w(workspace_id org_id evidence source_ref action addressee_user_id addressee_reason
                tier downgraded_from state acted_by acted_at artefact_ref pre_image delivered_at
-               disseminable origin expires_at inserted_at)a
+               disseminable origin expires_at inserted_at authored_by)a
 
   @doc "Enumerated `action_type` values."
   def action_types, do: @action_types
@@ -118,6 +124,29 @@ defmodule Platform.Memory.Insight do
     insight
     |> cast(attrs, [:addressee_user_id, :addressee_reason, :tier, :action, :body])
     |> validate_required([:body])
+    |> validate_inclusion(:tier, @tiers)
+  end
+
+  @doc """
+  Downgrade changeset (task 01a15587 stage 2): rewrites an open `page_edit`
+  whose source no longer resolves into the `question`
+  `Platform.Memory.Insights.Grounding.ground/1` produces, at execute time.
+  Written only by `Platform.Memory.Insights.Actions.apply_unattended/2`.
+  """
+  def downgrade_changeset(insight, attrs) do
+    insight
+    |> cast(attrs, [
+      :action_type,
+      :downgraded_from,
+      :body,
+      :action,
+      :addressee_user_id,
+      :addressee_reason,
+      :tier,
+      :disseminable
+    ])
+    |> validate_required([:action_type, :body])
+    |> validate_inclusion(:action_type, @action_types)
     |> validate_inclusion(:tier, @tiers)
   end
 

@@ -9,6 +9,10 @@ defmodule Platform.Memory.Insights.DigestTest do
   Mutation probes: (a) `Tier.classify/1` -> `:reversible` turns "a
   needs_call insight is never delivered for execution" red; (b) dropping the
   opt-out filter turns "an opted-out user receives nothing" red.
+
+  Task 01a15587 stage 3 probe (a): ignoring `settings.apply_page_edits`
+  (always selecting page_edit) turns "page_edit and task are selected only
+  when their toggle is on" red.
   """
 
   use Platform.DataCase, async: false
@@ -131,6 +135,124 @@ defmodule Platform.Memory.Insights.DigestTest do
     {:ok, _} = Platform.Memory.Insights.mark_delivered(first)
     insight!(addressee: person, action_type: "question", body: "Who owns the bucket")
     assert ids(Digest.select(), person) == []
+  end
+
+  describe "page_edit and task (task 01a15587 stage 3)" do
+    # A reversible page_edit (its target page exists and the hunk applies)
+    # and a task, both authored by the dreaming agent.
+    defp unattended_pair!(person, dreamer, attrs \\ %{}) do
+      key = "org/page/digest-#{System.unique_integer([:positive])}.md"
+      {:ok, _} = Platform.Org.Wiki.upsert_page(key, %{content: "Deploys go to host-a."})
+
+      edit =
+        insight!(
+          Map.merge(
+            %{
+              addressee: person,
+              action_type: "page_edit",
+              authored_by: dreamer.id,
+              action: %{"target" => key, "hunks" => [%{"old" => "host-a", "new" => "host-b"}]}
+            },
+            attrs
+          )
+        )
+
+      task =
+        insight!(
+          Map.merge(
+            %{
+              addressee: person,
+              action_type: "task",
+              authored_by: dreamer.id,
+              action: %{"target" => Ecto.UUID.generate()}
+            },
+            attrs
+          )
+        )
+
+      assert Platform.Memory.Insights.Tier.classify(edit) == :reversible
+      assert Platform.Memory.Insights.Tier.classify(task) == :reversible
+      {edit, task}
+    end
+
+    test "page_edit and task are selected only when their toggle is on" do
+      dreamer = dreaming_agent!()
+      person = person!()
+      briefing = insight!(addressee: person)
+      {edit, task} = unattended_pair!(person, dreamer)
+
+      # Both toggles off (the shipped default): only the briefing.
+      assert ids(Digest.select(), person) == [briefing.id]
+
+      enable_dissemination!(%{apply_page_edits: true})
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([briefing.id, edit.id])
+
+      enable_dissemination!(%{apply_page_edits: false, file_tasks: true})
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([briefing.id, task.id])
+
+      enable_dissemination!(%{apply_page_edits: true, file_tasks: true})
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([briefing.id, edit.id, task.id])
+
+      # Selection writes nothing.
+      for i <- [edit, task] do
+        assert %Insight{state: "open", delivered_at: nil, acted_by: nil} =
+                 Repo.get!(Insight, i.id)
+      end
+    end
+
+    test "with dissemination off nothing is selected even with both toggles on" do
+      dreamer = dreaming_agent!()
+      person = person!()
+      {edit, task} = unattended_pair!(person, dreamer)
+
+      enable_dissemination!(%{apply_page_edits: true, file_tasks: true})
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([edit.id, task.id])
+
+      enable_dissemination!(%{dissemination_enabled: false})
+      assert Digest.select() == %{}
+    end
+
+    test "a low-confidence page_edit is not selected under the control arm" do
+      enable_dissemination!(%{apply_page_edits: true, file_tasks: true})
+      dreamer = dreaming_agent!()
+      person = person!()
+
+      {low_edit, low_task} = unattended_pair!(person, dreamer, %{confidence: "low"})
+      # The control's auto_apply_min_confidence is medium, below the
+      # briefing's high: a medium page_edit and task ARE selected.
+      {medium_edit, medium_task} = unattended_pair!(person, dreamer, %{confidence: "medium"})
+      medium_briefing = insight!(addressee: person, confidence: "medium")
+
+      selected = ids(Digest.select(), person)
+      assert Enum.sort(selected) == Enum.sort([medium_edit.id, medium_task.id])
+      refute low_edit.id in selected
+      refute low_task.id in selected
+      refute medium_briefing.id in selected
+    end
+
+    test "a page_edit not authored by the dreaming agent is not selected" do
+      enable_dissemination!(%{apply_page_edits: true, file_tasks: true})
+      dreamer = dreaming_agent!()
+      person = person!()
+      {edit, task} = unattended_pair!(person, dreamer, %{authored_by: Ecto.UUID.generate()})
+      {ok_edit, ok_task} = unattended_pair!(person, dreamer)
+
+      selected = ids(Digest.select(), person)
+      assert Enum.sort(selected) == Enum.sort([ok_edit.id, ok_task.id])
+      refute edit.id in selected
+      refute task.id in selected
+    end
+
+    test "an opted-out addressee gets no page_edit or task" do
+      enable_dissemination!(%{apply_page_edits: true, file_tasks: true})
+      dreamer = dreaming_agent!()
+      person = person!()
+      {edit, task} = unattended_pair!(person, dreamer)
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([edit.id, task.id])
+
+      {:ok, _} = Accounts.update_user_preference(person.id, "insight_delivery_opt_out", true)
+      refute Map.has_key?(Digest.select(), person.id)
+    end
   end
 
   defp running_experiment!(payload) do

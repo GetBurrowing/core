@@ -313,7 +313,10 @@ defmodule Platform.Org.Context do
   # writes flow through the same upsert path but shouldn't be swept.
   defp maybe_sweep_journal_for_insights(%WikiPage{file_key: file_key} = file) do
     if Insights.journal_path?(file_key) do
-      case Insights.ingest_from_journal(file.workspace_id, file.file_key, file.content) do
+      # The author is nil: a whole-file journal write carries no per-block
+      # author, so nothing ingested here is eligible for unattended action
+      # (task 01a15587 stage 2).
+      case Insights.ingest_from_journal(file.workspace_id, file.file_key, file.content, nil) do
         {:ok, count} when count > 0 ->
           Logger.debug(
             "[memory.insights] ingested #{count} block(s) from #{file.file_key} " <>

@@ -18,11 +18,25 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesis do
       prompt as an `## Experiment directive (memory.insight_synthesis)`
       block, or nil for none. A blank string normalises to nil.
     * `min_confidence`: `"high" | "medium" | "low"`, the least confidence
-      at which an ingested insight is marked `disseminable`.
+      at which an ingested `briefing` or `question` insight is marked
+      `disseminable`.
+    * `auto_apply_min_confidence`: `"high" | "medium" | "low"`, the least
+      confidence at which a `page_edit` or `task` insight is marked
+      `disseminable`, i.e. acted on unattended (applied, or filed to the
+      backlog) when the install's `apply_page_edits` / `file_tasks` switch
+      is on. Below it the insight stays on the Insights tab for a person;
+      it is not downgraded. Optional in a variant payload (absent means the
+      control's value). Task `01a15587-afc8-7000-b76d-4e1c48eee5ed`.
 
-  The control is `%{"directive" => nil, "min_confidence" => "high"}`:
-  no directive block, and only high-confidence insights disseminable.
-  Nothing is seeded, so with no experiment every run gets the control.
+  The control is
+  `%{"directive" => nil, "min_confidence" => "high", "auto_apply_min_confidence" => "medium"}`:
+  no directive block, briefings and questions disseminable at high, and
+  page edits and tasks acted on at medium or above (biased toward acting,
+  because every unattended act is undoable from the briefing). Nothing is
+  seeded, so with no experiment every run gets the control.
+
+  The metric prices the auto-apply arm: a Revert or Delete from the
+  briefing records a `flagged` / `rejected` outcome.
 
   ## Metric
 
@@ -46,9 +60,13 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesis do
 
   @target "memory.dreaming"
   @confidences ~w(high medium low)
-  @keys ~w(directive min_confidence)
+  @keys ~w(directive min_confidence auto_apply_min_confidence)
   @max_directive 4000
-  @control %{"directive" => nil, "min_confidence" => "high"}
+  @control %{
+    "directive" => nil,
+    "min_confidence" => "high",
+    "auto_apply_min_confidence" => "medium"
+  }
 
   @impl true
   def key, do: "memory.insight_synthesis"
@@ -85,7 +103,14 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesis do
         "min_confidence" => %{
           "type" => "string",
           "enum" => @confidences,
-          "description" => "Least confidence at which an insight is disseminable. Control: high."
+          "description" =>
+            "Least confidence at which a briefing or question insight is disseminable. Control: high."
+        },
+        "auto_apply_min_confidence" => %{
+          "type" => "string",
+          "enum" => @confidences,
+          "description" =>
+            "Least confidence at which a page_edit or task insight is acted on unattended. Control: medium."
         }
       }
     }
@@ -98,11 +123,16 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesis do
     directive = normalise_directive(Map.get(payload, "directive"))
     min_confidence = Map.get(payload, "min_confidence")
 
+    auto_apply =
+      Map.get(payload, "auto_apply_min_confidence", @control["auto_apply_min_confidence"])
+
     errors =
       [
         unknown != [] && "unknown keys: #{Enum.join(unknown, ", ")}",
         min_confidence not in @confidences &&
           "min_confidence must be one of: #{Enum.join(@confidences, ", ")}",
+        auto_apply not in @confidences &&
+          "auto_apply_min_confidence must be one of: #{Enum.join(@confidences, ", ")}",
         directive == :invalid && "directive must be a string or null",
         (is_binary(directive) and String.length(directive) > @max_directive) &&
           "directive must be at most #{@max_directive} chars"
@@ -110,8 +140,16 @@ defmodule Platform.Experiments.Surfaces.InsightSynthesis do
       |> Enum.filter(&is_binary/1)
 
     case errors do
-      [] -> {:ok, %{"directive" => directive, "min_confidence" => min_confidence}}
-      errors -> {:error, errors}
+      [] ->
+        {:ok,
+         %{
+           "directive" => directive,
+           "min_confidence" => min_confidence,
+           "auto_apply_min_confidence" => auto_apply
+         }}
+
+      errors ->
+        {:error, errors}
     end
   end
 

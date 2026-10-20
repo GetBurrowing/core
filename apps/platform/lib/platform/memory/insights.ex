@@ -9,7 +9,7 @@ defmodule Platform.Memory.Insights do
 
   ## Two tables, two lifetimes
 
-      journal write ─► ingest_from_journal/3 ─► memory_insights (open)
+      journal write ─► ingest_from_journal/4 ─► memory_insights (open)
                                                    │
                          record_outcome :acted ────┼─► done  ─► Signal "accepted"
                          reject (reason)       ────┼─► dismissed + verdict "rejected"
@@ -34,7 +34,7 @@ defmodule Platform.Memory.Insights do
   `run_id/2` derives a uuid-shaped id from `(workspace_id, journal date)`,
   so the dreaming dispatch (which resolves the `memory.insight_synthesis`
   experiment surface for that run) and this ingest (which reads the same
-  arm's `min_confidence`) agree on the subject without the model copying an
+  arm's thresholds) agree on the subject without the model copying an
   id into its output.
 
   ## Signals
@@ -105,22 +105,37 @@ defmodule Platform.Memory.Insights do
   Parse `content` for `<synthesis-insight>` blocks and insert one open
   insight per new, well-formed block. Returns `{:ok, inserted_count}`.
 
+  `authored_by` is who wrote the content (the journal entry's
+  `authored_by`: an agent id or a user id), or nil when the writer is not
+  known. It is stored on every inserted row as `authored_by` (task 01a15587
+  stage 2). Only an insight authored by the `memory.dreaming` holder is
+  eligible for unattended action
+  (`Platform.Memory.Insights.Unattended.eligible?/1`); any other author's
+  block is still ingested and stays person-actable on the Insights tab.
+
   `<synthesis-proposal>` blocks are not read here.
   """
-  @spec ingest_from_journal(binary() | nil, String.t(), String.t() | nil) ::
+  @spec ingest_from_journal(binary() | nil, String.t(), String.t() | nil, binary() | nil) ::
           {:ok, non_neg_integer()}
-  def ingest_from_journal(workspace_id, journal_path, content) when is_binary(journal_path) do
+  def ingest_from_journal(workspace_id, journal_path, content, authored_by)
+      when is_binary(journal_path) do
     case Parser.parse(content) do
       [] ->
         {:ok, 0}
 
       blocks ->
         run_id = run_id(workspace_id, journal_date(journal_path))
-        min_confidence = min_confidence(run_id)
+
+        thresholds = %{
+          min_confidence: min_confidence(run_id),
+          auto_apply_min_confidence: auto_apply_min_confidence(run_id)
+        }
 
         inserted =
           blocks
-          |> Enum.map(&insert_block(&1, workspace_id, journal_path, run_id, min_confidence))
+          |> Enum.map(
+            &insert_block(&1, workspace_id, journal_path, run_id, thresholds, authored_by)
+          )
           |> Enum.filter(&match?({:ok, _}, &1))
 
         Enum.each(inserted, fn {:ok, insight} -> broadcast(:ingested, insight) end)
@@ -135,7 +150,7 @@ defmodule Platform.Memory.Insights do
     end
   end
 
-  defp insert_block(parsed, workspace_id, journal_path, run_id, min_confidence) do
+  defp insert_block(parsed, workspace_id, journal_path, run_id, thresholds, authored_by) do
     if duplicate?(workspace_id, parsed.block_hash) do
       {:conflict, :duplicate}
     else
@@ -147,9 +162,10 @@ defmodule Platform.Memory.Insights do
           journal_path: journal_path,
           run_id: run_id,
           origin: "dreaming",
-          disseminable: meets?(parsed.confidence, min_confidence)
+          authored_by: authored_by
         })
         |> Grounding.ground()
+        |> put_disseminable(thresholds)
         |> route_and_tier()
 
       %Insight{}
@@ -224,6 +240,39 @@ defmodule Platform.Memory.Insights do
 
   @confidence_rank %{"high" => 3, "medium" => 2, "low" => 1}
 
+  # Decided on the GROUNDED action type: a page_edit that grounding turned
+  # into a question is held to the question threshold. A page_edit or task
+  # below `auto_apply_min_confidence` is not disseminable and stays on the
+  # Insights tab for a person; it is not downgraded.
+  defp put_disseminable(%{action_type: type, confidence: confidence} = attrs, thresholds)
+       when type in ["page_edit", "task"],
+       do: Map.put(attrs, :disseminable, meets?(confidence, thresholds.auto_apply_min_confidence))
+
+  defp put_disseminable(%{confidence: confidence} = attrs, thresholds),
+    do: Map.put(attrs, :disseminable, meets?(confidence, thresholds.min_confidence))
+
+  @doc """
+  Whether an insight with these fields is disseminable under its run's arm:
+  the rule ingest applies, for a row whose action type changed after ingest
+  (`Platform.Memory.Insights.Actions.apply_unattended/2` downgrading a
+  `page_edit` to a `question` holds it to the question threshold, exactly as
+  ingest would have).
+  """
+  @spec disseminable?(%{action_type: String.t(), confidence: String.t(), run_id: String.t()}) ::
+          boolean()
+  def disseminable?(%{action_type: _, confidence: _, run_id: run_id} = insight)
+      when is_binary(run_id) do
+    thresholds = %{
+      min_confidence: min_confidence(run_id),
+      auto_apply_min_confidence: auto_apply_min_confidence(run_id)
+    }
+
+    insight
+    |> Map.take([:action_type, :confidence])
+    |> put_disseminable(thresholds)
+    |> Map.fetch!(:disseminable)
+  end
+
   defp meets?(confidence, min_confidence),
     do: Map.get(@confidence_rank, confidence, 0) >= Map.get(@confidence_rank, min_confidence, 3)
 
@@ -231,6 +280,22 @@ defmodule Platform.Memory.Insights do
   defp min_confidence(run_id) do
     payload = synthesis_payload(run_id)
     Map.get(payload, "min_confidence") || "high"
+  end
+
+  @doc """
+  The arm's `auto_apply_min_confidence` for `run_id`: the least confidence
+  at which a `page_edit` or `task` insight is acted on unattended. The
+  control's value (`"medium"`) when the arm carries none or is not a known
+  confidence. Never raises.
+  """
+  @spec auto_apply_min_confidence(String.t()) :: String.t()
+  def auto_apply_min_confidence(run_id) when is_binary(run_id) do
+    control = InsightSynthesis.control()["auto_apply_min_confidence"]
+
+    case Map.get(synthesis_payload(run_id), "auto_apply_min_confidence") do
+      confidence when is_map_key(@confidence_rank, confidence) -> confidence
+      _ -> control
+    end
   end
 
   @doc """
@@ -341,9 +406,15 @@ defmodule Platform.Memory.Insights do
 
     * an acted `page_edit` whose row still holds its pre-image is restored
       through `Platform.Memory.Insights.Actions.revert/3` as the `:scope`
-      given, then dismissed so it does not sit open again. A revert that is
-      refused (no scope, `:stale`, not permitted) leaves the page as it is;
-      the verdict stands either way;
+      given, then dismissed so it does not sit open again. For a page edit
+      applied UNATTENDED, a recipient's flag reverts it as the agent that
+      applied it, so it works for a recipient without `memory.write`
+      (task 01a15587 stage 4). A revert that is refused (no scope,
+      `:stale`, not permitted) leaves the page as it is; the verdict stands
+      either way;
+    * a `task` filed unattended is soft-deleted the same way, through
+      `Platform.Memory.Insights.Actions.delete_filed_task/3`, only while it
+      is still in backlog; otherwise the task is left as it is;
     * every delivered briefing line or question is retracted on its canvas:
       the line reads `"Retracted: <reason>"` and its buttons are removed
       (`Platform.Memory.Insights.Briefings.retract/2`).
@@ -389,7 +460,71 @@ defmodule Platform.Memory.Insights do
     end
   end
 
+  defp undo_flagged(
+         %Insight{action_type: "task", state: "done", pre_image: %{"unattended" => true}} =
+           insight,
+         %Platform.Access.Scope{} = scope
+       ) do
+    case Actions.delete_filed_task(insight, scope) do
+      {:ok, undone} ->
+        undone
+
+      other ->
+        Logger.warning(
+          "[memory.insights] flagged task #{insight.id} not deleted: " <>
+            inspect(other, limit: 3)
+        )
+
+        insight
+    end
+  end
+
   defp undo_flagged(insight, _scope), do: insight
+
+  @doc """
+  Revert from the briefing (task 01a15587 stage 4): `Actions.revert/3` as
+  the clicker `scope` (for the recipient of an unattended edit the write is
+  the acting agent's), then a durable `rejected` verdict with reason
+  `"reverted from briefing"` and the clicker as actor, then the item is
+  settled on every briefing that lists it ("Reverted."). A refused revert
+  writes no verdict and leaves the line and its buttons as they are.
+  """
+  @spec revert_from_briefing(Insight.t() | binary(), Platform.Access.Scope.t()) ::
+          {:ok, Insight.t()} | {:error, term()}
+  def revert_from_briefing(insight_or_id, scope) do
+    undo_from_briefing(
+      fn -> Actions.revert(insight_or_id, scope) end,
+      scope,
+      "reverted from briefing",
+      "Reverted."
+    )
+  end
+
+  @doc """
+  Delete task from the briefing (task 01a15587 stage 4):
+  `Actions.delete_filed_task/3` as the clicker `scope`, then a durable
+  `rejected` verdict with reason `"task deleted from briefing"`, then the
+  item is settled ("Task deleted."). A refused delete writes nothing.
+  """
+  @spec delete_task_from_briefing(Insight.t() | binary(), Platform.Access.Scope.t()) ::
+          {:ok, Insight.t()} | {:error, term()}
+  def delete_task_from_briefing(insight_or_id, scope) do
+    undo_from_briefing(
+      fn -> Actions.delete_filed_task(insight_or_id, scope) end,
+      scope,
+      "task deleted from briefing",
+      "Task deleted."
+    )
+  end
+
+  defp undo_from_briefing(undo, scope, reason, note) do
+    with {:ok, undone} <- undo.(),
+         {:ok, judged} <-
+           verdict(undone, "rejected", reason, [actor_id: Actions.scope_actor_id(scope)], nil) do
+      Platform.Memory.Insights.Briefings.settle(judged.id, note)
+      {:ok, judged}
+    end
+  end
 
   defp verdict(%Insight{} = insight, kind, reason, opts, state_change) do
     actor_id = Keyword.get(opts, :actor_id)

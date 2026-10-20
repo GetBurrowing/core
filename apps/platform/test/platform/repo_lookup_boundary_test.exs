@@ -897,8 +897,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a0008c stage 5 — `rule_claim/3`'s guard on the claimant id it reads out of a card's FRONTMATTER before handing it to `Files.get_file/1`. Frontmatter is a parsed YAML map on a wiki page: the cataloger writes a real `platform_files.id` there, but the same page is writable through `Wiki.upsert_page/3`, which performs no authorization at all, so the value is agent-reachable and cannot be treated as internal. `Files.get_file/1` carries its own classified guard, so this one is belt-and-braces at the boundary rather than the only rail — it is what makes a malformed claimant id return the `{:error, :no_card}` the caller already handles instead of relying on the callee's guard to fold it into a nil this function would then have to re-interpret"},
     {"platform/memory/insights.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "Insights.get/1's guard on the insight id a LiveView or canvas action supplies (task 01a13867 stage 1). 1 -> 2 at task 01a13867 stage 2: `ingest_org_id/1` guards the `project/<id>/` segment of the journal path before `where: p.id == ^project_id` (this file's `@repo_one_counts` entry); a non-UUID segment falls back to the root org"},
+    {"platform/memory/insights/briefing_card.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a15587 stage 4: `filed_task_id/1` checks the uuid in a task insight's `artefact_ref` (`\"task:<uuid>\"`) with Platform.UUID.valid?/1 before it is rendered into the briefing's `/tasks/<uuid>` link or handed to `Tasks.get_task_record/1` by `Actions.delete_filed_task/3`. The ref is written by the platform when it files the task, but the column is free text, so a malformed value renders no link and is `{:error, :not_retractable}`, never a CastError"},
     {"platform/memory/insights/briefings.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a13867 stage 4: `get_by_canvas/1` checks the canvas id with Platform.UUID.valid?/1 before `Repo.get_by(Briefing, canvas_id: ...)`; the only caller passes a loaded canvas row's id, and the guard keeps any other caller's malformed id a nil rather than a CastError"},
+    {"platform/memory/insights/unattended.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a15587 stage 4: `agent/1` checks the agent id with Platform.UUID.valid?/1 before `where: a.id == ^id` (this file's `@repo_one_counts` entry). It takes either `Roles.agent_id_for_role/1`'s uuid column value or the `acting_agent_id` an unattended act stored in the insight's jsonb `pre_image`, which `undo_page_edit_actor/2` / `undo_task_actor/1` read back; a malformed value is no agent, so the undo is `{:error, :unauthorized}`"},
     {"platform/memory/insights/grounding.ex", :platform_uuid_guard, "-", 3, :safe_internal,
      "task 01a13867 stage 2: the `task:<uuid>` and `message:<uuid>` source refs and `author_user/1`'s author id are each checked with Platform.UUID.valid?/1 before their `where: x.id == ^id`. The refs are parsed out of a dreaming agent's `source` attribute and the author id is a page's `updated_by` or a journal entry's `authored_by`, so all three are agent-reachable; a malformed id is ungrounded / unresolved, never a CastError"},
     {"platform/memory/insights/routing.ex", :platform_uuid_guard, "-", 3, :safe_internal,
@@ -1378,6 +1382,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # off `Roles.assignee_for/1`'s `%Agent{}` and a user id from
     # `Digest.select/2` (uuid column values); no boundary input reaches it.
     "platform/memory/insights/disseminator.ex" => 1,
+    # Task 01a15587 stage 2. unattended.ex: `historian/0` pins `a.id` to the
+    # `role_assignments.agent_id` `Roles.agent_id_for_role/1` returns, a uuid
+    # column value, so no boundary input reaches it. (Stage 3 replaced the
+    # runtime query with `Federation.get_runtime_for_agent/1`: 2 -> 1.)
+    # Stage 4 moved that one query into `agent/1`, shared with the undo
+    # actors, behind Platform.UUID.valid?/1 (this file's
+    # `:platform_uuid_guard` entry): still 1.
+    "platform/memory/insights/unattended.ex" => 1,
     # Task 01a10db6: 0 -> 5 in the iOS App Intents entity layer. Triaged by
     # hand: `fetch_own_approval/2` pins `i.id == ^item_id` behind
     # `Platform.UUID.valid?/1`; `user_participant/2` pins `space.id` off a

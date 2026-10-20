@@ -76,26 +76,88 @@ defmodule Platform.Memory.Insights.Actions do
   could reroute a `needs_call` insight to an internal person, which
   re-runs the tier to `reversible`, and then act on it.
 
+  ## apply_unattended/2 (task 01a15587 stage 2)
+
+  Acts on an insight with NO person clicking, as the identity
+  `Platform.Memory.Insights.Unattended` names. It re-reads the row (live
+  and `open`), requires the tier to be `:reversible` now
+  (`{:error, :unauthorized}` otherwise) and the insight to be
+  `Unattended.eligible?/1`, i.e. authored by the `memory.dreaming` holder
+  (`{:error, :not_eligible}` otherwise). Then:
+
+    * `page_edit`: the source is RE-GROUNDED through
+      `Platform.Memory.Insights.Grounding.ground/1` (`grounded?/1`). One that no longer
+      resolves is rewritten into the question `Grounding.ground/1` produces
+      (`Insight.downgrade_changeset/2`, held to the question threshold) and
+      the answer is `{:ok, :downgraded, insight}`, with nothing written to
+      the page. A grounded one runs the same write body as `act/3` under
+      the Historian's scope (`Unattended.page_edit_actor/1`: the wiki gate
+      AND `memory.write`); `{:error, :no_historian}` or
+      `{:error, :unauthorized}` writes nothing. The page's `updated_by` and
+      the insight's `acted_by` are the Historian's agent id.
+    * `task`: an insight with no addressee is `{:error, :no_sponsor}` and
+      nothing is filed. Otherwise the same write body as `act/3` runs under
+      the `memory.dreaming` holder's scope (`Unattended.task_actor/0`),
+      filing into backlog with no assignee, `auto_approve_plan` false, the
+      addressee as sponsor, and `reported_by` / `metadata` naming the
+      insight and the agent.
+
+  The stored `pre_image` carries `"unattended" => true` and
+  `"acting_agent_id"` (with the page pre-image for a `page_edit`), so an
+  undo knows the act was automatic and whose identity performed it.
+
   ## revert/2
 
   Only for an acted `page_edit` whose pre-image the row still holds, which
   is only while the row lives: pages have no revision table, so once the
-  row is purged there is nothing to revert to. The page must still be at
-  the version the act wrote (`{:error, :stale}` otherwise, page untouched).
-  The pre-image content is written back as a new version and the insight
-  returns to `open`.
+  row is purged there is nothing to revert to (the TTL is 7 days,
+  `Platform.Memory.Insight`'s `@default_ttl_days`; it is not extended for
+  undo). The page must still be at the version the act wrote,
+  `pre_image["written_version"]` (`{:error, :stale}` otherwise, page
+  untouched), and only the stored pre-image content is written, as a new
+  version. A person's act returns to `open`; an unattended act is
+  `dismissed` instead, so the next digest run does not apply it again.
+
+  ## Undo from the briefing (task 01a15587 stage 4)
+
+  An unattended act is done FOR the person whose briefing lists it, who
+  often lacks `memory.write` or `tasks.write` themselves. So the RECIPIENT
+  (a user with a `memory_briefings` row rendering this insight,
+  `Platform.Memory.Insights.Briefings.containing/1`) may undo THIS
+  insight's own artefact, and the undo runs as the identity that acted
+  (`Platform.Memory.Insights.Unattended.undo_page_edit_actor/2` /
+  `undo_task_actor/1`, from `pre_image["acting_agent_id"]`). The clicker is
+  the actor of the verdict that `Platform.Memory.Insights` records for the
+  undo, not of the write.
+
+    * `revert/2` on an unattended page_edit: for the recipient, the write
+      is the acting agent's (`updated_by` = that agent, its wiki gate and
+      `memory.write` re-checked now). Anyone else needs `memory.write`
+      themselves, exactly as for a person's act.
+    * `delete_filed_task/3`: recipient only, unattended `task` only. The
+      task is the one `artefact_ref` names
+      (`Platform.Memory.Insights.BriefingCard.filed_task_id/1`), it must
+      carry this insight's id in its metadata, still be `backlog` and not
+      deleted (else `{:error, :not_retractable}`), and the acting agent's
+      scope must still have `tasks.write` on it. Then
+      `Platform.Tasks.soft_delete_task/1`, and the insight is `dismissed`.
   """
 
   alias Platform.Access
   alias Platform.Access.Scope
+  alias Platform.Accounts.User
+  alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
+  alias Platform.Memory.Insights.BriefingCard
   alias Platform.Memory.Insights.Briefings
   alias Platform.Memory.Insights.Disseminator
+  alias Platform.Memory.Insights.Grounding
   alias Platform.Memory.Insights.Hunks
   alias Platform.Memory.Insights.Routing
   alias Platform.Memory.Insights.Tier
+  alias Platform.Memory.Insights.Unattended
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.Journal
   alias Platform.Repo
@@ -114,6 +176,10 @@ defmodule Platform.Memory.Insights.Actions do
           | :no_addressee
           | :no_agent
           | :opted_out
+          | :not_eligible
+          | :no_sponsor
+          | :no_historian
+          | :not_retractable
 
   @title_max 255
 
@@ -128,7 +194,7 @@ defmodule Platform.Memory.Insights.Actions do
     with {:ok, insight} <- live(insight_or_id, now),
          :ok <- open(insight),
          :ok <- tier_permits(insight, scope) do
-      execute(insight, scope, now)
+      execute(insight, scope, now, nil)
     end
   end
 
@@ -139,7 +205,10 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp execute(%Insight{action_type: "page_edit"} = insight, scope, now) do
+  # The one write body for a page_edit and a task, shared by the person's
+  # `act/3` (`acting` nil) and `apply_unattended/2` (`acting` the agent that
+  # acts). `scope` is whose authority the write runs under in both cases.
+  defp execute(%Insight{action_type: "page_edit"} = insight, scope, now, acting) do
     key = Map.get(insight.action, "target")
 
     with true <- is_binary(key) || {:error, :invalid},
@@ -160,12 +229,16 @@ defmodule Platform.Memory.Insights.Actions do
                  actor_id: actor_id(scope),
                  now: now,
                  artefact_ref: "page:#{written.file_key}@v#{written.version}",
-                 pre_image: %{
-                   "file_key" => page.file_key,
-                   "content" => page.content,
-                   "version" => page.version,
-                   "written_version" => written.version
-                 }
+                 pre_image:
+                   Map.merge(
+                     %{
+                       "file_key" => page.file_key,
+                       "content" => page.content,
+                       "version" => page.version,
+                       "written_version" => written.version
+                     },
+                     unattended_marker(acting)
+                   )
                ) do
           acted
         else
@@ -176,19 +249,20 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp execute(%Insight{action_type: "task"} = insight, scope, now) do
+  defp execute(%Insight{action_type: "task"} = insight, scope, now, acting) do
     project_id = Map.get(insight.action, "project_id") || Map.get(insight.action, "target")
 
     case Access.task_target(scope, {:project, project_id}, "tasks.write") do
       {:ok, {:project, project_id}} ->
         Repo.transaction(fn ->
-          with {:ok, task} <- Tasks.create_task(task_attrs(insight, project_id)),
+          with {:ok, task} <- Tasks.create_task(task_attrs(insight, project_id, acting)),
                {:ok, acted} <-
                  Insights.record_outcome(insight, :acted,
                    broadcast: false,
                    actor_id: actor_id(scope),
                    now: now,
-                   artefact_ref: "task:#{task.id}"
+                   artefact_ref: "task:#{task.id}",
+                   pre_image: unattended_pre_image(acting)
                  ) do
             acted
           else
@@ -202,7 +276,7 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp execute(%Insight{action_type: type} = insight, scope, now)
+  defp execute(%Insight{action_type: type} = insight, scope, now, nil)
        when type in ["question", "briefing"] do
     with :ok <- internal(scope),
          user_id when is_binary(user_id) <- insight.addressee_user_id || {:error, :no_addressee},
@@ -211,16 +285,42 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp execute(%Insight{}, _scope, _now), do: {:error, :not_supported}
+  defp execute(%Insight{}, _scope, _now, _acting), do: {:error, :not_supported}
 
-  defp task_attrs(insight, project_id) do
-    %{
+  # A person's act files with the defaults. An unattended act files into
+  # backlog with no assignee and no auto-approval, and names the insight
+  # and the filing agent, so the task is a proposal a person picks up.
+  defp task_attrs(insight, project_id, acting) do
+    base = %{
       project_id: project_id,
       title: task_title(insight),
       description: insight.body <> "\n\n_Filed from a dreaming insight (#{insight.id})._",
       sponsor_user_id: insight.addressee_user_id
     }
+
+    case acting do
+      nil ->
+        base
+
+      %Agent{} = agent ->
+        Map.merge(base, %{
+          status: "backlog",
+          auto_approve_plan: false,
+          reported_by: "dreaming insight #{insight.id} (agent #{agent.slug})",
+          metadata: %{"insight_id" => insight.id, "filed_by_agent_id" => agent.id}
+        })
+    end
   end
+
+  # What `revert/2` and the stage-4 undo read to know an act was unattended
+  # and who acted.
+  defp unattended_marker(nil), do: %{}
+
+  defp unattended_marker(%Agent{id: id}),
+    do: %{"unattended" => true, "acting_agent_id" => id}
+
+  defp unattended_pre_image(nil), do: nil
+  defp unattended_pre_image(%Agent{} = agent), do: unattended_marker(agent)
 
   defp task_title(insight) do
     insight.action
@@ -234,6 +334,89 @@ defmodule Platform.Memory.Insights.Actions do
     case Hunks.apply_all(content || "", hunks) do
       {:ok, new_content} -> {:ok, new_content}
       :stale -> {:error, :stale}
+    end
+  end
+
+  # ── apply_unattended (task 01a15587 stage 2) ─────────────────────────
+
+  @doc """
+  Act on an insight with no person clicking. See "apply_unattended/2" in
+  the moduledoc.
+  """
+  @spec apply_unattended(Insight.t() | binary(), keyword()) ::
+          {:ok, Insight.t()}
+          | {:ok, :downgraded, Insight.t()}
+          | {:error, error() | Ecto.Changeset.t()}
+  def apply_unattended(insight_or_id, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, insight} <- live(insight_or_id, now),
+         :ok <- open(insight),
+         :ok <- reversible(insight),
+         :ok <- eligible(insight) do
+      unattended(insight, now)
+    end
+  end
+
+  defp reversible(insight) do
+    case Tier.classify(insight) do
+      :reversible -> :ok
+      :needs_call -> unauthorized()
+    end
+  end
+
+  defp eligible(insight),
+    do: if(Unattended.eligible?(insight), do: :ok, else: {:error, :not_eligible})
+
+  defp unattended(%Insight{action_type: "page_edit"} = insight, now) do
+    case Grounding.ground(Map.from_struct(insight)) do
+      %{action_type: "page_edit"} ->
+        with key when is_binary(key) <- Map.get(insight.action, "target") || {:error, :invalid},
+             {:ok, agent, scope} <- Unattended.page_edit_actor(key) do
+          execute(insight, scope, now, agent)
+        end
+
+      question ->
+        downgrade(insight, question)
+    end
+  end
+
+  defp unattended(%Insight{action_type: "task"} = insight, now) do
+    with user_id when is_binary(user_id) <- insight.addressee_user_id || {:error, :no_sponsor},
+         {:ok, agent, scope} <- Unattended.task_actor() do
+      execute(insight, scope, now, agent)
+    end
+  end
+
+  defp unattended(%Insight{}, _now), do: {:error, :not_supported}
+
+  # The source no longer resolves: rewrite the row into the question
+  # grounding would have produced at ingest. Nothing touches the page.
+  defp downgrade(%Insight{} = insight, grounded) do
+    question = struct(insight, Map.take(grounded, [:action_type, :addressee_user_id, :action]))
+
+    attrs =
+      grounded
+      |> Map.take([
+        :action_type,
+        :downgraded_from,
+        :body,
+        :action,
+        :addressee_user_id,
+        :addressee_reason
+      ])
+      |> Map.merge(%{
+        tier: Tier.label(Tier.classify(question)),
+        disseminable: Insights.disseminable?(question)
+      })
+
+    case insight |> Insight.downgrade_changeset(attrs) |> Repo.update() do
+      {:ok, downgraded} ->
+        Insights.broadcast(:edited, downgraded)
+        {:ok, :downgraded, downgraded}
+
+      {:error, _changeset} = error ->
+        error
     end
   end
 
@@ -380,7 +563,7 @@ defmodule Platform.Memory.Insights.Actions do
 
     with {:ok, insight} <- live(insight_or_id, now),
          {:ok, pre} <- pre_image(insight),
-         :ok <- may_write_memory(scope, pre["file_key"]),
+         {:ok, writer} <- revert_writer(insight, pre, scope),
          %{} = page <-
            Wiki.get_page(pre["file_key"], workspace_id: insight.workspace_id) || not_found(),
          true <- page.version == pre["written_version"] || {:error, :stale} do
@@ -388,27 +571,135 @@ defmodule Platform.Memory.Insights.Actions do
         with {:ok, _restored} <-
                Wiki.upsert_page(
                  page.file_key,
-                 %{content: pre["content"], updated_by: actor_id(scope)},
+                 %{content: pre["content"], updated_by: actor_id(writer)},
                  workspace_id: insight.workspace_id,
                  expected_version: page.version
                ),
-             {:ok, reopened} <-
-               insight
-               |> Insight.outcome_changeset(%{
-                 state: "open",
-                 acted_by: nil,
-                 acted_at: nil,
-                 artefact_ref: nil,
-                 pre_image: nil
-               })
-               |> Repo.update() do
-          reopened
+             {:ok, undone} <- undo_outcome(insight, pre) do
+          undone
         else
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
       |> broadcast_ok(:reverted)
     end
+  end
+
+  # Whose authority the revert's write runs under (see "Undo from the
+  # briefing"): the acting agent's for the recipient of an unattended act,
+  # else the clicker's own `memory.write`.
+  defp revert_writer(insight, %{"unattended" => true} = pre, scope) do
+    if recipient?(insight, scope) do
+      case Unattended.undo_page_edit_actor(pre["acting_agent_id"], pre["file_key"]) do
+        {:ok, _agent, acting} -> {:ok, acting}
+        {:error, _reason} -> unauthorized()
+      end
+    else
+      clicker_writer(scope, pre["file_key"])
+    end
+  end
+
+  defp revert_writer(_insight, pre, scope), do: clicker_writer(scope, pre["file_key"])
+
+  defp clicker_writer(scope, key) do
+    with :ok <- may_write_memory(scope, key), do: {:ok, scope}
+  end
+
+  # A person's act reopens; an unattended one is dismissed so the digest
+  # does not select it and apply it again.
+  defp undo_outcome(insight, pre) do
+    state = if unattended?(pre), do: "dismissed", else: "open"
+
+    insight
+    |> Insight.outcome_changeset(%{
+      state: state,
+      acted_by: nil,
+      acted_at: nil,
+      artefact_ref: nil,
+      pre_image: nil
+    })
+    |> Repo.update()
+  end
+
+  defp unattended?(%{"unattended" => true}), do: true
+  defp unattended?(_pre), do: false
+
+  # The recipient: a person with a briefing row that renders this insight.
+  # Read from the rows, never from the click.
+  defp recipient?(%Insight{id: id}, %Scope{actor: %User{id: user_id}} = scope)
+       when is_binary(user_id) do
+    not Scope.guest?(scope) and
+      Enum.any?(Briefings.containing(id), &(&1.user_id == user_id))
+  end
+
+  defp recipient?(_insight, _scope), do: false
+
+  # ── delete_filed_task (task 01a15587 stage 4) ────────────────────────
+
+  @doc """
+  Soft-delete the backlog task an unattended `task` insight filed, for the
+  recipient of the briefing that lists it, as the agent that filed it. See
+  "Undo from the briefing" in the moduledoc.
+  """
+  @spec delete_filed_task(Insight.t() | binary(), Scope.t(), keyword()) ::
+          {:ok, Insight.t()} | {:error, error() | Ecto.Changeset.t()}
+  def delete_filed_task(insight_or_id, %Scope{} = scope, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, insight} <- live(insight_or_id, now),
+         {:ok, agent_id, task_id} <- filed_by_agent(insight),
+         true <- recipient?(insight, scope) || unauthorized(),
+         {:ok, _agent, acting} <- task_undo_actor(agent_id),
+         {:ok, _typed} <- task_writable(acting, task_id),
+         %Tasks.Task{} = task <- Tasks.get_task_record(task_id) || not_found(),
+         :ok <- retractable(task, insight) do
+      Repo.transaction(fn ->
+        with {:ok, _deleted} <- Tasks.soft_delete_task(task),
+             {:ok, undone} <- undo_outcome(insight, insight.pre_image) do
+          undone
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> broadcast_ok(:task_deleted)
+    end
+  end
+
+  defp filed_by_agent(
+         %Insight{
+           state: "done",
+           pre_image: %{"unattended" => true, "acting_agent_id" => agent_id}
+         } =
+           insight
+       ) do
+    case BriefingCard.filed_task_id(insight) do
+      task_id when is_binary(task_id) -> {:ok, agent_id, task_id}
+      nil -> {:error, :not_retractable}
+    end
+  end
+
+  defp filed_by_agent(_insight), do: {:error, :not_retractable}
+
+  defp task_undo_actor(agent_id) do
+    case Unattended.undo_task_actor(agent_id) do
+      {:ok, _agent, _scope} = ok -> ok
+      {:error, _reason} -> unauthorized()
+    end
+  end
+
+  defp task_writable(scope, task_id) do
+    case Access.task_target(scope, {:task, task_id}, "tasks.write") do
+      {:ok, typed} -> {:ok, typed}
+      :not_found -> not_found()
+    end
+  end
+
+  # Only the task this insight filed, only while nobody has picked it up.
+  defp retractable(%Tasks.Task{} = task, %Insight{id: insight_id}) do
+    if task.status == "backlog" and is_nil(task.deleted_at) and
+         is_map(task.metadata) and task.metadata["insight_id"] == insight_id,
+       do: :ok,
+       else: {:error, :not_retractable}
   end
 
   defp pre_image(%Insight{

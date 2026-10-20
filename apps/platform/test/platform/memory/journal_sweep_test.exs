@@ -43,7 +43,9 @@ defmodule Platform.Memory.JournalSweepTest do
                  updated_by: nil
                })
 
-      assert [%{body: "Ingested via the sweep hook."}] = Repo.all(Insight)
+      # A whole-file journal write carries no per-block author (task 01a15587
+      # stage 2), so the insight is not eligible for unattended action.
+      assert [%{body: "Ingested via the sweep hook.", authored_by: nil}] = Repo.all(Insight)
       assert Repo.aggregate("memory_proposals", :count) == 0
     end
 
@@ -122,6 +124,37 @@ defmodule Platform.Memory.JournalSweepTest do
       assert {:ok, _} = append_and_sweep(%{content: content, date: ~D[2026-07-17]}, "org")
 
       assert [%{body: "Written twice, ingested once."}] = Repo.all(Insight)
+    end
+
+    test "authored_by is stored from the entry" do
+      agent =
+        Repo.insert!(%Platform.Agents.Agent{
+          slug: "sweep-author-#{System.unique_integer([:positive])}",
+          name: "Sweep author",
+          status: "active"
+        })
+
+      content =
+        ~s(<synthesis-insight action="briefing" confidence="high">Written by an agent.</synthesis-insight>)
+
+      assert {:ok, entry} =
+               append_and_sweep(
+                 %{content: content, date: ~D[2026-07-17], authored_by: agent.id},
+                 "org"
+               )
+
+      assert entry.authored_by == agent.id
+      assert [%Insight{authored_by: authored_by}] = Repo.all(Insight)
+      assert authored_by == agent.id
+
+      # An entry with no author ingests an insight with none.
+      anonymous =
+        ~s(<synthesis-insight action="briefing" confidence="high">Written by nobody known.</synthesis-insight>)
+
+      assert {:ok, _} = append_and_sweep(%{content: anonymous, date: ~D[2026-07-17]}, "org")
+
+      assert %Insight{authored_by: nil} =
+               Repo.get_by!(Insight, body: "Written by nobody known.")
     end
 
     test "raw Journal.append/2 without the sweep ingests nothing" do

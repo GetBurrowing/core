@@ -567,7 +567,12 @@ config :platform,
        # Alias, two calls, one renamed private fn and their comments; the
        # hook still runs outside the write transaction. T5 still retires
        # this module.
-       "efb597fd9b981c7c36fa163ed360dc9fee2d8b2ba8b92ca7fe464e83df41aba1"
+       #
+       # Bumped again by task 01a15587 stage 2 (Insights authorship): the
+       # sweep hook calls `Insights.ingest_from_journal/4`, passing nil as the
+       # author (a whole-file journal write carries no per-block author), plus
+       # a three-line comment saying so. T5 still retires this module.
+       "781a8f7ded42b6af42060362b8318d94ec37f794ab5cd7aff1766314d08cd048"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

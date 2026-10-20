@@ -12,6 +12,7 @@ defmodule PlatformWeb.AdminInsightsLiveTest do
   import Platform.TenancyFixtures
 
   alias Platform.Memory.Insights.Settings
+  alias PlatformWeb.AdminInsightsLive
 
   @form "#admin-insights-form"
 
@@ -41,7 +42,8 @@ defmodule PlatformWeb.AdminInsightsLiveTest do
           "Questions to addressees",
           "Apply page edits automatically",
           "File backlog tasks",
-          "Only high-confidence insights are sent. Mail outside the org, deletes and permission changes always wait for a person."
+          "Briefings and questions are sent at high confidence. Page edits and backlog tasks are applied at medium confidence or above, and each can be reverted or deleted from the briefing. Mail outside the org, delete-shaped edits and permission changes still wait for a person." <>
+            " Turning either automatic switch on applies the eligible open insights from the past 7 days on the next run."
         ] do
       assert html =~ copy, "missing copy: #{copy}"
     end
@@ -50,13 +52,32 @@ defmodule PlatformWeb.AdminInsightsLiveTest do
     assert has_element?(
              view,
              ~s([data-role="insights-limits"]),
-             "Mail outside the org, deletes and permission changes always wait for a person."
+             "Mail outside the org, delete-shaped edits and permission changes still wait for a person."
            )
 
-    # The deferred paths are disabled and say why.
-    assert has_element?(view, ~s(input[data-role="insights-apply-page-edits"][disabled]))
-    assert has_element?(view, ~s(input[data-role="insights-file-tasks"][disabled]))
-    assert length(Regex.scan(~r/Not available yet/, html)) == 2
+    assert html =~ AdminInsightsLive.limits()
+
+    # Both automatic paths are real switches now, not disabled placeholders.
+    assert has_element?(view, ~s(input[type="checkbox"][data-role="insights-apply-page-edits"]))
+    assert has_element?(view, ~s(input[type="checkbox"][data-role="insights-file-tasks"]))
+    refute has_element?(view, ~s(input[data-role="insights-apply-page-edits"][disabled]))
+    refute has_element?(view, ~s(input[data-role="insights-file-tasks"][disabled]))
+    refute html =~ "Not available yet"
+  end
+
+  test "the copy says a switch turned on applies the past 7 days of eligible insights", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = conn |> conn_for(root_admin!()) |> live(~p"/admin/insights")
+
+    assert has_element?(
+             view,
+             ~s([data-role="insights-limits"]),
+             "Turning either automatic switch on applies the eligible open insights from the past 7 days on the next run."
+           )
+
+    # The 7 days is the insight TTL: the backlog a switch reaches.
+    assert Platform.Memory.Insight.default_ttl_days() == 7
   end
 
   test "the master switch and the two live toggles save", %{conn: conn} do
@@ -74,14 +95,25 @@ defmodule PlatformWeb.AdminInsightsLiveTest do
     settings = Settings.get()
     refute settings.deliver_briefings
     refute settings.deliver_questions
+  end
 
-    # A forged deferred value never reaches the settings.
-    render_submit(view, "save", %{
-      "settings" => %{"apply_page_edits" => "true", "file_tasks" => "true"}
-    })
+  test "an admin saves both automatic switches", %{conn: conn} do
+    {:ok, view, _html} = conn |> conn_for(root_admin!()) |> live(~p"/admin/insights")
 
-    settings = Settings.get()
-    refute settings.apply_page_edits
-    refute settings.file_tasks
+    view
+    |> form(@form, %{"settings" => %{"apply_page_edits" => "true", "file_tasks" => "true"}})
+    |> render_submit()
+
+    assert %Settings{apply_page_edits: true, file_tasks: true} = Settings.get()
+
+    # The re-rendered form reflects the saved row.
+    assert has_element?(view, ~s(input[data-role="insights-apply-page-edits"][checked]))
+    assert has_element?(view, ~s(input[data-role="insights-file-tasks"][checked]))
+
+    view
+    |> form(@form, %{"settings" => %{"apply_page_edits" => "false", "file_tasks" => "false"}})
+    |> render_submit()
+
+    assert %Settings{apply_page_edits: false, file_tasks: false} = Settings.get()
   end
 end

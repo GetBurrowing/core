@@ -37,7 +37,7 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
 
     2. The `Platform.Org.Context.upsert_context_file/3` write hook
        sweeps journal paths for `<synthesis-insight>` blocks and
-       hands them to `Platform.Memory.Insights.ingest_from_journal/3`
+       hands them to `Platform.Memory.Insights.ingest_from_journal/4`
        automatically (task 01a13867 stage 1; it used to ingest
        `<synthesis-proposal>` blocks) — so writing the LLM output to the
        journal is exactly the path that materialises open insights.

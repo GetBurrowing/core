@@ -53,7 +53,7 @@ defmodule Platform.Memory.Insights.PromptGrammarTest do
       <old>Pixel, Scout.</old><new>Pixel.</new>
       </synthesis-insight>)
 
-      assert {:ok, 1} = Insights.ingest_from_journal(nil, @journal, content)
+      assert {:ok, 1} = Insights.ingest_from_journal(nil, @journal, content, nil)
       assert [%Insight{} = insight] = Repo.all(Insight)
       assert insight.action_type == "page_edit", "#{ref} was downgraded"
       assert insight.downgraded_from == nil

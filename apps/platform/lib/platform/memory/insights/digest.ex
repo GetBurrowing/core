@@ -5,26 +5,36 @@ defmodule Platform.Memory.Insights.Digest do
 
   `select/2` returns `%{user_id => [insight]}` and writes nothing. It selects
   nothing at all unless `Platform.Memory.Insights.Settings` has
-  `dissemination_enabled` on. A candidate is an insight that is ALL of:
+  `dissemination_enabled` on, whatever the per-type toggles say. A candidate
+  is an insight that is ALL of:
 
     * `open`, never delivered (`delivered_at` nil) and unexpired;
     * `disseminable` and of origin `dreaming`, so a migrated legacy proposal
       (`disseminable: false`) is never selected;
-    * at least as confident as its run's arm requires: `min_confidence` read
-      from the `memory.insight_synthesis` surface for the insight's `run_id`
-      (control: `high`). Re-read here, not trusted from ingest, so an arm's
-      threshold binds delivery as well as ingest.
+    * at least as confident as its run's arm requires, read from the
+      `memory.insight_synthesis` surface for the insight's `run_id`:
+      `auto_apply_min_confidence` (control `medium`) for a `page_edit` or a
+      `task`, `min_confidence` (control `high`) for everything else.
+      Re-read here, not trusted from ingest, so an arm's threshold binds
+      delivery as well as ingest.
 
   A candidate is then routed by its tier, RE-CHECKED now with
   `Platform.Memory.Insights.Tier.classify/1` (the stored tier is from ingest,
   and membership and addressee can change in between):
 
-    * `:reversible` — delivered to its addressee for execution, when its type
-      is `briefing` or `question` and that type's toggle is on, the addressee
-      is set and has not opted out (`Accounts.insight_delivery_opted_out?/1`),
-      and, for a question, it is not a duplicate (normalised text) of an open
-      question already delivered or selected for the same addressee. Page
-      edits and tasks are never selected: their automatic paths are deferred.
+    * `:reversible` — delivered to its addressee, when its type's toggle is
+      on (`deliver_briefings` for `briefing`, `deliver_questions` for
+      `question`, `apply_page_edits` for `page_edit`, `file_tasks` for
+      `task`), the addressee is set and has not opted out
+      (`Accounts.insight_delivery_opted_out?/1`), and:
+      * for a question, it is not a duplicate (normalised text) of an open
+        question already delivered or selected for the same addressee;
+      * for a `page_edit` or a `task`, it is
+        `Platform.Memory.Insights.Unattended.eligible?/1` (authored by the
+        current `memory.dreaming` holder). Selection writes nothing: the
+        Disseminator applies it through
+        `Platform.Memory.Insights.Actions.apply_unattended/2` and lists the
+        result under "Already done" for the addressee.
     * `:needs_call` — never delivered for execution and never to its
       addressee. It goes to every internal root admin who has not opted out,
       rendered under "Needs your call" as a link to `/memory/insights`.
@@ -43,11 +53,13 @@ defmodule Platform.Memory.Insights.Digest do
   alias Platform.Memory.Insights
   alias Platform.Memory.Insights.Settings
   alias Platform.Memory.Insights.Tier
+  alias Platform.Memory.Insights.Unattended
   alias Platform.Repo
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
 
   @confidence_rank %{"high" => 3, "medium" => 2, "low" => 1}
+  @unattended_types ["page_edit", "task"]
 
   @doc """
   The digest at `now`. See the moduledoc. `opts` is reserved for callers and
@@ -81,7 +93,9 @@ defmodule Platform.Memory.Insights.Digest do
   defp enabled_types(settings) do
     [
       settings.deliver_briefings && "briefing",
-      settings.deliver_questions && "question"
+      settings.deliver_questions && "question",
+      settings.apply_page_edits && "page_edit",
+      settings.file_tasks && "task"
     ]
     |> Enum.filter(&is_binary/1)
   end
@@ -97,7 +111,15 @@ defmodule Platform.Memory.Insights.Digest do
     )
   end
 
-  # The arm's min_confidence for the insight's run; the control is "high".
+  # The arm's threshold for the insight's run: auto_apply_min_confidence
+  # (control "medium") for a page_edit or task, min_confidence (control
+  # "high") for the rest.
+  defp meets_arm?(%Insight{action_type: type, run_id: run_id, confidence: confidence})
+       when type in @unattended_types do
+    min = Insights.auto_apply_min_confidence(run_id)
+    Map.get(@confidence_rank, confidence, 0) >= Map.get(@confidence_rank, min, 3)
+  end
+
   defp meets_arm?(%Insight{run_id: run_id, confidence: confidence}) do
     min = run_id |> Insights.synthesis_payload() |> Map.get("min_confidence", "high")
     Map.get(@confidence_rank, confidence, 0) >= Map.get(@confidence_rank, min, 3)
@@ -112,6 +134,7 @@ defmodule Platform.Memory.Insights.Digest do
       not is_binary(user_id) -> acc
       Accounts.insight_delivery_opted_out?(user_id) -> acc
       insight.action_type == "question" -> route_question(insight, user_id, now, acc)
+      insight.action_type in @unattended_types and not Unattended.eligible?(insight) -> acc
       true -> {prepend(by_user, user_id, insight), seen}
     end
   end

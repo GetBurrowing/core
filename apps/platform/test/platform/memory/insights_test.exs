@@ -37,7 +37,7 @@ defmodule Platform.Memory.InsightsTest do
   </synthesis-insight>)
 
   defp ingest!(content, workspace_id \\ nil) do
-    {:ok, count} = Insights.ingest_from_journal(workspace_id, @journal, content)
+    {:ok, count} = Insights.ingest_from_journal(workspace_id, @journal, content, nil)
     count
   end
 
@@ -46,7 +46,7 @@ defmodule Platform.Memory.InsightsTest do
     insight
   end
 
-  describe "ingest_from_journal/3" do
+  describe "ingest_from_journal/4" do
     test "inserts one open insight per block, with a deterministic run id" do
       assert ingest!(@briefing <> "\n" <> @question) == 2
 
@@ -98,6 +98,61 @@ defmodule Platform.Memory.InsightsTest do
       ingest!(@briefing <> @question)
       by_type = Map.new(Repo.all(Insight), &{&1.action_type, &1.disseminable})
       assert by_type == %{"briefing" => true, "question" => false}
+    end
+
+    # Task 01a15587 stage 1: page_edit and task are held to
+    # auto_apply_min_confidence (control "medium"), briefing and question
+    # keep min_confidence (control "high").
+    test "a medium page_edit is disseminable under the control arm; a medium briefing is not" do
+      assert Insights.auto_apply_min_confidence(Insights.run_id(nil, "2026-10-18")) == "medium"
+
+      page_edit =
+        ~s(<synthesis-insight action="page_edit" confidence="medium" target="org/page/runbook.md" source="query:agent_runtimes.last_connected_at">
+      The runbook still names the old deploy host.
+      <old>deploy to host-a</old><new>deploy to host-b</new>
+      </synthesis-insight>)
+
+      task =
+        ~s(<synthesis-insight action="task" confidence="medium">
+      Add a release-notes check to the deploy checklist.
+      </synthesis-insight>)
+
+      low_task =
+        ~s(<synthesis-insight action="task" confidence="low">
+      Rename the staging bucket.
+      </synthesis-insight>)
+
+      briefing =
+        ~s(<synthesis-insight action="briefing" confidence="medium">
+      The staging bucket is filling up again.
+      </synthesis-insight>)
+
+      assert ingest!(page_edit <> task <> low_task <> briefing) == 4
+
+      rows =
+        Repo.all(Insight)
+        |> Enum.map(&{&1.action_type, &1.confidence, &1.downgraded_from, &1.disseminable})
+        |> Enum.sort()
+
+      assert rows == [
+               {"briefing", "medium", nil, false},
+               {"page_edit", "medium", nil, true},
+               {"task", "low", nil, false},
+               {"task", "medium", nil, true}
+             ]
+    end
+
+    test "a page_edit grounding downgrades to a question is held to the question threshold" do
+      ungrounded =
+        ~s(<synthesis-insight action="page_edit" confidence="medium" target="org/page/runbook.md">
+      The runbook still names the old deploy host.
+      <old>deploy to host-a</old><new>deploy to host-b</new>
+      </synthesis-insight>)
+
+      assert ingest!(ungrounded) == 1
+
+      assert %Insight{action_type: "question", downgraded_from: "page_edit", disseminable: false} =
+               only_insight!()
     end
 
     test "broadcasts each ingested insight on the memory_insights topic" do
@@ -301,6 +356,28 @@ defmodule Platform.Memory.InsightsTest do
 
       assert {:ok, %{value: 0.5, n: 2, unit: :ratio}} =
                Experiments.Metrics.InsightAcceptanceRate.compute(experiment.id, "treatment")
+    end
+
+    test "an arm's auto_apply_min_confidence reaches the ingest" do
+      running_experiment!(%{
+        "directive" => nil,
+        "min_confidence" => "high",
+        "auto_apply_min_confidence" => "high"
+      })
+
+      assert Insights.auto_apply_min_confidence(Insights.run_id(nil, "2026-10-18")) == "high"
+
+      ingest!(~s(<synthesis-insight action="task" confidence="medium">
+      Add a release-notes check to the deploy checklist.
+      </synthesis-insight>))
+
+      # Below the arm's threshold: not disseminable, still an open task for a person.
+      assert %Insight{action_type: "task", state: "open", disseminable: false} = only_insight!()
+    end
+
+    test "an arm without auto_apply_min_confidence gets the control's value" do
+      running_experiment!(%{"directive" => nil, "min_confidence" => "low"})
+      assert Insights.auto_apply_min_confidence(Insights.run_id(nil, "2026-10-18")) == "medium"
     end
 
     test "no experiment, no signal" do

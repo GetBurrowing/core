@@ -15,12 +15,16 @@ defmodule Platform.Memory.Insights.Settings do
       `Platform.Memory.Insights.Digest.select/2` selects nothing.
     * `deliver_briefings` — default `true`.
     * `deliver_questions` — default `true`.
-    * `apply_page_edits` — default `false`, and REFUSED when set `true`
-      ("not available yet"): automatic page edits are deferred.
-    * `file_tasks` — default `false`, and refused the same way.
+    * `apply_page_edits` — default `false`. When on, a grounded `page_edit`
+      insight at or above the run's `auto_apply_min_confidence` is applied
+      unattended and can be reverted from the briefing.
+    * `file_tasks` — default `false`. When on, a `task` insight at or above
+      the same threshold is filed to the backlog unattended and can be
+      deleted from the briefing.
 
-  The refusal is in `changeset/2` and again in a DB CHECK, so neither a
-  caller of `update/2` nor a raw write can turn a deferred path on.
+  Both ship off and only a root admin can turn them on (task
+  `01a15587-afc8-7000-b76d-4e1c48eee5ed` lifted the earlier deferral and its
+  DB CHECK).
 
   ## Authorization
 
@@ -38,9 +42,6 @@ defmodule Platform.Memory.Insights.Settings do
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
-
-  @deferred [:apply_page_edits, :file_tasks]
-  @not_available "not available yet"
 
   @type t :: %__MODULE__{}
 
@@ -86,19 +87,5 @@ defmodule Platform.Memory.Insights.Settings do
       :apply_page_edits,
       :file_tasks
     ])
-    |> refuse_deferred()
-    |> check_constraint(:apply_page_edits,
-      name: :install_insight_settings_deferred_off,
-      message: @not_available
-    )
-  end
-
-  defp refuse_deferred(changeset) do
-    Enum.reduce(@deferred, changeset, fn field, acc ->
-      validate_change(acc, field, fn
-        ^field, true -> [{field, @not_available}]
-        _field, _value -> []
-      end)
-    end)
   end
 end

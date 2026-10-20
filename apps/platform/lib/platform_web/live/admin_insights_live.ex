@@ -15,11 +15,17 @@ defmodule PlatformWeb.AdminInsightsLive do
 
   ## The hard limits are stated in the settings
 
-  The copy says, before the switch is flipped, that only high-confidence
-  insights are sent and that mail outside the org, deletes and permission
-  changes always wait for a person. "Apply page edits automatically" and
-  "File backlog tasks" render disabled with "Not available yet": the
-  changeset and a DB CHECK refuse them anyway.
+  The copy says, before the switch is flipped, what is sent and what is
+  acted on unattended: briefings and questions at high confidence; page
+  edits and backlog tasks at medium confidence or above (the control of
+  the `memory.insight_synthesis` arm `auto_apply_min_confidence`), each
+  revertable or deletable from the briefing; mail outside the org,
+  delete-shaped edits and permission changes still wait for a person.
+  "Apply page edits automatically" and "File backlog tasks" are real
+  switches since task `01a15587-afc8-7000-b76d-4e1c48eee5ed` lifted their
+  deferral; both ship off. There is no enabled-at cutoff, so the copy also
+  says that turning one on applies the eligible open insights already
+  waiting (up to the 7-day insight TTL) on the next run.
 
   ## Authorization, twice
 
@@ -32,7 +38,7 @@ defmodule PlatformWeb.AdminInsightsLive do
 
   alias Platform.Memory.Insights.Settings
 
-  @limits "Only high-confidence insights are sent. Mail outside the org, deletes and permission changes always wait for a person."
+  @limits "Briefings and questions are sent at high confidence. Page edits and backlog tasks are applied at medium confidence or above, and each can be reverted or deleted from the briefing. Mail outside the org, delete-shaped edits and permission changes still wait for a person. Turning either automatic switch on applies the eligible open insights from the past 7 days on the next run."
 
   @doc "The hard-limits sentence, verbatim."
   def limits, do: @limits
@@ -69,10 +75,7 @@ defmodule PlatformWeb.AdminInsightsLive do
         {:noreply,
          socket
          |> assign(:form, to_form(params, as: :settings))
-         |> put_flash(
-           :error,
-           "Not saved: automatic page edits and backlog tasks are not available yet."
-         )}
+         |> put_flash(:error, "Insight settings were not saved.")}
     end
   end
 
@@ -81,19 +84,21 @@ defmodule PlatformWeb.AdminInsightsLive do
     %{
       "dissemination_enabled" => s.dissemination_enabled,
       "deliver_briefings" => s.deliver_briefings,
-      "deliver_questions" => s.deliver_questions
+      "deliver_questions" => s.deliver_questions,
+      "apply_page_edits" => s.apply_page_edits,
+      "file_tasks" => s.file_tasks
     }
   end
 
-  # Only the three live switches are ever sent. The two deferred ones are
-  # disabled inputs (a browser does not submit them) and are never read
-  # from params, so a forged value cannot reach the changeset from here.
+  # Only the five switches are read from params; anything else is dropped.
   @doc false
   def to_attrs(params) do
     %{
       "dissemination_enabled" => params["dissemination_enabled"],
       "deliver_briefings" => params["deliver_briefings"],
-      "deliver_questions" => params["deliver_questions"]
+      "deliver_questions" => params["deliver_questions"],
+      "apply_page_edits" => params["apply_page_edits"],
+      "file_tasks" => params["file_tasks"]
     }
   end
 
@@ -165,25 +170,25 @@ defmodule PlatformWeb.AdminInsightsLive do
               />
             </div>
 
-            <div
-              :for={
-                {label, role} <- [
-                  {"Apply page edits automatically", "insights-apply-page-edits"},
-                  {"File backlog tasks", "insights-file-tasks"}
-                ]
-              }
-              class="flex items-center justify-between gap-4 p-4 pl-8"
-            >
-              <div class="min-w-0">
-                <p class="text-sm text-base-content/50">{label}</p>
-                <p class="text-xs text-base-content/50">Not available yet</p>
-              </div>
-              <input
+            <div class="flex items-center justify-between gap-4 p-4 pl-8">
+              <p class="text-sm text-base-content">Apply page edits automatically</p>
+              <.input
+                field={@form[:apply_page_edits]}
                 type="checkbox"
                 class="checkbox checkbox-sm"
-                disabled
-                aria-label={label}
-                data-role={role}
+                aria-label="Apply page edits automatically"
+                data-role="insights-apply-page-edits"
+              />
+            </div>
+
+            <div class="flex items-center justify-between gap-4 p-4 pl-8">
+              <p class="text-sm text-base-content">File backlog tasks</p>
+              <.input
+                field={@form[:file_tasks]}
+                type="checkbox"
+                class="checkbox checkbox-sm"
+                aria-label="File backlog tasks"
+                data-role="insights-file-tasks"
               />
             </div>
 

@@ -16,8 +16,13 @@ defmodule Platform.Memory.Insights.Briefings do
   `Platform.Memory.Insights.BriefingCard` renders each item under ids derived
   from its node key:
 
-    * the line: `done-<key>`, `question-<key>` or `call-<key>`;
+    * the line: `done-<key>`, `question-<key>`, `call-<key>` or, for a
+      page edit or task applied unattended (task 01a15587 stage 4),
+      `applied-<key>`;
     * the controls: `done-actions-<key>` (Looks right / Flag),
+      `applied-actions-<key>` (Revert / Flag, or Delete task / Flag),
+      `applied-link-<key>` (a filed task's link, removed with the buttons
+      once the item is settled, since the task may be gone),
       `insight_flag_reason:<key>` (the inline flag form, opened by Flag) or
       `insight_answer:<key>` (a question's answer form);
     * a note that replaces the controls once the item is settled: `note-<key>`;
@@ -90,12 +95,19 @@ defmodule Platform.Memory.Insights.Briefings do
 
   @doc "The ids of an item's line nodes (whichever section it is in)."
   @spec line_ids(String.t()) :: [String.t()]
-  def line_ids(key), do: ["done-" <> key, "question-" <> key, "call-" <> key]
+  def line_ids(key),
+    do: ["done-" <> key, "question-" <> key, "call-" <> key, "applied-" <> key]
 
   @doc "The ids of an item's controls (see the moduledoc)."
   @spec control_ids(String.t()) :: [String.t()]
   def control_ids(key),
-    do: ["done-actions-" <> key, "insight_flag_reason:" <> key, "insight_answer:" <> key]
+    do: [
+      "done-actions-" <> key,
+      "applied-actions-" <> key,
+      "applied-link-" <> key,
+      "insight_flag_reason:" <> key,
+      "insight_answer:" <> key
+    ]
 
   @doc "The id of the note that replaces an item's controls."
   @spec note_id(String.t()) :: String.t()
@@ -156,8 +168,9 @@ defmodule Platform.Memory.Insights.Briefings do
   # ── Updates ──────────────────────────────────────────────────────────
 
   @doc """
-  Replace the Looks right / Flag row of `key` on `briefing`'s canvas, or the
-  Flag-only row a Looks-right line keeps, with the inline flag form
+  Replace the Looks right / Flag row of `key` on `briefing`'s canvas, the
+  Revert or Delete task / Flag row of an applied item, or the Flag-only row
+  a Looks-right line keeps, with the inline flag form
   (`insight_flag_reason:<key>`, one required `reason`).
   `{:error, :not_found}` when neither row is there (retracted, answered, or
   the form is already open).
@@ -178,16 +191,12 @@ defmodule Platform.Memory.Insights.Briefings do
         ]
       })
 
-    patch(briefing.canvas_id, fn document ->
-      case swap_ops(document, "done-actions-" <> key, [form]) do
-        [] ->
-          case swap_ops(document, flag_actions_id(key), [form]) do
-            [] -> {:error, :not_found}
-            ops -> {:ok, ops}
-          end
+    rows = ["done-actions-" <> key, "applied-actions-" <> key, flag_actions_id(key)]
 
-        ops ->
-          {:ok, ops}
+    patch(briefing.canvas_id, fn document ->
+      case Enum.find_value(rows, &non_empty(swap_ops(document, &1, [form]))) do
+        nil -> {:error, :not_found}
+        ops -> {:ok, ops}
       end
     end)
   end
@@ -242,6 +251,9 @@ defmodule Platform.Memory.Insights.Briefings do
       {:ok, settle_ops(document, removed, []) ++ line_ops}
     end)
   end
+
+  defp non_empty([]), do: nil
+  defp non_empty(ops), do: ops
 
   # The first of `ids` present on `document` is swapped for `replacement`
   # (in place, so the note sits where the buttons were); the rest are

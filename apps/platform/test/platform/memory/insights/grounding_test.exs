@@ -61,7 +61,7 @@ defmodule Platform.Memory.Insights.GroundingTest do
   end
 
   defp ingest_one!(content) do
-    {:ok, 1} = Insights.ingest_from_journal(nil, @journal, content)
+    {:ok, 1} = Insights.ingest_from_journal(nil, @journal, content, nil)
     [insight] = Repo.all(Insight)
     insight
   end
