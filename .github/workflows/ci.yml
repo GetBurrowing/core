@@ -66,6 +66,29 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          # LOCK-WAIT LOGGING (the 15 s pool-timeout clusters, e.g. run
+          # 39347244298: three in 0.6 s, cause unknown). A service container
+          # takes no command, so the `-c` flags go through initdb: since
+          # Postgres 16, `initdb -c name=value` writes the setting into the
+          # generated postgresql.conf, and the image's entrypoint passes
+          # POSTGRES_INITDB_ARGS to initdb word-split.
+          #
+          #   log_lock_waits/deadlock_timeout: any wait over 1 s logs
+          #     "process A still waiting for <lock> ... after N ms" with
+          #     DETAIL "Process holding the lock: B. Wait queue: ...".
+          #   logging_collector + fixed file, no rotation: the log becomes a
+          #     file in the data directory that `pg_read_file` can return over
+          #     SQL. The job container has no docker/podman socket, so SQL is
+          #     the only route to it from a step. The cost: the runner's own
+          #     "Print service container logs" at job end now shows only the
+          #     startup lines; the full log is the `postgres-log-*` artifact.
+          #
+          # `Check Postgres lock-wait logging` below fails the job if any of
+          # these did not take effect.
+          POSTGRES_INITDB_ARGS: >-
+            -c log_lock_waits=on -c deadlock_timeout=1s
+            -c logging_collector=on -c log_filename=postgresql.log
+            -c log_rotation_age=0 -c log_rotation_size=0
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -110,8 +133,20 @@ jobs:
         working-directory: /
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
           update-ca-certificates
+
+      # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
+      # running server reports every setting the lock-wait log depends on.
+      - name: Check Postgres lock-wait logging
+        working-directory: /
+        run: |
+          got=$(psql -Atc "SELECT current_setting('log_lock_waits') || ' ' || current_setting('deadlock_timeout') || ' ' || current_setting('logging_collector') || ' ' || coalesce(pg_current_logfile(), '-')")
+          echo "log_lock_waits deadlock_timeout logging_collector logfile: $got"
+          if [ "$got" != "on 1s on log/postgresql.log" ]; then
+            echo "::error::Postgres service is not logging lock waits: got '$got', expected 'on 1s on log/postgresql.log'. See POSTGRES_INITDB_ARGS on this job's postgres service."
+            exit 1
+          fi
 
       - uses: actions/checkout@v5
 
@@ -483,6 +518,31 @@ jobs:
       # directories from here, while still in the container that labelled
       # them, is what works. checkout would wipe them on the next job anyway,
       # so no cache is lost.
+      # On failure AND on retry-green: a retry-green Test job concludes `success`
+      # (run 39347244298 did; only `first-run-green` went red), so `failure()`
+      # alone would skip exactly the runs this log exists for.
+      # pg_read_file is the only way to the log from here (see the
+      # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,
+      # so a reader without the artifact still gets the holder's pid.
+      - name: Collect the Postgres log
+        if: failure() || steps.run-tests.outputs.retry_fired == 'true'
+        working-directory: ${{ github.workspace }}
+        run: |
+          log="postgres-${{ github.job }}.log"
+          psql -Atc "SELECT pg_read_file(pg_current_logfile())" > "$log" || echo "::warning::could not read the Postgres log"
+          waits=$(grep -c 'still waiting for' "$log" || true)
+          echo "Postgres log: $(wc -l < "$log") lines, $waits lock wait(s) over deadlock_timeout"
+          grep -A2 -E 'still waiting for|acquired .* after|deadlock detected' "$log" | head -n 300 || true
+
+      - name: Upload the Postgres log
+        if: failure() || steps.run-tests.outputs.retry_fired == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: postgres-${{ github.job }}.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Hand the workspace back to the runner
         if: always()
         run: |
@@ -571,6 +631,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          # Lock-wait logging; the rationale is on the `test` job's service.
+          POSTGRES_INITDB_ARGS: >-
+            -c log_lock_waits=on -c deadlock_timeout=1s
+            -c logging_collector=on -c log_filename=postgresql.log
+            -c log_rotation_age=0 -c log_rotation_size=0
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -592,8 +657,20 @@ jobs:
       - name: Install system packages (with Play)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
           update-ca-certificates
+
+      # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
+      # running server reports every setting the lock-wait log depends on.
+      - name: Check Postgres lock-wait logging (with Play)
+        working-directory: ${{ github.workspace }}
+        run: |
+          got=$(psql -Atc "SELECT current_setting('log_lock_waits') || ' ' || current_setting('deadlock_timeout') || ' ' || current_setting('logging_collector') || ' ' || coalesce(pg_current_logfile(), '-')")
+          echo "log_lock_waits deadlock_timeout logging_collector logfile: $got"
+          if [ "$got" != "on 1s on log/postgresql.log" ]; then
+            echo "::error::Postgres service is not logging lock waits: got '$got', expected 'on 1s on log/postgresql.log'. See POSTGRES_INITDB_ARGS on this job's postgres service."
+            exit 1
+          fi
 
       - name: Install Hex and Rebar (with Play)
         run: |
@@ -728,6 +805,29 @@ jobs:
             exit 1
           fi
 
+      # This job has no serial retry, so a lock-wait timeout here fails it.
+      # pg_read_file is the only way to the log from here (see the
+      # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,
+      # so a reader without the artifact still gets the holder's pid.
+      - name: Collect the Postgres log (with Play)
+        if: failure()
+        working-directory: ${{ github.workspace }}
+        run: |
+          log="postgres-${{ github.job }}.log"
+          psql -Atc "SELECT pg_read_file(pg_current_logfile())" > "$log" || echo "::warning::could not read the Postgres log"
+          waits=$(grep -c 'still waiting for' "$log" || true)
+          echo "Postgres log: $(wc -l < "$log") lines, $waits lock wait(s) over deadlock_timeout"
+          grep -A2 -E 'still waiting for|acquired .* after|deadlock detected' "$log" | head -n 300 || true
+
+      - name: Upload the Postgres log (with Play)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: postgres-${{ github.job }}.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Hand the workspace back to the runner (with Play)
         if: always()
         run: |
@@ -752,6 +852,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          # Lock-wait logging; the rationale is on the `test` job's service.
+          POSTGRES_INITDB_ARGS: >-
+            -c log_lock_waits=on -c deadlock_timeout=1s
+            -c logging_collector=on -c log_filename=postgresql.log
+            -c log_rotation_age=0 -c log_rotation_size=0
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -772,8 +877,20 @@ jobs:
       - name: Install system packages (with Social)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
           update-ca-certificates
+
+      # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
+      # running server reports every setting the lock-wait log depends on.
+      - name: Check Postgres lock-wait logging (with Social)
+        working-directory: ${{ github.workspace }}
+        run: |
+          got=$(psql -Atc "SELECT current_setting('log_lock_waits') || ' ' || current_setting('deadlock_timeout') || ' ' || current_setting('logging_collector') || ' ' || coalesce(pg_current_logfile(), '-')")
+          echo "log_lock_waits deadlock_timeout logging_collector logfile: $got"
+          if [ "$got" != "on 1s on log/postgresql.log" ]; then
+            echo "::error::Postgres service is not logging lock waits: got '$got', expected 'on 1s on log/postgresql.log'. See POSTGRES_INITDB_ARGS on this job's postgres service."
+            exit 1
+          fi
 
       - name: Install Hex and Rebar (with Social)
         run: |
@@ -828,6 +945,29 @@ jobs:
             exit 1
           fi
           echo "apps/social mix test ran $count tests (floor MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT)"
+
+      # This job has no serial retry, so a lock-wait timeout here fails it.
+      # pg_read_file is the only way to the log from here (see the
+      # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,
+      # so a reader without the artifact still gets the holder's pid.
+      - name: Collect the Postgres log (with Social)
+        if: failure()
+        working-directory: ${{ github.workspace }}
+        run: |
+          log="postgres-${{ github.job }}.log"
+          psql -Atc "SELECT pg_read_file(pg_current_logfile())" > "$log" || echo "::warning::could not read the Postgres log"
+          waits=$(grep -c 'still waiting for' "$log" || true)
+          echo "Postgres log: $(wc -l < "$log") lines, $waits lock wait(s) over deadlock_timeout"
+          grep -A2 -E 'still waiting for|acquired .* after|deadlock detected' "$log" | head -n 300 || true
+
+      - name: Upload the Postgres log (with Social)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: postgres-${{ github.job }}.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Hand the workspace back to the runner (with Social)
         if: always()
