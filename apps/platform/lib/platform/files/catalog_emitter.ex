@@ -112,6 +112,14 @@ defmodule Platform.Files.CatalogEmitter do
   end
 
   @doc """
+  The telemetry events this process consumes. It attaches to each and to its
+  `Platform.Role.Relay` twin, so the same event emitted on a clustered web
+  node reaches it, once (task 01a155a6 stage 3).
+  """
+  @spec relayed_events() :: [:telemetry.event_name()]
+  def relayed_events, do: [@stop_event]
+
+  @doc """
   Counters since boot: `:seen`, `:catalogued`, `:noop`, `:ineligible`,
   `:errors`, `:dropped`.
 
@@ -131,6 +139,9 @@ defmodule Platform.Files.CatalogEmitter do
   not because anything should call it directly.
   """
   @spec handle_event(list(atom()), map(), map(), map()) :: :ok
+  def handle_event([:platform, :role_relay | event], measurements, metadata, config),
+    do: handle_event(event, measurements, metadata, config)
+
   def handle_event(@stop_event, _measurements, metadata, %{server: server}) do
     GenServer.cast(
       server,
@@ -159,9 +170,9 @@ defmodule Platform.Files.CatalogEmitter do
     # cannot outlive the process it casts to, and so a test-started
     # instance gets its own subscription without a second wiring step.
     :ok =
-      :telemetry.attach(
+      Platform.Role.Relay.attach_many(
         handler_id,
-        @stop_event,
+        relayed_events(),
         &__MODULE__.handle_event/4,
         %{server: name}
       )
@@ -182,7 +193,7 @@ defmodule Platform.Files.CatalogEmitter do
 
   @impl GenServer
   def terminate(_reason, %{handler_id: handler_id}) do
-    :telemetry.detach(handler_id)
+    Platform.Role.Relay.detach_many(handler_id)
     :ok
   end
 

@@ -18,11 +18,37 @@ defmodule Platform.Social.Application do
 
   use Application
 
+  # Web-role classification (task 01a155a6), by child id, under the rule in
+  # `Platform.Role`'s moduledoc. The Fake's call log and the rate limit's
+  # counters are ETS owners whose only timer prunes their own table. The
+  # render queue re-queues clips from the DB when it starts and renders on
+  # its own, so it and its task supervisor are background.
+  @web [Platform.Social.Publisher.Fake, Platform.Social.RateLimit]
+  @background [Platform.Social.RenderTaskSupervisor, Platform.Social.RenderQueue]
+
   @impl true
   def start(_type, _args) do
     Platform.Social.RuntimeConfig.apply(System.get_env())
 
-    children = [
+    Supervisor.start_link(children(Platform.Role.role()),
+      strategy: :one_for_one,
+      name: __MODULE__.Supervisor
+    )
+  end
+
+  @doc false
+  def web_ids, do: @web
+
+  @doc false
+  def background_ids, do: @background
+
+  @doc """
+  Social's children for `role`: all of them under `:full`, the `@web` ones
+  under `:web` (`Platform.Role.select/3`).
+  """
+  @spec children(Platform.Role.t()) :: list()
+  def children(role) do
+    [
       # Owns the Fake publisher's call log. Idle unless the Fake is selected.
       Platform.Social.Publisher.Fake,
       # Per-account publish limit's ETS counters.
@@ -33,7 +59,6 @@ defmodule Platform.Social.Application do
       {Task.Supervisor, name: Platform.Social.RenderTaskSupervisor},
       Platform.Social.RenderQueue
     ]
-
-    Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__.Supervisor)
+    |> Platform.Role.select(role, @web)
   end
 end

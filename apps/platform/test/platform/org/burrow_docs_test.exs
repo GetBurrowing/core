@@ -246,11 +246,11 @@ defmodule Platform.Org.BurrowDocsTest do
     test "the supervised child is transient and calls run_at_boot/0, not sync" do
       source = File.read!(Path.expand("../../../lib/platform/application.ex", __DIR__))
 
-      assert source =~ "|> maybe_add_burrow_docs_seed()"
+      assert source =~ "|> maybe_add_burrow_docs_seed(flag)"
       assert source =~ "Platform.Org.BurrowDocs.run_at_boot()"
       refute source =~ "Platform.Org.BurrowDocs.sync("
       assert source =~ "id: :burrow_docs_seed"
-      assert source =~ "Application.get_env(:platform, :start_burrow_docs_seed, true)"
+      assert source =~ "flag.(:platform, :start_burrow_docs_seed, true)"
     end
 
     test "it is disabled in the test environment" do

@@ -589,11 +589,13 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
   end
 
   # Parses `Platform.Application`'s source for every
-  # `Application.get_env(:platform, :start_XXX, ...)` call inside a
-  # `maybe_add_*` function body. Returns the discovered atoms as a
-  # sorted list.
+  # `Application.get_env(:platform, :start_XXX, ...)` call, and every
+  # `flag.(:platform, :start_XXX, ...)` call inside a `maybe_add_*`
+  # function body (task 01a155a6: `children/2` reads its gates through the
+  # `flag` it is given, which is `Application.get_env/3` at boot). Returns
+  # the discovered atoms as a sorted list.
   defp discover_start_flags(source) do
-    ~r/Application\.get_env\(\s*:platform\s*,\s*:(start_[a-z_]+)\s*,/
+    ~r/(?:Application\.get_env|flag\.)\(\s*:platform\s*,\s*:(start_[a-z_]+)\s*,/
     |> Regex.scan(source, capture: :all_but_first)
     |> List.flatten()
     |> Enum.map(&String.to_atom/1)

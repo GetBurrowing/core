@@ -31,8 +31,20 @@ defmodule Platform.Federation.RuntimePresence do
   So `proven` records only what core actually SAW arrive. An event core
   observed cannot lie, and a capability with no inbound frame honestly reads
   as never proven rather than as a claim nobody checked.
+
+  ## On a web node (task 01a155a6 stage 4)
+
+  Runtimes connect to the full node, so a web node's own map is empty and
+  every runtime would read as offline there. Under the web role with a
+  cluster peer, the four reads (`online?/1`, `status/1`, `list_online/0`,
+  `list_all/0`) also ask the peer through `Platform.Role.Peer.read/5`
+  (`:erpc`, 2s timeout) and combine its answer with the local map, local
+  entries winning. An unreachable peer contributes nothing. Writes stay
+  local: a runtime that does connect to the web node is tracked there.
   """
   use Agent
+
+  alias Platform.Role.Peer
 
   # Upper bound on the number of distinct capability keys held per runtime.
   #
@@ -103,8 +115,11 @@ defmodule Platform.Federation.RuntimePresence do
 
   @doc "Check if a runtime is currently connected."
   def online?(runtime_id) do
-    Agent.get(__MODULE__, &Map.has_key?(&1, runtime_id))
+    local_online?(runtime_id) or Peer.read(__MODULE__, :local_online?, [runtime_id], false)
   end
+
+  @doc false
+  def local_online?(runtime_id), do: Agent.get(__MODULE__, &Map.has_key?(&1, runtime_id))
 
   @doc """
   Update the last_seen_at timestamp for a runtime (call on any incoming message).
@@ -180,12 +195,15 @@ defmodule Platform.Federation.RuntimePresence do
 
   @doc "Get connection info for a specific runtime, or nil if offline."
   def status(runtime_id) do
-    Agent.get(__MODULE__, &Map.get(&1, runtime_id))
+    local_status(runtime_id) || Peer.read(__MODULE__, :local_status, [runtime_id], nil)
   end
+
+  @doc false
+  def local_status(runtime_id), do: Agent.get(__MODULE__, &Map.get(&1, runtime_id))
 
   @doc "List all currently connected runtime_ids."
   def list_online do
-    Agent.get(__MODULE__, &Map.keys(&1))
+    Map.keys(list_all())
   end
 
   @doc """
@@ -193,6 +211,9 @@ defmodule Platform.Federation.RuntimePresence do
   `%{runtime_id => %{connected_at: DateTime, last_seen_at: DateTime, proven: map}}`
   """
   def list_all do
-    Agent.get(__MODULE__, & &1)
+    Map.merge(Peer.read(__MODULE__, :local_list_all, [], %{}), local_list_all())
   end
+
+  @doc false
+  def local_list_all, do: Agent.get(__MODULE__, & &1)
 end

@@ -12,47 +12,72 @@ defmodule Platform.Chat.ContextPlane do
   @table :suite_context_plane
   @activity_limit 50
 
+  @relayed_events [
+    [:platform, :chat, :message_posted],
+    [:platform, :chat, :canvas_created],
+    [:platform, :chat, :canvas_updated],
+    [:platform, :chat, :participant_added]
+  ]
+
   # ── Public API ──────────────────────────────────────────────────────
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @doc """
+  The telemetry events this plane consumes, each attached with its
+  `Platform.Role.Relay` twin so a clustered web node's writes reach it
+  (task 01a155a6 stage 3).
+  """
+  @spec relayed_events() :: [:telemetry.event_name()]
+  def relayed_events, do: @relayed_events
+
   @doc "Return the full space context map for a space."
-  def get_space_context(space_id) do
-    case :ets.lookup(@table, {:space, space_id}) do
-      [{_, context}] -> context
-      [] -> %{}
-    end
-  end
+  def get_space_context(space_id), do: read({:space, space_id}, %{})
 
   @doc "Return the agent state map for all agents in a space."
-  def get_agent_states(space_id) do
-    case :ets.lookup(@table, {:agents, space_id}) do
-      [{_, states}] -> states
-      [] -> %{}
-    end
-  end
+  def get_agent_states(space_id), do: read({:agents, space_id}, %{})
 
   @doc "Return the canvas summaries for a space."
-  def get_canvas_summaries(space_id) do
-    case :ets.lookup(@table, {:canvases, space_id}) do
-      [{_, summaries}] -> summaries
-      [] -> []
-    end
-  end
+  def get_canvas_summaries(space_id), do: read({:canvases, space_id}, [])
 
   @doc "Return the recent activity ring buffer for a space."
-  def get_recent_activity(space_id, limit \\ 20) do
-    case :ets.lookup(@table, {:activity, space_id}) do
-      [{_, activity}] -> Enum.take(activity, limit)
-      [] -> []
+  def get_recent_activity(space_id, limit \\ 20),
+    do: Enum.take(read({:activity, space_id}, []), limit)
+
+  # Task 01a155a6 stage 4. ContextPlane is background, so a web node has no
+  # table: under the web role with a cluster peer the read goes to the peer
+  # (`Platform.Role.Peer.read/5`), and with no table at all it answers the
+  # empty default instead of raising `ArgumentError` from `:ets.lookup/2`.
+  # Reached on the request path by `build_context_bundle/1` from the MCP tool
+  # surface.
+  defp read(key, default) do
+    if Platform.Role.Peer.remote?(),
+      do: Platform.Role.Peer.read(__MODULE__, :local_read, [key, default], default),
+      else: local_read(key, default)
+  end
+
+  @doc false
+  def local_read(key, default) do
+    case :ets.whereis(@table) do
+      :undefined ->
+        default
+
+      _ ->
+        case :ets.lookup(@table, key) do
+          [{_, value}] -> value
+          [] -> default
+        end
     end
   end
 
   @doc "Update the state of a specific agent in a space."
   def update_agent_state(space_id, agent_participant_id, state) do
-    GenServer.cast(__MODULE__, {:update_agent_state, space_id, agent_participant_id, state})
+    GenServer.cast(
+      Platform.Role.Peer.server(__MODULE__),
+      {:update_agent_state, space_id, agent_participant_id, state}
+    )
   end
 
   @doc """
@@ -117,20 +142,16 @@ defmodule Platform.Chat.ContextPlane do
   # ── Telemetry handlers ─────────────────────────────────────────────
 
   defp attach_telemetry do
-    events = [
-      [:platform, :chat, :message_posted],
-      [:platform, :chat, :canvas_created],
-      [:platform, :chat, :canvas_updated],
-      [:platform, :chat, :participant_added]
-    ]
-
-    :telemetry.attach_many(
+    Platform.Role.Relay.attach_many(
       "context-plane-handlers",
-      events,
+      @relayed_events,
       &__MODULE__.handle_telemetry_event/4,
       nil
     )
   end
+
+  def handle_telemetry_event([:platform, :role_relay | event], measurements, metadata, config),
+    do: handle_telemetry_event(event, measurements, metadata, config)
 
   def handle_telemetry_event(
         [:platform, :chat, :message_posted],

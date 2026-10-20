@@ -49,6 +49,7 @@ defmodule Platform.AgentHost.Reconciler do
   alias Platform.AgentHost.State
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents, NativeLogin}
   alias Platform.Federation
+  alias Platform.Role.Peer
 
   @status_topic "agent_host:status"
 
@@ -63,11 +64,11 @@ defmodule Platform.AgentHost.Reconciler do
 
   @doc "A host's channel process joins. Refused while another host is connected."
   @spec host_joined(pid(), map()) :: :ok | {:error, :already_connected}
-  def host_joined(pid, meta \\ %{}), do: GenServer.call(__MODULE__, {:host_joined, pid, meta})
+  def host_joined(pid, meta \\ %{}), do: GenServer.call(server(), {:host_joined, pid, meta})
 
   @doc "The host's full report: its profile and every agent it runs."
   @spec inventory(pid(), map()) :: :ok | {:error, :not_host}
-  def inventory(pid, payload), do: GenServer.call(__MODULE__, {:inventory, pid, payload})
+  def inventory(pid, payload), do: GenServer.call(server(), {:inventory, pid, payload})
 
   @doc """
   One agent's observed state changed.
@@ -81,7 +82,7 @@ defmodule Platform.AgentHost.Reconciler do
   @spec agent_state(pid(), map()) :: :ok | {:error, term()}
   def agent_state(pid, payload) do
     before = previous_state(payload)
-    result = GenServer.call(__MODULE__, {:agent_state, pid, payload})
+    result = GenServer.call(server(), {:agent_state, pid, payload})
 
     with :ok <- result,
          %{"agent_id" => agent_id} <- payload,
@@ -104,35 +105,41 @@ defmodule Platform.AgentHost.Reconciler do
 
   @doc "Converge one agent (by id), or every native agent (`:all`)."
   @spec converge(binary() | :all) :: :ok | {:error, :not_connected}
-  def converge(target), do: GenServer.call(__MODULE__, {:converge, target})
+  def converge(target), do: GenServer.call(server(), {:converge, target})
 
   @doc "Restart an agent: stop it and start it again with a fresh token."
   @spec restart(binary()) :: :ok | {:error, term()}
-  def restart(agent_id), do: GenServer.call(__MODULE__, {:restart, agent_id})
+  def restart(agent_id), do: GenServer.call(server(), {:restart, agent_id})
 
   @doc "Ask the host for the last `lines` log lines of an agent, answered under `ref`."
   @spec request_logs(binary(), pos_integer(), String.t()) :: :ok | {:error, :not_connected}
   def request_logs(agent_id, lines, ref),
-    do: GenServer.call(__MODULE__, {:logs, agent_id, lines, ref})
+    do: GenServer.call(server(), {:logs, agent_id, lines, ref})
 
   @doc "Ask the host for the last `lines` pane lines of an agent, answered under `ref`."
   @spec request_pane(binary(), pos_integer(), String.t()) :: :ok | {:error, :not_connected}
   def request_pane(agent_id, lines, ref),
-    do: GenServer.call(__MODULE__, {:pane, agent_id, lines, ref})
+    do: GenServer.call(server(), {:pane, agent_id, lines, ref})
 
   @doc "Ask the host whether an agent's API key still works, answered under `ref`."
   @spec request_auth_check(binary(), String.t()) :: :ok | {:error, :not_connected}
   def request_auth_check(agent_id, ref),
-    do: GenServer.call(__MODULE__, {:check_auth, agent_id, ref})
+    do: GenServer.call(server(), {:check_auth, agent_id, ref})
 
   @doc "The connected host's channel pid, or nil."
   @spec host_pid() :: pid() | nil
   def host_pid do
-    case Process.whereis(__MODULE__) do
-      nil -> nil
-      _ -> GenServer.call(__MODULE__, :host_pid)
+    cond do
+      Peer.remote?() -> Peer.read(__MODULE__, :host_pid, [], nil)
+      Process.whereis(__MODULE__) -> GenServer.call(__MODULE__, :host_pid)
+      true -> nil
     end
   end
+
+  # Task 01a155a6 stage 4. The host connects to the full node, so on a web
+  # node with a cluster peer every command goes to the peer's reconciler
+  # (`Platform.Role.Peer.server/1`); elsewhere, this node's.
+  defp server, do: Peer.server(__MODULE__)
 
   # ── Server ─────────────────────────────────────────────────────────
 

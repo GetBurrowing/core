@@ -119,7 +119,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # in order to change the topic safely; the full payload-and-subscriber table
   # lives in the stage-2 classification posted to the task's execution space.
   #
-  # 27 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
+  # 28 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
   # 4 resource, 1 not-a-topic.
   @topics [
     # ── space ──
@@ -230,6 +230,14 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # Receivers re-read observed state through `Platform.AgentHost.status/1`.
     {"agent_host:status", :global},
     {"mail:inbound", :global},
+    # Task 01a155a6 stage 3. Platform.Role.Relay broadcasts a web node's
+    # telemetry here as {:role_relay, event, measurements, metadata}: the
+    # metadata of message_posted, canvas_created/updated, participant_added,
+    # files telemetry and responsibility fires (ids and keys, e.g. space_id,
+    # message_id, participant_id). The one subscriber is the supervised
+    # Platform.Role.RelayReceiver on the full node; no LiveView or socket
+    # subscribes. A non-member could learn which space just had a post, by id.
+    {"platform:role_relay", :global},
     {"meeting:action_item_intent", :global},
     {"meeting:brief_worthy_intent", :global},
     {"meeting:decision_recorded_intent", :global},

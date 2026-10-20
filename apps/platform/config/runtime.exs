@@ -38,6 +38,31 @@ if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
 
+# ── Boot role (task 01a155a6) ─────────────────────────────────────────────────
+# PLATFORM_ROLE picks the supervision tree `Platform.Role` selects: unset or
+# "full" is today's node, "web" serves HTTP/LiveView only (a preview instance
+# against prod's database). Any other value raises naming it, and the web role
+# raises outside MIX_ENV=prod, because a dev build compiles /dev/login.
+#
+# Signing secrets under the web role (stage 2): a web node shares prod's
+# session cookie domain and verifies links prod minted, so it must read
+# SECRET_KEY_BASE, ATTACHMENT_SIGNING_KEY, MEETING_GUEST_SIGNING_KEY and
+# MEETING_CALENDAR_SIGNING_KEY from the environment, never dev.exs's
+# constants. Because validate!/2 admits :web only under :prod, the prod
+# blocks below already read and require all four for it; a web-specific read
+# would be a branch no boot can reach. test/platform/role_test.exs pins that
+# a web+prod config with any one of them missing raises naming it.
+platform_role = Platform.Role.parse!(System.get_env("PLATFORM_ROLE"))
+Platform.Role.validate!(platform_role, config_env())
+config :platform, :role, platform_role
+
+# PLATFORM_CLUSTER_PEER (stage 3): the full node a web node joins over
+# distributed Erlang, e.g. platform@core-platform. Read by
+# Platform.Role.PeerLink. Unset means no peer; set under the full role raises.
+config :platform,
+       :cluster_peer,
+       Platform.Role.parse_peer!(System.get_env("PLATFORM_CLUSTER_PEER"), platform_role)
+
 # ── Native agents: experiment surfaces (task 01a10322 stages 1 and 7) ─────────
 # All are read PER CALL from application env, so an install changes them with
 # an env var and a restart, never a code change.

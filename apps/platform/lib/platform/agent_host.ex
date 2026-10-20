@@ -80,7 +80,13 @@ defmodule Platform.AgentHost do
   The connected host, `%{profile, connected_at}`, or nil.
   """
   @spec host() :: map() | nil
-  def host, do: if(connected?(), do: State.host(), else: nil)
+  def host do
+    cond do
+      not connected?() -> nil
+      Platform.Role.Peer.remote?() -> Platform.Role.Peer.read(State, :host, [], nil)
+      true -> State.host()
+    end
+  end
 
   @doc """
   One line describing the host for the UI: "No agent host configured" when
@@ -131,7 +137,14 @@ defmodule Platform.AgentHost do
   """
   @spec status(Agent.t() | binary()) :: State.entry() | nil
   def status(%Agent{id: id}), do: status(id)
-  def status(agent_id) when is_binary(agent_id), do: State.get(agent_id)
+
+  def status(agent_id) when is_binary(agent_id) do
+    # Task 01a155a6 stage 4: the observed-state table belongs to the full
+    # node's reconciler; a web node with a peer reads the peer's.
+    if Platform.Role.Peer.remote?(),
+      do: Platform.Role.Peer.read(State, :get, [agent_id], nil),
+      else: State.get(agent_id)
+  end
 
   @doc """
   The last `lines` journal lines of `agent`, asked of the host and waited for.

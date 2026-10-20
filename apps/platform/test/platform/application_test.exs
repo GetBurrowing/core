@@ -106,48 +106,11 @@ defmodule Platform.ApplicationTest do
 
   # ── helpers ──────────────────────────────────────────────────────────────
 
-  # Re-walk the application's start sequence to produce the same children
-  # list it would build at boot. We can't call `Platform.Application.start/2`
-  # because the supervisor is already up; instead we use the same
-  # `maybe_add_*` pipeline shape against a synthetic base list.
-  #
-  # NOTE: kept intentionally narrow — this test guards the membership
-  # invariant for SystemEventScheduler, Router, and CutoverMonitor. If
-  # the pipeline shape changes (e.g. a new maybe_add_* is added) this
-  # helper needs to grow to mirror it; the assertions above will start
-  # failing with "module not in supervision tree" until they do.
+  # The children `start/2` would build at boot under the full role, from
+  # the same `Platform.Application.children/2` it calls and the same gate
+  # reader (task 01a155a6). It used to mirror the pipeline by hand, which
+  # could only see the gates someone remembered to copy.
   defp build_children do
-    # The simplest way to inspect declared children is to call into
-    # Platform.Application's private builder via the public API:
-    # Application.spec gives the registered modules. But our pipeline
-    # is private — so we mirror the conditional inclusions explicitly,
-    # which keeps this test self-contained and fast.
-    base = [Platform.Repo, PlatformWeb.Endpoint]
-
-    base
-    |> maybe_append(
-      :start_responsibility_router,
-      Platform.Responsibilities.Router
-    )
-    |> maybe_append(
-      :start_cutover_monitor,
-      Platform.Responsibilities.CutoverMonitor
-    )
-    |> maybe_append(
-      :start_system_event_scheduler,
-      Platform.Agents.SystemEventScheduler
-    )
-    |> maybe_append(
-      :start_meeting_intent_dispatcher,
-      Platform.Meetings.IntentDispatcher
-    )
-  end
-
-  defp maybe_append(children, flag, mod) do
-    if Application.get_env(:platform, flag, true) do
-      children ++ [mod]
-    else
-      children
-    end
+    Platform.Application.children(:full, &Platform.Application.boot_flag/3)
   end
 end

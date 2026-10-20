@@ -310,4 +310,64 @@ defmodule Platform.Chat.ActiveAgentStoreTest do
       assert_receive {:active_agent_changed, ^space_id, nil}, 1_000
     end
   end
+
+  # Task 01a155a6 stage 3. A web node runs no AttentionRouter, so the mutex
+  # that decides routing is its full peer's. A write kept on the web node would
+  # arm a store nothing routes from, and its release timer would broadcast to
+  # the full node's LiveViews over clustered PubSub.
+  describe "under the web role with a cluster peer" do
+    setup do
+      previous = Map.new([:role, :cluster_peer], &{&1, Application.fetch_env(:platform, &1)})
+
+      on_exit(fn ->
+        for {key, value} <- previous do
+          case value do
+            {:ok, v} -> Application.put_env(:platform, key, v)
+            :error -> Application.delete_env(:platform, key)
+          end
+        end
+      end)
+
+      Application.put_env(:platform, :role, :web)
+      :ok
+    end
+
+    test "writes go to the peer's store; this node's store is untouched and broadcasts nothing",
+         %{space_id: space_id} do
+      peer = :nobody@nowhere
+      Application.put_env(:platform, :cluster_peer, peer)
+      Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space_id}")
+
+      assert ActiveAgentStore.server() == {ActiveAgentStore, peer}
+      assert :ok = ActiveAgentStore.set_active(space_id, Ecto.UUID.generate())
+      assert :ok = ActiveAgentStore.clear_active(space_id)
+      assert :ok = ActiveAgentStore.clear_if_match(space_id, Ecto.UUID.generate())
+
+      assert ActiveAgentStore.get_active(space_id) == nil
+      assert ActiveAgentStore.get_last_agent(space_id) == nil
+      refute_receive {:active_agent_changed, ^space_id, _}, 100
+    end
+
+    test "positive control: with this node as the peer, the forwarded write lands and broadcasts",
+         %{space_id: space_id} do
+      Application.put_env(:platform, :cluster_peer, node())
+      Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space_id}")
+      agent_id = Ecto.UUID.generate()
+
+      assert ActiveAgentStore.server() == {ActiveAgentStore, node()}
+      assert :ok = ActiveAgentStore.set_active(space_id, agent_id)
+
+      assert ActiveAgentStore.get_active(space_id) == agent_id
+      assert_receive {:active_agent_changed, ^space_id, ^agent_id}, 500
+    end
+
+    test "with no peer configured, a web node keeps its own store", %{space_id: space_id} do
+      Application.delete_env(:platform, :cluster_peer)
+      agent_id = Ecto.UUID.generate()
+
+      assert ActiveAgentStore.server() == ActiveAgentStore
+      assert :ok = ActiveAgentStore.set_active(space_id, agent_id)
+      assert ActiveAgentStore.get_active(space_id) == agent_id
+    end
+  end
 end

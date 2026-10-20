@@ -9,7 +9,10 @@ defmodule Platform.Chat.ActiveAgentStore do
   ## Read path
 
   `get_active/1` and `get_last_agent/1` read directly from ETS for speed — no
-  GenServer round-trip.
+  GenServer round-trip. Under the web role with a cluster peer (task 01a155a6
+  stage 4) they read the PEER's row through `Platform.Role.Peer.read/5`
+  (`:erpc`, 2s timeout), because that is where `server/0` sends every write;
+  an unreachable peer reads as `nil`.
 
   ## Write path
 
@@ -36,6 +39,10 @@ defmodule Platform.Chat.ActiveAgentStore do
 
   use GenServer
 
+  require Logger
+
+  alias Platform.Role.Peer
+
   @table :active_agent_store
   @pubsub Platform.PubSub
 
@@ -54,7 +61,7 @@ defmodule Platform.Chat.ActiveAgentStore do
   """
   @spec set_active(binary(), binary()) :: :ok
   def set_active(space_id, agent_participant_id) do
-    GenServer.call(__MODULE__, {:set_active, space_id, agent_participant_id})
+    write({:set_active, space_id, agent_participant_id})
   end
 
   @doc """
@@ -64,6 +71,15 @@ defmodule Platform.Chat.ActiveAgentStore do
   """
   @spec get_active(binary()) :: binary() | nil
   def get_active(space_id) do
+    if Peer.remote?(),
+      do: Peer.read(__MODULE__, :local_get_active, [space_id], nil),
+      else: local_get_active(space_id)
+  end
+
+  @doc false
+  # This node's row. Public so a web node can read it from its peer.
+  @spec local_get_active(binary()) :: binary() | nil
+  def local_get_active(space_id) do
     case :ets.lookup(@table, space_id) do
       [{^space_id, agent_participant_id, _last, _timer_ref}] -> agent_participant_id
       [] -> nil
@@ -81,6 +97,15 @@ defmodule Platform.Chat.ActiveAgentStore do
   """
   @spec get_last_agent(binary()) :: binary() | nil
   def get_last_agent(space_id) do
+    if Peer.remote?(),
+      do: Peer.read(__MODULE__, :local_get_last_agent, [space_id], nil),
+      else: local_get_last_agent(space_id)
+  end
+
+  @doc false
+  # This node's row. Public so a web node can read it from its peer.
+  @spec local_get_last_agent(binary()) :: binary() | nil
+  def local_get_last_agent(space_id) do
     case :ets.lookup(@table, space_id) do
       [{^space_id, _active, last_agent_participant_id, _timer_ref}] -> last_agent_participant_id
       [] -> nil
@@ -94,7 +119,7 @@ defmodule Platform.Chat.ActiveAgentStore do
   """
   @spec clear_active(binary()) :: :ok
   def clear_active(space_id) do
-    GenServer.call(__MODULE__, {:clear_active, space_id})
+    write({:clear_active, space_id})
   end
 
   @doc """
@@ -106,7 +131,44 @@ defmodule Platform.Chat.ActiveAgentStore do
   """
   @spec clear_if_match(binary(), binary()) :: :ok
   def clear_if_match(space_id, agent_participant_id) do
-    GenServer.call(__MODULE__, {:clear_if_match, space_id, agent_participant_id})
+    write({:clear_if_match, space_id, agent_participant_id})
+  end
+
+  @doc """
+  The store every write goes to: this node's, or under the web role with a
+  cluster peer (task 01a155a6 stage 3), the peer's.
+
+  A web node runs no `AttentionRouter`, so the mutex that decides routing is
+  the full peer's. If a web node kept its own, an eye click there would arm a
+  store nothing routes from, and its 15-minute release timer would broadcast
+  `{:active_agent_changed, space_id, nil}` on `"active_agent:<space_id>"`,
+  which clustered PubSub delivers to the full node's chat LiveViews, telling
+  them the mutex was released while the real one is still held.
+  """
+  @spec server() :: GenServer.server()
+  def server, do: Peer.server(__MODULE__)
+
+  # A remote write that cannot reach the peer (nodedown, not yet connected)
+  # is logged and dropped: the callers are request-path UI events and the
+  # mutex they would have set lives on a node that is not there.
+  defp write(request) do
+    case server() do
+      {__MODULE__, peer} = remote ->
+        try do
+          GenServer.call(remote, request)
+        catch
+          :exit, reason ->
+            Logger.warning(
+              "[ActiveAgentStore] #{elem(request, 0)} not applied: peer #{peer} " <>
+                "unreachable (#{inspect(reason)})"
+            )
+
+            :ok
+        end
+
+      local ->
+        GenServer.call(local, request)
+    end
   end
 
   # ── GenServer callbacks ─────────────────────────────────────────────────────

@@ -70,6 +70,7 @@ defmodule Platform.Chat.AttentionRouter do
   alias Platform.Tasks.Task, as: TaskRecord
 
   @handler_id "platform-chat-attention-router"
+  @relayed_events [[:platform, :chat, :message_posted]]
   @table :chat_attention_heartbeat
 
   # ── Public API ──────────────────────────────────────────────────────────────
@@ -77,6 +78,14 @@ defmodule Platform.Chat.AttentionRouter do
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
+
+  @doc """
+  The telemetry events this router consumes. It attaches to each and to its
+  `Platform.Role.Relay` twin, so a message posted on a clustered web node is
+  routed here, once (task 01a155a6 stage 3).
+  """
+  @spec relayed_events() :: [:telemetry.event_name()]
+  def relayed_events, do: @relayed_events
 
   @doc """
   Synchronously route attention for `message`.
@@ -187,21 +196,24 @@ defmodule Platform.Chat.AttentionRouter do
   # ── Telemetry integration ───────────────────────────────────────────────────
 
   defp attach_telemetry do
-    :telemetry.attach(
+    Platform.Role.Relay.attach_many(
       @handler_id,
-      [:platform, :chat, :message_posted],
+      @relayed_events,
       &__MODULE__.handle_telemetry_event/4,
       %{}
     )
   end
 
   defp detach_telemetry do
-    :telemetry.detach(@handler_id)
+    Platform.Role.Relay.detach_many(@handler_id)
   rescue
     _ -> :ok
   end
 
   @doc false
+  def handle_telemetry_event([:platform, :role_relay | event], measurements, metadata, cfg),
+    do: handle_telemetry_event(event, measurements, metadata, cfg)
+
   def handle_telemetry_event([:platform, :chat, :message_posted], _measurements, metadata, _cfg) do
     case Process.whereis(__MODULE__) do
       nil -> :ok

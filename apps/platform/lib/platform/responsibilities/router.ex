@@ -288,6 +288,14 @@ defmodule Platform.Responsibilities.Router do
   # ── public API ────────────────────────────────────────────────────────────
 
   @doc """
+  The telemetry events this process consumes. It attaches to each and to its
+  `Platform.Role.Relay` twin, so the same event emitted on a clustered web
+  node reaches it, once (task 01a155a6 stage 3).
+  """
+  @spec relayed_events() :: [:telemetry.event_name()]
+  def relayed_events, do: [@chat_message_posted_event]
+
+  @doc """
   Return the bucketed registry snapshot.
 
   Used by integration tests and the (future) health-check endpoint to
@@ -894,16 +902,16 @@ defmodule Platform.Responsibilities.Router do
 
   defp attach_chat_telemetry(handler_id, router_pid)
        when is_binary(handler_id) and is_pid(router_pid) do
-    :telemetry.attach(
+    Platform.Role.Relay.attach_many(
       handler_id,
-      @chat_message_posted_event,
+      relayed_events(),
       &__MODULE__.handle_chat_telemetry/4,
       %{router_pid: router_pid}
     )
   end
 
   defp detach_chat_telemetry(handler_id) when is_binary(handler_id) do
-    :telemetry.detach(handler_id)
+    Platform.Role.Relay.detach_many(handler_id)
   rescue
     _ -> :ok
   end
@@ -912,6 +920,9 @@ defmodule Platform.Responsibilities.Router do
   # Telemetry callback — runs on the publishing process. Keep it tiny:
   # forward to the router GenServer so all DB / matching work happens on
   # our own process. Mirrors `Platform.Chat.AttentionRouter`'s pattern.
+  def handle_chat_telemetry([:platform, :role_relay | event], measurements, metadata, config),
+    do: handle_chat_telemetry(event, measurements, metadata, config)
+
   def handle_chat_telemetry(
         @chat_message_posted_event,
         _measurements,

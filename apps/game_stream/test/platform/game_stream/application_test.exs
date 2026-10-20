@@ -84,4 +84,20 @@ defmodule Platform.GameStream.ApplicationTest do
     :ok = RuntimeConfig.apply(%{})
     refute Platform.GameStream.enabled?()
   end
+
+  describe "web role (task 01a155a6)" do
+    alias Platform.GameStream.Application, as: App
+
+    test "every child is classified exactly once" do
+      ids = Enum.map(App.children(:full), &Platform.Role.child_id/1)
+      unclassified = ids -- (App.web_ids() ++ App.background_ids())
+      assert unclassified == [], "unclassified Play children: #{inspect(unclassified)}"
+      assert MapSet.disjoint?(MapSet.new(App.web_ids()), MapSet.new(App.background_ids()))
+    end
+
+    test "the web role starts Play's inert supervisor, and :full keeps today's list" do
+      assert App.children(:web) == [Platform.GameStream.Supervisor]
+      assert App.children(:full) == [Platform.GameStream.Supervisor]
+    end
+  end
 end

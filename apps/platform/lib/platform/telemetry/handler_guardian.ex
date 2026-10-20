@@ -71,7 +71,8 @@ defmodule Platform.Telemetry.HandlerGuardian do
   failure event is emitted for a voluntary detach.
 
   The id is looked up in `@boot_handlers`, an explicit compile-time map of the
-  seven ids `Platform.Application.start/2` attaches to their modules. An id
+  ids `Platform.Application.start/2` attaches to their modules (seven on
+  every role, plus `Platform.Role.Relay` under `:web`). An id
   that is not in that map is left alone and `:ok` is returned. A guardian that
   restored *anything* that failed would resurrect test-owned handlers and
   third-party handlers whose owners detached them on purpose, and would make
@@ -80,7 +81,7 @@ defmodule Platform.Telemetry.HandlerGuardian do
   Restoring by calling the module's own `attach/0` is what makes the restore
   safe: that function is the single definition of the handler's id, event list
   and config, so the handler cannot come back under a drifted configuration.
-  Every one of the seven is idempotent (`{:error, :already_exists}` normalised
+  Every one of them is idempotent (`{:error, :already_exists}` normalised
   to `:ok`), verified individually, so restoring one that is somehow already
   attached is a no-op.
 
@@ -111,7 +112,7 @@ defmodule Platform.Telemetry.HandlerGuardian do
   @handler_id "platform-telemetry-handler-guardian"
   @failure_event [:telemetry, :handler, :failure]
 
-  # The seven handlers `Platform.Application.start/2` attaches at boot, keyed
+  # The handlers `Platform.Application.start/2` attaches at boot, keyed
   # by the `@handler_id` each one declares. Deliberately explicit: an id not
   # listed here is not restored.
   @boot_handlers %{
@@ -122,7 +123,11 @@ defmodule Platform.Telemetry.HandlerGuardian do
     "platform-meetings-intent-corrections" =>
       Platform.Meetings.IntentCorrections.TelemetryHandler,
     "platform-memory-telemetry" => Platform.Memory.TelemetryHandler,
-    "external-admission-notifier" => Platform.Accounts.ExternalAdmissionNotifier
+    "external-admission-notifier" => Platform.Accounts.ExternalAdmissionNotifier,
+    # Web role only (task 01a155a6 stage 3). Its body cannot raise, but if it
+    # were ever detached a web node would stop routing messages to agents and
+    # nothing would say so.
+    "platform-role-relay" => Platform.Role.Relay
   }
 
   @handler_ids @boot_handlers |> Map.keys() |> Enum.sort()
@@ -136,7 +141,7 @@ defmodule Platform.Telemetry.HandlerGuardian do
   Idempotent, matching the contract every boot handler satisfies: a duplicate
   attach reports `{:error, :already_exists}`, which is normalised to `:ok`.
 
-  Called FIRST in `Platform.Application.start/2`, ahead of the seven handlers
+  Called FIRST in `Platform.Application.start/2`, ahead of the handlers
   it guards. The reason is a window argument, not a dispatch-order one:
   `:telemetry` only orders handlers against each other within a single event
   name, and no boot handler subscribes to the failure event, so relative

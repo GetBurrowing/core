@@ -676,7 +676,10 @@ defmodule Platform.Mail.InboundTest do
   describe "module flag" do
     test "flag off: the inbound supervisor is not among the application's children" do
       assert Platform.Mail.Config.enabled?() == false
-      assert Platform.Application.maybe_add_mail_inbound([:x]) == [:x]
+
+      assert Platform.Application.maybe_add_mail_inbound([:x], &Platform.Application.boot_flag/3) ==
+               [:x]
+
       assert Process.whereis(Platform.Mail.Inbound.Supervisor) == nil
     end
 
@@ -685,7 +688,7 @@ defmodule Platform.Mail.InboundTest do
       Application.put_env(:platform, :mail_enabled, true)
       on_exit(fn -> Application.put_env(:platform, :mail_enabled, previous) end)
 
-      assert Platform.Application.maybe_add_mail_inbound([:x]) ==
+      assert Platform.Application.maybe_add_mail_inbound([:x], &Platform.Application.boot_flag/3) ==
                [:x, Platform.Mail.Inbound.Supervisor]
     end
 

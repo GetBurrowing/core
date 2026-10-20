@@ -23,13 +23,36 @@ defmodule Platform.GameStream.Application do
 
   use Application
 
+  # Web-role classification (task 01a155a6), by child id, under the rule in
+  # `Platform.Role`'s moduledoc. `Platform.GameStream.Supervisor` is an inert
+  # Registry plus an empty DynamicSupervisor: it holds no children until a
+  # play request starts a session, and has no timer, DB access or
+  # subscription of its own.
+  @web [Platform.GameStream.Supervisor]
+  @background []
+
   @impl true
   def start(_type, _args) do
     Platform.GameStream.RuntimeConfig.apply(System.get_env())
 
-    Supervisor.start_link([Platform.GameStream.Supervisor],
+    Supervisor.start_link(children(Platform.Role.role()),
       strategy: :one_for_one,
       name: __MODULE__.Supervisor
     )
+  end
+
+  @doc false
+  def web_ids, do: @web
+
+  @doc false
+  def background_ids, do: @background
+
+  @doc """
+  Play's children for `role`: all of them under `:full`, the `@web` ones
+  under `:web` (`Platform.Role.select/3`).
+  """
+  @spec children(Platform.Role.t()) :: list()
+  def children(role) do
+    Platform.Role.select([Platform.GameStream.Supervisor], role, @web)
   end
 end

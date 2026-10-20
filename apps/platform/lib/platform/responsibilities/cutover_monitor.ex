@@ -101,6 +101,14 @@ defmodule Platform.Responsibilities.CutoverMonitor do
         }
   def report(server \\ __MODULE__), do: GenServer.call(server, :report)
 
+  @doc """
+  The telemetry events this process consumes. It attaches to each and to its
+  `Platform.Role.Relay` twin, so the same event emitted on a clustered web
+  node reaches it, once (task 01a155a6 stage 3).
+  """
+  @spec relayed_events() :: [:telemetry.event_name()]
+  def relayed_events, do: [@router_fired_event, @dual_write_event]
+
   @doc "Return the list of responsibility keys this monitor tracks."
   @spec tracked_keys() :: [String.t()]
   def tracked_keys, do: @tracked_keys
@@ -195,25 +203,25 @@ defmodule Platform.Responsibilities.CutoverMonitor do
   # ── telemetry attach/detach ───────────────────────────────────────────────
 
   defp attach_telemetry(handler_id, @router_fired_event, monitor_pid) do
-    :telemetry.attach(
+    Platform.Role.Relay.attach_many(
       handler_id,
-      @router_fired_event,
+      [@router_fired_event],
       &__MODULE__.handle_router_fired_telemetry/4,
       %{monitor_pid: monitor_pid}
     )
   end
 
   defp attach_telemetry(handler_id, @dual_write_event, monitor_pid) do
-    :telemetry.attach(
+    Platform.Role.Relay.attach_many(
       handler_id,
-      @dual_write_event,
+      [@dual_write_event],
       &__MODULE__.handle_dual_write_telemetry/4,
       %{monitor_pid: monitor_pid}
     )
   end
 
   defp detach_telemetry(handler_id) when is_binary(handler_id) do
-    :telemetry.detach(handler_id)
+    Platform.Role.Relay.detach_many(handler_id)
   rescue
     _ -> :ok
   end
@@ -221,6 +229,14 @@ defmodule Platform.Responsibilities.CutoverMonitor do
   @doc false
   # Telemetry callback for router-fired events. Forwards to the monitor
   # GenServer so all counter work runs on a single process.
+  def handle_router_fired_telemetry(
+        [:platform, :role_relay | event],
+        measurements,
+        metadata,
+        config
+      ),
+      do: handle_router_fired_telemetry(event, measurements, metadata, config)
+
   def handle_router_fired_telemetry(
         @router_fired_event,
         _measurements,
@@ -241,6 +257,14 @@ defmodule Platform.Responsibilities.CutoverMonitor do
 
   @doc false
   # Telemetry callback for dual-write events. Same forwarder pattern.
+  def handle_dual_write_telemetry(
+        [:platform, :role_relay | event],
+        measurements,
+        metadata,
+        config
+      ),
+      do: handle_dual_write_telemetry(event, measurements, metadata, config)
+
   def handle_dual_write_telemetry(
         @dual_write_event,
         _measurements,

@@ -152,6 +152,8 @@ defmodule Platform.Orchestration.LeaseManager do
 
   require Logger
 
+  alias Platform.Role.Peer
+
   @table :orchestration_lease_manager
 
   # Position of the lease_map inside the ETS tuple `{task_id, lease}`.
@@ -287,7 +289,7 @@ defmodule Platform.Orchestration.LeaseManager do
   @spec record_ack(binary(), binary() | nil, binary() | nil) ::
           :ok | {:error, :not_found} | {:error, {:not_owner, binary() | nil}}
   def record_ack(task_id, caller_runtime_id, subagent_id \\ nil) when is_binary(task_id) do
-    GenServer.call(__MODULE__, {:record_ack, task_id, caller_runtime_id, subagent_id})
+    peer_call({:record_ack, task_id, caller_runtime_id, subagent_id})
   end
 
   @doc """
@@ -325,7 +327,30 @@ defmodule Platform.Orchestration.LeaseManager do
           :ok | {:error, :not_found | :invalid_until | :cap_exceeded}
   def silence(task_id, %DateTime{} = until, reason)
       when is_binary(task_id) and is_binary(reason) do
-    GenServer.call(__MODULE__, {:silence, task_id, until, reason})
+    peer_call({:silence, task_id, until, reason})
+  end
+
+  # Task 01a155a6 stage 4. `record_ack/3` and `silence/3` are reached from
+  # the MCP request path (`task_ack`, `alarm_silence`), which a web node also
+  # serves. The leases live with the routers on the full node, so a web node
+  # with a cluster peer sends the call there; an unreachable peer reads as
+  # no lease, which both MCP tools already surface as recoverable. On a full
+  # node this is the plain local call it always was.
+  defp peer_call(request) do
+    if Peer.remote?() do
+      try do
+        GenServer.call(Peer.server(__MODULE__), request, 2_000)
+      catch
+        :exit, reason ->
+          Logger.warning(
+            "[LeaseManager] #{elem(request, 0)} not applied: peer unreachable (#{inspect(reason, limit: 5)})"
+          )
+
+          {:error, :not_found}
+      end
+    else
+      GenServer.call(__MODULE__, request)
+    end
   end
 
   @doc """
@@ -389,6 +414,16 @@ defmodule Platform.Orchestration.LeaseManager do
   """
   @spec get(binary()) :: map() | nil
   def get(task_id) when is_binary(task_id) do
+    if Peer.remote?(),
+      do: Peer.read(__MODULE__, :local_get, [task_id], nil),
+      else: local_get(task_id)
+  end
+
+  @doc false
+  # This node's row. Public so a web node can read it from its peer
+  # (task 01a155a6 stage 4): `task_ack` reads `safety_net_at` back from it.
+  @spec local_get(binary()) :: map() | nil
+  def local_get(task_id) when is_binary(task_id) do
     if ensure_table() do
       case :ets.lookup(@table, task_id) do
         [{^task_id, lease}] -> lease

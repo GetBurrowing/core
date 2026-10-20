@@ -435,9 +435,22 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   @doc """
   Force a router dispatch for the given task if a router is running. If not,
   re-evaluate the task so an eligible router is started first.
+
+  On a web node (task 01a155a6 stage 4) the routers live on the full peer,
+  and a local re-evaluation would try to start one under a
+  `TaskRouterSupervisor` that never started (`:noproc`). The request-path
+  callers (a needs-human release, the in_progress to in_review hook) are
+  therefore forwarded to the peer through `Platform.Role.Peer.read/5`, and
+  answer `:noop` when there is no peer or it cannot be reached.
   """
   @spec force_dispatch(String.t()) :: :ok | :noop | {:error, :task_not_found}
   def force_dispatch(task_id) do
+    if Platform.Role.web?(),
+      do: Platform.Role.Peer.read(__MODULE__, :force_dispatch, [task_id], :noop),
+      else: local_force_dispatch(task_id)
+  end
+
+  defp local_force_dispatch(task_id) do
     case Registry.lookup(Platform.Orchestration.Registry, task_id) do
       [{pid, _}] ->
         send(pid, :dispatch)

@@ -603,11 +603,14 @@ defmodule Platform.Deploy.EmailTest do
   describe "startup" do
     test "the outbox is not a child when the Email module is off" do
       Application.put_env(:platform, :mail_enabled, false)
-      assert Platform.Application.maybe_add_mail_outbox([:x]) == [:x]
+
+      assert Platform.Application.maybe_add_mail_outbox([:x], &Platform.Application.boot_flag/3) ==
+               [:x]
     end
 
     test "the outbox is a child when the Email module is on" do
-      assert Platform.Application.maybe_add_mail_outbox([:x]) == [:x, Platform.Mail.Outbox]
+      assert Platform.Application.maybe_add_mail_outbox([:x], &Platform.Application.boot_flag/3) ==
+               [:x, Platform.Mail.Outbox]
     end
   end
 end
