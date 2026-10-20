@@ -18,8 +18,8 @@
  * involved, so nothing the owner deletes can unload it.
  *
  * ONE COPY OF THE PROSE. The text is suite-cli's own `SUITE_CONVENTIONS`, read
- * from the pinned install (install-tools.sh puts suite-cli's sources under
- * /usr/local/share/suite/cli), not a second copy kept here. The image build
+ * from the pinned install (install-tools.sh puts burrow-cli's sources under
+ * /usr/local/share/burrow/cli), not a second copy kept here. The image build
  * fails if that export cannot be loaded (Dockerfile). If it still cannot be
  * read at start, {@link FALLBACK} carries the one rule whose absence makes an
  * agent silent, and the host says so in its log.
@@ -28,8 +28,8 @@ import { join } from "node:path";
 import type { Runner } from "./exec.ts";
 import type { AgentUser } from "./users.ts";
 
-/** Where install-tools.sh installs suite-cli's library (XDG_DATA_HOME=/usr/local/share). */
-export const BURROW_CLI_LIB = "/usr/local/share/suite/cli";
+/** Where install-tools.sh installs burrow-cli's library (XDG_DATA_HOME=/usr/local/share; <data>/burrow/cli since 0.9.0). */
+export const BURROW_CLI_LIB = "/usr/local/share/burrow/cli";
 
 /** The agent's user-level memory file, relative to its home. */
 export const USER_MEMORY = ".claude/CLAUDE.md";

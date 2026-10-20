@@ -17,7 +17,7 @@ case "$verb" in
     ;;
   pane-status)
     session="$3"
-    dir="$HOME/.local/state/suite/sessions"
+    dir="$HOME/.local/state/burrow/sessions"
     mkdir -p "$dir"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if ! tmux has-session -t "=$session" 2>/dev/null; then

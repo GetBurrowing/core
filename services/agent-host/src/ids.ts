@@ -65,9 +65,9 @@ export function dropInDir(agentId: string): string {
   return `${UNIT_DIR}/${unitName(agentId)}.d`;
 }
 
-/** What suite-cli's status file for this agent's session is called. */
+/** What burrow-cli's status file for this agent's session is called (`<state>/burrow/sessions`, 0.10.1+). */
 export function statusFile(agentId: string): string {
-  return `${homeDir(agentId)}/.local/state/suite/sessions/${SESSION}.status.json`;
+  return `${homeDir(agentId)}/.local/state/burrow/sessions/${SESSION}.status.json`;
 }
 
 /**

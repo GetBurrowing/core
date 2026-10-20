@@ -56,7 +56,7 @@ describe("names", () => {
   test("paths are per agent", () => {
     expect(envFile(A)).toBe(`/etc/burrow-agents/${A}.env`);
     expect(runDir(A)).toBe(`/run/burrow-agents/${A}`);
-    expect(statusFile(A)).toBe("/home/agent-98259d347cbe/.local/state/suite/sessions/suite-agent.status.json");
+    expect(statusFile(A)).toBe("/home/agent-98259d347cbe/.local/state/burrow/sessions/suite-agent.status.json");
   });
 
   test("the connection key is suite-cli's agentKey for the same folder", () => {
@@ -324,17 +324,17 @@ describe("the runner", () => {
     };
   };
 
-  test("launches suite claude, then exits 1 when pane-status says the session is gone", async () => {
-    const r = io({ "suite pane-status": [0, 0, 1] });
+  test("launches burrow claude, then exits 1 when pane-status says the session is gone", async () => {
+    const r = io({ "burrow pane-status": [0, 0, 1] });
     expect(await runAgent(r)).toBe(1);
-    expect(r.calls[0]).toEqual(["suite", "claude", "--session", "suite-agent"]);
+    expect(r.calls[0]).toEqual(["burrow", "claude", "--session", "suite-agent"]);
     expect(r.calls.filter((c) => c[1] === "pane-status")).toHaveLength(3);
     // Nothing the runner runs types into a pane.
     expect(r.calls.some((c) => c.includes("send-keys"))).toBe(false);
   });
 
-  test("an older suite-cli without pane-status falls back to tmux has-session", async () => {
-    const r = io({ "suite pane-status": [2], "tmux has-session": [1] });
+  test("an older burrow-cli without pane-status falls back to tmux has-session", async () => {
+    const r = io({ "burrow pane-status": [2], "tmux has-session": [1] });
     expect(await alive(r, "suite-agent")).toBe(false);
   });
 

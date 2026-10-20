@@ -10,8 +10,8 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   its own OS user `agent-<last 12 hex of the id>`. The user has a 0700 home, a
   0600 env file at `/etc/burrow-agents/<id>.env` and a 0700 tmux dir at
   `/run/burrow-agents/<id>`. The unit runs the real Claude Code through
-  `suite claude`. suite-cli does the wiring, answers the launch dialogs, and
-  classifies the pane (`suite pane-status`). This daemon has no pane
+  `burrow claude`. burrow-cli does the wiring, answers the launch dialogs, and
+  classifies the pane (`burrow pane-status`). This daemon has no pane
   classifier of its own.
 - **Per-agent users stop agents from crossing into each other BY ACCIDENT.
   They are not a security boundary.** An install is one trust group, and an

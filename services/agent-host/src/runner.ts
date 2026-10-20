@@ -6,7 +6,7 @@
  *    entries, CLAUDE.md if absent), creates the tmux session, answers the
  *    launch dialogs it knows, and returns. Its tmux server's socket is under
  *    $TMUX_TMPDIR, this agent's 0700 runtime dir (see units.ts).
- * 2. Every few seconds, `suite pane-status --session suite-agent --answer`:
+ * 2. Every few seconds, `burrow pane-status --session suite-agent --answer`:
  *    suite-cli looks at the pane, answers a known dialog if one is up, and
  *    writes the status file the agent host reads. There is no pane classifier
  *    here; it is suite-cli's.
@@ -31,18 +31,18 @@ export interface RunnerIo {
 
 /** One check. Returns false when the session is gone. */
 export async function alive(io: RunnerIo, session: string): Promise<boolean> {
-  const status = await io.spawn(["suite", "pane-status", "--session", session, "--answer"]);
+  const status = await io.spawn(["burrow", "pane-status", "--session", session, "--answer"]);
   if (status.exitCode === 0) return true;
   if (status.exitCode === 1) return false;
-  // An older suite-cli without pane-status (exit 2): fall back to tmux itself.
+  // An older burrow-cli without pane-status (exit 2): fall back to tmux itself.
   return (await io.spawn(["tmux", "has-session", "-t", `=${session}`])).exitCode === 0;
 }
 
 export async function runAgent(io: RunnerIo, session: string = SESSION): Promise<number> {
-  const launched = await io.spawn(["suite", "claude", "--session", session]);
-  // `suite claude` ends by trying to attach, which fails with no terminal; its
+  const launched = await io.spawn(["burrow", "claude", "--session", session]);
+  // `burrow claude` ends by trying to attach, which fails with no terminal; its
   // exit code says nothing about the session. The session is the truth.
-  io.log(`suite claude returned ${launched.exitCode}`);
+  io.log(`burrow claude returned ${launched.exitCode}`);
   for (;;) {
     if (io.stopping()) return 0;
     if (!(await alive(io, session))) {

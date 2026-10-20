@@ -6,6 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash \
     && chmod 755 /usr/local/bin/bun
-COPY suite-stub.sh /usr/local/bin/suite
+COPY suite-stub.sh /usr/local/bin/burrow
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

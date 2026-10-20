@@ -7,7 +7,7 @@
 # Usage: install-tools.sh <versions.env>
 #
 # Installs node (nodejs.org tarball, sha256-checked), bun, Claude Code and the
-# Codex CLI (npm, global), and suite-cli at a pinned commit. Everything lands
+# Codex CLI (npm, global), and burrow-cli at a pinned commit. Everything lands
 # under /usr/local so every agent user can run it and none can modify it.
 # Idempotent: a tool already at its pinned version is left alone.
 set -eu
@@ -63,16 +63,17 @@ fi
 npm install --global --no-fund --no-audit --loglevel=error \
 	"@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION"
 
-# suite-cli, from the pinned commit. Its installer asks before replacing an
-# existing install, so remove the old entrypoint first; stdin is /dev/null so
-# no prompt can ever block a boot.
-curl -fsSL "https://raw.githubusercontent.com/Startup-Suite/suite-cli/$cli_ref/install.sh" \
-	-o "$tmp/suite-install.sh"
-rm -f /usr/local/bin/suite
+# burrow-cli, from the pinned commit. Its installer asks before replacing an
+# existing `burrow`, so remove it first; stdin is /dev/null so no prompt can
+# ever block a boot. The `suite` alias an older pin installed goes too: from
+# 0.10.0 nothing here calls it.
+curl -fsSL "https://raw.githubusercontent.com/GetBurrowing/burrow-cli/$cli_ref/install.sh" \
+	-o "$tmp/burrow-install.sh"
+rm -f /usr/local/bin/burrow /usr/local/bin/suite
 # suite-cli 969c6f7 reads only SUITE_CLI_REF, so pass both names.
 PATH="/usr/local/bin:$PATH" BURROW_CLI_REF="$cli_ref" SUITE_CLI_REF="$cli_ref" XDG_BIN_HOME=/usr/local/bin \
-	XDG_DATA_HOME=/usr/local/share sh "$tmp/suite-install.sh" </dev/null >/dev/null
-chmod -R a+rX /usr/local/share/suite
+	XDG_DATA_HOME=/usr/local/share sh "$tmp/burrow-install.sh" </dev/null >/dev/null
+chmod -R a+rX /usr/local/share/burrow
 
 echo "install-tools: node $(/usr/local/bin/node --version) bun $(/usr/local/bin/bun --version)" \
-	"claude $CLAUDE_CODE_VERSION codex $CODEX_VERSION suite $(/usr/local/bin/suite --version)"
+	"claude $CLAUDE_CODE_VERSION codex $CODEX_VERSION burrow $(/usr/local/bin/burrow --version)"
