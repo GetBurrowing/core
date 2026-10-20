@@ -32,6 +32,8 @@ defmodule Platform.TenancyFixtures do
   migration produced it.
   """
 
+  import Ecto.Query, only: [from: 2]
+
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -150,5 +152,52 @@ defmodule Platform.TenancyFixtures do
     end)
 
     user
+  end
+
+  @doc """
+  Leave the caller's sandbox with NO root org, without `TRUNCATE orgs`.
+
+  Re-parents the current root (the one row with `parent_org_id IS NULL`)
+  under a throwaway child, so the two form a detached cycle: afterwards no
+  row has `parent_org_id IS NULL`, and the caller can insert its own root
+  or assert the no-root behaviour. Returns the ids of every org that
+  existed before the call plus the throwaway child, i.e. the rows a test
+  should treat as pre-existing when it asserts on the `orgs` table.
+
+  Why not `TRUNCATE orgs CASCADE`: it takes ACCESS EXCLUSIVE on `orgs` and
+  on every table that FK-references it, so it queues behind any
+  concurrently running test whose sandbox transaction has read or written
+  one of them, and every newer lock request on those tables queues behind
+  it. In CI that produced simultaneous 15 s pool timeouts in unrelated
+  tests (runs 39331856392, 39347244298). This takes ROW EXCLUSIVE on
+  `orgs` and a FOR NO KEY UPDATE row lock on the root (its
+  `orgs_single_root` index is partial, so it is not a key column), which
+  does not conflict with the FOR KEY SHARE that other transactions' FK
+  checks take on the root. The change is uncommitted, so it is invisible
+  to every other transaction, and the sandbox rolls it back.
+  """
+  @spec park_root_org!() :: [binary()]
+  def park_root_org! do
+    existing = Repo.all(from(o in Org, select: o.id))
+
+    case Repo.one(from(o in Org, where: is_nil(o.parent_org_id))) do
+      nil ->
+        existing
+
+      root ->
+        n = System.unique_integer([:positive])
+
+        child =
+          Repo.insert!(%Org{
+            name: "parked-root-#{n}",
+            slug: "parked-root-#{n}",
+            parent_org_id: root.id
+          })
+
+        {1, _} =
+          Repo.update_all(from(o in Org, where: o.id == ^root.id), set: [parent_org_id: child.id])
+
+        [child.id | existing]
+    end
   end
 end

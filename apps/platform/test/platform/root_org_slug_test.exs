@@ -60,6 +60,7 @@ defmodule Platform.RootOrgSlugTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
+  alias Platform.TenancyFixtures
 
   @renamed_slug "milhouse"
 
@@ -233,37 +234,6 @@ defmodule Platform.RootOrgSlugTest do
     :ok
   end
 
-  # "No root row" without TRUNCATE. `TRUNCATE orgs CASCADE` needs ACCESS
-  # EXCLUSIVE on `orgs` AND on every table that FK-references it, so it waits
-  # for every concurrently running test whose sandbox transaction has read or
-  # written any of them. CI run 39331856392 sat on it for >15 s until the pool
-  # closed the connection. Instead, re-parent the root under a throwaway child:
-  # afterwards no row has `parent_org_id IS NULL`, the cycle is invisible to
-  # everyone else (uncommitted), and the sandbox rolls it back. Locks taken:
-  # ROW EXCLUSIVE on `orgs` and one row lock on the root, which does not
-  # conflict with other transactions' FK checks against it (FOR KEY SHARE).
-  defp park_root_row! do
-    case Repo.one(from(o in Org, where: is_nil(o.parent_org_id))) do
-      nil ->
-        :ok
-
-      root ->
-        n = System.unique_integer([:positive])
-
-        child =
-          Repo.insert!(%Org{
-            name: "parked-root-#{n}",
-            slug: "parked-root-#{n}",
-            parent_org_id: root.id
-          })
-
-        {1, _} =
-          Repo.update_all(from(o in Org, where: o.id == ^root.id), set: [parent_org_id: child.id])
-
-        :ok
-    end
-  end
-
   describe "root_org_slug/0 resolution" do
     test "(a) unset config + root row `root` resolves \"root\"" do
       delete_root_org_slug()
@@ -288,7 +258,8 @@ defmodule Platform.RootOrgSlugTest do
 
     test "(c) no root row and no config resolves nil" do
       delete_root_org_slug()
-      park_root_row!()
+      # "No root row" without TRUNCATE: see `park_root_org!/0`.
+      TenancyFixtures.park_root_org!()
 
       assert Tenancy.get_root_org() == nil
       assert Tenancy.root_org_slug() == nil

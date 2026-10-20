@@ -15,8 +15,11 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   files. Migrations run to `:up` once, outside ExUnit's sandbox, before the
   suite boots (see `config/test.exs`), so this test DB already carries a
   root org seeded under the "acme"/"Acme" env pin that file sets. Each test
-  here clears the `orgs` table first to reproduce a truly fresh database's
-  first migrate.
+  here parks that root first (`park_root_org!/0`) so no root is left, which
+  is the state a fresh database's first migrate sees, and then asserts on
+  the rows `up/0`/`down/0` added or removed relative to the snapshot the
+  park returns. On a fresh database that delta IS the whole table, so the
+  assertions keep their meaning without emptying `orgs`.
   """
   use Platform.DataCase, async: false
 
@@ -24,6 +27,7 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   alias Platform.Repo
   alias Platform.Repo.Migrations.SeedRootOrgs
   alias Platform.Tenancy.Org
+  alias Platform.TenancyFixtures
 
   # Migration source lives under `priv/repo/migrations/` and is not on the
   # compile path — walk up from `test/platform/data_migrations/<this>.exs`
@@ -49,21 +53,19 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   end
 
   setup do
-    # Reproduce a genuinely empty database: this test DB's `orgs` table
-    # already has the one root org seeded at boot (config/test.exs pins
-    # ROOT_ORG_SLUG=acme/ROOT_ORG_NAME=Acme), which `up/0`'s
-    # `ON CONFLICT (slug) DO NOTHING` would silently no-op against, and a
-    # differently-slugged insert would trip the `orgs_single_root` partial
-    # unique index. Clearing it first (inside this test's own sandboxed,
-    # rolled-back transaction) is what actually exercises "a fresh
-    # database's first migrate" rather than re-asserting a no-op.
+    # Reproduce a fresh database's first migrate: this test DB's `orgs`
+    # table already has the one root org seeded at boot (config/test.exs
+    # pins ROOT_ORG_SLUG=acme/ROOT_ORG_NAME=Acme), and a second
+    # `parent_org_id IS NULL` insert would trip the `orgs_single_root`
+    # partial unique index. Parking it leaves no root, inside this test's
+    # own sandboxed, rolled-back transaction.
     #
-    # `TRUNCATE ... CASCADE`, not `Repo.delete_all/1`: a long-lived local
-    # dev/test database accrues real rows elsewhere (`org_wiki_pages` etc.)
-    # that FK-reference `orgs.id`, and plain `DELETE` refuses to touch a
-    # referenced row. Transactional in Postgres like any other statement
-    # here, so it rolls back with everything else this test does.
-    Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
+    # Not `TRUNCATE orgs CASCADE` (what this used to do): its ACCESS
+    # EXCLUSIVE locks on `orgs` and every FK-referencing table queue behind
+    # concurrent tests and stall them (see `park_root_org!/0`). Not
+    # `DELETE` either: deleting the root takes a FOR UPDATE row lock that
+    # waits on every concurrent test holding an FK reference to it.
+    preexisting = TenancyFixtures.park_root_org!()
 
     original_name = System.get_env("ROOT_ORG_NAME")
     original_slug = System.get_env("ROOT_ORG_SLUG")
@@ -73,44 +75,59 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
       restore_env("ROOT_ORG_SLUG", original_slug)
     end)
 
-    :ok
+    %{preexisting: preexisting}
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
 
-  test "a fresh migrate with no env vars set seeds exactly one neutral root org" do
+  # Every org row this test's migration calls added: the whole `orgs`
+  # table minus the rows that existed (parked) before the test ran.
+  defp new_orgs(preexisting) do
+    Repo.all(from(o in Org, where: o.id not in ^preexisting))
+  end
+
+  test "a fresh migrate with no env vars set seeds exactly one neutral root org", %{
+    preexisting: preexisting
+  } do
     System.delete_env("ROOT_ORG_NAME")
     System.delete_env("ROOT_ORG_SLUG")
 
     SeedRootOrgs.up()
 
-    assert [%Org{name: "Root Org", slug: "root", parent_org_id: nil}] = Repo.all(Org)
+    assert [%Org{name: "Root Org", slug: "root", parent_org_id: nil}] = new_orgs(preexisting)
 
-    for org <- Repo.all(Org) do
+    for org <- new_orgs(preexisting) do
       assert Scanner.hits(org.name) == [], "org name carries install identity"
       assert Scanner.hits(org.slug) == [], "org slug carries install identity"
     end
   end
 
-  test "ROOT_ORG_NAME/ROOT_ORG_SLUG override the default" do
+  # Any non-default pair proves the override. Not "acme": the parked boot
+  # root still holds that slug, and `up/0`'s `ON CONFLICT (slug) DO NOTHING`
+  # would no-op against it (renaming the parked row instead would take a
+  # FOR UPDATE row lock on it, since `slug` is a unique key column).
+  test "ROOT_ORG_NAME/ROOT_ORG_SLUG override the default", %{preexisting: preexisting} do
     System.put_env("ROOT_ORG_NAME", "Acme Corp")
-    System.put_env("ROOT_ORG_SLUG", "acme")
+    System.put_env("ROOT_ORG_SLUG", "acme-corp")
 
     SeedRootOrgs.up()
 
-    assert [%Org{name: "Acme Corp", slug: "acme", parent_org_id: nil}] = Repo.all(Org)
+    assert [%Org{name: "Acme Corp", slug: "acme-corp", parent_org_id: nil}] =
+             new_orgs(preexisting)
   end
 
-  test "down/0 deletes only the configured slug" do
+  test "down/0 deletes only the configured slug", %{preexisting: preexisting} do
     System.delete_env("ROOT_ORG_NAME")
     System.delete_env("ROOT_ORG_SLUG")
 
     SeedRootOrgs.up()
-    assert [%Org{slug: "root"}] = Repo.all(Org)
+    assert [%Org{slug: "root"}] = new_orgs(preexisting)
 
     SeedRootOrgs.down()
-    assert Repo.all(Org) == []
+    assert new_orgs(preexisting) == []
+    # "Only": every row other than the one it seeded is still there.
+    assert Enum.sort(Repo.all(from(o in Org, select: o.id))) == Enum.sort(preexisting)
   end
 
   # ── e2e_behavior case 1 (task 01a068f6 stage 3, validation 01a0daa5-23bc-7008) ──
@@ -128,14 +145,17 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   # `ROOT_ORG_ADMIN_EMAIL_DOMAIN` is included in the cleared-env set per
   # the payload's stated setup even though `SeedRootOrgs.up/0` never reads
   # it — only `ROOT_ORG_NAME` and `ROOT_ORG_SLUG` affect this migration.
-  test "case 1: a fresh migrate has zero operator-brand references anywhere in the orgs table" do
+  # "Every org row" is every row the migrate added (`new_orgs/1`), which on
+  # a fresh database is the whole table.
+  test "case 1: a fresh migrate has zero operator-brand references anywhere in the orgs table",
+       %{preexisting: preexisting} do
     System.delete_env("ROOT_ORG_NAME")
     System.delete_env("ROOT_ORG_SLUG")
     System.delete_env("ROOT_ORG_ADMIN_EMAIL_DOMAIN")
 
     SeedRootOrgs.up()
 
-    orgs = Repo.all(Org)
+    orgs = new_orgs(preexisting)
 
     assert [%Org{name: "Root Org", slug: "root", parent_org_id: nil}] = orgs
 

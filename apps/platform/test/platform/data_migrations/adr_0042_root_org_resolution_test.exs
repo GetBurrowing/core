@@ -14,8 +14,11 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
   `ROOT_ORG_SLUG=legacy`, so every test DB's root WAS slugged `legacy` (task
   01a116de stage 4 renamed the fixture root to `acme`). A test against a
   seeded row passes before and after the fix. Each case here
-  therefore clears `orgs` first and builds its own topology inside the
-  sandboxed, rolled-back transaction.
+  therefore parks the seeded root first (`park_root_org!/0`: no row is left
+  with `parent_org_id IS NULL`) and builds its own topology inside the
+  sandboxed, rolled-back transaction. `root_org_id!/0` reads only
+  `parent_org_id IS NULL` rows, so the parked rows are invisible to it and
+  every case sees exactly the roots it inserted.
 
   Drives the public `root_org_id!/0` helper rather than `up/0`: `up/0`
   replays non-idempotent `ADD CONSTRAINT` statements and needs an
@@ -26,6 +29,7 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
 
   alias Platform.Repo
   alias Platform.Repo.Migrations.Adr0042OrgProjectTopology
+  alias Platform.TenancyFixtures
 
   # Migration source lives under `priv/repo/migrations/` and is not on the
   # compile path — walk up from `test/platform/data_migrations/<this>.exs`
@@ -45,10 +49,10 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
   end
 
   setup do
-    # `TRUNCATE ... CASCADE`, not `Repo.delete_all/1`: rows elsewhere
-    # (`org_wiki_pages`, `projects`, ...) FK-reference `orgs.id` with
-    # ON DELETE RESTRICT. Transactional, so it rolls back with the test.
-    Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
+    # Not `TRUNCATE orgs CASCADE`: its ACCESS EXCLUSIVE locks on `orgs` and
+    # every FK-referencing table queue behind concurrent tests and stall
+    # them (see `park_root_org!/0`).
+    TenancyFixtures.park_root_org!()
     :ok
   end
 

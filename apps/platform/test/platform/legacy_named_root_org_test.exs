@@ -46,9 +46,22 @@ defmodule Platform.LegacyNamedRootOrgTest do
   root-resolution bug this task fixes and are out of scope for this
   stage's audit.
 
-  `async: false`: clears and repopulates the shared `orgs` table directly
-  with `TRUNCATE ... CASCADE`, same reasoning as
-  `seed_root_orgs_test.exs`.
+  ## The boot root is parked, not truncated
+
+  The test DB already has its boot-seeded root, and `test_helper.exs`
+  commits the four tenants above (same names and slugs) under it. Setup
+  parks the boot root (`park_root_org!/0`: it and a throwaway child form a
+  detached cycle, so no row has `parent_org_id IS NULL`), inserts `legacy`
+  as the root, and re-parents the four tenants under it, rather than
+  emptying `orgs` with `TRUNCATE ... CASCADE`, whose table-wide ACCESS
+  EXCLUSIVE locks stalled concurrent tests in CI. Re-parenting changes
+  only `parent_org_id`, a non-key column, so its row locks do not conflict
+  with other tests' FK checks against those tenants. Every root lookup is
+  structural, so the parked rows are invisible to the code under test; the
+  count assertions are on every org except the parked ones, which on a
+  real legacy install is the whole table.
+
+  `async: false`: replaces the install's root inside the sandbox.
   """
 
   use Platform.DataCase, async: false
@@ -61,6 +74,7 @@ defmodule Platform.LegacyNamedRootOrgTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
+  alias Platform.TenancyFixtures
 
   defp insert_org!(attrs) do
     %Org{}
@@ -82,29 +96,32 @@ defmodule Platform.LegacyNamedRootOrgTest do
     |> Repo.insert!()
   end
 
+  # A tenant of the legacy root with exactly the historical name and slug.
+  # `test_helper.exs` already commits one under the boot root, so it is
+  # re-parented (a non-key UPDATE) rather than re-inserted, which the
+  # unique `slug` index would refuse.
+  defp legacy_tenant!(legacy, name, slug) do
+    case Repo.get_by(Org, slug: slug) do
+      nil ->
+        insert_org!(%{name: name, slug: slug, parent_org_id: legacy.id})
+
+      %Org{name: ^name} = org ->
+        {1, _} =
+          Repo.update_all(from(o in Org, where: o.id == ^org.id),
+            set: [parent_org_id: legacy.id]
+          )
+
+        Repo.get!(Org, org.id)
+    end
+  end
+
   setup do
     # Reproduce a from-scratch legacy install: exactly what the OLD
     # `up/0` body inserted, before task 01a068f6 stage 2 rewrote it, plus
-    # real pre-existing membership history.
-    #
-    # `access_roles` carries an `org_id` FK to `orgs` (custom roles, task
-    # 01a1386e-59d1 stage 1), so the CASCADE empties it too, built-in rows
-    # included. A from-scratch install has the three built-in rows the roles
-    # migration seeds, and every membership insert below needs them
-    # (`org_memberships.access_role_key` references `access_roles.key`), so
-    # they are copied aside and put back unchanged.
-    Ecto.Adapters.SQL.query!(
-      Repo,
-      "CREATE TEMP TABLE legacy_legacy_builtin_roles ON COMMIT DROP AS " <>
-        "SELECT * FROM access_roles WHERE builtin"
-    )
-
-    Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
-
-    Ecto.Adapters.SQL.query!(
-      Repo,
-      "INSERT INTO access_roles SELECT * FROM legacy_legacy_builtin_roles"
-    )
+    # real pre-existing membership history. The boot root is parked first
+    # so `legacy` can be the one root (see the moduledoc).
+    preexisting_org_ids = TenancyFixtures.park_root_org!()
+    preexisting_membership_ids = Repo.all(from(m in OrgMembership, select: m.id))
 
     # The legacy install also configures its own admin domain. The test
     # environment's pin is the neutral `acme.test` (task 01a116de stage 4),
@@ -117,13 +134,11 @@ defmodule Platform.LegacyNamedRootOrgTest do
     end)
 
     legacy = insert_org!(%{name: "Legacy", slug: "legacy", parent_org_id: nil})
-    initech = insert_org!(%{name: "Initech", slug: "initech", parent_org_id: legacy.id})
-
-    vandelay_ind =
-      insert_org!(%{name: "Vandelay-Ind", slug: "vandelay_ind", parent_org_id: legacy.id})
-
-    globex = insert_org!(%{name: "Globex", slug: "globex", parent_org_id: legacy.id})
-    hooli = insert_org!(%{name: "Hooli", slug: "hooli", parent_org_id: legacy.id})
+    initech = legacy_tenant!(legacy, "Initech", "initech")
+    vandelay_ind = legacy_tenant!(legacy, "Vandelay-Ind", "vandelay_ind")
+    globex = legacy_tenant!(legacy, "Globex", "globex")
+    hooli = legacy_tenant!(legacy, "Hooli", "hooli")
+    parked_org_ids = preexisting_org_ids -- [initech.id, vandelay_ind.id, globex.id, hooli.id]
 
     admin_user = insert_user!("alex.rivera@example.net", "oidc-legacy-admin")
     admin_membership = insert_membership!(admin_user.id, legacy.id, "admin")
@@ -140,7 +155,9 @@ defmodule Platform.LegacyNamedRootOrgTest do
       admin_user: admin_user,
       admin_membership: admin_membership,
       member_user: member_user,
-      member_membership: member_membership
+      member_membership: member_membership,
+      parked_org_ids: parked_org_ids,
+      preexisting_membership_ids: preexisting_membership_ids
     }
   end
 
@@ -158,7 +175,9 @@ defmodule Platform.LegacyNamedRootOrgTest do
          hooli: hooli,
          admin_user: admin_user,
          admin_membership: admin_membership,
-         member_membership: member_membership
+         member_membership: member_membership,
+         parked_org_ids: parked_org_ids,
+         preexisting_membership_ids: preexisting_membership_ids
        } do
     orgs_before = Repo.all(Org) |> Enum.sort_by(& &1.id)
     memberships_before = Repo.all(OrgMembership) |> Enum.sort_by(& &1.id)
@@ -195,8 +214,12 @@ defmodule Platform.LegacyNamedRootOrgTest do
     assert Repo.get(Org, hooli.id) == hooli
     assert Repo.get(OrgMembership, admin_membership.id) == admin_membership
     assert Repo.get(OrgMembership, member_membership.id) == member_membership
-    assert length(orgs_after) == 5
-    assert length(memberships_after) == 2
+    # The legacy install is exactly 5 orgs and 2 memberships: everything
+    # but the parked boot root's rows, which the code under test never sees.
+    assert length(Enum.reject(orgs_after, &(&1.id in parked_org_ids))) == 5
+
+    assert length(Enum.reject(memberships_after, &(&1.id in preexisting_membership_ids))) ==
+             2
   end
 
   test "Tasks.create_project/1 with no org_id attaches to the legacy root with no special-casing",
