@@ -106,6 +106,22 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{current_user: nil})
       refute html =~ "Sign out"
     end
+
+    test "the sign-out row links to a real GET logout route" do
+      html = render_more_sheet(%{current_user: %{name: "Robin"}})
+      row = html |> LazyHTML.from_fragment() |> LazyHTML.query(".more-sheet-profile")
+
+      assert Enum.count(row) == 1
+      [href] = LazyHTML.attribute(row, "href")
+
+      # A plain link is a GET. The row once pointed at /oidc/logout, which
+      # the router never defined, so signing out from the More sheet 404'd.
+      # The route check comes first: it is the property, the literal is the
+      # spelling.
+      assert Phoenix.Router.route_info(PlatformWeb.Router, "GET", href, "localhost") != :error
+      assert href == "/auth/logout"
+      assert LazyHTML.attribute(row, "data-method") == []
+    end
   end
 end
 

@@ -507,9 +507,15 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           <span class="font-medium">Reply in thread</span>
         </button>
         <button
+          id="message-actions-pin"
           type="button"
           phx-click={
-            Phoenix.LiveView.JS.push("pin_toggle", value: %{"message-id" => @open_message_actions_id})
+            Phoenix.LiveView.JS.push("pin_toggle",
+              value: %{
+                "message-id" => @open_message_actions_id,
+                "space-id" => @open_message_actions_msg && @open_message_actions_msg.space_id
+              }
+            )
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
           class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

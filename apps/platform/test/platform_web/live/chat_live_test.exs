@@ -2722,6 +2722,38 @@ defmodule PlatformWeb.ChatLiveTest do
       # The "+" opens the picker; it does not itself react.
       assert [] = Chat.list_reactions(msg.id)
     end
+
+    test "the sheet's Pin / Unpin row pins and unpins the message and closes the sheet",
+         %{view: view, msg: msg} do
+      # Phones have no hover pin button, so this sheet row is their only way
+      # to pin. Click the real element so the chained JS command runs as it
+      # does in the browser: push("pin_toggle") with the value map built in
+      # the template, then push("close_message_actions"). Firing pin_toggle
+      # by name would supply params the template never sends — the bug this
+      # guards is a value map with no "space-id", which no PinHooks clause
+      # matches, so the event fell through to a ChatLive with no catch-all
+      # handle_event and crashed the LiveView.
+      render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      view
+      |> element("#message-actions-pin")
+      |> render_click()
+
+      assert msg.id in Enum.map(Chat.list_pins(msg.space_id), & &1.message_id)
+
+      html = render(view)
+      refute html =~ ~s(id="message-actions-sheet")
+
+      # Second tap through the sheet takes the unpin path.
+      render_click(view, "open_message_actions", %{"id" => msg.id})
+
+      view
+      |> element("#message-actions-pin")
+      |> render_click()
+
+      refute msg.id in Enum.map(Chat.list_pins(msg.space_id), & &1.message_id)
+      refute render(view) =~ ~s(id="message-actions-sheet")
+    end
   end
 
   # ── Mobile drawer ────────────────────────────────────────────────────────────

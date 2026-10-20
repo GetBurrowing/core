@@ -125,8 +125,7 @@ defmodule PlatformWeb.Components.MoreSheet do
              (mount-time, not session-derived). --%>
         <a
           :if={@current_user}
-          href="/oidc/logout"
-          data-method="post"
+          href={~p"/auth/logout"}
           class="more-sheet-row more-sheet-profile"
         >
           <div class="more-sheet-avatar" aria-hidden="true">{user_initial(@current_user)}</div>

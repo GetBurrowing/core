@@ -32,6 +32,13 @@ function removeDraft(key) {
   ClientState.remove(NAMESPACE, normalizeDraftKey(key));
 }
 
+// Decides whether the delayed post-blur viewport reset should run. It runs
+// whenever focus has really left the composer (the iOS keyboard closed), and
+// is skipped when focus is back on it by the time the timer fires.
+export function shouldResetViewportAfterBlur(activeElement, el) {
+  return activeElement !== el;
+}
+
 const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
@@ -98,10 +105,15 @@ const ComposeInput = {
 
     this._syncDraftState();
 
-    // Reset viewport after iOS keyboard dismisses
+    // Reset viewport after iOS keyboard dismisses. Skipped when focus has
+    // come back to the composer before the timer fires: picking an @mention
+    // suggestion blurs the textarea and `chat:insert-mention` refocuses it,
+    // so an unconditional reset jumped the page to the top mid-compose.
     this.el.addEventListener("blur", () => {
       setTimeout(() => {
-        window.scrollTo({ top: 0, behavior: "instant" });
+        if (shouldResetViewportAfterBlur(document.activeElement, this.el)) {
+          window.scrollTo({ top: 0, behavior: "instant" });
+        }
       }, 100);
     });
 
