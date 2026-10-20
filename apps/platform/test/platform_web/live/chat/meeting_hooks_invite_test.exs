@@ -152,7 +152,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksInviteTest do
     {:ok, _runtime} =
       Federation.update_metadata(activated, %{
         "client_info" => %{
-          "product" => "suite-voice-worker",
+          "product" => "burrow-voice-worker",
           "version" => "0.1.0",
           "features" => ["meeting_voice"]
         }

@@ -163,7 +163,7 @@ Ignored while `services.meetings` is off, so flipping meetings back off is a one
 | `stt_model` | string | `whisper-1` | The transcriber's `STT_MODEL`. |
 
 TURN/TLS on 443 is not rendered (it needs its own hostname, certificate and a direct inbound 443).
-Agent voice in meetings (suite-voice-worker) is not part of the `mac` target in v1.
+Agent voice in meetings (burrow-voice-worker) is not part of the `mac` target in v1.
 
 ## `[day2]` (reserved)
 

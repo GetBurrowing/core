@@ -7484,7 +7484,7 @@ defmodule Platform.Meetings do
   The capability a client must declare to be offered a seat in a call.
 
   Matches the string `Platform.Meetings.IntentRuntimeAdapter` dispatches
-  against and that `suite-voice-worker` sends in its join payload. It is a
+  against and that `burrow-voice-worker` sends in its join payload. It is a
   plain string on purpose: `RuntimeChannel` deliberately keeps `features` an
   open set rather than a server-side allowlist, so a new client capability
   must not need a core deploy before it can be reported.
