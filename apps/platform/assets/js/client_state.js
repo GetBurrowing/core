@@ -1,7 +1,7 @@
 // Suite.ClientState — the single localStorage-wrapping API.
 //
 // Every persistence-touching hook migrates to this module (task 019f3e9a).
-// Direct `localStorage.*` calls outside `phx:theme` become lint-gated in a
+// Direct `localStorage.*` calls outside `burrow-theme-v1` become lint-gated in a
 // later stage; this file is the sole approved consumer.
 //
 // Contract:

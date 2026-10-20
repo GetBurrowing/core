@@ -445,9 +445,16 @@ defmodule PlatformWeb.MeetingLiveTest do
       # in `root.html.heex` instead — so neither "light" nor "dark"
       # should appear as a local LV-rendered override.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # `<html>` itself now legitimately carries the signed-in person's
+      # server-rendered `data-theme` (task 01a1557a stage 3), so the check
+      # reads everything BELOW the root element.
+      html = below_root_element(html)
 
-      refute html =~ ~s(data-theme="light")
-      refute html =~ ~s(data-theme="dark")
+      # The shell's theme picker chips are the one deliberate exception: each
+      # carries its preset's data-theme so the chip paints that preset (task
+      # 01a1557a stage 4). Nothing else below <html> may set one.
+      assert local_theme_overrides(html) == []
+      assert html =~ "data-theme-chip"
     end
   end
 
@@ -3102,9 +3109,16 @@ defmodule PlatformWeb.MeetingLiveTest do
       # now inherit the shell's `data-theme` from `<html>` in
       # `root.html.heex`.
       {:ok, _view, html} = live(conn, ~p"/meetings")
+      # `<html>` itself now legitimately carries the signed-in person's
+      # server-rendered `data-theme` (task 01a1557a stage 3), so the check
+      # reads everything BELOW the root element.
+      html = below_root_element(html)
 
-      refute html =~ ~s(data-theme="light")
-      refute html =~ ~s(data-theme="dark")
+      # The shell's theme picker chips are the one deliberate exception: each
+      # carries its preset's data-theme so the chip paints that preset (task
+      # 01a1557a stage 4). Nothing else below <html> may set one.
+      assert local_theme_overrides(html) == []
+      assert html =~ "data-theme-chip"
     end
   end
 
@@ -14114,5 +14128,16 @@ defmodule PlatformWeb.MeetingLiveTest do
 
   defp attrs(html, selector, attribute) do
     html |> frag() |> LazyHTML.query(selector) |> LazyHTML.attribute(attribute)
+  end
+
+  # Everything after the opening `<html ...>` tag. `live/2` returns the full
+  # document, whose root element carries the server-rendered theme.
+  defp below_root_element(html), do: String.replace(html, ~r/\A.*?<html\b[^>]*>/s, "")
+
+  defp local_theme_overrides(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-theme]:not([data-theme-chip])")
+    |> LazyHTML.attribute("data-theme")
   end
 end

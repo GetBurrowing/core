@@ -345,8 +345,8 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       assert length(dark) == 2,
              "the canvas-search-indexing-state line needs BOTH dark selectors: the " <>
                "`[data-theme=\"dark\"]` one and its `prefers-color-scheme` twin. A viewer " <>
-               "on \"system\" under a dark OS has no `data-theme` attribute at all " <>
-               "(`setAppTheme(\"system\")` removes it), so the attribute selector alone " <>
+               "with no script (the no-JS path) has no `data-theme` attribute at all, " <>
+               "so the attribute selector alone " <>
                "silently stops applying and the 2.23:1 failure comes back for exactly the " <>
                "people who never touched the toggle. Found: " <>
                inspect(Enum.map(dark, & &1.selector))

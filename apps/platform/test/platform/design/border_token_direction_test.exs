@@ -114,12 +114,12 @@ defmodule Platform.Design.BorderTokenDirectionTest do
   # Sites where the element carries border-base-300 AND bg-base-300, and the
   # sameness is the point. Repointing these draws a ring that was never meant
   # to be there. Each one must also carry the reason at the site.
-  @allowed_live [
-    {"lib/platform_web/components/layouts.ex", "border-2 border-base-300 bg-base-300",
-     "theme_toggle pill: the 2px border is a structural gutter that insets the " <>
-       "absolutely-positioned thumb, and matching it to the fill is how that " <>
-       "gutter is made invisible"}
-  ]
+  #
+  # Empty since task 01a1557a stage 3, which deleted its only entry: the
+  # unreachable `Layouts.theme_toggle/1` pill (its 2px border was a structural
+  # gutter matched to the fill). The tests below still hold for an empty list:
+  # a new collision site has to be added here with its reason.
+  @allowed_live []
 
   # Prose convention in this repo: a class name discussed in a comment or a
   # docstring is wrapped in backticks. That is what separates a mention from a

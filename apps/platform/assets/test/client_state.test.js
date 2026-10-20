@@ -137,13 +137,13 @@ describe("ClientState", () => {
       ClientState.set("a", "one", 1)
       ClientState.set("b", "two", 2)
       // Unrelated non-suite key MUST survive.
-      storage.__raw.set("phx:theme", "dark")
+      storage.__raw.set("burrow-theme-v1", "{\"preset\":\"burrow\",\"mode\":\"dark\"}")
 
       ClientState.clearAll()
 
       expect(ClientState.get("a", "one")).toBeNull()
       expect(ClientState.get("b", "two")).toBeNull()
-      expect(storage.__raw.get("phx:theme")).toBe("dark")
+      expect(storage.__raw.get("burrow-theme-v1")).toBe("{\"preset\":\"burrow\",\"mode\":\"dark\"}")
     })
   })
 

@@ -129,7 +129,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-briefcase h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">From a Template</span>
-        <span class="text-xs text-base-content/55">
+        <span class="text-xs text-subtle">
           Designer, Researcher, Architect, and more
         </span>
       </button>
@@ -142,7 +142,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-globe-alt h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Federate</span>
-        <span class="text-xs text-base-content/55">
+        <span class="text-xs text-subtle">
           Connect an agent from OpenClaw or Claude Code
         </span>
       </button>
@@ -155,7 +155,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-arrow-down-tray h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Import</span>
-        <span class="text-xs text-base-content/55">From an OpenClaw or Claude Code workspace</span>
+        <span class="text-xs text-subtle">From an OpenClaw or Claude Code workspace</span>
       </button>
 
       <button
@@ -166,7 +166,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-wrench-screwdriver h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Create Custom</span>
-        <span class="text-xs text-base-content/55">Full manual setup</span>
+        <span class="text-xs text-subtle">Full manual setup</span>
       </button>
 
       <button
@@ -180,7 +180,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </span>
         <span class="hero-bolt h-8 w-8 text-purple-500" />
         <span class="text-sm font-semibold text-base-content">External Agent</span>
-        <span class="text-xs text-base-content/55">
+        <span class="text-xs text-subtle">
           OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Burrow-managed runtime.
         </span>
       </button>
@@ -258,7 +258,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         >
           <span class={"#{tmpl.icon} h-6 w-6 text-primary"} />
           <span class="text-sm font-semibold text-base-content">{tmpl.name}</span>
-          <span class="text-[11px] text-base-content/55">{tmpl.description}</span>
+          <span class="text-[11px] text-subtle">{tmpl.description}</span>
         </button>
       </div>
     </div>
@@ -278,7 +278,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             <span class={"#{@selected_template.icon} h-6 w-6 text-primary"} />
             <div>
               <p class="text-sm font-semibold">{@selected_template.name}</p>
-              <p class="text-xs text-base-content/55">{@selected_template.description}</p>
+              <p class="text-xs text-subtle">{@selected_template.description}</p>
             </div>
           </div>
           <p class="mt-2 text-xs text-base-content/50">
@@ -452,7 +452,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     <div class="mt-6">
       <div
         :if={@import_agents == []}
-        class="rounded-2xl border border-dashed border-edge px-4 py-6 text-center text-sm text-base-content/55"
+        class="rounded-2xl border border-dashed border-edge px-4 py-6 text-center text-sm text-subtle"
       >
         No workspace agents found. Mount an OpenClaw workspace with an <code>openclaw.json</code>
         to import agents.
@@ -659,7 +659,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     <div class="mt-6">
       <div class="mb-4 rounded-2xl border border-dashed border-purple-500/40 bg-purple-500/5 px-4 py-3">
         <p class="text-sm font-semibold text-base-content">External Agent · configure</p>
-        <p class="mt-1 text-xs text-base-content/55">
+        <p class="mt-1 text-xs text-subtle">
           Connect an OpenAI-compatible or Ollama-native endpoint. No Burrow-managed runtime — Burrow
           calls the model directly. Credentials are stored in
           <code class="rounded bg-base-200 px-1 py-0.5 font-mono text-[11px]">Platform.Vault</code>
@@ -718,13 +718,13 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           </select>
           <span
             :if={@endpoint_kind == "openai_compat"}
-            class="mt-1 text-xs text-base-content/55"
+            class="mt-1 text-xs text-subtle"
           >
             Use for OpenAI, OpenRouter, Together, vLLM, LM Studio, or any server speaking <code class="font-mono">/v1/chat/completions</code>.
           </span>
           <span
             :if={@endpoint_kind == "ollama_native"}
-            class="mt-1 text-xs text-base-content/55"
+            class="mt-1 text-xs text-subtle"
           >
             Use for local Ollama installations speaking the native
             <code class="font-mono">/api/chat</code>
@@ -828,7 +828,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           <div :if={@vault_mode == "from_vault"} class="space-y-2">
             <div
               :if={@vault_options == []}
-              class="rounded-lg border border-dashed border-edge bg-base-200/30 px-3 py-3 text-xs text-base-content/55"
+              class="rounded-lg border border-dashed border-edge bg-base-200/30 px-3 py-3 text-xs text-subtle"
             >
               No vault credentials yet — switch to Paste new.
             </div>
@@ -973,7 +973,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       <div class="mb-2 flex items-center gap-2">
         <span
           :if={is_nil(@probe_result)}
-          class="text-xs text-base-content/55"
+          class="text-xs text-subtle"
         >
           Run probe on save
         </span>
@@ -996,7 +996,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       <%!-- Row 2: static liveness dot (no first save yet) --%>
       <div class="flex items-center gap-2">
         <span class="inline-block h-2.5 w-2.5 rounded-full bg-base-content/25" />
-        <span class="text-xs text-base-content/55">Not connected yet</span>
+        <span class="text-xs text-subtle">Not connected yet</span>
       </div>
     </div>
     """

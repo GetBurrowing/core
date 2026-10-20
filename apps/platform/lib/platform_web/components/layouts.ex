@@ -10,11 +10,14 @@ defmodule PlatformWeb.Layouts do
   # sidebar links + the previous `<.bottom_nav>` component (task 019e389b).
   import PlatformWeb.Components.IconRail
   import PlatformWeb.Components.MoreSheet
+  import PlatformWeb.Components.ThemePicker
 
   # Server-rendered <style> block carrying each active org's scope colour as
   # CSS custom properties — the runtime replacement for build-time per-slug
   # utilities. Rendered once from shell.html.heex.
   import PlatformWeb.Components.ScopeColorStyles
+
+  alias Platform.Accounts.ThemePreference
 
   # Embed all files in layouts/* within this module.
   # The default root.html.heex file contains the HTML
@@ -71,9 +74,6 @@ defmodule PlatformWeb.Layouts do
             <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
           </li>
           <li>
-            <.theme_toggle />
-          </li>
-          <li>
             <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
               Get Started <span aria-hidden="true">&rarr;</span>
             </a>
@@ -96,7 +96,7 @@ defmodule PlatformWeb.Layouts do
   Root layout for the guest meeting ingress (task 019f2483 stage 3).
 
   Purpose-built stripped-down `<html>` document for the `meet.` host
-  scope. Compared with `root.html.heex` this omits the theme-debug
+  scope. Compared with `root.html.heex` this omits the theme-boot
   script, the PWA manifest hook, the `webmcp-enabled` meta, and the VAPID
   key — none of which are meaningful to an unauthenticated guest.
 
@@ -449,63 +449,75 @@ defmodule PlatformWeb.Layouts do
   end
 
   @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
+  What the root layout needs to paint the person's theme before first paint
+  (task 01a1557a stage 3). Read once per dead render of `root.html.heex`.
 
-  See <head> in root.html.heex which applies the theme before page load.
+  For a signed-in request (a `%User{}` under `assigns[:current_user]`, set by
+  `PlatformWeb.Plugs.RequireAuth`, or under `assigns[:current_user_record]`
+  on a ShellLive route; see `signed_in_user/1`) the stored preference from
+  `Platform.Accounts.theme_preference/1` becomes:
+
+    * `html_theme`: `"light"` or `"dark"` for `<html data-theme>`; nil for
+      `"system"`, which only the client can resolve.
+    * `html_preset`: the preset id for `<html data-preset>`; nil for the base
+      preset, which app.css paints with no attribute.
+    * `server_preset` / `server_mode`: the full stored pair, handed to the
+      `data-role="theme-boot"` script. The `<html>` attributes alone cannot
+      tell a Burrow + System person (no attributes) from a signed-out page,
+      and the script must treat the server value as authoritative over its
+      localStorage cache for both.
+
+  A signed-out request gets nil for all four. The registry fields always
+  come from `Platform.Accounts.ThemePreference`, so the script carries no
+  second list of ids.
   """
-  def theme_toggle(assigns) do
-    ~H"""
-    <%!-- DELIBERATELY still on `border-base-300`, not repointed to `border-edge`
-          (task 01a0740b stage 2). The seamless fill is intended here.
+  @spec theme_boot(map()) :: map()
+  def theme_boot(assigns) do
+    registry = %{
+      presets: Enum.join(ThemePreference.preset_ids(), " "),
+      modes: Enum.join(ThemePreference.modes(), " "),
+      base_preset: ThemePreference.base_preset(),
+      default_preset: ThemePreference.default()["preset"],
+      default_mode: ThemePreference.default()["mode"]
+    }
 
-          This `border-2` is structural, not decorative. The sliding thumb below
-          is `absolute ... h-full left-0`, so its containing block is this div's
-          PADDING box: the 2px border is the gutter that insets the thumb from
-          the pill's outer edge. Matching the border colour to `bg-base-300` is
-          how that gutter is made invisible.
+    case signed_in_user(assigns) do
+      %Platform.Accounts.User{} = user ->
+        %{"preset" => preset, "mode" => mode} = Platform.Accounts.theme_preference(user)
 
-          Repointing would paint that structural gutter as a 2px #232A38 ring
-          around a segmented control designed to read as one solid pill. This
-          border was never meant to be seen, so it is not an instance of the
-          invisible-border defect this task closes; it is the one place the
-          collision is the point. --%>
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 transition-[left]" />
+        Map.merge(registry, %{
+          html_theme: if(mode in ["light", "dark"], do: mode),
+          html_preset: if(preset != ThemePreference.base_preset(), do: preset),
+          server_preset: preset,
+          server_mode: mode
+        })
 
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="system"
-      >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
+      _ ->
+        Map.merge(registry, %{
+          html_theme: nil,
+          html_preset: nil,
+          server_preset: nil,
+          server_mode: nil
+        })
+    end
+  end
 
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="light"
-      >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
+  # The BRIDGE for LiveView routes (task 01a1557a stage 3). A LiveView's dead
+  # render hands the root layout conn.assigns merged with the socket's
+  # assigns, and `PlatformWeb.ShellLive.on_mount/4` overwrites
+  # `:current_user` with the person's DISPLAY NAME (a string). The `%User{}`
+  # survives as `:current_user_record`, from the same `Accounts.get_user/1`
+  # read. Controller pages keep RequireAuth's `%User{}` under `:current_user`.
+  defp signed_in_user(assigns) do
+    case assigns[:current_user] do
+      %Platform.Accounts.User{} = user ->
+        user
 
-      <button
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="dark"
-      >
-        <%!-- Heroicons v2.2.0 16/solid dark-mode path (MIT), inlined so no
-              class token names it (task 01a14b9e stage 6). --%>
-        <svg
-          class="size-4 opacity-75 hover:opacity-100"
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 16 16"
-          fill="currentColor"
-          aria-hidden="true"
-        >
-          <path d="M14.438 10.148c.19-.425-.321-.787-.748-.601A5.5 5.5 0 0 1 6.453 2.31c.186-.427-.176-.938-.6-.748a6.501 6.501 0 1 0 8.585 8.586Z" />
-        </svg>
-      </button>
-    </div>
-    """
+      _ ->
+        case assigns[:current_user_record] do
+          %Platform.Accounts.User{} = user -> user
+          _ -> nil
+        end
+    end
   end
 end

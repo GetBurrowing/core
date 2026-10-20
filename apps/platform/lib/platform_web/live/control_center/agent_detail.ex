@@ -92,7 +92,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           >
             {native_meta_line(@native)}
           </p>
-          <div class="mt-3 flex flex-wrap gap-2 text-xs text-base-content/55">
+          <div class="mt-3 flex flex-wrap gap-2 text-xs text-subtle">
             <span
               :if={@agent.runtime_type == "external" and is_nil(@native)}
               class="inline-flex items-center gap-1 rounded-full bg-info/15 px-2.5 py-1 text-info"
@@ -476,7 +476,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <p class="font-semibold text-base-content">{space.space_name}</p>
             <p class="text-xs text-base-content/50">{space.space_slug}</p>
           </div>
-          <span class="rounded-full bg-base-200 px-2.5 py-1 text-[11px] uppercase tracking-widest text-base-content/55">
+          <span class="rounded-full bg-base-200 px-2.5 py-1 text-[11px] uppercase tracking-widest text-subtle">
             {space.attention_mode}
           </span>
         </div>
@@ -1395,13 +1395,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
         <div class="mt-2 flex items-center justify-between gap-3">
           <span>PID</span>
-          <span class="font-mono text-xs text-base-content/55">
+          <span class="font-mono text-xs text-subtle">
             {runtime_pid_label(@runtime.pid)}
           </span>
         </div>
         <div class="mt-2 flex items-center justify-between gap-3">
           <span>Active session IDs</span>
-          <span class="text-right text-xs text-base-content/55">
+          <span class="text-right text-xs text-subtle">
             {runtime_sessions_label(@runtime.active_session_ids)}
           </span>
         </div>
@@ -1554,7 +1554,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                   data-role="credential-slug"
                   class="input input-sm input-bordered w-full font-mono"
                 />
-                <p class="mt-1 text-xs text-base-content/55">
+                <p class="mt-1 text-xs text-subtle">
                   The key agents resolve. An existing slug is replaced, not duplicated.
                 </p>
               </div>
@@ -1573,7 +1573,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                   data-role="credential-name"
                   class="input input-sm input-bordered w-full"
                 />
-                <p class="mt-1 text-xs text-base-content/55">Optional. Defaults to the slug.</p>
+                <p class="mt-1 text-xs text-subtle">Optional. Defaults to the slug.</p>
               </div>
 
               <div>
@@ -1613,7 +1613,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                   data-role="credential-provider"
                   class="input input-sm input-bordered w-full"
                 />
-                <p class="mt-1 text-xs text-base-content/55">
+                <p class="mt-1 text-xs text-subtle">
                   Optional. Sets which model chains list this above.
                 </p>
               </div>
@@ -1641,7 +1641,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                 data-role="credential-secret"
                 class="input input-sm input-bordered w-full font-mono"
               />
-              <p class="mt-1 text-xs text-base-content/55">
+              <p class="mt-1 text-xs text-subtle">
                 Write-only. Stored encrypted and never displayed again.
               </p>
             </div>
@@ -1661,7 +1661,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                 data-role="credential-expires"
                 class="input input-sm input-bordered w-full"
               />
-              <p class="mt-1 text-xs text-base-content/55">
+              <p class="mt-1 text-xs text-subtle">
                 Optional. Surfaces the credential in Platform.Vault.expiring_soon/1.
               </p>
             </div>

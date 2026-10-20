@@ -32,6 +32,7 @@
 
 @import "tailwindcss" source(none);
 @import "./meeting_ask.css";
+@import "./theme_presets.css";
 @source "../css";
 @source "../js";
 @source "../../lib/platform_web";
@@ -114,7 +115,8 @@
      and the same rule stage 1 applied to pipeline-human: where the spec value
      fails, keep main's and record why). Secondary text paints this slot at
      reduced strength, by class (text-base-content/60, 401 occurrences in
-     lib/; /55, 33; daisyUI .label at 60%) and by rule (.empty-bot-author,
+     lib/ at the time; /55, 33, since replaced by text-subtle, the --subtle
+     token below; daisyUI .label at 60%) and by rule (.empty-bot-author,
      opacity 0.55). On the warm grounds the spec ink measured, at 60%,
      4.2824 / 4.2312 / 4.0937:1 on base-100/200/300, and at 55%
      3.6755 / 3.6400 / 3.5509: text failures main's black did not have. A
@@ -163,6 +165,15 @@
      Declared --faint, never --color-faint: the @theme inline block below maps
      the --color-* key, as it does for --edge. */
   --faint: #726961;
+  /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2): base-content
+     at reduced strength, exactly what Tailwind compiled the retired
+     base-content-at-55% utility to, so Burrow paints the same pixel it did.
+     A token, not a utility opacity, so a preset whose grounds cannot carry 55%
+     raises its own strength (Burrow sand light: 57%). Painted under every
+     measured browser formula (test/support/painted_composite.ex) it measures
+     4.6867:1 on base-100, 4.6350:1 on base-200 and 4.5414:1 on base-300.
+     Declared --subtle, never --color-subtle; see the @theme inline block. */
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. The
      burrow_palette_guard test fails if one is painted as a text colour. */
@@ -208,7 +219,6 @@
   --border: 1px;
   --depth: 0;
   --noise: 0;
-  --font-sans: "Public Sans", system-ui, sans-serif;
 }
 
 @plugin "../vendor/daisyui-theme" {
@@ -269,6 +279,10 @@
      faint_adoption_test.exs. Declared --faint, never --color-faint; see the
      @theme inline block below. */
   --faint: #90939b;
+  /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2); see the light
+     block. Painted under every measured browser formula it measures 5.3276:1
+     on base-100, 5.4963:1 on base-200 and 4.9321:1 on base-300. */
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. */
   --info-dim: #175660;
@@ -303,7 +317,6 @@
   --border: 1px;
   --depth: 0;
   --noise: 0;
-  --font-sans: "Public Sans", system-ui, sans-serif;
 }
 
 /* Register --edge as a Tailwind colour key, so that `border-edge` exists as
@@ -340,6 +353,10 @@
      mappings mint text-faint and the bg-/border- utilities for the -dim
      steps. The -dim steps are fills and borders only, never text. */
   --color-faint: var(--faint);
+  /* text-subtle (task 01a1557a stage 5 r2): every theme block, Burrow's and
+     each preset's in theme_presets.css, declares --subtle at its own
+     strength. */
+  --color-subtle: var(--subtle);
   --color-info-dim: var(--info-dim);
   --color-success-dim: var(--success-dim);
   --color-warning-dim: var(--warning-dim);
@@ -1096,7 +1113,27 @@ pre .makeup .sa { color: #79c0ff; }        /* string affix */
    Body inherits the sans face; mono opts in via Tailwind's font-mono, whose
    --font-mono we override below. */
 body, .font-suite {
-  font-family: "Public Sans", system-ui, sans-serif;
+  /* The variable, not the literal (task 01a1557a stage 2), so a theme preset's
+     --font-sans paints (theme_presets.css; Burrow sand is Georgia). With no
+     preset it resolves to the un-layered :root declaration below, the same
+     "Public Sans", system-ui, sans-serif stack this rule used to spell out. */
+  font-family: var(--font-sans);
+}
+
+/* Theme picker chips (task 01a1557a stage 4). Each chip carries its preset's
+   data-preset + data-theme, so theme_presets.css repaints the tokens on the
+   chip itself. font-family is set here, not inherited, because an inherited
+   font-family is the parent's COMPUTED face: the chip must resolve
+   var(--font-sans) at its own scope. Burrow declares no preset block and its
+   --font-sans lives only on :root, which a non-Burrow <html> overrides on the
+   same element, so the Burrow chip restates Burrow's stack. The picker test
+   pins this stack to the :root declaration. */
+.theme-chip {
+  font-family: var(--font-sans);
+}
+
+.theme-chip[data-preset="burrow"] {
+  --font-sans: "Public Sans", system-ui, sans-serif;
 }
 
 /* JetBrains Mono (variable, latin subset) — self-hosted, served from
@@ -1127,7 +1164,11 @@ body, .font-suite {
      block into multiple --font-sans declarations (last fragment wins → generic
      sans-serif). That plugin bug is why the old `* !important` font lock
      existed. Declaring the stacks here, un-layered and after the theme
-     emissions, restores a correct var for font-sans/font-mono utilities. */
+     emissions, restores a correct var for font-sans/font-mono utilities.
+     Task 01a1557a stage 2 deleted the two split stacks from the theme blocks:
+     they only reached elements carrying a nested data-theme, and this is the
+     one Burrow declaration. A preset's own --font-sans lives in
+     theme_presets.css, outside any plugin block. */
   --font-sans: "Public Sans", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --shadow-card: 0 1px 2px rgb(9 12 16 / 0.05), 0 1px 3px rgb(9 12 16 / 0.06);
@@ -6216,7 +6257,7 @@ body, .font-suite {
      quiet by default so it reads as "rail chrome" not "actionable noise".
      No leading eye icon — design review explicitly removed it. */
   .channel-hidden-drawer-trigger {
-    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
+    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-subtle hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   .channel-hidden-drawer-caret {
@@ -8400,10 +8441,10 @@ body, .font-suite {
    after the change, not by reasoning about the cascade.
 
    The `prefers-color-scheme` twin is the house pattern (see `.msg-agent`
-   above): the dark theme is declared `prefersdark: true`, and
-   `setAppTheme("system")` removes `data-theme` outright, so a viewer on
-   "system" under a dark OS gets the dark palette with no `[data-theme=dark]`
-   to match. */
+   above): the dark theme is declared `prefersdark: true`, and a page that
+   runs no script (or paints before the `theme-boot` script runs) has no
+   `data-theme` at all, so a viewer under a dark OS gets the dark palette
+   with no `[data-theme=dark]` to match. */
 [data-theme="dark"] [data-role="canvas-search-indexing-state"] {
   color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
 }

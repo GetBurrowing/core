@@ -1,0 +1,408 @@
+/*
+ * Theme presets (task 01a1557a, Burrow redesign 2, stage 2).
+ *
+ * One block per non-Burrow preset id in Platform.Accounts.ThemePreference.presets/0
+ * and per mode: <html data-preset="<id>" data-theme="dark|light">, or any nested
+ * element carrying both attributes (stage 4's picker swatches). The registry is the
+ * ONE list of ids; test/platform/design/theme_presets_guard_test.exs checks the
+ * blocks against it in both directions.
+ *
+ * Burrow declares NO block here. Burrow is the daisyui-theme blocks in app.css
+ * plus the install theme (Platform.Branding.ThemeCss), so a user with no
+ * data-preset paints exactly what they painted before.
+ *
+ * SPECIFICITY. ThemeCss emits [data-theme="light"]:not([data-theme-preview]) and
+ * its dark twin at (0,2,0) in a <style> AFTER app.css, so a preset selector at
+ * (0,2,0) would lose to a stored install colour. Every selector here is
+ * [data-preset][data-theme]:not([data-theme-preview]), (0,3,0): install branding
+ * colours style the Burrow preset only, and a named preset is a complete palette.
+ * These rules are unlayered, so they also beat daisyUI's layered theme blocks.
+ *
+ * SOURCE. The Burrow masters' theme.js (prototype v3, sha256 14e3bcff...). Slot
+ * mapping: ground -> base-200, surface -> base-100, raised -> base-300,
+ * edge -> --edge, ink -> base-content, muted -> secondary, faint -> --faint,
+ * accent -> primary AND accent, onAccent -> primary-content / accent-content,
+ * interactive -> --color-interactive, info/active/warning/danger ->
+ * info/success/warning/error plus their -dim steps. Status -content slots have no
+ * master key: black on dark fills, white on light fills, each measured by the
+ * guard.
+ *
+ * NOT PORTED, with the reason:
+ *   - the ten agent slots (agTeal ... agLime): agent hues come from
+ *     lib/platform/agents/color_palette.ex, not CSS tokens;
+ *   - bubbleMe, scrim, shade, viewer, stage, dangerDim: the app has no slot;
+ *   - desk: the masters mark it demo only.
+ *
+ * SHAPE. --radius-box = the preset radius, --radius-field = round(radius x 0.71)
+ * (Burrow's 14 gives 14/10, app.css's values). --font-sans is Georgia for sand
+ * (theme.js) and Public Sans elsewhere: the masters name Inter, which the app
+ * does not load, for the same presets Burrow uses it on, and Burrow paints
+ * Public Sans. Never declare a font stack inside an @plugin daisyui-theme block;
+ * the plugin splits comma stacks. --density is 1 in every master preset and has
+ * no consumer yet. --glass-alpha / --glass-blur are declared for rung 4's glass
+ * bar; nothing reads them yet.
+ *
+ * AA CORRECTIONS. The masters' values fail WCAG AA in 12 of 12 variants. Every
+ * value that differs from theme.js carries a comment with the master value and
+ * both measured ratios (Platform.Design.WcagContrast; the 55% ink check uses the
+ * painted 8-bit composite, held at its minimum over the browser formulas in
+ * test/support/painted_composite.ex). Stage 5 moved four light grounds so the
+ * 55% ink clears 4.5:1 under every formula; each carries its own comment. Method, as rung 1 (bc525bce5):
+ *   - faint: the step on that preset's muted oklch line (lightness only) that
+ *     clears 4.5:1 on all three grounds, and in dark also on the thread
+ *     composer's literal #252c3d fill, while staying more than 0.5:1 dimmer than
+ *     muted on base-100;
+ *   - dark on-accent: black;
+ *   - light ink: clears 4.5:1 at its --subtle strength on all three grounds;
+ *   - --subtle (the secondary-text tier, text-subtle) is base-content at 55%,
+ *     exactly what the retired 55% utility compiled to, except Burrow sand
+ *     light at 57%, where no ink clears 55% on the raised ground. Every block
+ *     also clears 4.5:1 at 60% (text-base-content/60, daisyUI .label);
+ *   - High contrast: 7:1 for every text pair.
+ * Hex values live only inside these token blocks.
+ */
+
+[data-preset="burrow-midnight"][data-theme="dark"]:not([data-theme-preview]) {
+  color-scheme: dark;
+  --color-base-100: #111a2b;
+  --color-base-200: #0a0f1a;
+  --color-base-300: #1b2740;
+  --edge: #2a3858;
+  --color-base-content: #e9eef8;
+  --color-secondary: #9fb0cc;
+  --color-secondary-content: #000000;
+  /* theme.js #687a99 measures 3.4252:1 min on base-100/200/300 and 3.2081:1 on the thread composer fill #252c3d;
+     this value measures 4.8340:1 and 4.5276:1 on the thread composer fill #252c3d. */
+  --faint: #8394af;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #ff8a3d;
+  /* theme.js #ffffff measures 2.3451:1 on the accent;
+     this value measures 8.9548:1. */
+  --color-primary-content: #000000;
+  --color-accent: #ff8a3d;
+  --color-accent-content: #000000;
+  --color-interactive: #ffad70;
+  --focus-ring: var(--color-primary);
+  --color-info: #4fd7ea;
+  --color-info-content: #000000;
+  --info-dim: #174a5e;
+  --color-success: #7cc98a;
+  --color-success-content: #000000;
+  --success-dim: #204a33;
+  --color-warning: #f0b24a;
+  --color-warning-content: #000000;
+  --warning-dim: #5a4320;
+  --color-error: #e5484d;
+  --color-error-content: #000000;
+  --radius-box: 12px;
+  --radius-field: 9px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="burrow-midnight"][data-theme="light"]:not([data-theme-preview]) {
+  color-scheme: light;
+  --color-base-100: #f8fafd;
+  --color-base-200: #eef2f8;
+  /* Stage 5: #e2e8f2 -> #e2ecf2. 55% ink on #e2e8f2 painted 4.4661:1 in
+     Chrome 147 (4.5140:1 in 151); on #e2ecf2 it measures 4.5367:1, the
+     min over the measured browser formulas, test/support/painted_composite.ex.
+     base-200/base-300 separation 1.0957:1 -> 1.0672:1 (accepted). */
+  --color-base-300: #e2ecf2;
+  --edge: #c9d3e3;
+  /* theme.js #15202f measures 3.5393:1 at 55% alpha, min on base-100/200/300 (painted);
+     this value measures 4.5367:1. */
+  --color-base-content: #000006;
+  --color-secondary: #4d5d75;
+  --color-secondary-content: #ffffff;
+  /* theme.js #8794a8 measures 2.4970:1 min on base-100/200/300;
+     this value measures 4.6484:1. */
+  --faint: #596982;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #b4470a;
+  --color-primary-content: #fbfaf9;
+  --color-accent: #b4470a;
+  --color-accent-content: #fbfaf9;
+  --color-interactive: #8f3806;
+  --focus-ring: var(--color-interactive);
+  --color-info: #0b6e7f;
+  --color-info-content: #ffffff;
+  --info-dim: #a9dbe4;
+  --color-success: #2a7036;
+  --color-success-content: #ffffff;
+  --success-dim: #aad7b2;
+  --color-warning: #8d5a0a;
+  --color-warning-content: #ffffff;
+  --warning-dim: #e5c38f;
+  --color-error: #a3252a;
+  --color-error-content: #ffffff;
+  --radius-box: 12px;
+  --radius-field: 9px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="burrow-sand"][data-theme="dark"]:not([data-theme-preview]) {
+  color-scheme: dark;
+  --color-base-100: #211d16;
+  --color-base-200: #17140f;
+  --color-base-300: #2e281f;
+  --edge: #433b2e;
+  --color-base-content: #f2ece2;
+  --color-secondary: #b7ab98;
+  --color-secondary-content: #000000;
+  /* theme.js #7f7462 measures 3.1796:1 min on base-100/200/300 and 3.0385:1 on the thread composer fill #252c3d;
+     this value measures 4.7136:1 and 4.5044:1 on the thread composer fill #252c3d. */
+  --faint: #9d917e;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #e8842e;
+  /* theme.js #ffffff measures 2.7023:1 on the accent;
+     this value measures 7.7711:1. */
+  --color-primary-content: #000000;
+  --color-accent: #e8842e;
+  --color-accent-content: #000000;
+  --color-interactive: #f8a35d;
+  --focus-ring: var(--color-primary);
+  --color-info: #22d3ee;
+  --color-info-content: #000000;
+  --info-dim: #175660;
+  --color-success: #6bae75;
+  --color-success-content: #000000;
+  --success-dim: #314936;
+  --color-warning: #e5a33d;
+  --color-warning-content: #000000;
+  --warning-dim: #5b4522;
+  --color-error: #e5484d;
+  --color-error-content: #000000;
+  --radius-box: 18px;
+  --radius-field: 13px;
+  --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="burrow-sand"][data-theme="light"]:not([data-theme-preview]) {
+  color-scheme: light;
+  --color-base-100: #f8f1e6;
+  /* Stage 5: #efe6d8 -> #efe9d8. 55% ink on #efe6d8 measured 4.4799:1; on
+     #efe9d8 it measures 4.5205:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     base-200/base-300 separation 1.1266:1 -> 1.1490:1; base-100/base-200
+     1.1022:1 -> 1.0808:1. */
+  --color-base-200: #efe9d8;
+  --color-base-300: #e5d9c6;
+  --edge: #cdbfa6;
+  /* theme.js #2a2219 measures 3.2571:1 at 55% alpha, min on base-100/200/300 (painted);
+     this value measures 4.6194:1 at this block's --subtle strength (57%). */
+  --color-base-content: #000000;
+  /* theme.js #6b5a46 measures 4.7456:1 min on base-100/200/300;
+     this value measures 5.0428:1. Darkened so a faint exists that clears
+     4.5:1 on all three grounds and stays more than 0.5:1 dimmer than muted on
+     EACH ground; at the theme.js value none does. Stage 5 r2 took it one
+     oklab lightness step darker (#685744 -> #675643): at #685744 faint sat
+     only 0.4536:1 under muted on base-300. The gaps are now 0.6592:1,
+     0.6099:1 and 0.5308:1 on base-100/200/300. */
+  --color-secondary: #675643;
+  --color-secondary-content: #ffffff;
+  /* theme.js #a08f78 measures 2.2513:1 min on base-100/200/300;
+     this value measures 4.5119:1. */
+  --faint: #6f5d4a;
+  /* Subtle at 57%, not 55% (task 01a1557a stage 5 r2). The secondary-text
+     tier owes 4.5:1 on all three grounds, and no ink can carry 55% on this
+     raised ground: black at 55% on #e5d9c6 paints 4.3460:1. At 57% black
+     measures 4.9442:1 on base-100, 4.8154:1 on base-200 and 4.6194:1 on
+     base-300, the worst pixel any measured browser paints
+     (test/support/painted_composite.ex). The grounds keep their elevation. */
+  --subtle: color-mix(in oklab, var(--color-base-content) 57%, transparent);
+  --color-primary: #9c4306;
+  --color-primary-content: #fbfaf9;
+  --color-accent: #9c4306;
+  --color-accent-content: #fbfaf9;
+  --color-interactive: #7b3404;
+  --focus-ring: var(--color-interactive);
+  --color-info: #0c6a78;
+  --color-info-content: #ffffff;
+  --info-dim: #a8d8de;
+  --color-success: #2b6f36;
+  --color-success-content: #ffffff;
+  --success-dim: #a9cfaa;
+  --color-warning: #86540a;
+  --color-warning-content: #ffffff;
+  --warning-dim: #dcb77a;
+  --color-error: #a3252a;
+  --color-error-content: #ffffff;
+  --radius-box: 18px;
+  --radius-field: 13px;
+  --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="burrow-forest"][data-theme="dark"]:not([data-theme-preview]) {
+  color-scheme: dark;
+  --color-base-100: #151d19;
+  --color-base-200: #0e1411;
+  --color-base-300: #1f2a25;
+  --edge: #2f3f38;
+  --color-base-content: #eaf1ec;
+  --color-secondary: #a3b5aa;
+  --color-secondary-content: #000000;
+  /* theme.js #6b7c72 measures 3.3550:1 min on base-100/200/300 and 3.1542:1 on the thread composer fill #252c3d;
+     this value measures 4.8036:1 and 4.5161:1 on the thread composer fill #252c3d. */
+  --faint: #85978c;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #f0a040;
+  /* theme.js #ffffff measures 2.1412:1 on the accent;
+     this value measures 9.8074:1. */
+  --color-primary-content: #000000;
+  --color-accent: #f0a040;
+  --color-accent-content: #000000;
+  --color-interactive: #ffbd6b;
+  --focus-ring: var(--color-primary);
+  --color-info: #5fd3d6;
+  --color-info-content: #000000;
+  --info-dim: #164b50;
+  --color-success: #7fc98a;
+  --color-success-content: #000000;
+  --success-dim: #234a2e;
+  --color-warning: #e6b04a;
+  --color-warning-content: #000000;
+  --warning-dim: #54431e;
+  --color-error: #e5484d;
+  --color-error-content: #000000;
+  --radius-box: 16px;
+  --radius-field: 11px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="burrow-forest"][data-theme="light"]:not([data-theme-preview]) {
+  color-scheme: light;
+  --color-base-100: #f7faf7;
+  --color-base-200: #eef3ef;
+  /* Stage 5: #dfe8e1 -> #dfece1. 55% ink on #dfe8e1 painted 4.4572:1; on
+     #dfece1 it measures 4.5290:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     base-200/base-300 separation 1.1154:1 -> 1.0859:1 (accepted). */
+  --color-base-300: #dfece1;
+  --edge: #c3d2c7;
+  /* theme.js #1a241e measures 3.4620:1 at 55% alpha, min on base-100/200/300 (painted);
+     this value measures 4.5290:1. */
+  --color-base-content: #000000;
+  --color-secondary: #51655a;
+  --color-secondary-content: #ffffff;
+  /* theme.js #88978e measures 2.4428:1 min on base-100/200/300;
+     this value measures 4.6263:1. */
+  --faint: #576c61;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #a3500a;
+  --color-primary-content: #fbfaf9;
+  --color-accent: #a3500a;
+  --color-accent-content: #fbfaf9;
+  --color-interactive: #7f3d05;
+  --focus-ring: var(--color-interactive);
+  --color-info: #0e7382;
+  --color-info-content: #ffffff;
+  --info-dim: #90d5df;
+  --color-success: #2d7638;
+  --color-success-content: #ffffff;
+  --success-dim: #95d09e;
+  --color-warning: #925d0c;
+  --color-warning-content: #ffffff;
+  --warning-dim: #ddb77e;
+  --color-error: #a3252a;
+  --color-error-content: #ffffff;
+  --radius-box: 16px;
+  --radius-field: 11px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.72;
+  --glass-blur: 18px;
+}
+
+[data-preset="high-contrast"][data-theme="dark"]:not([data-theme-preview]) {
+  color-scheme: dark;
+  --color-base-100: #0a0a0a;
+  --color-base-200: #000000;
+  --color-base-300: #1c1c1c;
+  --edge: #5a5a5a;
+  --color-base-content: #ffffff;
+  --color-secondary: #d0d0d0;
+  --color-secondary-content: #000000;
+  /* theme.js #9a9a9a measures 6.0563:1 min on base-100/200/300 and 4.9544:1 on the thread composer fill #252c3d;
+     this value measures 7.0007:1 and 5.7269:1 on the thread composer fill #252c3d. */
+  --faint: #a6a6a6;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #ff8c2a;
+  --color-primary-content: #000000;
+  --color-accent: #ff8c2a;
+  --color-accent-content: #000000;
+  --color-interactive: #ffb060;
+  --focus-ring: var(--color-primary);
+  --color-info: #5ff0ff;
+  --color-info-content: #000000;
+  --info-dim: #0a3a44;
+  --color-success: #8ef59a;
+  --color-success-content: #000000;
+  --success-dim: #0f3a18;
+  --color-warning: #ffd060;
+  --color-warning-content: #000000;
+  --warning-dim: #4a3600;
+  --color-error: #ff6b6b;
+  --color-error-content: #000000;
+  --radius-box: 6px;
+  --radius-field: 4px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.95;
+  --glass-blur: 0px;
+}
+
+[data-preset="high-contrast"][data-theme="light"]:not([data-theme-preview]) {
+  color-scheme: light;
+  --color-base-100: #ffffff;
+  --color-base-200: #ffffff;
+  /* Stage 5: #e6e6e6 -> #e9e9e9. 55% ink on #e6e6e6 painted 4.4647:1; on
+     #e9e9e9 it measures 4.5218:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     A neutral grey: #e7e7e7 (4.5062) and #e8e8e8 (4.4805) do not clear 4.52.
+     base-200/base-300 separation 1.2481:1 -> 1.2141:1 (accepted; base-200 is
+     already #ffffff). */
+  --color-base-300: #e9e9e9;
+  --edge: #6a6a6a;
+  --color-base-content: #000000;
+  --color-secondary: #2a2a2a;
+  --color-secondary-content: #ffffff;
+  /* theme.js #555555 measures 5.9734:1 min on base-100/200/300;
+     this value measures 7.2996:1. */
+  --faint: #4a4a4a;
+  --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --color-primary: #8a3300;
+  --color-primary-content: #ffffff;
+  --color-accent: #8a3300;
+  --color-accent-content: #ffffff;
+  --color-interactive: #5e2200;
+  --focus-ring: var(--color-interactive);
+  --color-info: #004f5c;
+  --color-info-content: #ffffff;
+  --info-dim: #b6e9f1;
+  --color-success: #0f5a1c;
+  --color-success-content: #ffffff;
+  --success-dim: #b9e8bf;
+  --color-warning: #6a4000;
+  --color-warning-content: #ffffff;
+  --warning-dim: #f1d59a;
+  --color-error: #8f0000;
+  --color-error-content: #ffffff;
+  --radius-box: 6px;
+  --radius-field: 4px;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --density: 1;
+  --glass-alpha: 0.95;
+  --glass-blur: 0px;
+}

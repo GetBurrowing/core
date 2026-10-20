@@ -65,11 +65,13 @@ migration)` comment so the lint gate lets them through.
 
 ### Carve-outs
 
-- **`phx:theme` (Phoenix theme toggle)** — Phoenix owns the theme cookie
-  and coordinates via an inline script in `root.html.heex`. The
-  `hooks/theme_toggle.js` hook mirrors that machinery for reactive tab
-  switches; it stays on direct `localStorage.*` for interop with the
-  Phoenix inline script and is explicitly allowlisted by the lint script.
+- **`burrow-theme-v1` (theme cache)** — the `data-role="theme-boot"`
+  inline script in `root.html.heex` owns this key: it holds the last
+  applied `{preset, mode}` so the first frame paints the right theme before
+  any bundle loads. JS changes the theme through `window.burrowTheme`
+  (`get()` / `apply({preset, mode})`) and follows it through the
+  `burrow:theme` event; it never touches the key directly. The
+  `hooks/theme_picker.js` hook stays on the lint script's allowlist.
 
 Any other subsystem that needs to bypass the wrapper — new interop with
 Phoenix core, third-party integrations that dictate a raw key — should
@@ -84,9 +86,9 @@ walks `js/` recursively and rejects any `localStorage.*` call that isn't
 covered by one of these escape hatches:
 
 1. **Allowlisted file** — `js/client_state.js` (the API itself) and
-   `js/hooks/theme_toggle.js` (Phoenix `phx:theme` carve-out).
-2. **Same-line `"phx:theme"` marker** — belt-and-braces for any hook that
-   mirrors the Phoenix theme fallback logic.
+   `js/hooks/theme_picker.js` (theme carve-out).
+2. **Same-line `"burrow-theme-v1"` marker** — belt-and-braces for any code
+   that has to read the theme cache directly.
 3. **Same-line `client-state:allow` comment marker** — the documented
    escape hatch for one-shot legacy-key migration paths. Add a trailing
    comment such as `// client-state:allow (legacy migration)` on the

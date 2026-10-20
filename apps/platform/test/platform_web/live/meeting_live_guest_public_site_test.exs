@@ -136,6 +136,14 @@ defmodule PlatformWeb.MeetingLiveGuestPublicSiteTest do
     |> Enum.sort()
   end
 
+  # What a guest reads: the document's text content, without attribute
+  # values (which hold random session and CSRF tokens).
+  defp guest_text(html) do
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.text()
+  end
+
   defp action_blocks(html) do
     html
     |> LazyHTML.from_fragment()
@@ -263,7 +271,14 @@ defmodule PlatformWeb.MeetingLiveGuestPublicSiteTest do
         refute html =~ ~s(href="")
         refute html =~ ~s(href="https://")
         refute html =~ "Go to"
-        refute html =~ "nil"
+        # Over the page's TEXT, not its raw HTML: the raw page carries random
+        # signed tokens (data-phx-session, the CSRF meta, phx ids), and one
+        # with "nil" in its base64 failed this on CI run 39485975295.
+        text = guest_text(html)
+        refute text =~ "nil"
+        # Positive control: `text` is the card's copy, so the refute is not
+        # passing on an empty string.
+        assert text =~ "invited you" or text =~ "meeting host"
 
         # The card still reads sensibly on its own — the heading it exists
         # to show, and the next step that actually helps the guest.

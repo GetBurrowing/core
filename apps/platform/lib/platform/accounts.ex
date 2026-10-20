@@ -2,6 +2,7 @@ defmodule Platform.Accounts do
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Accounts.ThemePreference
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -760,4 +761,67 @@ defmodule Platform.Accounts do
   end
 
   def dismiss_notification_banner(_), do: {:error, :not_found}
+
+  # ── Theme preference (task 01a1557a stage 1) ───────────────────────────
+  #
+  # Stored as `preferences["theme"] = %{"preset" => id, "mode" => mode}`.
+  # Same column and helpers as the notification-banner block above, no
+  # migration. The presets and modes live in `Platform.Accounts.ThemePreference`,
+  # the one registry later stages read.
+
+  @theme_key "theme"
+
+  @doc """
+  The person's theme choice as a full, valid `%{"preset", "mode"}` map.
+
+  Accepts a `%User{}` (read from the struct, no query) or a user id. Returns
+  `ThemePreference.default/0` for nil, an unknown id, a user with no stored
+  choice, or a stored value that no longer names a registered preset or mode
+  (each field falls back independently; see `ThemePreference.normalize/1`).
+  """
+  @spec theme_preference(User.t() | binary() | nil) :: ThemePreference.t()
+  def theme_preference(%User{preferences: prefs}) when is_map(prefs) do
+    ThemePreference.normalize(Map.get(prefs, @theme_key))
+  end
+
+  def theme_preference(%User{}), do: ThemePreference.default()
+
+  def theme_preference(user_id) when is_binary(user_id) do
+    user_id
+    |> get_user_preferences()
+    |> Map.get(@theme_key)
+    |> ThemePreference.normalize()
+  end
+
+  def theme_preference(_), do: ThemePreference.default()
+
+  @doc """
+  Store the person's theme choice. `attrs` may carry `"preset"`, `"mode"` or
+  both (string or atom keys); a field it leaves out keeps its current value.
+
+  Returns `{:ok, %User{}}`; `{:error, :invalid}` with nothing written when a
+  preset or mode is not in `ThemePreference`'s registry (or `attrs` carries any
+  other key); `{:error, :not_found}` when no user has that id.
+  """
+  @spec put_theme_preference(User.t() | binary() | nil, map()) ::
+          {:ok, User.t()} | {:error, :invalid | :not_found | Ecto.Changeset.t()}
+  def put_theme_preference(%User{id: user_id}, attrs), do: put_theme_preference(user_id, attrs)
+
+  def put_theme_preference(user_id, attrs) when is_binary(user_id) do
+    case get_user(user_id) do
+      %User{} = user ->
+        current = Map.get(user.preferences || %{}, @theme_key)
+
+        with {:ok, next} <- ThemePreference.validate(attrs, current) do
+          user
+          |> User.changeset(%{preferences: Map.put(user.preferences || %{}, @theme_key, next)})
+          |> Repo.update()
+        end
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  def put_theme_preference(_, _), do: {:error, :not_found}
 end

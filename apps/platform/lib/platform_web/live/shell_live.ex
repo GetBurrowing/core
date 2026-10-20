@@ -191,6 +191,9 @@ defmodule PlatformWeb.ShellLive do
       # `queue_chat_unread_refresh/1`.
       |> assign(:chat_unread_refresh_queued, false)
       |> assign(:roster_open, false)
+      # The theme picker's one open flag (task 01a1557a stage 4). Its checked
+      # row and chips live in the browser, owned by the ThemePicker hook.
+      |> assign(:theme_picker_open, false)
       |> assign(:show_presence_panel, false)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
@@ -774,6 +777,19 @@ defmodule PlatformWeb.ShellLive do
 
         "close_roster", _params, socket ->
           {:halt, assign(socket, :roster_open, false)}
+
+        "toggle_theme_picker", _params, socket ->
+          {:halt, assign(socket, :theme_picker_open, !socket.assigns[:theme_picker_open])}
+
+        "close_theme_picker", _params, socket ->
+          {:halt, assign(socket, :theme_picker_open, false)}
+
+        # The ThemePicker hook has already applied the choice in the browser
+        # (window.burrowTheme.apply); this stores it so the next load, on any
+        # device, server-renders it (task 01a1557a stage 4). An anonymous
+        # shell or a value outside the registry writes nothing.
+        "set_theme", params, socket ->
+          {:halt, put_theme(socket, params)}
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
           # ADR 0027: dismissed role removed — just remove the agent from roster.
@@ -1406,6 +1422,26 @@ defmodule PlatformWeb.ShellLive do
         |> String.replace("_", " ")
     end
   end
+
+  # `set_theme` from the ThemePicker hook (task 01a1557a stage 4). Only the
+  # two registry fields are passed on, and `Accounts.put_theme_preference/2`
+  # validates them against `ThemePreference`; an invalid value or a shell with
+  # no `%User{}` record (anonymous) leaves the socket and the row untouched.
+  # `:current_user` on ShellLive is a display-name string, so the record is
+  # the only handle on the user. Public only so the anonymous branch can be
+  # tested without an anonymous ShellLive route.
+  @doc false
+  def put_theme(socket, params) when is_map(params) do
+    with %Accounts.User{} = user <- socket.assigns[:current_user_record],
+         {:ok, %Accounts.User{} = updated} <-
+           Accounts.put_theme_preference(user, Map.take(params, ["preset", "mode"])) do
+      assign(socket, :current_user_record, updated)
+    else
+      _ -> socket
+    end
+  end
+
+  def put_theme(socket, _params), do: socket
 
   # Stage 4 (task 019ee06b): no-ChatLive fallback for bar-initiated
   # `meeting_toggle_mic` / `meeting_toggle_camera` events from the

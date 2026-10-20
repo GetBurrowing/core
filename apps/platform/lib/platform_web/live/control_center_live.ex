@@ -889,7 +889,7 @@ defmodule PlatformWeb.ControlCenterLive do
               <div>
                 <span class="hero-rectangle-stack mx-auto h-12 w-12 text-base-content/25" />
                 <p class="mt-3 text-lg font-semibold text-base-content">Add your first agent</p>
-                <p class="mt-1 text-sm text-base-content/55">
+                <p class="mt-1 text-sm text-subtle">
                   Choose a template, federate from OpenClaw, import from a workspace, or build from scratch.
                 </p>
               </div>

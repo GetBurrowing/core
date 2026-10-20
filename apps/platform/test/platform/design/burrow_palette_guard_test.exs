@@ -14,11 +14,11 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       and the mock kept white, but white on `oklch(63% 0.22 25)` is 3.8948:1
       (it was before the recolor too); black is 5.3918:1.
     * light `--color-base-content` keeps main's black, not the spec's #221f1b
-      (stage 4). Secondary text paints it at 55-60% (`text-base-content/55`
-      and `/60`, daisyUI `.label`, `.empty-bot-author`), and the spec ink at
-      60% is 4.2312:1 on base-200, a text failure main's black (5.5683:1) did
-      not have. At 55% only black clears all three warm grounds; the 55% test
-      below is what holds it.
+      (stage 4). Secondary text paints it at 55-60% (`text-subtle`, the
+      `--subtle` token at 55%; `text-base-content/60`, daisyUI `.label`;
+      `.empty-bot-author`), and the spec ink at 60% is 4.2312:1 on base-200, a
+      text failure main's black (5.5683:1) did not have. At 55% only black
+      clears all three warm grounds; the --subtle test below is what holds it.
 
   Two halves, deliberately separate:
 
@@ -51,6 +51,7 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   """
   use ExUnit.Case, async: true
 
+  alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -58,7 +59,6 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
 
   @aa_text 4.5
   @non_text 3.0
-  @secondary_alpha 0.55
 
   @burrow %{
     "light" => %{
@@ -132,7 +132,11 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   # Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
   # Each is declared bare in both theme blocks and mapped to a --color-* key in
   # @theme inline, exactly like --edge.
-  @schema_tokens ["--faint", "--info-dim", "--success-dim", "--warning-dim"]
+  @schema_tokens ["--faint", "--subtle", "--info-dim", "--success-dim", "--warning-dim"]
+
+  # --subtle (task 01a1557a stage 5 r2): base-content at 55% in both Burrow
+  # themes, the composite the retired 55% utility compiled to.
+  @subtle_value "color-mix(in oklab, var(--color-base-content) 55%, transparent)"
   @dim_tokens ["--info-dim", "--success-dim", "--warning-dim"]
 
   # The faint tier must stay visibly dimmer than muted (--color-secondary) on
@@ -187,26 +191,46 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
                  Enum.join(failures, "\n  ")
       end
 
-      # Secondary text is base-content at reduced strength: /60 and daisyUI's
-      # .label at 60%, /55 and .empty-bot-author at 55%. 55% is the weakest
-      # strength main's ink cleared AA at, so the ink must clear it here too.
-      # Painted ratio: the composite is quantised to 8 bits, as the browser
-      # paints it (axe read #777471 off the spec ink on base-200 at 60%).
-      test "base-content at 55% clears #{@aa_text}:1 on all three grounds", %{css: css} do
-        ink = resolve!(css, @theme, "--color-base-content")
+      # Secondary text is base-content at reduced strength: text-subtle
+      # (--subtle, 55% here) and .empty-bot-author at 55%, /60 and daisyUI's
+      # .label at 60%. Painted ratio: the composite is quantised to 8 bits, as
+      # the browser paints it (axe read #777471 off the spec ink on base-200 at
+      # 60%), on the worst pixel any measured browser formula allows
+      # (PaintedComposite, stage 5 r2).
+      test "--subtle is base-content at 55%", %{css: css} do
+        assert declaration(theme_block(css, @theme), "--subtle") == @subtle_value
+      end
 
-        failures =
-          @grounds
-          |> Enum.map(fn ground ->
-            bg = resolve!(css, @theme, ground)
-            {ground, W.contrast_painted(W.composite(ink, @secondary_alpha, bg), bg)}
-          end)
-          |> Enum.filter(fn {_, r} -> r < @aa_text end)
-          |> Enum.map(fn {ground, r} -> "#{ground}: #{Float.round(r, 4)}:1" end)
+      for strength <- [55, 60] do
+        @strength strength
 
-        assert failures == [],
-               "#{@theme} secondary text (base-content at 55%) under #{@aa_text}:1:\n  " <>
-                 Enum.join(failures, "\n  ")
+        test "base-content at #{strength}% clears #{@aa_text}:1 on all three grounds", %{
+          css: css
+        } do
+          failures =
+            @grounds
+            |> Enum.map(&{&1, painted(css, @theme, &1, @strength)})
+            |> Enum.filter(fn {_, r} -> r < @aa_text end)
+            |> Enum.map(fn {ground, r} -> "#{ground}: #{Float.round(r, 4)}:1" end)
+
+          assert failures == [],
+                 "#{@theme} secondary text (base-content at #{@strength}%) under " <>
+                   "#{@aa_text}:1:\n  " <> Enum.join(failures, "\n  ")
+        end
+      end
+
+      test "the --subtle comment records the computed ratios", %{css: css} do
+        block = theme_block(css, @theme)
+
+        missing =
+          for g <- @grounds,
+              r = painted(css, @theme, g, 55),
+              not String.contains?(block, fixed4(r) <> ":1"),
+              do: "--subtle on #{g}: #{fixed4(r)}:1"
+
+        assert missing == [],
+               "#{@theme}: the --subtle comment does not carry these computed ratios:\n  " <>
+                 Enum.join(missing, "\n  ")
       end
 
       test "the focus ring clears #{@non_text}:1 on all three grounds", %{css: css} do
@@ -343,6 +367,12 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   # ── extraction ───────────────────────────────────────────────────────────
 
   defp ratio(css, theme, a, b), do: W.contrast(resolve!(css, theme, a), resolve!(css, theme, b))
+
+  defp painted(css, theme, ground, strength) do
+    ink = resolve!(css, theme, "--color-base-content")
+    bg = resolve!(css, theme, ground)
+    elem(PaintedComposite.contrast_min(ink, bg, strength), 0)
+  end
 
   defp fixed4(r), do: :erlang.float_to_binary(r, decimals: 4)
 

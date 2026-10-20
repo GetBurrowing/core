@@ -14,10 +14,10 @@
 //
 // Allowlist mechanics:
 //   1. Files enumerated in `ALLOWLISTED_PATHS` (the ClientState module
-//      itself + the Phoenix `phx:theme` toggle hook).
-//   2. Any line where the offending call sits next to `"phx:theme"` — the
-//      Phoenix theme fallback machinery reads that key from `root.html.heex`
-//      inline JS and any hook that mirrors it needs a same-line escape.
+//      itself + the theme toggle hook).
+//   2. Any line where the offending call sits next to `"burrow-theme-v1"` —
+//      the theme cache that the `data-role="theme-boot"` script in
+//      `root.html.heex` owns; any JS that reads it needs a same-line escape.
 //   3. Any line carrying the comment marker `client-state:allow` — the
 //      documented escape hatch for one-shot legacy-key migration paths
 //      (see `assets/README.md` "Lint gate" section for the contract).
@@ -43,12 +43,12 @@ const SCAN_ROOT = process.argv[2]
 
 const OFFENDER = /\blocalStorage\s*\./;
 const ALLOW_MARKER = "client-state:allow";
-const PHX_THEME_MARKER = '"phx:theme"';
+const THEME_CACHE_MARKER = '"burrow-theme-v1"';
 
 // Paths are stored as forward-slash relative-to-SCAN_ROOT for portability.
 const ALLOWLISTED_PATHS = new Set([
   "client_state.js",
-  "hooks/theme_toggle.js",
+  "hooks/theme_picker.js",
 ]);
 
 // Extensions we scan. Kept narrow to avoid dragging in bundler / vendor code
@@ -96,7 +96,7 @@ async function scanFile(absolute) {
     const line = lines[i];
     if (!OFFENDER.test(line)) continue;
     if (line.includes(ALLOW_MARKER)) continue;
-    if (line.includes(PHX_THEME_MARKER)) continue;
+    if (line.includes(THEME_CACHE_MARKER)) continue;
     hits.push({ path: scanRel, line: i + 1, source: line.trim() });
   }
   return hits;

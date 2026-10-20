@@ -62,6 +62,12 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
     conn |> init_test_session(current_user_id: user.id) |> get("/chat") |> html_response(200)
   end
 
+  defp spans_ending_in_burrow(doc, selector) do
+    doc
+    |> LazyHTML.query(selector)
+    |> Enum.count(&(&1 |> LazyHTML.text() |> String.trim() |> String.ends_with?("Burrow")))
+  end
+
   defp rail_label(html) do
     html
     |> LazyHTML.from_document()
@@ -138,7 +144,13 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
       assert rail_label(html) == "Acme Ops"
       assert title_tag(html) =~ ~s(data-default="Acme Ops")
       assert meta(html, "apple-mobile-web-app-title") == "Acme Ops"
-      refute html =~ "Burrow</span>"
+      # The theme picker's preset names ("Burrow", "Burrow midnight", ...) are
+      # design-system names, not the install's (task 01a1557a stage 4), so
+      # they are the only spans allowed to end in the default product name.
+      doc = LazyHTML.from_document(html)
+      picker_names = spans_ending_in_burrow(doc, "[data-theme-option] span")
+      assert picker_names > 0
+      assert spans_ending_in_burrow(doc, "span") == picker_names
 
       assert dm_push_title("Sam") == "Sam in Acme Ops"
     end

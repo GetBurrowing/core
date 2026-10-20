@@ -70,9 +70,10 @@ defmodule PlatformWeb.InstallIdentityRenderedPagesTest do
       {:ok, _view, live_html} = live(conn, unquote(path))
 
       for {label, html} <- [document: document, live: live_html] do
-        # not vacuous: a real shell page, with the theme toggle in it
-        assert html =~ ~s(id="theme-toggle"), "#{label} render has no shell"
-        assert html =~ ~s(data-icon="dark"), "#{label} render has no dark-mode glyph"
+        # not vacuous: a real shell page, with the theme picker in it
+        # (task 01a1557a stage 4 replaced the theme toggle)
+        assert html =~ ~s(id="theme-picker-trigger"), "#{label} render has no shell"
+        assert html =~ ~s(data-theme-chip), "#{label} render has no theme picker chips"
 
         assert Scanner.hits(html) == [],
                "#{unquote(path)} #{label} render carries install identity at " <>

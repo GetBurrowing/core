@@ -67,7 +67,7 @@ import SectionReorderTouch from "./section_reorder_touch"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
-import ThemeToggle from "./theme_toggle"
+import ThemePicker from "./theme_picker"
 import UploadButton from "./upload_button"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
@@ -140,7 +140,7 @@ export default {
   SheetHandleClock,
   SidebarCollapse,
   TasksStatusFilter,
-  ThemeToggle,
+  ThemePicker,
   UploadButton,
   ViewportBreakpoint,
 }

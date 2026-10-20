@@ -56,11 +56,11 @@ test("check_no_direct_localstorage exits 0 on a clean tree", async () => {
     "hooks/other.js":
       "import ClientState from './client_state';\n" +
       "export const x = () => ClientState.get('ns', 'k');\n",
-    "hooks/theme_toggle.js":
+    "hooks/theme_picker.js":
       // Not the allowlisted path (fixture root != real assets), but has the
-      // `\"phx:theme\"` marker on the same line as the offending call. This
+      // `\"burrow-theme-v1\"` marker on the same line as the offending call. This
       // exercises the same-line escape hatch.
-      'const t = localStorage.getItem("phx:theme");\n',
+      'const t = localStorage.getItem("burrow-theme-v1");\n',
   });
   try {
     const result = await runScript(fixture);

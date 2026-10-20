@@ -23,7 +23,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     <div class="rounded-2xl border border-edge bg-base-200/40 px-4 py-3">
       <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">{@label}</p>
       <p class="mt-2 text-2xl font-semibold text-base-content">{@value}</p>
-      <p :if={@detail} class="mt-1 text-xs text-base-content/55">{@detail}</p>
+      <p :if={@detail} class="mt-1 text-xs text-subtle">{@detail}</p>
     </div>
     """
   end
@@ -42,11 +42,11 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           </p>
           <p class="truncate font-mono text-[11px] text-base-content/45">{@credential.slug}</p>
         </div>
-        <span class="rounded-full bg-base-200 px-2 py-1 text-[11px] uppercase tracking-widest text-base-content/55">
+        <span class="rounded-full bg-base-200 px-2 py-1 text-[11px] uppercase tracking-widest text-subtle">
           {@credential.credential_type}
         </span>
       </div>
-      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/55">
+      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-subtle">
         <span :if={@credential.provider}>provider {@credential.provider}</span>
         <span>scope {@credential.scope_type}</span>
         <span :if={@credential.expires_at}>expires {format_datetime(@credential.expires_at)}</span>
@@ -155,7 +155,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         data-role="agent-tool-profile"
       >
         <h3 class="font-semibold">Tool profile</h3>
-        <p class="mt-1 text-xs text-base-content/55">
+        <p class="mt-1 text-xs text-subtle">
           Loads only these modules. Never grants access.
         </p>
         <form :if={@can_manage?} phx-submit="save_tool_profile" class="mt-3 space-y-3">

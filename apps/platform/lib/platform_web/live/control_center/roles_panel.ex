@@ -72,7 +72,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           <div class="flex min-w-0 flex-1 flex-col gap-2">
             <div class="flex flex-col gap-0.5">
               <span class="text-base font-semibold text-base-content">{role.name}</span>
-              <span class="text-xs text-base-content/55">{role.description}</span>
+              <span class="text-xs text-subtle">{role.description}</span>
             </div>
 
             <div class="flex flex-wrap items-center gap-1.5">
@@ -105,7 +105,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
 
       <%!-- Show-advanced view: flat per-responsibility list with overrides --%>
       <section :if={@show_role_advanced} id="roles-advanced-panel" class="flex flex-col gap-3">
-        <p class="text-xs text-base-content/55">
+        <p class="text-xs text-subtle">
           Each responsibility routes via its role's assigned agent by default. A per-row override
           redirects only the work fired for that responsibility — it does not change which agent
           holds the role, so role-identity lookups (space membership, the wiki write-gate, and
@@ -122,7 +122,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
                 <code class="rounded bg-base-200 px-1.5 py-0.5 text-[11px] font-mono text-base-content/80">
                   {row.responsibility_key}
                 </code>
-                <span class="text-xs text-base-content/55">
+                <span class="text-xs text-subtle">
                   from <span class="font-medium text-base-content/70">{row.role_name}</span>
                 </span>
                 <span

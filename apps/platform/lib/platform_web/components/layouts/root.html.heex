@@ -8,7 +8,18 @@
      light-theme user still gets base-100. No hex literal here — the value
      is the branding row's. --%>
 <% branding = Platform.Branding.get() %> <!DOCTYPE html>
-<html lang="en" style={"background-color: #{branding.background_color}"}>
+<%!-- `data-theme` / `data-preset` are the signed-in person's stored theme
+     (task 01a1557a stage 3), so a device with an empty cache paints the
+     chosen preset in its first frame. Absent for a signed-out page, for
+     "system" mode (data-theme) and for the base Burrow preset
+     (data-preset); the theme-boot script below fills them in. --%>
+<% theme_boot = PlatformWeb.Layouts.theme_boot(assigns) %>
+<html
+  lang="en"
+  style={"background-color: #{branding.background_color}"}
+  data-theme={theme_boot.html_theme}
+  data-preset={theme_boot.html_preset}
+>
   <head>
     <meta charset="utf-8" />
     <meta
@@ -87,165 +98,148 @@
     </style>
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
-    <script>
+    <%!-- Theme boot (task 01a1557a stage 3). Applies the person's preset and
+         mode to <html> before first paint. It sits after the app.css link on
+         purpose: a parser-inserted script waits for the stylesheets above it,
+         so the computed `--color-base-200` it copies into theme-color is
+         already the painted one.
+
+         Resolution order: the server's stored preference (signed-in only,
+         authoritative, written through to the cache), then the
+         `burrow-theme-v1` localStorage cache (first-paint cache only), then
+         the registry default. Every id, mode and default reaches the script
+         as a data attribute rendered from Platform.Accounts.ThemePreference:
+         no EEx inside the body and no hex anywhere. The server-rendered
+         `branding.theme_color` meta above stays as the no-JS fallback. --%>
+    <script
+      data-role="theme-boot"
+      data-presets={theme_boot.presets}
+      data-modes={theme_boot.modes}
+      data-base-preset={theme_boot.base_preset}
+      data-default-preset={theme_boot.default_preset}
+      data-default-mode={theme_boot.default_mode}
+      data-server-preset={theme_boot.server_preset}
+      data-server-mode={theme_boot.server_mode}
+    >
       (() => {
-        let themeDebugHideTimer = null;
+        const KEY = "burrow-theme-v1";
+        const root = document.documentElement;
+        const config = (document.currentScript && document.currentScript.dataset) || {};
+        const words = (value) => (value || "").split(" ").filter(Boolean);
+        const PRESETS = words(config.presets);
+        const MODES = words(config.modes);
+        const BASE = config.basePreset;
+        const DEFAULT = {preset: config.defaultPreset, mode: config.defaultMode};
 
-        const SURFACE_SELECTORS = {
-          moduleRail: "#shell-sidebar",
-          spaceSidebar: "#chat-sidebar",
-          chatPane: "#message-list, #messages-container",
-          utilityBar: "#utility-bar",
-          messageComposer: "#compose-form textarea"
-        };
-
-        const getSurfaceSnapshot = () => {
-          const snapshot = {};
-
-          Object.entries(SURFACE_SELECTORS).forEach(([key, selector]) => {
-            const el = document.querySelector(selector);
-
-            if (!el) {
-              snapshot[key] = "(missing)";
-              return;
-            }
-
-            const styles = window.getComputedStyle(el);
-            snapshot[key] = styles.backgroundColor || "(transparent)";
-          });
-
-          return snapshot;
-        };
-
-        const ensureThemeDebugPanel = () => {
-          if (!document.body) return null;
-
-          let panel = document.getElementById("theme-debug-panel");
-          if (panel) return panel;
-
-          panel = document.createElement("div");
-          panel.id = "theme-debug-panel";
-          panel.setAttribute(
-            "style",
-            [
-              "position:fixed",
-              "right:12px",
-              "bottom:12px",
-              "z-index:9999",
-              "max-width:min(360px,calc(100vw - 24px))",
-              "padding:10px 12px",
-              "border-radius:12px",
-              "border:1px solid rgba(255,255,255,.12)",
-              "background:rgba(11,13,18,.94)",
-              "color:#e5e7eb",
-              "box-shadow:0 10px 30px rgba(0,0,0,.35)",
-              "font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
-              "white-space:pre-wrap",
-              "display:none",
-              "pointer-events:none"
-            ].join(";")
-          );
-
-          document.body.appendChild(panel);
-          return panel;
-        };
-
-        const renderThemeDebugPanel = (reason = "theme-change") => {
-          const panel = ensureThemeDebugPanel();
-          if (!panel) return;
-
-          const currentTheme = document.documentElement.getAttribute("data-theme") || "(unset)";
-          const storedTheme = localStorage.getItem("phx:theme") || "(none)";
-          const surfaces = getSurfaceSnapshot();
-
-          panel.textContent = [
-            `Theme Debug · ${reason}`,
-            `html[data-theme]: ${currentTheme}`,
-            `localStorage[phx:theme]: ${storedTheme}`,
-            `Module Rail: ${surfaces.moduleRail}`,
-            `Space Sidebar: ${surfaces.spaceSidebar}`,
-            `Chat Pane: ${surfaces.chatPane}`,
-            `Utility Bar: ${surfaces.utilityBar}`,
-            `Message Composer: ${surfaces.messageComposer}`
-          ].join("\n");
-        };
-
-        const showThemeDebugPanel = (reason = "theme-change") => {
-          const panel = ensureThemeDebugPanel();
-          if (!panel) return;
-
-          renderThemeDebugPanel(reason);
-          panel.style.display = "block";
-
-          if (themeDebugHideTimer) {
-            clearTimeout(themeDebugHideTimer);
-          }
-
-          themeDebugHideTimer = setTimeout(() => {
-            panel.style.display = "none";
-          }, 12000);
-        };
-
-        const setTheme = (theme) => {
-          const before = {
-            htmlTheme: document.documentElement.getAttribute("data-theme") || null,
-            storedTheme: localStorage.getItem("phx:theme") || null,
-            surfaces: getSurfaceSnapshot()
+        const normalize = (value) => {
+          const pref = value && typeof value === "object" ? value : {};
+          return {
+            preset: PRESETS.includes(pref.preset) ? pref.preset : DEFAULT.preset,
+            mode: MODES.includes(pref.mode) ? pref.mode : DEFAULT.mode
           };
-
-          if (theme === "system") {
-            localStorage.removeItem("phx:theme");
-            document.documentElement.removeAttribute("data-theme");
-          } else {
-            localStorage.setItem("phx:theme", theme);
-            document.documentElement.setAttribute("data-theme", theme);
-          }
-
-          const after = {
-            htmlTheme: document.documentElement.getAttribute("data-theme") || null,
-            storedTheme: localStorage.getItem("phx:theme") || null,
-            surfaces: getSurfaceSnapshot()
-          };
-
-          console.groupCollapsed(`[theme] setTheme(${theme})`);
-          console.log("before", before);
-          console.log("after", after);
-          console.groupEnd();
-
-          window.dispatchEvent(
-            new CustomEvent("app:theme-changed", {
-              detail: {theme: theme === "system" ? null : theme}
-            })
-          );
-
-          showThemeDebugPanel(`setTheme(${theme})`);
         };
 
-        const getTheme = () =>
-          document.documentElement.getAttribute("data-theme") ||
-          localStorage.getItem("phx:theme") ||
-          "dark";
+        const parse = (raw) => {
+          try {
+            return raw ? JSON.parse(raw) : null;
+          } catch (_error) {
+            return null;
+          }
+        };
 
-        window.setAppTheme = setTheme;
-        window.getAppTheme = getTheme;
-        window.showThemeDebugPanel = showThemeDebugPanel;
-        window.renderThemeDebugPanel = renderThemeDebugPanel;
+        const readCache = () => {
+          try {
+            return parse(localStorage.getItem(KEY));
+          } catch (_error) {
+            return null;
+          }
+        };
 
-        if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "dark");
-        }
+        const writeCache = (pref) => {
+          try {
+            localStorage.setItem(KEY, JSON.stringify(pref));
+          } catch (_error) {
+            // Private mode or a full quota: the server render still paints.
+          }
+        };
 
-        window.addEventListener("DOMContentLoaded", () => {
-          ensureThemeDebugPanel();
-          renderThemeDebugPanel("initial-load");
+        const scheme =
+          typeof window.matchMedia === "function"
+            ? window.matchMedia("(prefers-color-scheme: dark)")
+            : null;
+
+        let current = normalize(null);
+
+        const resolvedMode = () =>
+          current.mode === "system" ? (scheme && scheme.matches ? "dark" : "light") : current.mode;
+
+        const snapshot = () => ({
+          preset: current.preset,
+          mode: current.mode,
+          resolved: resolvedMode()
         });
 
-        window.addEventListener(
-          "storage",
-          (e) => e.key === "phx:theme" && setTheme(e.newValue || "dark")
-        );
-        
-        window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
+        const syncThemeColor = () => {
+          const meta = document.querySelector('meta[name="theme-color"]');
+          const ground = getComputedStyle(root).getPropertyValue("--color-base-200").trim();
+          if (!meta || !ground) return false;
+          meta.setAttribute("content", ground);
+          return true;
+        };
+
+        const paint = () => {
+          root.setAttribute("data-theme", resolvedMode());
+
+          if (current.preset === BASE) {
+            root.removeAttribute("data-preset");
+          } else {
+            root.setAttribute("data-preset", current.preset);
+          }
+
+          if (!syncThemeColor()) {
+            document.addEventListener("DOMContentLoaded", syncThemeColor, {once: true});
+          }
+
+          window.dispatchEvent(new CustomEvent("burrow:theme", {detail: snapshot()}));
+        };
+
+        window.burrowTheme = {
+          get: snapshot,
+          apply: (pref) => {
+            const next = pref || {};
+            current = {
+              preset: PRESETS.includes(next.preset) ? next.preset : current.preset,
+              mode: MODES.includes(next.mode) ? next.mode : current.mode
+            };
+            writeCache(current);
+            paint();
+            return snapshot();
+          }
+        };
+
+        if (config.serverPreset || config.serverMode) {
+          current = normalize({preset: config.serverPreset, mode: config.serverMode});
+          writeCache(current);
+        } else {
+          current = normalize(readCache());
+        }
+
+        paint();
+
+        if (scheme) {
+          const onScheme = () => current.mode === "system" && paint();
+          if (typeof scheme.addEventListener === "function") {
+            scheme.addEventListener("change", onScheme);
+          } else if (typeof scheme.addListener === "function") {
+            scheme.addListener(onScheme);
+          }
+        }
+
+        window.addEventListener("storage", (event) => {
+          if (event.key !== KEY) return;
+          current = normalize(parse(event.newValue));
+          paint();
+        });
       })();
     </script>
   </head>
