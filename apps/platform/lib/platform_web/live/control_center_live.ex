@@ -869,7 +869,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
           <nav
             id="agent-list"
-            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
+            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 clears-tab-bar"
           >
             <AgentCard.card
               :for={agent <- @agents}

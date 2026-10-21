@@ -375,7 +375,13 @@
        was the ONLY signal and measured ~1.20:1 — present in the DOM,
        invisible on screen. `base-200` under an opaque `base-100` panel
        fill restores the two-tier contrast the mock relies on. --%>
-    <div class="flex h-full flex-col bg-base-200 text-base-content">
+    <%!-- data-in-call (task 01a1557a-7a71 stage 3): present only while the
+         viewer is in the call. app.css hides the mobile tab bar under
+         `:root:has([data-in-call])` (the product lead's in-call case). --%>
+    <div
+      class="flex h-full flex-col bg-base-200 text-base-content"
+      data-in-call={assigns[:in_meeting] == true && "true"}
+    >
       <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
          `leave-meeting` / `toggle-{mic,camera,screen-share}` push_events
          from MeetingHooks (server-side) and drives the local WebRTC
@@ -1684,8 +1690,15 @@
            off @current_stage_mode. The `data-stage-mode` attribute drives
            renderer selection and is the e2e/test contract — keep it
            stable. --%>
+        <%!-- clears-tab-bar (task 01a1557a-7a71 stage 3): below lg the
+             stage controls end above the floating tab bar. Only in gallery,
+             where no bottom strip renders; the strip carries the clearance
+             itself otherwise. --%>
         <main
-          class="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4"
+          class={[
+            "relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4",
+            (@shell? and @current_stage_mode == :gallery) && "clears-tab-bar"
+          ]}
           data-pane="center-stage"
           data-role="call-stage"
           data-stage-mode={@current_stage_mode}
@@ -3111,12 +3124,12 @@
 
          Hence the `@shell?` branch below, mirroring the call rail at the
          `bottom-[...]` branch further up this file:
-         * Shell, below lg: NO inset here. `<.bottom_rail>`
-           (`icon_rail.ex:368`) is the bottom-most element and its
-           `.bottom-nav` rule already carries
-           `padding-bottom: env(safe-area-inset-bottom)`
-           (`app.css:3441`). Reserving it twice opens a dead band about a
-           third of a tile tall.
+         * Shell, below lg: the tab bar FLOATS over content since task
+           01a1557a-7a71 stage 3, so this footer is bottom-most and must
+           clear the bar itself: `var(--bottom-nav-clearance)` (bar + gap +
+           safe area) is ADDED to its padding and height. In the call the
+           bar hides and the clearance drops to the safe area alone, the
+           guest arithmetic.
          * Shell, lg and up: that rail is `display:none`
            (`app.css:3448-3452`), so this footer IS bottom-most and the
            inset is ADDED to its height.
@@ -3151,7 +3164,7 @@
           "border-t border-edge",
           if(@shell?,
             do:
-              "pb-2 h-[96px] lg:pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:h-[calc(120px+env(safe-area-inset-bottom))]",
+              "pb-[calc(0.5rem+var(--bottom-nav-clearance))] h-[calc(96px+var(--bottom-nav-clearance))] lg:pb-[calc(0.5rem+env(safe-area-inset-bottom))] lg:h-[calc(120px+env(safe-area-inset-bottom))]",
             else:
               "pb-[calc(0.5rem+env(safe-area-inset-bottom))] h-[calc(96px+env(safe-area-inset-bottom))] lg:h-[calc(120px+env(safe-area-inset-bottom))]"
           )
@@ -3925,7 +3938,7 @@
       <div :if={@meetings_view == :calendar} class="flex min-h-0 flex-1">
         <div
           :if={@meetings_view == :calendar}
-          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
+          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5 clears-tab-bar"
           data-region="meetings-list"
         >
           <%!-- ── The viewer's whole scoped index is empty (019f9cb7 stage 5) ─
@@ -4611,9 +4624,10 @@
          that click-dismisses, `items-end` so it rises from the bottom
          edge a thumb starts at — plus the frames' drag handle.
 
-         Out of flow, so `pb-[env(safe-area-inset-bottom)]` is the right
-         clearance and `--bottom-nav-height` is NOT: the in-flow bottom
-         nav reservation does not apply to an overlay that paints over it.
+         Out of flow at z-50, over the floating tab bar (z-30), so
+         `pb-[env(safe-area-inset-bottom)]` is the right clearance and
+         `--bottom-nav-height` is NOT: the bar reservation is for scrollers
+         the bar floats over, not for an overlay that paints over the bar.
 
          Geometry is the panel's, for the same reason — see the panel's
          comment above. Here the cap is explicit (`max-h-[75vh]`) because

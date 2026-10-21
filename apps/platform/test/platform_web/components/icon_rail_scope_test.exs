@@ -194,6 +194,18 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       end
     end
 
+    test "a guest without meetings.join gets no Meetings tab in the bar", ctx do
+      # Control: a member's bar carries Meetings, in its place.
+      member = scope_of(ctx.internal[:sub_member])
+      assert mobile_keys(%{access_scope: member}) == [:chat, :tasks, :meetings]
+
+      for {row, user} <- ctx.guests do
+        scope = scope_of(user)
+        refute Access.module_access?(scope, :meetings), "#{row} holds meetings.join"
+        refute :meetings in mobile_keys(%{access_scope: scope}), "#{row} sees a Meetings tab"
+      end
+    end
+
     test "a guest holding tasks.read on a project still sees no Tasks tile", ctx do
       guest = ctx.w.ext
 
@@ -320,8 +332,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert Enum.sort(scope_destination_keys(locked)) == [:chat, :meetings, :tasks]
       assert Enum.sort(desktop_keys(%{access_scope: locked})) == [:chat, :meetings, :tasks]
-      assert mobile_keys(%{access_scope: locked}) == [:chat, :tasks]
-      assert more_sheet_keys(%{access_scope: locked}) == [:meetings]
+      # Meetings is a bar tab since task 01a1557a-7a71 stage 2, so it left the
+      # sheet; Inbox, the sheet's first row, is locked here.
+      assert mobile_keys(%{access_scope: locked}) == [:chat, :tasks, :meetings]
+      assert more_sheet_keys(%{access_scope: locked}) == []
 
       sheet = more_sheet_html(%{access_scope: locked})
       refute sheet =~ ">Admin</p>"

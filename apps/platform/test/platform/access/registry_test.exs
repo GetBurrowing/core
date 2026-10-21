@@ -33,7 +33,14 @@ defmodule Platform.Access.RegistryTest do
   end
 
   defp rail_keys, do: Enum.map(IconRail.destinations(root_user: true), & &1.key)
-  defp entry_keys, do: Enum.map(Registry.rail_entries(), & &1.key)
+  # `:activity` is the one registry rail entry with no destination, on
+  # purpose: the Activity page was retired (task 01a1557a-7a71 stage 4) but
+  # ModuleGate still resolves ChangelogLive through `rail_entry(:activity)`
+  # (see registry.ex), so it gates /changelog. Every other entry still pairs
+  # one-to-one.
+  @destinationless_entries [:activity]
+
+  defp entry_keys, do: Enum.map(Registry.rail_entries(), & &1.key) -- @destinationless_entries
 
   describe "core registry (no extensions)" do
     setup do
@@ -44,6 +51,11 @@ defmodule Platform.Access.RegistryTest do
     test "every rail destination has exactly one registry entry, and the reverse" do
       assert Enum.sort(rail_keys()) == Enum.sort(entry_keys())
       assert entry_keys() == Enum.uniq(entry_keys())
+      # The exemption names an entry that exists and has no destination.
+      all_entries = Enum.map(Registry.rail_entries(), & &1.key)
+
+      for key <- @destinationless_entries,
+          do: assert(key in all_entries and key not in rail_keys())
     end
 
     test "a disabled destination keeps its registry entry" do

@@ -1059,7 +1059,7 @@ defmodule PlatformWeb.ExperimentsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6">
+    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6 clears-tab-bar">
       <%= if @experiment do %>
         {detail(assigns)}
       <% else %>

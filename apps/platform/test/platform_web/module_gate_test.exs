@@ -150,7 +150,9 @@ defmodule PlatformWeb.ModuleGateTest do
     {"/files", :files, PlatformWeb.FilesLive},
     {"/org_memory", :context, PlatformWeb.OrgMemoryLive},
     {"/inbox", :inbox, PlatformWeb.InboxLive},
-    {"/activity", :activity, PlatformWeb.ActivityLive},
+    # The Activity page is retired (task 01a1557a-7a71 stage 4); the
+    # `activity` module now gates /changelog, so the lock keeps coverage here.
+    {"/changelog", :activity, PlatformWeb.ChangelogLive},
     {"/email", :email, PlatformWeb.EmailLive},
     {"/skills", :skills, PlatformWeb.SkillsLive},
     {"/control/experiments", :experiments, PlatformWeb.ExperimentsLive}

@@ -464,7 +464,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
            card stay in `stack_position` (dependency) order. Stack cards include the stage-3
            expansion contract (`stack-member-mobile-#{id}` rows + dep
            annotations). Empty-state checks also use `@board_items`. --%>
-        <div class="flex-1 overflow-y-auto px-3 pb-24">
+        <div class="flex-1 overflow-y-auto px-3 pb-24 clears-tab-bar">
           <div
             :for={{col_key, col_label} <- @mobile_columns}
             :if={@active_status_filter == col_key && Map.get(@board_items, col_key, []) != []}

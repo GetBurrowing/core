@@ -477,8 +477,8 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
       # hold this subscription without its own authorization. Today none does.
       # There is no established scoped-read pattern on that surface to point at
       # either — `Audit.list/1` and `Audit.stream/1` have no platform_web
-      # callers at all, and `PlatformWeb.ActivityLive` reads
-      # `Chat.list_recent_agent_actions/1` instead. So the property held here is
+      # callers at all (the Activity page that read agent actions another way
+      # was retired by task 01a1557a-7a71 stage 4). So the property held here is
       # "the firehose has no user-facing subscriber", not "user-facing surfaces
       # read it safely by some other route".
       subscribers = matching_sources(web_sources(), audit_subscription_regex())

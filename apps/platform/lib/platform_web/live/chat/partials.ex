@@ -1289,7 +1289,8 @@ defmodule PlatformWeb.ChatLive.Partials do
       id={"canvas-versions-panel-#{(@mobile && "mobile") || "desktop"}-#{@canvas.id}"}
       class={[
         "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-edge bg-base-100 shadow-xl transition-transform",
-        @mobile && "fixed top-12 bottom-[var(--bottom-nav-height,0px)]"
+        @mobile &&
+          "fixed top-12 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
       ]}
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4">
@@ -2110,6 +2111,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       :if={@url}
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
       phx-click="close_lightbox"
+      data-fullscreen-viewer
     >
       <button
         class="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors safe-area-top"

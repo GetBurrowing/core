@@ -8,20 +8,22 @@ defmodule PlatformWeb.Components.IconRail do
                        56px collapsed / 224px expanded, `hidden lg:flex flex-col`.
                        Two clusters (Live, Working) separated by a divider,
                        with an `mt-auto` Admin slot pinned to the bottom.
-    * `bottom_rail/1` — mobile bottom-nav (<`lg` breakpoint). Exactly 5
-                       tiles: Chat / Tasks / Inbox / Activity / More. The
-                       More tile fires `phx-click="open_more_sheet"` and
-                       lives outside `bottom_rail` semantically only — the
-                       button is rendered inline here for thumb reach.
+    * `bottom_rail/1` — mobile tab bar (<`lg` breakpoint). Link tabs from
+                       `mobile_tab_keys/0` (Chat, Tasks, Meetings, filtered
+                       by Scope) plus a More button that fires
+                       `phx-click="open_more_sheet"`. Inbox and Activity are
+                       not in the bar (task 01a1557a-7a71 stage 2): Inbox
+                       is the More sheet's first row, and its unread signal
+                       is a dot on More.
 
   Stage 2 adds:
 
     * Hero icons on every destination, rendered via `<.icon name="hero-…" />`.
     * Active-state styling at both breakpoints:
         * Desktop: `.icon-rail-tab--active` (3px LEFT-bar accent via `::before`,
-          mirroring the mobile TOP-bar accent on `.bottom-nav-tab--active`)
           plus the existing `bg-base-300 text-primary` pill treatment.
-        * Mobile: reuses `.bottom-nav-tab--active` verbatim.
+        * Mobile: `.bottom-nav-tab--active` (primary ink, medium label, and
+          the solid icon; the top bar was retired by task 01a1557a-7a71).
     * `aria-current="page"` on the single active tile. Active state uses
       segment-boundary longest-prefix matching against `current_path`, so a
       nested route (`/chat/:slug`, `/tasks/:id`, `/org_memory/*file_key`) lights
@@ -92,8 +94,8 @@ defmodule PlatformWeb.Components.IconRail do
     default: 0,
     doc:
       "current user's non-dismissed inbox count; renders an attention badge on the Inbox tile. " <>
-        "0 omits the badge node entirely. Desktop icon_rail/1 only — the mobile bottom_rail " <>
-        "Inbox badge is a separate future stage."
+        "0 omits the badge node entirely. Desktop icon_rail/1; the mobile bar carries the " <>
+        "same count as a dot on More (bottom_rail/1)."
   )
 
   attr(:chat_unread_count, :integer,
@@ -370,30 +372,60 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   @doc """
-  Mobile bottom-nav. Hidden at the `lg` breakpoint and above.
+  Mobile tab bar. Hidden at the `lg` breakpoint and above.
 
-  Renders exactly 5 tiles: Chat / Tasks / Inbox / Activity / More. The
-  Admin destination lives in the More sheet on mobile, never in the bar
-  — `root_user` does not change the tile count here.
+  Link tabs for `mobile_tab_keys/0` (Chat, Tasks, Meetings; a Scope that does
+  not admit one drops its cell, and the rest stay equal width), then a More
+  button. Admin and the long tail live in the More sheet, never in the bar.
+
+  Active state (task 01a1557a-7a71 stage 2, Saru rules 3 and 4): the winner
+  is computed over the link tabs by `current_path`. More is active instead
+  when `more_open` is true, or when no link tab matches and `current_path`
+  is on a destination the More sheet lists (`more_sheet_destinations/2`).
+  Active tabs render the `-solid` icon; inactive tabs the outline one.
+
+  When `inbox_unread_count` is above 0, More carries a dot
+  (`data-role="more-unread-dot"`, no count) and its aria-label reads
+  "More, unread in Inbox". At 0 the dot is absent from the DOM.
   """
   attr(:current_path, :string, default: "/")
   attr(:root_user, :boolean, default: false)
 
   attr(:access_scope, :any,
     default: nil,
-    doc: "the actor's Scope; when set the four primary tiles are filtered through it"
+    doc: "the actor's Scope; when set the link tabs and the More test are filtered through it"
+  )
+
+  attr(:more_open, :boolean,
+    default: false,
+    doc: "true while the More sheet is open; lights More and nothing else"
+  )
+
+  attr(:inbox_unread_count, :integer,
+    default: 0,
+    doc: "the viewer's unread inbox count; above 0 puts the unread dot on More"
   )
 
   def bottom_rail(assigns) do
     current_path = Map.get(assigns, :current_path, "/")
-    primary = mobile_primary_destinations(assigns[:access_scope])
+    scope = assigns[:access_scope]
+    primary = mobile_primary_destinations(scope)
+    link_winner = active_destination_key(primary, current_path)
+
+    more_active? =
+      assigns[:more_open] == true or
+        (link_winner == nil and
+           more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
+           |> Enum.any?(&path_matches?(&1.path, current_path)))
+
+    unread? = is_integer(assigns[:inbox_unread_count]) and assigns[:inbox_unread_count] > 0
 
     assigns =
       assigns
       |> assign(:mobile_destinations, primary)
-      # Winner computed over the 4 primary tiles only — a More-sheet-only
-      # surface (Skills, Org Memory, Meetings, Admin) lights nothing in the bar.
-      |> assign(:active_key, active_destination_key(primary, current_path))
+      |> assign(:active_key, if(more_active?, do: :more, else: link_winner))
+      |> assign(:more_active?, more_active?)
+      |> assign(:more_unread?, unread?)
 
     ~H"""
     <nav
@@ -411,23 +443,105 @@ defmodule PlatformWeb.Components.IconRail do
         aria-label={dest.label}
         aria-current={aria_current_for(dest, @active_key)}
       >
-        <.icon name={dest.hero_icon} class="bottom-nav-icon size-5" />
+        <.icon
+          name={tab_icon(dest.key, dest.key == @active_key)}
+          class="bottom-nav-icon size-5"
+        />
         <span class="bottom-nav-label">{dest.label}</span>
       </.link>
 
       <button
         type="button"
         phx-click="open_more_sheet"
-        class="bottom-nav-tab"
+        class={["bottom-nav-tab", @more_active? && "bottom-nav-tab--active"]}
         data-destination="more"
-        aria-label="More surfaces"
+        aria-label={if @more_unread?, do: "More, unread in Inbox", else: "More"}
+        aria-expanded={to_string(@more_open)}
+        aria-haspopup="dialog"
       >
-        <.icon name="hero-ellipsis-horizontal" class="bottom-nav-icon size-5" />
+        <.icon name={tab_icon(:more, @more_active?)} class="bottom-nav-icon size-5" />
         <span class="bottom-nav-label">More</span>
+        <span :if={@more_unread?} class="bottom-nav-dot" data-role="more-unread-dot"></span>
       </button>
     </nav>
     """
   end
+
+  @doc """
+  The bar's link-tab keys, in order (task 01a1557a-7a71 stage 2; the product lead:
+  chat, voice, tasks, meetings, more). An ordered key list a later rung
+  extends: Voice joins between Chat and Tasks in rung 20. More is not a key
+  here; it is the button after the links.
+  """
+  @spec mobile_tab_keys() :: [atom()]
+  def mobile_tab_keys, do: [:chat, :tasks, :meetings]
+
+  # Bar-only icon mapping (task 01a1557a-7a71 stage 2): outline at rest,
+  # `-solid` when active (Saru rule 3). Chosen against the masters'
+  # master-mobile.html v3 glyphs; the shared destinations' `hero_icon` (the
+  # desktop rail's) is deliberately not touched. Literal class names, so the
+  # heroicons plugin generates every one of them.
+  #   chat     round speech bubble with three dots -> chat-bubble-oval-left-ellipsis
+  #   tasks    three check-mark rows                -> list-bullet (Heroicons has no
+  #            checklist-rows glyph; three rows is the nearer half of the shape)
+  #   meetings video camera                         -> video-camera
+  #   more     three dots                           -> ellipsis-horizontal
+  @tab_icons %{
+    chat: {"hero-chat-bubble-oval-left-ellipsis", "hero-chat-bubble-oval-left-ellipsis-solid"},
+    tasks: {"hero-list-bullet", "hero-list-bullet-solid"},
+    meetings: {"hero-video-camera", "hero-video-camera-solid"},
+    more: {"hero-ellipsis-horizontal", "hero-ellipsis-horizontal-solid"}
+  }
+
+  @doc false
+  def tab_icon(key, active?) do
+    {outline, solid} = Map.fetch!(@tab_icons, key)
+    if active?, do: solid, else: outline
+  end
+
+  @doc """
+  What the mobile More sheet lists, for an actor (task 01a1557a-7a71 stage 2):
+  `%{inbox: [inbox] | [], working: [...], admin: [...] | []}`.
+
+  Inbox gets a row because it left the bar and is a `:live` destination the
+  Working list would never show. Working drops every key the bar carries
+  (`mobile_tab_keys/0`), so Meetings is not repeated. Admin is present only
+  when the actor may see it. Every list is filtered by the same Scope rule as
+  the rails (`rail_filter/2`). Rung 5 (task 01a1557a-807f) owns the sheet's
+  final rows and order; this is only what keeps every surface reachable.
+  """
+  @spec more_sheet_sections(Scope.t() | nil, boolean()) :: %{
+          inbox: [map()],
+          working: [map()],
+          admin: [map()]
+        }
+  def more_sheet_sections(scope, root_user) do
+    visible = scope |> rail_filter(root_user) |> destinations()
+
+    admin =
+      if show_more_admin?(scope, root_user) do
+        scope |> rail_filter(true) |> destinations() |> Enum.filter(&(&1.cluster == :admin))
+      else
+        []
+      end
+
+    %{
+      inbox: Enum.filter(visible, &(&1.key == :inbox)),
+      working:
+        Enum.filter(visible, &(&1.cluster == :working and &1.key not in mobile_tab_keys())),
+      admin: admin
+    }
+  end
+
+  @doc "Every destination the More sheet lists, flattened (see `more_sheet_sections/2`)."
+  @spec more_sheet_destinations(Scope.t() | nil, boolean()) :: [map()]
+  def more_sheet_destinations(scope, root_user) do
+    %{inbox: inbox, working: working, admin: admin} = more_sheet_sections(scope, root_user)
+    inbox ++ working ++ admin
+  end
+
+  defp show_more_admin?(%Scope{} = scope, _root_user), do: Access.module_access?(scope, :admin)
+  defp show_more_admin?(_scope, root_user), do: root_user == true
 
   @doc """
   Returns the canonical destination list for the icon rail.
@@ -542,13 +656,15 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   defp mobile_primary_destinations(access_scope) do
-    # Chat / Tasks / Inbox / Activity — 4 surfaces; More is the 5th tile,
-    # rendered separately because it's a button (phx-click), not a link.
-    # With a Scope the four are filtered through it (task 01a1386d-fb6e
-    # stage 1); without one they render unfiltered, as before.
+    # The link tabs, in mobile_tab_keys/0 order (not the canonical list's
+    # order); More is rendered separately because it is a button. With a
+    # Scope they are filtered through it (task 01a1386d-fb6e stage 1);
+    # without one they render unfiltered, as before.
+    by_key = Map.new(canonical_destinations(), &{&1.key, &1})
+
     primary =
-      canonical_destinations()
-      |> Enum.filter(&(&1.key in [:chat, :tasks, :inbox, :activity]))
+      mobile_tab_keys()
+      |> Enum.flat_map(&List.wrap(Map.get(by_key, &1)))
       |> Enum.filter(&enabled?/1)
 
     case access_scope do
@@ -581,9 +697,9 @@ defmodule PlatformWeb.Components.IconRail do
     current_path == path or String.starts_with?(current_path, path <> "/")
   end
 
-  # Active-state classes — desktop uses the icon-rail variant, mobile reuses
-  # the existing bottom-nav variant (Phase-4 chrome). Both attach a 3px bar
-  # accent via `::before` (left for desktop, top for mobile). The active tile is
+  # Active-state classes — desktop uses the icon-rail variant (a 3px left bar
+  # via `::before`), mobile the bottom-nav variant (no bar since task
+  # 01a1557a-7a71; ink, weight and the solid icon carry it). The active tile is
   # the precomputed `active_key` winner (see active_destination_key/2), so these
   # only do a cheap key comparison and never re-derive the match per tile.
   defp desktop_active_class(dest, active_key) do
@@ -742,7 +858,7 @@ defmodule PlatformWeb.Components.IconRail do
 
   defp badge_spec(_key, _inbox_count, _chat_count), do: nil
 
-  # Canonical destination list: core's 12 entries, then every build-time
+  # Canonical destination list: core's 11 entries, then every build-time
   # module's (`Platform.Extensions.rail_items/0`, ADR 0055 section 5, read per
   # call). Order within a cluster determines render order in the rail, and an
   # extension's item goes through the same `root_only?` and `enabled?`
@@ -778,14 +894,6 @@ defmodule PlatformWeb.Components.IconRail do
         label: "Inbox",
         path: "/inbox",
         hero_icon: "hero-inbox",
-        cluster: :live,
-        root_only?: false
-      },
-      %{
-        key: :activity,
-        label: "Activity",
-        path: "/activity",
-        hero_icon: "hero-sparkles",
         cluster: :live,
         root_only?: false
       },

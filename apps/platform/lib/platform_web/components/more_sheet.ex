@@ -8,11 +8,17 @@ defmodule PlatformWeb.Components.MoreSheet do
   `PlatformWeb.Components.IconRail.destinations/1` — the same single source
   of truth that drives the desktop rail and the mobile bottom rail.
 
-  Sections:
-    * **Working** — Skills, Context, Memory, Prompts, Meetings (the
-      `:working` cluster from `IconRail.destinations/1`).
+  Sections, from `IconRail.more_sheet_sections/2`:
+    * **Inbox** — first, with its unread count badge
+      (`data-role="more-sheet-inbox-badge"`, the `IconRail.badge_text/1`
+      grammar). Inbox left the bar in task 01a1557a-7a71 stage 2, and as a
+      `:live` destination it would otherwise be unreachable on mobile.
+    * **Working** — the `:working` cluster minus anything the bar already
+      carries (`IconRail.mobile_tab_keys/0`, so not Meetings).
     * **Admin** — gated on `root_user`; hidden entirely (DOM-absent, not
       `display: none`) for non-root users.
+
+  Rung 5 (task 01a1557a-807f) owns the sheet's final row set and order.
 
   A profile row at the bottom exposes the user's name and the sign-out
   shortcut (unchanged from the previous revision).
@@ -22,7 +28,11 @@ defmodule PlatformWeb.Components.MoreSheet do
   tab's position for spatial continuity. `lg:hidden` ensures the desktop
   icon rail keeps doing its job at lg+ widths.
 
-  Dismissal: Sheet's hook handles backdrop tap, Esc, and close button.
+  Dismissal: Sheet's hook handles backdrop tap, Esc, and close button. The
+  rows carry no `phx-click` (task 01a1557a-7a71 stage 5): a `navigate` link
+  remounts the shell with the sheet closed, and a BARE event name on a
+  live-navigation link is handed to `liveSocket.execJS`, which throws
+  `TypeError: this[kind] is not a function` on every tap.
   Drag-to-dismiss is a future enhancement (out of scope).
 
   ## Examples
@@ -35,8 +45,6 @@ defmodule PlatformWeb.Components.MoreSheet do
   import PlatformWeb.Components.Sheet
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
-  alias Platform.Access
-  alias Platform.Access.Scope
   alias PlatformWeb.Components.IconRail
 
   attr(:open, :boolean, default: false, doc: "whether the sheet is shown")
@@ -54,6 +62,11 @@ defmodule PlatformWeb.Components.MoreSheet do
         "`module_access?(scope, :admin)` holds (task 01a1386d-fb6e stage 1)"
   )
 
+  attr(:inbox_unread_count, :integer,
+    default: 0,
+    doc: "the viewer's unread inbox count; above 0 renders a badge on the Inbox row"
+  )
+
   attr(:current_user, :map,
     default: nil,
     doc: "current_user assign so the profile row can render the name + avatar"
@@ -62,12 +75,15 @@ defmodule PlatformWeb.Components.MoreSheet do
   def more_sheet(assigns) do
     root_user = Map.get(assigns, :root_user, false)
     scope = assigns[:access_scope]
+    sections = IconRail.more_sheet_sections(scope, root_user)
 
     assigns =
       assigns
-      |> assign(:working_destinations, working_destinations(scope, root_user))
-      |> assign(:admin_destinations, admin_destinations(scope))
-      |> assign(:show_admin, show_admin?(scope, root_user))
+      |> assign(:inbox_destinations, sections.inbox)
+      |> assign(:inbox_badge, IconRail.badge_text(assigns[:inbox_unread_count]))
+      |> assign(:working_destinations, sections.working)
+      |> assign(:admin_destinations, sections.admin)
+      |> assign(:show_admin, sections.admin != [])
 
     ~H"""
     <.sheet
@@ -75,11 +91,31 @@ defmodule PlatformWeb.Components.MoreSheet do
       open={@open}
       placement={:bottom}
       on_close="close_more_sheet"
-      class="lg:hidden"
+      class="more-sheet lg:hidden"
     >
       <:title>More</:title>
 
       <nav class="more-sheet-list" aria-label="Long-tail navigation">
+        <.link
+          :for={dest <- @inbox_destinations}
+          navigate={dest.path}
+          class="more-sheet-row"
+          data-destination={dest.key}
+          aria-label={
+            if @inbox_badge, do: "#{dest.label}, #{@inbox_unread_count} unread", else: dest.label
+          }
+        >
+          <.icon name={dest.hero_icon} class="more-sheet-icon size-5" />
+          <span>{dest.label}</span>
+          <span
+            :if={@inbox_badge}
+            class="badge badge-error badge-sm ml-auto tabular-nums"
+            data-role="more-sheet-inbox-badge"
+          >
+            {@inbox_badge}
+          </span>
+        </.link>
+
         <%!-- A guest's Scope admits no Working tile (task 01a1386d-fb6e
              stage 1): drop the empty section's label rather than render a
              heading over nothing. The legacy path always has Working tiles. --%>
@@ -91,7 +127,6 @@ defmodule PlatformWeb.Components.MoreSheet do
           class="more-sheet-row"
           data-destination={dest.key}
           aria-label={dest.label}
-          phx-click="close_more_sheet"
         >
           <.icon name={dest.hero_icon} class="more-sheet-icon size-5" />
           <span>{dest.label}</span>
@@ -107,7 +142,6 @@ defmodule PlatformWeb.Components.MoreSheet do
             class="more-sheet-row"
             data-destination={dest.key}
             aria-label={dest.label}
-            phx-click="close_more_sheet"
           >
             <.icon name={dest.hero_icon} class="more-sheet-icon size-5" />
             <span>{dest.label}</span>
@@ -115,7 +149,7 @@ defmodule PlatformWeb.Components.MoreSheet do
         <% end %>
 
         <div
-          :if={@working_destinations != [] or @show_admin}
+          :if={@inbox_destinations != [] or @working_destinations != [] or @show_admin}
           class="more-sheet-divider"
           aria-hidden="true"
         >
@@ -139,31 +173,6 @@ defmodule PlatformWeb.Components.MoreSheet do
     </.sheet>
     """
   end
-
-  # Pass the actual root_user through so root_only? tiles (e.g. Prompts
-  # as of 2026-05-20) are correctly hidden from members. Previously this
-  # hardcoded `root_user: true` which leaked admin-only working-cluster
-  # tiles to every user in the More sheet.
-  #
-  # With a Scope (task 01a1386d-fb6e stage 1) `IconRail.rail_filter/2` picks
-  # the Scope path, so the sheet filters exactly as the desktop rail does.
-  defp working_destinations(scope, root_user) do
-    scope
-    |> IconRail.rail_filter(root_user)
-    |> IconRail.destinations()
-    |> Enum.filter(&(&1.cluster == :working))
-  end
-
-  # Legacy: every admin-cluster tile, shown behind the `root_user` gate.
-  defp admin_destinations(scope) do
-    scope
-    |> IconRail.rail_filter(true)
-    |> IconRail.destinations()
-    |> Enum.filter(&(&1.cluster == :admin))
-  end
-
-  defp show_admin?(%Scope{} = scope, _root_user), do: Access.module_access?(scope, :admin)
-  defp show_admin?(_scope, root_user), do: root_user
 
   defp user_initial(%{name: name}) when is_binary(name) and name != "" do
     name |> String.trim() |> String.first() |> String.upcase()

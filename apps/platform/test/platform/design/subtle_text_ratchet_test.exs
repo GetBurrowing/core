@@ -58,8 +58,10 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # 65-90%: frozen at their counts. Pinned at task 01a15902 stage 1 on
   # 952579d1 (70 => 235, 80 => 35), re-pinned at stage 5 after the rebase onto
   # feat/redesign b1e35b5c, where rung 3 (PR #1298) moved two 70% and two 80%
-  # sites.
-  @ceilings %{65 => 4, 70 => 233, 75 => 1, 80 => 33, 90 => 2}
+  # sites. Re-pinned again when rung 4 (task 01a1557a-7a71) rebased onto
+  # feat/redesign 493ad2ba: retiring Activity deleted four 70% and two 80%
+  # sites (70 => 229, 80 => 31).
+  @ceilings %{65 => 4, 70 => 229, 75 => 1, 80 => 31, 90 => 2}
 
   @buckets Enum.sort(Map.keys(@ceilings))
 

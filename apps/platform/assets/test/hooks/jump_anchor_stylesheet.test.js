@@ -154,10 +154,15 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     expect(bottomNav.some((r) => inMedia(r))).toBe(true);
     expect(bottomNav.some((r) => !inMedia(r))).toBe(true);
 
-    // And the media-gated one really is the desktop hide, so this control is
+    // And one media-gated copy really is the desktop hide, so this control is
     // pinned to a rule with a reason to exist rather than to a coincidence.
-    const hidden = bottomNav.find((r) => inMedia(r));
-    expect(hidden.ancestors.join(" ")).toContain("min-width: 1024px");
+    // Since the glass bar (task 01a1557a-7a71) `.bottom-nav` also sits inside
+    // reduced-transparency and reduced-motion queries, so the desktop hide is
+    // looked up by its query rather than taken as the first gated copy.
+    const hidden = bottomNav.find(
+      (r) => inMedia(r) && r.ancestors.join(" ").includes("min-width: 1024px"),
+    );
+    expect(hidden).toBeDefined();
     expect(hidden.body).toContain("display: none");
 
     // Comment stripping ran. `.chat-jump` appears far more often in the raw
@@ -213,7 +218,7 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     expect(hover.some((r) => r.selector.includes(":focus-visible"))).toBe(true);
   });
 
-  it("the shared 1023.98px breakpoint survives, and governs only the bottom nav", () => {
+  it("the shared 1023.98px breakpoint survives, and governs only the bottom nav and its clearance", () => {
     // NOT "zero occurrences of 1023.98". It is the shared mobile breakpoint and
     // deleting it would break an unrelated live rule. What matters is that no
     // occurrence of it reaches a `.chat-jump` selector — which the media-query
@@ -226,7 +231,16 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     const gated = rules.filter((r) =>
       r.ancestors.some((a) => a.includes("1023.98")),
     );
-    expect(gated.map((r) => r.selector)).toEqual([":root"]);
+    // Task 01a1557a-7a71 stage 3: the floating tab bar's clearance. The
+    // token rule is keyed on the bar's presence, and the two consumers that
+    // pad a scroll END by it sit at the same breakpoint. Still bottom-nav
+    // only, and still no `.chat-jump` selector.
+    expect(gated.map((r) => r.selector)).toEqual([
+      ":root:has([data-bottom-rail])",
+      ".compose-input-area",
+      ".clears-tab-bar",
+    ]);
     expect(gated[0].body).toContain("--bottom-nav-height");
+    expect(gated.every((r) => !r.selector.includes(".chat-jump"))).toBe(true);
   });
 });

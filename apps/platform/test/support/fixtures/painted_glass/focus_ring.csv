@@ -1,0 +1,48 @@
+# Painted focus ring for the mobile tab bar (task 01a1557a-7a71-7000-8580-75565039bffe stage 5).
+# Each row: the COMPILED app.css's .bottom-nav at its DECLARED --glass-alpha (no override), over a
+# full-width #000 or #fff panel, with a flat patch `background: var(--color-focus-ring)` inside it,
+# read from Page.captureScreenshot (PNG, DPR 1). Compiled CSS sha256 1fc428155d15b61bd49851caa3c90399ecb16edbd7a13c4fb1763b4fc22134c9.
+# builds: chrome151 = Chrome/151.0.7922.109 headless-shell in a podman container; chrome147 =
+# HeadlessChrome/147.0.7727.15 on a second machine. Painted by paint_ring_01a1557a7a71.mjs.
+# paint-input: .bottom-nav-tab:focus-visible | box-shadow | inset 0 0 0 2px var(--color-focus-ring)
+build,variant,backdrop,alpha,glass,ring,ctl_white,ctl_black
+chrome151,burrow light,black,0.96,#eceae7,#8b3b04,#ffffff,#000000
+chrome151,burrow light,white,0.96,#f6f4f1,#8b3b04,#ffffff,#000000
+chrome151,burrow dark,black,0.87,#0f1011,#f47721,#ffffff,#000000
+chrome151,burrow dark,white,0.87,#303132,#f47721,#ffffff,#000000
+chrome151,burrow-midnight light,black,0.98,#e9edf3,#8f3806,#ffffff,#000000
+chrome151,burrow-midnight light,white,0.98,#eef2f8,#8f3806,#ffffff,#000000
+chrome151,burrow-midnight dark,black,0.86,#090d16,#ff8a3d,#ffffff,#000000
+chrome151,burrow-midnight dark,white,0.86,#2d313a,#ff8a3d,#ffffff,#000000
+chrome151,burrow-sand light,black,0.93,#ded9c9,#7b3404,#ffffff,#000000
+chrome151,burrow-sand light,white,0.93,#f0ebdb,#7b3404,#ffffff,#000000
+chrome151,burrow-sand dark,black,0.88,#14120d,#e8842e,#ffffff,#000000
+chrome151,burrow-sand dark,white,0.88,#33312c,#e8842e,#ffffff,#000000
+chrome151,burrow-forest light,black,0.96,#e4e9e5,#7f3d05,#ffffff,#000000
+chrome151,burrow-forest light,white,0.96,#eef3ef,#7f3d05,#ffffff,#000000
+chrome151,burrow-forest dark,black,0.87,#0c110f,#f0a040,#ffffff,#000000
+chrome151,burrow-forest dark,white,0.87,#2d3230,#f0a040,#ffffff,#000000
+chrome151,high-contrast light,black,1,#ffffff,#5e2200,#ffffff,#000000
+chrome151,high-contrast light,white,1,#ffffff,#5e2200,#ffffff,#000000
+chrome151,high-contrast dark,black,1,#000000,#ff8c2a,#ffffff,#000000
+chrome151,high-contrast dark,white,1,#000000,#ff8c2a,#ffffff,#000000
+chrome147,burrow light,black,0.96,#eceae8,#8b3b04,#ffffff,#000000
+chrome147,burrow light,white,0.96,#f6f4f2,#8b3b04,#ffffff,#000000
+chrome147,burrow dark,black,0.87,#0f1011,#f47721,#ffffff,#000000
+chrome147,burrow dark,white,0.87,#303132,#f47721,#ffffff,#000000
+chrome147,burrow-midnight light,black,0.98,#e9edf3,#8f3806,#ffffff,#000000
+chrome147,burrow-midnight light,white,0.98,#eef2f8,#8f3806,#ffffff,#000000
+chrome147,burrow-midnight dark,black,0.86,#090d16,#ff8a3d,#ffffff,#000000
+chrome147,burrow-midnight dark,white,0.86,#2d313a,#ff8a3d,#ffffff,#000000
+chrome147,burrow-sand light,black,0.93,#ded9c9,#7b3404,#ffffff,#000000
+chrome147,burrow-sand light,white,0.93,#f0ebdb,#7b3404,#ffffff,#000000
+chrome147,burrow-sand dark,black,0.88,#14120d,#e8842e,#ffffff,#000000
+chrome147,burrow-sand dark,white,0.88,#33312c,#e8842e,#ffffff,#000000
+chrome147,burrow-forest light,black,0.96,#e5e9e6,#7f3d05,#ffffff,#000000
+chrome147,burrow-forest light,white,0.96,#eff3f0,#7f3d05,#ffffff,#000000
+chrome147,burrow-forest dark,black,0.87,#0c110f,#f0a040,#ffffff,#000000
+chrome147,burrow-forest dark,white,0.87,#2d3230,#f0a040,#ffffff,#000000
+chrome147,high-contrast light,black,1,#ffffff,#5e2200,#ffffff,#000000
+chrome147,high-contrast light,white,1,#ffffff,#5e2200,#ffffff,#000000
+chrome147,high-contrast dark,black,1,#000000,#ff8c2a,#ffffff,#000000
+chrome147,high-contrast dark,white,1,#000000,#ff8c2a,#ffffff,#000000

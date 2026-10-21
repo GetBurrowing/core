@@ -914,7 +914,6 @@ defmodule Platform.ExtensionsTest do
       :chat,
       :tasks,
       :inbox,
-      :activity,
       :agents,
       :skills,
       :files,

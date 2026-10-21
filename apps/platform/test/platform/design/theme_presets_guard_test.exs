@@ -32,7 +32,10 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       `--subtle` to 57% instead (stage 5 r2). A test fails if an exemption
       comment or a sub-4.5 floor reappears.
     * DEVIATIONS. Every value that differs from the masters' theme.js names the
-      master value in a comment, beside its own recomputed ratio.
+      master value in a comment, beside its own recomputed ratio. For
+      `--glass-alpha` (task 01a1557a-7a71 stage 1) that ratio is the worst tab
+      label on the PAINTED glass (`Platform.Design.PaintedGlass`); the bar's own
+      guard is `bottom_nav_glass_guard_test.exs`.
     * SPECIFICITY. Each preset selector beats every selector
       `Platform.Branding.ThemeCss` emits, which comes after app.css, so a named
       preset is a complete palette and install colours style Burrow only.
@@ -61,6 +64,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   alias Platform.Branding.InstallBranding
   alias Platform.Branding.ThemeCss
   alias Platform.Design.PaintedComposite
+  alias Platform.Design.PaintedGlass
   alias Platform.Design.WcagContrast, as: W
 
   import Platform.Design.ThemeBlocks,
@@ -156,7 +160,18 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     {"burrow-sand", "light", "--color-base-content"} => "#2a2219",
     {"burrow-sand", "light", "--color-secondary"} => "#6b5a46",
     {"burrow-forest", "dark", "--color-primary-content"} => "#ffffff",
-    {"burrow-forest", "light", "--color-base-content"} => "#1a241e"
+    {"burrow-forest", "light", "--color-base-content"} => "#1a241e",
+    # Glass tab bar (task 01a1557a-7a71 stage 1): each alpha is the painted
+    # floor (Platform.Design.PaintedGlass); High contrast is opaque by Saru's
+    # rule 2. The ratio is the worst tab label over #000 and #fff, both builds.
+    {"burrow-midnight", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-midnight", "light", "--glass-alpha"} => "0.72",
+    {"burrow-sand", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-sand", "light", "--glass-alpha"} => "0.72",
+    {"burrow-forest", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-forest", "light", "--glass-alpha"} => "0.72",
+    {"high-contrast", "dark", "--glass-alpha"} => "0.95",
+    {"high-contrast", "light", "--glass-alpha"} => "0.95"
   }
 
   setup_all do
@@ -539,6 +554,20 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     do: ratio(b, "--color-primary-content", "--color-primary")
 
   defp measure(b, "--color-base-content"), do: @grounds |> Enum.map(&subtle(b, &1)) |> Enum.min()
+
+  # The worst tab label (inactive or active) on the painted glass at the
+  # block's declared alpha, over both backdrops, on both builds.
+  defp measure(b, "--glass-alpha") do
+    alpha = declaration(b.decls, "--glass-alpha")
+
+    for build <- PaintedGlass.builds(),
+        bd <- PaintedGlass.backdrops(),
+        layer <- [:inactive_label, :active_label] do
+      PaintedGlass.contrast(build, "#{b.id} #{b.mode}", bd, alpha, layer)
+    end
+    |> Enum.min()
+  end
+
   defp measure(b, token), do: min_over(b, token)
 
   defp fixed4(r), do: :erlang.float_to_binary(r / 1, decimals: 4)

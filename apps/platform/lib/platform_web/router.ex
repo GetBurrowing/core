@@ -854,7 +854,6 @@ defmodule PlatformWeb.Router do
       live("/access/:type/:id", AccessLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
-      live("/activity", ActivityLive, :index)
       live("/inbox", InboxLive, :index)
       live("/tasks", TasksLive, :index)
       # Keep the static module-admin route above the task-id catch-all.

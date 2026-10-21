@@ -11,7 +11,6 @@ defmodule PlatformWeb.ModuleGate do
 
   @view_modules %{
     PlatformWeb.ChatLive => {:chat, nil},
-    PlatformWeb.ActivityLive => {:activity, nil},
     PlatformWeb.ChangelogLive => {:activity, nil},
     PlatformWeb.InboxLive => {:inbox, nil},
     PlatformWeb.TasksLive => {:tasks, nil},

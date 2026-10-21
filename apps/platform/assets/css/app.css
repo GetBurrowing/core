@@ -171,6 +171,15 @@
      @theme inline block. */
   --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Glass tab bar (task 01a1557a-7a71 stage 1): the bar is base-200 at this
+     alpha. The masters' 0.72 measures 2.5594:1 for the worst tab label
+     (inactive --subtle or active primary) painted on the bar over pure black
+     or pure white, Chrome 147 and 151; 0.96, the lowest swept alpha that
+     clears 4.5:1 for every label and 3:1 for every icon and the More dot,
+     measures 4.5124:1 (test/support/fixtures/painted_glass/, held by
+     test/platform/design/bottom_nav_glass_guard_test.exs). */
+  --glass-alpha: 0.96;
+  --glass-blur: 18px;
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. The
      burrow_palette_guard test fails if one is painted as a text colour. */
@@ -308,6 +317,11 @@
   /* Disabled and decorative (task 01a15902 stage 1); see the light block. */
   --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Glass tab bar (task 01a1557a-7a71 stage 1); see the light block. The
+     masters' 0.72 measures 2.7131:1 for the worst tab label painted over pure
+     black or white; 0.87, the measured floor, measures 4.5673:1. */
+  --glass-alpha: 0.87;
+  --glass-blur: 18px;
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. */
   --info-dim: #175660;
@@ -4587,13 +4601,20 @@ body, .font-suite {
    ui-ux-pro-max `bottom-nav-limit` + `tab-bar-ios` rules. Cinema Mobile
    aesthetic — alpha-modulated hairline border, easing curve from #11.
 
-   --bottom-nav-height clearance variable: 0 by default so desktop layouts
-   are unaffected; switches to 56px (matching .bottom-nav-tab min-height)
-   below `lg:` so any viewport-anchored element (FABs, meeting bar, captions,
-   side panels) can offset above the nav with `calc(... + var(--bottom-nav-height))`.
+   --bottom-nav-height is the bar's clearance with the safe area EXCLUDED
+   (consumers add env(safe-area-inset-bottom) themselves): 0 by default so
+   desktop layouts are unaffected; 76px below `lg:` since the bar floats
+   (64px bar + 12px gap, task 01a1557a-7a71 stage 3), and 0 again whenever the
+   bar is hidden (the three hide rules below), so FABs, toasts and side panels
+   drop with it. --bottom-nav-clearance adds the safe area, for the END
+   padding of scrollers and footers, so their last row clears the glass.
+   --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
+   stack on top of it (the in-call mini bar); 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
+  --bottom-nav-gap: 0px;
+  --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   /* Persistent meeting bar height. Set inline on the shell root to 3rem
      when `@meeting_active` is true (see shell.html.heex). The :root
      default of 0px keeps any `calc(... + var(--meeting-bar-height))`
@@ -4602,32 +4623,169 @@ body, .font-suite {
      the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
   --meeting-bar-height: 0px;
 }
+/* Only where the bar exists: a document with no `[data-bottom-rail]` (the
+   guest `meet.` surface, auth pages) reserves nothing. */
 @media (max-width: 1023.98px) {
-  :root {
-    --bottom-nav-height: 56px;
+  :root:has([data-bottom-rail]) {
+    --bottom-nav-height: 76px;
+    --bottom-nav-gap: 12px;
   }
 }
 
+/* Hide the bar in exactly the product lead's three cases (Saru's rule 8), never on
+   scroll, CSS only so no state can go stale when an element is removed while
+   focused:
+     1. keyboard up with a composer focused. "Keyboard up" is detected by its
+        proxy, focus on a ComposeInput textarea (chat, thread, task steering);
+     2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
+        lightbox, the file preview, the full-screen prototype);
+     3. the in-call room ([data-in-call], MeetingLive while in the call). The
+        mini bar on OTHER tabs during a call does not hide it.
+   Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */
+:root:has([phx-hook="ComposeInput"]:focus),
+:root:has([data-fullscreen-viewer]),
+:root:has([data-in-call]) {
+  --bottom-nav-height: 0px;
+  --bottom-nav-gap: 0px;
+}
+
+/* Glass tab bar (task 01a1557a-7a71, Burrow redesign 4, stage 1). ONE
+   token-driven paint path for every theme and preset; nothing here is
+   qualified by data-theme, and no colour literal appears in a .bottom-nav*
+   rule. Geometry and markup are stages 2 and 3.
+
+   Surface: --color-base-200 at --glass-alpha, both tokens per theme block.
+   DEVIATION from the masters (canvas 01a1382f-7dda-7001-b4cd-6856b8bd9b37),
+   which compose glass from SURFACE (base-100 under rung 2's mapping): this
+   follows Saru's direction (canvas 01a15b55-6565-7000-9dc1-0858ad0c7736,
+   "base-200 at --glass-alpha"), which is the ground the bar sits on.
+
+   Every --glass-alpha is a MEASURED floor, not a taste: the lowest alpha at
+   which the tab ink clears 4.5:1 (7:1 in High contrast) and the icon and the
+   More dot 3:1, painted over pure black AND pure white, on Chrome 151 and
+   Chrome 147. Blur counts for nothing. Fixtures:
+   test/support/fixtures/painted_glass/; guard:
+   test/platform/design/bottom_nav_glass_guard_test.exs.
+
+   Colour mechanism: color-mix(in srgb, <base-200> <alpha*100>%, transparent).
+   Measured against rgb(from var(--color-base-200) r g b / alpha) in all ten
+   variants at five alphas over both backdrops: both resolve per preset and
+   paint within 0.88 of a byte of the exact composite on Chrome 147 and within
+   0.80 on Chrome 151, pixel-identical to each other. color-mix is kept
+   because the build pipeline already emits it with an opaque fallback. */
 .bottom-nav {
-  position: sticky;
-  bottom: 0;
+  /* Tab ink. A bar-scoped variable so High contrast can raise it without
+     touching its own --subtle; see the override below. */
+  --tab-ink: var(--color-subtle);
+  /* Floating geometry (task 01a1557a-7a71 stage 3; Saru's rule 7, masters
+     .tabbar): fixed, 12px from the sides, 12px above the safe area, 64px
+     tall (--tab-h 64 x density 1), radius the masters' --r-xl
+     (round(radius x 1.57)) from --radius-box. Content scrolls UNDER the
+     glass; scrollers pad their end with --bottom-nav-clearance. z-index 30
+     keeps every modal and sheet above it; the More sheet alone goes UNDER it
+     (rule below). */
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  height: 64px;
+  border-radius: round(calc(var(--radius-box) * 1.57), 1px);
+  overflow: hidden;
   z-index: 30;
   display: flex;
-  align-items: flex-end;
-  background: oklch(8% 0 0 / 0.96);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(12px);
-  /* Both the shell's viewport height AND env(safe-area-inset-bottom) padding
-     here are required for a flush iOS PWA bottom-nav. With
-     viewport-fit=cover (set on the meta tag in root.html.heex), the
-     layout viewport extends across the home-indicator gesture zone — so
-     the .bottom-nav at sticky bottom: 0 sits right at the screen edge,
-     but its background does NOT reach into the gesture zone unless the
-     element itself is taller. This padding extends the bg downward into
-     the gesture zone, eliminating the dark band under the icons that
-     PR #339 left behind. The icons remain at flex-end of the un-padded
-     content area, ABOVE the home indicator. */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  align-items: stretch;
+  background: color-mix(
+    in srgb,
+    var(--color-base-200) calc(var(--glass-alpha) * 100%),
+    transparent
+  );
+  border: 1px solid var(--color-base-300);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  box-shadow: var(--shadow-dropdown);
+  /* Hide and return: a 150ms slide plus fade. Visibility flips at the END of
+     the hide (out of the tab order and the a11y tree once gone) and at the
+     START of the return. */
+  transition:
+    transform 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    visibility 0s linear 0s;
+}
+
+:root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
+:root:has([data-fullscreen-viewer]) .bottom-nav,
+:root:has([data-in-call]) .bottom-nav {
+  transform: translateY(calc(100% + 12px + env(safe-area-inset-bottom, 0px)));
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    visibility 0s linear 150ms;
+}
+
+/* The More sheet opens under the bar (masters coverage row 5): while it is
+   open the bar rises above the sheet (z-index 100) and its scrim, so More
+   reads active and Chat, Tasks and Meetings stay one tap away. Scoped to the
+   More sheet by id; every other sheet still covers the bar. The More sheet's
+   panel ends at the bar's top edge (.more-sheet .sheet-panel below). */
+:root:has(#more-sheet.sheet-open) .bottom-nav {
+  z-index: 110;
+}
+
+.more-sheet .sheet-panel {
+  padding-bottom: var(--bottom-nav-clearance);
+}
+
+/* Scroll-end clearance below lg (task 01a1557a-7a71 stage 3). Content
+   scrolls UNDER the glass, so a scroller's or footer's END pads by the bar
+   (--bottom-nav-clearance: bar + gap + safe area) and its last row ends
+   above the bar's top edge. Applied per scroller, never to <main>, which
+   would put nothing but the page ground behind the glass. Unlayered, so it
+   beats the scroller's own Tailwind padding utilities (p-4, md:p-6); the
+   1rem keeps the breathing room those gave.
+     .compose-input-area: the chat composer, masters
+       `.compose{padding-bottom:calc(88px + env(safe-area-inset-bottom))}`
+       (12px + 76px clearance). With the composer focused the bar hides and
+       the clearance drops to the safe area, so it sits on the keyboard.
+     .clears-tab-bar: the scrollers and footers the measured inventory
+       found under the bar (the stage 3 evidence lists them). */
+@media (max-width: 1023.98px) {
+  .compose-input-area {
+    padding-bottom: calc(12px + var(--bottom-nav-clearance));
+  }
+
+  .clears-tab-bar {
+    padding-bottom: calc(1rem + var(--bottom-nav-clearance));
+  }
+}
+
+/* Under reduced motion it simply disappears (Saru's rule 8). */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav {
+    transition: none;
+  }
+}
+
+/* High contrast owes 7:1 for text. Its --subtle (base-content at 55%) paints
+   4.7417:1 (light) and 6.2450:1 (dark) on its own opaque base-200, identical on
+   Chrome 147 and 151, so the tab ink in HC is full base-content (21:1).
+   DEVIATION from Saru's "text-subtle" for inactive tabs (canvas
+   01a15b55-6565-7000-9dc1-0858ad0c7736), recorded with its measurement. HC
+   --subtle itself is unchanged. Qualified by preset, never by theme. */
+[data-preset="high-contrast"] .bottom-nav {
+  --tab-ink: var(--color-base-content);
+}
+
+/* Opaque fallback (Saru's rule 2): no translucency, no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .bottom-nav {
+    --glass-alpha: 1;
+    --glass-blur: 0px;
+    background: var(--color-base-200);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* Desktop: hide the bottom-nav entirely (the desktop left rail in
@@ -4641,11 +4799,6 @@ body, .font-suite {
   }
 }
 
-[data-theme="light"] .bottom-nav {
-  background: oklch(98% 0 0 / 0.96);
-  border-top-color: rgba(0, 0, 0, 0.08);
-}
-
 .bottom-nav-tab {
   flex: 1;
   display: flex;
@@ -4653,10 +4806,12 @@ body, .font-suite {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  /* Symmetrical padding; safe-area lives on .bottom-nav (parent). */
-  padding: 8px 0;
-  min-height: 56px;
-  color: oklch(50% 0 0);
+  /* Four equal cells; each >= 44x44 (Saru's rule 6). The bar is 64px tall,
+     so every cell is the bar's full height. */
+  padding: 6px 0;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--tab-ink);
   position: relative;
   cursor: pointer;
   transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -4666,54 +4821,54 @@ body, .font-suite {
   text-decoration: none;
 }
 
-.bottom-nav-tab:hover {
-  color: oklch(70% 0 0);
+/* Hover lifts an INACTIVE tab's ink to full base-content: never dimmer than
+   rest, so the rest-state measurement bounds it. Only on hover-capable
+   pointers, and never on the active tab (task 01a1557a-7a71 stage 5, review
+   finding E4): on touch, :hover sticks to the tapped More button while its
+   sheet is open, and an unscoped rule here (0,2,0) beat
+   `.bottom-nav-tab--active` (0,1,0), repainting More base-content instead of
+   primary. The glass guard refuses any bar :hover rule outside
+   (hover: hover) or one that can match the active tab. */
+@media (hover: hover) {
+  .bottom-nav-tab:not(.bottom-nav-tab--active):hover {
+    color: var(--color-base-content);
+  }
+}
+
+/* Keyboard focus (task 01a1557a-7a71 stage 5, review finding case 3 step
+   10): the focus-ring token, drawn INSIDE the cell. `.bottom-nav` clips with
+   overflow: hidden, so an outline or an outset ring would be cut to a sliver.
+   The radius follows the bar's own so the edge cells' ring is not clipped at
+   the rounded corners. Painted >= 3:1 against the glass in all ten variants
+   over #000 and #fff (test/support/fixtures/painted_glass/focus_ring.csv). */
+.bottom-nav-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+  border-radius: calc(round(calc(var(--radius-box) * 1.57), 1px) - 1px);
 }
 
 .bottom-nav-tab:active {
   transform: scale(0.97);
 }
 
-/* The interactive text colour, not the fill-only primary (task
-   01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 1; Burrow values task 01a120c5).
-   This tab has TWO light grounds and they pull in opposite directions:
-
-     [data-theme="light"] .bottom-nav   #F8F8F8   interactive #8b3b04  7.2791
-     unqualified .bottom-nav on light   #0C0C0C   interactive #8b3b04  2.5444
-     dark theme .bottom-nav             #030303   interactive #ff9b55  9.9095
-
-   (Pre-Burrow, the cyan interactive measured 4.4478 / 4.1661 / 12.0046 here.)
-
-   NO colour can clear AA on both light grounds: clearing it on the near-white
-   nav needs a relative luminance of at most 0.170406, clearing it on the
-   near-black nav needs at least 0.190978. The second ground exists only
-   because `.bottom-nav` declares its light background under [data-theme="light"]
-   with no `prefers-color-scheme: light` twin, so a viewer who picks the "system"
-   theme gets a near-black nav under light tokens. That missing variant is the
-   real defect and is filed as a follow-up; it is not this stage's to fix.
-
-   Optimised for the [data-theme="light"] nav, which is what an explicit-light
-   viewer paints, and the Burrow orange now clears AA there. The deep orange is
-   WORSE than the old cyan on the near-black ground, 2.5444:1, and that applies
-   to the ::before bar too, which owes 3:1 as a non-text cue (it clears on the
-   other two grounds, 7.2791 and 9.9095). Recorded in
-   primary_contrast_sweep_test.exs clauses F3, F4 and the ::before clause.
-   Weight and size of the label
-   are unchanged; the large-text allowance is not a contrast fix. */
+/* Active: the primary, measured on the painted glass like the inactive ink
+   (it used --color-interactive while the nav had a theme-qualified light
+   ground; that ground and its F3/F4 findings are gone). The shape change
+   (filled icon, medium label) is stage 2's markup; the top bar is retired. */
 .bottom-nav-tab--active {
-  color: var(--color-interactive);
+  color: var(--color-primary);
 }
 
-.bottom-nav-tab--active::before {
-  content: '';
+/* More dot (Saru's rule 5): rendered by stage 2. Primary, non-text 3:1 on the
+   painted glass over both backdrops, held by the glass guard. */
+.bottom-nav-dot {
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 28px;
-  height: 3px;
-  background: var(--color-interactive);
-  border-radius: 0 0 3px 3px;
+  top: 8px;
+  left: calc(50% + 8px);
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--color-primary);
 }
 
 /* Desktop icon-rail clusters stack their tiles vertically. Without this,
@@ -4725,8 +4880,8 @@ body, .font-suite {
   gap: 0.125rem;
 }
 
-/* Desktop icon-rail active-tile accent — 3px LEFT-bar mirroring the
-   mobile TOP-bar above. Same visual language, axis rotated.
+/* Desktop icon-rail active-tile accent — 3px LEFT-bar. (The mobile tab
+   bar's TOP-bar it once mirrored was retired by task 01a1557a-7a71 stage 1.)
    Sits alongside the `bg-base-300 text-primary` pill applied by
    icon_rail.ex's `desktop_active_class/2`. */
 .icon-rail-tab {
@@ -4864,35 +5019,16 @@ body, .font-suite {
   flex-shrink: 0;
 }
 
+/* Tab label (Saru's type note): 11px, regular at rest, medium when active,
+   no letter-spacing. */
 .bottom-nav-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 11px;
+  font-weight: 400;
   line-height: 1;
 }
 
-.bottom-nav-badge {
-  position: absolute;
-  top: 6px;
-  right: calc(50% - 22px);
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 9999px;
-  background: var(--color-primary);
-  color: oklch(15% 0 0);
-  font-size: 9px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 2px border in the bottom-nav background color isolates the badge from
-     the icon visually (per ui-ux-pro-max badge-separation guideline). */
-  border: 2px solid oklch(8% 0 0);
-}
-
-[data-theme="light"] .bottom-nav-badge {
-  border-color: oklch(98% 0 0);
+.bottom-nav-tab--active .bottom-nav-label {
+  font-weight: 500;
 }
 
 /* ── More-sheet content classes (task 019e0d4b Stage 2) ───────────────

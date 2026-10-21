@@ -107,7 +107,6 @@ async function runScopedAxe(page: Page, label: string) {
 const ROUTES: { path: string; label: string }[] = [
   { path: "/chat/general", label: "chat" },
   { path: "/tasks", label: "tasks" },
-  { path: "/activity", label: "activity" },
 ]
 
 test.describe("Audit resolution: contrast + focus + motion", () => {

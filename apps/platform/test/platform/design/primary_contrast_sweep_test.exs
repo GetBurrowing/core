@@ -65,6 +65,17 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       that only exists because `.bottom-nav` lacks a prefers-color-scheme light
       background, the defect already filed as the real fix.
 
+  ## Burrow redesign 4: the tab bar left this file (task 01a1557a-7a71 stage 1)
+
+  F3, F4 and the active tab's `::before` bar measured the mobile tab bar on two
+  theme-dependent grounds that stage 1 of task 01a1557a-7a71-7000-8580-75565039bffe
+  deleted, together with the bar itself. The bar is now one glass surface,
+  `--color-base-200` at a per-variant `--glass-alpha`, and its ink is measured on
+  PAINTED pixels over pure black and pure white in all ten variants by
+  `test/platform/design/bottom_nav_glass_guard_test.exs`. Their three clauses are
+  replaced by one pointer clause that fails if any retired surface comes back.
+  The rows below are kept as the record; their class reads "retired".
+
   ## The classification, per pairing
 
   A threshold is asserted only where the obligation actually attaches. Asserting 3:1
@@ -101,7 +112,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
   F1 to F4 are classified as well, in the table under "The cyan-on-light findings"
   below, because their class only reads correctly beside the ground each one sits on:
-  F1 (a), F2 (c), F3 (c), F4 (c). Stage 4 of the ticket below re-read all twenty ids
+  F1 (a), F2 (c), F3 (c), F4 (c); F3 and F4 are now retired, see "Burrow redesign 4"
+  above. Stage 4 of the ticket below re-read all twenty ids
   against the clauses that carry them. Every id named (a) calls `assert_threshold`;
   every id named (b) or (c) does not, and states its reason at the assertion.
 
@@ -150,8 +162,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   | L6 focus ring                 | --color-base-100 (#FFFFFF)  | 1.6759       | 1.7875      | 4.7007  | (a)   |
   | F1 `.wikilink`                | --color-base-100 (#FFFFFF)  | 1.6759       | 1.7875      | 4.7007  | (a)   |
   | F2 `.code-block-expand`       | --color-base-200 (#F2F2F2)  | 1.4919       | 1.5913      | 4.1847  | (c)   |
-  | F3 `.bottom-nav-tab--active`  | light `.bottom-nav` #F9F9F9 | 1.5857       | 1.6913      | 4.4478  | (c)   |
-  | F4 the same tab, default nav  | near-black #0C0C0C on light | N/A          | 10.9561     | 4.1661  | (c)   |
+  | F3 `.bottom-nav-tab--active`  | light `.bottom-nav` #F9F9F9 | 1.5857       | 1.6913      | 4.4478  | retired (glass guard) |
+  | F4 the same tab, default nav  | near-black #0C0C0C on light | N/A          | 10.9561     | 4.1661  | retired (glass guard) |
 
   The "FE-18 before" column is `oklch(82% 0.12 207)`, the light primary FE-18
   replaced. It cannot be recomputed from the file any more, so it is recorded here
@@ -1128,142 +1140,29 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       assert_ratio("F2 dark (.code-block-expand on dark --color-base-200)", dark_ratio, 8.9889)
     end
 
-    test "F3 (a): .bottom-nav-tab--active on the [data-theme=light] nav surface", %{
-      css: css,
-      light: l
-    } do
-      body = rule_body!(css, ".bottom-nav-tab--active")
+    test "F3, F4 and the ::before bar are retired; the tab bar is measured by the glass guard",
+         %{css: css} do
+      # Task 01a1557a-7a71 stage 1 deleted every surface these clauses measured:
+      # the `[data-theme="light"] .bottom-nav` ground (F3), the unqualified
+      # near-black `oklch(8% 0 0 / 0.96)` ground (F4), and the active tab's
+      # `::before` bar. The bar is now one token-driven glass surface whose
+      # contrast is measured on PAINTED pixels over pure black and pure white in
+      # all ten variants, by test/platform/design/bottom_nav_glass_guard_test.exs.
+      # This clause is the pointer, and it fails if any retired surface returns,
+      # so none of F3/F4/::before can pass here merely because its rule is gone.
+      guard = Path.expand("bottom_nav_glass_guard_test.exs", __DIR__)
 
-      assert squish(body) =~ "color: var(--color-interactive)",
-             "`.bottom-nav-tab--active` no longer colours from var(--color-interactive). " <>
-               "Body:\n#{body}"
+      assert File.read!(guard) =~ "defmodule Platform.Design.BottomNavGlassGuardTest",
+             "the glass guard that replaced F3, F4 and the ::before clause is missing"
 
-      surface = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
-      ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
+      refute css =~ ~s([data-theme="light"] .bottom-nav),
+             "a theme-qualified .bottom-nav ground is back; the glass guard forbids it"
 
-      # Promoted from (c) to (a) by the Burrow recolor (task 01a120c5): 7.2791,
-      # where the cyan measured 4.4478. The two nav grounds are still mutually
-      # exclusive (see the clause below), and clearing this one pushed F4
-      # further under.
-      assert_threshold("F3", ".bottom-nav-tab--active on the near-white nav", ratio, @aa_text)
-      assert_ratio("F3 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 7.2791)
-    end
+      refute css =~ "oklch(8% 0 0 / 0.96)",
+             "the near-black nav literal (F4's ground) is back"
 
-    test "F4 (c): the same tab on the default near-black nav under light tokens", %{
-      css: css,
-      light: l
-    } do
-      # The ground the sweep did not measure before this ticket. `.bottom-nav`
-      # declares its light background under [data-theme="light"] only, with no
-      # `prefers-color-scheme: light` twin, so a viewer who selects the "system"
-      # theme (root.html.heex:174 removes the attribute for that choice, and
-      # otherwise defaults to dark) paints a near-black nav under light tokens.
-      #
-      # This clause is the one place that number lives. It got WORSE with the
-      # stage-1 swap, from 10.9561 to 4.1661, because the brand cyan was already
-      # legible on near-black. That is recorded rather than hidden: the worst
-      # case ACROSS both nav grounds is what improved, 1.6913 to 4.1661.
-      body = rule_body!(css, ".bottom-nav-tab--active")
-      surface = nav_surface!(css, ".bottom-nav", l.base_100)
-      ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
-
-      # Burrow (task 01a120c5): the deep orange is 2.5444 here, worse than the
-      # cyan's 4.1661. Still (c), for the same reason.
-      assert_ratio("F4 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 2.5444)
-
-      assert ratio < @aa_text,
-             "F4 now clears 4.5:1 (#{Float.round(ratio, 4)}). Check F3 before " <>
-               "promoting it, and if `.bottom-nav` gained a " <>
-               "`prefers-color-scheme: light` background this ground no longer exists " <>
-               "and the clause should be retired rather than re-pinned."
-    end
-
-    test "no colour clears AA on both nav grounds, so F3 and F4 cannot both be fixed", %{
-      css: css,
-      light: l
-    } do
-      # The reason F3 and F4 are (c) rather than under-tuned. WCAG's ratio is
-      # monotonic in the text colour's luminance, so each ground imposes a bound:
-      # the near-white nav a ceiling, the near-black one a floor. They cross. No
-      # value of any token satisfies both, which makes the missing
-      # `prefers-color-scheme: light` nav background the defect, not the colour.
-      near_white = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
-      near_black = nav_surface!(css, ".bottom-nav", l.base_100)
-
-      {floor, ceiling} = W.two_ground_window(@aa_text, near_white, near_black)
-
-      assert ceiling < floor,
-             "the two nav grounds are no longer mutually exclusive: a text colour of " <>
-               "luminance between #{Float.round(floor, 6)} and " <>
-               "#{Float.round(ceiling, 6)} would clear 4.5:1 on both " <>
-               "#{W.to_hex(near_white)} and #{W.to_hex(near_black)}. F3 and F4 can now " <>
-               "be fixed together; re-open them rather than leaving both recorded as " <>
-               "unsatisfiable."
-
-      # Burrow (task 01a120c5): the nav backgrounds composite over the new
-      # light base-100 #fbfaf9; pre-Burrow the bounds were 0.170779 / 0.191270.
-      assert abs(ceiling - 0.170406) < 0.0001 and abs(floor - 0.190978) < 0.0001,
-             "the nav-ground bounds moved: ceiling #{Float.round(ceiling, 6)} " <>
-               "(recorded 0.170406), floor #{Float.round(floor, 6)} (recorded " <>
-               "0.190978). Those two figures are quoted in the comment above " <>
-               "`.bottom-nav-tab--active` in app.css; update both together."
-    end
-
-    test "the active tab's ::before bar: 3:1 on two grounds, a recorded regression on the third",
-         %{
-           css: css,
-           light: l,
-           dark: d
-         } do
-      # A 28x3px non-text active cue, so SC 1.4.11's 3:1 is the obligation rather
-      # than 4.5:1. It moved to --color-interactive with the label deliberately:
-      # as --color-primary it measured 1.6913 on the near-white nav, an indicator
-      # invisible on the ground the label is optimised for. Unlike the label, the
-      # bar CLEARS its floor on all three grounds, so this one is (a).
-      body = rule_body!(css, ".bottom-nav-tab--active::before")
-
-      assert squish(body) =~ "background: var(--color-interactive)",
-             "the `.bottom-nav-tab--active::before` bar no longer draws from " <>
-               "var(--color-interactive). Body:\n#{body}"
-
-      bar_light = declared_color!(body, "background", l.tokens)
-
-      near_white = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
-      ratio = W.contrast(bar_light, near_white)
-
-      assert_threshold("::before on the near-white nav", "the active-tab bar", ratio, @non_text)
-      assert_ratio("::before on the near-white nav (#{W.to_hex(near_white)})", ratio, 7.2791)
-
-      # REGRESSED by the Burrow recolor (task 01a120c5) and recorded: the deep
-      # orange on the near-black nav under light tokens is 2.5444, under the
-      # 3:1 floor (the cyan measured 4.1661). This ground exists only because
-      # `.bottom-nav` has no prefers-color-scheme light background, the defect
-      # already filed as the real fix; the interactive hex is fixed by the spec.
-      near_black = nav_surface!(css, ".bottom-nav", l.base_100)
-      black_ratio = W.contrast(bar_light, near_black)
-
-      assert_ratio(
-        "::before on the near-black nav under light tokens (#{W.to_hex(near_black)})",
-        black_ratio,
-        2.5444
-      )
-
-      assert black_ratio < @non_text,
-             "the ::before bar now clears 3:1 on the near-black nav under light tokens " <>
-               "(#{Float.round(black_ratio, 4)}). Restore the threshold and close the " <>
-               "regression recorded in the moduledoc."
-
-      dark_surface = nav_surface!(css, ".bottom-nav", d.base_100)
-      dark_ratio = W.contrast(declared_color!(body, "background", d.tokens), dark_surface)
-
-      assert_threshold(
-        "::before dark",
-        "the active-tab bar on the dark nav",
-        dark_ratio,
-        @non_text
-      )
-
-      assert_ratio("::before dark (#{W.to_hex(dark_surface)})", dark_ratio, 9.9095)
+      refute css =~ ".bottom-nav-tab--active::before",
+             "the active tab's top bar is back; it was retired with its ::before clause"
     end
 
     test "no fixed site reached AA by growing or emboldening its text", %{css: css} do
@@ -1280,7 +1179,11 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
             {".wikilink", %{}},
             {".code-block-expand", %{"font-size" => "0.8em"}},
             {".bottom-nav-tab--active", %{}},
-            {".bottom-nav-label", %{"font-size" => "10px", "font-weight" => "600"}},
+            # Re-pinned by task 01a1557a-7a71 stage 1 to Saru's type note (11px,
+            # 400 at rest, 500 active via a separate rule). Not a contrast fix:
+            # the glass guard measures flat patches, so size and weight move no
+            # ratio there, and the label got lighter, not bolder.
+            {".bottom-nav-label", %{"font-size" => "11px", "font-weight" => "400"}},
             # Stage 2's site. The chip's type lives on `.chip-soft`, one selector
             # away from the `.chip-primary` rule the fix touched, so pinning only
             # the tone rule would miss a chip made bold to clear 4.5:1.
@@ -1434,11 +1337,6 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
   defp squish(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
 
-  defp to_f(text) do
-    {value, ""} = Float.parse(if String.contains?(text, "."), do: text, else: text <> ".0")
-    value
-  end
-
   # The body of a `@plugin "../vendor/daisyui-theme" { ... }` block, chosen by its
   # `name:` line. Split on a `}` at column 0, which is how this file closes them.
   defp theme_block!(css, name) do
@@ -1488,34 +1386,6 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
         flunk(
           "no `#{property}: var(--color-…)` declaration in the rule body, so the " <>
             "colour it renders cannot be resolved from the stylesheet:\n#{body}"
-        )
-    end
-  end
-
-  # A `.bottom-nav` background composited over the page ground. Both nav rules
-  # paint a translucent oklch(), and which one wins depends on whether the
-  # document carries a data-theme attribute, so the same tab has two grounds in
-  # the light theme. Parsed rather than hardcoded: retuning either alpha moves
-  # F3 and F4 instead of quietly invalidating them.
-  defp nav_surface!(css, selector, base) do
-    nav = rule_body!(css, selector)
-
-    case Regex.run(
-           ~r/background:\s*oklch\(([\d.]+)%\s+([\d.]+)\s+([\d.]+)\s*\/\s*([\d.]+)\)/,
-           squish(nav),
-           capture: :all_but_first
-         ) do
-      [lum, chroma, hue, alpha] ->
-        W.composite(
-          W.oklch(to_f(lum) / 100, to_f(chroma), to_f(hue)),
-          to_f(alpha),
-          base
-        )
-
-      nil ->
-        flunk(
-          "the `#{selector}` background is no longer a translucent oklch() over the " <>
-            "page ground, so the nav surface cannot be computed. Body:\n#{nav}"
         )
     end
   end

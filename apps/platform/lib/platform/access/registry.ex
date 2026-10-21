@@ -268,6 +268,12 @@ defmodule Platform.Access.Registry do
         permissions: ~w(inbox.read),
         rail: [%{key: :inbox, permission: "inbox.read"}]
       },
+      # The `activity` module, its `activity.read` permission and this rail
+      # entry outlived the Activity page (retired by task 01a1557a-7a71 stage
+      # 4). They now gate /changelog: `PlatformWeb.ModuleGate` maps
+      # ChangelogLive to {:activity, nil} and `Access.module_access?/3`
+      # resolves it through `rail_entry(:activity)`, failing CLOSED without
+      # it. `activity.read` is also persisted in role grants. Do not remove.
       %{
         module: "activity",
         permissions: ~w(activity.read),

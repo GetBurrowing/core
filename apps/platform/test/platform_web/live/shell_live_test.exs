@@ -827,10 +827,57 @@ defmodule PlatformWeb.ShellLiveTest do
     end
 
     test "active-state marker tracks current_path on the mobile bottom-rail", %{conn: conn} do
+      # Was /activity; Activity left the bar in task 01a1557a-7a71 stage 2.
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/activity")
+      {:ok, _view, html} = live(conn, ~p"/meetings")
 
-      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="activity"/
+      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="meetings"/
+    end
+
+    test "opening the More sheet lights More, and only More, in the rendered shell", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks")
+      assert bar_active_keys(html) == ["tasks"]
+
+      html =
+        view
+        |> element(~s([data-bottom-rail] button[data-destination="more"]))
+        |> render_click()
+
+      assert bar_active_keys(html) == ["more"]
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-bottom-rail] button[data-destination="more"]))
+             |> LazyHTML.attribute("aria-expanded") == ["true"]
+    end
+
+    test "the bar shows the More dot when the viewer has an unread inbox item", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+      refute html =~ ~s(data-role="more-unread-dot")
+
+      {:ok, _} =
+        Platform.Inbox.emit(%{
+          user_id: user_id,
+          kind: "chat_mention",
+          source_type: "chat_message",
+          source_id: Ecto.UUID.generate(),
+          title: "You were mentioned",
+          body: "…",
+          url: "/chat/x"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-bottom-rail] [data-role="more-unread-dot"]))
+             |> Enum.count() == 1
     end
 
     test "Admin tile renders on the desktop rail for an admin user", %{
@@ -4049,5 +4096,12 @@ defmodule PlatformWeb.ShellLiveTest do
       refute header =~ ~s(<span class="text-xs text-base-content/50">#{user.name}</span>)
       assert html =~ "account-menu-list"
     end
+  end
+
+  defp bar_active_keys(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-bottom-rail] .bottom-nav-tab--active")
+    |> LazyHTML.attribute("data-destination")
   end
 end

@@ -163,6 +163,16 @@ defmodule PlatformWeb.InboxLiveTest do
       assert has_element?(lv, "#inbox-item-#{review.id}")
     end
 
+    test "the inbox scroller pads its end past the floating tab bar (task 01a1557a-7a71 stage 5)",
+         %{conn: conn} do
+      # Review case 4: the last row sat 86px under the bar and in the safe band.
+      user = insert_user()
+      _ = emit!(user, kind: "chat_mention", title: "@you in #general", url: "/chat/general")
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert has_element?(lv, ~s([data-role="inbox-surface"].clears-tab-bar))
+    end
+
     test "a task_sponsor_assigned item renders in the review section (not dropped)",
          %{conn: conn} do
       user = insert_user()

@@ -357,6 +357,7 @@ defmodule PlatformWeb.Components.FilePreview do
       phx-window-keydown="close_preview_fullscreen"
       phx-key="Escape"
       data-role="files-preview-fullscreen"
+      data-fullscreen-viewer
     >
       <div class="absolute inset-0 bg-black/50" phx-click="close_preview_fullscreen" />
       <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-edge bg-base-100 shadow-2xl max-sm:h-full max-sm:max-h-none max-sm:rounded-none">

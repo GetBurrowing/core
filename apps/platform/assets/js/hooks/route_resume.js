@@ -53,7 +53,6 @@ const PATH_MODULE_MAP = [
   ["/tasks", "tasks"],
   ["/meetings", "meetings"],
   ["/inbox", "inbox"],
-  ["/activity", "activity"],
   ["/skills", "skills"],
   ["/files", "files"],
   ["/canvases", "canvases"],

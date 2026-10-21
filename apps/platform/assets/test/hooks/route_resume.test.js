@@ -210,7 +210,6 @@ describe("moduleFromPath", () => {
     expect(moduleFromPath("/tasks/xyz")).toBe("tasks")
     expect(moduleFromPath("/meetings/room-1")).toBe("meetings")
     expect(moduleFromPath("/inbox")).toBe("inbox")
-    expect(moduleFromPath("/activity")).toBe("activity")
     expect(moduleFromPath("/skills/deep-dive")).toBe("skills")
     expect(moduleFromPath("/files")).toBe("files")
   })

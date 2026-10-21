@@ -1258,8 +1258,9 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Description"
   end
 
-  # Mobile bottom-nav clearance regression: the persistent .bottom-nav
-  # (56px on phones, see app.css `--bottom-nav-height`) is rendered after
+  # Mobile bottom-nav clearance regression: the floating .bottom-nav
+  # (76px of clearance on phones since task 01a1557a-7a71 stage 3, see
+  # app.css `--bottom-nav-height`) is rendered after
   # the fixed detail panel in the shell layout. Without bounding the
   # panel's bottom edge to the nav height, the bottom-most panel content
   # (review-request approve/reject buttons, status transition pills) sits
@@ -2139,15 +2140,18 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # `--bottom-nav-height` is 56px below lg; pb-24 (= 6rem = 96px)
-      # comfortably clears it plus iOS safe-area-inset-bottom. The
+      # Since task 01a1557a-7a71 stage 3 the bar floats and
+      # `clears-tab-bar` (app.css, below lg) pads the end by
+      # `1rem + --bottom-nav-clearance` (bar + gap + safe area), which a
+      # flat pb-24 cannot do once an iOS inset is added. pb-24 stays as the
+      # base the clearance rule overrides below lg. The
       # padding lives on the inner `overflow-y-auto` scroller. The
       # outer `tasks-mobile-list` wrapper used to also carry pb-24
       # (pre-PR #334, when the shell wasn't properly bounded); that
       # copy was removed because it shows up as dead space below the
       # scroller now that the shell is correctly 100dvh-rooted.
-      assert html =~ ~r/<div class="flex-1 overflow-y-auto px-3 pb-24"/,
-             "mobile list scroller must keep pb-24 to clear the bottom-tab nav (~56px + safe-area)"
+      assert html =~ ~r/<div class="flex-1 overflow-y-auto px-3 pb-24 clears-tab-bar"/,
+             "mobile list scroller must pad its end past the floating tab bar (clears-tab-bar)"
     end
   end
 

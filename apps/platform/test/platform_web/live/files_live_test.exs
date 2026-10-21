@@ -220,6 +220,25 @@ defmodule PlatformWeb.FilesLiveTest do
   end
 
   describe "select project" do
+    test "the file list scroller pads its end past the floating tab bar (task 01a1557a-7a71 stage 5)",
+         %{conn: conn} do
+      # Review case 4: the last file row ended under the bar (and, in
+      # landscape, could not be reached at all).
+      conn = authenticated_conn(conn)
+      project = seed_project("acme", "Project Scroll End")
+      _file = seed_file(project, %{name: "scroll-end.txt"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      [class] =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s([data-role="file-dropzone"]))
+        |> LazyHTML.attribute("class")
+
+      assert "clears-tab-bar" in String.split(class)
+    end
+
     test "loading a project URL renders its file list", %{conn: conn} do
       conn = authenticated_conn(conn)
       project = seed_project("acme", "Project Alpha")

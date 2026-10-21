@@ -134,7 +134,7 @@
 - New component.
 - `chat_live.html.heex` (4 empty-state sites: lines 54, 92, 187, 454).
 - `tasks_live.html.heex` (1 site: line 331).
-- `activity_live.html.heex` (1 site: minimal variant).
+- The Activity page's empty state (1 site: minimal variant). The page was retired by task 01a1557a-7a71 stage 4.
 
 **Verification:**
 - Manual: each empty state renders the canonical pattern + matches the design lead's verbatim copy.
@@ -186,7 +186,7 @@
 **Anchors:** `1B-USE-2` + hero approval.
 
 **Approach:**
-- Rebuild `activity_live.html.heex` per the hero mock:
+- Rebuild the Activity page per the hero mock (superseded: the page was retired by task 01a1557a-7a71 stage 4):
   - Group items by day ("Today", "Yesterday", explicit date) — relative for ≤2 days, absolute for older.
   - Inline `Undo` button on each item card.
   - Card border replaces the unbordered list.

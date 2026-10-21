@@ -208,6 +208,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       }
       data-role="prototype-canvas"
       data-fullscreen={to_string(@fullscreen)}
+      data-fullscreen-viewer={@fullscreen && "true"}
     >
       <%!-- The bar is its own size container (`@container`): every width
            rule below is keyed to the BAR, not the viewport. The inline

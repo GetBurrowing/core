@@ -660,7 +660,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           </details>
         </div>
 
-        <div class="border-t border-edge p-2">
+        <div class="border-t border-edge p-2 clears-tab-bar">
           <button
             phx-click="filter_clear"
             phx-target="#tasks-filters"

@@ -7,8 +7,10 @@ defmodule PlatformWeb.Components.MoreSheetTest do
   of truth that drives the desktop icon-rail and the mobile bottom-rail.
   Asserts:
 
-    * Working-cluster destinations render (Skills / Context / Memory /
-      Prompts / Meetings).
+    * Working-cluster destinations render (Skills / Context / Prompts),
+      minus the tab bar's own tabs: Meetings is a bar tab since task
+      01a1557a-7a71 stage 2, so it is not repeated here.
+    * Inbox is the first row, with an unread badge above 0.
     * Admin section is gated on `root_user` and is DOM-absent (not just
       visually hidden) for non-Acme users.
     * Hero icons render via the data-driven loop.
@@ -25,7 +27,8 @@ defmodule PlatformWeb.Components.MoreSheetTest do
         %{
           open: true,
           root_user: false,
-          current_user: nil
+          current_user: nil,
+          inbox_unread_count: 0
         },
         assigns
       )
@@ -35,6 +38,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       open={@open}
       root_user={@root_user}
       current_user={@current_user}
+      inbox_unread_count={@inbox_unread_count}
     />
     """)
   end
@@ -47,7 +51,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       # (Memory tabs under Context per Robin 2026-05-18; not its own destination.)
       # Prompts is root_only?:true as of 2026-05-20 — visible only to admins;
       # see acme-only assertion in the next test.
-      for key <- ["skills", "context", "meetings"] do
+      for key <- ["skills", "context"] do
         assert html =~ ~s(data-destination="#{key}"),
                "expected data-destination=#{inspect(key)} in the member-view More sheet"
       end
@@ -58,7 +62,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     test "renders all working-cluster destinations including Prompts for a acme user" do
       html = render_more_sheet(%{root_user: true})
 
-      for key <- ["skills", "context", "prompts", "meetings"] do
+      for key <- ["skills", "context", "prompts"] do
         assert html =~ ~s(data-destination="#{key}"),
                "expected data-destination=#{inspect(key)} in the acme-view More sheet"
       end
@@ -67,6 +71,65 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     test "renders the Working section label" do
       html = render_more_sheet(%{})
       assert html =~ ">Working<"
+    end
+  end
+
+  describe "Inbox row and the bar's tabs (task 01a1557a-7a71 stage 2)" do
+    defp row_keys(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(".more-sheet-row[data-destination]")
+      |> LazyHTML.attribute("data-destination")
+    end
+
+    defp inbox_badges(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-destination="inbox"] [data-role="more-sheet-inbox-badge"]))
+    end
+
+    test "Inbox is the first row" do
+      assert [first | _] = row_keys(render_more_sheet(%{}))
+      assert first == "inbox"
+    end
+
+    test "the Inbox row carries a count badge above 0, with the rail's grammar" do
+      for {n, text} <- [{1, "1"}, {99, "99"}, {150, "99+"}] do
+        badge = inbox_badges(render_more_sheet(%{inbox_unread_count: n}))
+        assert Enum.count(badge) == 1
+        assert badge |> LazyHTML.text() |> String.trim() == text
+      end
+    end
+
+    test "no badge at 0" do
+      assert Enum.count(inbox_badges(render_more_sheet(%{inbox_unread_count: 0}))) == 0
+    end
+
+    test "no Meetings row, and no other bar tab either" do
+      keys = row_keys(render_more_sheet(%{root_user: true}))
+      for key <- ["meetings", "chat", "tasks"], do: refute(key in keys)
+    end
+  end
+
+  describe "row taps (task 01a1557a-7a71 stage 5)" do
+    test "no live-navigation row carries a bare-string phx-click" do
+      # A bare event name on a `data-phx-link` element is passed to
+      # liveSocket.execJS, which throws `TypeError: this[kind] is not a
+      # function` on every tap (measured in Chrome 151). Encoded JS (a JSON
+      # array, from JS.push/...) is the only phx-click a link may carry.
+      doc = LazyHTML.from_fragment(render_more_sheet(%{root_user: true, inbox_unread_count: 2}))
+      links = LazyHTML.query(doc, "#more-sheet [data-phx-link]")
+
+      # Anti-vacuity: the rows are live links.
+      assert Enum.count(links) >= 3
+
+      bare =
+        for link <- links,
+            [click] <- [LazyHTML.attribute(link, "phx-click")],
+            not String.starts_with?(String.trim(click), "["),
+            do: {LazyHTML.attribute(link, "data-destination"), click}
+
+      assert bare == [], "bare phx-click on live links: #{inspect(bare)}"
     end
   end
 
@@ -162,7 +225,7 @@ defmodule PlatformWeb.Components.MoreSheetMailFlagTest do
   test "flag off: no Email row" do
     with_mail(false)
     html = render_sheet()
-    assert html =~ ~s(data-destination="meetings")
+    assert html =~ ~s(data-destination="skills")
     refute html =~ ~s(data-destination="email")
   end
 

@@ -42,8 +42,9 @@
  * does not load, for the same presets Burrow uses it on, and Burrow paints
  * Public Sans. Never declare a font stack inside an @plugin daisyui-theme block;
  * the plugin splits comma stacks. --density is 1 in every master preset and has
- * no consumer yet. --glass-alpha / --glass-blur are declared for rung 4's glass
- * bar; nothing reads them yet.
+ * no consumer yet. --glass-alpha / --glass-blur feed rung 4's glass tab bar
+ * (app.css .bottom-nav); each alpha is a painted, measured floor, held by
+ * test/platform/design/bottom_nav_glass_guard_test.exs.
  *
  * AA CORRECTIONS. The masters' values fail WCAG AA in 12 of 12 variants. Every
  * value that differs from theme.js carries a comment with the master value and
@@ -127,7 +128,12 @@
   --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 3.2525:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, measures 4.5069:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.86;
   --glass-blur: 18px;
 }
 
@@ -208,7 +214,12 @@
   --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.4535:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, measures 4.5337:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.98;
   --glass-blur: 18px;
 }
 
@@ -273,7 +284,12 @@
   --radius-field: 13px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.7400:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, measures 4.5170:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.88;
   --glass-blur: 18px;
 }
 
@@ -373,7 +389,14 @@
   --radius-field: 13px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.7447:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, is 0.92 at 4.5002:1 (active label over black, Chrome 151), one
+     painted byte from failing. Declared one step above that floor for margin:
+     this value measures 4.5965:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.93;
   --glass-blur: 18px;
 }
 
@@ -443,7 +466,12 @@
   --radius-field: 11px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 3.2033:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, measures 4.5503:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.87;
   --glass-blur: 18px;
 }
 
@@ -527,7 +555,12 @@
   --radius-field: 11px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.72;
+  /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.5503:1 for the
+     worst tab label (inactive --color-subtle or active primary) painted on the bar
+     over pure black or pure white, Chrome 147 and 151; this value, the lowest
+     swept alpha that clears 4.5:1 for every label and 3:1 for every icon and
+     the More dot, measures 4.5043:1 (test/support/fixtures/painted_glass/). */
+  --glass-alpha: 0.96;
   --glass-blur: 18px;
 }
 
@@ -591,7 +624,14 @@
   --radius-field: 4px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.95;
+  /* Glass, opaque (task 01a1557a-7a71 stage 1; Saru's rule 2, canvas
+     01a15b55-6565-7000-9dc1-0858ad0c7736: High contrast renders the bar at
+     base-200, alpha 1, no blur). theme.js 0.95 measures 8.3635:1 for the worst
+     tab label painted over pure black or white, Chrome 147 and 151; this value
+     measures 9.0367:1 (the measured floor is 0.88; opacity is the rule, not
+     the floor). --subtle on this opaque base-200 paints 6.2450:1, under 7:1, so
+     the bar's tab ink in High contrast is base-content (app.css .bottom-nav). */
+  --glass-alpha: 1;
   --glass-blur: 0px;
 }
 
@@ -668,6 +708,13 @@
   --radius-field: 4px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
-  --glass-alpha: 0.95;
+  /* Glass, opaque (task 01a1557a-7a71 stage 1; Saru's rule 2, canvas
+     01a15b55-6565-7000-9dc1-0858ad0c7736: High contrast renders the bar at
+     base-200, alpha 1, no blur). theme.js 0.95 measures 7.3442:1 for the worst
+     tab label painted over pure black or white, Chrome 147 and 151; this value
+     measures 8.2218:1 (the measured floor is 0.93; opacity is the rule, not
+     the floor). --subtle on this opaque base-200 paints 4.7417:1, under 7:1, so
+     the bar's tab ink in High contrast is base-content (app.css .bottom-nav). */
+  --glass-alpha: 1;
   --glass-blur: 0px;
 }

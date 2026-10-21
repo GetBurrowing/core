@@ -108,7 +108,7 @@ defmodule PlatformWeb.ChangelogLive do
       </div>
 
       <%!-- Feed --%>
-      <div class="flex-1 overflow-y-auto px-6 py-4">
+      <div class="flex-1 overflow-y-auto px-6 py-4 clears-tab-bar">
         <%= if @grouped == [] do %>
           <div class="flex flex-col items-center justify-center py-16 text-subtle">
             <span class="hero-newspaper mb-3 size-12"></span>
