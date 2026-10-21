@@ -4970,6 +4970,17 @@ body, .font-suite {
     padding-bottom: calc(8px + var(--bottom-nav-clearance));
   }
 
+  /* A composer inside a sheet (the embedded meeting chat in the call rail's
+     bottom sheet, z-index 100) has no bar under it: the sheet covers the bar
+     (z-index 30). So it sits 8px above the safe area, Saru's rule r4 for a
+     composer with no bar under it, the same 8px the focused routed composer
+     keeps. Measured before this rule: 93 / 80 at inset 34 / 0, i.e. 85 / 72px
+     of dead space over a bar nobody could see. Keyed on the Sheet component's
+     own panel, never on a meeting class (task 01a15f2e follow-up). */
+  .sheet-panel .compose-input-area {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
   .clears-tab-bar {
     padding-bottom: var(--phone-chrome-bottom);
   }

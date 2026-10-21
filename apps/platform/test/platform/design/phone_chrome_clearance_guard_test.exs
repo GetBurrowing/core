@@ -144,6 +144,42 @@ defmodule Platform.Design.PhoneChromeClearanceGuardTest do
     end
   end
 
+  describe "(f) a composer inside a sheet has no bar under it (task 01a15f2e follow-up)" do
+    test "below lg it sits 8px above the safe area; the routed rules are unchanged",
+         %{rules: rules} do
+      sheet = Enum.filter(rules, &(&1.selector == ".sheet-panel .compose-input-area"))
+      assert length(sheet) == 1, "anti-vacuity: the sheet composer rule was not found"
+      [r] = sheet
+      assert r.at == [@phone]
+
+      assert Enum.map(declarations(r.body, "padding-bottom"), &normalise/1) ==
+               ["calc(8px + env(safe-area-inset-bottom, 0px))"]
+
+      # The routed and glass-dock composer rules are exactly as shipped.
+      [routed] =
+        Enum.filter(
+          rules,
+          &(&1.selector == ".compose-input-area" and &1.at == [@phone] and
+              declarations(&1.body, "padding-bottom") != [])
+        )
+
+      assert Enum.map(declarations(routed.body, "padding-bottom"), &normalise/1) ==
+               ["calc(8px + var(--bottom-nav-clearance))"]
+
+      [dock] = Enum.filter(rules, &(&1.selector == ".chat-dock--glass .compose-input-area"))
+      assert declarations(dock.body, "padding-bottom") == ["0"]
+
+      # Keyed on the Sheet component, never on a meeting-specific class.
+      meeting =
+        for x <- rules,
+            x.selector =~ "compose-input-area",
+            x.selector =~ ~r/meeting/,
+            do: x.selector
+
+      assert meeting == []
+    end
+  end
+
   describe "(e) the chat dock (stage 3)" do
     test "top-level .chat-dock is display: contents, so desktop and embedded keep their flex layout",
          %{rules: rules} do

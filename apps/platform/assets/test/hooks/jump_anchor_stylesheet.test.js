@@ -258,6 +258,7 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       "#chat-drop-zone:has(> .chat-dock--glass) #message-list",
       ":root:has([data-bottom-rail])",
       ".compose-input-area",
+      ".sheet-panel .compose-input-area",
       ".clears-tab-bar",
     ]);
     const token = gated.find((r) => r.selector === ":root:has([data-bottom-rail])");
