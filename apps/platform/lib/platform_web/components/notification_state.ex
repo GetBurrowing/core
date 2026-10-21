@@ -13,10 +13,12 @@ defmodule PlatformWeb.Components.NotificationState do
   rejected it on review: a rail row whose only behaviour was opening a panel
   collided with the Inbox tile beside it, which holds the actual activity
   notifications, and a rail row that navigates nowhere is not a rail row.
-  Settings was the obvious alternative and does not exist — there is no
-  `/settings` route, and the rail's bottom gear is Admin (`root_only?: true`,
-  gated on `root_user`), so external and non-admin internal users would
-  never see it, and this feature has to cover external users.
+  Settings was the obvious alternative and did not exist then — there was no
+  `/settings` route (`PlatformWeb.SettingsLive` arrived later, in task
+  01a1557a-807f, and does not carry this row yet), and the rail's bottom gear
+  is Admin (`root_only?: true`, gated on `root_user`), so external and
+  non-admin internal users would never see it, and this feature has to cover
+  external users.
 
   `InboxLive` runs the `:authenticated` `live_session`, whose `on_mount` chain
   includes `PlatformWeb.ShellLive`, so `@push_permission` is already in its

@@ -560,14 +560,16 @@
     />
 
     <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet for the
-         destinations the tab bar does not carry (Inbox first, then the Working
-         cluster minus the bar's tabs, then Admin) plus the profile + sign-out
-         row. Triggered by `phx-click="open_more_sheet"` on the More tab in
+         destinations the tab bar does not carry, in one ordered list, with
+         Settings pinned in its footer (task 01a1557a-807f stage 2).
+         Triggered by `phx-click="open_more_sheet"` on the More tab in
          <.bottom_rail>. lg:hidden inside the component itself. --%>
     <.more_sheet
       open={@more_sheet_open}
       inbox_unread_count={assigns[:inbox_unread_count] || 0}
       current_user={@current_user}
+      user={assigns[:current_user_record]}
+      current_path={@current_path}
       root_user={@root_user}
       access_scope={assigns[:access_scope]}
     />

@@ -47,7 +47,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Agent Resources")
+     |> assign(:page_title, "Agents")
      |> assign(:current_user_id, current_user_id)
      |> assign(:agent_host_connected?, AgentHost.connected?())
      |> assign(:restarting_agent_id, nil)
@@ -850,7 +850,7 @@ defmodule PlatformWeb.ControlCenterLive do
             <div class="flex items-start justify-between gap-3">
               <div>
                 <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
-                  Agent Resources
+                  Agents
                 </p>
                 <p class="mt-1 text-sm text-base-content/70">
                   Manage, federate, and monitor your agents.
@@ -1122,7 +1122,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp assign_empty_panel(socket) do
     socket
-    |> assign(:page_title, "Agent Resources")
+    |> assign(:page_title, "Agents")
     |> assign(:selected_agent, nil)
     |> assign(:runtime, %{status: :unknown, running?: false, pid: nil, active_session_ids: []})
     |> assign(:overview_counts, %{workspace_files: 0, memories: 0, sessions: 0, vault: 0})
@@ -1191,7 +1191,7 @@ defmodule PlatformWeb.ControlCenterLive do
     runtime = AgentData.runtime_snapshot(agent)
 
     socket
-    |> assign(:page_title, "Control Center · #{agent.name}")
+    |> assign(:page_title, "Agents · #{agent.name}")
     |> assign(:selected_agent, agent)
     |> assign(:runtime, runtime)
     |> assign(:overview_counts, %{

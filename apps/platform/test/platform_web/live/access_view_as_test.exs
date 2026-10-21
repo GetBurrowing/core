@@ -88,6 +88,9 @@ defmodule PlatformWeb.AccessViewAsTest do
 
     expected =
       IconRail.destinations(root_user: false)
+      # View-as previews the desktop rail; `:sheet` destinations (Changelog,
+      # task 01a1557a-807f stage 2) are More-sheet only.
+      |> Enum.filter(&(&1.cluster in IconRail.desktop_clusters()))
       |> Enum.map(&to_string(&1.key))
       |> MapSet.new()
 

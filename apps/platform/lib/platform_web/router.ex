@@ -879,6 +879,10 @@ defmodule PlatformWeb.Router do
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)
+      # Task 01a1557a-807f stage 1: the viewer's own account (profile, theme,
+      # links to Usage / Admin / Prompts, sign out). Ungated in ModuleGate;
+      # each row checks its own destination.
+      live("/settings", SettingsLive, :index)
       # Prompts is a module-admin view. It retains its stable URL and rail
       # destination, but belongs to this module-gated session instead of the
       # install-admin session.

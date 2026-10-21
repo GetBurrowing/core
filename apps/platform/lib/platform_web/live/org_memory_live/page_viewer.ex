@@ -310,7 +310,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">
         <span class="hero-document-text mb-3 size-16 text-subtle mx-auto block"></span>
-        <h3 class="text-lg font-medium text-base-content">Org Memory</h3>
+        <h3 class="text-lg font-medium text-base-content">Org memory</h3>
         <p class="mt-1 text-sm text-subtle">
           Select a page from the namespace tree to view or edit organizational memory.
         </p>

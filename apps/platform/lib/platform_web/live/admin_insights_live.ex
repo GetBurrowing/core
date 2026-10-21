@@ -121,7 +121,7 @@ defmodule PlatformWeb.AdminInsightsLive do
       <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
         <div class="mx-auto max-w-2xl space-y-4">
           <p class="text-sm text-subtle">
-            Dreaming writes insights to the Org Memory
+            Dreaming writes insights to the Org memory
             <.link navigate={~p"/memory/insights"} class="link link-hover">Insights tab</.link>
             every night. While sending is off they stay on that tab. These settings apply to
             every org on this install.

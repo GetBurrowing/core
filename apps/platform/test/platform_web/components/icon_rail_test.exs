@@ -64,16 +64,42 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 9 destinations for a non-Acme user (Admin + Prompts filtered out)" do
+    test "UI copy: Org memory and Agents (task 01a1557a-807f stage 2 renames)" do
+      by_key = Map.new(destinations(root_user: true), &{&1.key, &1})
+      assert by_key[:context].label == "Org memory"
+      assert by_key[:agents].label == "Agents"
+      # Renames are UI copy only: keys and routes stay.
+      assert by_key[:context].path == "/org_memory"
+      assert by_key[:agents].path == "/control"
+    end
+
+    test "Changelog is a :sheet destination the desktop rail never renders" do
+      dest = Enum.find(destinations(root_user: true), &(&1.key == :changelog))
+      assert %{cluster: :sheet, path: "/changelog", hero_icon: "hero-newspaper"} = dest
+
+      assigns = %{}
+
+      html =
+        rendered_to_string(~H"""
+        <.icon_rail current_path="/changelog" root_user={true} sidebar_collapsed={false} />
+        """)
+
+      # Positive control: the rail rendered its other tiles.
+      assert html =~ ~s(data-destination="skills")
+      refute html =~ ~s(data-destination="changelog")
+    end
+
+    test "returns 10 destinations for a non-Acme user (Admin + Prompts filtered out)" do
       # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
       # destination (working cluster, root_only?: false), 8 → 9 when
       # task 019fe6ba added Experiments, 9 → 10 when task 019fea0d added
       # Pipeline, and back 10 → 9 when task 019fed1e removed Pipeline again
-      # (it moved to an admin-only cog in the Tasks header), and 10 → 9 when
-      # task 01a1557a-7a71 stage 4 retired Activity. Any future
+      # (it moved to an admin-only cog in the Tasks header), 10 → 9 when
+      # task 01a1557a-7a71 stage 4 retired Activity, and 9 -> 10 when task
+      # 01a1557a-807f stage 2 added the More-sheet-only Changelog. Any future
       # destination addition should bump the matching guard below.
       list = destinations(root_user: false)
-      assert length(list) == 9
+      assert length(list) == 10
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -83,9 +109,9 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 11 destinations for an Acme user (Admin + Prompts included)" do
+    test "returns all 12 destinations for an Acme user (Admin + Prompts included)" do
       list = destinations(root_user: true)
-      assert length(list) == 11
+      assert length(list) == 12
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
@@ -157,7 +183,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         assert is_binary(dest.path)
         assert is_binary(dest.hero_icon)
         assert String.starts_with?(dest.hero_icon, "hero-")
-        assert dest.cluster in [:live, :working, :admin]
+        assert dest.cluster in [:live, :working, :admin, :sheet]
         assert is_boolean(dest.root_only?)
       end
     end
@@ -417,7 +443,9 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "renders the hero icon class for every visible destination" do
       html = render_icon_rail(%{root_user: true})
 
-      for dest <- destinations(root_user: true) do
+      # The desktop rail's tiles; `:sheet` destinations are More-sheet only.
+      for dest <- destinations(root_user: true),
+          dest.cluster in PlatformWeb.Components.IconRail.desktop_clusters() do
         assert html =~ dest.hero_icon,
                "expected hero icon class #{inspect(dest.hero_icon)} for destination #{inspect(dest.key)}"
       end
@@ -461,7 +489,8 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "every desktop tile carries an aria-label" do
       html = render_icon_rail(%{root_user: true})
 
-      for dest <- destinations(root_user: true) do
+      for dest <- destinations(root_user: true),
+          dest.cluster in PlatformWeb.Components.IconRail.desktop_clusters() do
         assert html =~ ~s(aria-label="#{dest.label}"),
                "expected aria-label=#{inspect(dest.label)} for destination #{inspect(dest.key)}"
       end
@@ -630,6 +659,24 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "/inbox, now a More-sheet row, lights More" do
       html = render_bottom_rail(%{current_path: "/inbox"})
       assert active_keys(html) == ["more"]
+    end
+
+    test "/changelog, a sheet-only row, lights More" do
+      assert active_keys(render_bottom_rail(%{current_path: "/changelog"})) == ["more"]
+    end
+
+    test "/settings and the pages it carries light More" do
+      for path <- ["/settings", "/control/usage", "/admin", "/admin/prompts"] do
+        assert active_keys(render_bottom_rail(%{current_path: path, root_user: true})) == ["more"],
+               path
+      end
+    end
+
+    test "More sends close_more_sheet while the sheet is open, open_more_sheet otherwise" do
+      for {open?, event} <- [{true, "close_more_sheet"}, {false, "open_more_sheet"}] do
+        [more] = more_button(render_bottom_rail(%{more_open: open?}))
+        assert LazyHTML.attribute(more, "phx-click") == [event]
+      end
     end
 
     test "a path nothing lists lights nothing" do
@@ -1197,5 +1244,54 @@ defmodule PlatformWeb.Components.IconRailMailFlagTest do
     assert enabled?(%{key: :chat})
     assert enabled?(%{key: :x, enabled?: fn -> true end})
     refute enabled?(%{key: :x, enabled?: fn -> false end})
+  end
+end
+
+defmodule PlatformWeb.Components.IconRailExtensionMoreTest.SocialStub do
+  @moduledoc false
+  # Stands in for the Social module's extension, which the platform suite does
+  # not load: one rail item at Social's real path.
+  def rail_items,
+    do: [
+      %{
+        key: :social,
+        label: "Social",
+        path: "/m/social",
+        hero_icon: "hero-megaphone",
+        cluster: :working,
+        root_only?: false
+      }
+    ]
+end
+
+defmodule PlatformWeb.Components.IconRailExtensionMoreTest do
+  @moduledoc """
+  An extension's page is a More-sheet row, so the bar lights More on it
+  (task 01a1557a-807f stage 2). async: false — swaps `:extensions`.
+  """
+  use ExUnit.Case, async: false
+
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+  import PlatformWeb.Components.IconRail
+
+  test "/m/social lights More once Social's rail item is installed" do
+    assigns = %{}
+
+    render = fn ->
+      rendered_to_string(~H"""
+      <.bottom_rail current_path="/m/social" root_user={false} />
+      """)
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-bottom-rail] .bottom-nav-tab--active")
+      |> LazyHTML.attribute("data-destination")
+    end
+
+    Platform.FixtureExtension.register([])
+    # Control: with no extension, nothing lists /m/social.
+    assert render.() == []
+
+    Platform.FixtureExtension.register([__MODULE__.SocialStub])
+    assert render.() == ["more"]
   end
 end

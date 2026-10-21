@@ -277,7 +277,15 @@ defmodule Platform.Access.Registry do
       %{
         module: "activity",
         permissions: ~w(activity.read),
-        rail: [%{key: :activity, permission: "activity.read"}]
+        # `:changelog` (task 01a1557a-807f stage 2) is the More sheet's
+        # Changelog row. Same permission ModuleGate asks of ChangelogLive
+        # (`{:activity, nil}`), so the row shows exactly when /changelog
+        # mounts. `:activity` stays: ModuleGate resolves ChangelogLive
+        # through it (see above).
+        rail: [
+          %{key: :activity, permission: "activity.read"},
+          %{key: :changelog, permission: "activity.read"}
+        ]
       },
       %{
         module: "files",

@@ -91,7 +91,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
-    assert html =~ "Agent Resources"
+    # UI copy renamed to "Agents" (task 01a1557a-807f stage 2).
+    assert html =~ "Agents"
+    refute html =~ "Agent Resources"
     assert html =~ "Zip"
     assert html =~ "Config + model routing"
     assert html =~ "Workspace files"
@@ -114,7 +116,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Alice"
     assert html =~ "REPL Test Agent"
     assert html =~ "Mounted Workspace"
-    assert html =~ "Control Center"
+    # The surface's visible name is "Agents" (task 01a1557a-807f stage 2).
+    assert html =~ ~r{<title[^>]*>\s*Agents\s*</title>}
+    refute html =~ "Agent Resources"
   end
 
   test "starting and stopping the runtime updates the dashboard", %{conn: conn} do

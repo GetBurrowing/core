@@ -11,7 +11,8 @@ defmodule PlatformWeb.Components.IconRail do
     * `bottom_rail/1` — mobile tab bar (<`lg` breakpoint). Link tabs from
                        `mobile_tab_keys/0` (Chat, Tasks, Meetings, filtered
                        by Scope) plus a More button that fires
-                       `phx-click="open_more_sheet"`. Inbox and Activity are
+                       `phx-click="open_more_sheet"` (`close_more_sheet`
+                       while the sheet is open). Inbox and Activity are
                        not in the bar (task 01a1557a-7a71 stage 2): Inbox
                        is the More sheet's first row, and its unread signal
                        is a dot on More.
@@ -43,7 +44,8 @@ defmodule PlatformWeb.Components.IconRail do
   activity notifications live, and a rail is a set of navigation targets. The
   durable notification-state row now lives on `/inbox`, rendered by
   `PlatformWeb.Components.NotificationState`. Settings was considered and ruled
-  out: there is no `/settings` route, and the rail's bottom gear is Admin,
+  out: there was no `/settings` route then (`PlatformWeb.SettingsLive` arrived
+  later, in task 01a1557a-807f), and the rail's bottom gear is Admin,
   `root_only?: true`, so it could never host a feature that has to reach
   external users. The rail therefore carries no `push_permission` state at all;
   `ShellLive`'s `:push_permission` assign feeds `/inbox` and the chat banner.
@@ -138,6 +140,8 @@ defmodule PlatformWeb.Components.IconRail do
     collapsed = Map.get(assigns, :sidebar_collapsed, false)
     all = assigns[:destinations] || canonical_destinations()
 
+    # The desktop rail draws exactly `desktop_clusters/0`, by name; the
+    # More-sheet-only `:sheet` cluster is not among them.
     live = cluster_destinations(all, :live, filter)
     working = cluster_destinations(all, :working, filter)
     admin = cluster_destinations(all, :admin, filter)
@@ -416,7 +420,7 @@ defmodule PlatformWeb.Components.IconRail do
       assigns[:more_open] == true or
         (link_winner == nil and
            more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
-           |> Enum.any?(&path_matches?(&1.path, current_path)))
+           |> active_destination_key(current_path) != nil)
 
     unread? = is_integer(assigns[:inbox_unread_count]) and assigns[:inbox_unread_count] > 0
 
@@ -452,7 +456,7 @@ defmodule PlatformWeb.Components.IconRail do
 
       <button
         type="button"
-        phx-click="open_more_sheet"
+        phx-click={if @more_open, do: "close_more_sheet", else: "open_more_sheet"}
         class={["bottom-nav-tab", @more_active? && "bottom-nav-tab--active"]}
         data-destination="more"
         aria-label={if @more_unread?, do: "More, unread in Inbox", else: "More"}
@@ -499,49 +503,90 @@ defmodule PlatformWeb.Components.IconRail do
     if active?, do: solid, else: outline
   end
 
+  # The More sheet's module rows, in order (task 01a1557a-807f stage 2;
+  # coverage row 5, master-mobile.html v3 :727-736). ONE list: a key with no
+  # destination yet (Canvases and Games, until rungs 16 and 21 add a page),
+  # or one the actor may not see, is skipped and leaves no gap.
+  @more_sheet_order [
+    :inbox,
+    :email,
+    :files,
+    :canvases,
+    :games,
+    :skills,
+    :context,
+    :agents,
+    :experiments,
+    :changelog
+  ]
+
+  # The Settings row is pinned in the sheet's footer, not in the list. It is
+  # current on /settings and on the pages it now carries (Usage, Admin and
+  # everything under it, Prompts), so those paths join the same longest-prefix
+  # match as the rows: /control/usage resolves to Settings, not to Agents'
+  # /control, and /control/experiments still resolves to Experiments.
+  @settings_paths ["/settings", "/control/usage", "/admin", "/admin/prompts"]
+
   @doc """
-  What the mobile More sheet lists, for an actor (task 01a1557a-7a71 stage 2):
-  `%{inbox: [inbox] | [], working: [...], admin: [...] | []}`.
-
-  Inbox gets a row because it left the bar and is a `:live` destination the
-  Working list would never show. Working drops every key the bar carries
-  (`mobile_tab_keys/0`), so Meetings is not repeated. Admin is present only
-  when the actor may see it. Every list is filtered by the same Scope rule as
-  the rails (`rail_filter/2`). Rung 5 (task 01a1557a-807f) owns the sheet's
-  final rows and order; this is only what keeps every surface reachable.
+  The clusters the desktop rail (`icon_rail/1`) renders, in order. A
+  destination in any other cluster (`:sheet`, task 01a1557a-807f stage 2) is
+  listed only by the mobile More sheet.
   """
-  @spec more_sheet_sections(Scope.t() | nil, boolean()) :: %{
-          inbox: [map()],
-          working: [map()],
-          admin: [map()]
-        }
-  def more_sheet_sections(scope, root_user) do
+  @spec desktop_clusters() :: [atom()]
+  def desktop_clusters, do: [:live, :working, :admin]
+
+  @doc "The More sheet's module-row key order (see `more_sheet_rows/2`)."
+  @spec more_sheet_order() :: [atom()]
+  def more_sheet_order, do: @more_sheet_order
+
+  @doc "The paths on which the More sheet's pinned Settings row is current."
+  @spec settings_paths() :: [String.t()]
+  def settings_paths, do: @settings_paths
+
+  @doc """
+  The mobile More sheet's module rows, for an actor (task 01a1557a-807f
+  stage 2): the destinations for `more_sheet_order/0`, in that order, then
+  every `Platform.Extensions.rail_items/0` item the actor may see, in
+  rail_items order, after Changelog.
+
+  Every row goes through the same `rail_filter/2` and `enabled?/1` as the
+  rails (via `destinations/1`), so a module the actor may not open, or one
+  switched off (Email with Mail off), is absent. Admin, Prompts and sign out
+  are not rows: they live on `/settings`, reached from the sheet's pinned
+  Settings row.
+  """
+  @spec more_sheet_rows(Scope.t() | nil, boolean()) :: [map()]
+  def more_sheet_rows(scope, root_user) do
     visible = scope |> rail_filter(root_user) |> destinations()
+    by_key = Map.new(visible, &{&1.key, &1})
+    extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
 
-    admin =
-      if show_more_admin?(scope, root_user) do
-        scope |> rail_filter(true) |> destinations() |> Enum.filter(&(&1.cluster == :admin))
-      else
-        []
-      end
-
-    %{
-      inbox: Enum.filter(visible, &(&1.key == :inbox)),
-      working:
-        Enum.filter(visible, &(&1.cluster == :working and &1.key not in mobile_tab_keys())),
-      admin: admin
-    }
+    Enum.flat_map(@more_sheet_order, &List.wrap(Map.get(by_key, &1))) ++
+      Enum.filter(visible, &(&1.key in extension_keys))
   end
 
-  @doc "Every destination the More sheet lists, flattened (see `more_sheet_sections/2`)."
+  @doc """
+  Every path the More sheet answers for: its module rows plus the Settings
+  row's paths (`settings_paths/0`), as `%{key, path}` entries. The bar lights
+  More on any of them (`bottom_rail/1`).
+  """
   @spec more_sheet_destinations(Scope.t() | nil, boolean()) :: [map()]
   def more_sheet_destinations(scope, root_user) do
-    %{inbox: inbox, working: working, admin: admin} = more_sheet_sections(scope, root_user)
-    inbox ++ working ++ admin
+    more_sheet_rows(scope, root_user) ++ settings_destinations()
   end
 
-  defp show_more_admin?(%Scope{} = scope, _root_user), do: Access.module_access?(scope, :admin)
-  defp show_more_admin?(_scope, root_user), do: root_user == true
+  @doc """
+  The More sheet row that is current for `current_path`: a row key, `:settings`,
+  or nil. The rails' own matcher (`active_destination_key/2`, longest prefix
+  at a segment boundary) over the rows plus the Settings paths.
+  """
+  @spec more_sheet_current_key([map()], String.t() | nil) :: atom() | nil
+  def more_sheet_current_key(rows, current_path) when is_binary(current_path),
+    do: active_destination_key(rows ++ settings_destinations(), current_path)
+
+  def more_sheet_current_key(_rows, _current_path), do: nil
+
+  defp settings_destinations, do: Enum.map(@settings_paths, &%{key: :settings, path: &1})
 
   @doc """
   Returns the canonical destination list for the icon rail.
@@ -554,7 +599,8 @@ defmodule PlatformWeb.Components.IconRail do
       yet; those are flagged with a TODO in the source. Stage 3 wires
       navigation and will reconcile any missing routes.)
     * `:hero_icon` — heroicon class name (rendered in Stage 2)
-    * `:cluster` — `:live | :working | :admin`
+    * `:cluster` — `:live | :working | :admin | :sheet` (`:sheet` is listed
+      only by the mobile More sheet; the desktop rail never renders it)
     * `:root_only?` — boolean; today `:admin` and `:prompts` are `true`
 
   With `opts[:scope]` (a `%Platform.Access.Scope{}`, task 01a1386d-fb6e
@@ -683,7 +729,8 @@ defmodule PlatformWeb.Components.IconRail do
   # a bare prefix would let `/tasksy` match `/tasks`. Why longest-wins rather
   # than first-match: the canonical list order must not silently decide
   # overlapping prefixes.
-  defp active_destination_key(destinations, current_path) do
+  @doc false
+  def active_destination_key(destinations, current_path) do
     destinations
     |> Enum.filter(&path_matches?(&1.path, current_path))
     |> Enum.sort_by(&String.length(&1.path), :desc)
@@ -933,7 +980,7 @@ defmodule PlatformWeb.Components.IconRail do
         # Old `/org-context[/:file_key]` paths 301-redirect to the new
         # canonical paths via PageController.
         key: :context,
-        label: "Org Memory",
+        label: "Org memory",
         path: "/org_memory",
         hero_icon: "hero-building-library",
         cluster: :working,
@@ -989,6 +1036,20 @@ defmodule PlatformWeb.Components.IconRail do
         cluster: :working,
         root_only?: false,
         enabled?: &Platform.Mail.Config.enabled?/0
+      },
+      %{
+        # Task 01a1557a-807f stage 2: a More-sheet-only destination. The
+        # `:sheet` cluster is one `icon_rail/1` never renders (it draws
+        # `:live`, `:working` and `:admin` by name), so the desktop rail does
+        # not show it. Its registry rail entry sits in the `activity` module
+        # with `activity.read`, which is exactly what ModuleGate asks of
+        # ChangelogLive.
+        key: :changelog,
+        label: "Changelog",
+        path: "/changelog",
+        hero_icon: "hero-newspaper",
+        cluster: :sheet,
+        root_only?: false
       },
 
       # Admin cluster — root-admin-only, gated by `root_user`

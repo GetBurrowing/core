@@ -9,6 +9,10 @@ defmodule PlatformWeb.AccessViewAs do
 
   def rail_keys(%{scope: scope}) do
     root_user = Tenancy.root_admin_preloaded?(scope.actor)
-    IconRail.destinations(root_user: root_user) |> Enum.map(& &1.key)
+    # The desktop rail's tiles: a More-sheet-only (`:sheet`) destination such
+    # as Changelog is not a rail tile (task 01a1557a-807f stage 2).
+    IconRail.destinations(root_user: root_user)
+    |> Enum.filter(&(&1.cluster in IconRail.desktop_clusters()))
+    |> Enum.map(& &1.key)
   end
 end

@@ -796,6 +796,58 @@ defmodule PlatformWeb.ShellLiveTest do
   # respects the root_user gate end-to-end.
   # ---------------------------------------------------------------------
 
+  # Task 01a1557a-807f stage 4: two of the More sheet's ways out, through the
+  # shell's own handlers (scrim, swipe and Escape push the same event).
+  describe "More sheet dismissal" do
+    defp more_open?(view), do: has_element?(view, "#more-sheet[data-open=true]")
+
+    test "the handle, a real Close button, closes the open sheet", %{conn: conn} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
+
+      view |> element(~s([data-bottom-rail] button[data-destination="more"])) |> render_click()
+      assert more_open?(view)
+
+      view |> element("#more-sheet button.sheet-handle-button") |> render_click()
+      refute more_open?(view)
+    end
+
+    # Task 01a1557a-807f stage 5: LiveView runs a live link's phx-click
+    # through liveSocket.execJS/3, so a bare event name on a navigate/patch
+    # link throws in the browser and pushes nothing. The whole rendered shell,
+    # with the More sheet open, carries none.
+    test "no live link in the shell carries a bare-string phx-click", %{conn: conn} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/files")
+      view |> element(~s([data-bottom-rail] button[data-destination="more"])) |> render_click()
+      doc = view |> render() |> LazyHTML.from_fragment()
+
+      links = LazyHTML.query(doc, "[data-phx-link]")
+      # Positive control: the sheet's rows are among the live links seen.
+      assert doc |> LazyHTML.query("#more-sheet [data-phx-link]") |> Enum.count() > 3
+
+      bare =
+        for link <- Enum.to_list(links),
+            click = link |> LazyHTML.attribute("phx-click") |> List.first(),
+            click != nil,
+            not match?({:ok, [_ | _]}, Jason.decode(click)),
+            do: {LazyHTML.attribute(link, "href"), click}
+
+      assert bare == []
+    end
+
+    test "More tapped again closes the sheet", %{conn: conn} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
+      more = ~s([data-bottom-rail] button[data-destination="more"])
+
+      view |> element(more) |> render_click()
+      assert more_open?(view)
+      assert view |> element(more) |> render() =~ ~s(phx-click="close_more_sheet")
+
+      view |> element(more) |> render_click()
+      refute more_open?(view)
+      assert view |> element(more) |> render() =~ ~s(phx-click="open_more_sheet")
+    end
+  end
+
   describe "icon-rail integration" do
     test "renders the desktop icon-rail wrapper", %{conn: conn} do
       conn = authenticated_conn(conn)

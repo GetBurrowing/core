@@ -44,6 +44,16 @@ defmodule PlatformWeb.Components.Sheet do
     doc:
       "Accessible name for the handle row. Only consulted when the `:handle` slot is filled — the plain decorative bar stays `aria-hidden`."
 
+  attr :handle_close, :boolean,
+    default: false,
+    doc:
+      "Opt-in (task 01a1557a-807f stage 4). The bottom handle renders as a real Close button (`aria-label=\"Close\"`, firing `on_close`), the header X button is omitted and the title is visually hidden (it still names the dialog). Default false: every other call site keeps the decorative handle, the X and a visible title."
+
+  attr :swipe_dismiss, :boolean,
+    default: false,
+    doc:
+      "Opt-in (task 01a1557a-807f stage 4). Stamps `data-swipe-dismiss=\"true\"` so the Sheet hook closes the sheet on a downward drag past 60px from the handle, or from the panel while its body is scrolled to the top. Default false: the hook ignores pointer drags."
+
   attr :rest, :global,
     doc:
       "Spread onto the root element. Lets a caller stamp `data-*` state on the sheet without the component learning what it means (FE-17: `data-sheet`)."
@@ -79,11 +89,22 @@ defmodule PlatformWeb.Components.Sheet do
       data-open={to_string(@open)}
       data-on-close={@on_close}
       data-on-close-target={close_target_selector(@on_close_target, @id)}
+      data-swipe-dismiss={@swipe_dismiss && "true"}
       {@rest}
     >
       <div class="sheet-backdrop" phx-click={@on_close} phx-target={@on_close_target}></div>
       <div class="sheet-panel">
-        <div :if={@bare_handle?} class="sheet-handle" aria-hidden="true"></div>
+        <div :if={@bare_handle? and !@handle_close} class="sheet-handle" aria-hidden="true"></div>
+        <button
+          :if={@bare_handle? and @handle_close}
+          type="button"
+          class="sheet-handle-button focus-visible-ring"
+          aria-label="Close"
+          phx-click={@on_close}
+          phx-target={@on_close_target}
+        >
+          <span class="sheet-handle" aria-hidden="true"></span>
+        </button>
         <div
           :if={@placement == :bottom and @handle != []}
           id={"#{@id}-handle"}
@@ -94,11 +115,15 @@ defmodule PlatformWeb.Components.Sheet do
           {render_slot(@handle)}
         </div>
 
-        <header class="sheet-header">
-          <h2 id={"#{@id}-title"} class="sheet-title">
+        <header class={if @handle_close, do: "sheet-header sr-only", else: "sheet-header"}>
+          <h2
+            id={"#{@id}-title"}
+            class={if @handle_close, do: "sheet-title sr-only", else: "sheet-title"}
+          >
             {render_slot(@title)}
           </h2>
           <button
+            :if={not @handle_close}
             type="button"
             aria-label="Close"
             phx-click={@on_close}

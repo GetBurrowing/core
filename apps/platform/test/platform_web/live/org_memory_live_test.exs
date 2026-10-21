@@ -197,7 +197,9 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert view.module == PlatformWeb.OrgMemoryLive
       # The renamed user-visible heading appears in the empty main pane
       # (no page selected on first mount).
-      assert html =~ "Org Memory"
+      assert html =~ "Org memory"
+      # The page title carries the renamed copy (task 01a1557a-807f stage 2).
+      assert html =~ ~r{<title[^>]*>\s*Org memory\s*</title>}
     end
   end
 

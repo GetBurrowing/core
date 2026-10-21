@@ -1379,7 +1379,7 @@ defmodule PlatformWeb.ShellLive do
         "Chat"
 
       PlatformWeb.ControlCenterLive ->
-        "Agent Resources"
+        "Agents"
 
       PlatformWeb.TasksLive ->
         "Tasks"
@@ -1392,6 +1392,9 @@ defmodule PlatformWeb.ShellLive do
 
       PlatformWeb.ChangelogLive ->
         "Changelog"
+
+      PlatformWeb.SettingsLive ->
+        "Settings"
 
       PlatformWeb.UsageLive ->
         "Usage"

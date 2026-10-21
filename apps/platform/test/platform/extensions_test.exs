@@ -921,6 +921,8 @@ defmodule Platform.ExtensionsTest do
       :prompts,
       :experiments,
       :meetings,
+      # The More-sheet-only Changelog (task 01a1557a-807f stage 2, `:sheet`).
+      :changelog,
       :admin
     ]
     # main's lists minus exactly Play's two metric slugs and two surface keys,

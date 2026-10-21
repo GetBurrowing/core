@@ -103,7 +103,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Org Memory")
+     |> assign(:page_title, "Org memory")
      |> assign(:pages, pages)
      |> assign(:namespace_tree, tree)
      |> assign(:burrow_docs, burrow_docs)

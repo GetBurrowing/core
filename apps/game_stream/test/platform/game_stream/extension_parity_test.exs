@@ -410,6 +410,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :prompts,
       :experiments,
       :meetings,
+      # The More-sheet-only Changelog (task 01a1557a-807f stage 2, `:sheet`).
+      :changelog,
       :admin
     ]
     @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 insight_acceptance_rate manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)

@@ -87,7 +87,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
           data-role="reply-failure-handoff"
           class="mt-1 text-xs leading-4 text-subtle"
         >
-          Someone who manages {@name} can fix this in Agent Resources.
+          Someone who manages {@name} can fix this in Agents.
         </p>
       </div>
     </div>

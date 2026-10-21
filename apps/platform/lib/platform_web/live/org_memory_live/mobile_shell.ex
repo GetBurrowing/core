@@ -386,7 +386,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <div class="flex flex-1 items-center justify-center px-6 py-16">
           <div class="text-center">
             <span class="hero-document-text mx-auto mb-3 block size-14 text-subtle"></span>
-            <h3 class="text-base font-medium text-base-content">Org Memory</h3>
+            <h3 class="text-base font-medium text-base-content">Org memory</h3>
             <p class="mt-1 text-sm text-subtle">
               Tap the menu to open the namespace tree and pick a page.
             </p>

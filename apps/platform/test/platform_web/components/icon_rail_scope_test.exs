@@ -127,7 +127,8 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert :admin in desktop_keys(%{access_scope: root})
       assert :prompts in desktop_keys(%{access_scope: root})
-      assert :admin in more_sheet_keys(%{access_scope: root})
+      # Admin left the More sheet for /settings (task 01a1557a-807f stage 2).
+      refute :admin in more_sheet_keys(%{access_scope: root})
 
       refute :admin in desktop_keys(%{access_scope: sub})
       refute :prompts in desktop_keys(%{access_scope: sub})
@@ -171,9 +172,9 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert diffs == []
 
-      # The More sheet lists only the Working and Admin clusters; Chat is in
-      # the Live cluster, so a guest's sheet is empty, with no section label
-      # over nothing (the member's sheet carries the label: control).
+      # The More sheet lists no Chat row (Chat is a bar tab), so a guest's
+      # sheet has no module row at all; the member's has some (control). The
+      # sheet carries no headings since task 01a1557a-807f stage 2.
       for {row, user} <- ctx.guests do
         assert more_sheet_keys(%{access_scope: scope_of(user), root_user: true}) == [],
                "#{row} sees More-sheet tiles"
@@ -182,7 +183,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
                  "more-sheet-section-label"
       end
 
-      assert more_sheet_html(%{access_scope: member}) =~ ">Working</p>"
+      assert more_sheet_keys(%{access_scope: member}) != []
 
       # Desktop: no Working eyebrow over an empty cluster for a guest; the
       # member's rail carries it (control).

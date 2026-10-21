@@ -4735,6 +4735,16 @@ body, .font-suite {
 
 .more-sheet .sheet-panel {
   padding-bottom: var(--bottom-nav-clearance);
+  /* Height (Saru rule 1; task 01a1557a-807f stage 3). The panel ends under
+     the bar and pads by its clearance (above), and boxes are border-box, so
+     capping the WHOLE panel at 100dvh minus a 48px top margin leaves
+     100dvh - 48px - var(--bottom-nav-clearance) for the visible sheet: the
+     scrim stays tappable above it and the footer (Settings) stays above the
+     bar while the list scrolls. The rise is 200ms for this sheet only (Saru
+     rule 9); the shared reduced-motion rule (`.sheet-panel { transition:
+     none !important }`) still removes it. */
+  max-height: calc(100dvh - 48px);
+  transition-duration: 200ms;
 }
 
 /* Scroll-end clearance below lg (task 01a1557a-7a71 stage 3). Content
@@ -5031,122 +5041,100 @@ body, .font-suite {
   font-weight: 500;
 }
 
-/* ── More-sheet content classes (task 019e0d4b Stage 2) ───────────────
-   The chrome (root, scrim, panel, handle, header, title, close) was
-   removed when more_sheet.ex was refactored to use the generic
-   <.sheet> component. Only the in-body content classes remain below.
+/* ── More sheet paint (task 01a1557a-807f stage 3) ─────────────────────
+   Semantic tokens only, every variant from the same rules: no colour
+   literal and no `[data-theme]`-qualified selector (held by
+   more_sheet_contrast_guard_test.exs, which also measures every pair below
+   in all ten variants). Saru (canvas 01a15bc3): an opaque base-100 sheet,
+   not glass; rows 15px regular in base-content; the current row on base-200
+   with a check; a 1px base-300 divider; the Inbox badge primary on
+   primary-content. Everything is scoped to `.more-sheet` (the root class
+   more_sheet.ex passes to <.sheet>); the shared `.sheet*` rules serve the
+   other sheets and are not touched here.
    ──────────────────────────────────────────────────────────────────── */
 .more-sheet-list {
-  overflow-y: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 12px;
+  display: flex;
+  flex-direction: column;
 }
 
-[data-theme="light"] .more-sheet-list {
-  border-top-color: rgba(0, 0, 0, 0.08);
-}
-
-.more-sheet-section-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: oklch(50% 0 0);
-  padding: 12px 16px 4px;
-  margin: 0;
-}
-
-.more-sheet-row {
+.more-sheet-row,
+.more-sheet-settings {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 11px 16px;
+  padding: 0 16px;
   min-height: 52px;
-  font-size: 14px;
-  color: oklch(95% 0 0);
+  border-radius: var(--radius-field);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--color-base-content);
   text-decoration: none;
   cursor: pointer;
-  transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-[data-theme="light"] .more-sheet-row {
-  color: oklch(15% 0 0);
+.more-sheet-row:hover,
+.more-sheet-row:active,
+.more-sheet-settings:hover,
+.more-sheet-settings:active,
+.more-sheet-row--current {
+  background-color: var(--color-base-200);
 }
 
-.more-sheet-row:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-[data-theme="light"] .more-sheet-row:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.more-sheet-row:active {
-  transform: scale(0.99);
-}
-
-.more-sheet-icon {
+.more-sheet-icon,
+.more-sheet-check {
   width: 22px;
   height: 22px;
-  color: oklch(70% 0 0);
   flex-shrink: 0;
+  color: var(--color-base-content);
 }
 
-[data-theme="light"] .more-sheet-icon {
-  color: oklch(40% 0 0);
+/* The pinned Settings footer: the shared `.sheet-actions` top border is the
+   divider (1px base-300); only its padding is the More sheet's own, so the
+   Settings row lines up with the list rows above it. */
+.more-sheet .sheet-actions {
+  padding: 0.5rem 1.5rem;
 }
 
-.more-sheet-divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-  margin: 6px 16px;
-}
-
-[data-theme="light"] .more-sheet-divider {
-  background: rgba(0, 0, 0, 0.08);
-}
-
-.more-sheet-profile {
-  padding: 12px 16px;
-  min-height: 60px;
-}
-
-.more-sheet-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 9999px;
-  background: linear-gradient(135deg, oklch(70% 0.14 200), oklch(60% 0.18 280));
-  color: oklch(98% 0 0);
+/* Drag handle. Saru names base-300, a border token: it measures under 3:1 on
+   base-100 in every variant (H-handle, measured in
+   more_sheet_contrast_guard_test.exs), so the handle paints with
+   --color-subtle, the lowest-contrast semantic text token that clears 3:1
+   against the sheet in all ten. */
+/* The handle as a Close button (`<.sheet handle_close>`, task 01a1557a-807f
+   stage 4; Saru rule 2). A 44px-tall, 88px-wide hit target around the
+   unchanged 36x4 bar; `touch-action: none` hands a drag that starts on it to
+   the Sheet hook's swipe-down instead of the page. Opt-in markup only: no
+   other sheet renders `.sheet-handle-button`. */
+.sheet-handle-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  font-weight: 600;
-  flex-shrink: 0;
+  width: 88px;
+  min-height: 44px;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-field);
+  cursor: grab;
+  touch-action: none;
 }
 
-.more-sheet-profile-info {
-  flex: 1;
-  min-width: 0;
+.sheet-handle-button .sheet-handle {
+  margin: 0;
 }
 
-.more-sheet-profile-name {
-  font-weight: 500;
-  font-size: 14px;
-  line-height: 1.2;
+/* The shared rule hides the bottom-sheet handle at 768px and up; a handle
+   that IS the Close button must stay visible wherever it is rendered. */
+@media (min-width: 768px) {
+  .sheet-bottom .sheet-handle-button .sheet-handle {
+    display: block;
+  }
 }
 
-.more-sheet-profile-meta {
-  font-size: 11px;
-  color: oklch(50% 0 0);
-  margin-top: 2px;
-}
-
-.more-sheet-chevron {
-  width: 16px;
-  height: 16px;
-  color: oklch(50% 0 0);
-  flex-shrink: 0;
+.more-sheet .sheet-handle {
+  background: var(--color-subtle);
 }
 
 
