@@ -133,9 +133,9 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
             class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
             data-role="external-empty"
           >
-            <span class="hero-chat-bubble-left-right size-8 text-base-content/30"></span>
+            <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
             <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               Your conversations will appear here.
             </p>
           </div>
@@ -148,7 +148,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               @active_space && @active_space.id == space.id && "channel-row--active"
             ]}
           >
-            <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
+            <span :if={space.kind == "channel"} class="text-subtle">#</span>
             <span class="truncate flex-1">
               {if space.kind == "channel",
                 do: ChatLive.masked_space_name(@mask_assigns, space.name),
@@ -247,7 +247,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               <button
                 :if={@active_space}
                 phx-click="close_mobile_browser"
-                class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
+                class="flex items-center justify-center size-10 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content"
                 aria-label="Close"
               >
                 <span class="hero-x-mark size-5"></span>
@@ -280,7 +280,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         <div class="flex-shrink-0 px-4 py-2 border-b border-edge" role="search">
           <form class="relative" phx-change="drawer_search" phx-submit="drawer_search">
             <span
-              class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-base-content/40"
+              class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-subtle"
               aria-hidden="true"
             >
             </span>
@@ -299,13 +299,13 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               spellcheck="false"
               enterkeyhint="go"
               aria-label="Find a conversation"
-              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-faint focus:border-primary focus:outline-none"
+              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
             />
             <button
               :if={@drawer_query != ""}
               type="button"
               phx-click="drawer_search_clear"
-              class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-base-content/50 hover:text-base-content"
+              class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-subtle hover:text-base-content"
               aria-label="Clear search"
             >
               <span class="hero-x-mark size-4"></span>
@@ -323,15 +323,15 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
               data-role="external-empty"
             >
-              <span class="hero-chat-bubble-left-right size-8 text-base-content/30"></span>
+              <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
               <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
-              <p class="text-xs text-base-content/50">
+              <p class="text-xs text-subtle">
                 Your conversations will appear here.
               </p>
             </div>
           <% else %>
             <%= if external_switcher_filtered == [] do %>
-              <p class="px-4 py-6 text-center text-sm text-base-content/50">No matches</p>
+              <p class="px-4 py-6 text-center text-sm text-subtle">No matches</p>
             <% else %>
               <.link
                 :for={space <- external_switcher_filtered}
@@ -341,7 +341,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
                   @active_space && @active_space.id == space.id && "channel-row--active"
                 ]}
               >
-                <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
+                <span :if={space.kind == "channel"} class="text-subtle">#</span>
                 <span class="truncate flex-1">
                   {if space.kind == "channel",
                     do: ChatLive.masked_space_name(@mask_assigns, space.name),

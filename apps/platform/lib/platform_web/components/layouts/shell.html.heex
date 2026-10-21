@@ -161,8 +161,7 @@
             data-role="install-logo"
           />
           <span class="max-w-[7rem] truncate text-sm font-semibold">{@brand_name}</span>
-          <span class="hero-chevron-down size-4 shrink-0 text-base-content/60" aria-hidden="true">
-          </span>
+          <span class="hero-chevron-down size-4 shrink-0 text-subtle" aria-hidden="true"></span>
           <span
             data-role="install-unread-dot"
             class="hidden size-2 shrink-0 rounded-full bg-primary"
@@ -183,7 +182,7 @@
         <.async_result :let={principal_name} assign={@principal_name}>
           <:loading>
             <span
-              class="loading loading-spinner loading-xs text-base-content/40"
+              class="loading loading-spinner loading-xs text-subtle"
               data-test-id="shell-roster-loading"
               title="Loading roster"
             >
@@ -217,7 +216,7 @@
                       class="inline-block size-2 rounded-full bg-neutral"
                       data-test-id="shell-composite-failed"
                     />
-                    <span class="text-base-content/50">Agents unavailable</span>
+                    <span class="text-subtle">Agents unavailable</span>
                   </:failed>
                   <%!-- `composite` is the `%{healthy:, total:, state:}` map
                        from `SpaceAgentPresence.composite/1`. `dot_color/1`
@@ -272,7 +271,7 @@
                     <:failed></:failed>
                     <div
                       :if={composite.total > 0}
-                      class="flex items-center gap-2 px-2 pb-1 text-[10px] uppercase tracking-widest text-base-content/40"
+                      class="flex items-center gap-2 px-2 pb-1 text-[10px] uppercase tracking-widest text-subtle"
                       data-test-id="shell-roster-panel-header"
                     >
                       <span>Agents</span>
@@ -288,7 +287,7 @@
                       </div>
                     </:loading>
                     <:failed>
-                      <div class="text-xs text-base-content/40 px-2 py-2">
+                      <div class="text-xs text-subtle px-2 py-2">
                         Roster unavailable
                       </div>
                     </:failed>
@@ -321,13 +320,13 @@
                           </span>
                           <span
                             :if={sa.role == "principal"}
-                            class="text-[10px] text-base-content/40 uppercase"
+                            class="text-[10px] text-subtle uppercase"
                           >
                             principal
                           </span>
                         </div>
                         <div class="flex items-center gap-2">
-                          <span :if={sa.agent} class="text-xs text-base-content/50">
+                          <span :if={sa.agent} class="text-xs text-subtle">
                             {Platform.Chat.SpaceAgentPresence.status_label(status)}
                           </span>
                           <button
@@ -335,7 +334,7 @@
                             phx-click="dismiss_agent"
                             phx-value-agent-id={sa.agent_id}
                             phx-value-space-id={sa.space_id}
-                            class="hidden group-hover:inline text-xs text-base-content/40 hover:text-error transition-colors"
+                            class="hidden group-hover:inline text-xs font-medium text-base-content hover:text-error transition-colors"
                             title="Remove agent"
                           >
                             Remove
@@ -354,7 +353,7 @@
               class={"inline-block size-2 rounded-full #{agent_status_color(@agent_status)}"}
             >
             </span>
-            <span :if={assigns[:agent_status]} class="text-xs text-base-content/50">
+            <span :if={assigns[:agent_status]} class="text-xs text-subtle">
               {agent_status_label(@agent_status)}
             </span>
           <% end %>
@@ -369,7 +368,7 @@
         <.async_result :let={presence_result} assign={@presence_list}>
           <:loading>
             <span
-              class="loading loading-spinner loading-xs text-base-content/40"
+              class="loading loading-spinner loading-xs text-subtle"
               data-test-id="shell-presence-loading"
               title="Loading participants"
             >
@@ -379,7 +378,7 @@
             <button
               phx-click="toggle_presence_panel"
               data-test-id="shell-presence-badge"
-              class="flex items-center gap-1 text-xs text-base-content/50 hover:text-base-content transition-colors"
+              class="flex items-center gap-1 text-xs font-medium text-base-content hover:text-base-content transition-colors"
               title={
                 case presence_result do
                   {:ok, _} -> "Online participants"
@@ -408,14 +407,14 @@
               :if={assigns[:show_presence_panel] && @show_presence_panel}
               class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-edge bg-base-100 shadow-lg p-2"
             >
-              <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
+              <div class="text-[10px] uppercase tracking-widest text-subtle px-2 mb-1">
                 Participants
               </div>
               <%= case presence_result do %>
                 <% {:ok, []} -> %>
                   <div
                     data-test-id="shell-presence-empty"
-                    class="py-1.5 px-2 text-sm text-base-content/50"
+                    class="py-1.5 px-2 text-sm text-subtle"
                   >
                     No one else online
                   </div>
@@ -431,7 +430,7 @@
                 <% _ -> %>
                   <div
                     data-test-id="shell-presence-unavailable"
-                    class="flex items-center gap-2 py-1.5 px-2 text-sm text-base-content/50"
+                    class="flex items-center gap-2 py-1.5 px-2 text-sm text-subtle"
                   >
                     <span class="inline-block size-2 rounded-full bg-neutral"></span>
                     <span>Presence unavailable</span>
@@ -499,7 +498,7 @@
                   is_binary(Map.get(assigns[:current_user_record] || %{}, :email)) &&
                     @current_user_record.email != @current_user
                 }
-                class="truncate text-xs text-base-content/50"
+                class="truncate text-xs text-subtle"
               >
                 {@current_user_record.email}
               </p>

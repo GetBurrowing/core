@@ -200,7 +200,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           </div>
 
           <section class="mb-5">
-            <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content">
               People
             </h4>
             <ul class="flex flex-col gap-1">
@@ -210,14 +210,14 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
                 class="flex items-center justify-between gap-2 text-sm text-base-content"
               >
                 <span class="min-w-0 truncate">{p.display_name || "Unknown"}</span>
-                <span class="shrink-0 text-xs text-base-content/60">{p.role}</span>
+                <span class="shrink-0 text-xs text-subtle">{p.role}</span>
               </li>
             </ul>
-            <p :if={@people == []} class="text-sm text-base-content/60">No people yet.</p>
+            <p :if={@people == []} class="text-sm text-subtle">No people yet.</p>
           </section>
 
           <section>
-            <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content">
               Agents
             </h4>
             <ul class="flex flex-col gap-1">
@@ -230,7 +230,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
               >
                 <span class="min-w-0 truncate">{a.display_name || "Agent"}</span>
                 <span class="flex shrink-0 items-center gap-2">
-                  <span class="text-xs text-base-content/60">{a.role}</span>
+                  <span class="text-xs text-subtle">{a.role}</span>
                   <button
                     :if={@can_manage?}
                     type="button"
@@ -245,7 +245,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
                 </span>
               </li>
             </ul>
-            <p :if={@agents == []} data-role="members-no-agents" class="text-sm text-base-content/60">
+            <p :if={@agents == []} data-role="members-no-agents" class="text-sm text-subtle">
               No agents in this channel yet.
             </p>
 

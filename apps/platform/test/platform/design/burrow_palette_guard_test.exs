@@ -34,20 +34,24 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   back to `oklch(100% 0 0)`. Both halves go red.
 
   Burrow token schema (task 01a1557a stage 1). daisyUI's slots stay the public
-  API; the only new names are the ones daisyUI has no slot for: `--faint` (the
-  quietest TEXT tier, placeholders and timestamps) and the status `-dim` steps
+  API; the only new names are the ones daisyUI has no slot for: `--subtle`
+  (the secondary-text tier), `--disabled` and `--decorative` (the two
+  WCAG-exempt text colours, task 01a15902 stage 1) and the status `-dim` steps
   `--info-dim` / `--success-dim` / `--warning-dim` (fills and borders only,
   never text). Each is declared bare in both theme blocks and mapped to its
-  `--color-*` key in `@theme inline`, like `--edge`. The guards: `--faint`
-  clears 4.5:1 on all three grounds in both themes and stays more than 0.5:1
-  dimmer than muted on base-100; the ratios in its comment are recomputed
-  here; dark on-accent stays a passing (black) label; every new name is
-  mapped; no `-dim` step is painted as text.
+  `--color-*` key in `@theme inline`, like `--edge`. The guards: dark
+  on-accent stays a passing (black) label; every new name is mapped; no `-dim`
+  step is painted as text.
 
-  Mutations (recorded in the task 01a1557a stage-1 commit): dark `--faint` back
-  to the masters' `#6f727a`; dark `--color-primary-content` to
-  `oklch(100% 0 0)`; delete the `--color-faint: var(--faint)` mapping line.
-  Each turns this file red.
+  The faint tier this schema used to carry was retired by task 01a15902
+  stage 2 (direction canvas 01a15902-e3b2, Rulings 1): text has two colour
+  levels, body and subtle. Its placeholders paint `--subtle`; the test that
+  `--faint` is gone lives in `theme_presets_guard_test.exs`, which reads both
+  CSS files.
+
+  Mutations (recorded in the task 01a1557a stage-1 commit): dark
+  `--color-primary-content` to `oklch(100% 0 0)`; delete a `--color-*` mapping
+  line. Each turns this file red.
   """
   use ExUnit.Case, async: true
 
@@ -79,7 +83,6 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       "--color-error-content" => "oklch(0% 0 0)",
       "--edge" => "#d9d3c9",
       "--focus-ring" => "var(--color-interactive)",
-      "--faint" => "#726961",
       "--info-dim" => "#90d5df",
       "--success-dim" => "#95d09e",
       "--warning-dim" => "#ddb77e"
@@ -101,7 +104,6 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       "--color-error-content" => "oklch(0% 0 0)",
       "--edge" => "#383b42",
       "--focus-ring" => "var(--color-primary)",
-      "--faint" => "#90939b",
       "--info-dim" => "#175660",
       "--success-dim" => "#314936",
       "--warning-dim" => "#5b4522"
@@ -132,16 +134,24 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   # Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
   # Each is declared bare in both theme blocks and mapped to a --color-* key in
   # @theme inline, exactly like --edge.
-  @schema_tokens ["--faint", "--subtle", "--info-dim", "--success-dim", "--warning-dim"]
+  @schema_tokens [
+    "--subtle",
+    "--disabled",
+    "--decorative",
+    "--info-dim",
+    "--success-dim",
+    "--warning-dim"
+  ]
 
   # --subtle (task 01a1557a stage 5 r2): base-content at 55% in both Burrow
   # themes, the composite the retired 55% utility compiled to.
   @subtle_value "color-mix(in oklab, var(--color-base-content) 55%, transparent)"
+  # --disabled and --decorative (task 01a15902 stage 1): the two WCAG-exempt
+  # text colours, base-content at 40% (the look disabled controls have today).
+  # Exempt, so no contrast floor; text_exemption_guard_test.exs holds where
+  # each may be used.
+  @exempt_value "color-mix(in oklab, var(--color-base-content) 40%, transparent)"
   @dim_tokens ["--info-dim", "--success-dim", "--warning-dim"]
-
-  # The faint tier must stay visibly dimmer than muted (--color-secondary) on
-  # the surface, or the two text tiers merge (design canvas 01a15585).
-  @tier_gap 0.5
 
   setup_all do
     {:ok, css: File.read!(@css_path)}
@@ -201,6 +211,12 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
         assert declaration(theme_block(css, @theme), "--subtle") == @subtle_value
       end
 
+      test "--disabled and --decorative are base-content at 40%", %{css: css} do
+        block = theme_block(css, @theme)
+        assert declaration(block, "--disabled") == @exempt_value
+        assert declaration(block, "--decorative") == @exempt_value
+      end
+
       for strength <- [55, 60] do
         @strength strength
 
@@ -240,52 +256,6 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
           assert r >= @non_text,
                  "#{@theme} --focus-ring on #{ground} is #{Float.round(r, 4)}:1"
         end
-      end
-
-      test "--faint clears #{@aa_text}:1 on all three grounds", %{css: css} do
-        failures =
-          @grounds
-          |> Enum.map(fn ground -> {ground, ratio(css, @theme, "--faint", ground)} end)
-          |> Enum.filter(fn {_, r} -> r < @aa_text end)
-          |> Enum.map(fn {ground, r} -> "--faint on #{ground}: #{Float.round(r, 4)}:1" end)
-
-        assert failures == [],
-               "#{@theme} --faint is a text colour (placeholders, timestamps) and is " <>
-                 "under the #{@aa_text}:1 WCAG AA text floor:\n  " <>
-                 Enum.join(failures, "\n  ")
-      end
-
-      test "--faint is dimmer than muted by more than #{@tier_gap}:1 on base-100", %{css: css} do
-        muted = ratio(css, @theme, "--color-secondary", "--color-base-100")
-        faint = ratio(css, @theme, "--faint", "--color-base-100")
-
-        assert muted - faint > @tier_gap,
-               "#{@theme}: muted #{Float.round(muted, 4)}:1 and faint " <>
-                 "#{Float.round(faint, 4)}:1 on base-100 are " <>
-                 "#{Float.round(muted - faint, 4)} apart; the two text tiers merge " <>
-                 "at #{@tier_gap} or less."
-      end
-
-      # The ratios in the --faint comment are computed, not copied: each is
-      # recomputed here and must appear in the theme block to 4 dp.
-      test "the --faint comment records the computed ratios", %{css: css} do
-        block = theme_block(css, @theme)
-
-        recorded =
-          Enum.map(@grounds, fn g -> {"--faint on #{g}", ratio(css, @theme, "--faint", g)} end) ++
-            [
-              {"--color-secondary on --color-base-100",
-               ratio(css, @theme, "--color-secondary", "--color-base-100")}
-            ]
-
-        missing =
-          for {label, r} <- recorded, not String.contains?(block, fixed4(r) <> ":1") do
-            "#{label}: #{fixed4(r)}:1"
-          end
-
-        assert missing == [],
-               "#{@theme}: the --faint comment does not carry these computed ratios " <>
-                 "(re-derive the comment, do not copy):\n  " <> Enum.join(missing, "\n  ")
       end
 
       test "the theme block declares the schema names bare, never as --color-*", %{css: css} do

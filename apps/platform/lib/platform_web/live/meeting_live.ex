@@ -1944,7 +1944,7 @@ defmodule PlatformWeb.MeetingLive do
   def calendar_card_status_class("scheduled"), do: "border-primary/40 bg-primary/15 text-primary"
 
   def calendar_card_status_class(_other),
-    do: "border-edge bg-base-200 text-base-content/60"
+    do: "border-edge bg-base-200 text-subtle"
 
   @doc """
   How many meetings the rendered WEEK actually draws.
@@ -2498,7 +2498,7 @@ defmodule PlatformWeb.MeetingLive do
   defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
   defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
   defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
-  defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-base-content/60"
+  defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-subtle"
 
   # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
   # ships `:short_label` on the action-item chip precisely so the phone does
@@ -9129,7 +9129,7 @@ defmodule PlatformWeb.MeetingLive do
 
     ~H"""
     <span
-      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-base-content/50 sm:flex lg:hidden 2xl:flex"
+      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-subtle sm:flex lg:hidden 2xl:flex"
       data-role="meeting-roster-count"
       data-people={@people}
       data-agents={@agents}

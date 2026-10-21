@@ -238,7 +238,7 @@ defmodule PlatformWeb.Tasks.CanvasPickerComponent do
             class="border-b border-edge p-2"
           >
             <label class="input input-sm flex w-full items-center gap-2">
-              <span class="hero-magnifying-glass size-4 shrink-0 text-base-content/60"></span>
+              <span class="hero-magnifying-glass size-4 shrink-0 text-subtle"></span>
               <input
                 type="search"
                 name="query"

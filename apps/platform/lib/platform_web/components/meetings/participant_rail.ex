@@ -979,8 +979,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
              clears both themes (5.53:1 light, 6.44:1 dark) and is the same
              tone the sub-line and the delay-reason text already use. --%>
         <div class="flex items-center gap-1.5 px-2 pb-1.5" data-role="humans-heading">
-          <span class="hero-users size-3.5 text-base-content/50"></span>
-          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/60">
+          <span class="hero-users size-3.5 text-subtle"></span>
+          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content">
             In this call
           </span>
         </div>
@@ -1022,7 +1022,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    above for how this was measured. --%>
               <div
                 :if={MeetingLive.via_guest_link?(p)}
-                class="truncate text-[11px] text-base-content/60"
+                class="truncate text-[11px] text-subtle"
                 data-role="participant-via-guest-link"
               >
                 via guest link
@@ -1048,7 +1048,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
           <li
             :if={@humans == []}
-            class="px-2 py-1.5 text-xs text-base-content/40"
+            class="px-2 py-1.5 text-xs text-subtle"
           >
             No people yet.
           </li>
@@ -1361,7 +1361,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       title={mute_button_label(@mute_target, @muted_by_host?, @name)}
       data-role="meeting-agent-mute"
       data-mute-state={mute_button_data_state(@mute_target, @muted_by_host?)}
-      class="btn btn-ghost btn-square btn-xs size-6 min-h-0 rounded-full p-0 text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11 disabled:opacity-100"
+      class="btn btn-ghost btn-square btn-xs size-6 min-h-0 rounded-full p-0 text-subtle hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11 disabled:opacity-100"
     >
       <span
         :if={not is_nil(@mute_target)}
@@ -1377,7 +1377,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       </span>
       <span
         :if={is_nil(@mute_target) and !@muted_by_host?}
-        class="hero-microphone size-3.5 text-base-content/60"
+        class="hero-microphone size-3.5 text-subtle"
         aria-hidden="true"
       >
       </span>
@@ -1477,8 +1477,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   # `text-warning` for OFF, which on this screen means "a human is being
   # asked for something". Being muted asks nothing of anyone.
   defp glyph_tone(:off), do: "text-error"
-  defp glyph_tone(:unavailable), do: "text-base-content/25"
-  defp glyph_tone(_state), do: "text-base-content/60"
+  defp glyph_tone(:unavailable), do: "text-subtle"
+  defp glyph_tone(_state), do: "text-subtle"
 
   # `hero-microphone-slash` resolves and paints, as of FE-19
   # (`01a07486-7985-7001-87ce-277681791f52`), against the vendored

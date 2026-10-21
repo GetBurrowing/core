@@ -77,7 +77,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <h2 class="text-lg font-semibold text-base-content">Agent files</h2>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             Changes apply the next time {@agent.name} starts.
           </p>
         </div>
@@ -140,7 +140,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
           id="native-files-readonly"
           class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-box border border-edge bg-base-200/40 p-3 font-mono text-[13px] leading-5 text-base-content"
         >{@selected_workspace_file.content}</pre>
-        <p class="mt-2 text-sm text-base-content/60">Edit files on a larger screen.</p>
+        <p class="mt-2 text-sm text-subtle">Edit files on a larger screen.</p>
       </div>
 
       <div
@@ -174,7 +174,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
           </button>
           <div
             :if={@workspace_files == []}
-            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/60"
+            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
           >
             No files yet.
           </div>
@@ -236,7 +236,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
             </p>
 
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p id="native-files-meta" class="text-xs text-base-content/60" role="status">
+              <p id="native-files-meta" class="text-xs text-subtle" role="status">
                 <%= cond do %>
                   <% @stopped_hint? -> %>
                     Saved. {@agent.name} will use this the next time it starts.

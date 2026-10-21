@@ -200,7 +200,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               </h2>
               <p
                 :if={@selected_stack.description && @selected_stack.description != ""}
-                class="text-xs text-base-content/60 leading-snug"
+                class="text-xs text-subtle leading-snug"
                 data-role="stack-detail-description"
               >
                 {@selected_stack.description}
@@ -265,7 +265,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
             data-role="stack-detail-meta"
           >
             <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-status">
-              <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <div class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Status
               </div>
               <div
@@ -276,7 +276,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               </div>
             </div>
             <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-members">
-              <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <div class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Members
               </div>
               <div class="mt-1 text-sm font-medium" data-role="meta-cell-members-value">
@@ -284,7 +284,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               </div>
             </div>
             <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-dep-edges">
-              <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <div class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Dep edges
               </div>
               <div
@@ -295,7 +295,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               </div>
             </div>
             <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-branch">
-              <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <div class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Branch
               </div>
               <div
@@ -404,7 +404,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                 data-role="stack-detail-dag-expand"
                 phx-click="stack_open_graph_expand"
                 phx-target={@myself}
-                class="btn btn-ghost btn-sm btn-square absolute top-1 right-1 text-base-content/60 hover:bg-base-content/10 max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]"
+                class="btn btn-ghost btn-sm btn-square absolute top-1 right-1 text-subtle hover:bg-base-content/10 max-sm:h-11 max-sm:w-11 max-sm:min-h-[44px] max-sm:min-w-[44px]"
               >
                 <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
               </button>
@@ -433,10 +433,10 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                 class="flex items-center gap-2"
                 data-role="stack-detail-members-header"
               >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Members
                 </span>
-                <span class="text-[10px] text-base-content/50">(dispatch order)</span>
+                <span class="text-[10px] text-subtle">(dispatch order)</span>
               </div>
               <div class="mlist flex flex-col gap-1.5" data-role="stack-detail-members-list">
                 <%= for member <- @selected_stack_members do %>
@@ -502,7 +502,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                         </button>
                       <% else %>
                         <span
-                          class="shrink-0 rounded bg-base-content/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
+                          class="shrink-0 rounded bg-base-content/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-subtle"
                           data-role="stack-detail-member-assignment"
                           data-assignment="inherited"
                         >
@@ -535,7 +535,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                     </div>
                     <div
                       :if={annotation}
-                      class="pl-7 text-[10px] text-base-content/50"
+                      class="pl-7 text-[10px] text-subtle"
                       data-role="stack-detail-member-deps"
                     >
                       {annotation}
@@ -563,7 +563,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           >
             <h3
               id={"stack-detail-canvases-#{@selected_stack.id}"}
-              class="pb-1 text-xs font-semibold uppercase tracking-wider text-base-content/60"
+              class="pb-1 text-xs font-semibold uppercase tracking-wider text-base-content"
             >
               Canvases
             </h3>
@@ -584,7 +584,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                   <span
                     class={[
                       "min-w-0 flex-1 truncate text-sm font-medium",
-                      if(row.canvas, do: "text-base-content", else: "text-base-content/60 italic")
+                      if(row.canvas, do: "text-base-content", else: "text-subtle italic")
                     ]}
                     data-role="stack-detail-canvas-title"
                     title={stack_canvas_title(row)}
@@ -794,7 +794,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                   Needs feedback
                 </div>
                 <div
-                  class="text-xs text-base-content/60"
+                  class="text-xs font-medium text-base-content"
                   data-role="stack-feedback-overlay-count"
                 >
                   {@selected_stack_pending_review_count} pending {request_word(
@@ -823,7 +823,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           <div class="flex-1 overflow-y-auto px-4 py-3">
             <%= if @selected_stack_open_review_requests == [] do %>
               <div
-                class="rounded-lg border border-dashed border-edge bg-base-200/50 p-6 text-center text-sm text-base-content/60"
+                class="rounded-lg border border-dashed border-edge bg-base-200/50 p-6 text-center text-sm text-subtle"
                 data-role="stack-feedback-overlay-empty"
               >
                 No pending feedback on this stack.
@@ -840,7 +840,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                   <%!-- Row header: member task title + drill-in link. --%>
                   <div class="flex items-start justify-between gap-2 border-b border-edge px-3 py-2">
                     <div class="min-w-0">
-                      <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+                      <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content">
                         Member task
                       </div>
                       <%= if rr.member_task do %>
@@ -852,7 +852,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                           {rr.member_task.title}
                         </.link>
                       <% else %>
-                        <span class="block truncate text-sm font-medium text-base-content/60">
+                        <span class="block truncate text-sm font-medium text-subtle">
                           (member task missing)
                         </span>
                       <% end %>
@@ -980,7 +980,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                           >{item.content}</pre>
                         <% true -> %>
                           <div
-                            class="rounded-md border border-dashed border-edge bg-base-100 p-2 text-xs text-base-content/50"
+                            class="rounded-md border border-dashed border-edge bg-base-100 p-2 text-xs text-subtle"
                             data-role="stack-feedback-overlay-empty-item"
                           >
                             No reviewable content attached.
@@ -1038,7 +1038,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           <div class="flex items-center justify-between border-b border-edge px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <div class="min-w-0">
               <div class="truncate text-sm font-semibold">Stack dep graph</div>
-              <div class="text-xs text-base-content/60">
+              <div class="text-xs text-subtle">
                 {length(@selected_stack_members)} members
               </div>
             </div>
@@ -1142,7 +1142,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div>
               <h2 class="text-base font-semibold">Assign Agents</h2>
-              <p class="mt-0.5 text-xs text-base-content/60">
+              <p class="mt-0.5 text-xs text-subtle">
                 {@selected_stack.name} · stack-level default
               </p>
             </div>
@@ -1159,7 +1159,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
 
           <%!-- Mode toggle (segmented) --%>
           <div class="flex items-center justify-between px-4 py-3 border-b border-edge gap-3">
-            <p class="text-xs text-base-content/60 leading-snug">
+            <p class="text-xs text-subtle leading-snug">
               {if @stack_assignee_modal_mode == :advanced,
                 do: "One agent per phase, applied to every member.",
                 else: "One agent for the whole stack."}
@@ -1206,7 +1206,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
           >
             <%!-- Simple mode --%>
             <div :if={@stack_assignee_modal_mode == :simple} class="flex flex-col gap-1">
-              <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+              <label class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Agent (all phases)
               </label>
               <select
@@ -1227,7 +1227,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
             <%!-- Advanced mode: per-phase pickers --%>
             <div :if={@stack_assignee_modal_mode == :advanced} class="flex flex-col gap-3">
               <div :for={phase <- ~w(planning execution review)} class="flex flex-col gap-1">
-                <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                <label class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   {phase_label(phase)}
                 </label>
                 <select
@@ -1245,7 +1245,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                 </select>
               </div>
 
-              <p class="mt-1 text-[11px] text-base-content/50">
+              <p class="mt-1 text-[11px] text-subtle">
                 This stack-level assignment is the default. It fans out to every member that
                 isn't individually overridden — members with their own assignment are left
                 untouched.

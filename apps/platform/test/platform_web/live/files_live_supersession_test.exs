@@ -155,7 +155,7 @@ defmodule PlatformWeb.FilesLiveSupersessionTest do
 
       badge = badge_html(view)
 
-      assert badge =~ "text-base-content/60",
+      assert badge =~ "text-subtle",
              "an unconfirmed claim must be quiet — the machine's guess is not a finding yet"
 
       for taken <-
@@ -208,7 +208,7 @@ defmodule PlatformWeb.FilesLiveSupersessionTest do
       assert badge =~ ~s(data-supersession-ruling="confirmed")
       refute badge =~ ~s(data-supersession-ruling="unruled")
 
-      refute badge =~ "text-base-content/60",
+      refute badge =~ "text-subtle",
              "full weight is the reward for being verified — the badge must stop being quiet"
 
       refute badge =~ "unconfirmed"

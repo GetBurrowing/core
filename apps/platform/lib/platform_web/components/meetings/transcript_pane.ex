@@ -67,14 +67,14 @@ defmodule PlatformWeb.Components.Meetings.TranscriptPane do
          (Saru's canvas, "Three calls"), so it is refuted by test. --%>
     <p
       :if={@captions_available}
-      class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+      class="px-3 py-5 text-[12.5px] leading-normal text-subtle"
       data-role="transcript-empty"
     >
       No speech yet. Lines appear here as people talk.
     </p>
     <p
       :if={!@captions_available}
-      class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+      class="px-3 py-5 text-[12.5px] leading-normal text-subtle"
       data-role="transcript-empty"
     >
       Captions are unavailable for this meeting, so no transcript lines will

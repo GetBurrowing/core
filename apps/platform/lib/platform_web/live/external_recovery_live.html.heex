@@ -2,7 +2,7 @@
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Admin · External Logins
       </h1>
       <span class="badge badge-ghost badge-sm" data-role="queue-count">{length(@queue)}</span>
@@ -21,7 +21,7 @@
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
     <div
       :if={@queue == [] and @provisioned == []}
-      class="flex h-full flex-col items-center justify-center gap-2 text-base-content/40"
+      class="flex h-full flex-col items-center justify-center gap-2 text-subtle"
       data-role="empty-queue"
     >
       <span class="hero-check-circle size-8"></span>
@@ -38,14 +38,14 @@
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <span class="hero-user-circle size-5 text-base-content/50"></span>
+              <span class="hero-user-circle size-5 text-subtle"></span>
               <span class="text-sm font-medium text-base-content truncate">
                 {display_name(row.user)}
               </span>
               <span :if={row.reason} class="badge badge-ghost badge-xs">{row.reason}</span>
             </div>
-            <div class="mt-1 text-xs text-base-content/60 truncate">{row.email}</div>
-            <div class="mt-0.5 text-xs text-base-content/40">
+            <div class="mt-1 text-xs text-subtle truncate">{row.email}</div>
+            <div class="mt-0.5 text-xs text-subtle">
               Signed in {relative_time(row.last_seen_at)}
             </div>
           </div>
@@ -61,7 +61,7 @@
           class="mt-2 flex flex-col gap-1"
           data-role="unmapped-groups"
         >
-          <span class="text-xs font-medium text-base-content/60">
+          <span class="text-xs font-medium text-subtle">
             No mapped group matched this login
           </span>
           <div
@@ -78,14 +78,14 @@
           </div>
           <span
             :if={row.group_values == []}
-            class="text-xs text-base-content/50"
+            class="text-xs text-subtle"
             data-role="unmapped-groups-empty"
           >
             This login carried no group values at all.
           </span>
           <span
             :if={is_nil(row.group_values)}
-            class="text-xs text-base-content/50"
+            class="text-xs text-subtle"
             data-role="unmapped-groups-unknown"
           >
             Group values weren't recorded for this login, so there is nothing to map from here.
@@ -110,7 +110,7 @@
                `required` keeps an empty submit from posting. --%>
           <label class="flex flex-col gap-1">
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs font-medium text-base-content/60">Target org</span>
+              <span class="text-xs font-medium text-subtle">Target org</span>
               <span
                 :if={row.group_match == :one and row.suggested_org_id}
                 class="badge badge-ghost badge-xs gap-1"
@@ -142,8 +142,8 @@
           </label>
 
           <div class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/60">
-              Channels <span class="text-base-content/40">· select any number</span>
+            <span class="text-xs font-medium text-subtle">
+              Channels <span class="font-normal text-subtle">· select any number</span>
             </span>
             <.channel_checkboxes id={"grant-#{row.user_id}"} spaces={@grant_spaces} />
           </div>
@@ -156,7 +156,7 @@
               class="checkbox checkbox-sm checkbox-primary"
               data-role="grant-allow-dm"
             />
-            <span class="text-xs font-medium text-base-content/60">Allow DMs in this org</span>
+            <span class="text-xs font-medium text-subtle">Allow DMs in this org</span>
           </label>
 
           <button
@@ -178,7 +178,7 @@
       class="mx-auto mt-6 max-w-4xl"
       data-role="provisioned-section"
     >
-      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content">
         Provisioned external users · add channels
       </h2>
       <div class="space-y-3">
@@ -189,7 +189,7 @@
           class="rounded-lg border border-edge bg-base-200 p-4"
         >
           <div class="flex items-center gap-2">
-            <span class="hero-user-circle size-5 text-base-content/50"></span>
+            <span class="hero-user-circle size-5 text-subtle"></span>
             <span class="text-sm font-medium text-base-content truncate">
               {display_name(row.user)}
             </span>
@@ -204,8 +204,9 @@
             <input type="hidden" name="user_id" value={row.user_id} />
 
             <div class="flex flex-col gap-1">
-              <span class="text-xs font-medium text-base-content/60">
-                Add channels <span class="text-base-content/40">· already-joined are locked</span>
+              <span class="text-xs font-medium text-subtle">
+                Add channels
+                <span class="font-normal text-subtle">· already-joined are locked</span>
               </span>
               <.channel_checkboxes
                 id={"add-#{row.user_id}"}
@@ -234,17 +235,17 @@
          Mobile-first: the form stacks vertically and stays usable at
          375px, matching the grant forms above. --%>
     <div class="mx-auto mt-6 max-w-4xl" data-role="group-mapping-section">
-      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <h2 class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content">
         Group claim → org mapping
       </h2>
-      <p class="mb-3 text-xs text-base-content/50">
+      <p class="mb-3 text-xs text-subtle">
         A mapping only pre-selects an org for logins that arrive after it is added. It grants nothing.
       </p>
 
       <div class="rounded-lg border border-edge bg-base-200 p-4">
         <p
           :if={@group_claims == []}
-          class="text-xs text-base-content/50"
+          class="text-xs text-subtle"
           data-role="group-mapping-empty"
         >
           No group values are mapped yet.
@@ -260,7 +261,7 @@
             <span class="font-mono text-xs text-base-content" data-role="group-mapping-value">
               {claim.claim_value}
             </span>
-            <span class="hero-arrow-right size-3 text-base-content/40"></span>
+            <span class="hero-arrow-right size-3 text-subtle"></span>
             <span class="text-sm text-base-content" data-role="group-mapping-org">
               {claim.org && claim.org.name}
             </span>
@@ -283,7 +284,7 @@
           class="mt-3 flex flex-col gap-3 border-t border-edge pt-3"
         >
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/60">Group claim value</span>
+            <span class="text-xs font-medium text-subtle">Group claim value</span>
             <input
               type="text"
               name="claim_value"
@@ -295,7 +296,7 @@
           </label>
 
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/60">Org</span>
+            <span class="text-xs font-medium text-subtle">Org</span>
             <select
               name="org_id"
               data-role="group-mapping-org-select"

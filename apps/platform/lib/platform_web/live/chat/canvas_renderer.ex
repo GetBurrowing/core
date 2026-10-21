@@ -126,7 +126,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
 
   defp render_removed(assigns) do
     ~H"""
-    <div class="rounded-xl border border-dashed border-edge bg-base-200 px-4 py-6 text-sm text-base-content/50 text-center">
+    <div class="rounded-xl border border-dashed border-edge bg-base-200 px-4 py-6 text-sm text-subtle text-center">
       This canvas was removed.
     </div>
     """

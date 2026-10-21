@@ -433,7 +433,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   # keeps it legible at 9px beside `◐ ✎ ○ ● !`.
   defp meta(:delayed),
     do: %{
-      ring: "border-base-content/25 text-base-content/50",
+      ring: "border-base-content/25 text-subtle",
       text: "text-info",
       glyph: "‖",
       word: "Delayed",
@@ -475,7 +475,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:idle),
     do: %{
       ring: "border-base-content/25 text-transparent",
-      text: "text-base-content/60",
+      text: "text-subtle",
       glyph: "",
       word: "Idle",
       face_dim: true,

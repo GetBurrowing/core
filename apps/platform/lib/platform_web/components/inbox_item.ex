@@ -118,7 +118,7 @@ defmodule PlatformWeb.Components.InboxItem do
         <span class="min-w-0 flex-1">
           <span class="flex flex-wrap items-center gap-2">
             <span
-              class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-base-content/60"
+              class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-subtle"
               data-role="inbox-item-kind"
             >
               <.icon name={kind_icon(@item.kind)} class="size-3.5" />
@@ -168,7 +168,7 @@ defmodule PlatformWeb.Components.InboxItem do
           </span>
 
           <span
-            class="mt-1 block text-xs text-base-content/50"
+            class="mt-1 block text-xs text-subtle"
             title={DateTime.to_string(@item.inserted_at)}
           >
             {relative_time(@item.inserted_at)}
@@ -180,7 +180,7 @@ defmodule PlatformWeb.Components.InboxItem do
         type="button"
         phx-click="dismiss"
         phx-value-id={@item.id}
-        class="m-2 flex size-8 shrink-0 items-center justify-center self-center rounded-full text-base-content/40 opacity-100 transition hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+        class="m-2 flex size-8 shrink-0 items-center justify-center self-center rounded-full text-subtle opacity-100 transition hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
         data-role="inbox-item-dismiss"
         aria-label="Dismiss notification"
         title="Dismiss"

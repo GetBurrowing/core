@@ -150,21 +150,6 @@
   --color-primary-content: #fbfaf9;           /* light text on deep orange */
   --color-secondary: #635b53;                 /* warm grey */
   --color-secondary-content: oklch(100% 0 0);
-  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
-     Muted is --color-secondary; daisyUI has no third slot, so this is a new
-     name. Being text, it owes 4.5:1 on every ground, and it must stay more
-     than 0.5:1 dimmer than muted on base-100 or the two tiers merge.
-
-     On the muted tint's own line (the oklch chroma and hue of #635b53, only
-     lightness raised), #726961 is the lightest 8-bit step that clears all
-     three grounds: 5.1536:1 on base-100, 4.8939:1 on base-200 and 4.5302:1 on
-     base-300. Muted measures 6.3911:1 on base-100. Computed through
-     Platform.Design.WcagContrast and recomputed against this comment by
-     test/platform/design/burrow_palette_guard_test.exs.
-
-     Declared --faint, never --color-faint: the @theme inline block below maps
-     the --color-* key, as it does for --edge. */
-  --faint: #726961;
   /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2): base-content
      at reduced strength, exactly what Tailwind compiled the retired
      base-content-at-55% utility to, so Burrow paints the same pixel it did.
@@ -174,6 +159,18 @@
      4.6867:1 on base-100, 4.6350:1 on base-200 and 4.5414:1 on base-300.
      Declared --subtle, never --color-subtle; see the @theme inline block. */
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  /* Disabled and decorative (task 01a15902 stage 1): the two text colours
+     WCAG 1.4.3 exempts, declared the way --subtle is. --disabled is text
+     inside a control that is actually disabled, and nothing else; it keeps
+     today's look of base-content at about 40%. --decorative is aria-hidden
+     glyphs only (middle-dot separators, watermark art). Being exempt, neither
+     is held to 4.5:1, so test/platform/design/text_exemption_guard_test.exs
+     holds where they may be used instead: text-disabled only on an element
+     carrying disabled or aria-disabled, text-decorative only on one carrying
+     aria-hidden="true". Declared bare, never as --color-*; see the
+     @theme inline block. */
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. The
      burrow_palette_guard test fails if one is painted as a text colour. */
@@ -304,23 +301,13 @@
   --color-primary-content: oklch(0% 0 0);     /* black text on orange */
   --color-secondary: #a9abb2;
   --color-secondary-content: oklch(0% 0 0);
-  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
-     The masters' #6f727a failed AA on all three grounds. #8a8d95, the lowest
-     step on the same tint that clears them, painted 4.1987:1 on the thread
-     composer's #252c3d fill (stage 2, measured on screenshot pixels), so
-     faint went up the same tint (+6 per channel) to #90939b, the lowest step
-     that also clears that fill: 5.6053:1 on base-100, 6.0981:1 on base-200,
-     4.8674:1 on base-300 and 4.5360:1 on #252c3d. Muted measures 7.5105:1
-     on base-100, so faint stays visibly dimmer. Computed through
-     Platform.Design.WcagContrast and recomputed against this comment by
-     test/platform/design/burrow_palette_guard_test.exs and
-     faint_adoption_test.exs. Declared --faint, never --color-faint; see the
-     @theme inline block below. */
-  --faint: #90939b;
   /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2); see the light
      block. Painted under every measured browser formula it measures 5.3276:1
      on base-100, 5.4963:1 on base-200 and 4.9321:1 on base-300. */
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  /* Disabled and decorative (task 01a15902 stage 1); see the light block. */
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. */
   --info-dim: #175660;
@@ -413,14 +400,19 @@
      Without it every ring-focus-ring call site falls back to currentColor. */
   --color-focus-ring: var(--focus-ring);
   /* Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
-     The theme blocks declare --faint and the three status -dim steps; these
-     mappings mint text-faint and the bg-/border- utilities for the -dim
-     steps. The -dim steps are fills and borders only, never text. */
-  --color-faint: var(--faint);
+     The theme blocks declare the three status -dim steps; these mappings mint
+     the bg-/border- utilities for them. The -dim steps are fills and borders
+     only, never text. (The faint text tier that also lived here is retired,
+     task 01a15902 stage 2: text has two levels, body and subtle.) */
   /* text-subtle (task 01a1557a stage 5 r2): every theme block, Burrow's and
      each preset's in theme_presets.css, declares --subtle at its own
      strength. */
   --color-subtle: var(--subtle);
+  /* text-disabled and text-decorative (task 01a15902 stage 1): the two
+     WCAG-exempt text colours, declared in every theme block like --subtle.
+     Where each may be used is held by text_exemption_guard_test.exs. */
+  --color-disabled: var(--disabled);
+  --color-decorative: var(--decorative);
   --color-info-dim: var(--info-dim);
   --color-success-dim: var(--success-dim);
   --color-warning-dim: var(--warning-dim);
@@ -464,6 +456,21 @@
   --ag-rose-tint: color-mix(in srgb, var(--ag-rose) var(--ag-tint-pct), var(--color-base-100));
   --ag-indigo-tint: color-mix(in srgb, var(--ag-indigo) var(--ag-tint-pct), var(--color-base-100));
   --ag-lime-tint: color-mix(in srgb, var(--ag-lime) var(--ag-tint-pct), var(--color-base-100));
+}
+
+/* Every placeholder defaults to the secondary-text tier (task 01a15902
+   stage 2). Tailwind v4 preflight paints ::placeholder at
+   color-mix(in oklab, currentcolor 50%, transparent), so an input with no
+   placeholder class painted base-content at 50%, under 4.5:1 on the light
+   grounds. Placeholder text is text (WCAG 1.4.3 exempts only inactive
+   controls). In @layer base, after preflight in the same layer, so every
+   placeholder: utility still wins. daisyUI's 20% placeholder applies to
+   :disabled controls only, which 1.4.3 exempts; it is left alone.
+   placeholder_contrast_test.exs holds this rule. */
+@layer base {
+  ::placeholder {
+    color: var(--color-subtle);
+  }
 }
 
 /* Add variants based on LiveView classes */
@@ -1749,13 +1756,13 @@ body, .font-suite {
   border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
-/* Faint, the quietest text tier (task 01a1557a stage 2). #666 painted
-   2.4329:1 on the #252c3d fill and the light #888 3.5449:1 on #ffffff; both
-   fail AA. --faint resolves per theme, so one rule serves both and the light
-   override is gone. The #252c3d fill is darker-blue than every theme ground
-   and is what set the dark --faint value; faint_adoption_test.exs holds
-   faint at 4.5:1 on it. */
-.thread-input::placeholder { color: var(--faint); }
+/* The thread placeholder paints the secondary-text tier (task 01a15902
+   stage 2; it was the retired faint tier, and #666 / #888 before that, which
+   failed AA). --color-subtle resolves per theme, so one rule serves every
+   preset. The #252c3d / #ffffff fills are not theme grounds, so
+   placeholder_contrast_test.exs measures --subtle on them in all 12
+   variants. */
+.thread-input::placeholder { color: var(--color-subtle); }
 .thread-send {
   width: 30px;
   height: 30px;
@@ -2222,19 +2229,12 @@ body, .font-suite {
 }
 
 /* Canvas picker meta line ("#space · edited Oct 13", task 01a1559a stage 3).
-   The design direction names `neutral` at text-xs and requires 4.5:1. Light
-   uses the token raw (7.18:1 on base-100 per the `.reaction-picker` measurement
-   in this file); dark takes the same 50% base-content mix as `.message-context-label`,
-   because raw neutral is 1.86:1 on the dark panel. */
-.canvas-picker-meta { color: var(--color-neutral); }
-[data-theme="dark"] .canvas-picker-meta {
-  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .canvas-picker-meta {
-    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+   Secondary text, so it paints the secondary-text token (task 01a15902
+   stage 1): --color-subtle resolves to each theme block's own --subtle, which
+   the theme guards hold at 4.5:1 on all three grounds in every preset. It
+   was `neutral` raw in light and a 50% base-content/neutral mix in dark,
+   a private colour-mix no secondary-text count could see. */
+.canvas-picker-meta { color: var(--color-subtle); }
 
 /* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
    The way back to the tip of a conversation for a reader who scrolled up
@@ -2891,9 +2891,10 @@ body, .font-suite {
 /* The composer placeholder (task 01a1557a stage 2), the design direction's
    signature element: a quiet invitation that still reads as live text, not
    a disabled control. Without this rule it painted Tailwind preflight's 50%
-   currentColor. --faint resolves per theme. */
+   currentColor. It paints the secondary-text tier, --color-subtle, which
+   resolves per theme (task 01a15902 stage 2; it was the retired faint tier). */
 .compose-pill-bar textarea::placeholder {
-  color: var(--faint);
+  color: var(--color-subtle);
 }
 
 /* iOS Safari auto-zooms any input with font-size < 16px on focus, and
@@ -4833,7 +4834,9 @@ body, .font-suite {
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+  /* The secondary-text tier (task 01a15902 stage 6; was base-content at
+     50%, 3.80:1 on sand light). */
+  color: var(--color-subtle);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -5194,7 +5197,7 @@ body, .font-suite {
     font-size: 12px;
     line-height: 1;
     white-space: nowrap;
-    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+    color: var(--color-subtle); /* task 01a15902 stage 6; was base-content at 60% */
   }
 
   .sheet-handle__fill.candidate-drain--warning {
@@ -5729,7 +5732,7 @@ body, .font-suite {
   /* The eye toggle, sized and weighted like the kebab beside it so the header
      row still reads as one pair of controls rather than a new emphasis. */
   .channel-mask-toggle {
-    @apply inline-flex items-center justify-center rounded p-1 text-base-content/60;
+    @apply inline-flex items-center justify-center rounded p-1 text-subtle;
     @apply hover:bg-base-200 hover:text-base-content;
   }
 
@@ -5741,7 +5744,7 @@ body, .font-suite {
      not hover-gated, so it survives touch. */
   .channel-section-reveal-button {
     @apply inline-flex flex-shrink-0 items-center justify-center rounded p-0.5;
-    @apply text-base-content/60 hover:bg-base-200 hover:text-base-content;
+    @apply text-subtle hover:bg-base-200 hover:text-base-content;
   }
 
   /* The drawer's reveal control (task 01a00c66 stage 3). Same control, same
@@ -5773,11 +5776,11 @@ body, .font-suite {
   /* Decorative chevron (aria-hidden in the markup). `--color-base-content` per
      the design direction — no new colour token. */
   .channel-section-chevron {
-    @apply flex-shrink-0 text-base-content/60;
+    @apply flex-shrink-0 text-subtle;
   }
 
   .channel-section-label {
-    @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
+    @apply text-xs font-semibold uppercase tracking-widest text-base-content;
   }
 
   /* Color-only section swatch in the section header. Communicates the section's
@@ -5826,7 +5829,7 @@ body, .font-suite {
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
   .channel-section-drag-handle {
-    @apply ml-auto cursor-grab opacity-0 text-base-content/40 transition-opacity duration-150 group-hover:opacity-100;
+    @apply ml-auto cursor-grab opacity-0 text-subtle transition-opacity duration-150 group-hover:opacity-100;
   }
 
   .channel-section-drag-handle:active {
@@ -5879,7 +5882,7 @@ body, .font-suite {
   }
 
   .channel-section-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
+    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content;
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
     touch-action: manipulation;
   }
@@ -5891,7 +5894,7 @@ body, .font-suite {
      WCAG 1.4.11 exempts disabled controls; we hold its 3:1 floor anyway
      because "present but disabled" is this drawer's whole convention. */
   .channel-section-move-button--touch:disabled {
-    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
+    @apply opacity-100 text-disabled hover:bg-transparent hover:text-disabled;
   }
 
   /* Channel-ROW reorder chrome in the mobile drawer (row reorder Stage 1;
@@ -5905,13 +5908,13 @@ body, .font-suite {
   }
 
   .channel-row-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
+    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content;
     @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
     touch-action: manipulation;
   }
 
   .channel-row-move-button--touch:disabled {
-    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
+    @apply opacity-100 text-disabled hover:bg-transparent hover:text-disabled;
   }
 
   /* Row touch-drag handle (channel-row reorder Stage 2 — activates the slot
@@ -5925,7 +5928,7 @@ body, .font-suite {
     /* /45 not /30: this is an ENABLED control, so WCAG 1.4.11's 3:1 floor
        genuinely applies (/30 ≈ 2.6:1 on the drawer bg). Still visibly
        quieter than the section handle's /60. */
-    @apply flex items-center justify-center min-h-11 min-w-11 flex-shrink-0 text-sm text-base-content/45;
+    @apply flex items-center justify-center min-h-11 min-w-11 flex-shrink-0 text-sm text-subtle;
     touch-action: none;
     -webkit-touch-callout: none;
   }
@@ -6007,7 +6010,7 @@ body, .font-suite {
 
   /* Empty-state hint inside a sub-org section that has no channels yet. */
   .channel-section-empty {
-    @apply px-2 py-1 text-xs italic text-base-content/40 leading-snug;
+    @apply px-2 py-1 text-xs italic text-subtle leading-snug;
   }
 
   /* Single channel / DM row — shared across all sections so we don't
@@ -6081,7 +6084,7 @@ body, .font-suite {
 
      `transition` covers colour and background on hover/focus. */
   .channel-row-actions-button {
-    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/60 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
+    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-subtle hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
   }
 
   /* 44x44 touch target from a hit-area pseudo-element, not from the box.
@@ -6137,7 +6140,7 @@ body, .font-suite {
     justify-content: center;
     width: 24px;
     height: 24px;
-      color: color-mix(in oklch, var(--color-base-content) 60%, transparent);
+      color: var(--color-subtle); /* task 01a15902 stage 6; was base-content at 60% */
     transition:
       color 75ms ease,
       background-color 75ms ease;
@@ -6203,7 +6206,7 @@ body, .font-suite {
   /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
      hover/open so it doesn't compete with the CHANNELS label. */
   .channel-sidebar-menu-button {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   .channel-sidebar-menu-button[aria-expanded="true"] {
@@ -6234,7 +6237,7 @@ body, .font-suite {
      states which layout is being edited without a second control. Truncates
      rather than overflowing at narrow widths. */
   .channel-edit-mode-label {
-    @apply min-w-0 truncate text-xs font-medium text-base-content/60;
+    @apply min-w-0 truncate text-xs font-medium text-subtle;
   }
 
   /* Admin variant of the mode label — admin accent to match admin-edit chrome. */
@@ -6246,7 +6249,7 @@ body, .font-suite {
      the actual drag is owned by the ChannelMembershipDrag hook, which only
      starts on this element so a row-link click still navigates. */
   .channel-row-grab {
-    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-base-content/40 leading-none;
+    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-subtle leading-none;
   }
 
   .channel-row-grab:active {
@@ -6261,17 +6264,17 @@ body, .font-suite {
   }
 
   .channel-row-move-button {
-    @apply inline-flex items-center justify-center w-5 h-5 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+    @apply inline-flex items-center justify-center w-5 h-5 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
   }
 
   .channel-row-move-button:disabled {
-    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-base-content/50;
+    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-disabled;
   }
 
   /* Per-section Hide control in the section header (edit mode). Mirrors the
      section drag handle's quiet treatment but stays visible in edit mode. */
   .channel-section-hide-button {
-    @apply inline-flex items-center justify-center w-6 h-6 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+    @apply inline-flex items-center justify-center w-6 h-6 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
   }
 
   /* Dragged channel row — faded while a drag is in flight (mirrors the
@@ -6539,7 +6542,7 @@ body, .font-suite {
      dismissed as broken. A real <button> in the markup, so focus-visible is the
      browser's and the tab order is the DOM's. */
   .channel-ajar-show-all {
-    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors;
+    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded font-medium text-base-content hover:text-base-content hover:bg-base-300 transition-colors;
   }
 
   /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).

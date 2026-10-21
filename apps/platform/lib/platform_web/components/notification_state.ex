@@ -267,7 +267,7 @@ defmodule PlatformWeb.Components.NotificationState do
       <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
       <div class="min-w-0 flex-1">
         <p class="text-sm">Notifications are off for Burrow on this phone.</p>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">
           Turn them on to hear about mentions and approvals when Burrow is closed.
         </p>
       </div>
@@ -288,10 +288,10 @@ defmodule PlatformWeb.Components.NotificationState do
       data-role="notification-state"
       data-permission="prompt"
     >
-      <.icon name="hero-bell" class="mt-0.5 size-4 flex-shrink-0 text-base-content/60" />
+      <.icon name="hero-bell" class="mt-0.5 size-4 flex-shrink-0 text-subtle" />
       <div class="min-w-0 flex-1">
         <p class="text-sm">Notifications are off for this browser.</p>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">
           Turn them on to hear about mentions and replies when Burrow is not open.
         </p>
       </div>
@@ -317,14 +317,14 @@ defmodule PlatformWeb.Components.NotificationState do
       <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
       <div :if={@auto_denied} class="min-w-0 flex-1">
         <p class="text-sm">Your browser turned notifications down without asking you.</p>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">
           That usually means a private window, or notifications are switched off for every site.
         </p>
       </div>
       <div :if={not @auto_denied} class="min-w-0 flex-1">
         <p class="text-sm">Your browser is blocking notifications from Burrow.</p>
-        <p class="mt-1 text-xs text-base-content/60">{denied_instruction(@browser)}</p>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">{denied_instruction(@browser)}</p>
+        <p class="mt-1 text-xs text-subtle">
           If your computer is silencing the browser itself, no site setting will help.
         </p>
       </div>
@@ -343,7 +343,7 @@ defmodule PlatformWeb.Components.NotificationState do
       <.icon name="hero-bell-alert" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
       <div :if={@registration_failed == :no_participant} class="min-w-0 flex-1">
         <p class="text-sm">Notifications are on, but you are not in any conversations yet.</p>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">
           Start a conversation in Chat and they will switch on.
         </p>
       </div>
@@ -351,7 +351,7 @@ defmodule PlatformWeb.Components.NotificationState do
         <p class="text-sm">
           Your browser allowed notifications, but this device could not be registered.
         </p>
-        <p class="mt-1 text-xs text-base-content/60">Reload the page to try again.</p>
+        <p class="mt-1 text-xs text-subtle">Reload the page to try again.</p>
       </div>
     </div>
     """

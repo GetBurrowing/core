@@ -38,7 +38,7 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
     ~H"""
     <aside class="flex min-h-0 flex-col overflow-y-auto border-l border-edge bg-base-200/40">
       <div class="border-b border-edge px-4 py-3">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content">
           Page Details
         </h2>
       </div>
@@ -46,11 +46,11 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
       <%= if @page do %>
         <%!-- Backlinks (top) --%>
         <div class="border-b border-edge px-4 py-3" data-role="backlinks">
-          <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
+          <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content">
             Backlinks
           </h3>
           <%= if @backlinks == [] do %>
-            <p class="text-xs text-base-content/40">No backlinks yet</p>
+            <p class="text-xs text-subtle">No backlinks yet</p>
           <% else %>
             <ul class="flex flex-col gap-1">
               <li :for={source <- @backlinks}>
@@ -61,7 +61,7 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
                   title={source.file_key}
                   class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-base-300/60"
                 >
-                  <span class={[file_icon(source.file_key), "shrink-0 text-base-content/40"]}></span>
+                  <span class={[file_icon(source.file_key), "shrink-0 text-subtle"]}></span>
                   <span class="min-w-0 flex-1 truncate font-mono">{source.file_key}</span>
                   <span class="badge badge-ghost badge-xs shrink-0">
                     {namespace_badge(source.file_key)}
@@ -76,13 +76,13 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
         <%!-- Current version only — no version-history list (design lock §5). --%>
         <%!-- # TODO(0041-T7-followup): version history requires org_wiki_page_versions table --%>
         <div class="px-4 py-3" data-role="page-meta">
-          <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
+          <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content">
             Metadata
           </h3>
           <dl class="flex flex-col gap-1.5 text-xs">
             <%= if @doc do %>
               <div class="flex items-center justify-between gap-2" data-role="burrow-meta-source">
-                <dt class="text-base-content/60">Source</dt>
+                <dt class="text-subtle">Source</dt>
                 <dd>Product docs</dd>
               </div>
               <div
@@ -90,12 +90,12 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
                 class="flex items-center justify-between gap-2"
                 data-role="burrow-meta-verified"
               >
-                <dt class="text-base-content/60">Verified at</dt>
+                <dt class="text-subtle">Verified at</dt>
                 <dd class="whitespace-nowrap font-mono">{@doc.verified_at}</dd>
               </div>
             <% else %>
               <div class="flex items-center justify-between gap-2">
-                <dt class="text-base-content/40">Version</dt>
+                <dt class="text-subtle">Version</dt>
                 <dd class="font-mono">v{@page.version}</dd>
               </div>
             <% end %>
@@ -103,15 +103,15 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
               :if={is_nil(@doc) && @page.updated_by && @updated_by_display}
               class="flex items-center justify-between gap-2"
             >
-              <dt class="text-base-content/40">Updated by</dt>
+              <dt class="text-subtle">Updated by</dt>
               <dd class="truncate" title={@updated_by_display}>{@updated_by_display}</dd>
             </div>
             <div :if={@page.inserted_at} class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/40">Created</dt>
+              <dt class="text-subtle">Created</dt>
               <dd>{format_relative(@page.inserted_at)}</dd>
             </div>
             <div :if={@page.updated_at} class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/40">Updated</dt>
+              <dt class="text-subtle">Updated</dt>
               <dd>{format_relative(@page.updated_at)}</dd>
             </div>
           </dl>
@@ -119,8 +119,8 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
       <% else %>
         <div class="flex flex-1 items-center justify-center px-4 py-8">
           <div class="text-center">
-            <span class="hero-link mb-2 size-8 text-base-content/20 mx-auto block"></span>
-            <p class="text-xs text-base-content/40">
+            <span class="hero-link mb-2 size-8 text-subtle mx-auto block"></span>
+            <p class="text-xs text-subtle">
               Select a page to see its details.
             </p>
           </div>

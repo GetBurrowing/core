@@ -212,7 +212,7 @@ defmodule Platform.Memory.Insights.Briefings do
   @spec settle(binary(), String.t(), keyword()) :: :ok
   def settle(insight_id, note, opts \\ []) when is_binary(insight_id) and is_binary(note) do
     key = BriefingCard.node_key(insight_id)
-    note_node = text(note_id(key), note, "text-sm text-base-content/60")
+    note_node = text(note_id(key), note, "text-sm text-subtle")
 
     flag_row =
       if Keyword.get(opts, :flag, false),

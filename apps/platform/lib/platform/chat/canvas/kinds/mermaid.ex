@@ -35,7 +35,7 @@ defmodule Platform.Chat.Canvas.Kinds.Mermaid do
       ]}
     >
       <div class="mermaid-container flex items-center justify-center min-h-[100px]">
-        <span class="loading loading-spinner loading-sm text-base-content/30"></span>
+        <span class="loading loading-spinner loading-sm text-subtle"></span>
       </div>
     </div>
     """

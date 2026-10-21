@@ -74,7 +74,7 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
           type="button"
           phx-click="close_message_context"
           aria-label="Close"
-          class="-m-1 rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class="-m-1 rounded p-1 text-subtle hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span class="hero-x-mark size-4" aria-hidden="true"></span>
         </button>
@@ -133,7 +133,7 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
             JS.remove_class("line-clamp-2", to: "##{@id_prefix}-agent-text")
             |> JS.hide()
           }
-          class="mt-1 rounded text-xs text-base-content/60 hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class="mt-1 rounded text-xs font-medium text-base-content hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           Show more
         </button>

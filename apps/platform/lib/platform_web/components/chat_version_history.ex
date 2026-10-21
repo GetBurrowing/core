@@ -49,7 +49,7 @@ defmodule PlatformWeb.Components.ChatVersionHistory do
             type="button"
             phx-click="close_version_history"
             aria-label="Close edit history"
-            class="rounded-lg p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-lg p-1 text-subtle hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <span class="hero-x-mark size-4"></span>
           </button>
@@ -60,10 +60,10 @@ defmodule PlatformWeb.Components.ChatVersionHistory do
             :for={v <- @versions}
             class="px-5 py-3 flex flex-col gap-1"
           >
-            <div class="flex items-center justify-between text-[11px] text-base-content/50">
+            <div class="flex items-center justify-between text-[11px] text-subtle">
               <span class="font-semibold">
                 v{v.version_number}
-                <span class="text-base-content/40">·</span>
+                <span aria-hidden="true" class="text-decorative">·</span>
                 {v.edited_by_display_name || "(unknown)"}
               </span>
               <time
@@ -77,7 +77,7 @@ defmodule PlatformWeb.Components.ChatVersionHistory do
               {v.content || ""}
             </p>
           </li>
-          <li :if={@versions == []} class="px-5 py-8 text-center text-sm text-base-content/40">
+          <li :if={@versions == []} class="px-5 py-8 text-center text-sm text-subtle">
             No prior versions on record.
           </li>
         </ul>

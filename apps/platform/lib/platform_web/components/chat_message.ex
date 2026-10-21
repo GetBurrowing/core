@@ -317,7 +317,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 title="Add reaction"
                 phx-click="open_reaction_picker"
                 phx-value-message-id={@msg.id}
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-plus size-4"></span>
               </button>
@@ -328,7 +328,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 id={"copy-msg-#{@msg.id}"}
                 data-clipboard-text={@msg.content}
                 title="Copy message"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-clipboard-document-list size-4"></span>
               </button>
@@ -337,7 +337,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
                 title="Reply"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-chat-bubble-left-right size-4"></span>
               </button>
@@ -346,7 +346,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
                 title="Open thread"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-subtle hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-arrow-top-right-on-square size-4"></span>
               </button>
@@ -356,7 +356,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-value-message-id={@msg.id}
                 phx-value-space-id={@msg.space_id}
                 title={if MapSet.member?(@pinned_message_ids, @msg.id), do: "Unpin", else: "Pin"}
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class={[
                   "size-4",
@@ -384,7 +384,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 data-role="message-context-summarise"
                 aria-label="Summarise what led here"
                 title="Summarise what led here"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-document-text size-4" aria-hidden="true"></span>
               </button>
@@ -401,7 +401,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 phx-value-id={@msg.id}
                 aria-label="More message actions"
                 title="More"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
+                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
               >
                 <span class="hero-ellipsis-horizontal size-4"></span>
               </button>
@@ -858,7 +858,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                             suggestion.participant_type == "agent" &&
                               "bg-primary/10 text-primary",
                             suggestion.participant_type != "agent" &&
-                              "bg-base-300 text-base-content/50"
+                              "bg-base-300 text-subtle"
                           ]}>
                             {suggestion.participant_type}
                           </span>
@@ -970,7 +970,7 @@ defmodule PlatformWeb.Components.ChatMessage do
         <p class="break-words">
           <.refused_names parts={refused_name_parts(@names)} /> {@verb} not added. {@reason}
         </p>
-        <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-base-content/60">
+        <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-subtle">
           <span data-role="refused-summon-visibility" class="text-[11px]">Only you can see this</span>
           <span aria-hidden="true">·</span>
           <%!-- Task 01a0fd62 stage 3: the members panel is where admins are
@@ -981,7 +981,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             type="button"
             phx-click="members_open"
             data-role="refused-summon-view-members"
-            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content/60 max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             View members
           </button>
@@ -991,7 +991,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             phx-click="dismiss_refused_summon"
             phx-value-id={@msg_id}
             data-role="refused-summon-dismiss"
-            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content/60 max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Dismiss
           </button>

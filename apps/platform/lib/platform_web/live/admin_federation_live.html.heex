@@ -6,13 +6,13 @@
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Admin · Federation Health
       </h1>
       <span class="badge badge-ghost badge-sm">{length(@runtimes)} runtimes</span>
     </div>
     <div class="flex items-center gap-2">
-      <span class="text-xs text-base-content/40">Auto-refreshes every 5s</span>
+      <span class="text-xs text-subtle">Auto-refreshes every 5s</span>
       <button phx-click="refresh" class="btn btn-ghost btn-xs">
         <span class="hero-arrow-path size-4"></span> Refresh
       </button>
@@ -23,12 +23,12 @@
   <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
     <%!-- Runtime status table --%>
     <div>
-      <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-3">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content mb-3">
         Runtime Connections
       </h2>
 
       <%= if Enum.empty?(@runtimes) do %>
-        <div class="rounded-lg border border-edge p-8 text-center text-base-content/40 text-sm">
+        <div class="rounded-lg border border-edge p-8 text-center text-subtle text-sm">
           No active runtimes registered.
         </div>
       <% else %>
@@ -50,7 +50,7 @@
         --%>
         <div class="rounded-lg border border-edge overflow-x-auto">
           <table class="w-full text-sm">
-            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
+            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content">
               <tr>
                 <th class="px-4 py-2 text-left">Agent</th>
                 <th class="px-4 py-2 text-left">Status</th>
@@ -99,7 +99,7 @@
                     task 01a06d03 (`e752bdce`) repairs what feeds it and asked
                     that this expression be left alone.
                   --%>
-                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
+                  <td class="px-4 py-3 align-top text-xs text-subtle">
                     {format_dt(runtime.connected_at)}
                   </td>
                   <%!--
@@ -200,13 +200,13 @@
                       <% end %>
                     </div>
                   </td>
-                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
+                  <td class="px-4 py-3 align-top text-xs text-subtle">
                     {format_dt(runtime.last_seen_at)}
                   </td>
-                  <td class="px-4 py-3 align-top text-xs text-base-content/60">
+                  <td class="px-4 py-3 align-top text-xs text-subtle">
                     {format_dt(runtime.last_connected_at)}
                   </td>
-                  <td class="px-4 py-3 align-top font-mono text-xs text-base-content/60">
+                  <td class="px-4 py-3 align-top font-mono text-xs text-subtle">
                     {runtime.runtime_id}
                   </td>
                   <td class="px-4 py-3 align-top">
@@ -228,7 +228,7 @@
                           <span></span>
                       <% end %>
                     <% else %>
-                      <span class="text-xs text-base-content/30">—</span>
+                      <span class="text-xs text-subtle">—</span>
                     <% end %>
                   </td>
                 </tr>
@@ -242,7 +242,7 @@
     <%!-- Dead Letters --%>
     <div>
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content">
           Dead Letters
           <span class="badge badge-ghost badge-xs ml-1">
             {length(@dead_letters)} in ledger
@@ -263,11 +263,11 @@
       <%!-- Cumulative loss counters. Monotonic, never pruned — see the caption. --%>
       <div id="dead-letter-cumulative" class="rounded-lg border border-edge p-3 mb-3">
         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
             Cumulative loss
           </h3>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-base-content/40">
+            <span class="text-xs text-subtle">
               replay rate {:erlang.float_to_binary(@loss_summary.replay_rate * 100, decimals: 1)}%
             </span>
             <span class={[
@@ -281,7 +281,7 @@
 
         <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Recorded
             </div>
             <div
@@ -292,7 +292,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Replayed
             </div>
             <div
@@ -303,7 +303,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Dropped · policy
             </div>
             <div
@@ -314,7 +314,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Dropped · stale
             </div>
             <div
@@ -325,7 +325,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Superseded
             </div>
             <div
@@ -336,7 +336,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Abandoned
             </div>
             <div
@@ -347,7 +347,7 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
               Awaiting replay
             </div>
             <div
@@ -359,7 +359,7 @@
           </div>
         </div>
 
-        <p id="dead-letter-cumulative-caption" class="mt-2 text-xs text-base-content/50">
+        <p id="dead-letter-cumulative-caption" class="mt-2 text-xs text-subtle">
           Totals since inception — every fire ever dead-lettered, not a snapshot of the
           rows below and not a 24h window. Pruning the ledger does not move these numbers.
           Subtract two readings to get a window. "Awaiting replay" is the only live term:
@@ -369,7 +369,7 @@
         <%= if not Enum.empty?(@key_breakdown) do %>
           <div id="dead-letter-key-breakdown" class="mt-3 overflow-x-auto">
             <table class="w-full text-sm">
-              <thead class="text-[0.65rem] uppercase tracking-wider text-base-content/50">
+              <thead class="text-[0.65rem] uppercase tracking-wider text-base-content">
                 <tr>
                   <th class="px-2 py-1 text-left">Responsibility key</th>
                   <th class="px-2 py-1 text-right">Recorded</th>
@@ -403,14 +403,14 @@
       </div>
 
       <%= if Enum.empty?(@dead_letters) do %>
-        <div class="rounded-lg border border-edge p-6 text-center text-base-content/40 text-sm">
+        <div class="rounded-lg border border-edge p-6 text-center text-subtle text-sm">
           The ledger is empty. That means nothing is queued and nothing settled recently —
           it does not mean nothing was ever lost; read the cumulative totals above.
         </div>
       <% else %>
         <div class="rounded-lg border border-edge overflow-x-auto">
           <table class="w-full text-sm">
-            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
+            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content">
               <tr>
                 <th class="px-3 py-2 text-left">Occurred</th>
                 <th class="px-3 py-2 text-left">Disposition</th>
@@ -424,7 +424,7 @@
             <tbody id="dead-letter-rows" class="divide-y divide-base-200">
               <%= for letter <- @dead_letters do %>
                 <tr id={"dead-letter-#{letter.id}"} class="hover:bg-base-100">
-                  <td class="px-3 py-2 text-xs text-base-content/60 whitespace-nowrap">
+                  <td class="px-3 py-2 text-xs text-subtle whitespace-nowrap">
                     {format_dt(letter.occurred_at)}
                   </td>
                   <td class="px-3 py-2">
@@ -439,16 +439,16 @@
                   <td class="px-3 py-2 font-mono text-xs">
                     {letter.responsibility_key || "—"}
                   </td>
-                  <td class="px-3 py-2 text-xs text-base-content/60">
+                  <td class="px-3 py-2 text-xs text-subtle">
                     {letter.trigger_kind || "—"}
                   </td>
                   <td class="px-3 py-2 text-xs">
                     {letter.agent_slug || "—"}
                   </td>
-                  <td class="px-3 py-2 font-mono text-xs text-base-content/60">
+                  <td class="px-3 py-2 font-mono text-xs text-subtle">
                     <%= cond do %>
                       <% is_nil(letter.subject_id) -> %>
-                        <span class="text-base-content/30">—</span>
+                        <span class="text-subtle">—</span>
                       <% letter.subject_task_id -> %>
                         <.link
                           navigate={~p"/tasks/#{letter.subject_task_id}"}

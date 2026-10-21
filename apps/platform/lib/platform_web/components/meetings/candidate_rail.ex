@@ -279,7 +279,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
            A live-activity dot is asking for nothing. --%>
       <header class="mb-3 flex items-center gap-2">
         <h3
-          class="text-base-content/60 flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.09em] uppercase"
+          class="text-base-content flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.09em] uppercase"
           data-role="meeting-candidate-rail-heading"
         >
           Cards <span class="candidate-rail-dot" aria-hidden="true"></span> appearing live
@@ -401,7 +401,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
              not a third guess at it here. --%>
       <p
         :if={presentation(@candidate) == :full}
-        class="text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
+        class="text-[10px] font-semibold uppercase tracking-wider text-subtle"
         data-role="meeting-candidate-step"
       >
         {step_label_text(@candidate)}

@@ -268,8 +268,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     ~H"""
     <div class="relative" data-role="meeting-invite-control" data-mode={@mode}>
       <label class="flex items-center gap-2 rounded-lg border border-edge bg-base-100 px-3 min-h-11 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
-        <span class="hero-magnifying-glass size-4 shrink-0 text-base-content/40" aria-hidden="true">
-        </span>
+        <span class="hero-magnifying-glass size-4 shrink-0 text-subtle" aria-hidden="true"></span>
         <input
           type="text"
           id={"#{@id}-search"}
@@ -329,7 +328,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           </span>
           <span
             :if={user.name}
-            class="block truncate text-xs text-base-content/50"
+            class="block truncate text-xs text-subtle"
             data-role="meeting-invite-candidate-email"
           >
             {user.email}
@@ -379,7 +378,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
             Invite as a guest
           </span>
           <span
-            class="block text-xs text-base-content/50"
+            class="block text-xs text-subtle"
             data-role="meeting-invite-option-detail"
           >
             <span class="sm:hidden" data-viewport="narrow">Personal link · 24h · no account</span>
@@ -388,7 +387,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
             </span>
           </span>
         </span>
-        <kbd class="hidden shrink-0 rounded border border-edge px-1.5 py-0.5 font-mono text-[10px] text-base-content/40 sm:inline-block">
+        <kbd class="hidden shrink-0 rounded border border-edge px-1.5 py-0.5 font-mono text-[10px] text-subtle sm:inline-block">
           ⏎
         </kbd>
       </button>
@@ -417,7 +416,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
             <span class="hidden sm:inline" data-viewport="wide">Invite as an external member</span>
           </span>
           <span
-            class="block text-xs text-base-content/50"
+            class="block text-xs text-subtle"
             data-role="meeting-invite-option-detail"
           >
             <span class="sm:hidden" data-viewport="narrow">Signs in · needs an org grant</span>
@@ -504,7 +503,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         </span>
         <span
           :if={@entry.subtitle}
-          class="block truncate text-[11px] text-base-content/50"
+          class="block truncate text-[11px] text-subtle"
           data-role="meeting-invite-row-subtitle"
         >
           {@entry.subtitle}
@@ -533,7 +532,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         type="button"
         data-role="meeting-invite-unstage"
         data-entry-id={@entry.id}
-        class="flex shrink-0 items-center justify-center rounded-lg text-base-content/40 min-h-11 min-w-11 hover:bg-base-300 hover:text-base-content"
+        class="flex shrink-0 items-center justify-center rounded-lg text-subtle min-h-11 min-w-11 hover:bg-base-300 hover:text-base-content"
         aria-label={"Remove #{@entry.name}"}
         title="Remove"
         phx-click={event(@mode, :unstage)}
@@ -585,7 +584,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     ~H"""
     <div data-role="meeting-invite-list" data-mode={@mode}>
       <h4
-        class="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-base-content/50"
+        class="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-base-content"
         data-role="meeting-invite-list-header"
       >
         Invited · {length(@entries)}

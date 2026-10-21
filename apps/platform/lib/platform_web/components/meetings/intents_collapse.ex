@@ -393,7 +393,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
                When nothing needs attention there is no severity span at
                all and the tail truncates freely. --%>
             <span
-              class="flex min-w-0 items-baseline gap-1 overflow-hidden font-mono text-[10px] leading-tight text-base-content/60"
+              class="flex min-w-0 items-baseline gap-1 overflow-hidden font-mono text-[10px] leading-tight text-subtle"
               data-role="intents-summary"
               title={@summary}
             >
@@ -411,7 +411,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           </span>
           <span
             class={[
-              "size-4 flex-shrink-0 text-base-content/50",
+              "size-4 flex-shrink-0 text-subtle",
               if(@open, do: "hero-chevron-up", else: "hero-chevron-down")
             ]}
             aria-hidden="true"
@@ -449,7 +449,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             "btn btn-ghost btn-square min-h-11 min-w-11",
             if(@muted,
               do: "text-warning bg-warning/10 hover:bg-warning/20",
-              else: "text-base-content/50 hover:text-base-content"
+              else: "text-subtle hover:text-base-content"
             )
           ]}
         >
@@ -466,7 +466,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           aria-label="Open the full intent table"
           aria-expanded={to_string(@expanded)}
           title="Full intent table"
-          class="btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/60 hover:text-base-content"
+          class="btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-base-content"
           data-role="intents-expand-toggle"
         >
           <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
@@ -489,7 +489,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
         <p
           :if={@intents == []}
-          class="px-3 py-3 font-mono text-xs text-base-content/50"
+          class="px-3 py-3 font-mono text-xs text-subtle"
           data-role="intents-empty"
         >
           Listening for intents…
@@ -625,7 +625,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             aria-label={"Remove intent #{@intent.classified_intent}"}
             title="Remove"
             class={[
-              "btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/60 hover:text-error",
+              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-error",
               @pending_cancel && "btn-disabled opacity-40"
             ]}
             data-role="intent-remove"
@@ -644,7 +644,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             aria-label={"Correct intent #{@intent.classified_intent}"}
             title="Correct"
             class={[
-              "btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/60 hover:text-primary",
+              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-primary",
               @pending_cancel && "btn-disabled opacity-40"
             ]}
             data-role="intent-edit"
@@ -673,7 +673,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
         data-role="intent-reason-picker"
         data-intent-id={@intent.id}
       >
-        <li class="px-2 py-1 font-mono text-[10px] text-base-content/50">Why remove it?</li>
+        <li class="px-2 py-1 font-mono text-[10px] text-subtle">Why remove it?</li>
         <li :for={reason <- IntentCorrection.reasons()}>
           <button
             type="button"
@@ -723,7 +723,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             type="button"
             phx-click="toggle_intents_expanded"
             aria-label="Close the full intent table"
-            class="btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/60"
+            class="btn btn-ghost btn-square min-h-11 min-w-11 text-subtle"
             data-role="intents-expanded-close"
           >
             <span class="hero-x-mark size-4" aria-hidden="true"></span>
@@ -820,7 +820,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             type="button"
             phx-click="intent_edit_close"
             aria-label="Close correction dialog"
-            class="btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/60"
+            class="btn btn-ghost btn-square min-h-11 min-w-11 text-subtle"
             data-role="intent-edit-close"
           >
             <span class="hero-x-mark size-4" aria-hidden="true"></span>
@@ -1001,7 +1001,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
     if low_confidence?(confidence) do
       "font-semibold text-warning"
     else
-      "text-base-content/50"
+      "text-subtle"
     end
   end
 end

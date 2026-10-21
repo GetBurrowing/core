@@ -109,7 +109,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
     you: "bg-primary text-primary-content",
     other: "bg-base-300 text-base-content",
     open:
-      "cursor-pointer border border-dashed border-base-content/40 text-base-content/60 " <>
+      "cursor-pointer border border-dashed border-base-content/40 text-subtle " <>
         "hover:bg-base-200"
   }
 
@@ -294,7 +294,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         <span
           :if={@branch}
           data-gs-branch
-          class="hidden min-w-0 truncate font-mono text-xs text-base-content/50 @md:inline"
+          class="hidden min-w-0 truncate font-mono text-xs text-subtle @md:inline"
         >
           {@branch}
         </span>
@@ -331,7 +331,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
             aria-label="More"
             aria-haspopup="menu"
             aria-expanded="false"
-            class="rounded-md p-1 text-base-content/60 hover:bg-base-200 hover:text-base-content"
+            class="rounded-md p-1 text-subtle hover:bg-base-200 hover:text-base-content"
           >
             <span class="hero-ellipsis-horizontal size-4" aria-hidden="true"></span>
           </button>
@@ -361,7 +361,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
             </div>
             <button type="button" role="menuitem" data-gs-end-session class={menu_item_class()}>
               <span class="block">End session</span>
-              <span data-gs-end-line class="block text-xs text-base-content/60">
+              <span data-gs-end-line class="block text-xs text-subtle">
                 {@view.end_line}
               </span>
             </button>
@@ -480,7 +480,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           <span
             data-gs-watching
             title={@view.watching_title}
-            class="ml-auto shrink-0 text-xs text-base-content/60"
+            class="ml-auto shrink-0 text-xs text-subtle"
           >
             {@view.watching}
           </span>
@@ -503,7 +503,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
             <div data-gs-sheet-chips class="flex flex-col items-stretch gap-1.5 *:max-w-none">
               <.chip :for={chip <- @view.chips} chip={chip} base={@chip_base} classes={@chip_classes} />
             </div>
-            <p data-gs-sheet-watching class="text-xs text-base-content/60">
+            <p data-gs-sheet-watching class="text-xs text-subtle">
               {@view.sheet_watching}
             </p>
           </div>
@@ -539,20 +539,20 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       >
       </div>
       <template data-gs-pad-template>
-        <span data-gs-pad class="min-w-0 truncate text-xs text-base-content/60"></span>
+        <span data-gs-pad class="min-w-0 truncate text-xs text-subtle"></span>
       </template>
 
       <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
         <span
           data-gs-controller
           hidden
-          class="min-w-0 basis-full text-xs text-base-content/60 @sm:basis-auto @sm:truncate"
+          class="min-w-0 basis-full text-xs text-subtle @sm:basis-auto @sm:truncate"
         >
         </span>
-        <span data-gs-hint class="hidden shrink-0 text-xs text-base-content/60 @sm:inline"></span>
+        <span data-gs-hint class="hidden shrink-0 text-xs text-subtle @sm:inline"></span>
         <span
           data-gs-audio-state="waiting"
-          class="shrink-0 text-xs text-base-content/60"
+          class="shrink-0 text-xs text-subtle"
           aria-live="polite"
         >
           Waiting for audio
@@ -570,7 +570,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         </button>
         <span
           data-gs-stats
-          class="ml-auto shrink-0 font-mono text-xs text-base-content/60"
+          class="ml-auto shrink-0 font-mono text-xs text-subtle"
           aria-label="Round trip, frame rate, connection path and frame size"
         >
           -- ms · -- fps · --
@@ -580,7 +580,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           data-gs-fullscreen
           title="Full screen"
           aria-label="Full screen"
-          class="shrink-0 rounded-md p-1 text-base-content/60 hover:bg-base-200 hover:text-base-content"
+          class="shrink-0 rounded-md p-1 text-subtle hover:bg-base-200 hover:text-base-content"
         >
           <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
         </button>

@@ -165,7 +165,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     <div
       id={@id}
       data-role="prototype-unavailable"
-      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-base-content/60"
+      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-subtle"
     >
       This prototype is not available.
     </div>
@@ -433,10 +433,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
               <span class="w-8 shrink-0 text-base-content">v{v.version}</span>
               <span class="shrink-0 whitespace-nowrap text-neutral">{short_time(v.inserted_at)}</span>
               <span class="min-w-0 flex-1 truncate font-sans text-neutral">{v.publisher}</span>
-              <span :if={v.removed?} class="shrink-0 font-sans text-base-content/50">removed</span>
+              <span :if={v.removed?} class="shrink-0 font-sans text-subtle">removed</span>
               <span
                 :if={not v.removed? and v.version == @view.latest}
-                class="shrink-0 font-sans text-base-content/50"
+                class="shrink-0 font-sans text-subtle"
               >
                 latest
               </span>

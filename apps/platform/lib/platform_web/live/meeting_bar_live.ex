@@ -110,7 +110,7 @@ defmodule PlatformWeb.MeetingBarLive do
       </div>
 
       <%!-- Duration timer (updated by MeetingTimer JS hook) --%>
-      <span class="tabular-nums text-base-content/60 text-xs font-mono" data-timer>
+      <span class="tabular-nums text-subtle text-xs font-mono" data-timer>
         00:00
       </span>
 
@@ -151,7 +151,7 @@ defmodule PlatformWeb.MeetingBarLive do
           "rounded-lg p-1.5 transition-colors",
           if(@camera_on,
             do: "text-base-content/70 hover:bg-base-300",
-            else: "text-base-content/40 hover:bg-base-300"
+            else: "text-subtle hover:bg-base-300"
           )
         ]}
         title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}

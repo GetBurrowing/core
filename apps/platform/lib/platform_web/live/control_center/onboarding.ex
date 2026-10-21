@@ -116,7 +116,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-server h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Run on this server</span>
-        <span class="text-xs text-base-content/60">
+        <span class="text-xs text-subtle">
           Claude Code on this server. Start, stop and restart it from this page.
         </span>
       </button>
@@ -230,7 +230,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               disabled
             />
             <span class="text-sm text-base-content">
-              Codex CLI <span class="block text-xs text-base-content/60">Not available yet</span>
+              Codex CLI <span class="block text-xs text-subtle">Not available yet</span>
             </span>
           </label>
         </div>
@@ -281,7 +281,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               <p class="text-xs text-subtle">{@selected_template.description}</p>
             </div>
           </div>
-          <p class="mt-2 text-xs text-base-content/50">
+          <p class="mt-2 text-xs text-subtle">
             Model: {@selected_template.suggested_model} · Tools: {Enum.join(
               @selected_template.tools_allow,
               ", "
@@ -289,7 +289,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           </p>
         </div>
         <label class="form-control">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Agent Name
           </span>
           <input
@@ -320,7 +320,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         class="space-y-4"
       >
         <label class="form-control">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Runtime ID
           </span>
           <input
@@ -333,7 +333,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           />
         </label>
         <label class="form-control">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Display Name (optional)
           </span>
           <input
@@ -345,7 +345,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           />
         </label>
         <label class="form-control">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Agent Name
           </span>
           <input
@@ -370,7 +370,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
       <div class="space-y-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Runtime ID
           </p>
           <div class="mt-1 flex items-center gap-2">
@@ -390,7 +390,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
 
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Auth Token
           </p>
           <div class="mt-1 flex items-center gap-2">
@@ -410,7 +410,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
 
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             WebSocket URL
           </p>
           <div class="mt-1 flex items-center gap-2">
@@ -430,7 +430,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
 
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             openclaw.json snippet
           </p>
           <pre class="mt-1 overflow-x-auto rounded-lg bg-base-200 p-3 font-mono text-xs leading-5"><code>{federation_config_snippet(@federate_result.ws_url, @federate_result.runtime_id)}</code></pre>
@@ -477,7 +477,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
             <div>
               <p class="text-sm font-semibold text-base-content">{agent.name}</p>
-              <p class="text-xs text-base-content/50">{agent.id}</p>
+              <p class="text-xs text-subtle">{agent.id}</p>
             </div>
           </label>
         </div>
@@ -507,7 +507,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Name
             </span>
             <input
@@ -519,7 +519,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
           </label>
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Slug
             </span>
             <input
@@ -531,7 +531,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
           </label>
           <label class="form-control sm:col-span-2">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Primary model
             </span>
             <input
@@ -545,7 +545,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
         <div class="grid gap-3 sm:grid-cols-3">
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Status
             </span>
             <select name="create_agent[status]" class="select select-bordered w-full">
@@ -559,7 +559,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             </select>
           </label>
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Max
             </span>
             <input
@@ -571,7 +571,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
           </label>
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Sandbox
             </span>
             <select name="create_agent[sandbox_mode]" class="select select-bordered w-full">
@@ -587,7 +587,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </div>
         <%!-- Color family picker --%>
         <div class="form-control">
-          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content">
             Color family
           </span>
           <div class="flex flex-wrap gap-2">
@@ -677,7 +677,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <%!-- Identity row: name + slug --%>
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Display Name
             </span>
             <input
@@ -690,7 +690,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
           </label>
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Slug
             </span>
             <input
@@ -705,7 +705,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
         <%!-- Endpoint Kind dropdown + conditional help text --%>
         <label class="form-control">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Endpoint Kind
           </span>
           <select name="external_agent[endpoint_kind]" class="select select-bordered w-full">
@@ -735,7 +735,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <%!-- Base URL + Model --%>
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Base URL
             </span>
             <input
@@ -747,7 +747,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             />
           </label>
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Model
             </span>
             <input
@@ -762,7 +762,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
         <%!-- Default Behavior pill row --%>
         <div class="form-control">
-          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content">
             Default Behavior
           </span>
           <div class="flex flex-wrap gap-2">
@@ -787,14 +787,14 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               </span>
             </label>
           </div>
-          <span class="mt-1 text-xs text-base-content/50">
+          <span class="mt-1 text-xs text-subtle">
             {behavior_description(@default_behavior)}
           </span>
         </div>
 
         <%!-- Credentials sub-form (stage 3): From-vault / Paste-new tab toggle --%>
         <div class="form-control" id="external-agent-vault">
-          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content">
             Credentials
           </span>
 
@@ -869,7 +869,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           <%!-- Paste-new mode: vault_key + secret + save-to-vault checkbox --%>
           <div :if={@vault_mode == "paste"} class="space-y-3">
             <label class="form-control">
-              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
                 Name in vault
               </span>
               <input
@@ -882,7 +882,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               />
             </label>
             <label class="form-control">
-              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
                 Secret
               </span>
               <input
@@ -906,7 +906,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               />
               <span>Save to vault on submit</span>
             </label>
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               Unchecked = stored only in memory, lost on restart.
             </p>
           </div>
@@ -917,7 +917,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
         <%!-- Role assignment (stage 6) --%>
         <div class="form-control" id="external-agent-role">
-          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
             Assign a role (optional)
           </span>
           <select
@@ -943,7 +943,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               </option>
             <% end %>
           </select>
-          <span class="mt-1 text-xs text-base-content/50">
+          <span class="mt-1 text-xs text-subtle">
             Pinning to a role auto-routes its responsibilities to this agent.
           </span>
         </div>
@@ -965,7 +965,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       id="external-agent-connection-status"
       class="rounded-2xl border border-edge bg-base-200/40 p-4"
     >
-      <p class="mb-3 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <p class="mb-3 text-xs font-semibold uppercase tracking-widest text-base-content">
         Connection Status
       </p>
 

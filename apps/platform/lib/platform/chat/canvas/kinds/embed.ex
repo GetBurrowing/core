@@ -325,7 +325,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
       :if={is_nil(@src)}
       id={@wrapper_id}
       data-role="embed-scripted-unavailable"
-      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-base-content/60"
+      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-subtle"
     >
       Scripted embed unavailable
     </div>

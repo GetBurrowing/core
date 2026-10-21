@@ -685,7 +685,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
           html
           |> chip_classes()
           |> Enum.filter(&String.match?(&1, ~r/^(hover:)?(bg|text|border)-[a-z]/))
-          |> Enum.reject(&(&1 in ~w(text-xs text-base-content/60)))
+          |> Enum.reject(&(&1 in ~w(text-xs text-subtle)))
 
         assert colour_tokens == [], "#{at}: #{inspect(colour_tokens)}"
 

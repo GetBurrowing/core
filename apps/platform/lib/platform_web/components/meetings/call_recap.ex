@@ -205,7 +205,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
       >
         <header class="flex items-start gap-3 border-b border-edge px-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-3 lg:pt-4">
           <div class="min-w-0 flex-1">
-            <p class="text-xs uppercase tracking-wide text-base-content/60">You left the call</p>
+            <p class="text-xs uppercase tracking-wide text-base-content">You left the call</p>
             <h1 id={"#{@id}-title"} class="truncate text-lg font-semibold" data-role="call-recap-name">
               {@meeting.name}
             </h1>
@@ -222,16 +222,16 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
         </header>
 
         <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-edge px-4 py-3 text-sm">
-          <dt class="text-base-content/60">Ran for</dt>
+          <dt class="text-subtle">Ran for</dt>
           <dd data-role="call-recap-duration">
             {@duration || "Start time not recorded"}
           </dd>
-          <dt class="text-base-content/60">In the call</dt>
+          <dt class="text-subtle">In the call</dt>
           <dd data-role="call-recap-roster">{roster_line(@recap.participants)}</dd>
         </dl>
 
         <div class="flex-1 px-4 py-3">
-          <h2 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
+          <h2 class="mb-2 text-xs uppercase tracking-wide text-base-content">
             What this call produced
           </h2>
 
@@ -241,7 +241,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
              read as loading, and after a call nothing is loading. --%>
           <p
             :if={@produced_nothing?}
-            class="rounded-box border border-dashed border-edge px-3 py-2.5 text-sm text-base-content/60"
+            class="rounded-box border border-dashed border-edge px-3 py-2.5 text-sm text-subtle"
             data-role="call-recap-empty"
           >
             This call produced nothing. No cards were formed from it, and nothing from it is still
@@ -273,7 +273,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
                   <span data-role="call-recap-outcome-label">
                     {CandidateDisplay.outcome_label(candidate)}
                   </span>
-                  <span class="font-mono text-[11px] text-base-content/60">
+                  <span class="font-mono text-[11px] text-subtle">
                     {CandidateDisplay.outcome_kind_label(candidate)}
                   </span>
                 </a>
@@ -281,7 +281,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
             </ul>
 
             <div :if={@closed != []} class="mt-4 lg:mt-0" data-role="call-recap-closed">
-              <h3 class="mb-2 text-xs uppercase tracking-wide text-base-content/60">
+              <h3 class="mb-2 text-xs uppercase tracking-wide text-base-content">
                 Closed without becoming anything
               </h3>
               <ul class="flex flex-col gap-2">
@@ -292,7 +292,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
                   data-candidate-id={candidate.id}
                 >
                   <p class="text-sm">{candidate.evidence_quote}</p>
-                  <p class="mt-1 text-xs text-base-content/60" data-role="call-recap-closed-reason">
+                  <p class="mt-1 text-xs text-subtle" data-role="call-recap-closed-reason">
                     {closed_reason_line(candidate)}
                   </p>
                 </li>
@@ -300,7 +300,7 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
             </div>
           </div>
 
-          <p :if={@open != []} class="mt-4 text-xs text-base-content/60" data-role="call-recap-open">
+          <p :if={@open != []} class="mt-4 text-xs text-subtle" data-role="call-recap-open">
             {length(@open)} {if length(@open) == 1, do: "card was", else: "cards were"} still open when you left.
           </p>
         </div>

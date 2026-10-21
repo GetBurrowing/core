@@ -5,7 +5,7 @@
        trigger lives in the center header below. --%>
   <aside class="hidden md:flex w-64 shrink-0 flex-col border-r border-edge bg-base-100">
     <div class="flex items-center justify-between border-b border-edge px-3 py-3">
-      <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Files
       </h2>
       <button
@@ -27,14 +27,14 @@
         data-role="files-project-group"
         data-org-slug={org_slug}
       >
-        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
+        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content hover:bg-base-200 cursor-pointer select-none">
           <span
             class="size-2 rounded-full scope-dot-current"
             data-scope={org_slug}
           >
           </span>
           <span>{org_name}</span>
-          <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+          <span class="ml-auto text-[10px] tracking-normal text-subtle">
             {length(org_projects)}
           </span>
         </summary>
@@ -54,7 +54,7 @@
            empty — show the hint only when no org has a project to select. --%>
       <div
         :if={Enum.all?(@project_sections, fn {_slug, _name, projects} -> projects == [] end)}
-        class="px-3 py-6 text-center text-sm text-base-content/50"
+        class="px-3 py-6 text-center text-sm text-subtle"
       >
         No projects yet. Create one from the Tasks surface to start uploading files here.
       </div>
@@ -66,7 +66,7 @@
     <%!-- Header --%>
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-edge px-4 py-3">
       <div class="flex items-center gap-3">
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Files
         </h1>
         <span :if={@selected_project} class="badge badge-ghost badge-sm">
@@ -75,13 +75,13 @@
         <%!-- Breadcrumb: org · project --%>
         <div
           :if={@selected_project}
-          class="flex items-center gap-1 text-xs text-base-content/60"
+          class="flex items-center gap-1 text-xs text-subtle"
           data-role="files-breadcrumb"
         >
           <span class="font-medium scope-fill-text" data-scope={org_scope_for(@selected_project)}>
             {org_label_for(@selected_project)}
           </span>
-          <span :if={@selected_project.org} class="text-base-content/40">/</span>
+          <span :if={@selected_project.org} aria-hidden="true" class="text-decorative">/</span>
           <span>{@selected_project.name}</span>
         </div>
       </div>
@@ -165,7 +165,7 @@
         data-role="files-semantic-search-form"
       >
         <label for="files-semantic-input" class="sr-only">Semantic search</label>
-        <span class="hero-magnifying-glass size-4 text-base-content/60"></span>
+        <span class="hero-magnifying-glass size-4 text-subtle"></span>
         <input
           id="files-semantic-input"
           type="text"
@@ -188,7 +188,7 @@
 
       <div
         :if={@semantic_search_state == :empty}
-        class="mt-2 text-xs text-base-content/60"
+        class="mt-2 text-xs text-subtle"
         data-role="files-semantic-empty"
       >
         No semantic hits for "{@semantic_query}" in this project.
@@ -210,7 +210,7 @@
             class="flex w-full flex-col text-left hover:opacity-80"
             data-role="files-semantic-hit"
           >
-            <div class="flex items-center justify-between gap-2 text-xs text-base-content/60">
+            <div class="flex items-center justify-between gap-2 text-xs text-subtle">
               <span class="font-medium text-base-content">
                 {result_label(result)}
               </span>
@@ -237,9 +237,9 @@
         :if={!@selected_project_id}
         class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
       >
-        <span class="hero-document-text size-12 text-base-content/30"></span>
+        <span class="hero-document-text size-12 text-subtle"></span>
         <h2 class="mt-4 text-lg font-semibold text-base-content">Pick a project</h2>
-        <p class="mt-2 max-w-md text-sm text-base-content/60">
+        <p class="mt-2 max-w-md text-sm text-subtle">
           Files are scoped per project (ADR 0042). Choose one from the sidebar
           to view its documents or upload new ones.
         </p>
@@ -250,9 +250,9 @@
         class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
         data-role="files-empty-state"
       >
-        <span class="hero-cloud-arrow-up size-12 text-base-content/30"></span>
+        <span class="hero-cloud-arrow-up size-12 text-subtle"></span>
         <h2 class="mt-4 text-lg font-semibold text-base-content">No files yet</h2>
-        <p class="mt-2 max-w-md text-sm text-base-content/60">
+        <p class="mt-2 max-w-md text-sm text-subtle">
           Drag and drop files here, or use the upload button above to add the first one.
         </p>
       </div>
@@ -294,7 +294,7 @@
         >
           Try again
         </button>
-        <span :if={failed_summary_note(@failed_summary)} class="text-base-content/60">
+        <span :if={failed_summary_note(@failed_summary)} class="text-subtle">
           {failed_summary_note(@failed_summary)}
         </span>
       </div>
@@ -343,7 +343,7 @@
                   } />
                 </div>
               </td>
-              <td class="text-xs text-base-content/60">{file.content_type}</td>
+              <td class="text-xs text-subtle">{file.content_type}</td>
               <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
               <td>
                 <span
@@ -353,7 +353,7 @@
                   {status_label(file.ingest_status)}
                 </span>
               </td>
-              <td class="text-xs text-base-content/60">
+              <td class="text-xs text-subtle">
                 {Calendar.strftime(file.inserted_at, "%Y-%m-%d %H:%M")}
               </td>
             </tr>
@@ -448,7 +448,7 @@
         class="border-t border-edge bg-base-200/40 px-4 py-3"
         data-role="files-upload-progress"
       >
-        <h3 class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+        <h3 class="text-xs font-semibold uppercase tracking-widest text-base-content">
           Uploading
         </h3>
         <ul class="mt-2 flex flex-col gap-1">
@@ -457,7 +457,7 @@
             class="flex items-center justify-between gap-3 text-sm"
           >
             <span class="truncate">{entry.client_name}</span>
-            <span class="text-xs text-base-content/60">{entry.progress}%</span>
+            <span class="text-xs text-subtle">{entry.progress}%</span>
             <button
               type="button"
               phx-click="cancel_upload"
@@ -573,7 +573,7 @@
         />
       </div>
 
-      <dl class="grid grid-cols-3 gap-2 text-xs text-base-content/60">
+      <dl class="grid grid-cols-3 gap-2 text-xs text-subtle">
         <dt>Type</dt>
         <dd class="col-span-2 text-base-content">{@selected_file.content_type}</dd>
         <dt>Size</dt>
@@ -732,7 +732,7 @@
       data-role="files-upload-sheet"
     >
       <div class="flex items-center justify-between border-b border-edge px-4 py-3">
-        <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Upload to {(@selected_project && @selected_project.name) || "—"}
         </h2>
         <button
@@ -764,7 +764,7 @@
             phx-drop-target={@uploads.files.ref}
             data-role="file-dropzone-sheet"
           >
-            <span class="hero-cloud-arrow-up size-8 text-base-content/40"></span>
+            <span class="hero-cloud-arrow-up size-8 text-subtle"></span>
             <p class="mt-2 text-sm text-base-content/70">
               Drag files here, or pick from your device:
             </p>
@@ -772,7 +772,7 @@
               upload={@uploads.files}
               class="file-input file-input-bordered file-input-sm mt-3 w-full"
             />
-            <p class="mt-2 text-[10px] text-base-content/40">
+            <p class="mt-2 text-[10px] text-subtle">
               Up to 50&nbsp;MB per file, {@uploads.files.max_entries} files per batch.
             </p>
           </div>

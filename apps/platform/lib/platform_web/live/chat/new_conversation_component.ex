@@ -164,7 +164,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
           </div>
 
           <div class="max-h-48 overflow-y-auto space-y-1 mb-3">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content px-1">
               Users
             </p>
             <%= for user <- @users do %>
@@ -197,7 +197,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
           </div>
 
           <div :if={@agents != []} class="max-h-32 overflow-y-auto space-y-1 mb-4">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content px-1">
               Agents
             </p>
             <%= for agent <- @agents do %>

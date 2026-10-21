@@ -238,7 +238,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProductDocs do
     ~H"""
     <div class="bg-base-200 px-4 py-2 text-xs lg:px-6" data-role="burrow-provenance">
       <p class="text-base-content/70">Product documentation. Updated with each release.</p>
-      <p class="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-base-content/60">
+      <p class="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-subtle">
         <span :if={@sha} class="whitespace-nowrap" data-role="burrow-verified">
           Last verified at <span class="font-mono text-xs">{@sha}</span>
         </span>
@@ -272,7 +272,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProductDocs do
           <p class="mt-1 text-sm text-base-content/70">
             How each part of the product works. Your org's own notes live under Pages.
           </p>
-          <p :if={@set_sha} class="mt-1 text-xs text-base-content/60" data-role="burrow-set-sha">
+          <p :if={@set_sha} class="mt-1 text-xs text-subtle" data-role="burrow-set-sha">
             All topics verified at <span class="whitespace-nowrap font-mono text-xs">{@set_sha}</span>
           </p>
         </div>
@@ -293,7 +293,7 @@ defmodule PlatformWeb.OrgMemoryLive.ProductDocs do
               </span>
               <span
                 :if={topic.verified_at && topic.verified_at != @set_sha}
-                class="shrink-0 whitespace-nowrap text-xs text-base-content/60"
+                class="shrink-0 whitespace-nowrap text-xs text-subtle"
                 data-role="burrow-row-sha"
               >
                 verified <span class="font-mono">{topic.verified_at}</span>

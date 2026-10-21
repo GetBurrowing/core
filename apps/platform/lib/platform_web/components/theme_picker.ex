@@ -63,7 +63,7 @@ defmodule PlatformWeb.Components.ThemePicker do
         id="theme-picker-trigger"
         type="button"
         phx-click={!@open && "toggle_theme_picker"}
-        class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content transition-colors"
+        class="rounded-lg p-1 text-subtle hover:bg-base-300 hover:text-base-content transition-colors"
         aria-label="Theme"
         title="Theme"
         aria-haspopup="dialog"

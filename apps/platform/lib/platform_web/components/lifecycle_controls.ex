@@ -105,7 +105,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
           class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
           data-role="lifecycle-archive"
         >
-          <.icon name="hero-archive-box" class="size-4 text-base-content/60" />
+          <.icon name="hero-archive-box" class="size-4 text-subtle" />
           <span class="flex-1">Archive</span>
         </button>
         <button
@@ -262,7 +262,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
       </div>
 
       <div :if={@item_count > 0} class="flex items-center justify-between gap-3 px-6 py-3">
-        <span class="text-xs font-medium uppercase tracking-wide text-base-content/50">
+        <span class="text-xs font-medium uppercase tracking-wide text-subtle">
           <span class="tabular-nums text-base-content">{@kept_count}</span>
           of <span class="tabular-nums">{@item_count}</span>
           kept
@@ -299,7 +299,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         />
       </ul>
 
-      <p :if={@item_count == 0} class="px-6 py-4 text-sm text-base-content/60">
+      <p :if={@item_count == 0} class="px-6 py-4 text-sm text-subtle">
         Nothing else is filed under {@resource.name} — deleting it affects only the org.
       </p>
 
@@ -356,7 +356,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         aria-label={"Keep #{@item.name}"}
       />
       <div class="flex min-w-0 items-center gap-2">
-        <.icon name={purge_icon(@item.type)} class="size-4 shrink-0 text-base-content/40" />
+        <.icon name={purge_icon(@item.type)} class="size-4 shrink-0 text-subtle" />
         <span class={[
           "truncate text-sm",
           @kept && "text-base-content",
@@ -419,7 +419,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         <p class="text-sm font-medium text-base-content">
           Archived {@undo.name}
         </p>
-        <p :if={@undo.hidden != []} class="truncate text-xs text-base-content/60">
+        <p :if={@undo.hidden != []} class="truncate text-xs text-subtle">
           Also hid {length(@undo.hidden)}: {Enum.join(@undo.hidden, ", ")}
         </p>
       </div>
@@ -435,7 +435,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         type="button"
         phx-click="dismiss_undo_archive"
         data-role="archive-undo-dismiss"
-        class="shrink-0 rounded p-1 text-base-content/40 transition-colors hover:text-base-content focus-visible-ring"
+        class="shrink-0 rounded p-1 text-subtle transition-colors hover:text-base-content focus-visible-ring"
         aria-label="Dismiss"
       >
         <.icon name="hero-x-mark" class="size-4" />
@@ -510,10 +510,10 @@ defmodule PlatformWeb.Components.LifecycleControls do
               aria-label={"Keep #{child.name} scheduled for deletion"}
             />
             <div class="flex min-w-0 items-center gap-2">
-              <.icon name={purge_icon(child.type)} class="size-4 shrink-0 text-base-content/40" />
+              <.icon name={purge_icon(child.type)} class="size-4 shrink-0 text-subtle" />
               <span class="truncate text-sm text-base-content">{child.name}</span>
             </div>
-            <span class="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-base-content/60">
+            <span class="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-subtle">
               <.icon name="hero-calendar" class="size-3.5 shrink-0" />
               {child.delete_on}
             </span>

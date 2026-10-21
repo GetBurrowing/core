@@ -64,7 +64,7 @@ defmodule PlatformWeb.ControlCenter.AgentCard do
             <.status_tag :if={@view.tag} tag={@view.tag} />
           </span>
           <span
-            class="block truncate text-xs leading-4 text-base-content/60"
+            class="block truncate text-xs leading-4 text-subtle"
             data-role="row-meta"
             title={@meta}
           >
@@ -115,7 +115,7 @@ defmodule PlatformWeb.ControlCenter.AgentCard do
 
   def status_tag(assigns) do
     ~H"""
-    <span data-role="row-tag" class="shrink-0 whitespace-nowrap text-xs text-base-content/60">
+    <span data-role="row-tag" class="shrink-0 whitespace-nowrap text-xs font-medium text-base-content">
       {elem(@tag, 1)}
     </span>
     """

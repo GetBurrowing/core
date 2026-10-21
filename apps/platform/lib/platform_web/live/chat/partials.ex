@@ -240,7 +240,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              keeps the whole name AND the box. --%>
         <h2 id="move-to-org-picker-title" class="break-words text-base font-semibold">
           {"Move ##{@picker.channel_name}"}
-          <span class="font-normal text-base-content/60">to organisation</span>
+          <span class="font-normal text-subtle">to organisation</span>
         </h2>
         <div class="mt-3 flex flex-col gap-1">
           <button
@@ -425,7 +425,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <button
       type="button"
-      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       phx-click="open_row_actions"
       phx-value-space_id={@space_id}
       data-role="drawer-row-actions"
@@ -1097,7 +1097,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                   do: "file",
                   else: "files"} selected
               <% end %>
-              <span :if={@limits} class="block text-xs text-base-content/60">
+              <span :if={@limits} class="block text-xs text-subtle">
                 Up to {@limits.label} per file
               </span>
             </div>
@@ -1157,11 +1157,11 @@ defmodule PlatformWeb.ChatLive.Partials do
               @limits.label}.
           </span>
         <% else %>
-          <span class="hero-document size-5 shrink-0 text-base-content/60" aria-hidden="true"></span>
+          <span class="hero-document size-5 shrink-0 text-subtle" aria-hidden="true"></span>
           <span class="min-w-0 flex-1 truncate" title={file.name}>
             {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
           </span>
-          <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
+          <span class="shrink-0 font-mono text-[11px] tabular-nums text-subtle">
             {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}
           </span>
         <% end %>
@@ -1208,7 +1208,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
-            <p class="truncate text-xs text-base-content/50">
+            <p class="truncate text-xs text-subtle">
               {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
             </p>
           </div>
@@ -1244,7 +1244,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
-            <p class="truncate text-xs text-base-content/50">
+            <p class="truncate text-xs text-subtle">
               {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
             </p>
           </div>
@@ -1317,7 +1317,7 @@ defmodule PlatformWeb.ChatLive.Partials do
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-semibold tabular-nums">v{v.revision}</span>
-                  <span class="text-xs text-base-content/50">{v.relative_time}</span>
+                  <span class="text-xs text-subtle">{v.relative_time}</span>
                 </div>
                 <p class="truncate text-xs text-base-content/70">
                   <span
@@ -1331,7 +1331,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                   </span>
                   {v.author_name}
                 </p>
-                <p class="truncate text-xs text-base-content/50 mt-0.5">{v.op_summary}</p>
+                <p class="truncate text-xs text-subtle mt-0.5">{v.op_summary}</p>
               </div>
               <div class="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -1374,7 +1374,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </li>
           <li
             :if={@versions == []}
-            class="px-4 py-6 text-center text-xs text-base-content/50"
+            class="px-4 py-6 text-center text-xs text-subtle"
           >
             No version history yet.
           </li>
@@ -1504,7 +1504,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration" class="text-xs text-base-content/50 tabular-nums">0:00</span>
+          <span id="meeting-duration" class="text-xs text-subtle tabular-nums">0:00</span>
         </div>
         <div class="flex items-center gap-1">
           <.soundboard_menu id="soundboard-menu-desktop" />
@@ -1549,7 +1549,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </button>
           <p
             data-quickmeet-screen-share-sharer
-            class="mt-1 text-xs text-base-content/50 truncate"
+            class="mt-1 text-xs text-subtle truncate"
           >
           </p>
         </div>
@@ -1666,7 +1666,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration-mobile" class="text-xs text-base-content/50 tabular-nums">
+          <span id="meeting-duration-mobile" class="text-xs text-subtle tabular-nums">
             0:00
           </span>
         </div>
@@ -1684,7 +1684,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             aria-expanded={to_string(@rail_open)}
             aria-controls="quickmeet-call-rail"
             title="Toggle call panel"
-            class="btn btn-ghost btn-xs btn-square text-base-content/60"
+            class="btn btn-ghost btn-xs btn-square text-subtle"
             data-role="quickmeet-rail-toggle"
           >
             <span class="hero-user-group size-4"></span>
@@ -1729,7 +1729,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </button>
           <p
             data-quickmeet-screen-share-sharer
-            class="mt-1 text-xs text-base-content/50 truncate"
+            class="mt-1 text-xs text-subtle truncate"
           >
           </p>
         </div>
@@ -1894,7 +1894,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           phx-click="quickmeet_toggle_rail"
           aria-label="Close call panel"
           title="Close"
-          class="btn btn-ghost btn-xs btn-square text-base-content/60"
+          class="btn btn-ghost btn-xs btn-square text-subtle"
           data-role="quickmeet-rail-close"
         >
           <span class="hero-x-mark size-4"></span>
@@ -1977,11 +1977,11 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div id={@id} class="mb-2" data-role="meeting-roster">
       <div class="mb-1 flex items-center justify-between px-0.5">
-        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+        <span class="text-xs font-semibold uppercase tracking-wide text-base-content">
           In this meeting
         </span>
         <span
-          class="text-xs tabular-nums text-base-content/50"
+          class="text-xs tabular-nums text-subtle"
           data-role="meeting-roster-count"
         >
           {length(@participants)}

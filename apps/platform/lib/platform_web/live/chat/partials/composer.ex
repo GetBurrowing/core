@@ -125,7 +125,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           Cancel deletion
         </button>
       <% else %>
-        <span class="hero-archive-box size-4 flex-shrink-0 text-base-content/60"></span>
+        <span class="hero-archive-box size-4 flex-shrink-0 text-subtle"></span>
         <p class="flex-1 text-sm text-base-content/70">
           This channel was archived on {Calendar.strftime(
             @active_space.archived_at,
@@ -391,7 +391,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           @embedded and @active_space != nil and @active_space.archived_at == nil and
             MapSet.size(@rendered_message_ids) == 0
         }
-        class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+        class="px-3 py-5 text-[12.5px] leading-normal text-subtle"
         data-role="call-rail-chat-empty"
       >
         Nothing typed yet. Messages appear here as people type them; the Transcript tab is for
@@ -407,7 +407,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         phx-hook="InfiniteScroll"
         data-direction="newer"
         data-loading={if @loading_newer, do: "true"}
-        class="flex justify-center py-2 text-xs text-base-content/40"
+        class="flex justify-center py-2 text-xs text-subtle"
       >
         <span :if={@loading_newer} class="hero-arrow-path size-3 animate-spin"></span>
         <span :if={!@loading_newer}>Loading newer messages…</span>
@@ -481,7 +481,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     <%!-- Typing indicator --%>
     <div
       :if={not MapSet.equal?(@agent_typing_pids, MapSet.new()) and @streaming_replies == %{}}
-      class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
+      class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-subtle"
     >
       <span class="flex gap-0.5 items-center">
         <span
@@ -599,7 +599,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                   <span class="font-medium">{suggestion.name}</span>
                   <span
                     :if={suggestion.participant_type == "broadcast"}
-                    class="block text-xs text-base-content/60 truncate"
+                    class="block text-xs text-subtle truncate"
                   >
                     Notify everyone in the channel
                   </span>
@@ -608,7 +608,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                   "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
                   suggestion.participant_type == "broadcast" && "bg-warning/10 text-warning",
                   suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
-                  suggestion.participant_type == "user" && "bg-base-300 text-base-content/50"
+                  suggestion.participant_type == "user" && "bg-base-300 text-subtle"
                 ]}>
                   {suggestion.participant_type}
                 </span>
@@ -624,7 +624,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             id="compose-attach-button"
             phx-hook="UploadButton"
             phx-click="upload_dialog_open"
-            class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
+            class="compose-pill-attach cursor-pointer text-subtle hover:bg-base-300/50 transition-colors"
             title="Attach files"
           >
             <span class="hero-plus size-5"></span>
@@ -781,7 +781,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
               <span class="text-sm font-bold text-base-content">
                 {PresenceHooks.sender_name(@participants_map, @current_participant.id)}
               </span>
-              <span data-slot="time" class="text-[10px] text-base-content/40"></span>
+              <span data-slot="time" class="text-[10px] text-subtle"></span>
             </div>
           </div>
         </div>

@@ -5597,7 +5597,7 @@ defmodule PlatformWeb.TasksLiveTest do
     # B's card as origin/main (cdc9dfed) rendered it for this exact fixture,
     # captured by running e2e_card_html/2 on a throwaway branch off main
     # BEFORE the marker existed. Pasted, never regenerated from the new code.
-    @unamended_card_on_main "<div data-role=\"e2e-behavior-validation\" data-validation-id=\"B_ID\" class=\"space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs\"><div class=\"flex items-center gap-2\"><span class=\"size-3 hero-clock text-base-content/40\"></span><span class=\"badge badge-xs badge-ghost\">pending</span></div><div data-role=\"e2e-setup\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Setup\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Seed case B fixture.</pre></div><div data-role=\"e2e-actions\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Actions\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Open task B and click the dependency badge.</pre></div><div data-role=\"e2e-expected\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Expected\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">The dependency badge renders the linked task title.</pre></div></div>"
+    @unamended_card_on_main "<div data-role=\"e2e-behavior-validation\" data-validation-id=\"B_ID\" class=\"space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs\"><div class=\"flex items-center gap-2\"><span class=\"size-3 hero-clock text-subtle\"></span><span class=\"badge badge-xs badge-ghost\">pending</span></div><div data-role=\"e2e-setup\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Setup\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Seed case B fixture.</pre></div><div data-role=\"e2e-actions\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Actions\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Open task B and click the dependency badge.</pre></div><div data-role=\"e2e-expected\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Expected\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">The dependency badge renders the linked task title.</pre></div></div>"
 
     defp e2e_card_nodes(view, validation_id, selector) do
       view
@@ -8542,7 +8542,7 @@ defmodule PlatformWeb.TasksLiveTest do
         {"in_progress", "text-info"},
         {"done", "text-success"},
         {"deploying", "text-secondary"},
-        {"forming", "text-base-content/50"}
+        {"forming", "text-subtle"}
       ]
 
       for {raw_status, expected_class} <- cases do
@@ -9208,7 +9208,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Semantic-token regression guard — no hard-coded color literals,
       # only the muted-foreground token + hover elevation.
-      assert button_tag =~ "text-base-content/60",
+      assert button_tag =~ "text-subtle",
              "expected muted-foreground semantic token on expand button: #{button_tag}"
 
       assert button_tag =~ "hover:bg-base-content/10",
@@ -9611,8 +9611,8 @@ defmodule PlatformWeb.TasksLiveTest do
         Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
 
       # Semantic-token positive: muted-foreground token present.
-      assert button_tag =~ "text-base-content/60",
-             "expected expand button to use text-base-content/60 semantic token; got: #{button_tag}"
+      assert button_tag =~ "text-subtle",
+             "expected expand button to use text-subtle semantic token; got: #{button_tag}"
 
       # No hard-coded hex color literal (matches Alex's directive that
       # the button chrome stays purely semantic — the only surviving hex

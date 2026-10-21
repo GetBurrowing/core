@@ -692,7 +692,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             "relative flex items-center justify-center px-2 py-2.5 text-[12.5px] transition-colors",
             if(id == @active,
               do: "min-w-0 flex-1 font-semibold text-base-content",
-              else: "flex-none font-medium text-base-content/60 hover:text-base-content/80"
+              else: "flex-none font-medium text-subtle hover:text-base-content/80"
             )
           ]}
         >
@@ -846,7 +846,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
                  captured. --%>
             <p
               :if={@candidates == [] and @candidates_closed == [] and is_nil(@candidate_error)}
-              class="text-base-content/40 p-3 text-xs"
+              class="text-subtle p-3 text-xs"
               data-role="call-rail-canvas-empty"
             >
               <%= if @meeting do %>
@@ -1049,7 +1049,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       data-role="meeting-agent-invite"
     >
       <div class="px-1 pb-1.5">
-        <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+        <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content">
           Invite an agent
         </span>
       </div>
@@ -1068,7 +1068,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
                 class={[
                   "min-w-0 truncate text-[13px] leading-tight",
                   if(row.state in [:incapable, :in_call],
-                    do: "text-base-content/50",
+                    do: "text-subtle",
                     else: "text-base-content"
                   )
                 ]}
@@ -1078,7 +1078,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               </span>
               <span
                 :if={not in_space?(row)}
-                class="shrink-0 text-[10px] uppercase tracking-wide text-base-content/40"
+                class="shrink-0 text-[10px] uppercase tracking-wide text-subtle"
                 data-role="meeting-agent-invite-membership"
               >
                 not in space
@@ -1086,7 +1086,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             </span>
             <span
               :if={invite_reason(row)}
-              class="block truncate text-[11px] text-base-content/50"
+              class="block truncate text-[11px] text-subtle"
               data-role="meeting-agent-invite-reason"
             >
               {invite_reason(row)}
@@ -1117,7 +1117,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
         <li
           :if={@invite_rows == []}
-          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
+          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-[11px] leading-relaxed text-subtle"
           data-role="meeting-agent-invite-empty"
         >
           No active agents yet. Every active agent appears here, whether or not it is already in

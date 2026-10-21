@@ -251,7 +251,14 @@ defmodule Platform.Design.DarkTokenDiffTest do
                "(#000306 kept, #0C1016 rejected at 1.2011:1 vs 1.1077:1) that this table cites."
     end
 
-    test "the muted and faint recipes are still used in lib/" do
+    # Both recipes are retired: muted (the 60% text utility) by task 01a15902
+    # stage 3, faint (the 40% one) by stage 4. Their replacement, text-subtle,
+    # is held at 4.5:1 by the theme guards. The fixture keeps the 01a0cf85
+    # measurement as a historical record, so this guard now holds the
+    # retirement: either recipe reappearing in lib/ turns it red.
+    @retired_recipes %{"muted" => "task 01a15902 stage 3", "faint" => "task 01a15902 stage 4"}
+
+    test "the live recipes are still used in lib/, and the retired ones are gone" do
       sources =
         Path.wildcard(Path.join(@lib_root, "**/*.{ex,heex}"))
         |> Enum.map(&File.read!/1)
@@ -260,8 +267,13 @@ defmodule Platform.Design.DarkTokenDiffTest do
       for row <- ~w(muted faint) do
         recipe = F.live()[row].recipe
 
-        assert String.contains?(sources, recipe),
-               "re-measure: #{recipe}, the live #{row} counterpart, no longer appears in lib/."
+        if retired_by = @retired_recipes[row] do
+          refute String.contains?(sources, recipe),
+                 "#{recipe} is back in lib/; #{retired_by} retired it (use text-subtle)."
+        else
+          assert String.contains?(sources, recipe),
+                 "re-measure: #{recipe}, the live #{row} counterpart, no longer appears in lib/."
+        end
       end
     end
   end

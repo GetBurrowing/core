@@ -364,7 +364,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
     <div id={"channel-picker-#{@id}"} phx-hook="ChannelPicker" data-role="channel-picker">
       <div class="mb-2 flex items-center gap-2">
         <div class="relative flex-1">
-          <span class="hero-magnifying-glass pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-base-content/40">
+          <span class="hero-magnifying-glass pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle">
           </span>
           <input
             type="text"
@@ -390,13 +390,13 @@ defmodule PlatformWeb.ExternalRecoveryLive do
       >
         <p
           :if={@spaces == []}
-          class="px-3 py-3 text-xs text-base-content/50"
+          class="px-3 py-3 text-xs text-subtle"
           data-role="channel-empty"
         >
           No channels available.
         </p>
         <p
-          class="hidden px-3 py-3 text-xs text-base-content/50"
+          class="hidden px-3 py-3 text-xs text-subtle"
           data-role="channel-empty-filter"
         >
           No channels match your search.

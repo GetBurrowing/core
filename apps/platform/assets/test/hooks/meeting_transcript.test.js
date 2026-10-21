@@ -447,7 +447,7 @@ describe("MeetingTranscript", () => {
     caption(listeners, { id: "i1", speaker: "Alex", text: "settling", final: false })
 
     const interim = lineClass(hook, "settling")
-    expect(interim).toContain("text-base-content/60")
+    expect(interim).toContain("text-subtle")
     expect(interim).not.toContain("italic")
     expect(interim).not.toContain("opacity")
 
@@ -455,7 +455,7 @@ describe("MeetingTranscript", () => {
 
     const final = lineClass(hook, "settled")
     expect(final).toContain("text-base-content ")
-    expect(final).not.toContain("text-base-content/60")
+    expect(final).not.toContain("text-subtle")
     expect(final).not.toContain("italic")
     expect(interimCount(hook)).toBe(0)
   })

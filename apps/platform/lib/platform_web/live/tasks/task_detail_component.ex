@@ -918,7 +918,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
     ~H"""
     <%!-- Plan stages --%>
     <div :if={@task.plans != []} class="space-y-2">
-      <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+      <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
         Plan
       </h3>
       <% {rejected_plans, active_plans} = partition_plans(@task) %>
@@ -937,7 +937,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           phx-click={if expanded?, do: "plan_collapse", else: "plan_expand"}
           phx-target={@target}
           phx-value-plan-id={plan.id}
-          class="flex h-8 w-full items-center gap-2 px-3 text-xs text-base-content/50 hover:bg-base-200/40 transition-colors"
+          class="flex h-8 w-full items-center gap-2 px-3 text-xs font-medium text-base-content hover:bg-base-200/40 transition-colors"
         >
           <span class={[
             "hero-chevron-right size-3 shrink-0 transition-transform",
@@ -961,7 +961,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             data-plan-id={plan.id}
             class="rounded border border-edge/60 bg-base-100/40 px-3 py-2"
           >
-            <p class="text-[10px] uppercase tracking-wider text-base-content/50 mb-1">
+            <p class="text-[10px] uppercase tracking-wider text-subtle mb-1">
               Rejection reason
             </p>
             <p class="text-xs italic text-base-content/70 whitespace-pre-wrap">
@@ -1037,7 +1037,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         >
           <label
             for={"plan-reject-feedback-#{plan.id}"}
-            class="block text-[10px] uppercase tracking-wider text-base-content/60"
+            class="block text-[10px] uppercase tracking-wider font-medium text-base-content"
           >
             What needs to change?
           </label>
@@ -1097,8 +1097,8 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   defp stage_status_icon("passed"), do: "hero-check-circle text-success"
   defp stage_status_icon("failed"), do: "hero-x-circle text-error"
   defp stage_status_icon("running"), do: "hero-arrow-path text-info animate-spin"
-  defp stage_status_icon("skipped"), do: "hero-minus-circle text-base-content/40"
-  defp stage_status_icon(_), do: "hero-clock text-base-content/40"
+  defp stage_status_icon("skipped"), do: "hero-minus-circle text-subtle"
+  defp stage_status_icon(_), do: "hero-clock text-subtle"
 
   @doc false
   def render(assigns) do
@@ -1300,10 +1300,10 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <span :if={@selected_task.priority} class={priority_badge_class(@selected_task.priority)}>
               {String.capitalize(@selected_task.priority)}
             </span>
-            <span :if={@selected_task.project} class="text-xs text-base-content/50">
+            <span :if={@selected_task.project} class="text-xs text-subtle">
               {@selected_task.project.name || "—"}
             </span>
-            <span :if={@selected_task.epic} class="text-xs text-base-content/50">
+            <span :if={@selected_task.epic} class="text-xs text-subtle">
               / {@selected_task.epic.name || "—"}
             </span>
           </div>
@@ -1402,7 +1402,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                     </span>
                     <span
                       :if={dep.status}
-                      class="text-[10px] uppercase tracking-wider text-base-content/40"
+                      class="text-[10px] uppercase tracking-wider text-subtle"
                     >
                       {status_label(dep.status)}
                     </span>
@@ -1437,7 +1437,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             class="flex flex-wrap items-center gap-2"
             data-role="linked-canvases-strip"
           >
-            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
               Canvases
             </span>
             <span
@@ -1516,7 +1516,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 <input type="hidden" name="task-id" value={@selected_task.id} />
                 <label
                   for={"priority-select-#{@selected_task.id}"}
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
                   Priority
                 </label>
@@ -1547,7 +1547,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 <input type="hidden" name="task-id" value={@selected_task.id} />
                 <label
                   for={"deploy-target-select-#{@selected_task.id}"}
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
                   Deploy target
                 </label>
@@ -1577,7 +1577,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               </form>
             <% else %>
               <div class="flex flex-col gap-1" data-role="priority-readonly" data-editable="false">
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Priority
                 </span>
                 <span class={[
@@ -1598,7 +1598,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 data-role="deploy-target-readonly"
                 data-editable="false"
               >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Deploy target
                 </span>
                 <.deploy_target_display task={@selected_task} target={@myself} />
@@ -1637,7 +1637,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 <input type="hidden" name="task-id" value={@selected_task.id} />
                 <label
                   for={"sponsor-select-#{@selected_task.id}"}
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
                   Sponsor
                 </label>
@@ -1666,7 +1666,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 data-editable="false"
                 class="flex flex-col gap-1"
               >
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Sponsor
                 </span>
                 <span class="badge badge-sm badge-outline">
@@ -1677,26 +1677,24 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           </div>
 
           <%!-- Reporter + Dates + Assignee name --%>
-          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-base-content/50">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-subtle">
             <span :if={@selected_task.reported_by}>
-              <span class="text-base-content/40">Reporter:</span> {@selected_task.reported_by}
+              <span class="text-subtle">Reporter:</span> {@selected_task.reported_by}
             </span>
             <span :if={assignee_name(@selected_task, @agent_names)}>
-              <span class="text-base-content/40">Assigned:</span> {assignee_name(
+              <span class="text-subtle">Assigned:</span> {assignee_name(
                 @selected_task,
                 @agent_names
               )}
             </span>
             <span :if={@selected_task.inserted_at}>
-              <span class="text-base-content/40">Created:</span> {Calendar.strftime(
+              <span class="text-subtle">Created:</span> {Calendar.strftime(
                 @selected_task.inserted_at,
                 "%b %d, %Y"
               )}
             </span>
             <span :if={@selected_task.updated_at}>
-              <span class="text-base-content/40">Updated:</span> {relative_time(
-                @selected_task.updated_at
-              )}
+              <span class="text-subtle">Updated:</span> {relative_time(@selected_task.updated_at)}
             </span>
           </div>
 
@@ -1705,7 +1703,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                  a single Repo.all per render (detail panel only). --%>
           <% deps = dependency_summary(@selected_task) %>
           <div :if={deps != []} id="task-dependencies" class="flex flex-col gap-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
               Dependencies
             </span>
             <ul class="flex flex-col gap-1 text-xs">
@@ -1719,7 +1717,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 </span>
                 <span
                   :if={dep.status}
-                  class="text-[10px] uppercase tracking-wider text-base-content/40"
+                  class="text-[10px] uppercase tracking-wider text-subtle"
                 >
                   {status_label(dep.status)}
                 </span>
@@ -1732,7 +1730,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                  (Advanced). --%>
           <div :if={@agents != []} class="flex flex-col gap-2">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Assignees
               </span>
               <button
@@ -1746,7 +1744,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             </div>
             <div class="grid grid-cols-3 gap-1 text-[11px]">
               <div :for={phase <- ~w(planning execution review)} class="rounded bg-base-200 p-1.5">
-                <p class="text-[10px] uppercase tracking-wider text-base-content/40">
+                <p class="text-[10px] uppercase tracking-wider text-subtle">
                   {phase_label(phase)}
                 </p>
                 <p class={[
@@ -1832,7 +1830,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             data-editable={to_string(@edit_mode)}
           >
             <div class="flex items-center justify-between gap-2">
-              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Description
               </h3>
               <button
@@ -1893,7 +1891,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               <p
                 :if={!@selected_task.description}
                 data-role="description-empty"
-                class="text-sm text-base-content/40 italic"
+                class="text-sm text-subtle italic"
               >
                 {if @edit_mode,
                   do: "No description yet — click Edit to add one.",
@@ -1919,7 +1917,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
           <%!-- Skills --%>
           <div class="space-y-2">
-            <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 flex items-center gap-1">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content flex items-center gap-1">
               <span class="hero-book-open size-3"></span> Skills
             </h3>
 
@@ -1931,7 +1929,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                     "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs " <>
                       if source == "task",
                         do: "bg-primary/10 text-primary border border-primary/20",
-                        else: "bg-base-200 text-base-content/60 border border-edge"
+                        else: "bg-base-200 text-subtle border border-edge"
                   }
               >
                 <span class="font-medium">{skill.name}</span>
@@ -2011,7 +2009,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div class="min-w-0">
               <h2 class="text-base font-semibold">Reopen with feedback</h2>
-              <p class="mt-0.5 text-xs text-base-content/60 truncate">
+              <p class="mt-0.5 text-xs text-subtle truncate">
                 {@selected_task.title}
               </p>
             </div>
@@ -2037,7 +2035,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <div class="flex flex-col gap-1">
               <label
                 for="reopen-reason-textarea"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                class="text-xs font-semibold uppercase tracking-wider text-base-content"
               >
                 Why is this being reopened?
               </label>
@@ -2053,7 +2051,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               >{@reopen_reason}</textarea>
               <p
                 :if={String.trim(@reopen_reason) == ""}
-                class="text-xs text-base-content/50"
+                class="text-xs text-subtle"
                 data-role="reopen-reason-hint"
               >
                 A reason is required so the planner has context for the next revision.
@@ -2151,7 +2149,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
           <% {:inherited, value} -> %>
             <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
-            <span class="text-xs text-base-content/50">Inherited from project</span>
+            <span class="text-xs text-subtle">Inherited from project</span>
           <% :none -> %>
             <span class="badge badge-sm badge-warning gap-1">
               <span class="hero-exclamation-triangle size-3"></span> No target set
@@ -2300,7 +2298,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
        when status in ~w(blocked planning backlog in_review deploying),
        do: "hero-pause-circle-solid text-warning"
 
-  defp dependency_status_icon(_), do: "hero-x-circle-solid text-base-content/40"
+  defp dependency_status_icon(_), do: "hero-x-circle-solid text-subtle"
 
   # ── Blocked-explanation helpers ────────────────────────────────────────
   #
@@ -2534,11 +2532,11 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         <div class="flex items-center gap-2 text-sm">
           <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
           <span class="flex-1">{stage.name}</span>
-          <span class="text-xs text-base-content/40">{stage.status}</span>
+          <span class="text-xs text-subtle">{stage.status}</span>
         </div>
         <div
           :if={stage.description}
-          class="prose prose-sm max-w-none text-xs text-base-content/60 chat-markdown task-markdown mt-1 ml-6"
+          class="prose prose-sm max-w-none text-xs text-subtle chat-markdown task-markdown mt-1 ml-6"
         >
           {Platform.Chat.ContentRenderer.render_message(stage.description)}
         </div>
@@ -2578,10 +2576,10 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         class="mt-3 rounded-box border border-edge bg-base-200/30 p-3 space-y-2"
       >
         <div class="flex items-center gap-2">
-          <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+          <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
             E2E Behavior
           </span>
-          <span class="text-[10px] text-base-content/40">
+          <span class="text-[10px] text-subtle">
             task-level review · {length(@e2e_validations)} test cases
           </span>
         </div>
@@ -2601,7 +2599,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           }>
             <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
             <span class={"badge badge-xs #{validation_badge_class(v.status)}"}>{v.status}</span>
-            <span :if={v.evaluated_by} class="text-base-content/50">
+            <span :if={v.evaluated_by} class="text-subtle">
               by {v.evaluated_by}
             </span>
             <%!-- Text colour is text-base-content, the design's named fallback:
@@ -2633,7 +2631,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               ] do %>
             <% value = e2e_payload_field(v, key) %>
             <div :if={value} data-role={"e2e-#{key}"} class="space-y-0.5">
-              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content">
                 {label}<span
                   :if={key in amended_fields}
                   data-role="e2e-amended-field-dot"
@@ -2656,7 +2654,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             class="space-y-1"
             phx-mounted={JS.ignore_attributes(["open"])}
           >
-            <summary class="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+            <summary class="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-base-content">
               evaluation_payload as amended ({length(amendments)})
             </summary>
             <div
@@ -2665,7 +2663,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               data-amendment-number={change.number}
               class="mt-1 space-y-1 border-l border-edge pl-2"
             >
-              <div class="text-[10px] text-base-content/60">
+              <div class="text-[10px] text-subtle">
                 <span class="font-semibold">#{change.number}</span>
                 <span>{amended_fields_label(change.changed)}</span>
                 ·
@@ -2674,10 +2672,10 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 </span>
                 · <span>{format_amended_at(change.entry["amended_at"])}</span>
               </div>
-              <div class="text-[10px] text-base-content/60">
+              <div class="text-[10px] text-subtle">
                 Reason: {change.entry["reason"]}
               </div>
-              <div class="text-[10px] text-base-content/60">Before:</div>
+              <div class="text-[10px] text-subtle">Before:</div>
               <%= for {label, key} <- [
                     {"Setup", "setup"},
                     {"Actions", "actions"},
@@ -2686,10 +2684,10 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                   key in change.changed do %>
                 <% prior = e2e_payload_value(change.entry["prior_payload"], key) %>
                 <div data-role={"e2e-amendment-prior-#{key}"} class="space-y-0.5">
-                  <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+                  <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content">
                     {label}
                   </div>
-                  <pre class="whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-[11px] leading-snug text-base-content/60">{prior || "(empty)"}</pre>
+                  <pre class="whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-[11px] leading-snug text-subtle">{prior || "(empty)"}</pre>
                 </div>
               <% end %>
             </div>

@@ -329,7 +329,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                to the header, never floats over the chat pane). The menu closes
                on click-away and Escape; choosing an item enters the mode AND
                closes the menu (handled server-side). --%>
-          <p class="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-widest text-base-content/60">
+          <p class="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-widest text-base-content">
             Channels
           </p>
           <%!-- Screen-share name masking (task 01a00c66). PERMANENTLY VISIBLE
@@ -759,7 +759,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 <%= case kind do %>
                   <% :channel -> %>
                     <span
-                      class="w-5 shrink-0 text-center text-base-content/60"
+                      class="w-5 shrink-0 text-center text-subtle"
                       data-role="pinned-row-hash"
                     >
                       #
@@ -776,8 +776,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                       data-role="pinned-row-task-glyph"
                       aria-hidden="true"
                     >
-                      <span class="hero-clipboard-document-list-mini size-3.5 text-base-content/60">
-                      </span>
+                      <span class="hero-clipboard-document-list-mini size-3.5 text-subtle"></span>
                     </span>
                 <% end %>
                 <span class="truncate flex-1">{row_label}</span>
@@ -893,12 +892,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
       aria-label="Direct Messages"
     >
       <div class="channel-section-header">
-        <span class="hero-chat-bubble-left-right size-3.5 text-base-content/60"></span>
+        <span class="hero-chat-bubble-left-right size-3.5 text-subtle"></span>
         <p class="channel-section-label">Direct Messages</p>
         <button
           type="button"
           phx-click="new_conversation_open"
-          class="text-base-content/40 hover:text-primary ml-auto"
+          class="text-subtle hover:text-primary ml-auto"
           title="New conversation"
         >
           <span class="hero-plus size-4"></span>
@@ -1197,7 +1196,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
               name="name"
               value={section.name}
               placeholder={section.org_name}
-              class="channel-section-rename-input placeholder:text-faint"
+              class="channel-section-rename-input placeholder:text-subtle"
               aria-label={"Sidebar label for #{section.org_name}"}
               maxlength="60"
             />
@@ -1300,14 +1299,14 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         <p
           :if={@sidebar_admin_edit and not custom_label?(section)}
           data-role="section-label-hint"
-          class="px-3 pb-1 text-xs text-base-content/60"
+          class="px-3 pb-1 text-xs text-subtle"
         >
           Uses the organisation name.
         </p>
         <p
           :if={@sidebar_admin_edit and custom_label?(section)}
           data-role="section-label-hint"
-          class="px-3 pb-1 text-xs text-base-content/60"
+          class="px-3 pb-1 text-xs text-subtle"
         >
           Sidebar label only. The organisation is {section.org_name}.
           <button
@@ -1398,7 +1397,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 data-role="restricted-channel-row"
                 data-space-id={space.id}
                 aria-disabled="true"
-                class="channel-row text-base-content/50"
+                class="channel-row text-subtle"
               >
                 <span class="hero-lock-closed-mini size-3.5"></span>
                 <span class="truncate flex-1">
@@ -1449,7 +1448,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                     @active_space && @active_space.id == space.id && "channel-row--active"
                   ]}
                 >
-                  <span class="text-base-content/40">#</span>
+                  <span class="text-subtle">#</span>
                   <span class="truncate flex-1">
                     {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
                   </span>
@@ -1588,9 +1587,9 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         aria-expanded={if @archived_open, do: "true", else: "false"}
         aria-controls="archived-channel-list"
       >
-        <span class="hero-archive-box size-3.5 text-base-content/40"></span>
+        <span class="hero-archive-box size-3.5 text-subtle"></span>
         <p class="channel-section-label">Archived</p>
-        <span class="ml-auto text-base-content/40 text-xs">
+        <span class="ml-auto text-subtle text-xs">
           {if @archived_open, do: "▾", else: "▸"}
         </span>
       </button>
@@ -1601,7 +1600,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
               data-role="restricted-channel-row"
               data-space-id={space.id}
               aria-disabled="true"
-              class="channel-row text-base-content/50"
+              class="channel-row text-subtle"
             >
               <span class="hero-lock-closed-mini size-3.5"></span>
               <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
@@ -1611,11 +1610,11 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             <.link
               patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
               class={[
-                "channel-row text-base-content/50",
+                "channel-row text-subtle",
                 @active_space && @active_space.id == space.id && "channel-row--active"
               ]}
             >
-              <span class="hero-archive-box size-3.5 text-base-content/30"></span>
+              <span class="hero-archive-box size-3.5 text-subtle"></span>
               <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
             </.link>
           <% end %>
@@ -1871,7 +1870,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 />
                 <span
                   :if={is_nil(bucket_org)}
-                  class="text-xs font-semibold uppercase tracking-wide text-base-content/50"
+                  class="text-xs font-semibold uppercase tracking-wide text-base-content"
                 >
                   {bucket_label}
                 </span>
@@ -1881,7 +1880,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                   :for={space <- hidden_channels}
                   class="channel-hidden-drawer-item"
                 >
-                  <span class="text-base-content/40">#</span>
+                  <span class="text-subtle">#</span>
                   <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
                   <button
                     type="button"

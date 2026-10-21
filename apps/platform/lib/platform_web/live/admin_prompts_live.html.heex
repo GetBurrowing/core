@@ -33,11 +33,11 @@
         >
           <span class="hero-arrow-left size-4"></span>
         </button>
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Admin · Prompts · {(@selected_template && @selected_template.slug) || @missing_key.slug}
         </h1>
       <% else %>
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Admin · Prompts
         </h1>
         <span class="badge badge-ghost badge-sm">{length(@templates)}</span>
@@ -53,7 +53,7 @@
     <div class="flex-1 overflow-y-auto p-4">
       <div
         :if={@rows == []}
-        class="flex items-center justify-center h-full text-base-content/30"
+        class="flex items-center justify-center h-full text-subtle"
       >
         No prompt templates found. Run migrations to seed defaults.
       </div>
@@ -62,15 +62,15 @@
         <table class="table table-sm w-full">
           <thead>
             <tr>
-              <th class="text-xs uppercase tracking-wider text-base-content/50">Slug</th>
-              <th class="text-xs uppercase tracking-wider text-base-content/50">Name</th>
-              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden md:table-cell">
+              <th class="text-xs uppercase tracking-wider text-base-content">Slug</th>
+              <th class="text-xs uppercase tracking-wider text-base-content">Name</th>
+              <th class="text-xs uppercase tracking-wider text-base-content hidden md:table-cell">
                 Description
               </th>
-              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden sm:table-cell">
+              <th class="text-xs uppercase tracking-wider text-base-content hidden sm:table-cell">
                 Updated
               </th>
-              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden sm:table-cell">
+              <th class="text-xs uppercase tracking-wider text-base-content hidden sm:table-cell">
                 By
               </th>
             </tr>
@@ -90,13 +90,13 @@
               >
                 <td class="font-mono text-xs text-primary">{row.template.slug}</td>
                 <td class="text-sm font-medium">{row.template.name}</td>
-                <td class="text-xs text-base-content/60 hidden md:table-cell max-w-xs">
+                <td class="text-xs text-subtle hidden md:table-cell max-w-xs">
                   <span class="line-clamp-1">{row.template.description || "—"}</span>
                 </td>
-                <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
+                <td class="text-xs text-subtle hidden sm:table-cell whitespace-nowrap">
                   {relative_time(row.template.updated_at)}
                 </td>
-                <td class="text-xs text-base-content/50 hidden sm:table-cell">
+                <td class="text-xs text-subtle hidden sm:table-cell">
                   {row.template.updated_by || "—"}
                 </td>
               </tr>
@@ -138,10 +138,10 @@
                 <td class="text-xs text-base-content/70 hidden md:table-cell max-w-xs">
                   <span class="line-clamp-1">No template carries this slug.</span>
                 </td>
-                <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
+                <td class="text-xs text-subtle hidden sm:table-cell whitespace-nowrap">
                   —
                 </td>
-                <td class="text-xs text-base-content/50 hidden sm:table-cell">—</td>
+                <td class="text-xs text-subtle hidden sm:table-cell">—</td>
               </tr>
             <% end %>
           </tbody>
@@ -201,7 +201,7 @@
           class="space-y-3 shrink-0"
         >
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-medium uppercase tracking-wider text-base-content/60">
+            <span class="text-xs font-medium uppercase tracking-wider text-base-content">
               Variant
             </span>
             <button
@@ -222,7 +222,7 @@
           </div>
 
           <div class="rounded-lg border border-edge bg-base-200 p-3 space-y-2">
-            <p class="text-xs text-base-content/60">
+            <p class="text-xs text-subtle">
               Diff against the control snapshot taken at activation — not against the row
               being edited above.
             </p>
@@ -245,7 +245,7 @@
             ><span
                 :for={{kind, line} <- @variant_diff}
                 data-role={"variant-diff-#{kind}"}
-                class={if kind == :del, do: "text-base-content/50", else: "text-base-content font-semibold"}
+                class={if kind == :del, do: "text-subtle", else: "text-base-content font-semibold"}
               >{if kind == :del, do: "- ", else: "+ "}{line}
 </span></pre>
           </div>
@@ -287,7 +287,7 @@
           <div>
             <label class="label label-text text-xs font-medium">
               Content
-              <span class="text-base-content/40 font-normal ml-1">
+              <span class="text-subtle font-normal ml-1">
                 — use {"{{variable}}"} for interpolation
               </span>
             </label>
@@ -322,10 +322,10 @@
         <%!-- Preview section --%>
         <div :if={@preview_content} class="space-y-2">
           <div class="flex items-center gap-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
               Preview
             </span>
-            <span class="text-[10px] text-base-content/30">(with sample data)</span>
+            <span class="text-[10px] text-subtle">(with sample data)</span>
           </div>
           <div class="rounded-lg border border-edge bg-base-200 p-4">
             <pre class="whitespace-pre-wrap font-mono text-xs text-base-content/80 leading-relaxed">{@preview_content}</pre>
@@ -335,7 +335,7 @@
 
       <%!-- Variables reference sidebar --%>
       <aside class="hidden lg:flex w-64 shrink-0 flex-col border-l border-edge bg-base-100 overflow-y-auto p-4 gap-3">
-        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content">
           Available Variables
         </div>
         <div class="space-y-2">
@@ -344,12 +344,12 @@
             class="rounded border border-edge bg-base-200 p-2"
           >
             <div class="font-mono text-xs text-primary">{"{{#{var}}}"}</div>
-            <div class="mt-0.5 text-[11px] text-base-content/50">
+            <div class="mt-0.5 text-[11px] text-subtle">
               {Map.get(variable_descriptions(), var, "Variable")}
             </div>
           </div>
         </div>
-        <div class="mt-2 text-[10px] text-base-content/30 leading-relaxed">
+        <div class="mt-2 text-[10px] text-subtle leading-relaxed">
           Use {"{{variable_name}}"} syntax in the content. Unknown variables are left as-is.
         </div>
       </aside>

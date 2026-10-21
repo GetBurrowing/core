@@ -1301,7 +1301,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
         # `/40` is the DISABLED treatment on this rail and an inactive tab
         # is not disabled (design canvas 01a084be, "Palette").
-        assert class =~ "text-base-content/60"
+        assert class =~ "text-subtle"
         refute class =~ "text-base-content/40"
       end
     end

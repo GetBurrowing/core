@@ -195,7 +195,7 @@ defmodule PlatformWeb.Components.IconRail do
         <button
           :if={!@sidebar_collapsed}
           type="button"
-          class="ml-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
+          class="ml-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content"
           phx-click="toggle_sidebar"
           title="Collapse sidebar"
           aria-label="Collapse sidebar"
@@ -205,7 +205,7 @@ defmodule PlatformWeb.Components.IconRail do
         <button
           :if={@sidebar_collapsed}
           type="button"
-          class="mx-auto flex size-10 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
+          class="mx-auto flex size-10 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content"
           phx-click="toggle_sidebar"
           title="Expand sidebar"
           aria-label="Expand sidebar"

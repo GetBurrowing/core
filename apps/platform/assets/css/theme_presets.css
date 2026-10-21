@@ -20,7 +20,8 @@
  *
  * SOURCE. The Burrow masters' theme.js (prototype v3, sha256 14e3bcff...). Slot
  * mapping: ground -> base-200, surface -> base-100, raised -> base-300,
- * edge -> --edge, ink -> base-content, muted -> secondary, faint -> --faint,
+ * edge -> --edge, ink -> base-content, muted -> secondary, faint -> none
+ * (the faint tier is retired, task 01a15902 stage 2: placeholders paint --subtle),
  * accent -> primary AND accent, onAccent -> primary-content / accent-content,
  * interactive -> --color-interactive, info/active/warning/danger ->
  * info/success/warning/error plus their -dim steps. Status -content slots have no
@@ -50,16 +51,17 @@
  * painted 8-bit composite, held at its minimum over the browser formulas in
  * test/support/painted_composite.ex). Stage 5 moved four light grounds so the
  * 55% ink clears 4.5:1 under every formula; each carries its own comment. Method, as rung 1 (bc525bce5):
- *   - faint: the step on that preset's muted oklch line (lightness only) that
- *     clears 4.5:1 on all three grounds, and in dark also on the thread
- *     composer's literal #252c3d fill, while staying more than 0.5:1 dimmer than
- *     muted on base-100;
  *   - dark on-accent: black;
  *   - light ink: clears 4.5:1 at its --subtle strength on all three grounds;
  *   - --subtle (the secondary-text tier, text-subtle) is base-content at 55%,
  *     exactly what the retired 55% utility compiled to, except Burrow sand
  *     light at 57%, where no ink clears 55% on the raised ground. Every block
- *     also clears 4.5:1 at 60% (text-base-content/60, daisyUI .label);
+ *     also clears 4.5:1 at 60% (daisyUI .label; the 60% text utility was
+ *     retired by task 01a15902 stage 3);
+ *   - --disabled and --decorative (task 01a15902) are base-content at 40% in
+ *     every block, the two WCAG-exempt text colours: text inside a disabled
+ *     control, and aria-hidden glyphs. text_exemption_guard_test.exs holds
+ *     where they may be used;
  *   - High contrast: 7:1 for every text pair.
  * Hex values live only inside these token blocks.
  */
@@ -73,10 +75,9 @@
   --color-base-content: #e9eef8;
   --color-secondary: #9fb0cc;
   --color-secondary-content: #000000;
-  /* theme.js #687a99 measures 3.4252:1 min on base-100/200/300 and 3.2081:1 on the thread composer fill #252c3d;
-     this value measures 4.8340:1 and 4.5276:1 on the thread composer fill #252c3d. */
-  --faint: #8394af;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #ff8a3d;
   /* theme.js #ffffff measures 2.3451:1 on the accent;
      this value measures 8.9548:1. */
@@ -145,10 +146,9 @@
   --color-base-content: #000006;
   --color-secondary: #4d5d75;
   --color-secondary-content: #ffffff;
-  /* theme.js #8794a8 measures 2.4970:1 min on base-100/200/300;
-     this value measures 4.6484:1. */
-  --faint: #596982;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #b4470a;
   --color-primary-content: #fbfaf9;
   --color-accent: #b4470a;
@@ -221,10 +221,9 @@
   --color-base-content: #f2ece2;
   --color-secondary: #b7ab98;
   --color-secondary-content: #000000;
-  /* theme.js #7f7462 measures 3.1796:1 min on base-100/200/300 and 3.0385:1 on the thread composer fill #252c3d;
-     this value measures 4.7136:1 and 4.5044:1 on the thread composer fill #252c3d. */
-  --faint: #9d917e;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #e8842e;
   /* theme.js #ffffff measures 2.7023:1 on the accent;
      this value measures 7.7711:1. */
@@ -292,17 +291,14 @@
      this value measures 4.6194:1 at this block's --subtle strength (57%). */
   --color-base-content: #000000;
   /* theme.js #6b5a46 measures 4.7456:1 min on base-100/200/300;
-     this value measures 5.0428:1. Darkened so a faint exists that clears
-     4.5:1 on all three grounds and stays more than 0.5:1 dimmer than muted on
-     EACH ground; at the theme.js value none does. Stage 5 r2 took it one
-     oklab lightness step darker (#685744 -> #675643): at #685744 faint sat
-     only 0.4536:1 under muted on base-300. The gaps are now 0.6592:1,
-     0.6099:1 and 0.5308:1 on base-100/200/300. */
+     this value measures 5.0428:1. Darkened (task 01a1557a) so the faint
+     tier could sit more than 0.5:1 under muted on each ground; stage 5 r2
+     took it one oklab lightness step further (#685744 -> #675643). Faint is
+     retired (task 01a15902 stage 2) and the value is kept: it clears 4.5:1
+     on all three grounds, which the theme.js value also does, so moving it
+     back would be a palette change this task does not make. */
   --color-secondary: #675643;
   --color-secondary-content: #ffffff;
-  /* theme.js #a08f78 measures 2.2513:1 min on base-100/200/300;
-     this value measures 4.5119:1. */
-  --faint: #6f5d4a;
   /* Subtle at 57%, not 55% (task 01a1557a stage 5 r2). The secondary-text
      tier owes 4.5:1 on all three grounds, and no ink can carry 55% on this
      raised ground: black at 55% on #e5d9c6 paints 4.3460:1. At 57% black
@@ -310,6 +306,8 @@
      base-300, the worst pixel any measured browser paints
      (test/support/painted_composite.ex). The grounds keep their elevation. */
   --subtle: color-mix(in oklab, var(--color-base-content) 57%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #9c4306;
   --color-primary-content: #fbfaf9;
   --color-accent: #9c4306;
@@ -388,10 +386,9 @@
   --color-base-content: #eaf1ec;
   --color-secondary: #a3b5aa;
   --color-secondary-content: #000000;
-  /* theme.js #6b7c72 measures 3.3550:1 min on base-100/200/300 and 3.1542:1 on the thread composer fill #252c3d;
-     this value measures 4.8036:1 and 4.5161:1 on the thread composer fill #252c3d. */
-  --faint: #85978c;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #f0a040;
   /* theme.js #ffffff measures 2.1412:1 on the accent;
      this value measures 9.8074:1. */
@@ -464,10 +461,9 @@
   --color-base-content: #000000;
   --color-secondary: #51655a;
   --color-secondary-content: #ffffff;
-  /* theme.js #88978e measures 2.4428:1 min on base-100/200/300;
-     this value measures 4.6263:1. */
-  --faint: #576c61;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #a3500a;
   --color-primary-content: #fbfaf9;
   --color-accent: #a3500a;
@@ -544,10 +540,9 @@
   --color-base-content: #ffffff;
   --color-secondary: #d0d0d0;
   --color-secondary-content: #000000;
-  /* theme.js #9a9a9a measures 6.0563:1 min on base-100/200/300 and 4.9544:1 on the thread composer fill #252c3d;
-     this value measures 7.0007:1 and 5.7269:1 on the thread composer fill #252c3d. */
-  --faint: #a6a6a6;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #ff8c2a;
   --color-primary-content: #000000;
   --color-accent: #ff8c2a;
@@ -614,10 +609,9 @@
   --color-base-content: #000000;
   --color-secondary: #2a2a2a;
   --color-secondary-content: #ffffff;
-  /* theme.js #555555 measures 5.9734:1 min on base-100/200/300;
-     this value measures 7.2996:1. */
-  --faint: #4a4a4a;
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --color-primary: #8a3300;
   --color-primary-content: #ffffff;
   --color-accent: #8a3300;

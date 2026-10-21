@@ -630,7 +630,7 @@ function buildRow(u, manager) {
 
   const wrap = el("div", "mt-1 flex flex-col gap-2")
   let card
-  const counter = el("span", "shrink-0 font-mono text-[11px] tabular-nums text-base-content/60")
+  const counter = el("span", "shrink-0 font-mono text-[11px] tabular-nums text-subtle")
   counter.setAttribute("data-role", "large-upload-counter")
   if (isVideo(u)) {
     card = el("div", "relative w-full max-w-md overflow-hidden rounded-box border border-edge bg-base-200")
@@ -663,7 +663,7 @@ function buildRow(u, manager) {
     )
     card.appendChild(el("span", "hero-paper-clip size-4"))
     card.appendChild(el("span", null, u.filename))
-    card.appendChild(el("span", "text-xs text-base-content/40", `(${formatBytes(u.byteSize)})`))
+    card.appendChild(el("span", "text-xs text-subtle", `(${formatBytes(u.byteSize)})`))
   }
   card.setAttribute("data-role", "large-upload-card")
   const track = el("div", "absolute inset-x-0 bottom-0 h-[3px] bg-base-300")
@@ -689,7 +689,7 @@ function buildRow(u, manager) {
 
 function statusLine(u, manager) {
   const frag = document.createDocumentFragment()
-  const line = el("div", "mt-1 flex items-center gap-2 text-xs text-base-content/60")
+  const line = el("div", "mt-1 flex items-center gap-2 text-xs text-subtle")
   line.setAttribute("data-role", "large-upload-status")
   if (u.status === "failed") {
     const icon = el("span", "hero-exclamation-circle size-4 shrink-0 text-error")
@@ -714,7 +714,7 @@ function statusLine(u, manager) {
     line.appendChild(el("span", "min-w-0 flex-1", words.join(" ")))
     frag.appendChild(line)
   }
-  frag.appendChild(el("p", "mt-1 text-xs text-base-content/60", "Keep this tab open until it finishes."))
+  frag.appendChild(el("p", "mt-1 text-xs text-subtle", "Keep this tab open until it finishes."))
   return frag
 }
 
@@ -846,7 +846,7 @@ function daySeparator() {
   const sep = el("div", "js-date-separator flex items-center gap-3 my-4 -mx-2")
   sep.setAttribute("data-role", "large-upload-day")
   sep.appendChild(el("div", "flex-1 border-t border-edge"))
-  sep.appendChild(el("span", "text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2", "Today"))
+  sep.appendChild(el("span", "text-[11px] uppercase tracking-widest text-subtle font-semibold px-2", "Today"))
   sep.appendChild(el("div", "flex-1 border-t border-edge"))
   return sep
 }

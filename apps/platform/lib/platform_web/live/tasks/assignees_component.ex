@@ -72,7 +72,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
           <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div>
               <h2 class="text-base font-semibold">Assign Agents</h2>
-              <p class="mt-0.5 text-xs text-base-content/60">
+              <p class="mt-0.5 text-xs text-subtle">
                 {@selected_task.title}
               </p>
             </div>
@@ -89,7 +89,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
 
           <%!-- Mode toggle (segmented) --%>
           <div class="flex items-center justify-between px-4 py-3 border-b border-edge gap-3">
-            <p class="text-xs text-base-content/60 leading-snug">
+            <p class="text-xs text-subtle leading-snug">
               {if @assignee_modal_mode == :advanced,
                 do: "One agent per phase. Build the DAG.",
                 else: "One agent for the whole task."}
@@ -136,7 +136,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
           >
             <%!-- Simple mode --%>
             <div :if={@assignee_modal_mode == :simple} class="flex flex-col gap-1">
-              <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+              <label class="text-xs font-semibold uppercase tracking-wider text-base-content">
                 Agent (all phases)
               </label>
               <select
@@ -161,7 +161,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
             <%!-- Advanced mode: per-phase pickers --%>
             <div :if={@assignee_modal_mode == :advanced} class="flex flex-col gap-3">
               <div :for={phase <- ~w(planning execution review)} class="flex flex-col gap-1">
-                <label class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                <label class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-base-content">
                   <span>{phase_label(phase)}</span>
                   <span
                     :if={phase == current_phase_label(@selected_task)}
@@ -185,7 +185,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
                 </select>
               </div>
 
-              <p class="mt-1 text-[11px] text-base-content/50">
+              <p class="mt-1 text-[11px] text-subtle">
                 The current-phase agent is the one the task router dispatches to right now.
                 When the task transitions across phases, the assignee is updated automatically.
               </p>

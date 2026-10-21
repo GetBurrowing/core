@@ -328,7 +328,7 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
                actor may take at least one destructive action. Visibility is
                affordance only — the Chat context re-authorizes every call. --%>
           <%= if @space.kind == "channel" && (@can_archive? || @can_delete?) do %>
-            <div class="divider text-xs text-base-content/40 mt-6">Danger Zone</div>
+            <div class="divider text-xs text-subtle mt-6">Danger Zone</div>
 
             <%= if @can_archive? do %>
               <button
@@ -344,7 +344,7 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
             <%= if @can_delete? do %>
               <div class="mt-4">
                 <p class="text-sm font-medium text-error mb-1">Delete this channel</p>
-                <p class="text-xs text-base-content/60 mb-2">
+                <p class="text-xs text-subtle mb-2">
                   The channel is hidden immediately for everyone and permanently
                   deleted on {permanent_deletion_date()}. An admin can cancel the
                   deletion until then. Type the channel name to confirm.

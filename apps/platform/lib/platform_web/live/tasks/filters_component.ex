@@ -113,7 +113,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
       <div
         :if={@selected_project_id}
         data-role="tasks-breadcrumb"
-        class="flex items-center gap-1 px-4 pb-2 text-xs text-base-content/60"
+        class="flex items-center gap-1 px-4 pb-2 text-xs text-subtle"
       >
         <span
           :for={p <- @projects}
@@ -127,7 +127,9 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
           >
             {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, p.org.slug}, real: p.org.name)}
           </span>
-          <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
+          <span :if={match?(%Tenancy.Org{}, p.org)} aria-hidden="true" class="text-decorative">
+            /
+          </span>
           <span>
             {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, p.id}, real: p.name)}
           </span>
@@ -248,7 +250,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
             if(@scope_filter == entry.slug,
               do: "bg-base-content/15 text-base-content",
-              else: "bg-base-200 text-base-content/60"
+              else: "bg-base-200 text-subtle"
             )
           ]}>
             {Map.get(@scope_counts, entry.slug, 0)}

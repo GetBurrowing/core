@@ -312,7 +312,7 @@ const MeetingTranscript = {
 
     if (this._truncated) {
       parts.push(
-        `<p class="px-3 pt-3 pb-1 text-[11px] leading-normal text-base-content/50" data-role="transcript-truncated">Showing the last ${MAX_LINES} lines. Earlier speech is not kept.</p>`
+        `<p class="px-3 pt-3 pb-1 text-[11px] leading-normal text-subtle" data-role="transcript-truncated">Showing the last ${MAX_LINES} lines. Earlier speech is not kept.</p>`
       )
     }
 
@@ -336,7 +336,7 @@ const MeetingTranscript = {
       const rule = index === 0 ? "" : " border-t border-edge"
       const agent = group.identity && group.identity.startsWith(AGENT_IDENTITY_PREFIX)
       const chip = agent
-        ? `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide text-base-content/60" data-role="transcript-agent-chip">agent</span>`
+        ? `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide text-subtle" data-role="transcript-agent-chip">agent</span>`
         : ""
 
       const rows = group.lines
@@ -344,7 +344,7 @@ const MeetingTranscript = {
           // Interim text is the same words at reduced strength; it snaps
           // to full `base-content` on final. No italics, no caret, no
           // spinner — the darkening IS the explanation.
-          const tone = line.final ? "text-base-content" : "text-base-content/60"
+          const tone = line.final ? "text-base-content" : "text-subtle"
           return `<p class="transcript-line ${tone} mb-1.5 text-[13px] leading-normal" data-role="transcript-line" data-speaker="${this._escapeAttr(line.speaker)}" data-final="${line.final}">${this._escapeHtml(line.text)}</p>`
         })
         .join("")
@@ -352,9 +352,9 @@ const MeetingTranscript = {
       parts.push(
         `<section class="px-3 pt-2${rule}" data-role="transcript-group" data-speaker="${this._escapeAttr(group.speaker)}">
           <div class="mb-1 flex items-baseline gap-1.5">
-            <span class="text-[11.5px] font-semibold text-base-content/60" data-role="transcript-speaker">${this._escapeHtml(group.speaker)}</span>
+            <span class="text-[11.5px] font-semibold text-subtle" data-role="transcript-speaker">${this._escapeHtml(group.speaker)}</span>
             ${chip}
-            <span class="ml-auto font-mono text-[10px] tabular-nums text-base-content/60" data-role="transcript-time">${this._formatTime(group.at)}</span>
+            <span class="ml-auto font-mono text-[10px] tabular-nums text-subtle" data-role="transcript-time">${this._formatTime(group.at)}</span>
           </div>
           ${rows}
         </section>`

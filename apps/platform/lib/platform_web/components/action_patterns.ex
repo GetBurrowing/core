@@ -56,7 +56,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
     >
       <div class={["flex items-center gap-3 px-4 pt-3", (@has_toolbar? && "pb-2") || "pb-3"]}>
         {render_slot(@leading)}
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           {@title}
         </h1>
         <span :if={not is_nil(@count)} class="badge badge-ghost badge-sm">{@count}</span>

@@ -44,7 +44,7 @@
           >
             {chip.label}
           </span>
-          <span class="text-xs text-base-content/60">
+          <span class="text-xs text-subtle">
             ← the rail as {@subject.name} sees it ({subject_role(@view)})
           </span>
         </div>
@@ -88,7 +88,7 @@
                   line.source == "grant" && "text-info",
                   line.source in ["deny", "restricted", "Locked"] && "text-error",
                   line.source == "capped" && "text-warning",
-                  line.source in ["role", "inherited"] && "text-base-content/60"
+                  line.source in ["role", "inherited"] && "text-subtle"
                 ]}>
                   {line.source}
                 </span>
@@ -159,9 +159,9 @@
             <tr
               :for={change <- @changes}
               data-change-id={change.id}
-              class={MapSet.member?(@undone, change.id) && "line-through text-base-content/60"}
+              class={MapSet.member?(@undone, change.id) && "line-through text-subtle"}
             >
-              <td class="font-mono text-xs text-base-content/60">
+              <td class="font-mono text-xs text-subtle">
                 {Calendar.strftime(change.inserted_at, "%Y-%m-%d %H:%M")}
               </td>
               <td>{change_label(change)}</td>
@@ -184,7 +184,7 @@
       <button phx-click="reset" class="btn btn-outline btn-error">
         Reset selected person to role defaults
       </button>
-      <p class="text-sm text-base-content/60">
+      <p class="text-sm text-subtle">
         Removes every per-person grant and deny, keeps their role. One undo.
       </p>
       <div :if={@preview} id="reset-card">

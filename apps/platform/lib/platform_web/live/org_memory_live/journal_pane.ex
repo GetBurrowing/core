@@ -35,7 +35,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
       <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div>
           <h1 class="text-lg font-bold">Journal</h1>
-          <p class="text-xs text-base-content/40">
+          <p class="text-xs text-subtle">
             Append-only notes, last 14 days
           </p>
         </div>
@@ -70,9 +70,9 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
       <div class="flex-1 overflow-y-auto px-6 py-4">
         <%= if @groups == [] do %>
           <div class="flex flex-col items-center justify-center py-16">
-            <span class="hero-book-open mb-3 size-12 text-base-content/20 block"></span>
-            <h3 class="text-base font-medium text-base-content/50">No journal entries yet</h3>
-            <p class="mt-1 text-sm text-base-content/40 max-w-sm text-center">
+            <span class="hero-book-open mb-3 size-12 text-subtle block"></span>
+            <h3 class="text-base font-medium text-base-content">No journal entries yet</h3>
+            <p class="mt-1 text-sm text-subtle max-w-sm text-center">
               Notes appended here (or by agents via <code>memory_create</code>)
               show up grouped by day.
             </p>
@@ -89,7 +89,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
                   {format_journal_date(date)}
                 </span>
                 <div class="flex-1 border-t border-edge"></div>
-                <span class="text-xs text-base-content/30">
+                <span class="text-xs text-subtle">
                   {length(entries)} {if length(entries) == 1, do: "entry", else: "entries"}
                 </span>
               </div>
@@ -108,7 +108,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
                 >
                   <div class="mb-2 flex items-center gap-2">
                     <span class="inline-block size-2 rounded-full bg-info"></span>
-                    <span class="ml-auto text-xs text-base-content/30">
+                    <span class="ml-auto text-xs text-subtle">
                       {Calendar.strftime(entry.inserted_at, "%H:%M")}
                     </span>
                   </div>

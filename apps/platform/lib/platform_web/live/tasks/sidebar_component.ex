@@ -431,7 +431,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         class="hidden w-56 shrink-0 flex-col border-r border-edge bg-base-100 md:flex"
       >
         <div class="flex items-center justify-between border-b border-edge px-3 py-3">
-          <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+          <span class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Projects
           </span>
           <div class="flex items-center gap-1">
@@ -545,7 +545,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
           >
             <summary class={
               [
-                "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none",
+                "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content hover:bg-base-200 cursor-pointer select-none",
                 # ONE padding class, never two: `["pr-9", "pr-16"]` both land in
                 # the attribute and which wins is Tailwind's stylesheet order,
                 # not the list's — the row's padding would be decided somewhere
@@ -568,7 +568,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               >
               </span>
               <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
-              <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+              <span class="ml-auto text-[10px] tracking-normal text-subtle">
                 {length(org_projects)}
               </span>
             </summary>
@@ -679,7 +679,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         class="hidden md:flex items-center justify-center w-6 shrink-0 border-r border-edge hover:bg-base-200"
         title="Expand sidebar"
       >
-        <span class="hero-chevron-right size-4 text-base-content/50"></span>
+        <span class="hero-chevron-right size-4 text-subtle"></span>
       </button>
 
       <%!-- Mobile project filter sheet (task 019e0d4b stage 3 sub a). Slides
@@ -736,7 +736,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             data-org-slug={TaskDisplay.rail_org_slug(@mask_labels, org_slug)}
           >
             <summary class={[
-              "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none",
+              "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content cursor-pointer select-none",
               summary_pad(
                 @root_admin? and org_slug not in [@root_org_slug, "_unassigned"],
                 @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
@@ -753,7 +753,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               >
               </span>
               <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
-              <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+              <span class="ml-auto text-[10px] tracking-normal text-subtle">
                 {length(org_projects)}
               </span>
             </summary>
@@ -1016,7 +1016,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               label="Slug"
               placeholder="storefront"
             />
-            <p class="mt-1 text-xs text-base-content/40">
+            <p class="mt-1 text-xs text-subtle">
               Leave blank to auto-derive from name.
             </p>
           </div>

@@ -185,7 +185,7 @@
           <span class="hero-video-camera size-6 text-primary" aria-hidden="true"></span>
           <h1 class="text-lg font-semibold">{@meeting.name}</h1>
         </div>
-        <p class="text-sm text-base-content/60" data-role="meeting-lobby-roster">
+        <p class="text-sm text-subtle" data-role="meeting-lobby-roster">
           {lobby_roster_line(@participants)}
         </p>
         <%!-- The agents that will be in THIS meeting, and whether each can
@@ -199,7 +199,7 @@
         >
           <p
             :for={row <- lobby_agent_rows(@invite_rows)}
-            class="text-xs text-base-content/50"
+            class="text-xs text-subtle"
             data-role="meeting-lobby-agent-line"
             data-agent-id={row.agent.id}
             data-capability={row.capability}
@@ -229,7 +229,7 @@
         >
         </video>
         <div
-          class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-base-content/60 group-data-[preview=live]:hidden"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-subtle group-data-[preview=live]:hidden"
           data-role="meeting-lobby-preview-placeholder"
         >
           <span class="hero-user-circle size-16" aria-hidden="true"></span>
@@ -258,7 +258,7 @@
               "btn min-h-11 gap-2 rounded-field border-edge font-normal",
               if(@mic_enabled,
                 do: "bg-base-200 text-base-content",
-                else: "bg-base-content/10 text-base-content/60"
+                else: "bg-base-content/10 text-subtle"
               )
             ]}
           >
@@ -278,7 +278,7 @@
               "btn min-h-11 gap-2 rounded-field border-edge font-normal",
               if(@camera_enabled,
                 do: "bg-base-200 text-base-content",
-                else: "bg-base-content/10 text-base-content/60"
+                else: "bg-base-content/10 text-subtle"
               )
             ]}
           >
@@ -330,7 +330,7 @@
               {@name_error}
             </span>
           </label>
-          <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
+          <p class="text-xs text-subtle" data-role="meeting-lobby-summary">
             You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
               do: "on",
               else: "off"}.
@@ -347,7 +347,7 @@
         </form>
       <% else %>
         <div class="mt-4 flex flex-1 flex-col gap-3" data-role="meeting-lobby-join-form">
-          <p class="text-xs text-base-content/60" data-role="meeting-lobby-summary">
+          <p class="text-xs text-subtle" data-role="meeting-lobby-summary">
             You will join with your microphone {if @mic_enabled, do: "on", else: "off"} and your camera {if @camera_enabled,
               do: "on",
               else: "off"}.
@@ -1188,7 +1188,7 @@
               "join-item btn btn-sm relative min-h-11 gap-1.5",
               if(@current_stage_mode == mode,
                 do: "bg-base-200 text-primary",
-                else: "btn-ghost text-base-content/60"
+                else: "btn-ghost text-subtle"
               )
             ]}
           >
@@ -1427,7 +1427,7 @@
             aria-expanded={to_string(@active_meeting_tab == "chat" and not @chat_panel_collapsed)}
             aria-controls="meeting-call-rail-pane"
             title="Toggle chat panel"
-            class="btn btn-sm btn-ghost btn-square order-1 text-base-content/60 lg:order-none"
+            class="btn btn-sm btn-ghost btn-square order-1 text-subtle lg:order-none"
             data-role="chat-panel-toggle"
           >
             <span class="hero-chat-bubble-left-right size-5"></span>
@@ -1450,7 +1450,7 @@
             aria-expanded={to_string(@call_rail_open)}
             aria-controls="meeting-call-rail"
             title="Toggle call panel"
-            class="btn btn-sm btn-ghost btn-square order-1 text-base-content/60 lg:hidden"
+            class="btn btn-sm btn-ghost btn-square order-1 text-subtle lg:hidden"
             data-role="call-rail-toggle"
           >
             <span class="hero-user-group size-5"></span>
@@ -1571,7 +1571,7 @@
             data-role="meeting-left-rail-agents"
           >
             <div class="flex flex-shrink-0 items-center border-b border-edge px-3 py-2.5">
-              <span class="text-xs font-medium text-base-content/50">
+              <span class="text-xs font-medium text-subtle">
                 In the room
               </span>
             </div>
@@ -1620,7 +1620,7 @@
             data-role="meeting-left-rail-cards"
           >
             <div class="flex flex-shrink-0 items-center gap-1.5 border-b border-edge px-3 py-2.5">
-              <span class="text-[11px] font-semibold uppercase tracking-[0.09em] text-base-content/50">
+              <span class="text-[11px] font-semibold uppercase tracking-[0.09em] text-base-content">
                 Cards
               </span>
               <span
@@ -1652,7 +1652,7 @@
                   @meeting_candidates == [] and @meeting_candidates_closed == [] and
                     is_nil(@candidate_error)
                 }
-                class="text-base-content/40 p-3 text-xs"
+                class="text-subtle p-3 text-xs"
                 data-role="meeting-left-rail-cards-empty"
               >
                 <%= if @meeting do %>
@@ -1877,12 +1877,12 @@
                  space and assigns it as the active meeting canvas. --%>
                 <div
                   id="meeting-stage-canvas-empty"
-                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/50"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-subtle"
                   data-placeholder="center-stage"
                   data-empty-state="canvas"
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
-                  <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
+                  <span class="hero-rectangle-stack size-10 text-subtle"></span>
                   <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
                   <p class="mt-0.5 max-w-xs text-center text-xs">
                     Meetings work best when there's something to point at. Spin one up to start sketching.
@@ -1907,7 +1907,7 @@
                  purpose, and its absence is asserted in meeting_live_test. --%>
                 <div
                   id="meeting-stage-whiteboard-fallback"
-                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40"
+                  class="stage-mode--enter absolute inset-0 flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-subtle"
                   data-placeholder="center-stage"
                   data-whiteboard-fallback
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
@@ -1977,9 +1977,9 @@
                    hook toggles `hidden` on this node when it (de)attaches. --%>
                   <div
                     data-screen-share-empty
-                    class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
+                    class="flex h-full w-full flex-col items-center justify-center text-subtle"
                   >
-                    <span class="hero-computer-desktop size-10 text-base-content/40"></span>
+                    <span class="hero-computer-desktop size-10 text-subtle"></span>
                     <p class="mt-2 text-sm font-medium text-base-content/70">
                       No active screen-share
                     </p>
@@ -2023,7 +2023,7 @@
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
-                    <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-base-content/40">
+                    <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-subtle">
                       <span class="hero-squares-2x2 size-10"></span>
                       <p class="mt-2 text-sm font-medium text-base-content/70">
                         No participants yet
@@ -2596,7 +2596,7 @@
               aria-label="Expand call rail"
               aria-expanded="false"
               title="Expand call rail"
-              class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+              class="btn btn-ghost btn-sm btn-square text-subtle hover:text-base-content"
               data-role="chat-pane-toggle"
             >
               <span class="hero-chevron-double-left size-4"></span>
@@ -2773,7 +2773,7 @@
                 aria-label="Collapse call rail"
                 aria-expanded="true"
                 title="Collapse"
-                class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
+                class="btn btn-ghost btn-xs btn-square text-subtle hidden lg:inline-flex"
                 data-role="chat-pane-toggle"
               >
                 <span class="hero-chevron-double-right size-4"></span>
@@ -2987,7 +2987,7 @@
                        There is no `live_render` on this branch at all, so
                        neither element can render in the other's state. --%>
                     <div
-                      class="flex h-full items-center justify-center text-xs text-base-content/40"
+                      class="flex h-full items-center justify-center text-xs text-subtle"
                       data-placeholder="chat-panel-empty"
                     >
                       <span class="hero-chat-bubble-left-right size-5"></span>
@@ -3470,7 +3470,7 @@
               "flex min-h-11 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition sm:min-h-9",
               @meetings_view == entry.id &&
                 "bg-base-200 text-base-content shadow-sm",
-              @meetings_view != entry.id && "text-base-content/60 hover:text-base-content"
+              @meetings_view != entry.id && "text-subtle hover:text-base-content"
             ]}
           >
             <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
@@ -3501,7 +3501,7 @@
            output. --%>
         <span
           :if={@meetings_view == :calendar and @calendar_zone_unresolved?}
-          class="text-xs text-base-content/50"
+          class="text-xs text-subtle"
           data-role="meetings-count"
           data-count-state="unknown"
         >
@@ -3510,7 +3510,7 @@
 
         <span
           :if={@meetings_view == :calendar and !@calendar_zone_unresolved?}
-          class="text-xs text-base-content/50"
+          class="text-xs text-subtle"
           data-role="meetings-count"
         >
           {calendar_week_count_label(
@@ -3528,7 +3528,7 @@
            section heading, so on a phone it renders there instead. --%>
         <span
           :if={@meetings_view == :archive}
-          class="hidden text-xs text-base-content/50 sm:inline"
+          class="hidden text-xs text-subtle sm:inline"
           data-role="archive-count"
         >
           {archive_count_label(@archive_result, "filtered")}
@@ -3585,7 +3585,7 @@
           phx-submit="archive_filter"
         >
           <label class="flex min-h-11 flex-shrink-0 items-center gap-2 rounded-lg border border-edge bg-base-100 px-3 sm:w-72">
-            <span class="hero-magnifying-glass size-4 flex-shrink-0 text-base-content/40"></span>
+            <span class="hero-magnifying-glass size-4 flex-shrink-0 text-subtle"></span>
             <input
               type="search"
               name="q"
@@ -3595,7 +3595,7 @@
               aria-label="Search the meetings archive"
               phx-debounce="300"
               data-role="archive-search"
-              class="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint"
+              class="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-subtle"
             />
           </label>
 
@@ -3616,7 +3616,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 type in @archive_types && "border-primary bg-primary text-primary-content",
                 type not in @archive_types &&
-                  "border-edge bg-base-100 text-base-content/60 hover:text-base-content"
+                  "border-edge bg-base-100 text-subtle hover:text-base-content"
               ]}
             >
               <span class={[archive_type_icon(type), "size-3.5 flex-shrink-0"]}></span>
@@ -3639,7 +3639,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 @archive_person_id && "border-primary bg-primary text-primary-content",
                 is_nil(@archive_person_id) &&
-                  "border-edge bg-base-100 text-base-content/60 hover:text-base-content"
+                  "border-edge bg-base-100 text-subtle hover:text-base-content"
               ]}
             >
               <span class="hero-user size-3.5 flex-shrink-0"></span>
@@ -3649,7 +3649,7 @@
             <label class={[
               "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
               @archive_project_id && "border-primary bg-primary text-primary-content",
-              is_nil(@archive_project_id) && "border-edge bg-base-100 text-base-content/60"
+              is_nil(@archive_project_id) && "border-edge bg-base-100 text-subtle"
             ]}>
               <span class="hero-folder size-3.5 flex-shrink-0"></span>
               <select
@@ -3673,7 +3673,7 @@
           <div class="hidden flex-1 sm:block"></div>
 
           <span
-            class="hidden flex-shrink-0 text-[10px] text-base-content/40 sm:inline"
+            class="hidden flex-shrink-0 text-[10px] text-subtle sm:inline"
             data-role="archive-sort-label"
           >
             {archive_sort_label(@archive_result)}
@@ -3707,7 +3707,7 @@
               class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
               data-empty-state="archive-no-meetings"
             >
-              <span class="hero-video-camera size-12 text-base-content/30"></span>
+              <span class="hero-video-camera size-12 text-subtle"></span>
               <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-meetings-heading">
                 No meetings yet
               </h2>
@@ -3724,7 +3724,7 @@
               class="flex flex-col items-center justify-center py-16 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+4rem)] text-center sm:pb-16"
               data-empty-state="archive-no-matches"
             >
-              <span class="hero-magnifying-glass size-12 text-base-content/30"></span>
+              <span class="hero-magnifying-glass size-12 text-subtle"></span>
               <h2 class="mt-3 text-lg font-semibold" data-role="archive-no-matches-heading">
                 No matches
               </h2>
@@ -3740,7 +3740,7 @@
 
             <%= for {section, index} <- Enum.with_index(archive_sections(@archive_result)) do %>
               <section data-archive-section={section.key}>
-                <h2 class="mb-2 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-base-content/40">
+                <h2 class="mb-2 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-base-content">
                   <%!-- The count lives in the header on desktop and HERE on a
                      phone, which has no room for it up top. --%>
                   <span :if={index == 0} class="sm:hidden" data-role="archive-count-mobile">
@@ -3773,7 +3773,7 @@
                         class="hidden w-11 flex-shrink-0 border-r border-edge pr-2.5 text-center sm:block"
                         data-role="archive-row-date"
                       >
-                        <div class="text-[9px] uppercase tracking-wide text-base-content/40">
+                        <div class="text-[9px] uppercase tracking-wide text-subtle">
                           {archive_row_month(entry, @archive_time_zone)}
                         </div>
                         <div class="text-lg font-semibold leading-tight text-base-content/70">
@@ -3794,7 +3794,7 @@
                           class={[
                             "truncate text-xs sm:hidden",
                             entry.status == "cancelled" && "text-error",
-                            entry.status != "cancelled" && "text-base-content/50"
+                            entry.status != "cancelled" && "text-subtle"
                           ]}
                           data-role="archive-row-subtitle-mobile"
                         >
@@ -3804,7 +3804,7 @@
                           class={[
                             "hidden truncate text-xs sm:block",
                             entry.status == "cancelled" && "text-error",
-                            entry.status != "cancelled" && "text-base-content/50"
+                            entry.status != "cancelled" && "text-subtle"
                           ]}
                           data-role="archive-row-subtitle"
                         >
@@ -3842,7 +3842,7 @@
 
                           <span
                             :if={artifacts.chips == []}
-                            class="inline-flex min-h-11 items-center rounded border border-edge bg-base-200 px-2 font-mono text-[10px] text-base-content/40 sm:min-h-0 sm:py-0.5"
+                            class="inline-flex min-h-11 items-center rounded border border-edge bg-base-200 px-2 font-mono text-[10px] text-subtle sm:min-h-0 sm:py-0.5"
                             data-role="archive-no-artifacts"
                           >
                             no artifacts
@@ -3858,13 +3858,13 @@
                         >
                           <span
                             :for={_ring <- archive_attendee_rings(artifacts)}
-                            class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                            class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-subtle ring-2 ring-base-100 first:ml-0"
                           >
                             <span class="hero-user size-3"></span>
                           </span>
                           <span
                             :if={archive_attendee_overflow(artifacts) > 0}
-                            class="ml-1.5 text-[10px] text-base-content/40"
+                            class="ml-1.5 text-[10px] text-subtle"
                           >
                             +{archive_attendee_overflow(artifacts)}
                           </span>
@@ -3878,13 +3878,13 @@
                       >
                         <span
                           :for={_ring <- archive_attendee_rings(artifacts)}
-                          class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-base-content/60 ring-2 ring-base-100 first:ml-0"
+                          class="-ml-1.5 flex size-5 items-center justify-center rounded-full bg-base-300 text-subtle ring-2 ring-base-100 first:ml-0"
                         >
                           <span class="hero-user size-3"></span>
                         </span>
                         <span
                           :if={archive_attendee_overflow(artifacts) > 0}
-                          class="ml-1.5 text-[10px] text-base-content/40"
+                          class="ml-1.5 text-[10px] text-subtle"
                         >
                           +{archive_attendee_overflow(artifacts)}
                         </span>
@@ -3958,7 +3958,7 @@
              for the other. See `:viewer_external?` in `meeting_live.ex`. --%>
             <p
               :if={@viewer_external?}
-              class="mt-1 text-sm text-base-content/60"
+              class="mt-1 text-sm text-subtle"
               data-role="meetings-index-empty-note"
               data-viewer="external"
             >
@@ -3966,7 +3966,7 @@
             </p>
             <p
               :if={!@viewer_external?}
-              class="mt-1 text-sm text-base-content/60"
+              class="mt-1 text-sm text-subtle"
               data-role="meetings-index-empty-note"
               data-viewer="internal"
             >
@@ -4017,7 +4017,7 @@
              miss a call. --%>
             <span
               :if={@calendar_time_zone}
-              class="truncate font-mono text-[10px] text-base-content/40"
+              class="truncate font-mono text-[10px] text-subtle"
               data-role="calendar-timezone"
               data-zone-assumed={@calendar_zone_assumed? && "true"}
             >
@@ -4066,7 +4066,7 @@
             <h2 class="mt-3 text-lg font-semibold" data-role="calendar-no-timezone-heading">
               Your browser did not report a usable time zone
             </h2>
-            <p class="mt-1 max-w-md text-sm text-base-content/60">
+            <p class="mt-1 max-w-md text-sm text-subtle">
               Meetings cannot be placed on a calendar without one, so none are drawn below. This
               is not a claim that your week is empty.
             </p>
@@ -4074,7 +4074,7 @@
             <%!-- Client-controlled data. Interpolated, never `raw/1`. --%>
             <p
               :if={@calendar_time_zone_raw}
-              class="mt-2 break-all font-mono text-[11px] text-base-content/50"
+              class="mt-2 break-all font-mono text-[11px] text-subtle"
               data-role="calendar-no-timezone-raw"
             >
               {@calendar_time_zone_raw}
@@ -4111,7 +4111,7 @@
               data-role="calendar-week-day-heading"
               data-date={Date.to_iso8601(day.date)}
             >
-              <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="text-[10px] font-semibold uppercase tracking-widest text-base-content">
                 {calendar_weekday_abbrev(day.date)}
               </span>
               <span
@@ -4129,7 +4129,7 @@
             <div class="flex flex-col bg-base-200/20">
               <div
                 :for={hour <- calendar_hours(@calendar_hour_window)}
-                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-subtle"
                 style={calendar_hour_row_style(:week)}
               >
                 {calendar_hour_label(hour)}
@@ -4245,7 +4245,7 @@
                   </span>
                 </span>
                 <span class={[
-                  "truncate text-[10px] leading-tight text-base-content/60",
+                  "truncate text-[10px] leading-tight text-subtle",
                   placement.compact? && "min-w-0 shrink-[10]"
                 ]}>
                   {calendar_event_time(meeting, @calendar_time_zone)}
@@ -4293,7 +4293,7 @@
               <span class={[
                 "text-[10px] font-semibold uppercase leading-none tracking-widest",
                 day.today? && "text-primary",
-                !day.today? && "text-base-content/50"
+                !day.today? && "text-subtle"
               ]}>
                 {calendar_weekday_initial(day.date)}
               </span>
@@ -4317,7 +4317,7 @@
            day actually being drawn rather than a week-wide total the
            single column cannot show. --%>
           <div
-            class="flex items-baseline gap-1.5 border-x border-b border-edge bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-base-content/50 lg:hidden"
+            class="flex items-baseline gap-1.5 border-x border-b border-edge bg-base-200/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-widest text-subtle lg:hidden"
             data-role="calendar-day-heading"
             data-date={Date.to_iso8601(@calendar_selected_date)}
           >
@@ -4393,7 +4393,7 @@
                   {meeting.name}
                 </span>
                 <span
-                  class="font-mono text-[11px] text-base-content/60"
+                  class="font-mono text-[11px] text-subtle"
                   data-role="meeting-card-time"
                 >
                   {calendar_event_time(meeting, @calendar_time_zone)}
@@ -4414,7 +4414,7 @@
                 </span>
                 {calendar_card_status_label(meeting.status)}
               </span>
-              <span class="hero-chevron-right size-4 flex-shrink-0 text-base-content/40"></span>
+              <span class="hero-chevron-right size-4 flex-shrink-0 text-subtle"></span>
             </.link>
           </div>
 
@@ -4446,7 +4446,7 @@
             <div class="flex flex-col bg-base-200/20">
               <div
                 :for={hour <- calendar_hours(@calendar_hour_window)}
-                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-base-content/40"
+                class="pr-1.5 pt-0.5 text-right font-mono text-[10px] leading-none text-subtle"
                 style={calendar_hour_row_style(:day)}
               >
                 {calendar_hour_label(hour)}
@@ -4536,7 +4536,7 @@
                     {meeting.name}
                   </span>
                 </span>
-                <span class="truncate text-[11px] leading-tight text-base-content/60">
+                <span class="truncate text-[11px] leading-tight text-subtle">
                   {calendar_event_time(meeting, @calendar_time_zone)}
                 </span>
               </button>
@@ -4916,7 +4916,7 @@
               <div class="flex flex-col gap-1">
                 <label
                   for="start-meeting-name"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
                   Name <span class="text-error">*</span>
                 </label>
@@ -4943,7 +4943,7 @@
                 <div class="col-span-2 flex flex-col gap-1 sm:col-span-1">
                   <label
                     for="meeting-create-date"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
                   >
                     Date
                   </label>
@@ -4960,7 +4960,7 @@
                 <div class="flex flex-col gap-1">
                   <label
                     for="meeting-create-start-time"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
                   >
                     Start
                   </label>
@@ -4977,7 +4977,7 @@
                 <div class="flex flex-col gap-1">
                   <label
                     for="meeting-create-duration"
-                    class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                    class="text-xs font-semibold uppercase tracking-wider text-base-content"
                   >
                     Duration
                   </label>
@@ -5005,7 +5005,7 @@
               <div class="flex flex-col gap-1">
                 <label
                   for="start-meeting-project"
-                  class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                  class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
                   Project <span class="text-error">*</span>
                 </label>
@@ -5032,7 +5032,7 @@
               <%!-- Invite. `:draft` mode — nothing is written until submit,
                  and the row `X` unstages rather than revoking. --%>
               <div class="flex flex-col gap-2" data-role="meeting-create-invite-section">
-                <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+                <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Invite
                 </span>
 

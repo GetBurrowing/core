@@ -179,7 +179,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         tabindex="-1"
       >
         <div class="reaction-picker-header mb-2 flex items-center justify-between">
-          <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+          <span class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Add reaction
           </span>
           <button
@@ -187,7 +187,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             phx-click="close_reaction_picker"
             title="Close"
             aria-label="Close reaction picker"
-            class="reaction-picker-close rounded p-1 text-base-content/50 hover:bg-base-content/5 hover:text-base-content"
+            class="reaction-picker-close rounded p-1 text-subtle hover:bg-base-content/5 hover:text-base-content"
           >
             <span class="hero-x-mark size-5"></span>
           </button>
@@ -584,7 +584,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         <div class="flex items-center justify-between border-b border-edge px-4 py-3">
           <div class="min-w-0">
             <h2 class="text-base font-semibold">Roll back this batch</h2>
-            <p class="mt-0.5 text-xs text-base-content/60">
+            <p class="mt-0.5 text-xs text-subtle">
               Meeting-triage rollback
             </p>
           </div>

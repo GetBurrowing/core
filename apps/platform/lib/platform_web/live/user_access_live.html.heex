@@ -6,7 +6,7 @@
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Admin · User Access
       </h1>
       <span class="badge badge-ghost badge-sm">{length(@users)}</span>
@@ -33,7 +33,7 @@
 
   <%!-- User list --%>
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
-    <div :if={@users == []} class="flex items-center justify-center h-full text-base-content/40">
+    <div :if={@users == []} class="flex items-center justify-center h-full text-subtle">
       No users to show.
     </div>
 
@@ -41,15 +41,15 @@
       <table class="table table-sm w-full">
         <thead>
           <tr>
-            <th class="text-xs uppercase tracking-wider text-base-content/50">Name</th>
-            <th class="text-xs uppercase tracking-wider text-base-content/50 hidden md:table-cell">
+            <th class="text-xs uppercase tracking-wider text-base-content">Name</th>
+            <th class="text-xs uppercase tracking-wider text-base-content hidden md:table-cell">
               Email
             </th>
-            <th class="text-xs uppercase tracking-wider text-base-content/50">Status</th>
-            <th class="text-xs uppercase tracking-wider text-base-content/50 hidden lg:table-cell">
+            <th class="text-xs uppercase tracking-wider text-base-content">Status</th>
+            <th class="text-xs uppercase tracking-wider text-base-content hidden lg:table-cell">
               Archived by
             </th>
-            <th class="text-xs uppercase tracking-wider text-base-content/50 text-right">
+            <th class="text-xs uppercase tracking-wider text-base-content text-right">
               Actions
             </th>
           </tr>
@@ -78,14 +78,14 @@
                 />
                 <div
                   :if={!u.avatar_url}
-                  class="w-8 h-8 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold uppercase text-base-content/60"
+                  class="w-8 h-8 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold uppercase text-subtle"
                   aria-hidden="true"
                 >
                   {String.first(u.name || "?") |> String.upcase()}
                 </div>
                 <div class="min-w-0">
                   <div class="text-sm font-medium text-base-content truncate">{u.name}</div>
-                  <div class="text-xs text-base-content/50 md:hidden truncate">{u.email}</div>
+                  <div class="text-xs text-subtle md:hidden truncate">{u.email}</div>
                 </div>
               </div>
             </td>
@@ -102,7 +102,7 @@
                 <span class="badge badge-success badge-sm">Active</span>
               <% end %>
             </td>
-            <td class="text-xs text-base-content/60 hidden lg:table-cell">
+            <td class="text-xs text-subtle hidden lg:table-cell">
               {archived_by_name(@users_by_id, u.archived_by_user_id)}
             </td>
             <td class="text-right whitespace-nowrap">

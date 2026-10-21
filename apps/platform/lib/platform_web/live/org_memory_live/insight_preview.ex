@@ -116,7 +116,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
       </div>
       <div
         :if={is_binary(@source) and @source != ""}
-        class="border-t border-edge px-3 py-1.5 text-xs text-base-content/60"
+        class="border-t border-edge px-3 py-1.5 text-xs text-subtle"
         data-role="insight-preview-source"
       >
         Source: <span class="font-mono">{@source}</span>
@@ -130,7 +130,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
 
     ~H"""
     <div class="mt-2 text-sm" data-role="insight-preview" data-preview-type="question">
-      <p class="text-xs text-base-content/60" data-role="insight-preview-to">
+      <p class="text-xs text-subtle" data-role="insight-preview-to">
         to <span class="font-medium text-base-content">{@to}</span>
       </p>
       <p class="mt-1 rounded-lg border border-edge bg-base-100 px-3 py-2 text-base-content">
@@ -145,7 +145,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
 
     ~H"""
     <div class="mt-2 text-sm" data-role="insight-preview" data-preview-type="briefing">
-      <p class="text-xs text-base-content/60" data-role="insight-preview-to">
+      <p class="text-xs text-subtle" data-role="insight-preview-to">
         In <span class="font-medium text-base-content">{@to}</span>’s briefing
       </p>
       <p class="mt-1 rounded-lg border border-edge bg-base-100 px-3 py-2 text-base-content">
@@ -167,7 +167,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
       <p class="font-medium text-base-content" data-role="insight-preview-title">
         {task_title(@insight)}
       </p>
-      <p class="mt-0.5 text-xs text-base-content/60">
+      <p class="mt-0.5 text-xs text-subtle">
         Sponsor: <span class="text-base-content">{@sponsor}</span>
       </p>
     </div>

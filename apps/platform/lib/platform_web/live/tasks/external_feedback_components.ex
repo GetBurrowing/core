@@ -18,7 +18,7 @@ defmodule PlatformWeb.Tasks.ExternalFeedbackComponents do
 
   Colour comes from the brand's semantic slots through existing classes only
   (`chip-error` for destructive/quarantined, `chip-primary` for trusted,
-  `border-accent` for the lane, `bg-base-*` surfaces, `text-base-content/60`
+  `border-accent` for the lane, `bg-base-*` surfaces, `text-subtle`
   muted text, `border-edge` borders). No raw colour values.
   """
 
@@ -94,7 +94,7 @@ defmodule PlatformWeb.Tasks.ExternalFeedbackComponents do
       <span class="hero-inbox-arrow-down size-5 shrink-0 text-accent" aria-hidden="true"></span>
       <div class="min-w-0 text-xs">
         <p class="font-semibold text-base-content">External feedback</p>
-        <p class="text-base-content/60">
+        <p class="text-subtle">
           Filed from accepted GitHub issues. Quarantined items cannot be planned or
           executed until an org admin promotes them; promoted items stay here with their
           provenance.
@@ -124,18 +124,18 @@ defmodule PlatformWeb.Tasks.ExternalFeedbackComponents do
     >
       <div class="flex flex-wrap items-center gap-2">
         <span class="hero-inbox-arrow-down size-4 text-accent" aria-hidden="true"></span>
-        <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+        <span class="text-xs font-semibold uppercase tracking-widest text-base-content">
           External feedback
         </span>
         <.trust_badge task={@task} size="sm" />
       </div>
 
       <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt class="text-base-content/60">Repository</dt>
+        <dt class="text-subtle">Repository</dt>
         <dd class="min-w-0 truncate font-mono" data-role="detail-external-repository">
           {@task.external_repository_identity}
         </dd>
-        <dt class="text-base-content/60">Issue</dt>
+        <dt class="text-subtle">Issue</dt>
         <dd data-role="detail-external-issue">
           <a
             :if={@url}
@@ -151,7 +151,7 @@ defmodule PlatformWeb.Tasks.ExternalFeedbackComponents do
         </dd>
       </dl>
 
-      <p :if={@task.trust == "quarantined"} class="text-xs text-base-content/60">
+      <p :if={@task.trust == "quarantined"} class="text-xs text-subtle">
         Quarantined: planning and execution are refused on the server until this task is
         promoted. Promotion changes trust only; the origin and issue link above stay.
       </p>

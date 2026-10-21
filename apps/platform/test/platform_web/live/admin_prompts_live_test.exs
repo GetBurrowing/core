@@ -39,7 +39,7 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
   # "Variable")` falls back to the bare word "Variable" for an undescribed
   # variable, so the fallback is detectable as a value rather than as an
   # absence.
-  @description_cell ~r/mt-0\.5 text-\[11px\] text-base-content\/50">\s*([^<]*?)\s*<\/div>/
+  @description_cell ~r/mt-0\.5 text-\[11px\] text-subtle">\s*([^<]*?)\s*<\/div>/
 
   # The page renders the template body TWICE: raw (with `{{placeholders}}`) in
   # the editor textarea, and interpolated in the preview `<pre>`. Asserting

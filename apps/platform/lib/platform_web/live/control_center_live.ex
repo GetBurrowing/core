@@ -849,7 +849,7 @@ defmodule PlatformWeb.ControlCenterLive do
           <div class="border-b border-edge px-4 py-4 sm:px-5">
             <div class="flex items-start justify-between gap-3">
               <div>
-                <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
                   Agent Resources
                 </p>
                 <p class="mt-1 text-sm text-base-content/70">
@@ -887,7 +887,7 @@ defmodule PlatformWeb.ControlCenterLive do
               class="flex flex-col items-center gap-6 px-4 py-10 text-center"
             >
               <div>
-                <span class="hero-rectangle-stack mx-auto h-12 w-12 text-base-content/25" />
+                <span class="hero-rectangle-stack mx-auto h-12 w-12 text-subtle" />
                 <p class="mt-3 text-lg font-semibold text-base-content">Add your first agent</p>
                 <p class="mt-1 text-sm text-subtle">
                   Choose a template, federate from OpenClaw, import from a workspace, or build from scratch.

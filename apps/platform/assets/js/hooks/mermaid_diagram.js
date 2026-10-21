@@ -39,7 +39,7 @@ const MermaidDiagram = {
     const source = this.el.dataset.source;
     if (!source || !source.trim()) {
       this.el.querySelector(".mermaid-container").innerHTML =
-        '<p class="text-xs text-base-content/40 italic">No diagram source</p>';
+        '<p class="text-xs text-subtle italic">No diagram source</p>';
       return;
     }
 
@@ -53,7 +53,7 @@ const MermaidDiagram = {
       this.el.querySelector(".mermaid-container").innerHTML =
         `<div class="text-xs">
           <p class="text-error mb-2">Diagram render failed</p>
-          <pre class="whitespace-pre-wrap text-base-content/60 font-mono text-[11px] bg-base-200 rounded p-2">${source}</pre>
+          <pre class="whitespace-pre-wrap text-subtle font-mono text-[11px] bg-base-200 rounded p-2">${source}</pre>
         </div>`;
     }
   },

@@ -371,7 +371,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       |> Enum.join(" ")
 
     assert classes =~ "text-xs"
-    assert classes =~ "text-base-content/60"
+    assert classes =~ "text-subtle"
   end
 
   # --- colour, announcement, and what the row must NOT carry ------------

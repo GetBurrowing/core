@@ -113,14 +113,14 @@ defmodule PlatformWeb.AdminInsightsLive do
         %{label: "Insights", navigate: nil}
       ]} />
       <div class="flex items-center justify-between border-b border-edge px-4 py-3">
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Admin · Insights
         </h1>
       </div>
 
       <div class="flex-1 min-h-0 overflow-y-auto p-4">
         <div class="mx-auto max-w-2xl space-y-4">
-          <p class="text-sm text-base-content/60">
+          <p class="text-sm text-subtle">
             Dreaming writes insights to the Org Memory
             <.link navigate={~p"/memory/insights"} class="link link-hover">Insights tab</.link>
             every night. While sending is off they stay on that tab. These settings apply to
@@ -137,7 +137,7 @@ defmodule PlatformWeb.AdminInsightsLive do
             <div class="flex items-center justify-between gap-4 p-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Send insights beyond this tab</p>
-                <p class="text-xs text-base-content/60" data-role="insights-limits">{@limits}</p>
+                <p class="text-xs text-subtle" data-role="insights-limits">{@limits}</p>
               </div>
               <.input
                 field={@form[:dissemination_enabled]}

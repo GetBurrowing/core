@@ -437,7 +437,7 @@ defmodule PlatformWeb.Layouts do
       <div class="reconnect-pill-wrap flex justify-center pt-2">
         <span class="reconnect-pill inline-flex items-center gap-1.5 rounded-full bg-base-300 text-base-content px-3 py-1 text-xs font-medium shadow-sm">
           <span
-            class="reconnect-spinner hero-arrow-path size-3 text-base-content/60 motion-safe:animate-spin"
+            class="reconnect-spinner hero-arrow-path size-3 text-subtle motion-safe:animate-spin"
             aria-hidden="true"
           >
           </span>

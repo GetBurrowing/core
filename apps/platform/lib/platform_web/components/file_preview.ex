@@ -251,7 +251,7 @@ defmodule PlatformWeb.Components.FilePreview do
 
   defp no_text_yet(assigns) do
     ~H"""
-    <p class="text-sm text-base-content/60" data-role={@scope <> "-no-text"}>
+    <p class="text-sm text-subtle" data-role={@scope <> "-no-text"}>
       No extracted text yet. The file may still be ingesting.
     </p>
     """
@@ -365,7 +365,7 @@ defmodule PlatformWeb.Components.FilePreview do
             <div class="truncate text-sm font-semibold">
               {@file.name || @file.original_filename || "File"}
             </div>
-            <div class="text-xs text-base-content/60">{@file.content_type}</div>
+            <div class="text-xs text-subtle">{@file.content_type}</div>
           </div>
           <button
             class="btn btn-ghost btn-sm btn-square max-sm:min-h-[44px] max-sm:min-w-[44px]"

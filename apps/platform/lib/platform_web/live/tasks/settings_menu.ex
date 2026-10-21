@@ -54,7 +54,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
       <button
         type="button"
         phx-click="toggle_settings_menu"
-        class="btn btn-ghost btn-sm px-2 text-base-content/60 hover:text-base-content focus-visible-ring"
+        class="btn btn-ghost btn-sm px-2 text-subtle hover:text-base-content focus-visible-ring"
         aria-label="Tasks settings"
         aria-haspopup="menu"
         aria-controls="tasks-settings-menu"
@@ -88,7 +88,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
           data-role="tasks-settings-pipeline-link"
         >
           <span class="text-sm font-medium text-base-content">Pipeline</span>
-          <span class="text-xs text-base-content/60">
+          <span class="text-xs text-subtle">
             Stage and validation flow across all tasks
           </span>
         </.link>
@@ -131,7 +131,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
           data-role="tasks-settings-pipeline-link-mobile"
         >
           <span class="text-sm font-medium text-base-content">Pipeline</span>
-          <span class="text-xs text-base-content/60">
+          <span class="text-xs text-subtle">
             Stage and validation flow across all tasks
           </span>
         </.link>

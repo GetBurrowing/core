@@ -5,7 +5,7 @@
   ]} />
   <%!-- Header (mirrors the Admin surface chrome) — title left, org filter right --%>
   <div class="flex items-center justify-between gap-3 border-b border-edge px-4 py-3">
-    <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+    <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
       Recovery · Archived &amp; scheduled
     </h1>
     <form :if={@org_options != []} phx-change="filter_org" class="shrink-0">
@@ -47,7 +47,7 @@
           <div class="overflow-x-auto rounded-box border border-edge bg-base-100">
             <table class="w-full border-collapse text-sm">
               <thead>
-                <tr class="border-b border-edge text-left text-xs font-medium uppercase tracking-wide text-base-content/50">
+                <tr class="border-b border-edge text-left text-xs font-medium uppercase tracking-wide text-base-content">
                   <th class="w-10 px-4 py-2.5">
                     <span class="sr-only">Select</span>
                   </th>
@@ -113,7 +113,7 @@
       <button
         type="button"
         phx-click="clear_selection"
-        class="focus-visible-ring rounded px-1 text-sm text-base-content/60 hover:text-base-content"
+        class="focus-visible-ring rounded px-1 text-sm font-medium text-base-content hover:text-base-content"
       >
         Clear
       </button>

@@ -85,7 +85,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
         <p
           :if={!@can_manage?}
           data-role="reply-failure-handoff"
-          class="mt-1 text-xs leading-4 text-base-content/60"
+          class="mt-1 text-xs leading-4 text-subtle"
         >
           Someone who manages {@name} can fix this in Agent Resources.
         </p>

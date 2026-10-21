@@ -204,7 +204,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           </button>
           <button
             phx-click="close_mobile_browser"
-            class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
+            class="flex items-center justify-center size-10 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content"
             aria-label="Close"
           >
             <span class="hero-x-mark size-5"></span>
@@ -277,7 +277,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
              affordance beyond the ☰ glyph — one muted line teaches it. --%>
           <p
             :if={@sidebar_edit && @drawer_query == ""}
-            class="px-4 pb-2 text-xs text-base-content/40"
+            class="px-4 pb-2 text-xs text-subtle"
           >
             Reorder with the arrows, or press and hold ☰ to drag.
           </p>
@@ -348,11 +348,11 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
               aria-expanded={if @archived_open, do: "true", else: "false"}
               aria-controls="archived-channel-list-mobile"
             >
-              <span class="hero-archive-box size-3.5 text-base-content/40"></span>
-              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="hero-archive-box size-3.5 text-subtle"></span>
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
                 Archived
               </p>
-              <span class="ml-auto text-base-content/40 text-xs">
+              <span class="ml-auto text-subtle text-xs">
                 {if @archived_open, do: "▾", else: "▸"}
               </span>
             </button>
@@ -363,7 +363,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                     data-role="restricted-channel-row"
                     data-space-id={space.id}
                     aria-disabled="true"
-                    class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+                    class="flex items-center gap-3 px-4 py-3 text-sm text-subtle"
                   >
                     <span class="hero-lock-closed-mini size-4"></span>
                     <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
@@ -375,12 +375,12 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                     phx-click="close_mobile_browser"
                     class={[
                       "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-                      "text-base-content/50 hover:bg-base-200",
+                      "text-subtle hover:bg-base-200",
                       @active_space && @active_space.id == space.id &&
                         "bg-base-200 font-semibold"
                     ]}
                   >
-                    <span class="hero-archive-box size-4 text-base-content/30"></span>
+                    <span class="hero-archive-box size-4 text-subtle"></span>
                     <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
                   </.link>
                 <% end %>
@@ -409,9 +409,9 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             }
             class="flex flex-col items-center gap-3 px-6 py-10 text-center"
           >
-            <span class="hero-magnifying-glass size-8 text-base-content/30" aria-hidden="true"></span>
+            <span class="hero-magnifying-glass size-8 text-subtle" aria-hidden="true"></span>
             <p class="text-sm font-medium">No matches for “{@drawer_query}”</p>
-            <p class="text-sm text-base-content/50">
+            <p class="text-sm text-subtle">
               Check the spelling, or start a new conversation.
             </p>
             <div class="flex items-center gap-2 mt-1">
@@ -425,7 +425,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
               <button
                 type="button"
                 phx-click="drawer_search_clear"
-                class="flex items-center justify-center min-h-11 px-4 rounded-lg text-sm font-medium text-base-content/60 hover:text-base-content hover:bg-base-200"
+                class="flex items-center justify-center min-h-11 px-4 rounded-lg text-sm font-medium text-base-content hover:text-base-content hover:bg-base-200"
               >
                 Clear search
               </button>
@@ -503,7 +503,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
            fall through to a full-page form POST. --%>
       <form class="relative" phx-change="drawer_search" phx-submit="drawer_search">
         <span
-          class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-base-content/40"
+          class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-subtle"
           aria-hidden="true"
         >
         </span>
@@ -528,13 +528,13 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           spellcheck="false"
           enterkeyhint="go"
           aria-label="Find a channel or direct message"
-          class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-faint focus:border-primary focus:outline-none"
+          class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
         />
         <button
           :if={@drawer_query != ""}
           type="button"
           phx-click="drawer_search_clear"
-          class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-base-content/50 hover:text-base-content"
+          class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-subtle hover:text-base-content"
           aria-label="Clear search"
         >
           <span class="hero-x-mark size-4"></span>
@@ -661,7 +661,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
     <section :if={pinned_rows != []} data-section-reorderable="false" aria-label="Pinned">
       <div class="flex items-center px-4 py-1">
         <%!-- Same label as the desktop block. Holds all three kinds. --%>
-        <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
           Pinned
         </p>
         <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5).
@@ -678,7 +678,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
            pinned to the top of the drawer; the rows inside it reorder. --%>
         <span
           :if={@sidebar_edit}
-          class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-base-content/40"
+          class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-subtle"
           aria-hidden="true"
           title="Pinned stays at the top of the list"
         >
@@ -738,7 +738,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           <%= case kind do %>
             <% :channel -> %>
               <span
-                class="w-5 shrink-0 text-center text-base-content/60 text-lg"
+                class="w-5 shrink-0 text-center text-subtle text-lg"
                 data-role="pinned-row-hash"
               >
                 #
@@ -751,7 +751,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                 data-role="pinned-row-task-glyph"
                 aria-hidden="true"
               >
-                <span class="hero-clipboard-document-list-mini size-4 text-base-content/60"></span>
+                <span class="hero-clipboard-document-list-mini size-4 text-subtle"></span>
               </span>
           <% end %>
           <span class="truncate flex-1">{row_label}</span>
@@ -846,7 +846,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             <%= case kind do %>
               <% :channel -> %>
                 <span
-                  class="w-5 shrink-0 text-center text-base-content/60 text-lg"
+                  class="w-5 shrink-0 text-center text-subtle text-lg"
                   data-role="pinned-row-hash"
                 >
                   #
@@ -859,7 +859,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                   data-role="pinned-row-task-glyph"
                   aria-hidden="true"
                 >
-                  <span class="hero-clipboard-document-list-mini size-4 text-base-content/60"></span>
+                  <span class="hero-clipboard-document-list-mini size-4 text-subtle"></span>
                 </span>
             <% end %>
             <span class="truncate flex-1">{row_label}</span>
@@ -872,7 +872,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           <%= if kind == :task do %>
             <button
               type="button"
-              class="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 mr-2 rounded text-base-content/40 hover:text-primary hover:bg-base-200 transition-colors"
+              class="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 mr-2 rounded text-subtle hover:text-primary hover:bg-base-200 transition-colors"
               phx-click="unpin_task_from_chat"
               phx-value-task-id={space.metadata["task_id"]}
               data-role="pinned-task-drawer-unpin"
@@ -921,7 +921,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
     >
       <div class="flex items-center justify-between px-4 py-1 mt-2">
         <div class="flex items-center gap-1.5">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Direct Messages
           </p>
           <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5) —
@@ -931,7 +931,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
              data-section-reorderable="false" branch. --%>
           <span
             :if={@sidebar_edit}
-            class="channel-section-lock hero-lock-closed size-3.5 text-base-content/40"
+            class="channel-section-lock hero-lock-closed size-3.5 text-subtle"
             aria-hidden="true"
             title="Direct Messages is locked and can't be reordered"
           >
@@ -939,7 +939,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
         </div>
         <button
           phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-          class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
+          class="flex items-center justify-center size-11 rounded-lg text-subtle hover:bg-base-300 hover:text-primary"
           aria-label="New conversation"
           title="New conversation"
         >
@@ -951,11 +951,11 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
          and self-healing, and a manual order would be silently wiped
          by the next incoming message. One line of copy explains the
          absent affordance instead of per-row lock icons. --%>
-      <p :if={@sidebar_edit} class="px-4 pb-1 text-xs text-base-content/40">
+      <p :if={@sidebar_edit} class="px-4 pb-1 text-xs text-subtle">
         Sorted by recent activity
       </p>
       <%= if @channel_sections.dms == [] do %>
-        <p class="px-4 py-2 text-sm text-base-content/50">
+        <p class="px-4 py-2 text-sm text-subtle">
           No conversations yet — direct messages will appear here once you start one.
         </p>
       <% else %>
@@ -1052,7 +1052,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       aria-label={"#{Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)} channels"}
     >
       <div class="flex items-center px-4 py-1 mt-2">
-        <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
           {Platform.Chat.SidebarMask.label(drawer_mask_ctx, section)}
         </p>
         <%!-- Per-item reveal, the SAME affordance the rail has. A real
@@ -1150,7 +1150,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       </div>
       <%= cond do %>
         <% section_channels == [] -> %>
-          <p class="px-4 py-2 text-sm text-base-content/50">
+          <p class="px-4 py-2 text-sm text-subtle">
             No channels yet — channels in this org appear here.
           </p>
         <% @sidebar_edit && @drawer_query == "" -> %>
@@ -1160,7 +1160,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                 data-role="restricted-channel-row"
                 data-space-id={space.id}
                 aria-disabled="true"
-                class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+                class="flex items-center gap-3 px-4 py-3 text-sm text-subtle"
               >
                 <span class="hero-lock-closed-mini size-4"></span>
                 <span class="truncate flex-1">
@@ -1188,7 +1188,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                 data-section-id={section.id}
                 class="flex items-center gap-3 px-4 py-3 text-sm"
               >
-                <span class="text-base-content/40 text-lg">#</span>
+                <span class="text-subtle text-lg">#</span>
                 <span class="truncate flex-1">
                   {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
                 </span>
@@ -1253,7 +1253,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                 data-role="restricted-channel-row"
                 data-space-id={space.id}
                 aria-disabled="true"
-                class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+                class="flex items-center gap-3 px-4 py-3 text-sm text-subtle"
               >
                 <span class="hero-lock-closed-mini size-4"></span>
                 <span class="truncate flex-1">
@@ -1283,7 +1283,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                       "bg-base-200 text-primary font-semibold"
                   ]}
                 >
-                  <span class="text-base-content/40 text-lg">#</span>
+                  <span class="text-subtle text-lg">#</span>
                   <span class="truncate flex-1">
                     {Platform.Chat.SidebarMask.channel_label(
                       drawer_mask_ctx,

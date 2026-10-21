@@ -2,7 +2,7 @@
   <%!-- LIST: header, tabs, rows. --%>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div class="flex flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Email
       </h1>
 
@@ -98,7 +98,7 @@
         data-role={"mail-tab-#{tab}"}
       >
         {label}
-        <span :if={Map.has_key?(@counts, tab)} class="text-xs text-base-content/60">
+        <span :if={Map.has_key?(@counts, tab)} class="text-xs text-subtle">
           {@counts[tab]}
         </span>
       </.link>
@@ -123,14 +123,14 @@
             {if(@editor.draft_id, do: "Draft", else: "New email")}
           </h2>
           <span
-            class="rounded-full border border-edge px-2 py-0.5 text-xs text-base-content/60"
+            class="rounded-full border border-edge px-2 py-0.5 text-xs text-subtle"
             data-role="mail-draft-drafted-by"
           >
             {editor_drafted_by(@editor)}
           </span>
         </div>
 
-        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+        <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
           From
           <select
             name="draft[from]"
@@ -147,13 +147,13 @@
                 do: " (internal only)"}
             </option>
           </select>
-          <span :if={@senders == []} class="text-xs text-base-content/60">
+          <span :if={@senders == []} class="text-xs text-subtle">
             This org has no account with Send on. An org admin can add one under Accounts.
           </span>
         </label>
 
         <fieldset class="flex flex-col gap-2">
-          <legend class="text-xs text-base-content/60">To</legend>
+          <legend class="text-xs text-base-content">To</legend>
           <ul
             :if={@editor_recipients != []}
             class="flex flex-col divide-y divide-edge rounded-box border border-edge"
@@ -165,7 +165,7 @@
             >
               <span class="min-w-0 flex-1 break-all text-base-content">
                 {recipient.address || "(unknown user)"}
-                <span :if={recipient.name} class="text-xs text-base-content/60">
+                <span :if={recipient.name} class="text-xs text-subtle">
                   {recipient.name}
                 </span>
               </span>
@@ -238,7 +238,7 @@
           </p>
         </fieldset>
 
-        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+        <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
           Subject
           <input
             type="text"
@@ -253,7 +253,7 @@
         <%!-- Plain text, escaped: a textarea's content is never parsed as
              HTML or markdown, so an agent-written body shows exactly as it
              will be sent. --%>
-        <label class="flex flex-col gap-1 text-xs text-base-content/60">
+        <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
           Body <textarea
             name="draft[body]"
             rows="12"
@@ -292,7 +292,7 @@
           </button>
           <span
             :if={!@editor_reviewable?}
-            class="text-xs text-base-content/60"
+            class="text-xs text-subtle"
             data-role="mail-review-unavailable"
           >
             {review_blocked_text(assigns)}
@@ -317,17 +317,17 @@
           <span class="truncate text-sm font-medium text-base-content sm:w-48 sm:shrink-0">
             {message.from_address || "(unknown sender)"}
           </span>
-          <span class="min-w-0 flex-1 truncate text-sm text-base-content/60">
+          <span class="min-w-0 flex-1 truncate text-sm text-subtle">
             <span class="font-medium text-base-content">{message.subject || "(no subject)"}</span>
             <span :if={snippet(message.text_body) != ""}>
               — {snippet(message.text_body)}
             </span>
           </span>
-          <span class="shrink-0 text-xs text-base-content/60">
+          <span class="shrink-0 text-xs text-subtle">
             {list_time(message.received_at)}
           </span>
         </.link>
-        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-subtle">
           No mail has been read for this org yet. Turn on Read mail for an account to fill the Inbox.
         </p>
       </div>
@@ -347,11 +347,11 @@
           <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
             {draft.subject || "(no subject)"}
           </span>
-          <span class="shrink-0 text-xs text-base-content/60" data-role="mail-draft-row-meta">
+          <span class="shrink-0 text-xs text-subtle" data-role="mail-draft-row-meta">
             {drafted_by_text(@provenance[draft.id])} · {list_time(draft.updated_at)}
           </span>
         </.link>
-        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-subtle">
           No drafts.
         </p>
       </div>
@@ -373,14 +373,14 @@
           <span
             class={[
               "shrink-0 text-xs",
-              if(delivery.status == "failed", do: "text-error", else: "text-base-content/60")
+              if(delivery.status == "failed", do: "text-error", else: "text-subtle")
             ]}
             data-role="mail-sent-status"
           >
             {status_text(delivery, @accounts)} · {list_time(delivery.inserted_at)}
           </span>
         </div>
-        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-subtle">
           Nothing sent yet.
         </p>
       </div>
@@ -399,7 +399,7 @@
             <span class="min-w-0 flex-1 truncate text-sm font-medium text-base-content">
               {delivery.subject || "(no subject)"}
             </span>
-            <span class="shrink-0 text-xs text-base-content/60">
+            <span class="shrink-0 text-xs text-subtle">
               {list_time(delivery.inserted_at)}
             </span>
           </div>
@@ -410,7 +410,7 @@
             </span>
           </p>
         </div>
-        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-base-content/60">
+        <p :if={@rows == []} class="px-4 py-8 text-center text-sm text-subtle">
           Nothing has been refused.
         </p>
       </div>
@@ -488,20 +488,20 @@
         data-role="mail-confirm"
       >
         <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
-          <span class="text-xs text-base-content/60">From</span>
+          <span class="text-xs text-subtle">From</span>
           <span
             class="break-all font-mono text-sm font-semibold text-base-content"
             data-role="mail-confirm-from"
           >
             {@confirm.sender.address}
           </span>
-          <span class="text-xs text-base-content/60">
+          <span class="text-xs text-subtle">
             {@confirm.account.name} / {@confirm.sender.key}
           </span>
         </div>
 
         <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
-          <span class="text-xs text-base-content/60">To</span>
+          <span class="text-xs text-subtle">To</span>
           <ul class="flex max-h-64 flex-col gap-1 overflow-y-auto" data-role="mail-confirm-to">
             <li
               :for={recipient <- @confirm.recipients}
@@ -518,12 +518,12 @@
               </span>
             </li>
           </ul>
-          <span class="text-xs text-base-content/60" data-role="mail-confirm-count">
+          <span class="text-xs font-medium text-base-content" data-role="mail-confirm-count">
             {recipient_count_text(length(@confirm.recipients))}
           </span>
           <span
             :if={@confirm.removed_external > 0}
-            class="text-xs text-base-content/60"
+            class="text-xs text-subtle"
             data-role="mail-confirm-removed"
           >
             {removed_text(@confirm.removed_external)}
@@ -531,7 +531,7 @@
         </div>
 
         <div class="flex flex-col gap-1">
-          <span class="text-xs text-base-content/60">Subject</span>
+          <span class="text-xs text-subtle">Subject</span>
           <p class="break-words text-sm text-base-content" data-role="mail-confirm-subject">
             {@confirm.draft.subject || "(no subject)"}
           </p>
@@ -543,13 +543,13 @@
         >{@confirm.draft.body || ""}</pre>
 
         <div class="flex flex-col gap-1 rounded-box border border-edge p-3">
-          <span class="text-xs text-base-content/60">Recorded before sending</span>
+          <span class="text-xs text-subtle">Recorded before sending</span>
           <span class="text-sm text-base-content" data-role="mail-confirm-recorded">
             {recorded_text(@confirm, @user)}
           </span>
         </div>
 
-        <p class="text-xs text-base-content/60" data-role="mail-confirm-rate">
+        <p class="text-xs text-subtle" data-role="mail-confirm-rate">
           Sending can't be undone. This account: {elem(@confirm.rate, 0)} of {elem(
             @confirm.rate,
             1
@@ -624,7 +624,7 @@
       <%!-- MESSAGE --%>
       <div :if={@pane == :message} class="flex flex-col gap-4" data-role="mail-message-detail">
         <p
-          class="flex items-center gap-1.5 text-xs text-base-content/60"
+          class="flex items-center gap-1.5 text-xs text-subtle"
           data-role="mail-external-label"
         >
           <span class="hero-envelope size-3.5 shrink-0" aria-hidden="true"></span>
@@ -632,25 +632,25 @@
         </p>
 
         <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-          <dt class="text-base-content/60">From</dt>
+          <dt class="text-subtle">From</dt>
           <dd class="break-all text-base-content">
             {@selected_message.from_address || "(unknown sender)"}
           </dd>
-          <dt class="text-base-content/60">To</dt>
+          <dt class="text-subtle">To</dt>
           <dd class="break-all text-base-content">
             {Enum.join(@selected_message.to_addresses || [], ", ")}
           </dd>
-          <dt class="text-base-content/60">Date</dt>
+          <dt class="text-subtle">Date</dt>
           <dd class="text-base-content">{full_time(@selected_message.received_at)}</dd>
-          <dt class="text-base-content/60">Subject</dt>
+          <dt class="text-subtle">Subject</dt>
           <dd class="break-words text-base-content">
             {@selected_message.subject || "(no subject)"}
           </dd>
-          <dt class="text-base-content/60">Message-ID</dt>
+          <dt class="text-subtle">Message-ID</dt>
           <dd class="break-all font-mono text-xs text-base-content" data-role="mail-message-id">
             {@selected_message.message_id_header || "(none)"}
           </dd>
-          <dt class="text-base-content/60">Account</dt>
+          <dt class="text-subtle">Account</dt>
           <dd class="break-all font-mono text-xs text-base-content">
             {account_label(@accounts, @selected_message.account_id)}
           </dd>
@@ -687,7 +687,7 @@
               class="flex flex-wrap items-end gap-2"
               id="mail-add-to-files-form"
             >
-              <label class="flex min-w-0 flex-1 flex-col gap-1 text-xs text-base-content/60">
+              <label class="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium text-base-content">
                 Project
                 <select
                   name="project_id"
@@ -707,7 +707,7 @@
                 <span class="hero-document-plus size-4" aria-hidden="true"></span> Add to files
               </button>
             </form>
-            <p :if={@projects == []} class="text-xs text-base-content/60">
+            <p :if={@projects == []} class="text-xs text-subtle">
               This org has no projects to add files to.
             </p>
           <% end %>
@@ -719,7 +719,7 @@
 
       <%!-- ACCOUNTS --%>
       <div :if={@pane == :accounts} class="flex flex-col gap-3" data-role="mail-accounts-pane">
-        <p class="text-sm text-base-content/60">
+        <p class="text-sm text-subtle">
           Accounts this org sends and reads mail from. Passwords live in the Vault and are never shown here.
         </p>
 
@@ -732,7 +732,7 @@
           <p class="break-all font-mono text-sm font-semibold text-base-content">
             {dispatch_address(account)}
           </p>
-          <p class="text-xs text-base-content/60">
+          <p class="text-xs text-subtle">
             {account.name} · SMTP {account.smtp_host || "(no host)"}:{account.smtp_port ||
               "default"} · {if account.imap_host,
               do: "IMAP #{account.imap_host}:#{account.imap_port || "default"}",
@@ -766,20 +766,20 @@
               >
                 {on_off(Map.fetch!(account, String.to_existing_atom(flag)))}
               </button>
-              <span :if={!@is_admin} class="text-base-content/60">
+              <span :if={!@is_admin} class="text-subtle">
                 {on_off(Map.fetch!(account, String.to_existing_atom(flag)))}
               </span>
             </li>
           </ul>
 
-          <p class="text-xs text-base-content/60" data-role="mail-account-read-scope">
+          <p class="text-xs text-subtle" data-role="mail-account-read-scope">
             <%= if account.read_enabled do %>
               {read_scope_text(account)}<span :if={channel_name(account.inbound_space_id)}> · posts to #{channel_name(account.inbound_space_id)}</span>
             <% else %>
               Not reading mail
             <% end %>
           </p>
-          <p class="text-xs text-base-content/60">{rate_text(account)}</p>
+          <p class="text-xs text-subtle">{rate_text(account)}</p>
 
           <div :if={@is_admin} class="flex flex-wrap items-center gap-2">
             <.link
@@ -794,7 +794,7 @@
           <.test_send_result result={@test_results[account.id]} />
         </div>
 
-        <p :if={@accounts == []} class="text-sm text-base-content/60">
+        <p :if={@accounts == []} class="text-sm text-subtle">
           This org has no mail accounts yet.
         </p>
 
@@ -806,7 +806,7 @@
         >
           <span class="hero-plus size-4" aria-hidden="true"></span> Add account
         </.link>
-        <p :if={!@is_admin} class="text-xs text-base-content/60">
+        <p :if={!@is_admin} class="text-xs text-subtle">
           Only org admins can add or change mail accounts.
         </p>
       </div>
@@ -818,7 +818,7 @@
           class="flex flex-col gap-2 rounded-box border border-edge p-3"
           data-role="mail-senders"
         >
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Senders
           </p>
           <div
@@ -883,7 +883,7 @@
           class="flex flex-col gap-3"
           data-role="mail-account-form"
         >
-          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
             Account name
             <input
               type="text"
@@ -895,7 +895,7 @@
           </label>
 
           <fieldset class="flex flex-col gap-1">
-            <legend class="text-xs text-base-content/60">
+            <legend class="text-xs text-base-content">
               Outgoing (SMTP) host · port · security
             </legend>
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_5rem_7rem]">
@@ -929,7 +929,7 @@
             </div>
           </fieldset>
 
-          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
             Username
             <input
               type="text"
@@ -956,7 +956,7 @@
             class="flex flex-col gap-3 border-l-2 border-edge pl-3"
           >
             <fieldset class="flex flex-col gap-1">
-              <legend class="text-xs text-base-content/60">
+              <legend class="text-xs text-base-content">
                 Incoming (IMAP) host · port · security
               </legend>
               <div class="grid grid-cols-2 gap-2 sm:grid-cols-[1fr_5rem_7rem]">
@@ -998,7 +998,7 @@
             />
 
             <fieldset class="flex flex-col gap-1" data-role="mail-account-read-scope-field">
-              <legend class="text-xs text-base-content/60">Folders to read</legend>
+              <legend class="text-xs text-base-content">Folders to read</legend>
               <label class="flex items-center gap-2 text-sm text-base-content">
                 <input
                   type="radio"
@@ -1038,7 +1038,7 @@
             <input type="hidden" name="account[read_folders]" value={@form[:read_folders].value} />
           </div>
 
-          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
             Post incoming mail to
             <select
               name="account[inbound_space_id]"
@@ -1058,10 +1058,10 @@
 
           <div class="flex flex-col gap-1">
             <.flag_field form={@form} field={:internal_only} label="Internal recipients only" />
-            <p class="text-xs text-base-content/60">Internal = members of this org.</p>
+            <p class="text-xs text-subtle">Internal = members of this org.</p>
           </div>
 
-          <label class="flex flex-col gap-1 text-xs text-base-content/60">
+          <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
             Rate limit per hour
             <input
               type="number"
@@ -1106,14 +1106,14 @@
           <div class="flex flex-col gap-1">
             <p class="text-base font-medium text-base-content">Import older mail</p>
             <p
-              class="text-sm font-medium text-base-content/60"
+              class="text-sm font-medium text-subtle"
               data-role="mail-backfill-quiet"
             >
               Adds messages to the Inbox and agent context. Nothing is posted to chat.
             </p>
             <p
               :if={is_nil(@form_account.inbound_space_id)}
-              class="text-sm text-base-content/60"
+              class="text-sm text-subtle"
               data-role="mail-backfill-no-channel"
             >
               Agents see imported mail only when this account posts to a channel. This one does not, so imported mail stays in the Inbox.
@@ -1148,7 +1148,7 @@
                   aria-label="Import progress"
                 >
                 </progress>
-                <p class="text-xs text-base-content/60">You can leave this page.</p>
+                <p class="text-xs text-subtle">You can leave this page.</p>
               </div>
             <% "done" -> %>
               <div class="flex flex-col gap-1" data-role="mail-backfill-done">
@@ -1167,7 +1167,7 @@
                   </.link>
                 </div>
                 <p
-                  class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-base-content/60"
+                  class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-subtle"
                   data-role="mail-backfill-already"
                 >
                   <span>
@@ -1185,7 +1185,7 @@
                 </p>
                 <p
                   :if={@backfill.skipped_folders != []}
-                  class="text-xs text-base-content/60"
+                  class="text-xs text-subtle"
                   data-role="mail-backfill-skipped"
                 >
                   Not read: {Enum.join(@backfill.skipped_folders, ", ")}
@@ -1198,7 +1198,7 @@
                 {backfill_noun(@backfill.imported)}: {@backfill.error || "unknown error"}. Nothing was lost.
               </p>
             <% _idle -> %>
-              <p class="text-sm text-base-content/60" data-role="mail-backfill-folders">
+              <p class="text-sm text-subtle" data-role="mail-backfill-folders">
                 Folders
                 <span class="text-base-content">{backfill_folders_text(@form_account)}</span>
               </p>
@@ -1211,7 +1211,7 @@
             class="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3"
           >
             <input type="hidden" name="account_id" value={@form_account.id} />
-            <label class="flex w-full flex-col gap-1 text-xs text-base-content/60 sm:w-auto">
+            <label class="flex w-full flex-col gap-1 text-xs font-medium text-base-content sm:w-auto">
               Window
               <select
                 name="window_days"

@@ -105,7 +105,7 @@ defmodule PlatformWeb.Tasks.SortControl do
             |> JS.toggle_attribute({"aria-expanded", "true", "false"})
           }
           class={[
-            "inline-flex items-center gap-1 whitespace-nowrap rounded-field border border-edge bg-base-200 text-xs font-medium text-base-content/60 transition-colors hover:bg-base-300 focus-visible-ring",
+            "inline-flex items-center gap-1 whitespace-nowrap rounded-field border border-edge bg-base-200 text-xs font-medium text-base-content transition-colors hover:bg-base-300 focus-visible-ring",
             if(@mobile?, do: "min-h-11 min-w-11 px-3", else: "h-7 px-2.5")
           ]}
         >

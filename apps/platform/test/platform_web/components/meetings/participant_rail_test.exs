@@ -26,7 +26,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   # the rail's actual painted background in the light theme, under the
   # 4.5:1 AA floor for 11px text). See `participant_rail.ex`'s comment at
   # the humans heading for the measurement.
-  @heading_type "text-[11px] font-semibold uppercase tracking-widest text-base-content/60"
+  @heading_type "text-[11px] font-semibold uppercase tracking-widest text-base-content\""
 
   defp human(name, id) do
     %{
@@ -264,7 +264,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       class = node |> Floki.attribute("class") |> List.first()
 
-      assert class =~ "text-base-content/60"
+      assert class =~ "text-subtle"
       refute class =~ "text-base-content/50"
     end
   end

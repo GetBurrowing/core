@@ -96,7 +96,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
           ]}
         />
       </a>
-      <p :if={@props["caption"]} class="text-[11px] text-base-content/50 text-center mt-1">
+      <p :if={@props["caption"]} class="text-[11px] text-subtle text-center mt-1">
         {@props["caption"]}
       </p>
     </div>

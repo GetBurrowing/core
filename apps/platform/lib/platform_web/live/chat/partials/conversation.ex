@@ -183,7 +183,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
              (this template's @mobile_browser_open overlay) for the long-tail
              jump-to-channel case. --%>
         <div class="flex items-center gap-2 overflow-hidden lg:hidden">
-          <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
+          <span :if={@active_space.kind == "channel"} class="text-subtle">#</span>
           <span class="truncate font-semibold">
             {space_header_name(
               @active_space,
@@ -242,7 +242,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         <span class="hidden lg:flex items-center gap-2 overflow-hidden">
           <span
             :if={@active_space.kind == "channel"}
-            class="text-base-content/50 text-lg font-bold"
+            class="text-subtle text-lg font-bold"
           >
             #
           </span>
@@ -311,13 +311,13 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                silently. --%>
           <span
             :if={@active_space.kind == "channel" && @active_space.topic && is_nil(@goal_panel)}
-            class="truncate text-xs text-base-content/40"
+            class="truncate text-xs text-subtle"
           >
             — {@active_space.topic}
           </span>
           <span
             :if={@active_space.kind == "group"}
-            class="text-xs text-base-content/40"
+            class="text-xs text-subtle"
           >
             — {length(@space_participants)} members
           </span>
@@ -358,14 +358,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <button
         :if={@meetings_enabled && !@in_meeting && !@external?}
         phx-click="meeting_join"
-        class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content/60 hover:text-primary hover:bg-primary/10 transition-colors"
+        class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content hover:text-primary hover:bg-primary/10 transition-colors"
         title="Start or join a meeting in this space"
       >
         <span class="hero-video-camera size-4"></span>
         <span class="hidden md:inline">Meet</span>
       </button>
 
-      <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
+      <div class="flex flex-shrink-0 items-center gap-3 text-xs text-subtle">
         <.form
           for={@search_form}
           id="chat-search-form"
@@ -399,7 +399,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@canvases != []}
           phx-click="canvas_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+            "flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_canvases && "!bg-base-300 !text-primary"
           ]}
         >
@@ -411,7 +411,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@pins != []}
           phx-click="pin_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+            "flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_pins && "!bg-base-300 !text-primary"
           ]}
         >
@@ -467,8 +467,8 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             "flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
             eye_state == "open" && "text-success hover:bg-base-300",
             eye_state == "closed" &&
-              "text-base-content/50 hover:text-base-content hover:bg-base-300",
-            eye_state == "inert" && "text-base-content/50 opacity-50"
+              "text-subtle hover:text-base-content hover:bg-base-300",
+            eye_state == "inert" && "text-disabled opacity-50"
           ]}
           title={
             case eye_state do
@@ -500,7 +500,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@active_space.kind == "channel"}
           phx-click="members_open"
           data-role="members-open"
-          class="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
+          class="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
           title="Channel members"
         >
           <span class="hero-users size-4"></span>
@@ -509,7 +509,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
         <button
           phx-click="settings_open"
-          class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
+          class="flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300"
           title="Space settings"
         >
           <span class="hero-cog-6-tooth size-4"></span>
@@ -558,7 +558,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <div class="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
           :if={@goal_panel && @goal_panel.leader}
-          class="text-xs text-base-content/60"
+          class="text-xs text-subtle"
           data-role="agents-goal-leader"
         >
           {@goal_panel.leader.name} leads
@@ -659,7 +659,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             :if={!@goal_panel}
             type="button"
             phx-click="edit_goal"
-            class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content/60 max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
+            class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
             data-role="agents-goal-invite"
           >
             Set a goal for this channel
@@ -714,7 +714,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             <%= cond do %>
               <% @goal_panel.measurement[:kind] == :uncounted -> %>
                 <span
-                  class="min-w-0 truncate text-xs text-base-content/60"
+                  class="min-w-0 truncate text-xs text-subtle"
                   data-role="agents-goal-measurement-uncounted"
                 >
                   {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
@@ -734,7 +734,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                 </span>
               <% true -> %>
                 <span
-                  class="min-w-0 truncate text-xs text-base-content/60"
+                  class="min-w-0 truncate text-xs text-subtle"
                   data-role="agents-goal-measurement"
                 >
                   <%!-- The number, and ONLY the number, in JetBrains Mono
@@ -797,7 +797,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div class="flex flex-col gap-1" data-role="agents-goal-cadence-line">
       <div class="flex flex-wrap items-center gap-2">
-        <label class="text-xs text-base-content/60" for="agents-goal-cadence">
+        <label class="text-xs font-medium text-base-content" for="agents-goal-cadence">
           Check progress
         </label>
         <select
@@ -815,7 +815,9 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </option>
         </select>
         <%= if @selection.cadence == :daily do %>
-          <label class="text-xs text-base-content/60" for="agents-goal-cadence-hour">at</label>
+          <label class="text-xs font-medium text-base-content" for="agents-goal-cadence-hour">
+            at
+          </label>
           <select
             id="agents-goal-cadence-hour"
             name="goal_cadence_hour"
@@ -832,7 +834,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </select>
         <% end %>
       </div>
-      <span class="text-xs text-base-content/60" data-role="agents-goal-cadence-preview">
+      <span class="text-xs text-subtle" data-role="agents-goal-cadence-preview">
         {@preview}
       </span>
     </div>
@@ -849,7 +851,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     assigns = assign(assigns, :tail, GoalCadenceForm.tail(cadence_of(assigns.cadence)))
 
     ~H"""
-    <span :if={@tail} class="text-base-content/60" data-role="agents-goal-cadence-tail">
+    <span :if={@tail} class="text-subtle" data-role="agents-goal-cadence-tail">
       {@tail}
     </span>
     """
@@ -990,7 +992,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           "hero-clipboard-document-list-mini size-3.5",
           if(@active_space.id == space.id,
             do: "text-primary-content/80",
-            else: "text-base-content/40"
+            else: "text-subtle"
           )
         ]}>
         </span>
@@ -1039,7 +1041,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
               "shrink-0",
               if(@active_space.id == space.id,
                 do: "text-primary-content/80",
-                else: "text-base-content/40"
+                else: "text-subtle"
               )
             ]}
             data-role="pinned-row-hash"
@@ -1117,7 +1119,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <button
         phx-click="toggle_mobile_browser"
         phx-value-intent="search"
-        class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
+        class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-subtle hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
         aria-label="Search channels and direct messages"
         title="Search channels and DMs"
       >
@@ -1152,7 +1154,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <span class={[
             if(@active_space.id == space.id,
               do: "text-primary-content/80",
-              else: "text-base-content/40"
+              else: "text-subtle"
             )
           ]}>#</span>{masked_space_name(assigns, space.name)}<span
             :if={unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -1166,7 +1168,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           data-space-id={space.id}
           aria-disabled="true"
           title="Restricted, ask an admin"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-base-content/40 border border-base-content/10"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-subtle border border-base-content/10"
         >
           <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
         </div>
@@ -1276,7 +1278,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     >
       <div class="flex items-center justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Search Results
           </p>
           <p class="text-sm text-base-content/70">
@@ -1299,7 +1301,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           phx-value-message-id={result.id}
           class="block w-full rounded-xl border border-edge bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
         >
-          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-subtle">
             <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
             <.local_time
               id={"search-time-#{result.id}"}
@@ -1313,7 +1315,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             </span>
             <span
               :if={result.search_rank}
-              class="font-mono normal-case tracking-normal text-[10px] text-base-content/40"
+              class="font-mono normal-case tracking-normal text-[10px] text-subtle"
             >
               rank {Float.round(result.search_rank, 3)}
             </span>
@@ -1361,7 +1363,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       :if={@show_pins && @pins != []}
       class="border-b border-edge bg-base-200 px-5 py-2"
     >
-      <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
         Pinned Messages
       </p>
       <div class="flex flex-col gap-1 max-h-40 overflow-y-auto">
@@ -1372,7 +1374,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <span class="truncate text-base-content/70 text-xs">
             <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
             pinned message
-            <span class="font-mono text-base-content/40 text-[10px]">
+            <span class="font-mono text-subtle text-[10px]">
               {String.slice(pin.message_id, 0, 8)}…
             </span>
           </span>
@@ -1381,7 +1383,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             phx-click="pin_toggle"
             phx-value-message-id={pin.message_id}
             phx-value-space-id={pin.space_id}
-            class="ml-2 text-xs text-base-content/40 hover:text-error"
+            class="ml-2 text-xs font-medium text-base-content hover:text-error"
           >
             Unpin
           </button>
@@ -1472,7 +1474,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
              text. The `xl` track above already says `minmax(0,1fr)` for the
              same reason, which is why only the mobile width broke. --%>
         <div class="min-w-0 space-y-2">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Live Canvases
           </p>
 
@@ -1606,7 +1608,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             phx-change="canvas_sort"
             class="flex items-center gap-2"
           >
-            <label for="canvas-sort" class="text-[11px] text-base-content/50">Sort</label>
+            <label for="canvas-sort" class="text-[11px] font-medium text-base-content">Sort</label>
             <select
               id="canvas-sort"
               name="order"
@@ -1664,7 +1666,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         >
           <div>
             <p class="text-sm font-semibold text-base-content">New canvas</p>
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               Creates a canvas and posts a linked canvas message.
             </p>
           </div>
@@ -1682,7 +1684,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                 "flex min-h-9 cursor-pointer items-center justify-center rounded-field text-sm",
                 new_canvas_kind(@new_canvas_form) == value &&
                   "bg-base-200 font-semibold text-base-content",
-                new_canvas_kind(@new_canvas_form) != value && "text-base-content/60"
+                new_canvas_kind(@new_canvas_form) != value && "text-subtle"
               ]}
             >
               <input
@@ -1711,7 +1713,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             >
               <span class="hero-arrow-up-tray size-5 text-neutral" aria-hidden="true"></span>
               <span class="text-sm text-base-content">Drop a zip of the prototype</span>
-              <span class="text-xs text-base-content/50">
+              <span class="text-xs text-subtle">
                 index.html at the top, with its CSS, JS and images beside it
               </span>
               <.live_file_input upload={@prototype_upload} class="sr-only" />

@@ -1595,7 +1595,7 @@ defmodule PlatformWeb.EmailLive do
       />
       <button type="submit" class="btn btn-sm min-h-11 lg:min-h-8">{@label}</button>
     </form>
-    <span :if={@account.senders == []} class="text-xs text-base-content/60">
+    <span :if={@account.senders == []} class="text-xs text-subtle">
       Add a sender to send a test.
     </span>
     """
@@ -1636,7 +1636,7 @@ defmodule PlatformWeb.EmailLive do
       )
 
     ~H"""
-    <div class="flex flex-col gap-1 text-xs text-base-content/60">
+    <div class="flex flex-col gap-1 text-xs text-subtle">
       <span>{@label}</span>
       <div
         :if={@configured and not MapSet.member?(@replacing, @kind)}
@@ -1645,7 +1645,7 @@ defmodule PlatformWeb.EmailLive do
         <span class="text-sm text-base-content" data-role="mail-account-secret-status">
           Configured
         </span>
-        <span class="text-base-content/60">stored in the Vault</span>
+        <span class="text-subtle">stored in the Vault</span>
         <button
           type="button"
           phx-click="replace_secret"
@@ -1682,7 +1682,7 @@ defmodule PlatformWeb.EmailLive do
     <label class="flex items-center justify-between gap-2 border-t border-edge py-2 text-sm text-base-content">
       <span>{@label}</span>
       <span class="flex items-center gap-2">
-        <span class="text-xs text-base-content/60">
+        <span class="text-xs text-subtle">
           {on_off(checked?(@form, @field))}
         </span>
         <input type="hidden" name={"account[#{@field}]"} value="false" />

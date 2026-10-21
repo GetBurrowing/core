@@ -42,7 +42,7 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
       ><%= @msg.content || "" %></textarea>
 
       <div class="flex items-center justify-between gap-2">
-        <p class="text-xs text-base-content/40">
+        <p class="text-xs text-subtle">
           <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⌘</kbd>
           <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⏎</kbd>
           to save · <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">Esc</kbd>

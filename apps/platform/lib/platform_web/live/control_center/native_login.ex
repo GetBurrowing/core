@@ -82,17 +82,17 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
 
       <ol class="mt-5 space-y-5">
         <li id="native-login-subscription" class="flex items-start gap-3">
-          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-base-200 text-xs font-semibold text-base-content/60">
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-base-200 text-xs font-semibold text-subtle">
             1
           </span>
           <div class="min-w-0">
-            <p class="flex flex-wrap items-center gap-2 text-sm font-semibold text-base-content/60">
+            <p class="flex flex-wrap items-center gap-2 text-sm font-semibold text-subtle">
               Claude subscription
               <span class="rounded-field bg-base-200 px-2 py-0.5 text-xs font-medium text-base-content/70">
                 {subscription_unavailable()}
               </span>
             </p>
-            <p class="mt-0.5 text-sm text-base-content/60">
+            <p class="mt-0.5 text-sm text-subtle">
               Burrow can't log an agent in to a Claude subscription yet.
             </p>
           </div>
@@ -105,7 +105,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
           <div class="min-w-0 flex-1">
             <h3 class="text-sm font-semibold text-base-content">Use an Anthropic API key</h3>
             <.key_form :if={@can_manage?} agent={@agent} key_set?={@key_set?} />
-            <p :if={!@can_manage?} id="native-login-locked" class="mt-1 text-sm text-base-content/60">
+            <p :if={!@can_manage?} id="native-login-locked" class="mt-1 text-sm text-subtle">
               {locked_message(@agent.name)}
             </p>
           </div>
@@ -143,13 +143,13 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
       </p>
       <p
         :if={@step not in [:logged_in, :waiting]}
-        class="mt-1 text-sm text-base-content/60"
+        class="mt-1 text-sm text-subtle"
       >
         {if @key_set?,
           do: "#{@agent.name} logs in with the Anthropic API key saved here.",
           else: "No API key saved. #{@agent.name} will ask for a login when it starts."}
       </p>
-      <p class="mt-1 text-sm text-base-content/60">
+      <p class="mt-1 text-sm text-subtle">
         Claude subscription login: {String.downcase(subscription_unavailable())}.
       </p>
 
@@ -159,7 +159,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
         </summary>
         <.key_form agent={@agent} key_set?={@key_set?} />
       </details>
-      <p :if={!@can_manage?} class="mt-3 text-sm text-base-content/60">
+      <p :if={!@can_manage?} class="mt-3 text-sm text-subtle">
         {locked_message(@agent.name)}
       </p>
     </section>
@@ -194,7 +194,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
           required
         />
       </label>
-      <p class="text-xs text-base-content/60">Stored encrypted in this install's vault.</p>
+      <p class="text-xs text-subtle">Stored encrypted in this install's vault.</p>
       <div class="flex flex-wrap gap-2">
         <button id="native-api-key-save" type="submit" class="btn btn-primary btn-sm">
           Save key and restart
@@ -230,7 +230,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
       <h2 class="text-lg font-semibold text-base-content">Logs</h2>
       <details id="native-recent-output" class="mt-2" open={not is_nil(@output)}>
         <summary class="cursor-pointer text-sm font-medium text-base-content">Recent output</summary>
-        <p class="mt-1 text-xs text-base-content/60">
+        <p class="mt-1 text-xs text-subtle">
           What {@agent.name}'s terminal shows, for debugging. Read only. Login screens are never shown.
         </p>
         <button
@@ -248,7 +248,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
               {@agent.name} is showing a login screen, so its output is hidden.
             </p>
           <% %{lines: []} -> %>
-            <p class="mt-3 text-sm text-base-content/60">Nothing to show.</p>
+            <p class="mt-3 text-sm text-subtle">Nothing to show.</p>
           <% %{lines: lines} -> %>
             <pre
               id="native-recent-output-text"

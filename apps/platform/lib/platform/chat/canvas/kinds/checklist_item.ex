@@ -60,18 +60,18 @@ defmodule Platform.Chat.Canvas.Kinds.ChecklistItem do
         "mt-0.5 size-4 shrink-0",
         @state == "complete" && "hero-check-circle text-success",
         @state == "active" && "hero-bolt text-primary",
-        @state not in ["complete", "active"] && "hero-stop-circle text-base-content/25"
+        @state not in ["complete", "active"] && "hero-stop-circle text-subtle"
       ]}>
       </span>
       <div class="min-w-0">
         <p class={[
           "text-sm leading-5",
-          @state == "complete" && "line-through text-base-content/40",
+          @state == "complete" && "line-through text-subtle",
           @state != "complete" && "text-base-content"
         ]}>
           {@props["label"] || ""}
         </p>
-        <p :if={@props["note"]} class="text-xs text-base-content/50 leading-4 mt-0.5">
+        <p :if={@props["note"]} class="text-xs text-subtle leading-4 mt-0.5">
           {@props["note"]}
         </p>
       </div>

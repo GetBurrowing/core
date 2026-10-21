@@ -189,17 +189,17 @@ defmodule PlatformWeb.SocialCardComponent do
         <p
           :if={@view.provenance}
           data-role="social-card-provenance"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           {@view.provenance}
         </p>
-        <p :if={@view.edited_by} data-role="social-card-edited" class="text-sm text-base-content/60">
+        <p :if={@view.edited_by} data-role="social-card-edited" class="text-sm text-subtle">
           Edited by {@view.edited_by}
         </p>
         <p
           :if={@view.draft_only? and @view.actions != []}
           data-role="social-card-by-hand"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           Post this by hand on {@view.platform_label}
         </p>
@@ -242,11 +242,11 @@ defmodule PlatformWeb.SocialCardComponent do
         </span>
       <% end %>
       <span :if={@view[:profile_name]} class="text-sm font-semibold">{@view.profile_name}</span>
-      <span :if={@view[:handle]} class="text-sm text-base-content/60">{@view.handle}</span>
+      <span :if={@view[:handle]} class="text-sm text-subtle">{@view.handle}</span>
       <span
         :if={@view[:found]}
         data-role="social-card-time"
-        class="ml-auto font-mono text-xs text-base-content/60"
+        class="ml-auto font-mono text-xs text-subtle"
       >
         {schedule(@view)}
       </span>
@@ -283,7 +283,7 @@ defmodule PlatformWeb.SocialCardComponent do
             "rounded border px-2 py-0.5 font-mono text-xs uppercase tracking-wide",
             if(@view.over_limit?,
               do: "border-warning text-warning",
-              else: "border-edge text-base-content/60"
+              else: "border-edge font-medium text-base-content"
             )
           ]}
         >
@@ -354,7 +354,7 @@ defmodule PlatformWeb.SocialCardComponent do
         <p
           :if={@view.hashtags != []}
           data-role="social-card-hashtags"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           {Enum.join(@view.hashtags, " ")}
         </p>
@@ -369,7 +369,7 @@ defmodule PlatformWeb.SocialCardComponent do
           data-over-limit={to_string(@view.over_limit?)}
           class={[
             "text-right font-mono text-xs",
-            if(@view.over_limit?, do: "text-warning", else: "text-base-content/60")
+            if(@view.over_limit?, do: "text-warning", else: "text-base-content")
           ]}
         >
           {@view.char_count} / {@view.char_limit}
@@ -488,7 +488,7 @@ defmodule PlatformWeb.SocialCardComponent do
 
   defp tone_class(:success), do: "text-success"
   defp tone_class(:error), do: "text-error"
-  defp tone_class(_), do: "text-base-content/60"
+  defp tone_class(_), do: "text-subtle"
 
   defp schedule(%{scheduled_at: %DateTime{} = at}), do: Approvals.when_text(at)
   defp schedule(_), do: "not scheduled"

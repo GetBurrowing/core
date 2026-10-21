@@ -55,7 +55,7 @@ defmodule PlatformWeb.Components.EmptyState do
     ~H"""
     <div class="empty-state empty-standard">
       <div :if={@icon_name} class="empty-icon-wrapper">
-        <.icon name={@icon_name} class="size-8 text-base-content/60" />
+        <.icon name={@icon_name} class="size-8 text-subtle" />
       </div>
       <h2 :if={@title != []} class="empty-title">
         {render_slot(@title)}

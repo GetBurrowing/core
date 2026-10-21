@@ -82,7 +82,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
           <div class="flex items-center justify-between border-b border-edge px-4 py-3">
             <div class="min-w-0">
               <h2 class="text-base font-semibold">Return to planning</h2>
-              <p class="mt-0.5 text-xs text-base-content/60 truncate">
+              <p class="mt-0.5 text-xs text-subtle truncate">
                 {@selected_task.title}
               </p>
             </div>
@@ -112,7 +112,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
             <div class="flex flex-col gap-1">
               <label
                 for="supersede-reason-textarea"
-                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+                class="text-xs font-semibold uppercase tracking-wider text-base-content"
               >
                 Why is this being returned to planning?
               </label>
@@ -128,7 +128,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
               >{@supersede_reason}</textarea>
               <p
                 :if={String.trim(@supersede_reason) == ""}
-                class="text-xs text-base-content/50"
+                class="text-xs text-subtle"
                 data-role="supersede-reason-hint"
               >
                 A reason is required so the planner has context for the next revision.

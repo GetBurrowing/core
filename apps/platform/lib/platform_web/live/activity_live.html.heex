@@ -39,7 +39,7 @@
       </button>
     </div>
 
-    <p class="mb-6 text-xs text-base-content/50">
+    <p class="mb-6 text-xs text-subtle">
       <span class="font-medium text-base-content/70">{range_label(@range)}</span>
       &middot; Page <span class="font-medium text-base-content/70">{@page}</span>
       of <span class="font-medium text-base-content/70">{@total_pages}</span>
@@ -65,7 +65,7 @@
       >
         <h2
           id={"activity-day-#{Date.to_iso8601(day)}"}
-          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+          class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content"
         >
           {day_header_label(day)}
         </h2>
@@ -99,7 +99,7 @@
             </div>
 
             <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
+              <div class="flex flex-wrap items-center gap-2 text-xs text-subtle">
                 <span class="font-semibold text-base-content/80">{action.agent_name}</span>
                 <span class="rounded-full bg-base-200 px-2 py-0.5 font-medium">
                   {kind_label(action.kind)}
@@ -120,7 +120,7 @@
               <p class={[
                 "mt-1 line-clamp-3 text-sm break-words",
                 action.state == :active && "text-base-content/80",
-                action.state == :undone && "text-base-content/60 line-through decoration-1"
+                action.state == :undone && "text-subtle line-through decoration-1"
               ]}>
                 {action_preview(action)}
               </p>
@@ -159,7 +159,7 @@
       <%= for entry <- visible_pages(@page, @total_pages) do %>
         <%= case entry do %>
           <% :ellipsis -> %>
-            <span class="px-2 text-base-content/40" aria-hidden="true">…</span>
+            <span class="px-2 text-decorative" aria-hidden="true">…</span>
           <% n -> %>
             <button
               type="button"

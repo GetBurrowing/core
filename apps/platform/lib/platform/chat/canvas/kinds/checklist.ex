@@ -43,11 +43,11 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
       <div class="flex items-center justify-between mb-1">
         <p
           :if={@props["title"]}
-          class="text-xs font-semibold uppercase tracking-widest text-base-content/50"
+          class="text-xs font-semibold uppercase tracking-widest text-base-content"
         >
           {@props["title"]}
         </p>
-        <span :if={@total > 0} class="text-xs text-base-content/40">
+        <span :if={@total > 0} class="text-xs text-subtle">
           {@complete} / {@total} tasks
         </span>
       </div>

@@ -72,7 +72,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               class={[
                 "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
                 @federation_online? && "bg-success/15 text-success",
-                !@federation_online? && "bg-base-content/10 text-base-content/50"
+                !@federation_online? && "bg-base-content/10 text-subtle"
               ]}
             >
               {if @federation_online?, do: "Connected", else: "Disconnected"}
@@ -84,11 +84,11 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               {humanize_value(@selected_agent_directory_entry.source_label)}
             </span>
           </div>
-          <p class="mt-1 text-sm text-base-content/60">{@agent.slug}</p>
+          <p class="mt-1 text-sm text-subtle">{@agent.slug}</p>
           <p
             :if={@native}
             id="native-agent-meta"
-            class="mt-1 text-xs leading-4 text-base-content/60"
+            class="mt-1 text-xs leading-4 text-subtle"
           >
             {native_meta_line(@native)}
           </p>
@@ -339,13 +339,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         <span class="hero-globe-alt mr-1 inline-block h-5 w-5 align-text-bottom" />
         Federation Connection
       </h2>
-      <p :if={!@managed?} class="mt-1 text-sm text-base-content/60">
+      <p :if={!@managed?} class="mt-1 text-sm text-subtle">
         External runtime linked to this agent.
       </p>
       <h2 :if={@managed?} class="text-lg font-semibold text-base-content">
         <span class="hero-server mr-1 inline-block h-5 w-5 align-text-bottom" /> Runtime
       </h2>
-      <p :if={@managed?} class="mt-1 text-sm text-base-content/60">
+      <p :if={@managed?} class="mt-1 text-sm text-subtle">
         Runs on this server.
       </p>
       <RuntimePanel.federation_connection_panel
@@ -382,7 +382,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <p
         :if={@managed? and not @can_manage?}
         id="native-identity-locked"
-        class="text-sm text-base-content/60"
+        class="text-sm text-subtle"
       >
         Only the agent's owner or an admin can change its identity and voice.
       </p>
@@ -396,15 +396,15 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           <h2 class="text-lg font-semibold text-base-content">
             <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
           </h2>
-          <p :if={!@managed?} class="mt-1 text-sm text-base-content/60">
+          <p :if={!@managed?} class="mt-1 text-sm text-subtle">
             How this agent appears in Burrow chat. Config and model routing are managed by the remote OpenClaw instance.
           </p>
-          <p :if={@managed?} class="mt-1 text-sm text-base-content/60">
+          <p :if={@managed?} class="mt-1 text-sm text-subtle">
             How this agent appears in Burrow chat.
           </p>
           <div class="mt-4 space-y-4">
             <label class="form-control max-w-md">
-              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
                 Display name
               </span>
               <input
@@ -416,7 +416,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </label>
             <%!-- Color family picker for federated agents --%>
             <div>
-              <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content">
                 Color family
               </span>
               <div class="flex flex-wrap gap-2">
@@ -465,7 +465,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         <span class="hero-chat-bubble-left-right mr-1 inline-block h-5 w-5 align-text-bottom" />
         Spaces
       </h2>
-      <p class="mt-1 text-sm text-base-content/60">
+      <p class="mt-1 text-sm text-subtle">
         Spaces this agent participates in.
       </p>
       <div class="mt-4 space-y-2">
@@ -475,7 +475,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         >
           <div>
             <p class="font-semibold text-base-content">{space.space_name}</p>
-            <p class="text-xs text-base-content/50">{space.space_slug}</p>
+            <p class="text-xs text-subtle">{space.space_slug}</p>
           </div>
           <span class="rounded-full bg-base-200 px-2.5 py-1 text-[11px] uppercase tracking-widest text-subtle">
             {space.attention_mode}
@@ -483,7 +483,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
         <div
           :if={@federation_spaces == []}
-          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
+          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-subtle"
         >
           Not participating in any spaces yet.
         </div>
@@ -573,7 +573,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
     ~H"""
     <div id="agent-avatar-field">
-      <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content">
         Avatar
       </span>
       <div class="flex flex-wrap items-center gap-4 rounded-2xl border border-edge bg-base-200/50 p-4">
@@ -587,7 +587,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           />
           <span
             :if={!@agent.avatar_url}
-            class="text-sm font-semibold uppercase tracking-wide text-base-content/50"
+            class="text-sm font-semibold uppercase tracking-wide text-subtle"
             data-avatar-kind="agent-fallback"
           >
             {@initials}
@@ -600,7 +600,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             class="file-input file-input-bordered file-input-sm w-full max-w-xs"
           />
 
-          <p class="text-xs text-base-content/60">
+          <p class="text-xs text-subtle">
             {AgentAvatarUpload.accept_label()} up to {AgentAvatarUpload.max_file_size_label()}.
             The image is saved with the rest of the form.
           </p>
@@ -693,7 +693,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <div class="flex items-start justify-between gap-4">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Config + model routing</h2>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             Edit the persisted agent definition. Runtime refresh uses the real AgentServer.
           </p>
         </div>
@@ -711,7 +711,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       >
         <div class="grid gap-4 md:grid-cols-2">
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Name
             </span>
             <input
@@ -723,7 +723,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Status
             </span>
             <select name="config[status]" class="select select-bordered w-full">
@@ -738,7 +738,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Primary model
             </span>
             <input
@@ -751,7 +751,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Fallbacks
             </span>
             <input
@@ -764,7 +764,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Thinking default
             </span>
             <input
@@ -777,7 +777,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Max concurrent
             </span>
             <input
@@ -790,7 +790,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control md:col-span-2">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Sandbox mode
             </span>
             <select
@@ -810,7 +810,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
         <.voice_fields config_form={@config_form} />
 
-        <p class="text-xs text-base-content/50">
+        <p class="text-xs text-subtle">
           Spoken personality lives in this agent's
           <code class="rounded bg-base-200 px-1">{Platform.Agents.Voice.personality_file_key()}</code>
           workspace file below, not here.
@@ -818,7 +818,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
         <%!-- Color family picker --%>
         <div>
-          <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content">
             Color family
           </span>
           <div class="flex flex-wrap gap-2">
@@ -861,7 +861,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </p>
 
         <div class="rounded-2xl border border-edge bg-base-200/50 p-4">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Resolved model chain
           </p>
           <div class="mt-3 flex flex-wrap gap-2">
@@ -873,7 +873,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </span>
             <span
               :if={model_chain(@model_chain_result) == []}
-              class="text-sm text-base-content/50"
+              class="text-sm text-subtle"
             >
               No models configured yet.
             </span>
@@ -908,21 +908,21 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     control follows it. --%>
     <div class="grid gap-4 md:grid-cols-3">
       <label class="form-control">
-        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
           Voice provider
         </span>
         <.voice_provider_select config_form={@config_form} />
       </label>
 
       <label class="form-control">
-        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
           Voice ID
         </span>
         <.voice_id_input config_form={@config_form} />
       </label>
 
       <label class="form-control">
-        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
           Voice model
         </span>
         <.voice_model_input config_form={@config_form} />
@@ -1131,7 +1131,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Workspace files</h2>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             These are the portable identity files that make an OpenClaw agent feel like itself.
           </p>
         </div>
@@ -1156,12 +1156,12 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             ]}
           >
             <p class="truncate text-sm font-semibold">{workspace_file.file_key}</p>
-            <p class="text-xs text-base-content/50">v{workspace_file.version}</p>
+            <p class="text-xs text-subtle">v{workspace_file.version}</p>
           </button>
 
           <div
             :if={@workspace_files == []}
-            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
+            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
           >
             No files yet.
           </div>
@@ -1174,7 +1174,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           class="space-y-3"
         >
           <div>
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content">
               File key
             </label>
             <input
@@ -1199,7 +1199,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content">
               Content
             </label>
             <textarea
@@ -1210,7 +1210,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </div>
 
           <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               {workspace_hint(@selected_workspace_file, @workspace_form[:file_key].value)}
             </p>
             <button type="submit" class="btn btn-neutral w-full sm:w-auto">
@@ -1235,7 +1235,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 class="text-lg font-semibold text-base-content">Memory browser</h2>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             Browse recent memories and append new long-term, daily, or snapshot entries.
           </p>
         </div>
@@ -1251,7 +1251,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             class="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]"
           >
             <label class="form-control">
-              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
                 Type
               </span>
               <select name="memory_filters[type]" class="select select-bordered w-full">
@@ -1273,7 +1273,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </label>
 
             <label class="form-control">
-              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
                 Search
               </span>
               <input
@@ -1291,7 +1291,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               :for={memory <- @recent_memories}
               class="rounded-2xl border border-edge bg-base-100 px-4 py-3"
             >
-              <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+              <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-subtle">
                 <span>{humanize_memory_type(memory.memory_type)}</span>
                 <span :if={memory.date}>{Date.to_iso8601(memory.date)}</span>
                 <span>{format_datetime(memory.inserted_at)}</span>
@@ -1303,7 +1303,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
             <div
               :if={@recent_memories == []}
-              class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-subtle"
             >
               Nothing matched this memory filter.
             </div>
@@ -1318,13 +1318,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         >
           <div>
             <p class="text-sm font-semibold text-base-content">Add memory</p>
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               Writes through MemoryContext so later runtime modules see the real data.
             </p>
           </div>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Memory type
             </span>
             <select name="memory_entry[memory_type]" class="select select-bordered w-full">
@@ -1345,7 +1345,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Date (for daily)
             </span>
             <input
@@ -1357,7 +1357,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </label>
 
           <label class="form-control">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
               Content
             </span>
             <textarea
@@ -1383,7 +1383,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     ~H"""
     <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <h2 class="text-lg font-semibold text-base-content">Runtime + sessions</h2>
-      <p class="mt-1 text-sm text-base-content/60">
+      <p class="mt-1 text-sm text-subtle">
         Monitoring reads the real AgentServer state plus persisted session history.
       </p>
 
@@ -1417,14 +1417,14 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <span class={session_badge_class(session.status)}>
               {humanize_value(session.status)}
             </span>
-            <span class="font-mono text-[11px] text-base-content/45">
+            <span class="font-mono text-[11px] text-subtle">
               {short_id(session.id)}
             </span>
           </div>
           <p class="mt-2 text-base-content/70">
             {blank_fallback(session.model_used, "model not recorded")}
           </p>
-          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/50">
+          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-subtle">
             <span>started {format_datetime(session.started_at)}</span>
             <span :if={session.ended_at}>ended {format_datetime(session.ended_at)}</span>
             <span :if={session.parent_session_id}>
@@ -1435,7 +1435,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
         <div
           :if={@recent_sessions == []}
-          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
+          class="rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-subtle"
         >
           No sessions yet.
         </div>
@@ -1457,13 +1457,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     ~H"""
     <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
       <h2 class="text-lg font-semibold text-base-content">Vault visibility</h2>
-      <p class="mt-1 text-sm text-base-content/60">
+      <p class="mt-1 text-sm text-subtle">
         Metadata only — secrets stay encrypted. Agent runtime still resolves values through Platform.Vault.get/2.
       </p>
 
       <div class="mt-4 space-y-4">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Agent-scoped credentials
           </p>
           <div class="mt-2 space-y-2">
@@ -1473,7 +1473,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@agent_credentials == []}
-              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
             >
               No agent-scoped credentials.
             </div>
@@ -1481,7 +1481,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
 
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Relevant platform credentials
           </p>
           <div class="mt-2 space-y-2">
@@ -1491,7 +1491,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@platform_credentials == []}
-              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
             >
               No matching platform credentials for this model chain.
             </div>
@@ -1507,7 +1507,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               to see that it landed, not wonder where it went. --%>
         <div :if={@root_admin?} class="border-t border-edge pt-4" data-role="vault-manage">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
               All platform credentials
             </p>
             <button
@@ -1527,7 +1527,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@all_platform_credentials == []}
-              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/50"
+              class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
             >
               No platform credentials yet.
             </div>
@@ -1542,7 +1542,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <div class="grid gap-3 sm:grid-cols-2">
               <div>
                 <label
-                  class="text-xs font-semibold uppercase text-base-content/60"
+                  class="text-xs font-semibold uppercase text-base-content"
                   for="credential-slug"
                 >
                   Slug
@@ -1562,7 +1562,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
               <div>
                 <label
-                  class="text-xs font-semibold uppercase text-base-content/60"
+                  class="text-xs font-semibold uppercase text-base-content"
                   for="credential-name"
                 >
                   Name
@@ -1579,7 +1579,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
               <div>
                 <label
-                  class="text-xs font-semibold uppercase text-base-content/60"
+                  class="text-xs font-semibold uppercase text-base-content"
                   for="credential-type"
                 >
                   Type
@@ -1602,7 +1602,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
               <div>
                 <label
-                  class="text-xs font-semibold uppercase text-base-content/60"
+                  class="text-xs font-semibold uppercase text-base-content"
                   for="credential-provider"
                 >
                   Provider
@@ -1622,7 +1622,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
             <div>
               <label
-                class="text-xs font-semibold uppercase text-base-content/60"
+                class="text-xs font-semibold uppercase text-base-content"
                 for="credential-secret"
               >
                 Secret
@@ -1649,7 +1649,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
             <div>
               <label
-                class="text-xs font-semibold uppercase text-base-content/60"
+                class="text-xs font-semibold uppercase text-base-content"
                 for="credential-expires"
               >
                 Expires

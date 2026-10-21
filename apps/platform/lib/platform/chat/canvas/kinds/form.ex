@@ -97,7 +97,7 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
         {@props["title"]}
       </p>
       <label :for={field <- @fields} class="flex flex-col gap-1">
-        <span class="text-xs text-base-content/60">
+        <span class="text-xs text-subtle">
           {field["label"] || field["name"]}
         </span>
         <%= case field["type"] do %>

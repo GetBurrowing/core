@@ -21,7 +21,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   def stat_card(assigns) do
     ~H"""
     <div class="rounded-2xl border border-edge bg-base-200/40 px-4 py-3">
-      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">{@label}</p>
+      <p class="text-xs font-semibold uppercase tracking-widest text-base-content">{@label}</p>
       <p class="mt-2 text-2xl font-semibold text-base-content">{@value}</p>
       <p :if={@detail} class="mt-1 text-xs text-subtle">{@detail}</p>
     </div>
@@ -40,7 +40,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <p class="truncate font-semibold text-base-content">
             {@credential.name || @credential.slug}
           </p>
-          <p class="truncate font-mono text-[11px] text-base-content/45">{@credential.slug}</p>
+          <p class="truncate font-mono text-[11px] text-subtle">{@credential.slug}</p>
         </div>
         <span class="rounded-full bg-base-200 px-2 py-1 text-[11px] uppercase tracking-widest text-subtle">
           {@credential.credential_type}
@@ -100,7 +100,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <span class={[
             "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
             @federation_online? && "bg-success/15 text-success",
-            !@federation_online? && "bg-base-content/10 text-base-content/50"
+            !@federation_online? && "bg-base-content/10 text-subtle"
           ]}>
             <span class={[
               "inline-block h-2 w-2 rounded-full",
@@ -221,7 +221,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           </div>
           <button type="submit" class="btn btn-primary btn-sm">Save restriction</button>
         </form>
-        <p :if={!@can_manage?} class="mt-2 text-xs text-base-content/60">
+        <p :if={!@can_manage?} class="mt-2 text-xs text-subtle">
           {if is_nil(@restrictions),
             do: "Inherits owner's access",
             else: "Allowed: " <> (@restrictions |> Map.keys() |> Enum.sort() |> Enum.join(", "))}
@@ -286,7 +286,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
     <div
       :if={is_nil(@fed_runtime)}
-      class="mt-4 rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-base-content/50"
+      class="mt-4 rounded-2xl border border-dashed border-edge px-4 py-5 text-sm text-subtle"
     >
       Runtime record not found.
     </div>

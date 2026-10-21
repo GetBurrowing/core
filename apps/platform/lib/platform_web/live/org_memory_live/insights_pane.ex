@@ -112,7 +112,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
           class="mt-2 flex flex-wrap items-center gap-2 text-sm"
           data-role="insight-filters"
         >
-          <span class="text-xs text-base-content/50">Filter:</span>
+          <span class="text-xs text-subtle">Filter:</span>
           <select
             name="type"
             class="select select-sm min-h-11 w-auto sm:min-h-0"
@@ -165,7 +165,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
               class="rounded-xl border border-edge bg-base-100 p-6 text-center"
               data-role="insights-empty-state"
             >
-              <span class="hero-light-bulb mx-auto mb-2 block size-10 text-base-content/30"></span>
+              <span class="hero-light-bulb mx-auto mb-2 block size-10 text-subtle"></span>
               <p class="text-sm font-medium text-base-content/70">
                 Nothing open. Dreaming has nothing for you to act on right now.
               </p>
@@ -190,10 +190,10 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
             class="pt-2"
             data-role="insights-already-done"
           >
-            <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/50">
+            <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content">
               Already done
             </h2>
-            <p :if={@done == []} class="text-sm text-base-content/50">
+            <p :if={@done == []} class="text-sm text-subtle">
               Nothing has been applied yet.
             </p>
             <div
@@ -206,7 +206,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
                 <span class="min-w-0 flex-1 text-sm font-medium text-base-content">
                   {InsightPreview.sentence(insight)}
                 </span>
-                <span class="font-mono text-xs text-base-content/60">
+                <span class="font-mono text-xs text-subtle">
                   {InsightPreview.type_label(insight.action_type)}
                 </span>
               </div>
@@ -273,7 +273,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
       <p class="font-medium text-base-content" data-role="insight-sentence">
         {InsightPreview.sentence(@insight)}
       </p>
-      <p class="mt-0.5 text-sm text-base-content/60" data-role="insight-evidence">
+      <p class="mt-0.5 text-sm text-subtle" data-role="insight-evidence">
         Evidence: {evidence(@insight)} · {@insight.confidence}
       </p>
       <div class="mt-1 flex items-center justify-between gap-2">
@@ -283,7 +283,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         <span
           class={[
             "font-mono text-xs",
-            if(@days_left <= 1, do: "font-semibold text-warning", else: "text-base-content/50")
+            if(@days_left <= 1, do: "font-semibold text-warning", else: "text-subtle")
           ]}
           data-role="insight-expiry"
           data-last-day={to_string(@days_left <= 1)}
@@ -343,7 +343,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
           </button>
         </div>
       <% else %>
-        <p class="mt-3 text-xs text-base-content/60" data-role="insight-no-actions">
+        <p class="mt-3 text-xs text-subtle" data-role="insight-no-actions">
           An install admin decides this one.
         </p>
       <% end %>
@@ -362,7 +362,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         >
           Why is this wrong?
         </label>
-        <p class="text-xs text-base-content/60">
+        <p class="text-xs text-subtle">
           Required. Your reason is kept and used to teach dreaming.
         </p>
         <textarea
@@ -400,7 +400,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         >
           Send to
         </label>
-        <p class="text-xs text-base-content/60" data-role="insight-reroute-reason">
+        <p class="text-xs text-subtle" data-role="insight-reroute-reason">
           Suggested: {InsightPreview.addressee_name(@insight, @names)} ({@insight.addressee_reason ||
             "unrouted"})
         </p>

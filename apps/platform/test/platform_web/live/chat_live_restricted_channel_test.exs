@@ -79,6 +79,13 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
         html
       )
 
+    # The name stays readable (Saru, 2026-10-21, task 01a15902 stage 4): the
+    # lock and the wording carry "restricted"; the row is subtle text, not
+    # the WCAG-exempt disabled colour.
+    [row_tag] = Regex.run(~r/<div[^>]*data-role="restricted-channel-row"[^>]*>/, restricted_row)
+    assert row_tag =~ "text-subtle"
+    refute row_tag =~ "text-disabled"
+
     refute restricted_row =~ "<a "
     refute restricted_row =~ "<button "
     refute restricted_row =~ "channel-row-unread-pill"
