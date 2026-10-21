@@ -153,9 +153,9 @@ defmodule Platform.Memory.Insights.AnswerTest do
     test "a needs_call question is refused unless a root admin acts" do
       dreaming_agent!()
       member = person!()
-      addressee = person!()
+      addressee = person!("member", external: true)
 
-      # A raw email addressee makes it needs_call even for a member (stage 2).
+      # A guest addressee makes it needs_call (Tier rule 3), however it is named.
       question =
         question!(addressee, tier: "needs_call", action: %{"addressee" => addressee.email})
 
@@ -164,9 +164,11 @@ defmodule Platform.Memory.Insights.AnswerTest do
       assert {:error, :unauthorized} = Insights.act(question.id, Scope.for_user(member))
       assert Repo.aggregate(Briefing, :count) == 0
 
-      assert {:ok, _} = Insights.act(question.id, Scope.for_user(root_admin!()))
-      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
-      assert user_id == addressee.id
+      # Control: a root admin passes the gate. The question then stops at
+      # delivery, because a guest cannot be sent the agent's DM: it is
+      # refused downstream (:no_dm), never as :unauthorized.
+      assert {:error, :no_dm} = Insights.act(question.id, Scope.for_user(root_admin!()))
+      assert Repo.aggregate(Briefing, :count) == 0
     end
 
     test "an unrouted question has nowhere to go" do

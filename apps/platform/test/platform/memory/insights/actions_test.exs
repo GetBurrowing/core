@@ -202,7 +202,7 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
       task =
         ingest!(
-          ~s(<synthesis-insight action="task" confidence="high" target="#{project.id}" addressee="#{member.email}">
+          ~s(<synthesis-insight action="task" confidence="high" target="#{project.id}" addressee="vendor-#{n()}@outside.example">
         Rotate the deploy key.
         </synthesis-insight>)
         )
