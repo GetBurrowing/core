@@ -336,138 +336,156 @@
         viewer_user_id={@user_id}
       />
 
-      <.streaming_replies
-        streaming_replies={@streaming_replies}
-        agent_slots_map={@agent_slots_map}
-        participants_map={@participants_map}
-      />
-
-      <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
-           overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
-           by task 01a0419a v3 stage 1, per design canvas revision 37).
-
-           This is a floating overlay at all viewport widths. The two
-           wrappers below are unconditional boxes — there is no breakpoint
-           and no `display: contents` state any more, and there is no
-           in-flow chip at any width. `.chat-jump-anchor` is a
-           zero-height positioned box and `.chat-jump-anchor-row` is an
-           absolutely-positioned full-width centring row sitting 8px above
-           the composer (above the typing indicator when one is showing,
-           because the anchor sits ahead of it in the flow). Zero height
-           means ZERO LAYOUT SHIFT: the composer does not move when the
-           control appears, and the message pane keeps its full height,
-           which is worth one extra visible message.
-
-           There is no bar, strip or full-width background behind it. The
-           centring row is transparent and `pointer-events: none`, so the
-           only thing that takes a tap is the control itself; the message
-           text either side of it stays clickable.
-
-           DESKTOP now gets the same overlay. The `self-start ml-5 mb-1`
-           gutter classes that positioned the old in-flow chip are GONE from
-           the button: the promoted `margin: 0` overrides them at every
-           width, so leaving them would describe a layout this file no
-           longer has. Centring is PANE-RELATIVE, not viewport-relative —
-           `.chat-jump-anchor` is an in-flow block inside the chat column,
-           so it is the row's containing block and `left: 0; right: 0` track
-           the message pane in both sidebar states.
-
-           Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
-           The old in-flow row made "nothing clipped or unreachable at 390px"
-           true by construction; an overlay gives that guarantee up as the
-           accepted cost of zero layout shift. Nothing in this template
-           proves it any more — it is asserted by the stage-5 measurements,
-           which hit-test the composer input, the send control and every
-           bottom-nav tab with the control present, at 390px and at 1440x900.
-
-           It stays in `chat_live.html.heex` rather than moving into
-           `Partials.Composer` (task 01a0312e's extraction): the desktop
-           path still depends on being a SIBLING of the scroller and the
-           composer, so pushing it inside either one is the one move that
-           could silently break it.
-
-           The `:if` is the whole visibility story: when the reader does not
-           need a way back, this node LEAVES THE DOM. Not transparent, not
-           zero-width, no aria-hidden shell and no exit animation — an exit
-           animation needs the node to outlive its own removal, which is the
-           unreachable-but-present state the acceptance criteria forbid.
-
-           WHAT THE `:if` NOW ASKS (task 01a0419a stage 4). It is no longer
-           the distance predicate alone. `MessagesHooks.jump_chip_visible?/3`
-           composes the reader's position with the unread count into five
-           bands, and the rule lives THERE, in one testable function, not
-           spelled out in this attribute — a boolean expression inline here
-           is a rule nothing can call and nothing can mutate.
-
-           The band that matters: scrolled up a little with NOTHING new, the
-           control is absent. Scrolling up to re-read three messages used to
-           raise a pill nobody asked for. Deep in history it appears
-           unprompted, because there the way back is worth offering.
-
-           The count badge sits to the RIGHT of the label so its arrival
-           grows the chip into empty space and the label never shifts. It is
-           aria-hidden because the accessible name below already says the
-           number in a sentence.
-
-           Both strings come from `MessagesHooks` (stage 4). The cap lives
-           there as a single module attribute, so the unresolved 99+ / 9+
-           question resolves in one integer rather than in this template. --%>
+      <%!-- THE DOCK (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
+           "the conversation fills the whole screen"). One wrapper around the
+           four contiguous siblings below the scroller: streaming replies, the
+           jump-to-latest anchor, the typing indicator and the composer.
+           `.chat-dock` is `display: contents` at EVERY width, so on desktop and
+           in embedded chat these four stay flex items of #chat-drop-zone
+           exactly as before (the jump anchor's sibling relationship above
+           included). Only `.chat-dock--glass` below lg becomes a box: an
+           absolute overlay at the bottom of #chat-drop-zone, so the timeline
+           runs under the glass composer and bar instead of being cropped
+           above them. The ChatDock hook writes its height to
+           `--chat-dock-h` on <html> for the timeline's end padding. --%>
       <div
-        :if={
-          MessagesHooks.jump_chip_visible?(
-            @jump_deep_in_history,
-            @jump_away_from_bottom,
-            @jump_new_message_count
-          )
-        }
-        class="chat-jump-anchor"
+        id="chat-dock"
+        phx-hook="ChatDock"
+        class={["chat-dock", !@embedded && "chat-dock--glass"]}
       >
-        <div class="chat-jump-anchor-row">
-          <button
-            type="button"
-            phx-click="jump_to_latest"
-            aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-            class="chat-jump-chip focus-visible-ring flex-shrink-0"
-          >
-            <%!-- The button is the 44px HIT AREA and paints nothing; this span
-                 is the 28px painted pill. They are two elements on purpose, so
-                 both boxes have a bounding rect and the e2e measurement can
-                 assert 28-painted-inside-44-tappable without reading a
-                 pseudo-element. Collapsing them back into one is the defect
-                 this split exists to prevent: it looks finished either way,
-                 and the only symptom is people missing the button. --%>
-            <span class="chat-jump-chip-pill">
-              <span class="min-w-0 truncate">Jump to latest</span>
-              <span
-                :if={@jump_new_message_count > 0}
-                aria-hidden="true"
-                class="chat-jump-chip-count shrink-0 whitespace-nowrap"
-              >
-                {MessagesHooks.jump_count_label(@jump_new_message_count)}
+        <.streaming_replies
+          streaming_replies={@streaming_replies}
+          agent_slots_map={@agent_slots_map}
+          participants_map={@participants_map}
+        />
+
+        <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
+             overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
+             by task 01a0419a v3 stage 1, per design canvas revision 37).
+
+             This is a floating overlay at all viewport widths. The two
+             wrappers below are unconditional boxes — there is no breakpoint
+             and no `display: contents` state any more, and there is no
+             in-flow chip at any width. `.chat-jump-anchor` is a
+             zero-height positioned box and `.chat-jump-anchor-row` is an
+             absolutely-positioned full-width centring row sitting 8px above
+             the composer (above the typing indicator when one is showing,
+             because the anchor sits ahead of it in the flow). Zero height
+             means ZERO LAYOUT SHIFT: the composer does not move when the
+             control appears, and the message pane keeps its full height,
+             which is worth one extra visible message.
+
+             There is no bar, strip or full-width background behind it. The
+             centring row is transparent and `pointer-events: none`, so the
+             only thing that takes a tap is the control itself; the message
+             text either side of it stays clickable.
+
+             DESKTOP now gets the same overlay. The `self-start ml-5 mb-1`
+             gutter classes that positioned the old in-flow chip are GONE from
+             the button: the promoted `margin: 0` overrides them at every
+             width, so leaving them would describe a layout this file no
+             longer has. Centring is PANE-RELATIVE, not viewport-relative —
+             `.chat-jump-anchor` is an in-flow block inside the chat column,
+             so it is the row's containing block and `left: 0; right: 0` track
+             the message pane in both sidebar states.
+
+             Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
+             The old in-flow row made "nothing clipped or unreachable at 390px"
+             true by construction; an overlay gives that guarantee up as the
+             accepted cost of zero layout shift. Nothing in this template
+             proves it any more — it is asserted by the stage-5 measurements,
+             which hit-test the composer input, the send control and every
+             bottom-nav tab with the control present, at 390px and at 1440x900.
+
+             It stays in `chat_live.html.heex` rather than moving into
+             `Partials.Composer` (task 01a0312e's extraction): the desktop
+             path still depends on being a SIBLING of the scroller and the
+             composer, so pushing it inside either one is the one move that
+             could silently break it.
+
+             The `:if` is the whole visibility story: when the reader does not
+             need a way back, this node LEAVES THE DOM. Not transparent, not
+             zero-width, no aria-hidden shell and no exit animation — an exit
+             animation needs the node to outlive its own removal, which is the
+             unreachable-but-present state the acceptance criteria forbid.
+
+             WHAT THE `:if` NOW ASKS (task 01a0419a stage 4). It is no longer
+             the distance predicate alone. `MessagesHooks.jump_chip_visible?/3`
+             composes the reader's position with the unread count into five
+             bands, and the rule lives THERE, in one testable function, not
+             spelled out in this attribute — a boolean expression inline here
+             is a rule nothing can call and nothing can mutate.
+
+             The band that matters: scrolled up a little with NOTHING new, the
+             control is absent. Scrolling up to re-read three messages used to
+             raise a pill nobody asked for. Deep in history it appears
+             unprompted, because there the way back is worth offering.
+
+             The count badge sits to the RIGHT of the label so its arrival
+             grows the chip into empty space and the label never shifts. It is
+             aria-hidden because the accessible name below already says the
+             number in a sentence.
+
+             Both strings come from `MessagesHooks` (stage 4). The cap lives
+             there as a single module attribute, so the unresolved 99+ / 9+
+             question resolves in one integer rather than in this template. --%>
+        <div
+          :if={
+            MessagesHooks.jump_chip_visible?(
+              @jump_deep_in_history,
+              @jump_away_from_bottom,
+              @jump_new_message_count
+            )
+          }
+          class="chat-jump-anchor"
+        >
+          <div class="chat-jump-anchor-row">
+            <button
+              type="button"
+              phx-click="jump_to_latest"
+              aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+              class="chat-jump-chip focus-visible-ring flex-shrink-0"
+            >
+              <%!-- The button is the 44px HIT AREA and paints nothing; this span
+                   is the 28px painted pill. They are two elements on purpose, so
+                   both boxes have a bounding rect and the e2e measurement can
+                   assert 28-painted-inside-44-tappable without reading a
+                   pseudo-element. Collapsing them back into one is the defect
+                   this split exists to prevent: it looks finished either way,
+                   and the only symptom is people missing the button. --%>
+              <span class="chat-jump-chip-pill">
+                <span class="min-w-0 truncate">Jump to latest</span>
+                <span
+                  :if={@jump_new_message_count > 0}
+                  aria-hidden="true"
+                  class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+                >
+                  {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          </div>
         </div>
+
+        <.typing_indicator
+          agent_typing_pids={@agent_typing_pids}
+          streaming_replies={@streaming_replies}
+          participants_map={@participants_map}
+        />
+
+        <.composer
+          active_space={@active_space}
+          compose_form={@compose_form}
+          current_participant={@current_participant}
+          uploads={@uploads}
+          mention_suggestions={@mention_suggestions}
+          mention_source={@mention_source}
+          mask_names?={@mask_names?}
+          revealed_section_ids={@revealed_section_ids}
+          sidebar_sections={@sidebar_sections}
+          limits={@large_upload_limits}
+        />
       </div>
-
-      <.typing_indicator
-        agent_typing_pids={@agent_typing_pids}
-        streaming_replies={@streaming_replies}
-        participants_map={@participants_map}
-      />
-
-      <.composer
-        active_space={@active_space}
-        compose_form={@compose_form}
-        current_participant={@current_participant}
-        uploads={@uploads}
-        mention_suggestions={@mention_suggestions}
-        mention_source={@mention_source}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        limits={@large_upload_limits}
-      />
 
       <.upload_dialog
         open={@upload_dialog_open}

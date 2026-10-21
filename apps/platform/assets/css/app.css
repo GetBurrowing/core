@@ -3134,6 +3134,194 @@ body, .font-suite {
   }
 }
 
+/* Phone composer (task 01a15f2e stage 2; Saru's canvas 01a15f2f, nodes meas
+   r3/r4, type and pal). Below lg ONLY: every desktop composer rule above is
+   untouched, and phone_composer_css_guard_test.exs snapshots them.
+
+   Geometry. The pill is 44px border-box at rest and grows only with typed
+   lines (the textarea's 200px cap is markup, rung 10's). Attach and send
+   keep 44x44 boxes; a -1px block margin lets those boxes overlap the pill's
+   1px border instead of adding 2px to its height (42px content + 2px border
+   = 44). Send's painted disc is its whole 44px box, as on desktop touch.
+   A smaller painted circle inside a 44px box (the `.chat-jump-chip` shape)
+   was built and dropped: it needs background-clip, which
+   chip_soft_contrast_test.exs refuses file-wide, or shrinking the send box
+   under the (hover: none) 44px rule, which stays. A 44px square ::after on
+   each button makes the whole square tappable, corners included, which the
+   round border box alone would not (hit testing follows border-radius).
+   The sides sit 12px in, aligned with the tab bar's left/right: 12px.
+
+   Glass. The tab bar's own declarations, so stage 4's painted fixtures cover
+   both surfaces. The background is unconditional and reaches (0,3,0) with
+   :root, later in source than the theme backgrounds ((0,2,0) light, (0,3,0)
+   dark and its prefers-color-scheme copy), so it wins without a data-theme
+   selector. The border sits behind :not(:focus-within), so it never
+   competes with the :focus-within ring rules (up to (0,4,0)): when focused
+   the ring's border colour and 2px band apply exactly as on desktop.
+
+   Send: no resting glow below lg. Its colour is rung 10's and unchanged.
+
+   Placeholder: one line with an ellipsis while empty; the channel name is
+   what truncates. */
+@media (max-width: 1023.98px) {
+  .compose-input-area {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  :root .compose-input-area .compose-pill-bar {
+    min-height: 44px;
+    padding: 0;
+    background: color-mix(
+      in srgb,
+      var(--color-base-200) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  }
+
+  .compose-input-area .compose-pill-bar:not(:focus-within) {
+    border: 1px solid var(--color-base-300);
+  }
+
+  .compose-input-area .compose-pill-attach,
+  .compose-input-area .compose-pill-send {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    margin-block: -1px;
+  }
+
+  .compose-input-area .compose-pill-attach::after,
+  .compose-input-area .compose-pill-send::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  /* No resting glow. (0,2,0), so the shared :hover rule (rung 10's) is left
+     as it is. */
+  .compose-input-area .compose-pill-send {
+    box-shadow: none;
+  }
+
+  .compose-input-area .compose-pill-bar textarea:placeholder-shown,
+  .compose-input-area .compose-pill-bar textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Opaque fallback, as the tab bar's: no translucency, no blur. */
+  @media (prefers-reduced-transparency: reduce) {
+    :root .compose-input-area .compose-pill-bar {
+      --glass-alpha: 1;
+      --glass-blur: 0px;
+      background: var(--color-base-200);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
+/* The chat dock (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
+   "the conversation fills the whole screen"). #chat-dock wraps the four
+   contiguous siblings below the timeline: streaming replies, the
+   jump-to-latest anchor, the typing indicator and the composer.
+
+   At EVERY width the wrapper is `display: contents`, so it generates no box
+   and its four children stay flex items of #chat-drop-zone exactly as they
+   were: desktop (lg and up) and embedded chat (meetings) lay out as before.
+
+   Below lg, on a routed (non-embedded) mount, `.chat-dock--glass` turns it
+   into an absolute overlay at the bottom of #chat-drop-zone. The timeline
+   (#chat-message-scroller, flex-1) then runs to the bottom of the screen,
+   under the glass composer and the glass tab bar, and pads its END by
+   --phone-chrome-bottom: the dock's measured height (--chat-dock-h, written
+   on <html> by hooks/chat_dock.js) plus 8px, so the newest message ends 8px
+   above the dock. The fallback covers the first paint before the hook
+   mounts: 8 gap + 44 pill + 8 over the bar's clearance.
+
+   The dock is pointer-events: none and only its children take taps, so a tap
+   in the 8px between the pill and the bar lands on the message beneath.
+   z-index 20: above the timeline, below the tab bar (30), the upload dialog
+   (50), and every sheet and modal (100 and up). */
+.chat-dock {
+  display: contents;
+}
+
+@media (max-width: 1023.98px) {
+  #chat-drop-zone:has(> .chat-dock--glass) {
+    position: relative;
+    --phone-chrome-bottom: calc(
+      var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) + 8px
+    );
+  }
+
+  .chat-dock.chat-dock--glass {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    padding-bottom: calc(8px + var(--bottom-nav-clearance));
+    pointer-events: none;
+  }
+
+  .chat-dock--glass > * {
+    pointer-events: auto;
+  }
+
+  /* The gap comes from the dock. Embedded composers keep the
+     `8px + clearance` rule further down. Its 12px top padding goes too, so
+     the dock is the pill plus the gap (planner geometry: 137 at inset 34). */
+  .chat-dock--glass .compose-input-area {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  /* The typing row paints the tab bar's glass, so its text never sits
+     straight on message text. (The streaming reply rows keep their own
+     opaque `.msg-agent` tint and 3px rail: a `border` shorthand here would
+     erase the rail, and the tint already keeps message text out from
+     behind them.) */
+  .chat-dock--glass > [data-role="typing-indicator"] {
+    background: color-mix(
+      in srgb,
+      var(--color-base-200) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    border: 1px solid var(--color-base-300);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .chat-dock--glass > [data-role="typing-indicator"] {
+      --glass-alpha: 1;
+      --glass-blur: 0px;
+      background: var(--color-base-200);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* High contrast owes 7:1 for text, and its --subtle misses that on
+     base-200 (see the tab bar's --tab-ink override), so the typing row's
+     text is full base-content there, as the bar's tab ink is. */
+  [data-preset="high-contrast"] .chat-dock--glass > [data-role="typing-indicator"] {
+    color: var(--color-base-content);
+  }
+
+  /* Timeline end padding. Unlayered, so it beats `py-4` on #message-list. */
+  #chat-drop-zone:has(> .chat-dock--glass) #message-list {
+    padding-bottom: var(--phone-chrome-bottom);
+  }
+}
+
 
 /* -- Meeting Panel ------------------------------------------------- */
 
@@ -4601,20 +4789,35 @@ body, .font-suite {
    ui-ux-pro-max `bottom-nav-limit` + `tab-bar-ios` rules. Cinema Mobile
    aesthetic — alpha-modulated hairline border, easing curve from #11.
 
-   --bottom-nav-height is the bar's clearance with the safe area EXCLUDED
-   (consumers add env(safe-area-inset-bottom) themselves): 0 by default so
-   desktop layouts are unaffected; 76px below `lg:` since the bar floats
-   (64px bar + 12px gap, task 01a1557a-7a71 stage 3), and 0 again whenever the
-   bar is hidden (the three hide rules below), so FABs, toasts and side panels
-   drop with it. --bottom-nav-clearance adds the safe area, for the END
-   padding of scrollers and footers, so their last row clears the glass.
+   --bottom-nav-offset is the bar's bottom edge above the viewport bottom:
+   max(inset - 13px, 8px), so the bar sits 13px down INTO the home-indicator
+   area on a notched phone (21px at inset 34) and 8px up where there is no
+   inset (Saru's canvas 01a15f2f, task 01a15f2e stage 1).
+
+   --bottom-nav-height NO LONGER MEANS THE BAR'S HEIGHT below lg. It means
+   "the bar's top edge minus the safe-area inset":
+   offset + 64px - env(safe-area-inset-bottom), so that
+   env(safe-area-inset-bottom) + var(--bottom-nav-height) lands exactly on
+   the bar's top edge at every inset (85px at inset 34, 72px at inset 0).
+   The name is kept, not renamed, because about 40 inline call sites (FABs,
+   toasts, panels, sheets, meeting surfaces) write that sum and follow the
+   lowered bar with no edit. It is 0 by default so desktop layouts are
+   unaffected, and 0 again whenever the bar is hidden (the three hide rules
+   below), so those call sites drop to the safe area with it.
+   --bottom-nav-clearance is that same sum, the bar's top edge, for elements
+   that must end AT the bar (the More sheet's panel).
+   --phone-chrome-bottom is the END padding of scrollers and footers: the
+   bar's top edge plus 8px of breathing room, so a last row ends 8px above
+   the glass (`.clears-tab-bar` below).
    --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
    stack on top of it (the in-call mini bar); 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
   --bottom-nav-gap: 0px;
+  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 8px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
   /* Persistent meeting bar height. Set inline on the shell root to 3rem
      when `@meeting_active` is true (see shell.html.heex). The :root
      default of 0px keeps any `calc(... + var(--meeting-bar-height))`
@@ -4627,7 +4830,7 @@ body, .font-suite {
    guest `meet.` surface, auth pages) reserves nothing. */
 @media (max-width: 1023.98px) {
   :root:has([data-bottom-rail]) {
-    --bottom-nav-height: 76px;
+    --bottom-nav-height: calc(var(--bottom-nav-offset) + 64px - env(safe-area-inset-bottom, 0px));
     --bottom-nav-gap: 12px;
   }
 }
@@ -4678,16 +4881,19 @@ body, .font-suite {
      touching its own --subtle; see the override below. */
   --tab-ink: var(--color-subtle);
   /* Floating geometry (task 01a1557a-7a71 stage 3; Saru's rule 7, masters
-     .tabbar): fixed, 12px from the sides, 12px above the safe area, 64px
-     tall (--tab-h 64 x density 1), radius the masters' --r-xl
-     (round(radius x 1.57)) from --radius-box. Content scrolls UNDER the
-     glass; scrollers pad their end with --bottom-nav-clearance. z-index 30
+     .tabbar; lowered in task 01a15f2e stage 1, Saru's canvas 01a15f2f):
+     fixed, 12px from the sides, its bottom edge --bottom-nav-offset above
+     the viewport bottom (21px at inset 34, 8px at inset 0), 64px tall
+     (--tab-h 64 x density 1), radius the masters' --r-xl
+     (round(radius x 1.57)) from --radius-box. No shadow: the glass and its
+     1px base-300 border are the only separation. Content scrolls UNDER the
+     glass; scrollers pad their end with --phone-chrome-bottom. z-index 30
      keeps every modal and sheet above it; the More sheet alone goes UNDER it
      (rule below). */
   position: fixed;
   left: 12px;
   right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  bottom: var(--bottom-nav-offset);
   height: 64px;
   border-radius: round(calc(var(--radius-box) * 1.57), 1px);
   overflow: hidden;
@@ -4702,7 +4908,6 @@ body, .font-suite {
   border: 1px solid var(--color-base-300);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
-  box-shadow: var(--shadow-dropdown);
   /* Hide and return: a 150ms slide plus fade. Visibility flips at the END of
      the hide (out of the tab order and the a11y tree once gone) and at the
      START of the return. */
@@ -4715,7 +4920,7 @@ body, .font-suite {
 :root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
 :root:has([data-fullscreen-viewer]) .bottom-nav,
 :root:has([data-in-call]) .bottom-nav {
-  transform: translateY(calc(100% + 12px + env(safe-area-inset-bottom, 0px)));
+  transform: translateY(calc(100% + var(--bottom-nav-offset)));
   opacity: 0;
   visibility: hidden;
   transition:
@@ -4747,26 +4952,26 @@ body, .font-suite {
   transition-duration: 200ms;
 }
 
-/* Scroll-end clearance below lg (task 01a1557a-7a71 stage 3). Content
-   scrolls UNDER the glass, so a scroller's or footer's END pads by the bar
-   (--bottom-nav-clearance: bar + gap + safe area) and its last row ends
-   above the bar's top edge. Applied per scroller, never to <main>, which
+/* Scroll-end clearance below lg (task 01a1557a-7a71 stage 3; task 01a15f2e
+   stage 1). Content scrolls UNDER the glass, so a scroller's or footer's END
+   pads by --phone-chrome-bottom (the bar's top edge plus 8px) and its last
+   row ends 8px above the bar. Applied per scroller, never to <main>, which
    would put nothing but the page ground behind the glass. Unlayered, so it
-   beats the scroller's own Tailwind padding utilities (p-4, md:p-6); the
-   1rem keeps the breathing room those gave.
+   beats the scroller's own Tailwind padding utilities (p-4, md:p-6).
      .compose-input-area: the chat composer, masters
        `.compose{padding-bottom:calc(88px + env(safe-area-inset-bottom))}`
-       (12px + 76px clearance). With the composer focused the bar hides and
+       (12px + the bar's top edge; 8px since task 01a15f2e stage 2, Saru's
+       gap). With the composer focused the bar hides and
        the clearance drops to the safe area, so it sits on the keyboard.
      .clears-tab-bar: the scrollers and footers the measured inventory
        found under the bar (the stage 3 evidence lists them). */
 @media (max-width: 1023.98px) {
   .compose-input-area {
-    padding-bottom: calc(12px + var(--bottom-nav-clearance));
+    padding-bottom: calc(8px + var(--bottom-nav-clearance));
   }
 
   .clears-tab-bar {
-    padding-bottom: calc(1rem + var(--bottom-nav-clearance));
+    padding-bottom: var(--phone-chrome-bottom);
   }
 }
 

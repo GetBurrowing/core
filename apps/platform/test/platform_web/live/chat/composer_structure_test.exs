@@ -129,9 +129,14 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
 
       {:ok, _view, html} = live(conn, ~p"/chat/#{space.slug}")
 
-      # The composer region is a flex sibling of the scroller, not nested
-      # inside a wrapper of its own.
-      assert count(html, "#chat-drop-zone > div.compose-input-area") == 1
+      # The composer region is a flex sibling of the scroller. Since task
+      # 01a15f2e stage 3 its one wrapper is #chat-dock, which is
+      # `display: contents` at every width (no box, so the composer stays a
+      # flex item of #chat-drop-zone) and becomes the glass overlay only below
+      # lg on a routed mount. That CSS is pinned in
+      # test/platform/design/phone_chrome_clearance_guard_test.exs; any OTHER
+      # wrapper still turns this selector to 0.
+      assert count(html, "#chat-drop-zone > #chat-dock.chat-dock > div.compose-input-area") == 1
 
       # #message-list is a direct child of the scroller — the infinite-scroll
       # sentinels are its siblings inside the same scroll viewport.
@@ -185,8 +190,9 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       # restore the forms by accident.
       assert count(html, "form#compose-form") == 0
       assert count(html, "form#upload-send-form") == 0
-      # The compose-input-area shell itself stays (it is unconditional).
-      assert count(html, "#chat-drop-zone > div.compose-input-area") == 1
+      # The compose-input-area shell itself stays (it is unconditional), as
+      # the dock's child (see the live-space test above).
+      assert count(html, "#chat-drop-zone > #chat-dock.chat-dock > div.compose-input-area") == 1
     end
 
     test "a live space renders the composer and no banner", %{conn: conn} do

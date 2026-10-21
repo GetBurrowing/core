@@ -11,6 +11,7 @@ import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
+import ChatDock from "./chat_dock"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
@@ -81,6 +82,7 @@ export default {
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,
+  ChatDock,
   ChatScrollToMessage,
   MessageContextPopover,
   CodeBlock,

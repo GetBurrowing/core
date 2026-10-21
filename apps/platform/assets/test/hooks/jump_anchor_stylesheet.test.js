@@ -235,12 +235,33 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     // token rule is keyed on the bar's presence, and the two consumers that
     // pad a scroll END by it sit at the same breakpoint. Still bottom-nav
     // only, and still no `.chat-jump` selector.
+    //
+    // Task 01a15f2e stages 2 and 3 add the phone composer pill and the chat
+    // dock at the same breakpoint (Saru's canvas 01a15f2f). Still no
+    // `.chat-jump` selector: the jump chip floats over the dock unchanged.
     expect(gated.map((r) => r.selector)).toEqual([
+      ".compose-input-area",
+      ":root .compose-input-area .compose-pill-bar",
+      ".compose-input-area .compose-pill-bar:not(:focus-within)",
+      ".compose-input-area .compose-pill-attach,\n  .compose-input-area .compose-pill-send",
+      ".compose-input-area .compose-pill-attach::after,\n  .compose-input-area .compose-pill-send::after",
+      ".compose-input-area .compose-pill-send",
+      ".compose-input-area .compose-pill-bar textarea:placeholder-shown,\n  .compose-input-area .compose-pill-bar textarea::placeholder",
+      ":root .compose-input-area .compose-pill-bar",
+      "#chat-drop-zone:has(> .chat-dock--glass)",
+      ".chat-dock.chat-dock--glass",
+      ".chat-dock--glass > *",
+      ".chat-dock--glass .compose-input-area",
+      '.chat-dock--glass > [data-role="typing-indicator"]',
+      '.chat-dock--glass > [data-role="typing-indicator"]',
+      '[data-preset="high-contrast"] .chat-dock--glass > [data-role="typing-indicator"]',
+      "#chat-drop-zone:has(> .chat-dock--glass) #message-list",
       ":root:has([data-bottom-rail])",
       ".compose-input-area",
       ".clears-tab-bar",
     ]);
-    expect(gated[0].body).toContain("--bottom-nav-height");
+    const token = gated.find((r) => r.selector === ":root:has([data-bottom-rail])");
+    expect(token.body).toContain("--bottom-nav-height");
     expect(gated.every((r) => !r.selector.includes(".chat-jump"))).toBe(true);
   });
 });

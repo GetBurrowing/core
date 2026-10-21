@@ -481,6 +481,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     <%!-- Typing indicator --%>
     <div
       :if={not MapSet.equal?(@agent_typing_pids, MapSet.new()) and @streaming_replies == %{}}
+      data-role="typing-indicator"
       class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-subtle"
     >
       <span class="flex gap-0.5 items-center">

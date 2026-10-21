@@ -383,7 +383,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       assert declaration(r.body, "background") == "var(--color-base-200)"
     end
 
-    test "the bar draws blur, edge and shadow from tokens", %{rules: rules} do
+    test "the bar draws blur and edge from tokens, and no shadow", %{rules: rules} do
       body = top_level_body!(rules, ".bottom-nav")
 
       assert normalise(declaration(body, "backdrop-filter")) ==
@@ -391,7 +391,17 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
 
       # A full hairline since the bar floats (stage 3); stage 1 drew border-top.
       assert normalise(declaration(body, "border")) == "1px solid var(--color-base-300)"
-      assert declaration(body, "box-shadow") in ["var(--shadow-modal)", "var(--shadow-dropdown)"]
+
+      # Task 01a15f2e stage 1 (Saru's canvas 01a15f2f): the glass and its 1px
+      # border are the only separation. No `.bottom-nav` rule, in any at-rule,
+      # may paint a shadow under the bar.
+      shadowed =
+        for r <- rules,
+            Enum.any?(split_selectors(r.selector), &String.ends_with?(&1, ".bottom-nav")),
+            declarations(r.body, "box-shadow") != [],
+            do: {r.context, r.selector}
+
+      assert shadowed == [], "`.bottom-nav` declares a box-shadow: #{inspect(shadowed)}"
     end
 
     test "tab type: 11px, 400 at rest, 500 active, no letter-spacing", %{rules: rules} do
@@ -408,7 +418,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
   # ── geometry and hide rules (stage 3) ───────────────────────────────────
 
   describe "floating geometry and the three hide rules (task 01a1557a-7a71 stage 3)" do
-    test "the bar is fixed, 12px in from the sides and 12px above the safe area, 64px tall",
+    test "the bar is fixed, 12px in from the sides, --bottom-nav-offset from the bottom, 64px tall",
          %{rules: rules} do
       body = top_level_body!(rules, ".bottom-nav")
       assert body != ""
@@ -417,10 +427,18 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       assert declaration(body, "right") == "12px"
       assert declaration(body, "height") == "64px"
 
-      bottom = normalise(declaration(body, "bottom"))
+      # Task 01a15f2e stage 1 (Saru's canvas 01a15f2f): the bar's bottom edge
+      # is max(inset - 13px, 8px) above the viewport bottom, 21px at inset 34
+      # and 8px at inset 0, declared once in the top-level :root.
+      assert declarations(body, "bottom") == ["var(--bottom-nav-offset)"]
 
-      assert bottom =~ "env(safe-area-inset-bottom" and bottom =~ "12px",
-             "the bar's bottom must clear the safe area: #{inspect(bottom)}"
+      [offset] =
+        for r <- rules,
+            r.selector == ":root" and r.context == [],
+            v <- declarations(r.body, "--bottom-nav-offset"),
+            do: normalise(v)
+
+      assert offset == "max(env(safe-area-inset-bottom, 0px) - 13px, 8px)"
 
       tab = top_level_body!(rules, ".bottom-nav-tab")
       assert declaration(tab, "min-width") == "44px"
@@ -428,7 +446,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       assert declaration(tab, "flex") == "1"
     end
 
-    test "clearance tokens: 76px where a bar exists below lg, safe area added for scroll ends",
+    test "clearance tokens: below lg the height is the bar's top edge minus the safe area",
          %{rules: rules} do
       [mobile] =
         Enum.filter(
@@ -437,7 +455,11 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
               &1.context == ["@media (max-width: 1023.98px)"])
         )
 
-      assert declaration(mobile.body, "--bottom-nav-height") == "76px"
+      # Not the bar's height any more: offset + 64 - inset, so the ~40 inline
+      # `env(safe-area-inset-bottom) + var(--bottom-nav-height)` call sites
+      # sum to the bar's top edge at every inset (task 01a15f2e stage 1).
+      assert normalise(declaration(mobile.body, "--bottom-nav-height")) ==
+               "calc(var(--bottom-nav-offset) + 64px - env(safe-area-inset-bottom, 0px))"
 
       root =
         rules
