@@ -68,6 +68,7 @@ import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
+import ToastPause from "./toast_pause"
 import UploadButton from "./upload_button"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
@@ -141,6 +142,7 @@ export default {
   SidebarCollapse,
   TasksStatusFilter,
   ThemePicker,
+  ToastPause,
   UploadButton,
   ViewportBreakpoint,
 }

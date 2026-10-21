@@ -248,6 +248,89 @@ defmodule Platform.Tasks do
 
   def get_project(id), do: Repo.get(Project, id)
 
+  # ── Live projects (task 01a15ee1 stage 3) ───────────────────────────
+  #
+  # A LIVE project is one in the given org that is neither archived
+  # (`archived_at`) nor scheduled for deletion (`deletion_scheduled_at`).
+  # `Platform.Memory.Insights.ProjectInference` reads projects only through
+  # the four functions below, so this definition lives in one place.
+
+  @doc "The `project_id` of task `task_id`, or nil (a non-uuid is nil)."
+  @spec project_id_for_task(term()) :: binary() | nil
+  def project_id_for_task(task_id) when is_binary(task_id) do
+    if Platform.UUID.valid?(task_id),
+      do: Repo.one(from(t in Task, where: t.id == ^task_id, select: t.project_id)),
+      else: nil
+  end
+
+  def project_id_for_task(_task_id), do: nil
+
+  @doc """
+  Ids of the live projects of `org_id` (see "Live projects" above).
+  Options: `:limit`.
+  """
+  @spec live_project_ids(term(), keyword()) :: [binary()]
+  def live_project_ids(org_id, opts \\ [])
+
+  def live_project_ids(org_id, opts) when is_binary(org_id) do
+    if Platform.UUID.valid?(org_id) do
+      query = from(p in live_projects_query(org_id), select: p.id, order_by: [asc: p.id])
+
+      query =
+        case Keyword.get(opts, :limit) do
+          n when is_integer(n) and n > 0 -> from(p in query, limit: ^n)
+          _ -> query
+        end
+
+      Repo.all(query)
+    else
+      []
+    end
+  end
+
+  def live_project_ids(_org_id, _opts), do: []
+
+  @doc "True when `project_id` names a live project of `org_id`."
+  @spec live_project_in_org?(term(), term()) :: boolean()
+  def live_project_in_org?(project_id, org_id) when is_binary(project_id) and is_binary(org_id) do
+    Platform.UUID.valid?(project_id) and Platform.UUID.valid?(org_id) and
+      Repo.exists?(
+        from(p in live_projects_query(org_id), where: p.id == ^String.downcase(project_id))
+      )
+  end
+
+  def live_project_in_org?(_project_id, _org_id), do: false
+
+  @doc """
+  The id of the live project of `org_id` whose slug matches `slug`
+  case-insensitively (surrounding blanks ignored), or nil.
+  """
+  @spec live_project_id_by_slug(term(), term()) :: binary() | nil
+  def live_project_id_by_slug(slug, org_id) when is_binary(slug) and is_binary(org_id) do
+    slug = slug |> String.trim() |> String.downcase()
+
+    if slug == "" or not Platform.UUID.valid?(org_id) do
+      nil
+    else
+      Repo.one(
+        from(p in live_projects_query(org_id),
+          where: fragment("lower(?)", p.slug) == ^slug,
+          select: p.id,
+          order_by: [asc: p.id],
+          limit: 1
+        )
+      )
+    end
+  end
+
+  def live_project_id_by_slug(_slug, _org_id), do: nil
+
+  defp live_projects_query(org_id) do
+    from(p in Project,
+      where: p.org_id == ^org_id and is_nil(p.archived_at) and is_nil(p.deletion_scheduled_at)
+    )
+  end
+
   def get_project_by_slug(slug) do
     Repo.get_by(Project, slug: slug)
   end

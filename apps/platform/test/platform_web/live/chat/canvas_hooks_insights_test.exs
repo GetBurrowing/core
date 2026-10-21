@@ -18,6 +18,11 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
         refuses after a later edit" goes red;
     (c) drop the backlog-status check in `Actions.delete_filed_task/3`:
         "Delete task refuses once the task has left backlog" goes red.
+  Task 01a15ee1 stage 1 moved delivery to the Inbox: the Disseminator no
+  longer creates or re-renders canvases. The canvas here is a HISTORICAL one
+  built by `legacy_briefing_canvas!/3`, and the test "a settled item stays
+  settled when the day's canvas is re-rendered" was removed with the
+  re-render it covered.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -51,6 +56,7 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
   defmodule PushRecorder do
     @moduledoc false
     def fan_out_to_humans(_participant_ids, _payload, _opts), do: :ok
+    def fan_out_to_user(_user_id, _payload), do: :ok
   end
 
   setup do
@@ -69,7 +75,9 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
         evidence: "journal:org/journal/2026-10-17.md#L4"
       )
 
-    assert {:ok, %{users: 1, items: 2}} = Disseminator.run(notifications_module: PushRecorder)
+    # Task 01a15ee1 stage 1: the Disseminator no longer creates canvases, so
+    # the historical canvas these hooks still act on is built by the fixture.
+    %Briefing{} = legacy_briefing_canvas!(person, [line, question])
     briefing = Repo.one!(Briefing)
     canvas = Chat.get_canvas(briefing.canvas_id)
 
@@ -273,33 +281,6 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
              CanvasDocument.get_node(document, "note-" <> k)
   end
 
-  test "a settled item stays settled when the day's canvas is re-rendered", ctx do
-    view = mount!(ctx.person, ctx.briefing.space_id)
-    click(view, ctx.canvas, "insight_ok:" <> key(ctx.bline))
-
-    # A new item the same day re-renders the whole canvas.
-    insight!(addressee: ctx.person, body: "A second line.")
-    assert {:ok, %{items: 1}} = Disseminator.run(notifications_module: PushRecorder)
-
-    document = live_doc(ctx.canvas)
-    refute CanvasDocument.get_node(document, "done-actions-" <> key(ctx.bline))
-    assert CanvasDocument.get_node(document, "note-" <> key(ctx.bline))
-    assert CanvasDocument.get_node(document, "insight_answer:" <> key(ctx.question))
-
-    # Stage 6: the Flag-only row a Looks-right line keeps survives the
-    # re-render, and still opens the flag form.
-    assert %{"type" => "action_row"} =
-             CanvasDocument.get_node(document, "flag-actions-" <> key(ctx.bline))
-
-    click(view, ctx.canvas, "insight_flag:" <> key(ctx.bline))
-
-    assert %{"type" => "form"} =
-             CanvasDocument.get_node(
-               live_doc(ctx.canvas),
-               "insight_flag_reason:" <> key(ctx.bline)
-             )
-  end
-
   # Stage 6, the behavioural gate's order: Looks right means "confirmed for
   # now", not final, so the line can still be flagged afterwards.
   test "Looks right, then Flag: a confirmed line can still be flagged with a reason", ctx do
@@ -419,6 +400,9 @@ defmodule PlatformWeb.Chat.CanvasHooksInsightsTest do
 
       assert edit.addressee_user_id == ctx.person.id
       assert {:ok, %{items: 2}} = Disseminator.run(notifications_module: PushRecorder)
+      # The run merged both into the day's row; re-render the historical
+      # canvas with them, as a same-day re-delivery used to.
+      legacy_briefing_canvas!(ctx.person)
 
       edit = Repo.get!(Insight, edit.id)
       filed = Repo.get!(Insight, filed.id)

@@ -4,7 +4,7 @@ defmodule Platform.Memory.Insights.SettingsTest do
   Dissemination ships OFF; only a root admin may change it. Task 01a15587
   stage 1 lifted the deferral: a root admin can turn on automatic page
   edits and backlog tasks, a non-admin still cannot, and the DB CHECK that
-  refused them is gone.
+  refused them is gone. Task 01a15ee1 stage 2: `file_tasks` ships ON.
   """
 
   use Platform.DataCase, async: false
@@ -17,7 +17,7 @@ defmodule Platform.Memory.Insights.SettingsTest do
   alias Platform.Memory.Insights.Settings
   alias Platform.Repo
 
-  test "dissemination is off on a fresh install" do
+  test "dissemination is off on a fresh install, and tasks file by default" do
     assert Repo.aggregate(Settings, :count) == 1
 
     assert %Settings{
@@ -25,8 +25,13 @@ defmodule Platform.Memory.Insights.SettingsTest do
              deliver_briefings: true,
              deliver_questions: true,
              apply_page_edits: false,
-             file_tasks: false
+             file_tasks: true
            } = Settings.get()
+  end
+
+  test "the schema default for file_tasks is true, apply_page_edits stays false" do
+    assert %Settings{file_tasks: true, apply_page_edits: false, dissemination_enabled: false} =
+             %Settings{}
   end
 
   test "a non-admin cannot update settings" do
@@ -52,16 +57,15 @@ defmodule Platform.Memory.Insights.SettingsTest do
              Settings.update(root_admin!(), %{apply_page_edits: false, file_tasks: false})
   end
 
-  test "a non-admin still cannot turn on apply_page_edits or file_tasks" do
+  test "a non-admin still cannot turn on apply_page_edits or turn off file_tasks" do
     member = person!("member")
     before = Settings.get()
 
-    for field <- [:apply_page_edits, :file_tasks] do
-      assert Settings.update(member, %{field => true}) == {:error, :unauthorized}
-    end
+    assert Settings.update(member, %{apply_page_edits: true}) == {:error, :unauthorized}
+    assert Settings.update(member, %{file_tasks: false}) == {:error, :unauthorized}
 
     assert Settings.get() == before
-    assert %Settings{apply_page_edits: false, file_tasks: false} = Settings.get()
+    assert %Settings{apply_page_edits: false, file_tasks: true} = Settings.get()
   end
 
   test "a raw UPDATE setting apply_page_edits = true succeeds (the CHECK is gone)" do

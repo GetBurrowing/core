@@ -1382,6 +1382,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   defp insight_error(:not_open), do: "Someone already handled this insight."
   defp insight_error(:not_found), do: "The page or project this insight names was not found."
+  defp insight_error(:no_project), do: "This insight names no project. Pick a project to file it."
   defp insight_error(:no_addressee), do: "No one to send this to. Reroute it first."
 
   defp insight_error(:opted_out),

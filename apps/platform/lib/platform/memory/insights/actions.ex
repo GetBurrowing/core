@@ -141,7 +141,35 @@ defmodule Platform.Memory.Insights.Actions do
       deleted (else `{:error, :not_retractable}`), and the acting agent's
       scope must still have `tasks.write` on it. Then
       `Platform.Tasks.soft_delete_task/1`, and the insight is `dismissed`.
+
+  ## Filing into a project (task 01a15ee1 stage 2)
+
+  A `task` insight files into `action["project_id"]` (what
+  `Platform.Memory.Insights.ProjectInference` inferred at ingest, or the
+  parser lifted from a uuid `target`), else `action["target"]`. One that
+  names no project at all is `{:error, :no_project}`, a request to pick
+  one, not `:not_found`. `act/3` takes `project_id:`, the picker's choice,
+  which overrides the inferred one and is checked the same way.
+  `apply_unattended/2` infers again before filing.
+
+  A person's filing names them in the task's metadata
+  (`"filed_by_user_id"`), so `delete_filed_task/3` also retracts a
+  person-filed task, for that person only (`acted_by`), under their own
+  `tasks.write` on it; the insight returns to `open`. `move_filed_task/4`
+  moves a filed backlog task to another project and writes the receipt
+  whose inverse is the move back.
+
+  ## The briefing's inverses (task 01a15ee1 stage 3)
+
+  `act/3` also takes `title:` for a task (the briefing's Title field, in
+  memory only). `unanswer/3` takes back an answer (append-only: a
+  `Retracted answer to: ...` entry, the insight reopened) and `restore/3`
+  reopens a Got it / Dismiss / Not useful, deleting Not useful's own
+  `rejected` verdict by id. Both are for the person who pressed the button.
+  `Platform.Memory.Insights.Briefings.handle/5` and `undo/3` call them.
   """
+
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Access
   alias Platform.Access.Scope
@@ -149,12 +177,14 @@ defmodule Platform.Memory.Insights.Actions do
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Memory.Insight
+  alias Platform.Memory.InsightVerdict
   alias Platform.Memory.Insights
   alias Platform.Memory.Insights.BriefingCard
   alias Platform.Memory.Insights.Briefings
   alias Platform.Memory.Insights.Disseminator
   alias Platform.Memory.Insights.Grounding
   alias Platform.Memory.Insights.Hunks
+  alias Platform.Memory.Insights.ProjectInference
   alias Platform.Memory.Insights.Routing
   alias Platform.Memory.Insights.Tier
   alias Platform.Memory.Insights.Unattended
@@ -180,6 +210,8 @@ defmodule Platform.Memory.Insights.Actions do
           | :no_sponsor
           | :no_historian
           | :not_retractable
+          | :no_project
+          | :project_archived
 
   @title_max 255
 
@@ -194,9 +226,33 @@ defmodule Platform.Memory.Insights.Actions do
     with {:ok, insight} <- live(insight_or_id, now),
          :ok <- open(insight),
          :ok <- tier_permits(insight, scope) do
-      execute(insight, scope, now, nil)
+      insight
+      |> with_project(Keyword.get(opts, :project_id))
+      |> with_title(Keyword.get(opts, :title))
+      |> execute(scope, now, nil)
     end
   end
+
+  # The picker's choice (task 01a15ee1 stage 2) overrides the inferred
+  # project for a task, in memory only; `execute/4` re-checks `tasks.write`
+  # on it exactly as on an inferred one.
+  defp with_project(%Insight{action_type: "task", action: action} = insight, project_id)
+       when is_binary(project_id),
+       do: %{insight | action: Map.put(action || %{}, "project_id", project_id)}
+
+  defp with_project(insight, _project_id), do: insight
+
+  # The briefing's "Title" field (task 01a15ee1 stage 3): a person filing a
+  # task may name it. In memory only, like the project; blank is ignored.
+  defp with_title(%Insight{action_type: "task", action: action} = insight, title)
+       when is_binary(title) do
+    case String.trim(title) do
+      "" -> insight
+      trimmed -> %{insight | action: Map.put(action || %{}, "title", trimmed)}
+    end
+  end
+
+  defp with_title(insight, _title), do: insight
 
   defp tier_permits(insight, scope) do
     case Tier.classify(insight) do
@@ -252,10 +308,30 @@ defmodule Platform.Memory.Insights.Actions do
   defp execute(%Insight{action_type: "task"} = insight, scope, now, acting) do
     project_id = Map.get(insight.action, "project_id") || Map.get(insight.action, "target")
 
+    # Task 01a15ee1 stage 2: an insight that names no project is a request to
+    # pick one, not a missing project. A uuid that resolves to nothing the
+    # scope may write stays `:not_found` (missing and forbidden read alike).
+    with true <- Platform.UUID.valid?(project_id) || {:error, :no_project} do
+      file_task(insight, scope, now, acting, project_id)
+    end
+  end
+
+  defp execute(%Insight{action_type: type} = insight, scope, now, nil)
+       when type in ["question", "briefing"] do
+    with :ok <- internal(scope),
+         user_id when is_binary(user_id) <- insight.addressee_user_id || {:error, :no_addressee},
+         {:ok, _added} <- Disseminator.deliver_now(user_id, [insight], now: now) do
+      {:ok, Insights.get(insight.id) || insight}
+    end
+  end
+
+  defp execute(%Insight{}, _scope, _now, _acting), do: {:error, :not_supported}
+
+  defp file_task(insight, scope, now, acting, project_id) do
     case Access.task_target(scope, {:project, project_id}, "tasks.write") do
       {:ok, {:project, project_id}} ->
         Repo.transaction(fn ->
-          with {:ok, task} <- Tasks.create_task(task_attrs(insight, project_id, acting)),
+          with {:ok, task} <- Tasks.create_task(task_attrs(insight, project_id, acting, scope)),
                {:ok, acted} <-
                  Insights.record_outcome(insight, :acted,
                    broadcast: false,
@@ -276,21 +352,10 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp execute(%Insight{action_type: type} = insight, scope, now, nil)
-       when type in ["question", "briefing"] do
-    with :ok <- internal(scope),
-         user_id when is_binary(user_id) <- insight.addressee_user_id || {:error, :no_addressee},
-         {:ok, _added} <- Disseminator.deliver_now(user_id, [insight], now: now) do
-      {:ok, Insights.get(insight.id) || insight}
-    end
-  end
-
-  defp execute(%Insight{}, _scope, _now, _acting), do: {:error, :not_supported}
-
   # A person's act files with the defaults. An unattended act files into
   # backlog with no assignee and no auto-approval, and names the insight
   # and the filing agent, so the task is a proposal a person picks up.
-  defp task_attrs(insight, project_id, acting) do
+  defp task_attrs(insight, project_id, acting, scope) do
     base = %{
       project_id: project_id,
       title: task_title(insight),
@@ -300,7 +365,12 @@ defmodule Platform.Memory.Insights.Actions do
 
     case acting do
       nil ->
-        base
+        # Task 01a15ee1 stage 2: the filer is named, so `delete_filed_task/3`
+        # can retract a person-filed task for the person who filed it.
+        Map.put(base, :metadata, %{
+          "insight_id" => insight.id,
+          "filed_by_user_id" => actor_id(scope)
+        })
 
       %Agent{} = agent ->
         Map.merge(base, %{
@@ -381,10 +451,16 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
+  # The project is inferred AGAIN here (task 01a15ee1 stage 2), so a project
+  # archived or deleted since ingest is not filed into; with none,
+  # `{:error, :no_project}` and the Disseminator asks the person to pick.
   defp unattended(%Insight{action_type: "task"} = insight, now) do
     with user_id when is_binary(user_id) <- insight.addressee_user_id || {:error, :no_sponsor},
+         {project_id, _reason} <- ProjectInference.infer(insight) || {:error, :no_project},
          {:ok, agent, scope} <- Unattended.task_actor() do
-      execute(insight, scope, now, agent)
+      insight
+      |> with_project(project_id)
+      |> execute(scope, now, agent)
     end
   end
 
@@ -553,6 +629,171 @@ defmodule Platform.Memory.Insights.Actions do
   defp of_type(%Insight{action_type: type}, type), do: :ok
   defp of_type(_insight, _type), do: {:error, :not_supported}
 
+  # ── unanswer / restore (task 01a15ee1 stage 3) ───────────────────────
+
+  @doc """
+  Take back an answer (the briefing's "Undo answer", task 01a15ee1 stage
+  3). Only for a `question` answered through `answer/4` (`done`,
+  `artefact_ref` `journal:<id>`), and only by the person who answered it
+  (`acted_by`); anyone else is `{:error, :unauthorized}`.
+
+  Journals are append-only, so the answer's entry is NOT deleted: a new org
+  journal entry `Retracted answer to: <question> (entry <id>)`, authored by
+  the clicker, is appended, and the insight is reopened (`open`, the acted
+  fields cleared). The `accepted` signal the answer recorded stays: signals
+  are append-only.
+  """
+  @spec unanswer(Insight.t() | binary(), Scope.t(), keyword()) ::
+          {:ok, Insight.t()} | {:error, error() | Ecto.Changeset.t()}
+  def unanswer(insight_or_id, %Scope{} = scope, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, insight} <- live(insight_or_id, now),
+         :ok <- of_type(insight, "question"),
+         {:ok, entry_id} <- answered_entry(insight),
+         :ok <- internal(scope),
+         author when is_binary(author) <- actor_id(scope) || unauthorized(),
+         true <- insight.acted_by == author || unauthorized() do
+      Repo.transaction(fn ->
+        with {:ok, _entry} <-
+               Journal.append(
+                 %{
+                   content: "Retracted answer to: #{inert(insight.body)} (entry #{entry_id})",
+                   date: DateTime.to_date(now),
+                   workspace_id: insight.workspace_id,
+                   org_id: insight.org_id,
+                   authored_by: author,
+                   metadata: %{
+                     "source" => "insight_answer_retracted",
+                     "insight_id" => insight.id,
+                     "entry_id" => entry_id
+                   }
+                 },
+                 namespace: "org"
+               ),
+             {:ok, reopened} <- reopen(insight) do
+          reopened
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> broadcast_ok(:reopened)
+    end
+  end
+
+  defp answered_entry(%Insight{state: "done", artefact_ref: "journal:" <> entry_id})
+       when entry_id != "",
+       do: {:ok, entry_id}
+
+  defp answered_entry(_insight), do: {:error, :not_revertible}
+
+  @doc """
+  Reopen an insight the clicker closed from the briefing with Got it,
+  Dismiss or Not useful (task 01a15ee1 stage 3, the receipt's "Restore").
+
+  Accepts a `done` `briefing` with no artefact (Got it), only for the person
+  who pressed it (`acted_by`), or a `dismissed` insight. The same gates as
+  `dismiss/3` (live, not a guest, and a `needs_call` insight needs
+  `Access.authorize_install/1`). The insight returns to `open` with the
+  acted fields cleared.
+
+  `verdict_id:` (Not useful) also deletes THAT `rejected` verdict row, by
+  id, only when it is a `rejected` verdict on this insight's block written
+  by the clicker (`{:error, :not_found}` and nothing changed otherwise), so
+  the block may be proposed again. The experiment signal the rejection
+  recorded is NOT removed: `experiment_signals` is append-only, and a
+  restore is a later event, not an erasure.
+  """
+  @spec restore(Insight.t() | binary(), Scope.t(), keyword()) ::
+          {:ok, Insight.t()} | {:error, error() | Ecto.Changeset.t()}
+  def restore(insight_or_id, %Scope{} = scope, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, insight} <- live(insight_or_id, now),
+         :ok <- internal(scope),
+         :ok <- restorable(insight, actor_id(scope)),
+         :ok <- tier_permits(insight, scope) do
+      verdict_id = Keyword.get(opts, :verdict_id)
+
+      Repo.transaction(fn ->
+        with :ok <- delete_verdict(verdict_id, insight, actor_id(scope)),
+             {:ok, reopened} <- reopen(insight) do
+          reopened
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> broadcast_ok(:reopened)
+    end
+  end
+
+  defp restorable(%Insight{state: "dismissed"}, _clicker), do: :ok
+
+  defp restorable(
+         %Insight{state: "done", action_type: "briefing", artefact_ref: nil, acted_by: by},
+         clicker
+       )
+       when is_binary(clicker) and by == clicker,
+       do: :ok
+
+  defp restorable(%Insight{state: "done", action_type: "briefing", artefact_ref: nil}, _),
+    do: unauthorized()
+
+  defp restorable(_insight, _clicker), do: {:error, :not_revertible}
+
+  defp delete_verdict(nil, _insight, _clicker), do: :ok
+
+  defp delete_verdict(verdict_id, %Insight{block_hash: hash}, clicker)
+       when is_binary(verdict_id) and is_binary(clicker) do
+    if Platform.UUID.valid?(verdict_id) do
+      {count, _} =
+        Repo.delete_all(
+          from(v in InsightVerdict,
+            where:
+              v.id == ^verdict_id and v.kind == "rejected" and v.block_hash == ^hash and
+                v.actor_id == ^clicker
+          )
+        )
+
+      if count == 1, do: :ok, else: not_found()
+    else
+      not_found()
+    end
+  end
+
+  defp delete_verdict(_verdict_id, _insight, _clicker), do: not_found()
+
+  defp reopen(insight) do
+    insight
+    |> Insight.outcome_changeset(%{
+      state: "open",
+      acted_by: nil,
+      acted_at: nil,
+      artefact_ref: nil,
+      pre_image: nil
+    })
+    |> Repo.update()
+  end
+
+  @doc """
+  The id of the newest `rejected` verdict `actor_id` wrote on `insight`'s
+  block, or nil: what the briefing's Not useful keeps in its receipt so
+  Restore can delete exactly that row.
+  """
+  @spec latest_rejection_id(Insight.t(), binary() | nil) :: binary() | nil
+  def latest_rejection_id(%Insight{block_hash: hash}, actor_id) when is_binary(actor_id) do
+    Repo.one(
+      from(v in InsightVerdict,
+        where: v.block_hash == ^hash and v.kind == "rejected" and v.actor_id == ^actor_id,
+        order_by: [desc: v.inserted_at, desc: v.id],
+        select: v.id,
+        limit: 1
+      )
+    )
+  end
+
+  def latest_rejection_id(_insight, _actor_id), do: nil
+
   # ── revert ───────────────────────────────────────────────────────────
 
   @doc "Write an acted page_edit's pre-image back. See the moduledoc."
@@ -637,8 +878,10 @@ defmodule Platform.Memory.Insights.Actions do
   # ── delete_filed_task (task 01a15587 stage 4) ────────────────────────
 
   @doc """
-  Soft-delete the backlog task an unattended `task` insight filed, for the
-  recipient of the briefing that lists it, as the agent that filed it. See
+  Soft-delete the backlog task a `task` insight filed. An unattended filing
+  is deleted for the recipient of the briefing that lists it, as the agent
+  that filed it; a person's filing (task 01a15ee1 stage 2) for the person
+  who filed it (`acted_by`), under their own `tasks.write` on the task. See
   "Undo from the briefing" in the moduledoc.
   """
   @spec delete_filed_task(Insight.t() | binary(), Scope.t(), keyword()) ::
@@ -647,9 +890,8 @@ defmodule Platform.Memory.Insights.Actions do
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
     with {:ok, insight} <- live(insight_or_id, now),
-         {:ok, agent_id, task_id} <- filed_by_agent(insight),
-         true <- recipient?(insight, scope) || unauthorized(),
-         {:ok, _agent, acting} <- task_undo_actor(agent_id),
+         {:ok, filer, task_id} <- filed_by(insight),
+         {:ok, acting} <- filed_task_writer(insight, filer, scope),
          {:ok, _typed} <- task_writable(acting, task_id),
          %Tasks.Task{} = task <- Tasks.get_task_record(task_id) || not_found(),
          :ok <- retractable(task, insight) do
@@ -665,20 +907,40 @@ defmodule Platform.Memory.Insights.Actions do
     end
   end
 
-  defp filed_by_agent(
-         %Insight{
-           state: "done",
-           pre_image: %{"unattended" => true, "acting_agent_id" => agent_id}
-         } =
-           insight
-       ) do
-    case BriefingCard.filed_task_id(insight) do
-      task_id when is_binary(task_id) -> {:ok, agent_id, task_id}
-      nil -> {:error, :not_retractable}
+  # Who filed the task an acted `task` insight names: `{:agent, id}` for an
+  # unattended act, `{:person, user_id}` for a person's.
+  defp filed_by(%Insight{state: "done", action_type: "task"} = insight) do
+    filer =
+      case insight.pre_image do
+        %{"unattended" => true, "acting_agent_id" => agent_id} -> {:agent, agent_id}
+        _ when is_binary(insight.acted_by) -> {:person, insight.acted_by}
+        _ -> nil
+      end
+
+    case {filer, BriefingCard.filed_task_id(insight)} do
+      {nil, _} -> {:error, :not_retractable}
+      {_, nil} -> {:error, :not_retractable}
+      {filer, task_id} -> {:ok, filer, task_id}
     end
   end
 
-  defp filed_by_agent(_insight), do: {:error, :not_retractable}
+  defp filed_by(_insight), do: {:error, :not_retractable}
+
+  # Whose authority a retraction or a move of the filed task runs under: the
+  # filing agent's for the recipient of an unattended act, the clicker's own
+  # for the person who filed it. Anyone else is unauthorized.
+  defp filed_task_writer(insight, {:agent, agent_id}, scope) do
+    with true <- recipient?(insight, scope) || unauthorized(),
+         {:ok, _agent, acting} <- task_undo_actor(agent_id) do
+      {:ok, acting}
+    end
+  end
+
+  defp filed_task_writer(_insight, {:person, user_id}, %Scope{actor: %User{id: user_id}} = scope) do
+    if Scope.guest?(scope), do: unauthorized(), else: {:ok, scope}
+  end
+
+  defp filed_task_writer(_insight, {:person, _user_id}, _scope), do: unauthorized()
 
   defp task_undo_actor(agent_id) do
     case Unattended.undo_task_actor(agent_id) do
@@ -700,6 +962,97 @@ defmodule Platform.Memory.Insights.Actions do
          is_map(task.metadata) and task.metadata["insight_id"] == insight_id,
        do: :ok,
        else: {:error, :not_retractable}
+  end
+
+  # ── move_filed_task (task 01a15ee1 stage 2) ─────────────────────────
+
+  @doc """
+  Move the backlog task a `task` insight filed into project `project_id`:
+  the correction on a filing receipt ("Move to another project"). The same
+  who-may as `delete_filed_task/3`: the recipient of an unattended filing,
+  as the agent that filed it (`Unattended.undo_task_actor/1`), or the person
+  who filed it, as themselves. That identity's scope needs `tasks.write` on
+  BOTH the task and the new project.
+
+  Only while the task is `backlog`, not deleted and carries this insight's
+  id (`{:error, :not_retractable}` otherwise); a project that is archived is
+  `{:error, :project_archived}`, and moving to the project the task is
+  already in is `{:error, :invalid}`. The task is changed through
+  `Platform.Tasks.update_task/3`, and every briefing of the clicker's that
+  lists the insight gets a `receipts` entry: verb `move`, `ref`
+  `project:<new id>`, and `undo` `%{"verb" => "move", "project_id" => <old
+  id>}`, the move back (which is this function again).
+  """
+  @spec move_filed_task(Insight.t() | binary(), Scope.t(), binary(), keyword()) ::
+          {:ok, Tasks.Task.t()} | {:error, error() | atom() | Ecto.Changeset.t()}
+  def move_filed_task(insight_or_id, %Scope{} = scope, project_id, opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    with {:ok, insight} <- live(insight_or_id, now),
+         {:ok, filer, task_id} <- filed_by(insight),
+         {:ok, acting} <- filed_task_writer(insight, filer, scope),
+         {:ok, _typed} <- task_writable(acting, task_id),
+         %Tasks.Task{} = task <- Tasks.get_task_record(task_id) || not_found(),
+         :ok <- retractable(task, insight),
+         true <- Platform.UUID.valid?(project_id) || {:error, :invalid},
+         {:ok, {:project, project_id}} <- project_writable(acting, project_id),
+         true <- project_id != task.project_id || {:error, :invalid},
+         :ok <- Platform.Tenancy.Lifecycle.ensure_project_writable(project_id) do
+      from_project = task.project_id
+
+      Repo.transaction(fn ->
+        with {:ok, moved} <-
+               Tasks.update_task(task, %{project_id: project_id}, access_scope: acting),
+             :ok <- move_receipts(insight, scope, task, from_project, project_id, now) do
+          moved
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, moved} ->
+          Insights.broadcast(:task_moved, insight)
+          {:ok, moved}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp project_writable(scope, project_id) do
+    case Access.task_target(scope, {:project, project_id}, "tasks.write") do
+      {:ok, typed} -> {:ok, typed}
+      :not_found -> not_found()
+    end
+  end
+
+  defp move_receipts(insight, scope, task, from_project, to_project, now) do
+    by = actor_id(scope)
+    key = BriefingCard.node_key(insight.id)
+
+    receipt = %{
+      "verb" => "move",
+      "at" => DateTime.to_iso8601(now),
+      "by" => by,
+      "ref" => "project:" <> to_project,
+      "task_id" => task.id,
+      "undo" => %{"verb" => "move", "project_id" => from_project}
+    }
+
+    insight.id
+    |> Briefings.containing()
+    |> Enum.filter(&(&1.user_id == by))
+    |> Enum.reduce_while(:ok, fn briefing, :ok ->
+      receipts = Map.put(briefing.receipts || %{}, key, receipt)
+
+      case briefing
+           |> Platform.Memory.Briefing.changeset(%{receipts: receipts})
+           |> Repo.update() do
+        {:ok, _} -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp pre_image(%Insight{

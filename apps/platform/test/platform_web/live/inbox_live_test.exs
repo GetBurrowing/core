@@ -1664,4 +1664,402 @@ defmodule PlatformWeb.InboxLiveTest do
       refute has_element?(lv, ~s([data-role="notification-state"] button))
     end
   end
+
+  # Records `fan_out_to_user/3` as `{:notif, user_id, payload}`, injected via
+  # `:notifications_module` the way `Platform.InboxPushTest` observes push
+  # (the real `fan_out_to_user/3` short-circuits in :test env).
+  defmodule RelistPushRecorder do
+    @moduledoc false
+    def install(pid), do: :persistent_term.put({__MODULE__, :owner}, pid)
+
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      case :persistent_term.get({__MODULE__, :owner}, nil) do
+        nil -> :ok
+        owner -> send(owner, {:notif, user_id, payload})
+      end
+
+      :ok
+    end
+  end
+
+  # ── The daily briefing (task 01a15ee1 stage 4) ─────────────────────────
+
+  describe "the daily briefing row, chips and detail pane" do
+    alias Platform.Memory.Briefing
+    alias Platform.Memory.Insights.BriefingCard
+    alias Platform.Memory.Insights.Briefings
+    alias PlatformWeb.Components.BriefingRow
+
+    # The America/Chicago date the disseminator writes `digest_date` in, which
+    # is also the row's fallback "today" when no viewer zone is connected.
+    defp briefing_today, do: BriefingRow.today(nil)
+
+    # A delivered briefing: the `memory_briefings` row plus its ONE Inbox row,
+    # made through the same `Inbox.upsert_briefing_item/2` the disseminator
+    # calls. `questions` need a call; `fyis` are reversible briefing lines.
+    defp briefing!(user, opts) do
+      questions =
+        for _ <- 1..Keyword.get(opts, :questions, 0)//1,
+            do: Platform.InsightFixtures.insight!(addressee: user, action_type: "question")
+
+      fyis =
+        for _ <- 1..Keyword.get(opts, :fyis, 0)//1,
+            do: Platform.InsightFixtures.insight!(addressee: user)
+
+      insights = questions ++ fyis
+
+      briefing =
+        Repo.insert!(%Briefing{
+          user_id: user.id,
+          digest_date: Keyword.get(opts, :date, briefing_today()),
+          items: Map.new(insights, &{BriefingCard.node_key(&1.id), &1.id})
+        })
+
+      {:ok, item, :created} =
+        Inbox.upsert_briefing_item(briefing, %{
+          total: length(insights),
+          calls: length(questions)
+        })
+
+      %{briefing: briefing, item: item, questions: questions, fyis: fyis}
+    end
+
+    defp row_text(lv, role),
+      do:
+        lv
+        |> element(~s([data-role="inbox-briefing-row"] [data-role="#{role}"]))
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text()
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+
+    test "the row's receipt line for 0, 1 and 3 calls", %{conn: conn} do
+      for {questions, fyis, line, pill} <- [
+            {0, 2, "2 items · FYI only", nil},
+            {1, 1, "2 items · 1 needs your call", "1 needs your call"},
+            {3, 2, "5 items · 3 need your call", "3 need your call"}
+          ] do
+        user = Platform.InsightFixtures.person!()
+        briefing!(user, questions: questions, fyis: fyis)
+
+        {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+        assert row_text(lv, "inbox-briefing-title") == "Today's briefing"
+        assert row_text(lv, "inbox-briefing-kind") == "Briefing"
+        assert row_text(lv, "inbox-briefing-summary") == line
+
+        if pill do
+          assert row_text(lv, "inbox-briefing-calls") == pill
+        else
+          refute has_element?(lv, ~s([data-role="inbox-briefing-calls"]))
+        end
+
+        # Unread until opened; and it is not filed under a section.
+        assert has_element?(lv, ~s([data-role="inbox-briefing-unread-dot"]))
+        refute has_element?(lv, ~s([data-role="inbox-item"][data-item-kind="briefing"]))
+      end
+    end
+
+    test "an earlier day's row is titled with its date", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      date = Date.add(briefing_today(), -1)
+      briefing!(user, fyis: 1, date: date)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert row_text(lv, "inbox-briefing-title") ==
+               "Briefing · " <> Calendar.strftime(date, "%a, %b %-d")
+    end
+
+    test "the receipt line follows the briefing live", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{briefing: briefing, questions: [q]} = briefing!(user, questions: 1, fyis: 1)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert row_text(lv, "inbox-briefing-summary") == "2 items · 1 needs your call"
+
+      scope = Platform.Access.Scope.for_user(Platform.Accounts.get_user(user.id))
+
+      assert {:ok, _} =
+               Briefings.handle(briefing, BriefingCard.node_key(q.id), "dismiss", scope, %{})
+
+      # handle/5 broadcasts {:inbox_changed, user_id}; the LV re-derives.
+      assert row_text(lv, "inbox-briefing-summary") == "2 items · FYI only"
+    end
+
+    # Task 01a15ee1 stage 6: the row stays listed through the day once
+    # everything is handled ("All done · nothing waiting"), and an undo that
+    # reopens an item finds it there with the open count.
+    defp handle_all!(user, briefing, [q], [fyi]) do
+      scope = Platform.Access.Scope.for_user(Platform.Accounts.get_user(user.id))
+      q_key = BriefingCard.node_key(q.id)
+
+      assert {:ok, _} =
+               Briefings.handle(briefing, q_key, "answer", scope, %{"answer" => "host-b"})
+
+      assert {:ok, _} =
+               Briefings.handle(briefing, BriefingCard.node_key(fyi.id), "got_it", scope, %{})
+
+      {scope, q_key}
+    end
+
+    test "every item handled: a fresh /inbox still lists the row, All done", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{briefing: b, item: item, questions: qs, fyis: fs} = briefing!(user, questions: 1, fyis: 1)
+      handle_all!(user, b, qs, fs)
+
+      for path <- ["/inbox", "/inbox?f=briefing"] do
+        {:ok, lv, _html} = live(auth(conn, user), path)
+
+        assert has_element?(
+                 lv,
+                 ~s([data-role="inbox-briefing-row"][data-item-id="#{item.id}"])
+               )
+
+        assert row_text(lv, "inbox-briefing-summary") == "All done · nothing waiting"
+        refute has_element?(lv, ~s([data-role="inbox-briefing-calls"]))
+      end
+
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+    end
+
+    test "undo after everything is handled: the row is listed with the open count",
+         %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{briefing: b, item: item, questions: qs, fyis: fs} = briefing!(user, questions: 1, fyis: 1)
+      {scope, q_key} = handle_all!(user, b, qs, fs)
+
+      {:ok, _lv, _html} = live(auth(conn, user), "/inbox")
+      assert {:ok, _} = Briefings.undo(b, q_key, scope)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"][data-item-id="#{item.id}"]))
+      assert row_text(lv, "inbox-briefing-summary") == "2 items · 1 needs your call"
+    end
+
+    test "undo re-lists a row that was dismissed while everything was handled",
+         %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{briefing: b, item: item, questions: qs, fyis: fs} = briefing!(user, questions: 1, fyis: 1)
+      {scope, q_key} = handle_all!(user, b, qs, fs)
+
+      # As the pre-stage-6 reconciler rule (or a hand dismissal) left it.
+      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+
+      assert {:ok, _} = Briefings.undo(b, q_key, scope)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"][data-item-id="#{item.id}"]))
+      assert row_text(lv, "inbox-briefing-summary") == "2 items · 1 needs your call"
+    end
+
+    test "an undo relist keeps the row's place in the list and its read state, and sends no push",
+         %{conn: conn} do
+      Application.put_env(:platform, :notifications_module, RelistPushRecorder)
+      RelistPushRecorder.install(self())
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :notifications_module)
+        :persistent_term.erase({RelistPushRecorder, :owner})
+      end)
+
+      user = Platform.InsightFixtures.person!()
+
+      %{briefing: old, item: old_item, questions: qs, fyis: fs} =
+        briefing!(user, questions: 1, fyis: 1, date: Date.add(briefing_today(), -1))
+
+      %{item: new_item} = briefing!(user, fyis: 1)
+
+      # Yesterday's row was delivered an hour before today's, so the list
+      # (newest `inserted_at` first) reads today, then yesterday.
+      earlier = DateTime.add(new_item.inserted_at, -3600, :second)
+
+      Repo.update_all(from(i in Item, where: i.id == ^old_item.id),
+        set: [inserted_at: earlier]
+      )
+
+      {scope, q_key} = handle_all!(user, old, qs, fs)
+      {:ok, _} = Inbox.mark_read(old_item.id, user.id)
+      {:ok, _} = Inbox.mark_dismissed(old_item.id, user.id)
+      before = Repo.get!(Item, old_item.id)
+      assert %DateTime{} = before.read_at
+
+      assert {:ok, _} = Briefings.undo(old, q_key, scope)
+
+      relisted = Repo.get!(Item, old_item.id)
+      assert relisted.dismissed_at == nil
+      # (a) its place: `inserted_at` is untouched.
+      assert relisted.inserted_at == before.inserted_at
+      # (b) still read, `read_at` unchanged.
+      assert relisted.read_at == before.read_at
+      # (c) no push.
+      refute_received {:notif, _, _}
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      ids =
+        lv
+        |> render()
+        |> Floki.parse_document!()
+        |> Floki.find(~s([data-role="inbox-briefing-row"]))
+        |> Floki.attribute("data-item-id")
+
+      assert ids == [new_item.id, old_item.id]
+
+      refute has_element?(
+               lv,
+               ~s([data-role="inbox-briefing-row"][data-item-id="#{old_item.id}"] ) <>
+                 ~s([data-role="inbox-briefing-unread-dot"])
+             )
+    end
+
+    test "the Briefing chip shows only briefing rows, in the URL as ?f=", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      briefing!(user, questions: 1)
+      mention = emit!(user, kind: "chat_mention")
+      review = emit!(user, kind: "task_plan_review", source_type: "task", url: "/tasks/x")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, row_selector(mention))
+      assert has_element?(lv, row_selector(review))
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+
+      lv
+      |> element(~s([data-role="inbox-filter-chip"][data-filter="briefing"]))
+      |> render_click()
+
+      assert_patch(lv, "/inbox?f=briefing")
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+      refute has_element?(lv, row_selector(mention))
+      refute has_element?(lv, row_selector(review))
+
+      assert has_element?(
+               lv,
+               ~s([data-role="inbox-filter-chip"][data-filter="briefing"][aria-current="true"])
+             )
+
+      # Mentions and Tasks map onto their sections; All brings everything back.
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=mentions")
+      assert has_element?(lv, row_selector(mention))
+      refute has_element?(lv, row_selector(review))
+      refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=tasks")
+      assert has_element?(lv, row_selector(review))
+      refute has_element?(lv, row_selector(mention))
+
+      lv |> element(~s([data-role="inbox-filter-chip"][data-filter="all"])) |> render_click()
+      assert_patch(lv, "/inbox")
+      assert has_element?(lv, row_selector(mention))
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+    end
+
+    test "a filter with nothing to show says so", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      emit!(user, kind: "chat_mention")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=briefing")
+      assert has_element?(lv, ~s([data-role="inbox-filter-empty"]), "Nothing here.")
+    end
+
+    test "clicking the row patches to /inbox/briefing/<date>; the row stays listed, read",
+         %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{item: item} = briefing!(user, questions: 3, fyis: 2)
+      iso = Date.to_iso8601(briefing_today())
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-role="inbox-detail-empty"]), "Select an item")
+
+      lv |> element(~s([data-role="inbox-briefing-open"])) |> render_click()
+      assert_patch(lv, "/inbox/briefing/" <> iso)
+
+      # Still listed, now read, and selected in the two-pane list.
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"][data-selected="true"]))
+      refute has_element?(lv, ~s([data-role="inbox-briefing-unread-dot"]))
+      assert %Item{read_at: %DateTime{}, dismissed_at: nil} = Repo.get!(Item, item.id)
+
+      # The detail pane holds the briefing, with the phone's back link.
+      assert has_element?(lv, ~s([data-role="inbox-briefing-detail"][data-date="#{iso}"]))
+      assert has_element?(lv, ~s([data-role="inbox-detail-back"][href="/inbox"]), "‹ Inbox")
+      refute has_element?(lv, ~s([data-role="inbox-detail-empty"]))
+
+      # A fresh visit still lists it.
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-role="inbox-briefing-row"][data-item-id="#{item.id}"]))
+    end
+
+    test "the row keeps the chip filter when it opens the detail", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      briefing!(user, fyis: 1)
+      iso = Date.to_iso8601(briefing_today())
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=briefing")
+      lv |> element(~s([data-role="inbox-briefing-open"])) |> render_click()
+      assert_patch(lv, "/inbox/briefing/#{iso}?f=briefing")
+      assert has_element?(lv, ~s([data-role="inbox-detail-back"][href="/inbox?f=briefing"]))
+    end
+
+    test "a GET of the detail route marks the row read", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{item: item} = briefing!(user, fyis: 1)
+
+      {:ok, lv, _html} =
+        live(auth(conn, user), "/inbox/briefing/" <> Date.to_iso8601(briefing_today()))
+
+      assert has_element?(lv, ~s([data-role="inbox-briefing-detail"]))
+      assert %Item{read_at: %DateTime{}, dismissed_at: nil} = Repo.get!(Item, item.id)
+    end
+
+    test "a second user never sees the row or the briefing", %{conn: conn} do
+      owner = Platform.InsightFixtures.person!()
+      %{questions: [q]} = briefing!(owner, questions: 1, fyis: 1)
+      other = Platform.InsightFixtures.person!()
+      iso = Date.to_iso8601(briefing_today())
+
+      {:ok, lv, html} = live(auth(conn, other), "/inbox")
+      refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+      refute html =~ "Today&#39;s briefing"
+
+      {:ok, lv, html} = live(auth(conn, other), "/inbox/briefing/" <> iso)
+      assert has_element?(lv, ~s([data-role="inbox-briefing-not-found"]))
+      refute has_element?(lv, ~s([data-role="inbox-briefing-detail"]))
+      refute html =~ q.body
+      refute html =~ "need your call"
+    end
+
+    test "a malformed date is not found, not a crash", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox/briefing/not-a-date")
+      assert has_element?(lv, ~s([data-role="inbox-briefing-not-found"]))
+    end
+
+    test "Clear all counts and clears the briefing row too", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{item: item} = briefing!(user, fyis: 1)
+      emit!(user, kind: "chat_mention")
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, ~s([data-role="clear-all"]), "Clear all (2)")
+
+      clear_all(lv)
+      refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+    end
+
+    test "the row's X dismisses only that row", %{conn: conn} do
+      user = Platform.InsightFixtures.person!()
+      %{item: item} = briefing!(user, fyis: 1)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      lv |> element(~s([data-role="inbox-briefing-dismiss"])) |> render_click()
+
+      refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+    end
+  end
 end

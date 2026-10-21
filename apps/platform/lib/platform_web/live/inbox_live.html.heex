@@ -1,5 +1,15 @@
-<div class="relative h-full min-h-0">
-  <div class="h-full overflow-y-auto" data-role="inbox-surface">
+<div class="relative flex h-full min-h-0">
+  <%!-- Two panes at lg and up (task 01a15ee1 stage 4): the list as a 380px
+       column, the detail beside it. Below lg one pane at a time: /inbox is
+       the list, /inbox/briefing/:date the detail with a back link. The pinned
+       chrome below is position: fixed, so this flex row does not lay it out. --%>
+  <div
+    class={[
+      "h-full min-w-0 flex-1 overflow-y-auto lg:w-95 lg:flex-none lg:border-r lg:border-edge lg:bg-base-100",
+      @live_action == :briefing && "max-lg:hidden"
+    ]}
+    data-role="inbox-surface"
+  >
     <div class="mx-auto max-w-3xl p-6">
       <header class="mb-6 flex items-start justify-between gap-4">
         <div class="min-w-0">
@@ -15,15 +25,46 @@
              on plain surface + border. Hidden entirely at zero, so an empty inbox
              offers nothing to clear. --%>
         <button
-          :if={clearable_count(@review_count, @mention_count, @meeting_count) > 0}
+          :if={
+            clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count) > 0
+          }
           type="button"
           phx-click="clear_all"
           data-role="clear-all"
           class="btn btn-ghost btn-sm focus-visible-ring shrink-0 text-error hover:bg-error/10"
         >
-          Clear all ({clearable_count(@review_count, @mention_count, @meeting_count)})
+          Clear all ({clearable_count(
+            @review_count,
+            @mention_count,
+            @meeting_count,
+            @briefing_count
+          )})
         </button>
       </header>
+
+      <%!-- Filter chips (task 01a15ee1 stage 4). The filter is in the URL as
+           ?f=, so a reload or a shared link keeps it. --%>
+      <nav aria-label="Filter the Inbox" class="-mt-2 mb-6">
+        <ul class="flex flex-wrap gap-1.5" data-role="inbox-filter-chips">
+          <li :for={{value, label} <- @filters}>
+            <.link
+              patch={"/inbox" <> filter_query(value)}
+              data-role="inbox-filter-chip"
+              data-filter={value}
+              aria-current={if(@filter == value, do: "true")}
+              class={[
+                "focus-visible-ring inline-flex min-h-8 items-center rounded-full border px-3 text-sm",
+                if(@filter == value,
+                  do: "border-transparent bg-base-300 text-base-content",
+                  else: "border-edge text-subtle lg:hover:text-base-content"
+                )
+              ]}
+            >
+              {label}
+            </.link>
+          </li>
+        </ul>
+      </nav>
 
       <%!-- Notification-permission state (task 019ffb7b stage 4). The rail bell
          this replaces was rejected on review: it collided with the Inbox tile,
@@ -54,7 +95,10 @@
          state. Sections below are each gated on their own count, so when
          every count is zero only this renders. --%>
       <.empty_state
-        :if={@review_count == 0 and @mention_count == 0 and @meeting_count == 0}
+        :if={
+          @review_count == 0 and @mention_count == 0 and @meeting_count == 0 and
+            @briefing_count == 0
+        }
         variant={:minimal}
       >
         <:body>
@@ -69,10 +113,44 @@
         </:body>
       </.empty_state>
 
+      <%!-- A filter with nothing to show, in an inbox that is not empty. --%>
+      <p
+        :if={
+          @filter != "all" and
+            clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count) > 0 and
+            filtered_count(@filter, %{
+              briefing: @briefing_count,
+              review: @review_count,
+              mentions: @mention_count,
+              meetings: @meeting_count
+            }) == 0
+        }
+        class="py-10 text-center text-sm text-subtle"
+        data-role="inbox-filter-empty"
+      >
+        Nothing here.
+      </p>
+
       <div class="space-y-8">
+        <%!-- The daily briefing (task 01a15ee1 stage 4): above the sections,
+             newest first, one row per day. --%>
+        <ul
+          :if={@briefing_count > 0 and shows?(@filter, :briefing)}
+          id="inbox-briefing-list"
+          role="list"
+          class="space-y-2"
+          data-role="inbox-briefings"
+        >
+          <.briefing_row
+            :for={row <- @briefing_rows}
+            row={row}
+            patch={(row.url || "/inbox") <> filter_query(@filter)}
+          />
+        </ul>
+
         <%!-- Awaiting your review --%>
         <section
-          :if={@review_count > 0}
+          :if={@review_count > 0 and shows?(@filter, :review)}
           aria-labelledby="inbox-section-review"
           data-role="inbox-section"
           data-section="review"
@@ -101,7 +179,7 @@
 
         <%!-- Mentions (grouped by space via per-row label + adjacency) --%>
         <section
-          :if={@mention_count > 0}
+          :if={@mention_count > 0 and shows?(@filter, :mentions)}
           aria-labelledby="inbox-section-mentions"
           data-role="inbox-section"
           data-section="mentions"
@@ -131,7 +209,7 @@
 
         <%!-- Meetings --%>
         <section
-          :if={@meeting_count > 0}
+          :if={@meeting_count > 0 and shows?(@filter, :meetings)}
           aria-labelledby="inbox-section-meetings"
           data-role="inbox-section"
           data-section="meetings"
@@ -160,6 +238,63 @@
       </div>
     </div>
   </div>
+
+  <%!-- The detail pane. At lg and up it is always there; below lg only on
+       /inbox/briefing/:date, where it is the whole screen. Stage 5 mounts the
+       briefing's own component in place of the header placeholder below. --%>
+  <section
+    class={[
+      "min-w-0 flex-1 overflow-auto bg-base-200",
+      @live_action != :briefing && "max-lg:hidden"
+    ]}
+    data-role="inbox-detail-pane"
+    aria-label="Inbox item"
+  >
+    <p
+      :if={is_nil(@briefing_detail)}
+      class="flex h-full items-center justify-center p-6 text-sm text-subtle"
+      data-role="inbox-detail-empty"
+    >
+      Select an item
+    </p>
+
+    <div :if={@briefing_detail} class="mx-auto max-w-3xl p-6">
+      <.link
+        patch={"/inbox" <> filter_query(@filter)}
+        class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
+        data-role="inbox-detail-back"
+      >
+        ‹ Inbox
+      </.link>
+
+      <div
+        :if={@briefing_detail == :not_found}
+        class="py-10 text-center text-sm text-subtle"
+        data-role="inbox-briefing-not-found"
+      >
+        There's no briefing for this day.
+      </div>
+
+      <div
+        :if={is_map(@briefing_detail)}
+        id={"inbox-briefing-detail-#{@briefing_detail.date}"}
+        data-role="inbox-briefing-detail"
+        data-date={Date.to_iso8601(@briefing_detail.date)}
+      >
+        <%!-- Stage 5: the briefing itself. Every button goes through
+             Briefings.handle/5 / undo/3 inside the component; its toast is
+             the one below. --%>
+        <.live_component
+          module={PlatformWeb.InboxLive.BriefingComponent}
+          id={"briefing-#{@briefing_detail.briefing_id}"}
+          briefing_id={@briefing_detail.briefing_id}
+          user_id={@current_user_id}
+          today={@briefing_today}
+          refresh={@briefing_refresh}
+        />
+      </div>
+    </div>
+  </section>
 
   <%!-- Pinned chrome: the bulk-selection bar. A direct sibling of the scroll
        region (NOT nested inside it, and NOT inside a conditional wrapper that
@@ -217,21 +352,31 @@
        out. Full-width inset below sm so a long title still leaves Undo room at
        375px; the bulk-clear toast's right-4 max-w-sm from sm up. Same surface,
        same live region, no error tint: opening a row is not a failure. --%>
+  <%!-- The briefing detail's toast (task 01a15ee1 stage 5) is this same
+       one-line toast, `variant: :briefing`: 5 s instead of 8 s, paused while
+       hovered or focused (the ToastPause hook pushes toast_pause /
+       toast_resume), and its Undo is `Briefings.undo/3`. A Revert or Delete
+       toast has no Undo: those have no inverse. It clears the tab bar AND
+       the home indicator on the phone. --%>
   <div
-    :if={@toast && @toast[:variant] == :single}
+    :if={@toast && @toast[:variant] in [:single, :briefing]}
+    id="inbox-toast"
+    phx-hook="ToastPause"
     data-role="inbox-toast"
-    data-variant="single"
+    data-variant={@toast[:variant]}
+    data-paused={to_string(@toast[:paused] == true)}
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm"
+    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height)+env(safe-area-inset-bottom))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm"
   >
-    <div class="flex items-center gap-3 rounded-lg border border-edge bg-base-100 pl-4 pr-2 shadow-md">
+    <div class="flex min-h-11 items-center gap-3 rounded-lg border border-edge bg-base-100 pl-4 pr-2 shadow-md">
       <p class="min-w-0 flex-1 truncate text-sm text-base-content" data-role="toast-message">
         {@toast.message}
       </p>
       <button
+        :if={@toast[:undo?] != false}
         type="button"
-        phx-click="undo_clear"
+        phx-click={if(@toast[:variant] == :briefing, do: "undo_briefing", else: "undo_clear")}
         data-role="toast-undo"
         class="focus-visible-ring min-h-11 shrink-0 whitespace-nowrap rounded px-2 text-sm font-medium text-base-content/70 hover:text-base-content"
       >
@@ -241,7 +386,7 @@
   </div>
 
   <div
-    :if={@toast && @toast[:variant] != :single}
+    :if={@toast && @toast[:variant] not in [:single, :briefing]}
     data-role="inbox-toast"
     role="status"
     aria-live="polite"

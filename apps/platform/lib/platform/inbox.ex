@@ -56,6 +56,15 @@ defmodule Platform.Inbox do
   # Equal to `Platform.Mobile`'s `@approval_kinds`.
   @action_kinds ~w(task_plan_review review_request_pending)
 
+  # Core kinds that stay listed when opened but are NOT approvals, so they are
+  # in `action_kinds/0` and never in `core_action_kinds/0` (which must equal
+  # `Platform.Mobile`'s `@approval_kinds`: Mobile cannot act on these).
+  # `briefing` (task 01a15ee1 stage 1): opening the day's briefing is reading
+  # it, not handling it. The row stays listed through the day, "All done"
+  # once every item is handled, and the reconciler clears it only once the
+  # day is past the insight TTL (`row_stale?/1`, task 01a15ee1 stage 6).
+  @listed_on_open ~w(briefing)
+
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
   # remembering to exclude it.
@@ -63,7 +72,8 @@ defmodule Platform.Inbox do
 
   @doc """
   The kinds that stay listed after they are opened: core's `task_plan_review`
-  and `review_request_pending`, then every registered extension kind declared
+  and `review_request_pending`, core's non-approval `briefing` (task
+  `01a15ee1` stage 1), then every registered extension kind declared
   with `stays_listed_on_open: true` (`Platform.Extension` `inbox_kinds/0`,
   read per call). `open_item/2` marks these read and dismisses every other
   kind. The list is an allowlist, so a new kind is acknowledged on open
@@ -72,6 +82,7 @@ defmodule Platform.Inbox do
   @spec action_kinds() :: [String.t()]
   def action_kinds do
     @action_kinds ++
+      @listed_on_open ++
       for %{kind: kind, stays_listed_on_open: true} <- Platform.Extensions.inbox_kinds(),
           do: kind
   end
@@ -180,6 +191,126 @@ defmodule Platform.Inbox do
   defp notifications_module do
     Application.get_env(:platform, :notifications_module, Platform.Notifications)
   end
+
+  @doc """
+  Write or refresh the ONE Inbox row for a delivered daily briefing
+  (`Platform.Memory.Briefing`). Task `01a15ee1-48c8-7000-a8f1-33a5586cb458`,
+  stage 1.
+
+  The row is keyed by `(briefing.user_id, "briefing", briefing.id)`, and the
+  briefing is unique per `(user_id, digest_date)`, so there is one row per
+  person per day:
+
+    * no row yet: inserted through `emit/1`, returns `{:ok, item, :created}`;
+    * a row exists: its `title` / `body` / `url` are updated and, when
+      `attrs[:new_items?]` is true, `read_at` and `dismissed_at` are cleared
+      so the row is unread and listed again. Returns
+      `{:ok, item, :updated}`. A second row is never inserted, even when the
+      first was dismissed.
+
+  `attrs`: `:title`, `:body`, `:url` (defaults built from `:digest_date` /
+  `:total` / `:calls` by `briefing_title/0`, `briefing_summary/2` and
+  `briefing_url/1`) and `:new_items?` (default true).
+
+  Serialised per briefing by a transaction-scoped advisory lock, so two
+  concurrent deliveries for one day cannot both insert. Broadcasts
+  `{:inbox_changed, user_id}` after the write commits.
+  """
+  @spec upsert_briefing_item(Platform.Memory.Briefing.t(), map()) ::
+          {:ok, Item.t(), :created | :updated} | {:error, term()}
+  def upsert_briefing_item(%Platform.Memory.Briefing{} = briefing, attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    total = Map.get(attrs, :total, map_size(briefing.items || %{}))
+    calls = Map.get(attrs, :calls, 0)
+
+    fields = %{
+      title: Map.get(attrs, :title, briefing_title()),
+      body: Map.get(attrs, :body, briefing_summary(total, calls)),
+      url: Map.get(attrs, :url, briefing_url(briefing.digest_date))
+    }
+
+    new_items? = Map.get(attrs, :new_items?, true)
+
+    result =
+      Repo.transaction(fn ->
+        Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          "inbox:briefing:" <> briefing.id
+        ])
+
+        case briefing_row(briefing) do
+          nil ->
+            attrs =
+              Map.merge(fields, %{
+                user_id: briefing.user_id,
+                kind: "briefing",
+                source_type: "briefing",
+                source_id: briefing.id
+              })
+
+            case emit(attrs) do
+              {:ok, item} -> {item, :created}
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          %Item{} = item ->
+            changes =
+              if new_items?,
+                do: Map.merge(fields, %{read_at: nil, dismissed_at: nil}),
+                else: fields
+
+            case item |> Ecto.Changeset.change(changes) |> Repo.update() do
+              {:ok, updated} -> {updated, :updated}
+              {:error, reason} -> Repo.rollback(reason)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, {item, outcome}} ->
+        broadcast_changed(item.user_id)
+        {:ok, item, outcome}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The day's row for `briefing`, dismissed or not (newest first, in case a
+  # pre-lock race ever wrote two).
+  defp briefing_row(briefing) do
+    Repo.one(
+      from(i in Item,
+        where:
+          i.user_id == ^briefing.user_id and i.source_type == "briefing" and
+            i.source_id == ^briefing.id,
+        order_by: [desc: i.inserted_at, desc: i.id],
+        limit: 1
+      )
+    )
+  end
+
+  @doc "The briefing row's title."
+  @spec briefing_title() :: String.t()
+  def briefing_title, do: "Today's briefing"
+
+  @doc """
+  The briefing row's subtitle: `"N items · K need your call"`, `"1 needs your
+  call"` when K is 1, `"N items · FYI only"` when K is 0.
+  """
+  @spec briefing_summary(non_neg_integer(), non_neg_integer()) :: String.t()
+  def briefing_summary(total, calls) do
+    items = if total == 1, do: "1 item", else: "#{total} items"
+
+    case calls do
+      0 -> items <> " · FYI only"
+      1 -> items <> " · 1 needs your call"
+      k -> items <> " · #{k} need your call"
+    end
+  end
+
+  @doc "Where the briefing row opens: `/inbox/briefing/<digest_date>`."
+  @spec briefing_url(Date.t()) :: String.t()
+  def briefing_url(%Date{} = date), do: "/inbox/briefing/" <> Date.to_iso8601(date)
 
   @doc """
   List a user's non-dismissed inbox items, newest first. Pass `opts[:kind]` to
@@ -812,6 +943,29 @@ defmodule Platform.Inbox do
   end
 
   @doc """
+  Bring a dismissed briefing row back to the list: clears `dismissed_at`
+  (only) on `briefing`'s row. A no-op when the row is live or absent.
+  Called by `Platform.Memory.Insights.Briefings` when a handle or an undo
+  leaves the briefing with an open item (task 01a15ee1 stage 6). Does not
+  broadcast: the caller's `{:inbox_changed, user_id}` follows.
+  """
+  @spec relist_briefing_item(Platform.Memory.Briefing.t()) :: :ok
+  def relist_briefing_item(%Platform.Memory.Briefing{id: id, user_id: user_id})
+      when is_binary(id) and is_binary(user_id) do
+    Item
+    |> where(
+      [i],
+      i.user_id == ^user_id and i.kind == "briefing" and i.source_type == "briefing" and
+        i.source_id == ^id and not is_nil(i.dismissed_at)
+    )
+    |> Repo.update_all(set: [dismissed_at: nil])
+
+    :ok
+  end
+
+  def relist_briefing_item(_briefing), do: :ok
+
+  @doc """
   The inverse of `dismiss_many/2`: clear `dismissed_at` for the given ids,
   returning `{:ok, restored_ids}`. Same single-write, single-broadcast shape and
   the same non-optional `user_id` scope.
@@ -889,6 +1043,13 @@ defmodule Platform.Inbox do
       no longer live. This closes the gap where a meeting ENDS without you ever
       joining: `Meetings.maybe_dismiss_meeting_inbox/2` fires at join time only,
       so nothing else would ever clear that row.
+    * `briefing` (`source_type: "briefing"`, `source_id` = the
+      `memory_briefings` id; task `01a15ee1` stages 1 and 6, ADR 0049) —
+      stale iff the briefing row exists and its `digest_date` is older than
+      the insight TTL (`Platform.Memory.Insight.default_ttl_days/0`).
+      Handling every item does NOT clear it: the row stays listed for the
+      day as "All done · nothing waiting". See
+      `Platform.Memory.Insights.Briefings.inbox_row_stale?/2`.
     * `task_sponsor_assigned` — deliberately NO clause; see `row_stale?/1`.
 
   Cost: one indexed load of the user's live rows (indexed on `user_id`), then a
@@ -934,6 +1095,10 @@ defmodule Platform.Inbox do
   defp row_stale?(%Item{kind: "meeting_starting", source_type: "meeting", source_id: meeting_id}) do
     Platform.Meetings.meeting_exists?(meeting_id) and
       not Platform.Meetings.meeting_live?(meeting_id)
+  end
+
+  defp row_stale?(%Item{kind: "briefing", source_type: "briefing", source_id: briefing_id}) do
+    Platform.Memory.Insights.Briefings.inbox_row_stale?(briefing_id)
   end
 
   # DELIBERATE DECISION — do not add a `task_sponsor_assigned` clause without

@@ -258,15 +258,17 @@ defmodule Platform.Memory.Insights.ActionsTest do
       # A project-namespace journal: the insights belong to the fenced org.
       journal = "project/#{own.id}/journal/2026-10-18.md"
 
+      # Task 01a15ee1 stage 2: inference only names a project in the
+      # insight's own org, so an org-journal insight (root org) is what
+      # names the foreign project now; a project-journal one naming it would
+      # fall through to the journal's project.
       outside =
-        ingest!(
-          ~s(<synthesis-insight action="task" confidence="high" target="#{foreign.id}">
+        ingest!(~s(<synthesis-insight action="task" confidence="high" target="#{foreign.id}">
           File the deploy-key rotation.
-          </synthesis-insight>),
-          journal
-        )
+          </synthesis-insight>))
 
-      assert outside.org_id == s
+      assert outside.org_id == acme_org_id()
+      assert outside.action["project_id"] == foreign.id
       tasks_before = Repo.aggregate(Task, :count)
       assert {:error, :not_found} = Insights.act(outside, scope(fenced))
       assert Repo.aggregate(Task, :count) == tasks_before
@@ -277,8 +279,7 @@ defmodule Platform.Memory.Insights.ActionsTest do
         ingest!(
           ~s(<synthesis-insight action="task" confidence="high" target="#{Ecto.UUID.generate()}">
           File something else.
-          </synthesis-insight>),
-          journal
+          </synthesis-insight>)
         )
 
       assert {:error, :not_found} = Insights.act(missing, scope(fenced))
@@ -415,6 +416,126 @@ defmodule Platform.Memory.Insights.ActionsTest do
 
       assert_received {:insight_broadcast, :acted, false}
       refute_received {:insight_broadcast, _event, true}
+    end
+  end
+
+  # ── task 01a15ee1 stage 2: project choice, no_project, delete, move ────
+
+  describe "filing into a project (task 01a15ee1 stage 2)" do
+    defp two_projects! do
+      {:ok, a} = Platform.Tasks.create_project(%{name: "pick-a-#{n()}", org_id: acme_org_id()})
+      {:ok, b} = Platform.Tasks.create_project(%{name: "pick-b-#{n()}", org_id: acme_org_id()})
+      {a, b}
+    end
+
+    defp task_block(attrs \\ "") do
+      ~s(<synthesis-insight action="task" confidence="high" #{attrs}>
+      Rotate the build key, ref #{n()}.
+      </synthesis-insight>)
+    end
+
+    defp briefing_for!(user, insight) do
+      Repo.insert!(%Platform.Memory.Briefing{
+        user_id: user.id,
+        digest_date: Date.utc_today(),
+        items: %{Platform.Memory.Insights.BriefingCard.node_key(insight.id) => insight.id}
+      })
+    end
+
+    test "a task naming no project is :no_project, not :not_found; the picker's choice files it",
+         %{member: member} do
+      {_a, b} = two_projects!()
+      insight = ingest!(task_block())
+      refute Map.has_key?(insight.action, "project_id")
+
+      tasks_before = Repo.aggregate(Task, :count)
+      assert {:error, :no_project} = Insights.act(insight, scope(member))
+      assert Repo.aggregate(Task, :count) == tasks_before
+      assert %Insight{state: "open"} = Repo.get!(Insight, insight.id)
+
+      # Control: the same insight, with a project picked, is filed there.
+      assert {:ok, %Insight{state: "done", artefact_ref: "task:" <> task_id}} =
+               Insights.act(insight, scope(member), project_id: b.id)
+
+      filed = Repo.get!(Task, task_id)
+      assert filed.project_id == b.id
+      assert filed.metadata == %{"insight_id" => insight.id, "filed_by_user_id" => member.id}
+    end
+
+    test "act/3 with project_id: overrides the inferred project", %{member: member} do
+      {a, b} = two_projects!()
+      insight = ingest!(task_block(~s(target="#{a.id}")))
+      assert insight.action["project_id"] == a.id
+      assert insight.action["project_reason"] == "named by dreaming"
+
+      assert {:ok, %Insight{artefact_ref: "task:" <> task_id}} =
+               Insights.act(insight, scope(member), project_id: b.id)
+
+      assert Repo.get!(Task, task_id).project_id == b.id
+    end
+
+    test "delete_filed_task/3 retracts a person-filed task for its filer only", %{
+      org: org,
+      member: member
+    } do
+      {a, _b} = two_projects!()
+      other = member!(org)
+      insight = ingest!(task_block(~s(target="#{a.id}")))
+      {:ok, acted} = Insights.act(insight, scope(member))
+      "task:" <> task_id = acted.artefact_ref
+
+      assert {:error, :unauthorized} =
+               Platform.Memory.Insights.Actions.delete_filed_task(acted, scope(other))
+
+      assert %Task{deleted_at: nil} = Repo.get!(Task, task_id)
+
+      assert {:ok, %Insight{state: "open", artefact_ref: nil}} =
+               Platform.Memory.Insights.Actions.delete_filed_task(acted, scope(member))
+
+      assert %Task{deleted_at: %DateTime{}} = Repo.get!(Task, task_id)
+    end
+
+    test "move_filed_task/4 moves a backlog task with a receipt whose inverse moves it back", %{
+      org: org,
+      member: member
+    } do
+      alias Platform.Memory.Insights.Actions
+
+      {a, b} = two_projects!()
+      other = member!(org)
+      insight = ingest!(task_block(~s(target="#{a.id}")))
+      {:ok, acted} = Insights.act(insight, scope(member))
+      "task:" <> task_id = acted.artefact_ref
+      briefing = briefing_for!(member, acted)
+      key = Platform.Memory.Insights.BriefingCard.node_key(acted.id)
+
+      assert {:error, :unauthorized} = Actions.move_filed_task(acted, scope(other), b.id)
+      assert Repo.get!(Task, task_id).project_id == a.id
+
+      assert {:ok, %Task{project_id: moved_to}} =
+               Actions.move_filed_task(acted, scope(member), b.id)
+
+      assert moved_to == b.id
+      assert Repo.get!(Task, task_id).project_id == b.id
+
+      receipt = Repo.get!(Platform.Memory.Briefing, briefing.id).receipts[key]
+      assert receipt["verb"] == "move"
+      assert receipt["ref"] == "project:" <> b.id
+      assert receipt["by"] == member.id
+      assert receipt["undo"] == %{"verb" => "move", "project_id" => a.id}
+
+      # The inverse: move back.
+      assert {:ok, _} =
+               Actions.move_filed_task(acted, scope(member), receipt["undo"]["project_id"])
+
+      assert Repo.get!(Task, task_id).project_id == a.id
+
+      # Once someone picks the task up it is no longer movable.
+      {:ok, _} =
+        Platform.Tasks.update_task(Repo.get!(Task, task_id), %{status: "planning"})
+
+      assert {:error, :not_retractable} = Actions.move_filed_task(acted, scope(member), b.id)
+      assert Repo.get!(Task, task_id).project_id == a.id
     end
   end
 end

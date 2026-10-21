@@ -233,6 +233,9 @@ defmodule PlatformWeb.Components.InboxItem do
   defp unread?(%Item{}), do: false
 
   defp needs_action?(%Item{read_at: nil}), do: false
+  # A read `briefing` row stays listed (it is in `action_kinds/0`) but asks for
+  # no review; the briefing has its own row renderer (task 01a15ee1 stage 4).
+  defp needs_action?(%Item{kind: "briefing"}), do: false
   defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

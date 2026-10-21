@@ -356,7 +356,9 @@ defmodule Platform.ExtensionsTest do
       assert Keyword.has_key?(changeset.errors, :source_type)
       assert Extensions.inbox_kinds() == []
       assert Platform.Inbox.Item.kinds() == Platform.Inbox.Item.core_kinds()
-      assert Platform.Inbox.action_kinds() == Platform.Inbox.core_action_kinds()
+      # Core's non-approval `briefing` stays listed on open but is never a
+      # core (Mobile approval) action kind (task 01a15ee1 stage 1).
+      assert Platform.Inbox.action_kinds() == Platform.Inbox.core_action_kinds() ++ ["briefing"]
       assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
       assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
     end

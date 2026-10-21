@@ -36,6 +36,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
   defmodule PushRecorder do
     @moduledoc false
     def fan_out_to_humans(_participant_ids, _payload, _opts), do: :ok
+    def fan_out_to_user(_user_id, _payload), do: :ok
   end
 
   setup do
@@ -240,10 +241,12 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
 
       admin_html = render_click(admin_view, "insight_act", %{"id" => insight.id})
 
-      # The admin passes the gate (no refusal), and delivery then stops
-      # because a guest cannot be sent the agent's DM.
+      # The admin passes the gate (no refusal), and the briefing lands in the
+      # guest's Inbox: since task 01a15ee1 there is no agent DM to refuse.
       refute admin_html =~ "You cannot act on this insight. An install admin decides it."
-      assert %Insight{delivered_at: nil} = Repo.get!(Insight, insight.id)
+      assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, insight.id)
+      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
+      assert user_id == addressee.id
     end
   end
 
