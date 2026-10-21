@@ -1,3 +1,18 @@
+/* Burrow design system — Public Sans */
+@import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap");
+
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+@import "./meeting_ask.css";
+@import "./theme_presets.css";
+@source "../css";
+@source "../js";
+@source "../../lib/platform_web";
+@source "../../lib/platform/chat/canvas/kinds";
+@source "../../lib/platform/access/change_card.ex";
+
 /*
  * #chat-sidebar width — carried by a root-level custom property, NOT an
  * inline style (task 01a05873).
@@ -23,21 +38,6 @@
 #chat-sidebar {
   width: var(--suite-sidebar-width, 224px);
 }
-
-/* Burrow design system — Public Sans */
-@import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap");
-
-/* See the Tailwind configuration guide for advanced usage
-   https://tailwindcss.com/docs/configuration */
-
-@import "tailwindcss" source(none);
-@import "./meeting_ask.css";
-@import "./theme_presets.css";
-@source "../css";
-@source "../js";
-@source "../../lib/platform_web";
-@source "../../lib/platform/chat/canvas/kinds";
-@source "../../lib/platform/access/change_card.ex";
 
 /* Safelist: dynamic classes generated at runtime that Tailwind cannot scan */
 @layer utilities {
