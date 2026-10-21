@@ -27,7 +27,10 @@ defmodule PlatformWeb.SocialCardComponent do
 
   `Approvals.card_view/2` decides. A non-approver (an agent, a human not on
   the list) gets the status line only: no buttons at all (not disabled
-  ones), no preview text, no media.
+  ones), no preview text, no media. On an owned account (task 01a14ce1,
+  stage 3) the owner sees a "Posts as you" meta line, and a profile
+  approver sees the post read-only with a "Waiting for <owner>" info pill
+  in place of the action row: no buttons, not disabled ones.
 
   ## Events
 
@@ -51,6 +54,7 @@ defmodule PlatformWeb.SocialCardComponent do
     card_changed: "This card changed since it was posted; reload.",
     not_a_social_card: "This card is not a real approval card.",
     not_an_approver: "You are not an approver for this account.",
+    not_the_owner: "Only the person this account posts as can decide this post.",
     not_a_human: "You are not an approver for this account.",
     approver_no_access: "Your access to this account was removed.",
     approver_archived: "Your access to this account was removed.",
@@ -60,7 +64,13 @@ defmodule PlatformWeb.SocialCardComponent do
   }
 
   @doc false
-  def refusal_copy(reason),
+  def refusal_copy(reason, view \\ %{})
+
+  # Task 01a14ce1 stage 3: the canvas copy names the owner.
+  def refusal_copy(:not_the_owner, %{owner_name: name}) when is_binary(name),
+    do: "Only #{name} can approve posts to their account."
+
+  def refusal_copy(reason, _view),
     do: Map.get(@refusals, reason, "That did not work: #{inspect(reason)}")
 
   @impl true
@@ -148,7 +158,7 @@ defmodule PlatformWeb.SocialCardComponent do
     socket =
       case result do
         {:ok, _} -> assign(socket, mode: nil, reject_text: "", edit_text: nil, notice: nil)
-        {:error, reason} -> assign(socket, notice: refusal_copy(reason))
+        {:error, reason} -> assign(socket, notice: refusal_copy(reason, socket.assigns.view))
       end
 
     {:noreply, refresh(socket)}
@@ -169,6 +179,14 @@ defmodule PlatformWeb.SocialCardComponent do
       <.status_header view={@view} />
 
       <p
+        :if={@view[:posts_as]}
+        data-role="social-card-posts-as"
+        class="-mt-2 text-sm text-base-content/60"
+      >
+        {@view.posts_as}
+      </p>
+
+      <p
         :if={@notice}
         role="alert"
         data-role="social-card-notice"
@@ -177,11 +195,11 @@ defmodule PlatformWeb.SocialCardComponent do
         {@notice}
       </p>
 
-      <%= if @view.role == :approver do %>
+      <%= if @view.role in [:approver, :waiting] do %>
         <.preview
           view={@view}
           myself={@myself}
-          mode={@mode}
+          mode={if @view.role == :approver, do: @mode}
           edit_text={@edit_text}
           canvas_id={@canvas_id}
         />
@@ -219,6 +237,14 @@ defmodule PlatformWeb.SocialCardComponent do
           canvas_id={@canvas_id}
           id={@id}
         />
+
+        <div
+          :if={@view.role == :waiting and @view[:waiting?]}
+          data-role="social-card-waiting"
+          class="flex items-center"
+        >
+          <span class="badge badge-info badge-sm font-medium">Waiting for {@view.owner_name}</span>
+        </div>
       <% end %>
     </div>
     """

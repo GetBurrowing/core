@@ -22,6 +22,10 @@ end
 # The default matches the vendor's 25 posts/hour per-account velocity cap.
 config :social, :rate_limit, per_window: 25, window_ms: 3_600_000
 
+# How long a connect invite link stays usable (task 01a14ce1), in days.
+# `Platform.Social.create_invite/5` reads it when no ttl is passed.
+config :social, :invite_ttl_days, 7
+
 # The Zernio adapter (Social 2/7 stage 4) is NOT selected by any config file:
 # prod selects it with SOCIAL_PUBLISHER=zernio at boot (above), and the
 # optional SOCIAL_ZERNIO_BASE_URL overrides its base URL the same way. Its

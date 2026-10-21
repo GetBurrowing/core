@@ -38,7 +38,17 @@ defmodule Platform.Social do
 
   alias Ecto.Changeset
   alias Platform.Repo
-  alias Platform.Social.{Account, Clip, ClipMedia, Post, Profile, Publisher, RenderQueue}
+
+  alias Platform.Social.{
+    Account,
+    Clip,
+    ClipMedia,
+    ConnectInvite,
+    Post,
+    Profile,
+    Publisher,
+    RenderQueue
+  }
 
   @not_a_user "must be a human user"
 
@@ -275,6 +285,21 @@ defmodule Platform.Social do
   def update_account(org_id, account, attrs) do
     with {:ok, account} <- fetch(Account, org_id, account) do
       account |> Account.changeset(attrs) |> Repo.update()
+    end
+  end
+
+  @doc """
+  Sets the account's owner, the person it posts as (task 01a14ce1), or
+  clears it with nil. `owner_user_id` is never cast from attrs, so this is
+  the only writer. An id that is not a users row is a changeset error on
+  `:owner_user_id`. Who may call this is the caller's rule (the connect
+  flow decides it); this function only writes.
+  """
+  @spec set_account_owner(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), Ecto.UUID.t() | nil) ::
+          {:ok, Account.t()} | {:error, term()}
+  def set_account_owner(org_id, account, owner_user_id) do
+    with {:ok, account} <- fetch(Account, org_id, account) do
+      account |> Account.owner_changeset(owner_user_id) |> Repo.update()
     end
   end
 
@@ -628,6 +653,7 @@ defmodule Platform.Social do
     Account
     |> where([a], a.profile_id == ^profile_id and a.platform == ^platform)
     |> where([a], is_nil(a.archived_at) and is_nil(a.status) and is_nil(a.provider_account_ref))
+    |> not_invite_bound()
     |> order_by([a], asc: a.inserted_at, asc: a.id)
     |> limit(1)
     |> Repo.one()
@@ -670,19 +696,50 @@ defmodule Platform.Social do
        `:no_pending_account` (no row is created). A ref held by another
        profile's live row trips the unique index: `:ref_in_use`.
   """
-  @spec complete_connect(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), map()) ::
+  @spec complete_connect(
+          Ecto.UUID.t(),
+          Profile.t() | Ecto.UUID.t(),
+          connect_auth() | term(),
+          map()
+        ) ::
           {:ok, Account.t(), :connected | :already_connected} | {:error, connect_refusal()}
-  def complete_connect(org_id, profile, user_id, params) when is_map(params) do
+  def complete_connect(org_id, profile, auth, params) when is_map(params) do
     ref = Map.get(params, :account_ref)
 
     with {:ok, profile} <- fetch(Profile, org_id, profile),
-         :ok <- approver_check(org_id, profile, user_id),
+         {:ok, auth} <- connect_authorized(org_id, profile, auth),
          :ok <- linked(profile),
          {:ok, entries} <- publisher_list_accounts(profile),
          {:ok, entry} <- listed_entry(entries, profile, ref) do
-      connect_listed(org_id, profile, entry)
+      connect_listed(org_id, profile, entry, auth)
     end
   end
+
+  @typedoc """
+  Who is completing a connect (task 01a14ce1, stage 2). `{:approver, user_id}`
+  is the profile approver's own connect (a bare user id means the same).
+  `{:invite, nonce, user_id}` is an invitee returning from a connect that
+  `start_invite_connect/3` started: `nonce` is the per-connect nonce from
+  the `redirect_url`, never the shared invite token.
+  """
+  @type connect_auth :: {:approver, term()} | {:invite, String.t(), term()}
+
+  # Re-authorized on every call, BEFORE the vendor request, so a refusal
+  # sends nothing and writes nothing. The invite branch is re-checked under
+  # the row locks in connect_listed/4.
+  defp connect_authorized(org_id, profile, {:approver, user_id}) do
+    with :ok <- approver_check(org_id, profile, user_id), do: {:ok, :approver}
+  end
+
+  defp connect_authorized(_org_id, profile, {:invite, nonce, user_id}) do
+    with {:ok, invite} <- invite_by_nonce(nonce),
+         :ok <- invite_connect_check(invite, profile, user_id) do
+      {:ok, {:invite, invite.connect_nonce_hash, user_id}}
+    end
+  end
+
+  defp connect_authorized(org_id, profile, user_id),
+    do: connect_authorized(org_id, profile, {:approver, user_id})
 
   @doc """
   The pre-ship pickup: fills our never-connected rows from the vendor's list,
@@ -739,7 +796,51 @@ defmodule Platform.Social do
 
   defp listed_entry(_entries, _profile, _ref), do: {:error, :not_listed}
 
-  defp connect_listed(org_id, profile, entry) do
+  # The invite branch (task 01a14ce1, stage 2). Under the profile lock and
+  # the invite's row lock, in ONE transaction: re-validate the invite and the
+  # caller, then fill the invite's OWN account row (never another pending
+  # row), set its owner to the invitee and mark the invite used. There is no
+  # approver step: the invite is the authorization. Any refusal rolls back,
+  # so nothing is written.
+  defp connect_listed(org_id, profile, entry, {:invite, nonce_hash, user_id}) do
+    Repo.transaction(fn ->
+      locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
+      invite = lock_invite_by_nonce_hash(nonce_hash) || Repo.rollback(:not_found)
+
+      with :ok <- invite_connect_check(invite, locked, user_id),
+           :ok <- same_platform(invite, entry),
+           :ok <- ref_free(locked, entry.ref),
+           %Account{} = account <- invite_account(invite, locked) || {:error, :no_pending_account} do
+        account = mark_connected!(account, entry)
+
+        account =
+          case account |> Account.owner_changeset(user_id) |> Repo.update() do
+            {:ok, owned} -> owned
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
+
+        invite
+        |> Changeset.change(
+          used_at: DateTime.utc_now(),
+          used_by_user_id: user_id,
+          account_id: account.id,
+          connect_nonce_hash: nil,
+          connect_nonce_expires_at: nil
+        )
+        |> Repo.update!()
+
+        {account, :connected}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {account, outcome}} -> {:ok, account, outcome}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp connect_listed(org_id, profile, entry, :approver) do
     Repo.transaction(fn ->
       locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
 
@@ -811,6 +912,7 @@ defmodule Platform.Social do
     Account
     |> where([a], a.profile_id == ^profile_id)
     |> where([a], is_nil(a.archived_at) and is_nil(a.status) and is_nil(a.provider_account_ref))
+    |> not_invite_bound()
     |> order_by([a], asc: a.inserted_at, asc: a.id)
     |> Repo.all()
   end
@@ -840,6 +942,417 @@ defmodule Platform.Social do
           else: Repo.rollback(changeset)
     end
   end
+
+  # ── Connect invites (task 01a14ce1, stage 2) ─────────────────────────
+
+  @invite_nonce_ttl_s 30 * 60
+  @token_bytes 32
+
+  @typedoc "Why an invite cannot be used right now."
+  @type invite_refusal ::
+          :not_found
+          | :expired
+          | :used
+          | :cancelled
+          | :not_the_inviter
+          | :unsupported_platform
+          | approver_refusal()
+
+  @doc """
+  Invites a person to connect THEIR OWN account on `platform` under
+  `profile`; whoever completes it becomes the account's owner. Only a
+  profile approver may invite (`approver_check/3`), and only on a
+  `connectable_platforms/0` platform. The invite expires after `ttl_days`
+  (default `config :social, :invite_ttl_days`, else 7).
+
+  Answers `{:ok, invite, token}`. `token` is 32 random bytes, url-safe
+  base64, returned ONCE: only its sha256 is stored. The link to share is
+  `/m/social?invite=<token>`. No account row is created yet, and no vendor
+  request is made.
+  """
+  @spec create_invite(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), term(), term()) ::
+          {:ok, ConnectInvite.t(), String.t()} | {:error, term()}
+  def create_invite(org_id, profile, user_id, platform, ttl_days \\ nil) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id),
+         :ok <- connectable(platform),
+         {:ok, days} <- invite_ttl(ttl_days) do
+      token = random_token()
+
+      %ConnectInvite{
+        org_id: profile.org_id,
+        profile_id: profile.id,
+        platform: platform,
+        token_hash: digest(token),
+        created_by_user_id: user_id,
+        expires_at: DateTime.add(DateTime.utc_now(), days * 86_400, :second)
+      }
+      |> Repo.insert()
+      |> case do
+        {:ok, invite} -> {:ok, invite, token}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  defp invite_ttl(nil), do: invite_ttl(Application.get_env(:social, :invite_ttl_days, 7))
+  defp invite_ttl(days) when is_integer(days) and days > 0, do: {:ok, days}
+  defp invite_ttl(_days), do: {:error, :invalid_ttl}
+
+  @doc """
+  Cancels an unused invite. Approver only (`approver_check/3` on the
+  invite's profile, re-read now). A used invite is `{:error, :used}`; an
+  already cancelled one answers `{:ok, invite}` with no write. Any connect
+  in flight on it is refused afterwards.
+  """
+  @spec cancel_invite(Ecto.UUID.t(), ConnectInvite.t() | Ecto.UUID.t(), term()) ::
+          {:ok, ConnectInvite.t()} | {:error, term()}
+  def cancel_invite(org_id, invite, user_id) do
+    Repo.transaction(fn ->
+      with %ConnectInvite{} = locked <- lock_invite_in(org_id, invite) || {:error, :not_found},
+           {:ok, profile} <- fetch(Profile, org_id, locked.profile_id),
+           :ok <- approver_check(org_id, profile, user_id) do
+        cond do
+          locked.used_at -> Repo.rollback(:used)
+          locked.cancelled_at -> locked
+          true -> Repo.update!(Changeset.change(locked, cancelled_at: DateTime.utc_now()))
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc "The profile's invites that are neither used, cancelled nor expired, oldest first."
+  @spec list_pending_invites(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t()) :: [ConnectInvite.t()]
+  def list_pending_invites(org_id, profile) do
+    case fetch(Profile, org_id, profile) do
+      {:ok, %Profile{id: profile_id}} ->
+        now = DateTime.utc_now()
+
+        ConnectInvite
+        |> where([i], i.profile_id == ^profile_id)
+        |> where([i], is_nil(i.used_at) and is_nil(i.cancelled_at) and i.expires_at > ^now)
+        |> order_by([i], asc: i.inserted_at, asc: i.id)
+        |> Repo.all()
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
+  Resolves a shared invite `token` for the signed-in `user_id`. The token
+  is hashed and compared in constant time; an unknown or forged token is
+  `:not_found`. The user must be a live, non-archived human with access to
+  the invite's org (an agent id is `:not_a_human`, another org's user
+  `:approver_no_access`); they need NOT be an approver. Then the invite's
+  own state: `:cancelled`, `:used` or `:expired`. Answers `{:ok, invite}`.
+  Reads only.
+  """
+  @spec get_invite_for(term(), term()) :: {:ok, ConnectInvite.t()} | {:error, invite_refusal()}
+  def get_invite_for(token, user_id) do
+    with {:ok, invite} <- invite_by_token(token),
+         {:ok, profile} <- invite_profile(invite),
+         :ok <- invitee_check(profile, user_id),
+         :ok <- invite_live(invite) do
+      {:ok, invite}
+    end
+  end
+
+  @doc """
+  Starts a FRESH vendor connect for an invite (the vendor's own connect
+  state expires in about 30 minutes, so a link cannot carry one). In order:
+  `get_invite_for/2` (no write and no request on any refusal), the
+  platform must still be connectable, `ensure_provider_profile/2`, then
+  under the profile lock and the invite's row lock: the invite is
+  re-validated, its OWN account row is bound (the row in
+  `invite.account_id` while it is still never-connected, else a new row,
+  never another pending row), `started_by_user_id` is set to the caller and
+  a fresh per-connect nonce replaces any earlier one (only its sha256 and
+  an expiry of 30 minutes are stored, so an abandoned connect's nonce is
+  refused from now on). Then `connect_url/2` with
+  `redirect_url: <base>/m/social?invite_connect=<nonce>`. The shared token
+  never goes to the vendor.
+
+  Options: `:base_url` (default `PlatformWeb.Endpoint.url/0`). Answers
+  `{:ok, url}`.
+  """
+  @spec start_invite_connect(term(), term(), keyword()) ::
+          {:ok, String.t()} | {:error, invite_refusal() | term()}
+  def start_invite_connect(token, user_id, opts \\ []) do
+    with {:ok, invite} <- get_invite_for(token, user_id),
+         {:ok, profile} <- invite_profile(invite) do
+      start_bound_connect(invite, profile, user_id, opts)
+    end
+  end
+
+  @doc """
+  "Try again" after a cancelled or failed vendor connect (task 01a14ce1,
+  stage 4). The browser holds only the per-connect `nonce` from the return,
+  never the shared token, so the restart is keyed on it: the nonce must
+  still be live, its invite live, and the caller must be the user who
+  started that connect (`:not_the_inviter` otherwise) and pass the same
+  invitee check. Then exactly what `start_invite_connect/3` does after its
+  lookup, so a FRESH nonce replaces this one. Answers `{:ok, url}`; any
+  refusal sends no request and writes nothing.
+  """
+  @spec restart_invite_connect(term(), term(), keyword()) ::
+          {:ok, String.t()} | {:error, invite_refusal() | term()}
+  def restart_invite_connect(nonce, user_id, opts \\ []) do
+    with {:ok, invite} <- invite_by_nonce(nonce),
+         {:ok, profile} <- invite_profile(invite),
+         :ok <- invite_connect_check(invite, profile, user_id) do
+      start_bound_connect(invite, profile, user_id, opts)
+    end
+  end
+
+  defp start_bound_connect(invite, profile, user_id, opts) do
+    with :ok <- connectable(invite.platform),
+         {:ok, profile} <- ensure_provider_profile(profile.org_id, profile),
+         {:ok, {account, nonce}} <- bind_invite_connect(profile, invite.id, user_id) do
+      base = Keyword.get_lazy(opts, :base_url, fn -> PlatformWeb.Endpoint.url() end)
+      redirect_url = base <> "/m/social?" <> URI.encode_query(%{"invite_connect" => nonce})
+      publisher_connect_url(account, profile, redirect_url)
+    end
+  end
+
+  @doc """
+  What the invitee landing page shows for a shared `token` (task 01a14ce1,
+  stage 4). Reads only. The same lookup and invitee check as
+  `get_invite_for/2` (forged, another org, an agent or an archived user is
+  `{:error, :not_found | refusal}` with nothing else), but an invite that is
+  no longer usable still answers with its row and profile, so the page can
+  say when it expired, who sent it, or that the viewer already used it:
+
+    * `{:ok, invite, profile}`: live, Continue may start a connect;
+    * `{:error, :expired | :used | :cancelled, invite, profile}`;
+    * `{:error, reason}`: nothing to show beyond "not valid".
+  """
+  @spec invite_landing_for(term(), term()) ::
+          {:ok, ConnectInvite.t(), Profile.t()}
+          | {:error, :expired | :used | :cancelled, ConnectInvite.t(), Profile.t()}
+          | {:error, invite_refusal()}
+  def invite_landing_for(token, user_id) do
+    with {:ok, invite} <- invite_by_token(token),
+         {:ok, profile} <- invite_profile(invite),
+         :ok <- invitee_check(profile, user_id) do
+      invite_state(invite, profile)
+    end
+  end
+
+  @doc """
+  The landing page's view of a vendor return carrying `nonce` (the failed
+  or cancelled leg, task 01a14ce1 stage 4). Reads only. The caller must be
+  the user who started that connect; answers like `invite_landing_for/2`.
+  """
+  @spec invite_return_for(term(), term()) ::
+          {:ok, ConnectInvite.t(), Profile.t()}
+          | {:error, :expired | :used | :cancelled, ConnectInvite.t(), Profile.t()}
+          | {:error, invite_refusal()}
+  def invite_return_for(nonce, user_id) do
+    with {:ok, invite} <- invite_by_nonce(nonce),
+         {:ok, profile} <- invite_profile(invite),
+         :ok <- invitee_check(profile, user_id),
+         :ok <- the_inviter(invite, user_id) do
+      invite_state(invite, profile)
+    end
+  end
+
+  defp invite_state(invite, profile) do
+    case invite_live(invite) do
+      :ok -> {:ok, invite, profile}
+      {:error, reason} -> {:error, reason, invite, profile}
+    end
+  end
+
+  defp bind_invite_connect(profile, invite_id, user_id) do
+    Repo.transaction(fn ->
+      locked = lock_profile(profile.org_id, profile) || Repo.rollback(:not_found)
+      invite = lock_invite(invite_id) || Repo.rollback(:not_found)
+
+      with :ok <- same_profile(invite, locked),
+           :ok <- invitee_check(locked, user_id),
+           :ok <- invite_live(invite) do
+        account =
+          case invite_account(invite, locked) do
+            %Account{} = account ->
+              account
+
+            nil ->
+              case create_account(locked.org_id, locked, %{platform: invite.platform}) do
+                {:ok, account} -> account
+                {:error, reason} -> Repo.rollback(reason)
+              end
+          end
+
+        nonce = random_token()
+
+        invite
+        |> Changeset.change(
+          account_id: account.id,
+          started_by_user_id: user_id,
+          connect_nonce_hash: digest(nonce),
+          connect_nonce_expires_at: DateTime.add(DateTime.utc_now(), @invite_nonce_ttl_s, :second)
+        )
+        |> Repo.update!()
+
+        {account, nonce}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp publisher_connect_url(account, profile, redirect_url) do
+    case Publisher.impl() do
+      {:error, :publisher_not_configured} = error -> error
+      module -> module.connect_url(account, redirect_url: redirect_url, profile: profile)
+    end
+  end
+
+  # Every check an invite return must pass, run before the vendor request
+  # AND again under the row locks: the nonce's invite is on this profile,
+  # the caller is a live human with org access, the invite is live, the
+  # nonce has not expired, and the caller is who started this connect.
+  defp invite_connect_check(%ConnectInvite{} = invite, %Profile{} = profile, user_id) do
+    with :ok <- same_profile(invite, profile),
+         :ok <- invitee_check(profile, user_id),
+         :ok <- invite_live(invite),
+         :ok <- nonce_live(invite) do
+      the_inviter(invite, user_id)
+    end
+  end
+
+  defp the_inviter(%ConnectInvite{started_by_user_id: started_by}, user_id) do
+    if is_binary(started_by) and started_by == user_id,
+      do: :ok,
+      else: {:error, :not_the_inviter}
+  end
+
+  defp same_profile(%ConnectInvite{profile_id: id}, %Profile{id: id}), do: :ok
+  defp same_profile(_invite, _profile), do: {:error, :not_found}
+
+  defp ref_free(profile, ref) do
+    if live_account_with_ref(profile, ref), do: {:error, :ref_in_use}, else: :ok
+  end
+
+  defp same_platform(%ConnectInvite{platform: platform}, %{platform: platform}), do: :ok
+  defp same_platform(_invite, _entry), do: {:error, :not_listed}
+
+  defp invitee_check(%Profile{} = profile, user_id) do
+    with {:ok, user} <- live_user(user_id),
+         :ok <- not_archived(user) do
+      if approver_access?(user, profile), do: :ok, else: {:error, :approver_no_access}
+    end
+  end
+
+  defp invite_live(%ConnectInvite{cancelled_at: %DateTime{}}), do: {:error, :cancelled}
+  defp invite_live(%ConnectInvite{used_at: %DateTime{}}), do: {:error, :used}
+
+  defp invite_live(%ConnectInvite{expires_at: expires_at}) do
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :gt,
+      do: :ok,
+      else: {:error, :expired}
+  end
+
+  defp nonce_live(%ConnectInvite{connect_nonce_expires_at: %DateTime{} = at}) do
+    if DateTime.compare(at, DateTime.utc_now()) == :gt, do: :ok, else: {:error, :expired}
+  end
+
+  defp nonce_live(_invite), do: {:error, :not_found}
+
+  defp invite_profile(%ConnectInvite{profile_id: profile_id, org_id: org_id}) do
+    case Repo.get(Profile, profile_id) do
+      %Profile{org_id: ^org_id} = profile -> {:ok, profile}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # The invite's OWN row, while it is still never-connected on its profile
+  # and platform. Never another pending row.
+  defp invite_account(%ConnectInvite{account_id: nil}, _profile), do: nil
+
+  defp invite_account(%ConnectInvite{account_id: id, platform: platform}, %Profile{id: profile_id}) do
+    Account
+    |> where([a], a.id == ^id and a.profile_id == ^profile_id and a.platform == ^platform)
+    |> where([a], is_nil(a.archived_at) and is_nil(a.status) and is_nil(a.provider_account_ref))
+    |> Repo.one()
+  end
+
+  # Rows bound to a live invite belong to that invite: an approver's own
+  # add, return or pickup never reuses or fills them.
+  defp not_invite_bound(query) do
+    now = DateTime.utc_now()
+
+    bound =
+      from(i in ConnectInvite,
+        where:
+          not is_nil(i.account_id) and is_nil(i.used_at) and is_nil(i.cancelled_at) and
+            i.expires_at > ^now,
+        select: i.account_id
+      )
+
+    where(query, [a], a.id not in subquery(bound))
+  end
+
+  defp invite_by_token(token) when is_binary(token) and byte_size(token) in 1..128 do
+    hash = digest(token)
+
+    case Repo.get_by(ConnectInvite, token_hash: hash) do
+      %ConnectInvite{token_hash: stored} = invite ->
+        if Plug.Crypto.secure_compare(stored, hash), do: {:ok, invite}, else: {:error, :not_found}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp invite_by_token(_token), do: {:error, :not_found}
+
+  defp invite_by_nonce(nonce) when is_binary(nonce) and byte_size(nonce) in 1..128 do
+    hash = digest(nonce)
+
+    case Repo.get_by(ConnectInvite, connect_nonce_hash: hash) do
+      %ConnectInvite{connect_nonce_hash: stored} = invite when is_binary(stored) ->
+        if Plug.Crypto.secure_compare(stored, hash), do: {:ok, invite}, else: {:error, :not_found}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp invite_by_nonce(_nonce), do: {:error, :not_found}
+
+  defp lock_invite(id) do
+    ConnectInvite |> where([i], i.id == ^id) |> lock("FOR UPDATE") |> Repo.one()
+  end
+
+  defp lock_invite_by_nonce_hash(hash) when is_binary(hash) do
+    ConnectInvite
+    |> where([i], i.connect_nonce_hash == ^hash)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+  end
+
+  defp lock_invite_by_nonce_hash(_hash), do: nil
+
+  defp lock_invite_in(org_id, %ConnectInvite{id: id}), do: lock_invite_in(org_id, id)
+
+  defp lock_invite_in(org_id, id) do
+    with {:ok, id} <- Ecto.UUID.cast(id),
+         %ConnectInvite{org_id: invite_org} = invite <- lock_invite(id),
+         true <- org_visible?(org_id, invite_org) do
+      invite
+    else
+      _ -> nil
+    end
+  end
+
+  defp random_token,
+    do: @token_bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+
+  defp digest(value), do: :crypto.hash(:sha256, value)
 
   # ── Posts ────────────────────────────────────────────────────────────
 
@@ -952,7 +1465,7 @@ defmodule Platform.Social do
         |> Post.changeset(attrs)
         |> ClipMedia.put_media_meta(account.profile_id)
 
-      with :ok <- require_channel(changeset, account.profile_id),
+      with :ok <- require_channel(changeset, account.profile_id, account),
            {:ok, post} <- Repo.insert(changeset) do
         {:ok, needs_approval_written(post)}
       end
@@ -974,7 +1487,8 @@ defmodule Platform.Social do
         |> ClipMedia.put_media_meta(profile_id_of_account(post.account_id))
 
       with :ok <- refuse_scheduling_on_archived(org_id, post, changeset),
-           :ok <- require_channel(changeset, profile_id_of(post)),
+           :ok <-
+             require_channel(changeset, profile_id_of(post), Repo.get(Account, post.account_id)),
            {:ok, updated} <- Repo.update(changeset) do
         {:ok, needs_approval_written(updated)}
       end
@@ -984,29 +1498,44 @@ defmodule Platform.Social do
   # ── needs_approval (Social 3/7) ──────────────────────────────────────
 
   @doc """
-  Refuses `needs_approval` while the post's profile has no channel
-  (`social_profiles.space_id`): the approval card has nowhere to go. Called
-  BEFORE the write by every path that can set the status (`create_post/3`,
-  `update_post/3`, `Platform.Social.AgentDrafts`), so the row is unchanged.
-  """
-  @spec require_channel(Ecto.Changeset.t() | String.t(), Ecto.UUID.t() | Profile.t()) ::
-          :ok | {:error, :profile_has_no_channel}
-  def require_channel(%Changeset{} = changeset, profile),
-    do: require_channel(Changeset.get_field(changeset, :status), profile)
+  Refuses `needs_approval` while the approval card has nowhere to go:
+  an UNOWNED account's card goes to its profile's channel
+  (`social_profiles.space_id`), so a profile with no channel is
+  `{:error, :profile_has_no_channel}`. An OWNED account (task 01a14ce1,
+  stage 3) is satisfied by its owner: the card goes to the owner's DM, so
+  no profile channel is needed. Called BEFORE the write by every path that
+  can set the status (`create_post/3`, `update_post/3`,
+  `Platform.Social.AgentDrafts`), so the row is unchanged.
 
-  def require_channel("needs_approval", %Profile{space_id: nil}),
+  The 2-arity form knows no account and applies the unowned rule.
+  """
+  @spec require_channel(
+          Ecto.Changeset.t() | String.t(),
+          Ecto.UUID.t() | Profile.t(),
+          Account.t() | nil
+        ) :: :ok | {:error, :profile_has_no_channel}
+  def require_channel(status, profile, account \\ nil)
+
+  def require_channel(%Changeset{} = changeset, profile, account),
+    do: require_channel(Changeset.get_field(changeset, :status), profile, account)
+
+  def require_channel("needs_approval", _profile, %Account{owner_user_id: owner_id})
+      when is_binary(owner_id),
+      do: :ok
+
+  def require_channel("needs_approval", %Profile{space_id: nil}, _account),
     do: {:error, :profile_has_no_channel}
 
-  def require_channel("needs_approval", %Profile{}), do: :ok
+  def require_channel("needs_approval", %Profile{}, _account), do: :ok
 
-  def require_channel("needs_approval", profile_id) when is_binary(profile_id) do
+  def require_channel("needs_approval", profile_id, account) when is_binary(profile_id) do
     case Repo.get(Profile, profile_id) do
-      %Profile{} = profile -> require_channel("needs_approval", profile)
+      %Profile{} = profile -> require_channel("needs_approval", profile, account)
       nil -> {:error, :profile_has_no_channel}
     end
   end
 
-  def require_channel(_status, _profile), do: :ok
+  def require_channel(_status, _profile, _account), do: :ok
 
   @doc """
   The ONE hook every write path calls after a post is committed: when the
@@ -1041,8 +1570,8 @@ defmodule Platform.Social do
 
   @doc """
   Approves a post as `approver_user_id`, the ONLY path that sets the
-  approver. Every caller is guarded by `approver_check/3` (Social 3/7)
-  before any write:
+  approver. Every caller is guarded by `post_approver_check/4` (Social
+  3/7, owner rule task 01a14ce1) before any write:
 
     * an id that is not a user (an agent id included) is a changeset error
       on `:approved_by_user_id`, "must be a human user" (member 1's text,
@@ -1051,7 +1580,10 @@ defmodule Platform.Social do
     * a user not in the profile's `approver_user_ids` is
       `{:error, :not_an_approver}`;
     * a user who can no longer read the profile's org is
-      `{:error, :approver_no_access}`.
+      `{:error, :approver_no_access}`;
+    * on an account with an owner, anyone but the owner is
+      `{:error, :not_the_owner}`, and an archived owner is
+      `{:error, :approver_archived}`.
 
   Pass `lock: true` from inside a transaction to re-read the post `FOR
   UPDATE` (`Platform.Social.Approvals` does).
@@ -1061,10 +1593,11 @@ defmodule Platform.Social do
   def approve_post(org_id, post, approver_user_id, opts \\ []) do
     with {:ok, post} <- fetch_for_approval(org_id, post, opts),
          :ok <- refuse_approved_again(post),
-         {:ok, profile} <- profile_of_post(post) do
+         {:ok, profile} <- profile_of_post(post),
+         {:ok, account} <- account_of_post(post) do
       changeset = Post.approval_changeset(post, approver_user_id)
 
-      case approver_check(profile.org_id, profile, approver_user_id) do
+      case post_approver_check(profile.org_id, profile, account, approver_user_id) do
         :ok ->
           Repo.update(changeset)
 
@@ -1086,6 +1619,13 @@ defmodule Platform.Social do
       end
     else
       fetch(Post, org_id, post)
+    end
+  end
+
+  defp account_of_post(%Post{account_id: account_id}) do
+    case Repo.get(Account, account_id) do
+      nil -> {:error, :not_found}
+      account -> {:ok, account}
     end
   end
 
@@ -1111,9 +1651,13 @@ defmodule Platform.Social do
 
   # ── Approver guard (Social 3/7) ──────────────────────────────────────
 
-  @typedoc "Why `approver_check/3` refused."
+  @typedoc "Why `approver_check/3` or `post_approver_check/4` refused."
   @type approver_refusal ::
-          :not_a_human | :approver_archived | :not_an_approver | :approver_no_access
+          :not_a_human
+          | :approver_archived
+          | :not_an_approver
+          | :approver_no_access
+          | :not_the_owner
 
   @doc """
   Whether `user_id` may approve, edit or reject posts of `profile` RIGHT
@@ -1137,6 +1681,73 @@ defmodule Platform.Social do
       if org_id == profile.org_id and approver_access?(user, profile),
         do: :ok,
         else: {:error, :approver_no_access}
+    end
+  end
+
+  @doc """
+  Whether `user_id` may approve or edit posts on `account` RIGHT NOW
+  (task 01a14ce1). Every approve and edit path goes through this, not
+  `approver_check/3`, which stays the rule for managing the profile
+  (connections, settings).
+
+    * an account with no `owner_user_id` is exactly `approver_check/3`;
+    * an owned account: the id must resolve to a users row (else
+      `:not_a_human`, an agent id included), must BE the owner (else
+      `:not_the_owner`, a profile approver included), must not be archived
+      (else `:approver_archived`), and must pass `approver_access?/2` on the
+      profile's org (else `:approver_no_access`). The owner need not be on
+      `approver_user_ids`. There is NO fallback to the profile approvers
+      when the owner is archived or gone.
+
+  The owner is re-read from `account.owner_user_id` as given; callers pass
+  an account row read in the same request, never an assign.
+  """
+  @spec post_approver_check(Ecto.UUID.t(), Profile.t(), Account.t(), term()) ::
+          :ok | {:error, approver_refusal()}
+  def post_approver_check(org_id, %Profile{} = profile, %Account{owner_user_id: nil}, user_id),
+    do: approver_check(org_id, profile, user_id)
+
+  def post_approver_check(org_id, %Profile{} = profile, %Account{} = account, user_id) do
+    with {:ok, user} <- live_user(user_id),
+         :ok <- the_owner(account, user.id),
+         :ok <- not_archived(user) do
+      if org_id == profile.org_id and approver_access?(user, profile),
+        do: :ok,
+        else: {:error, :approver_no_access}
+    end
+  end
+
+  @doc """
+  Whether `user_id` may REJECT a post on `account` RIGHT NOW. The same as
+  `post_approver_check/4`, with one exception so posts are not stranded:
+  when the account's owner is archived or no longer a users row, a user who
+  passes `approver_check/3` on the profile may reject (never approve or
+  edit). With a live owner, only the owner may reject.
+  """
+  @spec post_rejecter_check(Ecto.UUID.t(), Profile.t(), Account.t(), term()) ::
+          :ok | {:error, approver_refusal()}
+  def post_rejecter_check(org_id, %Profile{} = profile, %Account{} = account, user_id) do
+    case post_approver_check(org_id, profile, account, user_id) do
+      :ok ->
+        :ok
+
+      {:error, _} = refused ->
+        if owner_gone?(account),
+          do: approver_check(org_id, profile, user_id),
+          else: refused
+    end
+  end
+
+  defp the_owner(%Account{owner_user_id: owner_id}, user_id) do
+    if owner_id == user_id, do: :ok, else: {:error, :not_the_owner}
+  end
+
+  defp owner_gone?(%Account{owner_user_id: nil}), do: false
+
+  defp owner_gone?(%Account{owner_user_id: owner_id}) do
+    case live_user(owner_id) do
+      {:ok, owner} -> not_archived(owner) != :ok
+      {:error, _} -> true
     end
   end
 

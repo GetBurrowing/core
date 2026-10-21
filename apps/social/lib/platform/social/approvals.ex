@@ -36,9 +36,11 @@ defmodule Platform.Social.Approvals do
        human's click is pending would otherwise be approved unseen. The
        card digest does not catch it, because the digest guards the canvas,
        not the post;
-    6. runs `Platform.Social.approver_check/3` on the user, re-read from the
-       database, so archived users, users taken off the list and users who
-       lost access are refused at the moment of the click;
+    6. runs `Platform.Social.post_approver_check/4` (approve, edit) or
+       `post_rejecter_check/4` (reject) on the user, re-read from the
+       database, so archived users, users taken off the list, users who
+       lost access and, on an owned account, anyone but its owner are
+       refused at the moment of the click;
     7. compare-and-sets the card `pending -> deciding` (`update_all` with
        the state in the WHERE clause), so a second decision can never win.
 
@@ -62,7 +64,7 @@ defmodule Platform.Social.Approvals do
   alias Platform.Chat
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, ApprovalCard, Post, Publishing}
+  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, Publishing}
 
   @kind "social_post_approval"
   @source_type "social_post"
@@ -116,13 +118,14 @@ defmodule Platform.Social.Approvals do
           | {:error, term()}
   def request_approval(%Post{status: "needs_approval"} = post) do
     with {:ok, profile} <- Social.profile_of_post(post),
-         :ok <- Social.require_channel("needs_approval", profile) do
+         {:ok, account} <- fetch_account(post),
+         :ok <- Social.require_channel("needs_approval", profile, account) do
       case live_card(post.id) do
         %ApprovalCard{} = card ->
           with {:ok, card} <- rerender(card), do: {:ok, %{card: card, unreachable_approvers: []}}
 
         nil ->
-          create_card(post, profile)
+          create_card(post, profile, account)
       end
     end
   end
@@ -143,12 +146,12 @@ defmodule Platform.Social.Approvals do
     )
   end
 
-  defp create_card(post, profile) do
+  defp create_card(post, profile, account) do
     card_id = Platform.Types.UUIDv7.generate()
 
-    with {:ok, participant} <- ensure_system_participant(profile.space_id),
+    with {:ok, space_id, participant} <- card_sender(post, profile, account),
          {:ok, canvas, message} <-
-           Chat.create_canvas_with_message(profile.space_id, participant.id, %{
+           Chat.create_canvas_with_message(space_id, participant.id, %{
              title: "Post approval",
              message_content: "A post is waiting for a human approval.",
              document: card_document(card_id, 1)
@@ -162,7 +165,7 @@ defmodule Platform.Social.Approvals do
              card_digest: digest(canvas.document)
            })
            |> Repo.insert() do
-      unreachable = fan_out(post, profile, card, canvas, message)
+      unreachable = fan_out(post, profile, account, card, canvas, message)
       {:ok, %{card: card, unreachable_approvers: unreachable}}
     else
       # A concurrent request created the live card first: re-render it.
@@ -196,14 +199,21 @@ defmodule Platform.Social.Approvals do
     }
   end
 
-  defp fan_out(post, profile, card, canvas, message) do
-    {:ok, account} = fetch_account(post)
-    space = Chat.get_space(profile.space_id)
+  # Task 01a14ce1: an owned account's posts go to its owner alone (who need
+  # not be on the profile's list); an unowned account's to the list.
+  defp approval_candidates(%Account{owner_user_id: nil}, profile),
+    do: profile.approver_user_ids || []
+
+  defp approval_candidates(%Account{owner_user_id: owner_id}, _profile), do: [owner_id]
+
+  defp fan_out(post, profile, account, card, canvas, message) do
+    space = Chat.get_space(message.space_id)
     url = "/chat/#{Chat.space_path_segment(space)}?message=#{message.id}"
 
     {reachable, unreachable} =
-      (profile.approver_user_ids || [])
-      |> Enum.filter(&(Social.approver_check(profile.org_id, profile, &1) == :ok))
+      account
+      |> approval_candidates(profile)
+      |> Enum.filter(&(Social.post_approver_check(profile.org_id, profile, account, &1) == :ok))
       |> Enum.split_with(
         &match?(
           {:ok, _, _},
@@ -232,6 +242,132 @@ defmodule Platform.Social.Approvals do
     end
 
     unreachable
+  end
+
+  # ── Where the card goes (task 01a14ce1, stage 3) ──────────────────────
+
+  # `{:ok, space_id, participant}`: the space the card is posted in and the
+  # participant row that posts it.
+  #
+  #   * unowned account: the profile's channel, posted by the Social system
+  #     participant (unchanged);
+  #   * owned account, post drafted by an agent: the agent's DM with the
+  #     owner (`Platform.Chat.find_or_create_agent_dm/2`), posted by the
+  #     agent's own participant row in it;
+  #   * owned account otherwise (or the agent DM cannot be had): the
+  #     owner's ONE Social DM (`owner_dm/2`), posted by the Social system
+  #     participant.
+  defp card_sender(_post, profile, %Account{owner_user_id: nil}) do
+    with {:ok, participant} <- ensure_system_participant(profile.space_id),
+         do: {:ok, profile.space_id, participant}
+  end
+
+  defp card_sender(%Post{generated_by_agent_id: agent_id} = post, profile, account)
+       when is_binary(agent_id) do
+    case agent_dm(agent_id, account.owner_user_id) do
+      {:ok, space_id, participant} ->
+        {:ok, space_id, participant}
+
+      error ->
+        Logger.warning(
+          "[Social] post #{post.id}: no DM with drafting agent #{agent_id} " <>
+            "(#{inspect(error)}); using the owner's Social DM"
+        )
+
+        card_sender(%{post | generated_by_agent_id: nil}, profile, account)
+    end
+  end
+
+  defp card_sender(_post, profile, %Account{owner_user_id: owner_id}) do
+    with {:ok, space} <- owner_dm(profile.org_id, owner_id),
+         {:ok, participant} <- ensure_system_participant(space.id),
+         do: {:ok, space.id, participant}
+  end
+
+  # `Platform.Chat.find_or_create_agent_dm/2` is idempotent by its lookup
+  # (both roster halves pinned), but it is check-then-insert: two
+  # concurrent callers can each miss and each insert. Social's own callers
+  # are serialized on a transaction-scoped advisory lock per (agent, owner),
+  # so two cards for one agent and owner always land in one DM.
+  defp agent_dm(agent_id, owner_id) do
+    Repo.transaction(fn ->
+      advisory_lock("social_agent_dm:#{agent_id}:#{owner_id}")
+
+      with {:ok, space} <- Chat.find_or_create_agent_dm(agent_id, owner_id),
+           %{} = participant <-
+             Enum.find(
+               Chat.list_participants(space.id),
+               &(&1.participant_type == "agent" and &1.participant_id == agent_id)
+             ) || {:error, :agent_not_in_dm} do
+        {space.id, participant}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {space_id, participant}} -> {:ok, space_id, participant}
+      error -> error
+    end
+  end
+
+  @doc """
+  The owner's ONE Social system-sender DM in `org_id`: found, or created
+  with the owner and the Social system participant in it. Canonical per
+  (org, owner): guarded by the unique index on `social_owner_dms (org_id,
+  owner_user_id)` AND a transaction-scoped advisory lock on the pair, so
+  concurrent callers cannot mint two. An archived DM is replaced, and the
+  row re-pointed.
+  """
+  @spec owner_dm(Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, Platform.Chat.Space.t()} | {:error, term()}
+  def owner_dm(org_id, owner_id) do
+    Repo.transaction(fn ->
+      advisory_lock("social_owner_dm:#{org_id}:#{owner_id}")
+      row = Repo.get_by(OwnerDm, org_id: org_id, owner_user_id: owner_id)
+
+      case row && Chat.get_space(row.space_id) do
+        %{archived_at: nil} = space ->
+          space
+
+        _missing_or_archived ->
+          with {:ok, space} <- create_owner_dm_space(owner_id),
+               {:ok, _} <- upsert_owner_dm(row, org_id, owner_id, space.id) do
+            space
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+  end
+
+  defp create_owner_dm_space(owner_id) do
+    with {:ok, space} <-
+           Chat.create_space(%{
+             kind: "dm",
+             is_direct: true,
+             metadata: %{"social_owner_dm" => owner_id}
+           }),
+         {:ok, _} <-
+           Chat.add_participant(space.id, %{
+             participant_type: "user",
+             participant_id: owner_id,
+             joined_at: DateTime.utc_now()
+           }),
+         {:ok, _} <- ensure_system_participant(space.id) do
+      {:ok, space}
+    end
+  end
+
+  defp upsert_owner_dm(nil, org_id, owner_id, space_id),
+    do: Repo.insert(%OwnerDm{org_id: org_id, owner_user_id: owner_id, space_id: space_id})
+
+  defp upsert_owner_dm(%OwnerDm{} = row, _org_id, _owner_id, space_id),
+    do: row |> Changeset.change(space_id: space_id) |> Repo.update()
+
+  defp advisory_lock(key) do
+    <<lock::signed-integer-size(64), _::binary>> = :crypto.hash(:sha256, key)
+    Repo.query!("SELECT pg_advisory_xact_lock($1)", [lock])
+    :ok
   end
 
   # A Social system participant in the channel, with a deterministic id per
@@ -331,16 +467,17 @@ defmodule Platform.Social.Approvals do
   end
 
   def decide_approve(canvas_id, clicker, shown_fingerprint) do
-    result =
-      decide(canvas_id, clicker, shown_fingerprint, fn card, post, account, profile, user_id ->
-        with :ok <- refuse_draft_only(account),
-             :ok <- claim(card),
-             {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
-             {:ok, card} <-
-               card |> ApprovalCard.decided_changeset("approve", user_id) |> Repo.update() do
-          {card, approved, profile}
-        end
-      end)
+    approve = fn card, post, account, profile, user_id ->
+      with :ok <- refuse_draft_only(account),
+           :ok <- claim(card),
+           {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
+           {:ok, card} <-
+             card |> ApprovalCard.decided_changeset("approve", user_id) |> Repo.update() do
+        {card, approved, profile}
+      end
+    end
+
+    result = decide(:approve, canvas_id, clicker, shown_fingerprint, approve)
 
     with {:ok, {card, approved, profile}} <- result do
       publish = Publishing.publish_post(profile.org_id, approved.id)
@@ -360,13 +497,14 @@ defmodule Platform.Social.Approvals do
     shown_fingerprint = shown_fingerprint || peek_fingerprint(canvas_id)
     body = Map.get(attrs, :body) || Map.get(attrs, "body")
 
-    result =
-      decide(canvas_id, clicker, shown_fingerprint, fn card, post, _account, profile, user_id ->
-        with {:ok, edited} <- post |> Post.human_edit_changeset(%{body: body}) |> Repo.update(),
-             {:ok, card} <- card |> ApprovalCard.edited_changeset(user_id) |> Repo.update() do
-          {card, edited, profile}
-        end
-      end)
+    edit = fn card, post, _account, profile, user_id ->
+      with {:ok, edited} <- post |> Post.human_edit_changeset(%{body: body}) |> Repo.update(),
+           {:ok, card} <- card |> ApprovalCard.edited_changeset(user_id) |> Repo.update() do
+        {card, edited, profile}
+      end
+    end
+
+    result = decide(:edit, canvas_id, clicker, shown_fingerprint, edit)
 
     with {:ok, {card, edited, _profile}} <- result,
          {:ok, card} <- rerender(card) do
@@ -390,15 +528,16 @@ defmodule Platform.Social.Approvals do
     else
       shown_fingerprint = shown_fingerprint || peek_fingerprint(canvas_id)
 
-      result =
-        decide(canvas_id, clicker, shown_fingerprint, fn card, post, _account, profile, user_id ->
-          with :ok <- claim(card),
-               {:ok, rejected} <- post |> Post.reject_changeset(reason) |> Repo.update(),
-               {:ok, card} <-
-                 card |> ApprovalCard.decided_changeset("reject", user_id) |> Repo.update() do
-            {card, rejected, profile}
-          end
-        end)
+      reject = fn card, post, _account, profile, user_id ->
+        with :ok <- claim(card),
+             {:ok, rejected} <- post |> Post.reject_changeset(reason) |> Repo.update(),
+             {:ok, card} <-
+               card |> ApprovalCard.decided_changeset("reject", user_id) |> Repo.update() do
+          {card, rejected, profile}
+        end
+      end
+
+      result = decide(:reject, canvas_id, clicker, shown_fingerprint, reject)
 
       with {:ok, {card, rejected, profile}} <- result do
         resolve(card, profile, rejected)
@@ -410,7 +549,7 @@ defmodule Platform.Social.Approvals do
   end
 
   # The shared locked prologue (steps 1-6 of the moduledoc), then `body`.
-  defp decide(canvas_id, clicker, shown_fingerprint, body) do
+  defp decide(action, canvas_id, clicker, shown_fingerprint, body) do
     user_id = clicker_id(clicker)
     # Read BEFORE the transaction: the canvas server is another process, and
     # on first use it loads the row through the pool, which this
@@ -426,7 +565,7 @@ defmodule Platform.Social.Approvals do
            :ok <- check_fingerprint(post, shown_fingerprint),
            {:ok, account} <- fetch_account(post),
            {:ok, profile} <- Social.profile_of_post(post),
-           :ok <- Social.approver_check(profile.org_id, profile, user_id) do
+           :ok <- decide_check(action, profile, account, user_id) do
         case body.(card, post, account, profile, user_id) do
           {:error, %Changeset{} = changeset} -> Repo.rollback(changeset_reason(changeset))
           {:error, reason} -> Repo.rollback(reason)
@@ -437,6 +576,15 @@ defmodule Platform.Social.Approvals do
       end
     end)
   end
+
+  # Task 01a14ce1: the owner rule. Approve and edit need the account's owner
+  # (or, unowned, a profile approver); reject also lets a profile approver
+  # in once the owner is archived or gone, so the post is not stranded.
+  defp decide_check(:reject, profile, account, user_id),
+    do: Social.post_rejecter_check(profile.org_id, profile, account, user_id)
+
+  defp decide_check(_approve_or_edit, profile, account, user_id),
+    do: Social.post_approver_check(profile.org_id, profile, account, user_id)
 
   defp changeset_reason(%Changeset{errors: errors} = changeset) do
     Enum.find_value(errors, changeset, fn {_field, {_msg, opts}} -> Keyword.get(opts, :reason) end)
@@ -548,7 +696,13 @@ defmodule Platform.Social.Approvals do
   # After a decision: every approver's inbox row is dismissed and the card
   # re-renders for every open session.
   defp resolve(card, profile, post) do
-    for user_id <- profile.approver_user_ids || [] do
+    owner_ids =
+      case fetch_account(post) do
+        {:ok, %Account{owner_user_id: owner_id}} when is_binary(owner_id) -> [owner_id]
+        _ -> []
+      end
+
+    for user_id <- Enum.uniq(owner_ids ++ (profile.approver_user_ids || [])) do
       Platform.Inbox.dismiss_by_source(user_id, @source_type, post.id, kind: @kind)
     end
 
@@ -588,13 +742,20 @@ defmodule Platform.Social.Approvals do
   @doc """
   What the card shows `viewer` (`{:user, id}`, `{:agent, id}`, or nil).
 
-  A viewer who passes `Platform.Social.approver_check/3` RIGHT NOW gets
+  A viewer who passes `Platform.Social.post_approver_check/4` RIGHT NOW gets
   `role: :approver` and the preview: body, media, link, hashtags, platform,
   character count against the platform limit, schedule, provenance, the
   edited-by line, the content `fingerprint`, and the `actions` while the
   card is pending (`:approve`, or `:copy` on a draft_only account, plus
   `:edit` and `:reject`). Everyone else, agents included, gets
   `role: :viewer` with the status line only: no text, media or actions.
+  On an owned account (task 01a14ce1, stage 3) the owner's view carries
+  `posts_as` ("Posts as you · LinkedIn · for <brand>"), and a profile
+  approver who is not the owner gets `role: :waiting`: the preview with NO
+  actions, and `owner_name` (the owner's first name) to wait for.
+  A profile approver who fails it only because the account's owner is
+  archived or gone (`post_rejecter_check/4`) gets the preview with
+  `:reject` as the only action.
   """
   @spec card_view(term(), term()) :: map()
   def card_view(card_id, viewer) do
@@ -612,13 +773,25 @@ defmodule Platform.Social.Approvals do
         handle: account.handle,
         platform: account.platform,
         platform_label: platform_label(account.platform),
-        scheduled_at: post.scheduled_at
+        scheduled_at: post.scheduled_at,
+        owner_name: account.owner_user_id && first_name(account.owner_user_id),
+        posts_as: nil
       }
 
-      if approver?(viewer, profile) do
-        Map.merge(base, approver_view(card, post, account, profile))
-      else
-        Map.put(base, :role, :viewer)
+      case viewer_role(viewer, profile, account) do
+        :approver ->
+          base
+          |> Map.merge(approver_view(card, post, account, profile))
+          |> Map.put(:posts_as, posts_as(viewer, profile, account))
+
+        :rejecter ->
+          Map.merge(base, rejecter_view(card, post, account, profile))
+
+        :waiting ->
+          Map.merge(base, waiting_view(card, post, account, profile))
+
+        :viewer ->
+          Map.put(base, :role, :viewer)
       end
     else
       _ ->
@@ -630,10 +803,55 @@ defmodule Platform.Social.Approvals do
     end
   end
 
-  defp approver?({:user, user_id}, profile),
-    do: Social.approver_check(profile.org_id, profile, user_id) == :ok
+  # Re-checked on every render through the owner rule (task 01a14ce1). A
+  # profile approver on an owned account with a live owner waits: the post
+  # read-only, no actions (stage 3).
+  defp viewer_role({:user, user_id}, profile, account) do
+    cond do
+      Social.post_approver_check(profile.org_id, profile, account, user_id) == :ok ->
+        :approver
 
-  defp approver?(_viewer, _profile), do: false
+      Social.post_rejecter_check(profile.org_id, profile, account, user_id) == :ok ->
+        :rejecter
+
+      owned?(account) and Social.approver_check(profile.org_id, profile, user_id) == :ok ->
+        :waiting
+
+      true ->
+        :viewer
+    end
+  end
+
+  defp viewer_role(_viewer, _profile, _account), do: :viewer
+
+  defp owned?(%Account{owner_user_id: owner_id}), do: is_binary(owner_id)
+
+  # A profile approver on an owned account (task 01a14ce1, stage 3): the
+  # preview read-only, no actions at all (Approve hidden, not disabled),
+  # and who it waits for.
+  defp waiting_view(card, post, account, profile) do
+    card
+    |> approver_view(post, account, profile)
+    |> Map.merge(%{role: :waiting, actions: [], waiting?: card.state == "pending"})
+  end
+
+  # The owner's meta line: "Posts as you · LinkedIn · for <brand>".
+  defp posts_as({:user, user_id}, profile, %Account{owner_user_id: user_id} = account)
+       when is_binary(user_id),
+       do: "Posts as you · #{platform_label(account.platform)} · for #{profile.name}"
+
+  defp posts_as(_viewer, _profile, _account), do: nil
+
+  defp first_name(user_id) do
+    user_id |> user_name() |> String.split(~r/[\s@]/, parts: 2) |> List.first()
+  end
+
+  # A profile approver on an account whose owner is archived or gone: the
+  # preview, and Reject as the only action.
+  defp rejecter_view(card, post, account, profile) do
+    view = approver_view(card, post, account, profile)
+    %{view | actions: Enum.filter(view.actions, &(&1 == :reject))}
+  end
 
   defp approver_view(card, post, account, profile) do
     limit = Map.get(@platform_limits, account.platform)
