@@ -1,5 +1,14 @@
 defmodule PlatformWeb.GithubWebhookControllerTest do
-  use PlatformWeb.ConnCase, async: true
+  # NOT async. The multi-strategy rollup tests assert on
+  # `ExUnit.CaptureLog.capture_log/1` output (`refute log =~ "Stack "`,
+  # `assert log =~ "Stack <id> matched via slug"`), and capture_log
+  # collects log lines from EVERY process, not just this test's. Run
+  # async, a concurrent module's lines land in the capture; e.g.
+  # HeartbeatSchedulerTest's stack-member dispatch logs "Stack member …"
+  # (heartbeat_scheduler.ex). That redded :2264 on CI run 39533565709 and
+  # :2163 on main run 37473726149. ExUnit starts sync modules only after
+  # every async module has finished.
+  use PlatformWeb.ConnCase, async: false
 
   alias Platform.Changelog
   alias Platform.Tasks
