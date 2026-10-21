@@ -303,7 +303,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           data-gs-sha
           title={@review_sha}
           aria-label={"Review build " <> @review_sha}
-          class="ml-auto shrink-0 font-mono text-xs text-base-content/70"
+          class="ml-auto shrink-0 font-mono text-xs text-subtle"
         >
           <span class="@xl:hidden">{@sha7}</span><span class="hidden @xl:inline">{@review_sha}</span>
         </span>
@@ -489,7 +489,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           type="button"
           data-gs-roster-line
           aria-haspopup="dialog"
-          class="flex w-full min-w-0 items-center gap-1 text-left text-xs text-base-content/70 @md:hidden"
+          class="flex w-full min-w-0 items-center gap-1 text-left text-xs text-base-content @md:hidden"
         >
           <span data-gs-roster-line-text class="min-w-0 truncate">{@view.phone_line}</span>
           <span class="hero-chevron-up size-3 shrink-0" aria-hidden="true"></span>
@@ -518,7 +518,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         hidden={!(@running? and @multi? and not @view.player?)}
         class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2"
       >
-        <span data-gs-watch-line class="min-w-0 text-xs text-base-content/70">
+        <span data-gs-watch-line class="min-w-0 text-xs text-base-content">
           {@view.watch && @view.watch.line}
         </span>
         <button
@@ -801,7 +801,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   defp header_button_class,
     do:
       "shrink-0 rounded-md border border-edge px-2 py-0.5 text-xs font-medium " <>
-        "text-base-content/80 hover:bg-base-200"
+        "text-base-content hover:bg-base-200"
 
   defp menu_item_class,
     do: "w-full rounded-md px-2 py-1.5 text-left text-sm text-base-content hover:bg-base-200"

@@ -487,6 +487,23 @@
   }
 }
 
+/* An inactive daisyUI tab paints the secondary-text tier (task 01a15907
+   stage 4; backlog 01a15ca0; Saru's ruling: subtle, not disabled). daisyUI's
+   own rule paints it base-content at 50%, about 3.85:1 on light grounds,
+   and as vendor CSS neither the class ratchet nor the stylesheet floor sees
+   it. The selector is daisyUI's own resting-tab selector, so hover, checked,
+   tab-active and aria-selected keep daisyUI's full base-content: a state
+   variant goes to body, never to subtle. UNLAYERED on purpose: the built
+   stylesheet emits daisyUI's .tab rules inside @layer utilities (measured
+   in the dev build, task 01a15907 stage 4), so a components-layer rule
+   lost to them; an unlayered rule outranks every layer. Same specificity
+   as daisyUI's. The guard also refuses a per-site text colour class on a
+   .tab, so this rule is the tab colour's one source. Held by
+   test/platform/design/inactive_tab_contrast_test.exs. */
+.tab:not(:checked, label:has(:checked), :hover, .tab-active, [aria-selected="true"]) {
+  color: var(--color-subtle);
+}
+
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
@@ -1125,7 +1142,9 @@ html {
   background: var(--color-base-300);
   border-radius: 0.5rem 0.5rem 0 0;
   font-size: 0.75em;
-  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
+  /* Metadata beside the code it labels: the secondary-text tier (task
+     01a15907 stage 5; was base-content 70% over transparent). */
+  color: var(--color-subtle);
 }
 
 .code-block-header + pre {
@@ -2228,19 +2247,12 @@ body, .font-suite {
 }
 
 /* Secondary labels in the Context panel ("From the agent", "Replying to",
-   the source line): the design direction names `neutral` at text-xs. Light
-   uses the token raw. Dark gets the same correction the reaction picker
-   measured for this token on base-100 (1.86:1 raw), by mixing the foreground
-   into neutral rather than moving the token. */
-.message-context-label { color: var(--color-neutral); }
-[data-theme="dark"] .message-context-label {
-  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .message-context-label {
-    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+   the source line): the secondary-text tier, in both themes (task 01a15907
+   stage 5). They were `--color-neutral` in light and, in dark, base-content
+   50% mixed into neutral: an opaque third grey, which the two-level rule
+   (body and subtle) refuses. --color-subtle resolves per theme block and is
+   guarded at 4.5:1 on every ground. */
+.message-context-label { color: var(--color-subtle); }
 
 /* Canvas picker meta line ("#space · edited Oct 13", task 01a1559a stage 3).
    Secondary text, so it paints the secondary-text token (task 01a15902
@@ -3376,32 +3388,18 @@ body, .font-suite {
      inside this component only — no app-level token moves — by mixing the
      foreground into neutral. See the dark block below for the resulting
      numbers. */
-  --reaction-picker-label: var(--color-neutral);
+  --reaction-picker-label: var(--color-subtle);
 
   display: none;
 }
 
 .reaction-picker[data-open="true"] { display: flex; }
 
-/* The dark correction. 50% base-content into neutral gives #9a9596, which is
-   5.85:1 on the panel and 5.30:1 on the tinted sticky header — both clear of
-   the 4.5:1 small-text floor with headroom, and still visibly quieter than
-   --color-base-content, which would be ~14:1 and would stop reading as
-   structural. Light is untouched: it already passes at 7.48:1, and mixing a
-   black foreground into it there would make the labels heavier than designed.
-
-   Three-state theming, matching the pattern this file already uses at the
-   `.chip-soft` blocks: an explicit `data-theme="dark"` wins
-   outright, and the unset default follows `prefers-color-scheme`. */
-[data-theme="dark"] .reaction-picker {
-  --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .reaction-picker {
-    --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+/* The labels paint the secondary-text tier in both themes (task 01a15907
+   stage 5). The dark correction that lived here mixed base-content 50% into
+   neutral, an opaque third grey; --color-subtle resolves per theme block
+   (dark included) and is guarded at 4.5:1 on every ground, so one
+   declaration serves both themes. */
 
 /* Mobile: bottom-sheet. The panel slides up from the bottom of the
    viewport with iOS-style rounded top corners and honors the bottom
@@ -4137,11 +4135,13 @@ body, .font-suite {
    one.
 
    It bites the four quick-react emoji hardest, which is exactly where the
-   report came from. Every other button in the row also carries
-   `text-base-content/50 hover:text-base-content`, so it has a second,
-   working signal. An emoji is a colour glyph that ignores `color`
-   entirely, so for those four the invisible fill was the ONLY feedback
-   there was.
+   report came from. The icon buttons in the row rest at the `text-subtle`
+   token and, all but one, brighten to `hover:text-base-content`, so they
+   have a second, working signal. The exception is the open-thread-in-panel
+   button, whose hover class is also `text-subtle`: it gets no colour change,
+   so for it the fill and scale below are the only hover feedback. An emoji
+   is a colour glyph that ignores `color` entirely, so for the four
+   quick-react buttons the invisible fill was the ONLY feedback there was.
 
    So: two signals, neither depending on a lightness step that a theme can
    flatten.
@@ -5016,7 +5016,7 @@ body, .font-suite {
 
 .icon-rail-tab--child .icon-rail-label {
   font-weight: 400;
-  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  color: var(--color-base-content);
 }
 
 .icon-rail-tab--child.icon-rail-tab--active .icon-rail-label {
@@ -6314,7 +6314,7 @@ body, .font-suite {
      "More" menu below.) Reused for the admin "Done (admin)" via its own
      accented rule. */
   .channel-edit-toggle {
-    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content hover:text-primary hover:bg-base-300 transition-colors;
   }
 
   .channel-edit-toggle[aria-pressed="true"] {
@@ -6348,7 +6348,7 @@ body, .font-suite {
 
   /* One menu row. Left-aligned, full-width tap target, hover highlight. */
   .channel-sidebar-menu-item {
-    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content/80 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
+    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
   }
 
   /* The admin entry point — warning accent so "Edit company default" reads as
@@ -6418,7 +6418,7 @@ body, .font-suite {
      the "+ New channel" visual vocabulary so the rail's chrome stays
      consistent. */
   .channel-reset-layout-button {
-    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors;
   }
 
   /* ── Root-admin "Edit default" mode (chat sidebar Stage 6) ────────────
@@ -6515,7 +6515,7 @@ body, .font-suite {
   }
 
   .channel-hidden-drawer-item {
-    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content/70 rounded hover:bg-base-300/60;
+    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content rounded hover:bg-base-300/60;
   }
 
   .channel-hidden-drawer-show {
@@ -8714,14 +8714,19 @@ body, .font-suite {
    above): the dark theme is declared `prefersdark: true`, and a page that
    runs no script (or paints before the `theme-boot` script runs) has no
    `data-theme` at all, so a viewer under a dark OS gets the dark palette
-   with no `[data-theme=dark]` to match. */
+   with no `[data-theme=dark]` to match.
+
+   Task 01a15907 stage 5: the colour is now the secondary-text token,
+   `var(--color-subtle)`, which resolves in every dark block to the same
+   base-content 55% over transparent measured above. No base-content mix
+   below 100% is declared outside the --subtle definitions. */
 [data-theme="dark"] [data-role="canvas-search-indexing-state"] {
-  color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+  color: var(--color-subtle);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) [data-role="canvas-search-indexing-state"] {
-    color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+    color: var(--color-subtle);
   }
 }
 

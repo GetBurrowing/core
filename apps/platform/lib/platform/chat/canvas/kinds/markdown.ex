@@ -31,7 +31,7 @@ defmodule Platform.Chat.Canvas.Kinds.Markdown do
 
     ~H"""
     <div class={[
-      "prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown",
+      "prose prose-sm max-w-none text-sm text-base-content chat-markdown",
       @class_overrides
     ]}>
       {ContentRenderer.render_message(@content)}

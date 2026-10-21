@@ -263,7 +263,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
           Frontmatter
         </h2>
         <pre
-          class="rounded-lg bg-base-100 p-3 font-mono text-xs text-base-content/70 overflow-x-auto"
+          class="rounded-lg bg-base-100 p-3 font-mono text-xs text-base-content overflow-x-auto"
           data-role="complex-frontmatter"
         >{@fm_complex}</pre>
         <p class="mt-1 text-xs text-subtle">

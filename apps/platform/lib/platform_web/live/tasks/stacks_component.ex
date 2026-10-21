@@ -869,7 +869,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                       data-review-item-id={item.id}
                     >
                       <div class="mb-2 flex items-center justify-between gap-2">
-                        <div class="min-w-0 truncate text-xs font-semibold text-base-content/80">
+                        <div class="min-w-0 truncate text-xs font-semibold text-base-content">
                           {item.label}
                         </div>
                         <div class="flex shrink-0 gap-1">
@@ -975,7 +975,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                           </div>
                         <% is_binary(item.content) and item.content != "" -> %>
                           <pre
-                            class="overflow-x-auto whitespace-pre-wrap rounded-md border border-edge bg-base-100 p-2 text-xs text-base-content/80"
+                            class="overflow-x-auto whitespace-pre-wrap rounded-md border border-edge bg-base-100 p-2 text-xs text-base-content"
                             data-role="stack-feedback-overlay-content"
                           >{item.content}</pre>
                         <% true -> %>

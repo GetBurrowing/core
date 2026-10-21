@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.InboxItem do
   Styling reads only from semantic DaisyUI token slots per
   `docs/design-system/01-foundations.md`, no raw hex: `bg-primary` (unread
   dot), `text-info` + `border-info/40` (Needs-your-review tag), `base-100` +
-  `border-edge` (row ground), `text-base-content/70` (body), and `error` (the
+  `border-edge` (row ground), `text-base-content` (body), and `error` (the
   dismiss X hover). The rail count stays `badge-error` in `IconRail`; this
   component does not render it. The kind badge and the per-item space label
   give each row its taxonomy at a glance.
@@ -126,7 +126,7 @@ defmodule PlatformWeb.Components.InboxItem do
             </span>
             <span
               :if={@space_label}
-              class="inline-flex items-center rounded-full bg-base-200 px-2 py-0.5 text-[11px] font-medium text-base-content/70"
+              class="inline-flex items-center rounded-full bg-base-200 px-2 py-0.5 text-xs font-medium text-subtle"
               data-role="inbox-item-space"
             >
               {@space_label}
@@ -162,7 +162,7 @@ defmodule PlatformWeb.Components.InboxItem do
 
           <span
             :if={present?(@item.body)}
-            class="mt-0.5 block line-clamp-2 text-sm text-base-content/70"
+            class="mt-0.5 block line-clamp-2 text-sm text-base-content"
           >
             {@item.body}
           </span>

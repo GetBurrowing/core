@@ -438,7 +438,7 @@ defmodule PlatformWeb.PipelineLiveTest do
       # The phase-NAME axis below keeps its truncation deliberately — a
       # clipped word is not ambiguous the way a clipped number is — so the
       # rule must not have been applied page-wide.
-      assert html =~ ~r/text-\[10px\] text-base-content\/70 text-center truncate/
+      assert html =~ ~r/text-xs text-base-content text-center truncate/
 
       # Anti-vacuity for the drop: the wide segment DOES carry a label span,
       # so a missing one is a width decision rather than the page having

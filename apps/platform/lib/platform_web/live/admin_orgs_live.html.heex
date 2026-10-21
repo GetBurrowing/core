@@ -308,7 +308,7 @@
                 <span class="hero-exclamation-triangle size-4 text-warning"></span>
                 Close to a colour already in use
               </p>
-              <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content/70">
+              <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content">
                 {conflict.org.name} is at hue {conflict.org.color_hue},
                 <span class="font-mono">{conflict.distance}°</span>
                 away. You can still create this org.

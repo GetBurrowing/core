@@ -246,8 +246,8 @@ describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)"
   })
 
   // The defect this pins: the host div carries `text-white`, but
-  // `_render` wrote `text-base-content` / `text-base-content/90` on the
-  // CHILD spans, and a colour on a child beats one inherited from a
+  // `_render` wrote `text-base-content`, at full and at 90% strength, on
+  // the CHILD spans, and a colour on a child beats one inherited from a
   // parent — so the host's white was dead. `light` is `default: true` in
   // app.css and sets `--color-base-content: oklch(0% 0 0)`, so a
   // light-theme viewer got BLACK caption text on the `bg-black/75`

@@ -65,7 +65,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
       <h2 class="text-[22px] font-semibold leading-7 text-base-content">
         Log {@agent.name} in to Claude
       </h2>
-      <p class="mt-1 max-w-prose text-sm text-base-content/70">
+      <p class="mt-1 max-w-prose text-sm text-base-content">
         {@agent.name} runs Claude Code on this server. Logging in with a Claude subscription
         is not available yet, so {@agent.name} uses an Anthropic API key. You do this once.
       </p>
@@ -88,7 +88,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
           <div class="min-w-0">
             <p class="flex flex-wrap items-center gap-2 text-sm font-semibold text-subtle">
               Claude subscription
-              <span class="rounded-field bg-base-200 px-2 py-0.5 text-xs font-medium text-base-content/70">
+              <span class="rounded-field bg-base-200 px-2 py-0.5 text-xs font-medium text-base-content">
                 {subscription_unavailable()}
               </span>
             </p>
@@ -138,7 +138,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
         <span class="hero-check-circle mr-1 inline-block h-4 w-4 align-text-bottom" />
         {logged_in_message(@agent.name)}
       </p>
-      <p :if={@step == :waiting} id="native-login-waiting" class="mt-1 text-sm text-base-content/70">
+      <p :if={@step == :waiting} id="native-login-waiting" class="mt-1 text-sm text-base-content">
         Waiting for {@agent.name} to start with the API key.
       </p>
       <p
@@ -244,7 +244,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
         </button>
         <%= case @output do %>
           <% %{hidden: :login} -> %>
-            <p id="native-recent-output-hidden" class="mt-3 text-sm text-base-content/70">
+            <p id="native-recent-output-hidden" class="mt-3 text-sm text-base-content">
               {@agent.name} is showing a login screen, so its output is hidden.
             </p>
           <% %{lines: []} -> %>
@@ -255,7 +255,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
               class="mt-3 max-h-96 overflow-auto rounded-box bg-neutral p-3 font-mono text-xs leading-5 text-neutral-content"
             >{Enum.join(lines, "\n")}</pre>
           <% {:error, reason} -> %>
-            <p class="mt-3 text-sm text-base-content/70">
+            <p class="mt-3 text-sm text-base-content">
               Could not read the output: {error_text(reason)}.
             </p>
           <% _ -> %>

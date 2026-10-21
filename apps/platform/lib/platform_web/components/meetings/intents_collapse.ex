@@ -566,7 +566,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           {CandidateDisplay.intent_label(@intent.classified_intent)}
         </span>
         <span
-          class="flex-shrink-0 truncate rounded-full border border-edge bg-base-200/60 px-2 py-0.5 text-[10px] text-base-content/70"
+          class="flex-shrink-0 truncate rounded-full border border-edge bg-base-200/60 px-2 py-0.5 text-xs text-subtle"
           data-role="intent-target"
         >
           {CandidateDisplay.target_label(@intent.target_agent_slug, @intent.target_role)}
@@ -830,12 +830,12 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
         <form phx-submit="intent_edit_save" class="flex flex-col gap-3 px-4 py-4">
           <input type="hidden" name="intent_edit[intent_id]" value={@row.id} />
 
-          <p class="rounded-lg bg-base-200/60 px-3 py-2 font-mono text-[11px] text-base-content/70">
+          <p class="rounded-lg bg-base-200/60 px-3 py-2 font-mono text-xs text-base-content">
             {@row.chunk_excerpt || @row.classified_intent}
           </p>
 
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/70">Corrected intent</span>
+            <span class="text-xs font-medium text-base-content">Corrected intent</span>
             <input
               type="text"
               name="intent_edit[corrected_intent]"
@@ -847,7 +847,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           </label>
 
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/70">Corrected target agent</span>
+            <span class="text-xs font-medium text-base-content">Corrected target agent</span>
             <select
               name="intent_edit[corrected_target_agent_id]"
               class="select select-bordered min-h-11 w-full text-xs"
@@ -865,7 +865,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           </label>
 
           <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium text-base-content/70">Reason</span>
+            <span class="text-xs font-medium text-base-content">Reason</span>
             <select
               name="intent_edit[reason]"
               class="select select-bordered min-h-11 w-full text-xs"

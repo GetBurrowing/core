@@ -1167,7 +1167,7 @@ defmodule PlatformWeb.SocialLive do
             </span>
             <span
               :if={count(@counts, @profile) == 0}
-              class="whitespace-nowrap text-sm text-base-content/70"
+              class="whitespace-nowrap text-sm text-base-content"
               data-role="social-needs-approval"
             >
               0 need approval
@@ -1227,7 +1227,7 @@ defmodule PlatformWeb.SocialLive do
               role="tab"
               class={[
                 "tab shrink-0",
-                if(@tab == key, do: "tab-active", else: "text-base-content/70!")
+                @tab == key && "tab-active"
               ]}
               aria-selected={to_string(@tab == key)}
               phx-click="select_tab"
@@ -1249,7 +1249,7 @@ defmodule PlatformWeb.SocialLive do
                stream survives a tab change. --%>
           <div class={[@tab != "queue" && "hidden"]} data-pane="queue">
             <div :if={@queue_empty?} class="space-y-3">
-              <p class="text-base-content/70" data-role="social-empty">
+              <p class="text-base-content" data-role="social-empty">
                 {empty_queue_copy(@profile, @accounts_empty?)}
               </p>
               <button
@@ -1276,7 +1276,7 @@ defmodule PlatformWeb.SocialLive do
                   />
                 <% else %>
                   <p
-                    class="rounded-xl border border-base-300 bg-base-100 p-3 text-sm text-base-content/70"
+                    class="rounded-xl border border-base-300 bg-base-100 p-3 text-sm text-base-content"
                     data-role="social-queue-waiting"
                   >
                     Waiting for its approval card.
@@ -1316,7 +1316,7 @@ defmodule PlatformWeb.SocialLive do
                 Go to Settings
               </button>
             </div>
-            <p :if={@accounts_empty?} class="mb-3 text-base-content/70" data-role="social-empty">
+            <p :if={@accounts_empty?} class="mb-3 text-base-content" data-role="social-empty">
               No accounts connected for {@profile.name} yet
             </p>
             <.add_account
@@ -1378,7 +1378,7 @@ defmodule PlatformWeb.SocialLive do
               <h2 class="text-lg font-semibold" data-role="social-create-heading">
                 Set up your first social profile
               </h2>
-              <p class="mt-1 mb-4 text-base-content/70" data-role="social-create-explanation">
+              <p class="mt-1 mb-4 text-base-content" data-role="social-create-explanation">
                 A profile is a brand or person you post for. You'll be its first approver.
               </p>
               <.create_form form={@create_form} orgs={@creatable_orgs} focus?={true} />
@@ -1386,7 +1386,7 @@ defmodule PlatformWeb.SocialLive do
           </div>
         <% else %>
           <div class="px-4 py-12 text-center sm:px-6">
-            <p class="text-base-content/70" data-role="social-no-profiles">
+            <p class="text-base-content" data-role="social-no-profiles">
               No social profiles yet. Ask an org member to set one up.
             </p>
           </div>
@@ -1461,7 +1461,7 @@ defmodule PlatformWeb.SocialLive do
         </p>
       </div>
       <div class="fieldset py-0">
-        <label for="social-create-home-url" class="label mb-1 font-medium text-base-content/70">
+        <label for="social-create-home-url" class="label mb-1 font-medium text-base-content">
           Home page (optional)
         </label>
         <input
@@ -1475,7 +1475,7 @@ defmodule PlatformWeb.SocialLive do
           aria-describedby="social-create-home-hint"
           data-role="social-create-home-url"
         />
-        <p id="social-create-home-hint" class="mt-1 text-sm text-base-content/70">
+        <p id="social-create-home-hint" class="mt-1 text-sm text-base-content">
           Where clips link back to. Add it later in Settings if you like.
         </p>
         <p
@@ -1674,13 +1674,13 @@ defmodule PlatformWeb.SocialLive do
           >
             Connect
           </button>
-          <span :if={!@can_connect?} class="text-sm text-base-content/70">Not connected</span>
+          <span :if={!@can_connect?} class="text-sm text-base-content">Not connected</span>
       <% end %>
     </span>
     <button
       :if={@can_edit?}
       type="button"
-      class="btn btn-ghost btn-sm shrink-0 text-base-content/70"
+      class="btn btn-ghost btn-sm shrink-0 text-base-content"
       phx-click="open_remove"
       phx-value-id={@account.id}
       data-role="social-account-remove"
@@ -1708,7 +1708,7 @@ defmodule PlatformWeb.SocialLive do
       <p data-role="social-remove-sentence">
         <span :for={{class, text} <- @segments} class={class}>{text}</span>
       </p>
-      <p :if={@account.status} class="mt-1 text-base-content/70" data-role="social-remove-reconnect">
+      <p :if={@account.status} class="mt-1 text-base-content" data-role="social-remove-reconnect">
         You can reconnect this account later.
       </p>
       <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -1819,7 +1819,7 @@ defmodule PlatformWeb.SocialLive do
           <span class="size-2 rounded-full bg-success" aria-hidden="true"></span> Set
         </span>
       </div>
-      <p class="mt-0.5 text-sm text-base-content/70" data-role="social-zernio-scope">
+      <p class="mt-0.5 text-sm text-base-content" data-role="social-zernio-scope">
         One key for the whole org. Used by every profile.
       </p>
 
@@ -1827,7 +1827,7 @@ defmodule PlatformWeb.SocialLive do
         :if={match?({:set, _}, @status) and @mode != :edit}
         class="mt-3 flex flex-wrap items-center justify-between gap-2"
       >
-        <p class="text-sm text-base-content/70" data-role="social-zernio-changed">
+        <p class="text-sm text-subtle" data-role="social-zernio-changed">
           {last_changed(@status)}
         </p>
         <button
@@ -1861,7 +1861,7 @@ defmodule PlatformWeb.SocialLive do
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
-            class="peer input min-w-0 flex-1 border-edge bg-base-100 font-mono placeholder:text-base-content/70"
+            class="peer input min-w-0 flex-1 border-edge bg-base-100 font-mono placeholder:text-subtle"
             data-role="social-zernio-key-input"
           />
           <button
@@ -1875,7 +1875,7 @@ defmodule PlatformWeb.SocialLive do
       </.form>
       <p
         :if={@input? and @status == :not_set}
-        class="mt-2 text-sm text-base-content/70"
+        class="mt-2 text-sm text-base-content"
         data-role="social-zernio-helper"
       >
         Find it in Zernio > Settings > API.
@@ -1922,15 +1922,15 @@ defmodule PlatformWeb.SocialLive do
     ~H"""
     <dl class="space-y-3 text-sm" data-role="social-settings-readonly">
       <div>
-        <dt class="text-base-content/70">Home URL</dt>
+        <dt class="text-base-content">Home URL</dt>
         <dd>{@profile.home_url || "Not set"}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Voice notes</dt>
+        <dt class="text-base-content">Voice notes</dt>
         <dd class="whitespace-pre-wrap">{@profile.voice_notes || "Not set"}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Hashtags</dt>
+        <dt class="text-base-content">Hashtags</dt>
         <dd>{Enum.join(@profile.default_hashtags || [], " ")}</dd>
       </div>
     </dl>
@@ -1998,7 +1998,7 @@ defmodule PlatformWeb.SocialLive do
         <button type="button" class="btn btn-ghost btn-sm" phx-click="week_next" data-role="week-next">
           next week <.icon name="hero-chevron-right-micro" class="size-4" />
         </button>
-        <span class="text-sm text-base-content/70" data-role="social-week-label">
+        <span class="text-sm text-base-content" data-role="social-week-label">
           Week of {Calendar.strftime(@week_start, "%-d %b %Y")} (UTC)
         </span>
       </div>
@@ -2009,7 +2009,7 @@ defmodule PlatformWeb.SocialLive do
         <.status_mark status="failed" />
       </div>
 
-      <p :if={@empty?} class="text-base-content/70" data-role="social-empty">
+      <p :if={@empty?} class="text-base-content" data-role="social-empty">
         Nothing scheduled for {@profile.name} this week.
       </p>
 
@@ -2019,7 +2019,7 @@ defmodule PlatformWeb.SocialLive do
           <div class="bg-base-100 p-2"></div>
           <div
             :for={day <- @days}
-            class="bg-base-100 p-2 text-xs font-semibold text-base-content/70"
+            class="bg-base-100 p-2 text-xs font-semibold text-base-content"
             data-role="social-day-head"
           >
             {Cal.day_name(day)} {day.day}
@@ -2041,7 +2041,7 @@ defmodule PlatformWeb.SocialLive do
               <span class="shrink-0 whitespace-nowrap font-mono text-xs uppercase">
                 {row.account.platform}
               </span>
-              <span class="min-w-0 truncate text-sm text-base-content/70">{row.account.handle}</span>
+              <span class="min-w-0 truncate text-sm text-base-content">{row.account.handle}</span>
             </div>
             <div
               :for={{day, items} <- row.days}
@@ -2086,7 +2086,7 @@ defmodule PlatformWeb.SocialLive do
                   {item.account.platform}
                 </span>
                 <span class="shrink-0 whitespace-nowrap font-mono text-xs">{Cal.time(item.at)}</span>
-                <span class="min-w-0 flex-1 truncate text-sm text-base-content/70">
+                <span class="min-w-0 flex-1 truncate text-sm text-base-content">
                   {item.account.handle}
                 </span>
                 <.status_mark status={item.post.status} />
@@ -2140,7 +2140,7 @@ defmodule PlatformWeb.SocialLive do
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
             <p class="font-mono text-xs uppercase">{@detail.account.platform}</p>
-            <p class="truncate text-sm text-base-content/70">{@detail.account.handle}</p>
+            <p class="truncate text-sm text-base-content">{@detail.account.handle}</p>
           </div>
           <button
             type="button"

@@ -176,7 +176,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             type="button"
             phx-click="toggle_mask_names"
             phx-value-masked={to_string(!@mask_names?)}
-            class="channel-mask-toggle flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/70 hover:bg-base-300 hover:text-base-content"
+            class="channel-mask-toggle flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content hover:bg-base-300 hover:text-base-content"
             aria-pressed={to_string(@mask_names?)}
             aria-label="Hide workspace names for sharing"
           >
@@ -196,7 +196,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           <button
             type="button"
             phx-click="toggle_sidebar_edit"
-            class="flex items-center justify-center min-h-11 min-w-11 px-3 rounded-lg text-sm font-medium text-base-content/70 hover:bg-base-300 hover:text-base-content"
+            class="flex items-center justify-center min-h-11 min-w-11 px-3 rounded-lg text-sm font-medium text-base-content hover:bg-base-300 hover:text-base-content"
             aria-pressed={to_string(@sidebar_edit)}
             aria-label={if @sidebar_edit, do: "Done editing layout", else: "Edit layout"}
           >
@@ -465,7 +465,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
       <button
         phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
         aria-label="New channel"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
       >
         <span class="hero-plus size-5"></span>
         <span>New channel</span>

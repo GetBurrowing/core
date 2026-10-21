@@ -947,7 +947,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
             if(@active_space.id == agents_space.id,
               do: "bg-primary text-primary-content",
-              else: "bg-base-100 text-base-content/80 border border-base-content/10"
+              else: "bg-base-100 text-base-content border border-base-content/10"
             )
           ]}
         >
@@ -977,7 +977,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
           if(@active_space.id == space.id,
             do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content/80 border border-base-content/10"
+            else: "bg-base-100 text-base-content border border-base-content/10"
           )
         ]}
       >
@@ -1015,7 +1015,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
           if(@active_space.id == space.id,
             do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content/80 border border-base-content/10"
+            else: "bg-base-100 text-base-content border border-base-content/10"
           )
         ]}
       >
@@ -1147,7 +1147,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             if @active_space.id == space.id do
               "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
             else
-              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+              "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
             end
           ]}
         >
@@ -1184,7 +1184,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           if @active_space.id == space.id do
             "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
           else
-            "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+            "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
           end
         ]}
       >
@@ -1281,7 +1281,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Search Results
           </p>
-          <p class="text-sm text-base-content/70">
+          <p class="text-sm text-base-content">
             “{@search_query}” · {length(@search_results)} match{if length(@search_results) == 1,
               do: "",
               else: "es"}
@@ -1371,7 +1371,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :for={pin <- @pins}
           class="flex items-center justify-between rounded bg-base-100 px-3 py-1.5 text-sm"
         >
-          <span class="truncate text-base-content/70 text-xs">
+          <span class="truncate text-base-content text-xs">
             <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
             pinned message
             <span class="font-mono text-subtle text-[10px]">

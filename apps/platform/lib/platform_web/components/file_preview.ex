@@ -227,7 +227,7 @@ defmodule PlatformWeb.Components.FilePreview do
           <.no_text_yet :if={!@text} scope={@scope} />
         <% :unknown -> %>
           <div
-            class="rounded border border-edge bg-base-200 p-4 text-sm text-base-content/70"
+            class="rounded border border-edge bg-base-200 p-4 text-sm text-base-content"
             data-role={@scope <> "-unknown"}
           >
             <p>Cannot preview this file type ({@file.content_type}) in the browser.</p>
@@ -294,7 +294,7 @@ defmodule PlatformWeb.Components.FilePreview do
         {@file.original_filename || @file.name || "file"}
       </span>
       <span
-        class="shrink-0 whitespace-nowrap font-mono text-xs text-base-content/70"
+        class="shrink-0 whitespace-nowrap font-mono text-xs text-subtle"
         data-role={@scope <> "-html-size"}
       >
         {FilesLive.humanize_bytes(@file.byte_size)}

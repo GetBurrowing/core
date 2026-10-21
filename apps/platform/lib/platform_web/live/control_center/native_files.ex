@@ -95,7 +95,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <p
         :if={!@can_manage?}
         id="native-files-locked"
-        class="mt-4 rounded-box border border-edge bg-base-200/50 px-4 py-3 text-sm text-base-content/70"
+        class="mt-4 rounded-box border border-edge bg-base-200/50 px-4 py-3 text-sm text-base-content"
       >
         {locked_message()}
       </p>
@@ -122,7 +122,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <%!-- Narrow screens (375px): a select and the file, read-only. --%>
       <div :if={@can_manage?} id="native-files-narrow" class="mt-4 md:hidden">
         <form id="native-files-pick" phx-change="select_workspace_file">
-          <label for="native-files-select" class="mb-1 block text-sm text-base-content/70">
+          <label for="native-files-select" class="mb-1 block text-sm text-base-content">
             File
           </label>
           <select id="native-files-select" name="file_key" class="select select-bordered w-full">
@@ -189,7 +189,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
             class="flex flex-col gap-3"
           >
             <div :if={is_nil(@selected_workspace_file)}>
-              <label for="native-file-key" class="mb-1 block text-sm text-base-content/70">
+              <label for="native-file-key" class="mb-1 block text-sm text-base-content">
                 File name
               </label>
               <input

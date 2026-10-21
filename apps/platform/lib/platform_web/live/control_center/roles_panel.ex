@@ -42,7 +42,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Platform Roles
           </p>
-          <p class="mt-1 text-sm text-base-content/70">
+          <p class="mt-1 text-sm text-base-content">
             Pin one agent per role. Each role bundles a fixed set of responsibilities.
           </p>
         </div>
@@ -78,7 +78,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
             <div class="flex flex-wrap items-center gap-1.5">
               <code
                 :for={key <- Map.get(@role_bundles, role.key, [])}
-                class="rounded bg-base-200 px-1.5 py-0.5 text-[11px] font-mono text-base-content/70"
+                class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content"
               >
                 {key}
               </code>
@@ -119,11 +119,11 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           >
             <div class="flex min-w-0 flex-1 flex-col gap-1">
               <div class="flex flex-wrap items-center gap-2">
-                <code class="rounded bg-base-200 px-1.5 py-0.5 text-[11px] font-mono text-base-content/80">
+                <code class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content">
                   {row.responsibility_key}
                 </code>
                 <span class="text-xs text-subtle">
-                  from <span class="font-medium text-base-content/70">{row.role_name}</span>
+                  from <span class="font-medium text-base-content">{row.role_name}</span>
                 </span>
                 <span
                   :if={row.overridden?}
@@ -135,7 +135,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
               <div class="flex items-center gap-1.5 text-xs text-subtle">
                 <%= if row.assignee do %>
                   <span class="hero-user-circle h-3.5 w-3.5" />
-                  <span class="font-medium text-base-content/80">{row.assignee.name}</span>
+                  <span class="font-medium text-base-content">{row.assignee.name}</span>
                 <% else %>
                   <span class="text-xs text-subtle">unassigned</span>
                 <% end %>

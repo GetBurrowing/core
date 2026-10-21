@@ -692,7 +692,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             "relative flex items-center justify-center px-2 py-2.5 text-[12.5px] transition-colors",
             if(id == @active,
               do: "min-w-0 flex-1 font-semibold text-base-content",
-              else: "flex-none font-medium text-subtle hover:text-base-content/80"
+              else: "flex-none font-medium text-subtle hover:text-base-content"
             )
           ]}
         >
@@ -1102,7 +1102,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             data-agent-id={row.agent.id}
             data-invite-pending={row.state == :pending && "true"}
             aria-label={invite_label(row)}
-            class="btn btn-ghost btn-xs shrink-0 font-normal text-base-content/70 hover:text-base-content"
+            class="btn btn-ghost btn-xs shrink-0 font-normal text-base-content hover:text-base-content"
           >
             <span
               :if={row.state == :pending}
@@ -1322,7 +1322,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@camera_on)}
         aria-pressed={to_string(!@camera_on)}
         aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
-        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
       >
         <span
           class={["size-4", if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash")]}
@@ -1343,7 +1343,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@sharing)}
         aria-pressed={to_string(@sharing)}
         aria-label={if @sharing, do: "Stop sharing your screen", else: "Share your screen"}
-        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
       >
         <span class="hero-arrow-up-tray size-4" aria-hidden="true"></span>
         <.toggling_label on={@sharing} when_on="Stop sharing" when_off="Share" />
@@ -1381,7 +1381,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       <p
         :if={@native && !@media_error}
         data-role="call-control-native-note"
-        class="min-w-0 truncate text-sm text-base-content/70"
+        class="min-w-0 truncate text-sm text-base-content"
       >
         Audio only in the app
       </p>
@@ -1398,7 +1398,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   # outranks the plain utility, so the ring computed to `none` and pending
   # looked like nothing at all. `disabled` stays: it is what makes the
   # button inert to pointer AND keyboard while the native call answers.
-  @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+  @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
 
   defp mic_class(nil, _mic_on, _pending), do: @mic_class
 

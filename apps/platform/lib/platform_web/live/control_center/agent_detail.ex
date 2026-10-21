@@ -606,7 +606,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           </p>
 
           <div :for={entry <- @upload.entries} class="flex items-center gap-2 text-xs">
-            <span class="truncate text-base-content/70">{entry.client_name}</span>
+            <span class="truncate text-base-content">{entry.client_name}</span>
             <%!-- Only for an entry that will actually upload. A rejected
             entry never gets progress, and a full-looking bar under a
             rejection message reads as "it worked". --%>
@@ -855,7 +855,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             @selected_agent_directory_entry &&
               @selected_agent_directory_entry.workspace_managed?
           }
-          class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
+          class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content"
         >
           This agent is sourced from the mounted workspace config. Use the workspace to remove it permanently.
         </p>
@@ -867,7 +867,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           <div class="mt-3 flex flex-wrap gap-2">
             <span
               :for={model <- model_chain(@model_chain_result)}
-              class="rounded-full bg-base-100 px-3 py-1 text-sm text-base-content/70 shadow-sm"
+              class="rounded-full bg-base-100 px-3 py-1 text-sm text-base-content shadow-sm"
             >
               {model}
             </span>
@@ -1187,7 +1187,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             />
             <div
               :if={@selected_workspace_file}
-              class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content/70"
+              class="rounded-2xl border border-edge bg-base-200/50 px-3 py-2 text-sm text-base-content"
             >
               {@selected_workspace_file.file_key}
               <input
@@ -1296,7 +1296,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                 <span :if={memory.date}>{Date.to_iso8601(memory.date)}</span>
                 <span>{format_datetime(memory.inserted_at)}</span>
               </div>
-              <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-base-content/80">
+              <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-base-content">
                 {memory.content}
               </p>
             </article>
@@ -1387,7 +1387,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         Monitoring reads the real AgentServer state plus persisted session history.
       </p>
 
-      <div class="mt-4 rounded-2xl border border-edge bg-base-200/40 p-4 text-sm text-base-content/75">
+      <div class="mt-4 rounded-2xl border border-edge bg-base-200/40 p-4 text-sm text-base-content">
         <div class="flex items-center justify-between gap-3">
           <span>Status</span>
           <span class={runtime_badge_class(@runtime.status)}>
@@ -1421,7 +1421,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               {short_id(session.id)}
             </span>
           </div>
-          <p class="mt-2 text-base-content/70">
+          <p class="mt-2 text-base-content">
             {blank_fallback(session.model_used, "model not recorded")}
           </p>
           <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-subtle">

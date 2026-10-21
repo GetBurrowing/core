@@ -2077,7 +2077,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp badge_class("user"), do: "bg-success/20 text-success"
   defp badge_class("federated"), do: "bg-info/20 text-info"
   defp badge_class("external"), do: "bg-warning/20 text-warning"
-  defp badge_class(_), do: "bg-base-300 text-base-content/70"
+  defp badge_class(_), do: "bg-base-300 text-base-content"
 
   defp relative_time(nil), do: ""
 

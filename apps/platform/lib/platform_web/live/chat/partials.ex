@@ -340,7 +340,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </h2>
         <%!-- All four lines share ONE aria-describedby container so a screen
              reader hears the org-scope consequence, not just the first line. --%>
-        <div id="move-to-org-body" class="mt-3 flex flex-col gap-2 text-sm text-base-content/80">
+        <div id="move-to-org-body" class="mt-3 flex flex-col gap-2 text-sm text-base-content">
           <p>{"Everyone sees this channel filed under #{@confirm.to.name}."}</p>
           <p>Nobody is added to or removed from the channel.</p>
           <p>
@@ -1320,7 +1320,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                   <span class="text-sm font-semibold tabular-nums">v{v.revision}</span>
                   <span class="text-xs text-subtle">{v.relative_time}</span>
                 </div>
-                <p class="truncate text-xs text-base-content/70">
+                <p class="truncate text-xs text-subtle">
                   <span
                     :if={v.author_type_badge}
                     class={[
@@ -1351,7 +1351,7 @@ defmodule PlatformWeb.ChatLive.Partials do
               :if={@restore_confirm_revision == v.revision}
               class="mt-3 rounded border border-warning/40 bg-warning/5 p-3"
             >
-              <p class="text-xs text-base-content/80 mb-2">
+              <p class="text-xs text-base-content mb-2">
                 Replace current canvas with revision {v.revision}? The current state stays in history as a new revision.
               </p>
               <div class="flex justify-end gap-2">
@@ -2078,7 +2078,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <span class="hero-musical-note size-4"></span>
       </button>
       <div class="hidden group-hover:block group-focus-within:block absolute top-full right-0 mt-1 w-56 bg-base-200 border border-edge rounded-lg p-3 shadow-lg z-20">
-        <p class="text-xs font-semibold mb-2 text-base-content/70">
+        <p class="text-xs font-semibold mb-2 text-base-content">
           Press 1–7 during a call
         </p>
         <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs items-center">

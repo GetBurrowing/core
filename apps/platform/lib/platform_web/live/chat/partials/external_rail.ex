@@ -134,7 +134,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
             data-role="external-empty"
           >
             <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
-            <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
+            <p class="text-sm font-medium text-base-content">Nothing here yet</p>
             <p class="text-xs text-subtle">
               Your conversations will appear here.
             </p>
@@ -171,7 +171,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         phx-click="new_conversation_open"
         aria-label="New conversation"
         data-role="external-new-conversation"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors"
         style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));"
       >
         <span class="hero-plus size-4"></span>
@@ -324,7 +324,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               data-role="external-empty"
             >
               <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
-              <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
+              <p class="text-sm font-medium text-base-content">Nothing here yet</p>
               <p class="text-xs text-subtle">
                 Your conversations will appear here.
               </p>
@@ -366,7 +366,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
           phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
           aria-label="New conversation"
           data-role="external-new-conversation"
-          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
         >
           <span class="hero-plus size-5"></span>
           <span>New conversation</span>

@@ -964,7 +964,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <p class="text-[10px] uppercase tracking-wider text-subtle mb-1">
               Rejection reason
             </p>
-            <p class="text-xs italic text-base-content/70 whitespace-pre-wrap">
+            <p class="text-xs italic text-base-content whitespace-pre-wrap">
               {plan.rejection_reason}
             </p>
           </div>
@@ -1884,7 +1884,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 :if={@selected_task.description}
                 id={"task-desc-#{@selected_task.id}"}
                 data-role="description-rendered"
-                class="prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown task-markdown"
+                class="prose prose-sm max-w-none text-sm text-base-content chat-markdown task-markdown"
               >
                 {Platform.Chat.ContentRenderer.render_message(@selected_task.description)}
               </div>
@@ -2640,7 +2640,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                   title="Changed after the plan was approved"
                 ></span>
               </div>
-              <pre class="whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80">{value}</pre>
+              <pre class="whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-xs leading-snug text-base-content">{value}</pre>
             </div>
           <% end %>
 

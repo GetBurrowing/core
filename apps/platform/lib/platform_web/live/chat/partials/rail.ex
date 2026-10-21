@@ -1763,7 +1763,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
       type="button"
       phx-click="new_channel_open"
       aria-label="New channel"
-      class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-content/10 px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+      class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-content/10 px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors"
     >
       <span class="hero-plus size-4"></span>
       <span>New channel</span>

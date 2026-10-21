@@ -130,12 +130,12 @@
                   </div>
                   <div
                     data-role="declared-missing-utility"
-                    class="mt-0.5 text-xs text-base-content/70"
+                    class="mt-0.5 text-xs text-subtle"
                   >
                     declared by {row.entry.trigger_kind || "responsibility"} {row.entry.key} · no template · dispatches render empty
                   </div>
                 </td>
-                <td class="text-xs text-base-content/70 hidden md:table-cell max-w-xs">
+                <td class="text-xs text-base-content hidden md:table-cell max-w-xs">
                   <span class="line-clamp-1">No template carries this slug.</span>
                 </td>
                 <td class="text-xs text-subtle hidden sm:table-cell whitespace-nowrap">
@@ -328,7 +328,7 @@
             <span class="text-[10px] text-subtle">(with sample data)</span>
           </div>
           <div class="rounded-lg border border-edge bg-base-200 p-4">
-            <pre class="whitespace-pre-wrap font-mono text-xs text-base-content/80 leading-relaxed">{@preview_content}</pre>
+            <pre class="whitespace-pre-wrap font-mono text-xs text-base-content leading-relaxed">{@preview_content}</pre>
           </div>
         </div>
       </div>
@@ -382,7 +382,7 @@
         renders with an empty body and nothing errors.
       </p>
 
-      <p class="text-xs text-base-content/70">
+      <p class="text-xs text-base-content">
         Declared by {@missing_key.trigger_kind || "responsibility"} {@missing_key.key}.
       </p>
 

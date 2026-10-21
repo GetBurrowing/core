@@ -852,7 +852,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
                   Agents
                 </p>
-                <p class="mt-1 text-sm text-base-content/70">
+                <p class="mt-1 text-sm text-base-content">
                   Manage, federate, and monitor your agents.
                 </p>
               </div>

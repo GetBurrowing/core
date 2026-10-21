@@ -135,7 +135,7 @@ defmodule PlatformWeb.Tasks.SortControl do
             data-role="board-sort-option"
             data-sort={mode}
             class={[
-              "flex items-center justify-between gap-3 rounded-field px-2.5 text-xs text-base-content/80 hover:bg-base-200",
+              "flex items-center justify-between gap-3 rounded-field px-2.5 text-xs text-base-content hover:bg-base-200",
               if(@mobile?, do: "min-h-11", else: "min-h-8"),
               mode == @board_sort && "font-semibold text-base-content"
             ]}

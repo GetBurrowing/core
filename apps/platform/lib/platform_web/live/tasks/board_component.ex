@@ -420,7 +420,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 if @active_status_filter == col_key do
                   "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
                 else
-                  "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+                  "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
                 end
               ]}
             >
@@ -433,7 +433,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
                   if(@active_status_filter == col_key,
                     do: "bg-primary-content/20 text-primary-content",
-                    else: "bg-base-300 text-base-content/70"
+                    else: "bg-base-300 text-base-content"
                   )
                 ]}
               >

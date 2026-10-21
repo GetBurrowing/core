@@ -305,7 +305,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
       <%= if @view.state == :removed do %>
         <div
-          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content/70"
+          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content"
           data-role="prototype-removed"
         >
           <span>
@@ -420,7 +420,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         ]}
       >
         <%= if @open == :versions do %>
-          <p class="px-1 pb-2 text-xs font-semibold text-base-content/70">Versions</p>
+          <p class="px-1 pb-2 text-xs font-semibold text-base-content">Versions</p>
           <ul class="max-h-72 space-y-0.5 overflow-y-auto">
             <li
               :for={v <- @view.versions}
@@ -456,7 +456,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </ul>
           <p :if={@pin_error} class="px-1 pt-2 text-xs text-error" role="alert">{@pin_error}</p>
         <% else %>
-          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content/80">
+          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content">
             <span class="hero-lock-closed size-4 shrink-0 text-neutral" aria-hidden="true"></span>
             Sealed: no network, no Burrow access
           </p>

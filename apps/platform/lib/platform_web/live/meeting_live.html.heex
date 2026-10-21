@@ -65,7 +65,7 @@
         <div class="card-body items-center text-center">
           <span class="hero-clock size-10 text-warning" aria-hidden="true"></span>
           <h1 class="card-title text-lg">This invite has expired</h1>
-          <p class="text-sm text-base-content/70">
+          <p class="text-sm text-base-content">
             Guest invite links are only valid for a short window. Please ask the meeting host to send you a fresh link.
           </p>
           <div :if={@public_site_url} class="card-actions mt-2">
@@ -82,7 +82,7 @@
         <div class="card-body items-center text-center">
           <span class="hero-exclamation-triangle size-10 text-error" aria-hidden="true"></span>
           <h1 class="card-title text-lg">Invite link is not valid</h1>
-          <p class="text-sm text-base-content/70">
+          <p class="text-sm text-base-content">
             We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists. Please ask whoever invited you for a new link.
           </p>
           <div :if={@public_site_url} class="card-actions mt-2">
@@ -128,13 +128,13 @@
           <h1 :if={@unavailable_kind == :permanent} class="card-title text-lg">
             We can't connect you to this meeting
           </h1>
-          <p :if={@unavailable_kind == :permanent} class="text-sm text-base-content/70">
+          <p :if={@unavailable_kind == :permanent} class="text-sm text-base-content">
             Your invite link is fine — the problem is at our end, and it is not something that will clear on its own. Please contact whoever invited you to {@meeting.name} and let them know, so they can get it put right.
           </p>
           <h1 :if={@unavailable_kind == :unknown} class="card-title text-lg">
             Meetings are temporarily unavailable
           </h1>
-          <p :if={@unavailable_kind == :unknown} class="text-sm text-base-content/70">
+          <p :if={@unavailable_kind == :unknown} class="text-sm text-base-content">
             Your invite link is fine — we're unable to connect you to {@meeting.name} right now. Please try again in a few minutes, or contact whoever invited you.
           </p>
           <div :if={@public_site_url} class="card-actions mt-2">
@@ -1631,7 +1631,7 @@
               </span>
               <span
                 :if={@meeting_candidates != []}
-                class="rounded-full bg-base-300 px-1.5 text-[10px] font-semibold text-base-content/70"
+                class="rounded-full bg-base-300 px-1.5 text-[10px] font-semibold text-base-content"
                 data-role="meeting-left-rail-card-count"
               >
                 {length(@meeting_candidates)}
@@ -1896,7 +1896,7 @@
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <span class="hero-rectangle-stack size-10 text-subtle"></span>
-                  <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
+                  <p class="mt-2 text-sm font-medium text-base-content">No canvas yet</p>
                   <p class="mt-0.5 max-w-xs text-center text-xs">
                     Meetings work best when there's something to point at. Spin one up to start sketching.
                   </p>
@@ -1926,7 +1926,7 @@
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
                   <span class="hero-pencil-square size-10"></span>
-                  <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
+                  <p class="mt-2 text-sm font-medium text-base-content">Whiteboard</p>
                   <p class="mt-0.5 text-xs">Loading the drawing surface…</p>
                 </div>
               <% @current_stage_mode == :screen -> %>
@@ -1993,7 +1993,7 @@
                     class="flex h-full w-full flex-col items-center justify-center text-subtle"
                   >
                     <span class="hero-computer-desktop size-10 text-subtle"></span>
-                    <p class="mt-2 text-sm font-medium text-base-content/70">
+                    <p class="mt-2 text-sm font-medium text-base-content">
                       No active screen-share
                     </p>
                     <p class="mt-0.5 max-w-xs text-center text-xs">
@@ -2038,7 +2038,7 @@
                   <%= if gallery_participants(assigns[:participants] || [], @speaking_identities) == [] do %>
                     <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-edge text-subtle">
                       <span class="hero-squares-2x2 size-10"></span>
-                      <p class="mt-2 text-sm font-medium text-base-content/70">
+                      <p class="mt-2 text-sm font-medium text-base-content">
                         No participants yet
                       </p>
                       <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
@@ -2373,10 +2373,11 @@
              renaming would compound the blast radius without changing
              behaviour.
 
-             STATE TREATMENT (task 01a0740e stage 1), unchanged by the
-             move. OFF is `text-base-content/70` (not `/40`, which is
-             reserved for genuinely-unavailable — this control has no
-             unavailable state). ON is a PRESSED treatment, `bg-base-300`
+             STATE TREATMENT (task 01a0740e stage 1; OFF moved to body by
+             task 01a15907 stage 1). OFF is body `text-base-content` on no
+             ground (never the disabled treatment, which is reserved for
+             genuinely-unavailable — this control has no unavailable
+             state). ON is a PRESSED treatment, `bg-base-300`
              as a filled ground with `base-content` as the foreground, so
              the button looks depressed rather than tinted, matching the
              sibling pills in this row. Behaviour, event name,
@@ -2396,7 +2397,7 @@
                   "btn btn-sm btn-ghost btn-square min-h-11",
                   if(@captions_visible,
                     do: "bg-base-300 text-base-content shadow-inner",
-                    else: "text-base-content/70"
+                    else: "text-base-content"
                   )
                 ]}
               >
@@ -3789,7 +3790,7 @@
                         <div class="text-[9px] uppercase tracking-wide text-subtle">
                           {archive_row_month(entry, @archive_time_zone)}
                         </div>
-                        <div class="text-lg font-semibold leading-tight text-base-content/70">
+                        <div class="text-lg font-semibold leading-tight text-subtle">
                           {archive_row_day(entry, @archive_time_zone)}
                         </div>
                       </div>

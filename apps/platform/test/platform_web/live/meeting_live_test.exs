@@ -9039,7 +9039,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # `LazyHTML.query/2` returns a truthy `%LazyHTML{}` even with zero
     # matched nodes (and `length/1` raises on it), so a `refute` against
     # the struct would pass on an element that is not there at all.
-    test "CC toggle: off is base-content/70, on is a base-300 pressed ground", %{
+    test "CC toggle: off is body on no ground, on is a base-300 pressed ground", %{
       conn: conn,
       meeting: meeting
     } do
@@ -9052,8 +9052,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       # someone reverted the OFF token onto it.
       off = captions_toggle_classes(render(view))
 
-      # Positive: off is /70, the "available and off" treatment.
-      assert "text-base-content/70" in off
+      # Positive: off is body on no ground, the "available and off"
+      # treatment (task 01a15907 stage 1 moved it from 70% to body; the
+      # pressed ground is what tells ON from OFF, so OFF must not wear it).
+      assert "text-base-content" in off
+      refute "bg-base-300" in off
 
       # Negative, and the point of the change: `/40` is the treatment a
       # DISABLED control gets. While the off state wore it, "captions

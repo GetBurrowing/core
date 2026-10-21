@@ -266,7 +266,7 @@ defmodule PlatformWeb.Components.NotificationState do
       data-permission={@push_permission}
       data-native="android"
     >
-      <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
+      <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div class="min-w-0 flex-1">
         <p class="text-sm">Notifications are off for Burrow on this phone.</p>
         <p class="mt-1 text-xs text-subtle">
@@ -316,7 +316,7 @@ defmodule PlatformWeb.Components.NotificationState do
       data-browser={Atom.to_string(@browser)}
       data-auto-denied={to_string(@auto_denied)}
     >
-      <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
+      <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div :if={@auto_denied} class="min-w-0 flex-1">
         <p class="text-sm">Your browser turned notifications down without asking you.</p>
         <p class="mt-1 text-xs text-subtle">
@@ -342,7 +342,7 @@ defmodule PlatformWeb.Components.NotificationState do
       data-permission="granted"
       data-registration-failed={Atom.to_string(@registration_failed)}
     >
-      <.icon name="hero-bell-alert" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
+      <.icon name="hero-bell-alert" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div :if={@registration_failed == :no_participant} class="min-w-0 flex-1">
         <p class="text-sm">Notifications are on, but you are not in any conversations yet.</p>
         <p class="mt-1 text-xs text-subtle">

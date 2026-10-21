@@ -89,7 +89,7 @@
 
       <div
         :if={@visible == [] && String.trim(@query) != ""}
-        class="text-sm text-base-content/70"
+        class="text-sm text-base-content"
         data-role="no-results"
       >
         No one matches '{@query}'.
@@ -110,13 +110,13 @@
         <table class="table table-sm w-full" id="sign-in-users-table">
           <thead>
             <tr>
-              <th class="text-xs uppercase tracking-wider text-base-content/70">Name</th>
-              <th class="text-xs uppercase tracking-wider text-base-content/70 hidden md:table-cell">
+              <th class="text-xs uppercase tracking-wider text-base-content">Name</th>
+              <th class="text-xs uppercase tracking-wider text-base-content hidden md:table-cell">
                 Email
               </th>
-              <th class="text-xs uppercase tracking-wider text-base-content/70">Role</th>
-              <th class="text-xs uppercase tracking-wider text-base-content/70">Status</th>
-              <th class="text-xs uppercase tracking-wider text-base-content/70 text-right">
+              <th class="text-xs uppercase tracking-wider text-base-content">Role</th>
+              <th class="text-xs uppercase tracking-wider text-base-content">Status</th>
+              <th class="text-xs uppercase tracking-wider text-base-content text-right">
                 Actions
               </th>
             </tr>
@@ -140,7 +140,7 @@
                   />
                   <div
                     :if={!row.avatar_url}
-                    class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content/70"
+                    class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content"
                     aria-hidden="true"
                   >
                     {initials(row.name)}
@@ -149,18 +149,18 @@
                     <div class={[
                       "text-sm font-medium truncate",
                       if(row.status == :disabled,
-                        do: "text-base-content/70",
+                        do: "text-base-content",
                         else: "text-base-content"
                       )
                     ]}>
                       {row.name}
                     </div>
-                    <div class="text-xs text-base-content/70 md:hidden truncate">{row.email}</div>
+                    <div class="text-xs text-subtle md:hidden truncate">{row.email}</div>
                   </div>
                 </div>
               </td>
-              <td class="text-sm text-base-content/70 hidden md:table-cell">{row.email}</td>
-              <td class="text-sm text-base-content/70">{role_label(row.role)}</td>
+              <td class="text-sm text-base-content hidden md:table-cell">{row.email}</td>
+              <td class="text-sm text-base-content">{role_label(row.role)}</td>
               <td class="whitespace-nowrap">
                 <.status_pill row={row} />
                 <.expiry_note
@@ -202,7 +202,7 @@
             />
             <div
               :if={!row.avatar_url}
-              class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content/70"
+              class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content"
               aria-hidden="true"
             >
               {initials(row.name)}
@@ -212,7 +212,7 @@
                 <div class={[
                   "text-sm font-medium truncate",
                   if(row.status == :disabled,
-                    do: "text-base-content/70",
+                    do: "text-base-content",
                     else: "text-base-content"
                   )
                 ]}>
@@ -220,7 +220,7 @@
                 </div>
                 <.status_pill row={row} />
               </div>
-              <div class="text-xs text-base-content/70 truncate">
+              <div class="text-xs text-subtle truncate">
                 {row.email}<span :if={role_label(row.role)}> · {role_label(row.role)}</span>
               </div>
               <.expiry_note expiries={@link_expiries} row={row} time_zone={@time_zone} />
@@ -234,7 +234,7 @@
 
       <div
         :if={length(@rows) <= 1 && String.trim(@query) == "" && @service != :unreachable}
-        class="flex flex-wrap items-center gap-3 text-sm text-base-content/70"
+        class="flex flex-wrap items-center gap-3 text-sm text-base-content"
         data-role="empty-hint"
       >
         Invite people to give them access to Burrow.
@@ -388,7 +388,7 @@
           </div>
 
           <div>
-            <p class="text-xs font-medium text-base-content/70">Link</p>
+            <p class="text-xs font-medium text-base-content">Link</p>
             <code
               class="mt-1 block break-all rounded-field bg-base-200 px-3 py-2 font-mono text-sm text-base-content"
               data-role="slip-link"
@@ -399,7 +399,7 @@
 
           <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
             <p>
-              <span class="text-xs font-medium text-base-content/70">Code</span>
+              <span class="text-xs font-medium text-base-content">Code</span>
               <code
                 class="ml-2 rounded-field bg-base-200 px-2 py-1 font-mono text-sm text-base-content"
                 data-role="slip-code"
@@ -407,7 +407,7 @@
                 {group_code(@slip.link.code)}
               </code>
             </p>
-            <p class="text-base-content/70" data-role="slip-expiry">
+            <p class="text-subtle" data-role="slip-expiry">
               Expires at {clock(@slip.expires_at, @time_zone)}
             </p>
           </div>

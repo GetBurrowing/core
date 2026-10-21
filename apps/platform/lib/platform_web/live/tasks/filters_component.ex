@@ -184,7 +184,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             if(@scope_filter == :all,
               do:
                 "bg-base-content text-base-100 border-base-content shadow-[0_0_0_2px_oklch(70%_0_0/30%)]",
-              else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              else: "bg-base-200 text-base-content border-base-content/15 hover:bg-base-300"
             )
           ]}
         >
@@ -193,7 +193,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
             if(@scope_filter == :all,
               do: "bg-base-100/20 text-base-100",
-              else: "bg-base-300 text-base-content/70"
+              else: "bg-base-300 text-base-content"
             )
           ]}>
             {scope_count_total(@scope_counts)}
@@ -277,7 +277,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             if(@sponsor_filter == :mine,
               do:
                 "bg-primary text-primary-content border-primary shadow-[0_0_0_2px_oklch(70%_0.15_260/30%)]",
-              else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              else: "bg-base-200 text-base-content border-base-content/15 hover:bg-base-300"
             )
           ]}
         >
@@ -314,7 +314,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium leading-none whitespace-nowrap transition-colors focus-visible-ring max-sm:h-9",
             if(lane_active?(@origin_filter, lane),
               do: "bg-primary text-primary-content",
-              else: "text-base-content/70 hover:bg-base-300"
+              else: "text-base-content hover:bg-base-300"
             )
           ]}
         >

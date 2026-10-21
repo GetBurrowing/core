@@ -105,7 +105,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
             phx-target={@myself}
             class="flex flex-col gap-3 px-4 py-4"
           >
-            <p class="text-xs text-base-content/70" data-role="supersede-explanation">
+            <p class="text-xs text-base-content" data-role="supersede-explanation">
               This marks the current plan superseded and requires re-planning. Any in-flight executor will stop. The task branch and any open PR are kept intact.
             </p>
 

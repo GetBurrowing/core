@@ -131,7 +131,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   # only: hovering the selected row must not repaint it base-300 and bring
   # the 3.27:1 pair back.
   @selected_leaf_class "bg-base-100 font-medium text-[var(--color-interactive)] ring-1 ring-inset ring-edge"
-  @unselected_leaf_class "text-base-content/70 hover:bg-base-300"
+  @unselected_leaf_class "text-base-content hover:bg-base-300"
 
   @doc false
   @spec selected_leaf_class() :: String.t()
@@ -234,7 +234,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
         phx-value-prefix={@node.prefix}
         data-namespace-prefix={@node.prefix}
         style={indent(@depth)}
-        class="flex w-full items-center gap-1.5 py-1.5 pr-4 text-left text-sm text-base-content/70 transition-colors hover:bg-base-300"
+        class="flex w-full items-center gap-1.5 py-1.5 pr-4 text-left text-sm text-base-content transition-colors hover:bg-base-300"
       >
         <span class={[
           if(@expanded?, do: "hero-chevron-down", else: "hero-chevron-right"),

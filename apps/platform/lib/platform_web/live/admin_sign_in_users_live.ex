@@ -566,7 +566,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
       assign(assigns, :line, expiry_line(assigns.expiries, assigns.row, assigns.time_zone))
 
     ~H"""
-    <div :if={@line} class={["text-xs text-base-content/70", @class]} data-role="link-expiry">
+    <div :if={@line} class={["text-xs text-subtle", @class]} data-role="link-expiry">
       {@line}
     </div>
     """
@@ -593,7 +593,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
           <span class="sr-only">Loading</span>
         </span>
       <% :unknown -> %>
-        <span class="text-xs text-base-content/70" data-role="status-unknown">N/A</span>
+        <span class="text-xs text-base-content" data-role="status-unknown">N/A</span>
       <% :pending -> %>
         <span class="badge badge-info badge-sm gap-1" data-role="status-pending">
           <span class="hero-clock size-3.5" aria-hidden="true"></span> Pending

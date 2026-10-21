@@ -154,7 +154,7 @@ defmodule PlatformWeb.Components.ActionPatterns do
       type="button"
       class={[
         "inline-flex size-[26px] shrink-0 items-center justify-center rounded-lg",
-        "border border-base-content/15 text-base-content/70 transition-colors",
+        "border border-base-content/15 text-base-content transition-colors",
         "hover:bg-base-200 hover:text-base-content focus-visible-ring",
         @class
       ]}

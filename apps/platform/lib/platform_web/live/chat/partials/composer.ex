@@ -106,7 +106,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     >
       <%= if @active_space.deletion_scheduled_at do %>
         <span class="hero-trash size-4 flex-shrink-0 text-error"></span>
-        <p class="flex-1 text-sm text-base-content/70">
+        <p class="flex-1 text-sm text-base-content">
           This channel is scheduled for permanent deletion on {Calendar.strftime(
             DateTime.add(
               @active_space.deletion_scheduled_at,
@@ -126,7 +126,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         </button>
       <% else %>
         <span class="hero-archive-box size-4 flex-shrink-0 text-subtle"></span>
-        <p class="flex-1 text-sm text-base-content/70">
+        <p class="flex-1 text-sm text-base-content">
           This channel was archived on {Calendar.strftime(
             @active_space.archived_at,
             "%B %-d, %Y"

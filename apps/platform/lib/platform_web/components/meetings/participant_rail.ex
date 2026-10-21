@@ -1003,7 +1003,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             />
             <div class="min-w-0 flex-1">
               <div
-                class="truncate text-xs font-medium text-base-content/90"
+                class="truncate text-xs font-medium text-base-content"
                 data-role="participant-name"
               >
                 {p.display_name || "Unknown participant"}

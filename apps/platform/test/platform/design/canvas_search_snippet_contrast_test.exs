@@ -54,8 +54,8 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
     * the `[data-role="canvas-result-snippet"] mark` rule in `app.css`, for the
       fill's token and its percentage
     * the container's own `class` attribute in `canvas_explorer.ex`, for the
-      ground's alpha (`bg-base-content/5`) and the context runs'
-      (`text-base-content/65`)
+      ground's alpha (`bg-base-content/5`) and the context runs' strength
+      (body `text-base-content` since task 01a15907 stage 1; it was 65%)
 
   So retuning a token, the fill percentage or a Tailwind opacity modifier moves
   these numbers rather than leaving a stale pin behind. A version of this file
@@ -179,7 +179,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
 
     {:ok,
      ground_alpha: tailwind_alpha!(container_class, "bg-base-content"),
-     context_alpha: tailwind_alpha!(container_class, "text-base-content"),
+     context_alpha: text_alpha!(container_class),
      fill_spec: fill,
      mark_rule: rule_body!(css, ~s([data-role="canvas-result-snippet"] mark)),
      drawer_ground_token: opaque_bg_token!(drawer_class),
@@ -309,12 +309,14 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
     # what the shipped values actually are. Re-derived for the Burrow palette
     # (task 01a120c5; light base-content black, kept by stage 4); the
     # pre-Burrow light/dark context figures were 6.6964 / 6.3992, as the
-    # moduledoc records.
+    # moduledoc records. Task 01a15907 stage 1 moved the context runs from
+    # 65% to body, so their figures are body on the row's ground (they were
+    # 6.5904 light / 6.4331 dark at 65%).
     test "light", %{light: c, ground_alpha: ga, context_alpha: ta, fill_spec: fs} do
       ground = W.composite(c.content, ga, c.base_100)
       fill = fill_color(c, fs, ground)
 
-      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.5904, @tolerance
+      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 18.0403, @tolerance
       assert_in_delta W.contrast(c.content, fill), 11.3113, @tolerance
       assert_in_delta W.contrast(fill, ground), 1.5949, @tolerance
       assert_in_delta W.contrast(c.edge, c.base_100), 1.4275, @tolerance
@@ -324,7 +326,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       ground = W.composite(c.content, ga, c.base_100)
       fill = fill_color(c, fs, ground)
 
-      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.4331, @tolerance
+      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 13.2262, @tolerance
       assert_in_delta W.contrast(c.content, fill), 7.2517, @tolerance
       assert_in_delta W.contrast(fill, ground), 1.8239, @tolerance
       assert_in_delta W.contrast(c.edge, c.base_100), 1.5361, @tolerance
@@ -339,7 +341,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
 
   describe "the partial-index line's correction is scoped to the element" do
     test "dark declares a colour for it, and the prefers-color-scheme twin declares the same one",
-         %{indexing_rules: rules} do
+         %{indexing_rules: rules, dark: c} do
       dark = rules["dark"]
 
       assert length(dark) == 2,
@@ -357,7 +359,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       assert Enum.any?(dark, &match?(["@media (prefers-color-scheme: dark)"], &1.at)),
              "no `prefers-color-scheme: dark` twin: #{inspect(Enum.map(dark, & &1.at))}"
 
-      specs = dark |> Enum.map(&color_mix_spec!(&1.body)) |> Enum.uniq()
+      specs = dark |> Enum.map(&color_mix_spec!(&1.body, c.block)) |> Enum.uniq()
 
       assert length(specs) == 1,
              "the two dark selectors for canvas-search-indexing-state declare DIFFERENT " <>
@@ -419,7 +421,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       indexing_rules: rules
     } do
       ground = token_color!(c, ground_token)
-      spec = dark_indexing_spec!(rules)
+      spec = dark_indexing_spec!(rules, c.block)
       text = W.composite(token_color!(c, spec.token), spec.alpha, ground)
 
       ratio = W.contrast(text, ground)
@@ -477,7 +479,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       indexing_rules: rules
     } do
       ground = token_color!(c, ground_token)
-      spec = dark_indexing_spec!(rules)
+      spec = dark_indexing_spec!(rules, c.block)
 
       assert_in_delta W.contrast(
                         W.composite(token_color!(c, spec.token), spec.alpha, ground),
@@ -734,10 +736,10 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
   # `%{token:, alpha:}`. An empty list is the "someone deleted the rule" case
   # and gets a message that names the element, rather than an `hd([])` raise
   # that names nothing.
-  defp dark_indexing_spec!(rules) do
+  defp dark_indexing_spec!(rules, block) do
     case rules["dark"] do
       [rule | _] ->
-        color_mix_spec!(rule.body)
+        color_mix_spec!(rule.body, block)
 
       [] ->
         flunk(
@@ -749,25 +751,43 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
     end
   end
 
-  # The token and percentage a `color: color-mix(in <space>, var(--x) N%,
-  # transparent)` declaration actually names. Deliberately not pinned to a
-  # token or a number: pinning either is what would make the mutation probe
-  # unable to move this file.
-  defp color_mix_spec!(body) do
-    re =
-      ~r/(?:^|;)\s*color:\s*color-mix\(\s*in\s+\w+\s*,\s*var\((--[\w-]+)\)\s*([\d.]+)%\s*,\s*transparent\s*\)/
+  # The token and percentage the line's dark colour paints. Since task
+  # 01a15907 stage 5 the rule must name the secondary-text token,
+  # `color: var(--color-subtle)` (no third grey; the stylesheet floor in
+  # subtle_text_ratchet_test refuses any base-content mix below 100% outside
+  # the --subtle definitions). The strength is read from the theme block's own
+  # `--subtle` declaration, not pinned here, so retuning --subtle moves the
+  # computed clauses.
+  defp color_mix_spec!(body, block) do
+    unless Regex.match?(~r/(?:^|;)\s*color:\s*var\(--color-subtle\)\s*(?:;|$)/, body) do
+      flunk(
+        "the canvas-search-indexing-state dark colour must be `var(--color-subtle)` " <>
+          "(task 01a15907 stage 5), got: #{body}"
+      )
+    end
 
-    case Regex.run(re, body, capture: :all_but_first) do
+    re =
+      ~r/^[^\S\n]*--subtle:\s*color-mix\(\s*in\s+\w+\s*,\s*var\((--[\w-]+)\)\s*([\d.]+)%\s*,\s*transparent\s*\)\s*;/m
+
+    case Regex.run(re, block, capture: :all_but_first) do
       [token, pct] ->
         {value, ""} = Float.parse(pct)
         %{token: token, alpha: value / 100.0}
 
       nil ->
-        flunk(
-          "the canvas-search-indexing-state colour is no longer a `color-mix` of a single " <>
-            "token with transparent, so this file cannot say what it resolves to: #{body}"
-        )
+        flunk("the dark theme block declares no `--subtle: color-mix(... N%, transparent)`")
     end
+  end
+
+  # The context runs' text strength. Body text is a bare `text-base-content`
+  # (1.0), which is the text colour's own full strength and not the solid-row
+  # bug `tailwind_alpha!/2` guards against for the ground; a modifier still
+  # reads as its alpha. Anything else (no base-content text utility at all) is
+  # a failure, because the colour measured would not be the colour rendered.
+  defp text_alpha!(class) do
+    if Regex.match?(~r/(?:^|\s)text-base-content(?:\s|$)/, class),
+      do: 1.0,
+      else: tailwind_alpha!(class, "text-base-content")
   end
 
   # A Tailwind opacity modifier, e.g. `bg-base-content/5` -> 0.05. An absent

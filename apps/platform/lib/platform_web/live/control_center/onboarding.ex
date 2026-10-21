@@ -780,7 +780,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
               />
               <span class={[
                 "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition",
-                "border-edge bg-base-100 text-base-content/70 hover:border-primary/50",
+                "border-edge bg-base-100 text-base-content hover:border-primary/50",
                 "peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary"
               ]}>
                 {behavior_label(behavior)}

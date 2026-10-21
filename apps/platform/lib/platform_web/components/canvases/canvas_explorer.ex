@@ -689,7 +689,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
     <span
       phx-no-format
       data-role="canvas-result-snippet"
-      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content/65"
+      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content"
     ><%= if @match do %><span
         :if={@leading}
         data-role="canvas-result-snippet-leading"

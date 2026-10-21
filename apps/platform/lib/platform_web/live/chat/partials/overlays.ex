@@ -317,14 +317,14 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         <h2 id="edit-removal-warning-title" class="text-base font-semibold text-base-content">
           Edit removes text.
         </h2>
-        <p class="mt-2 text-sm text-base-content/70">
+        <p class="mt-2 text-sm text-base-content">
           Agents that already read this still have the original in their memory.
         </p>
         <div class="mt-4 flex items-center justify-end gap-2">
           <button
             type="button"
             phx-click="cancel_save_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-md px-3 py-1.5 text-sm text-base-content hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Cancel
           </button>
@@ -397,7 +397,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           }
           class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <span class="hero-arrow-up-right size-5 text-base-content/70" aria-hidden="true"></span>
+          <span class="hero-arrow-up-right size-5 text-base-content" aria-hidden="true"></span>
           <span class="font-medium">What this message is answering</span>
         </button>
         <div
@@ -503,7 +503,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           }
           class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <span class="hero-chat-bubble-left-right size-5 text-base-content/70"></span>
+          <span class="hero-chat-bubble-left-right size-5 text-base-content"></span>
           <span class="font-medium">Reply in thread</span>
         </button>
         <button
@@ -520,7 +520,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           }
           class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <span class="hero-bookmark size-5 text-base-content/70"></span>
+          <span class="hero-bookmark size-5 text-base-content"></span>
           <span class="font-medium">Pin / Unpin</span>
         </button>
         <%!-- Edit affordance — Policy 3 of the editable-messages contract
@@ -545,7 +545,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           }
           class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <span class="hero-pencil-square size-5 text-base-content/70"></span>
+          <span class="hero-pencil-square size-5 text-base-content"></span>
           <span class="font-medium">Edit message</span>
         </button>
       </div>
@@ -601,7 +601,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         <%!-- Body --%>
         <div class="flex flex-col gap-3 px-4 py-4">
           <%= if @junk_batch_target.preview_count > 0 do %>
-            <p class="text-sm text-base-content/80">
+            <p class="text-sm text-base-content">
               This will soft-delete
               <span class="font-semibold" data-role="junk-batch-preview-count">
                 {@junk_batch_target.preview_count}
@@ -609,7 +609,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
               {if @junk_batch_target.preview_count == 1, do: "task", else: "tasks"} filed from this canvas. Continue?
             </p>
           <% else %>
-            <p class="text-sm text-base-content/80" data-role="junk-batch-empty-note">
+            <p class="text-sm text-base-content" data-role="junk-batch-empty-note">
               Nothing to roll back — every task from this batch has already been handled.
             </p>
           <% end %>

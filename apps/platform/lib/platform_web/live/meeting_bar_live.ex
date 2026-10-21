@@ -133,7 +133,7 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@mic_on,
-            do: "text-base-content/70 hover:bg-base-300",
+            do: "text-base-content hover:bg-base-300",
             else: "text-error bg-error/10 hover:bg-error/20"
           ),
           @mic_pending && "ring-2 ring-warning"
@@ -150,7 +150,7 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@camera_on,
-            do: "text-base-content/70 hover:bg-base-300",
+            do: "text-base-content hover:bg-base-300",
             else: "text-subtle hover:bg-base-300"
           )
         ]}

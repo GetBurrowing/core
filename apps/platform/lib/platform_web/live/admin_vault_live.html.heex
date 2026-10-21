@@ -22,7 +22,7 @@
             </h1>
             <span class="text-sm text-neutral">{@secret.scope_type}</span>
           </div>
-          <p :if={@secret.note} class="mt-1 text-sm text-base-content/70">{@secret.note}</p>
+          <p :if={@secret.note} class="mt-1 text-sm text-base-content">{@secret.note}</p>
         </div>
 
         <section class="mb-6">
@@ -200,7 +200,7 @@
               ← Admin
             </.link>
             <h1 class="mt-2 text-xl font-semibold text-base-content">Vault</h1>
-            <p class="mt-1 text-sm text-base-content/70">
+            <p class="mt-1 text-sm text-base-content">
               Secrets agents can fetch. Values are never shown after saving.
             </p>
           </div>

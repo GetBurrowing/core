@@ -85,7 +85,7 @@ defmodule PlatformWeb.OrgMemoryLive.JournalPane do
                 "sticky top-0 z-10 flex items-center gap-3 bg-base-100 py-2",
                 @focus_date == date && "text-primary"
               ]}>
-                <span class="text-sm font-semibold text-base-content/70">
+                <span class="text-sm font-semibold text-base-content">
                   {format_journal_date(date)}
                 </span>
                 <div class="flex-1 border-t border-edge"></div>

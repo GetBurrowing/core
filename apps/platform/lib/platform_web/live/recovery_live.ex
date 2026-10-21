@@ -500,7 +500,7 @@ defmodule PlatformWeb.RecoveryLive do
         />
       </td>
 
-      <td class="px-4 py-3 text-base-content/70">
+      <td class="px-4 py-3 text-base-content">
         <div class="flex min-w-0 items-center gap-2">
           <span
             :if={org_scope_slug(@row)}
@@ -534,14 +534,14 @@ defmodule PlatformWeb.RecoveryLive do
         </button>
       </td>
 
-      <td class="px-4 py-3 text-base-content/70">{type_label(@row.type)}</td>
+      <td class="px-4 py-3 text-base-content">{type_label(@row.type)}</td>
 
       <td class="px-4 py-3">
         <.chip :if={@row.status == :scheduled} tone="warning">Scheduled for deletion</.chip>
         <.chip :if={@row.status == :archived} tone="neutral">Archived</.chip>
       </td>
 
-      <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content/70">
+      <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content">
         {format_date(@row.archived_at)}
       </td>
 

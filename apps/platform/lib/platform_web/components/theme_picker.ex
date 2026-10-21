@@ -129,7 +129,7 @@ defmodule PlatformWeb.Components.ThemePicker do
     ~H"""
     <div id={@id} phx-hook="ThemePicker" phx-update="ignore" class="theme-picker flex flex-col gap-4">
       <div class="flex flex-col gap-1.5">
-        <p id={"#{@id}-mode-label"} class="text-xs font-medium text-base-content/70">Mode</p>
+        <p id={"#{@id}-mode-label"} class="text-xs font-medium text-base-content">Mode</p>
         <div
           role="radiogroup"
           aria-labelledby={"#{@id}-mode-label"}
@@ -144,7 +144,7 @@ defmodule PlatformWeb.Components.ThemePicker do
             data-value={mode}
             aria-checked={to_string(mode == @pref["mode"])}
             tabindex={if mode == @pref["mode"], do: "0", else: "-1"}
-            class="rounded-field px-2 py-1 text-sm text-base-content/70 hover:text-base-content aria-checked:bg-base-100 aria-checked:text-base-content aria-checked:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-field px-2 py-1 text-sm text-base-content hover:text-base-content aria-checked:bg-base-100 aria-checked:text-base-content aria-checked:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {Map.fetch!(@mode_labels, mode)}
           </button>
@@ -152,7 +152,7 @@ defmodule PlatformWeb.Components.ThemePicker do
       </div>
 
       <div class="flex flex-col gap-1.5">
-        <p id={"#{@id}-preset-label"} class="text-xs font-medium text-base-content/70">Theme</p>
+        <p id={"#{@id}-preset-label"} class="text-xs font-medium text-base-content">Theme</p>
         <div
           role="radiogroup"
           aria-labelledby={"#{@id}-preset-label"}

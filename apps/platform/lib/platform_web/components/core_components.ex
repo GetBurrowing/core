@@ -423,7 +423,7 @@ defmodule PlatformWeb.CoreComponents do
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-base-content">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -483,7 +483,7 @@ defmodule PlatformWeb.CoreComponents do
           <span
             :if={!seg.navigate}
             data-role="breadcrumb-current"
-            class="font-medium uppercase tracking-wider text-base-content/70"
+            class="font-medium uppercase tracking-wider text-base-content"
             aria-current="page"
           >
             {seg.label}

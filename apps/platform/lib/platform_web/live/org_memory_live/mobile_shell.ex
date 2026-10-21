@@ -124,7 +124,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       >
         <button
           phx-click="open_tree_drawer"
-          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-300"
+          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content transition-colors hover:bg-base-300"
           aria-label="Open namespace tree"
           data-role="mobile-menu-button"
         >
@@ -133,7 +133,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <button
           :if={@view_mode == :pages}
           phx-click="show_create"
-          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-300"
+          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content transition-colors hover:bg-base-300"
           aria-label="New page"
           data-role="mobile-app-bar-action"
         >
@@ -455,7 +455,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   defp mobile_details(assigns) do
     ~H"""
     <details class="group border-t border-edge" data-role="mobile-details">
-      <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-base-content/70 marker:content-none [&::-webkit-details-marker]:hidden">
+      <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-base-content marker:content-none [&::-webkit-details-marker]:hidden">
         <.icon
           name="hero-chevron-right"
           class="size-4 text-subtle transition-transform group-open:rotate-90"
@@ -595,7 +595,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               <div class="mb-2 flex items-center gap-2">
                 <span class={[
                   "text-sm font-semibold",
-                  if(@focus_date == date, do: "text-primary", else: "text-base-content/70")
+                  if(@focus_date == date, do: "text-primary", else: "text-base-content")
                 ]}>
                   {format_journal_date(date)}
                 </span>

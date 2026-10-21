@@ -172,7 +172,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
               <% end %>
             </div>
 
-            <p :if={item.content} class="text-xs text-base-content/70 whitespace-pre-wrap">
+            <p :if={item.content} class="text-xs text-base-content whitespace-pre-wrap">
               {item.content}
             </p>
 

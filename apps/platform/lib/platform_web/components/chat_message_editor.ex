@@ -52,7 +52,7 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
           <button
             type="button"
             phx-click="cancel_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-md px-3 py-1.5 text-sm text-base-content hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Cancel
           </button>

@@ -275,7 +275,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
         aria-label="Expand canvas to full screen"
         title="Expand"
         class={
-          "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
+          "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content shadow-md " <>
             "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
             "hover:bg-base-100 hover:text-base-content"
         }
@@ -357,7 +357,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
           aria-label="Expand canvas to full screen"
           title="Expand"
           class={
-            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
+            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content shadow-md " <>
               "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
               "hover:bg-base-100 hover:text-base-content"
           }

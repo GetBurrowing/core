@@ -94,7 +94,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
           >
             <input type="hidden" name="receive" value="false" />
             <label class="flex cursor-pointer items-center gap-2">
-              <span class="text-base-content/70">Insight briefings and questions</span>
+              <span class="text-base-content">Insight briefings and questions</span>
               <input
                 type="checkbox"
                 name="receive"
@@ -146,7 +146,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         <p
           :if={not @dissemination_on}
           class={[
-            "border-b border-edge text-sm text-base-content/70",
+            "border-b border-edge text-sm text-base-content",
             if(@surface == :desktop, do: "px-6 py-2", else: "px-3 py-2")
           ]}
           data-role="insights-off-notice"
@@ -166,7 +166,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
               data-role="insights-empty-state"
             >
               <span class="hero-light-bulb mx-auto mb-2 block size-10 text-subtle"></span>
-              <p class="text-sm font-medium text-base-content/70">
+              <p class="text-sm font-medium text-base-content">
                 Nothing open. Dreaming has nothing for you to act on right now.
               </p>
             </div>
@@ -211,7 +211,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
                 </span>
               </div>
               <div class="mt-1 flex flex-wrap items-center justify-between gap-2">
-                <span class="text-xs text-base-content/70" data-role="insight-done-status">
+                <span class="text-xs text-base-content" data-role="insight-done-status">
                   {done_status(insight)}
                 </span>
                 <button
@@ -277,7 +277,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         Evidence: {evidence(@insight)} · {@insight.confidence}
       </p>
       <div class="mt-1 flex items-center justify-between gap-2">
-        <span class="font-mono text-xs text-base-content/70" data-role="insight-type-label">
+        <span class="font-mono text-xs text-subtle" data-role="insight-type-label">
           {InsightPreview.type_label(@insight.action_type)}
         </span>
         <span
@@ -456,7 +456,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightsPane do
         >{@insight.body}</textarea>
         <%= for {{old, new}, index} <- Enum.with_index(InsightPreview.hunks(@insight)) do %>
           <input type="hidden" name={"hunks[#{index}][old]"} value={old} />
-          <label class="mt-2 block text-xs font-medium text-base-content/70">
+          <label class="mt-2 block text-xs font-medium text-base-content">
             Replacement text {index + 1}
           </label>
           <textarea

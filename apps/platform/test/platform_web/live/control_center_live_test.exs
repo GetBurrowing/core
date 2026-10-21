@@ -456,6 +456,18 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ ~s(value="local-llama")
   end
 
+  # The text COLOUR utilities in a class list: every `text-*` token (with any
+  # variant chain) that is not a size, an alignment or a wrap/overflow mode.
+  # Kept wide on purpose, so a new colour token in the roles row is counted
+  # rather than skipped (task 01a15907 stage 2).
+  @text_non_colour ~r/^(?:[a-z0-9-]+:)*text-(?:xs|sm|base|lg|[2-9]?xl|\[[^\]]*(?:px|rem|em)\]|left|center|right|start|end|justify|wrap|nowrap|balance|pretty|ellipsis|clip)$/
+
+  defp colour_tokens(classes) do
+    Enum.filter(classes, fn c ->
+      String.match?(c, ~r/^(?:[a-z0-9-]+:)*text-/) and not String.match?(c, @text_non_colour)
+    end)
+  end
+
   # ── Stage 4: Connection Status panel + submit-flow wiring ──────────
 
   defp stub_external_agents_req_client(response_fn) do
@@ -1676,6 +1688,65 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "it does not change which agent"
       assert html =~ "so role-identity lookups"
       assert html =~ "still resolve to the role&#39;s assigned agent"
+    end
+
+    # Saru ruling 2 (direction canvas 01a15902-e3b2 rev 4, "Part 2 rulings";
+    # task 01a15907 stage 2). In a responsibility row the code chip is the row
+    # title: body at 12px, never 11px. The role name and the assignee name are
+    # body at medium weight inside subtle wrappers. The row carries exactly two
+    # grey levels, body and text-subtle, and no base-content strength. The
+    # OVERRIDE badge (warning colour) is out of scope and is not rendered here:
+    # the assignee comes from the role, not an override.
+    test "a responsibility row paints exactly two greys: a 12px body chip and medium body names",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Row Greys Pal"})
+      {:ok, _assignment} = Platform.Roles.assign_role("designer", agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+      html = render_click(view, "toggle_role_advanced", %{})
+
+      rows =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#roles-advanced-panel li")
+        |> Enum.filter(fn li ->
+          li |> LazyHTML.query("code") |> LazyHTML.text() |> String.trim() == "design.critique"
+        end)
+
+      assert [row] = rows, "expected exactly one design.critique row in the advanced panel"
+      assert LazyHTML.text(row) =~ "Row Greys Pal"
+      refute LazyHTML.text(row) =~ "OVERRIDE"
+
+      classes_of = fn node ->
+        node |> LazyHTML.attribute("class") |> Enum.flat_map(&String.split/1)
+      end
+
+      chip = classes_of.(LazyHTML.query(row, "code"))
+      assert "text-xs" in chip and "font-mono" in chip
+      refute "text-[11px]" in chip
+      assert colour_tokens(chip) == ["text-base-content"]
+
+      [role_name, assignee] =
+        row |> LazyHTML.query("span.font-medium") |> Enum.map(classes_of)
+
+      for name <- [role_name, assignee] do
+        assert "font-medium" in name
+        assert colour_tokens(name) == ["text-base-content"]
+      end
+
+      greys =
+        [row, LazyHTML.query(row, "*")]
+        |> Enum.flat_map(classes_of)
+        |> colour_tokens()
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert greys == ["text-base-content", "text-subtle"],
+             "the responsibility row paints #{inspect(greys)}; Saru's ruling is two greys, " <>
+               "body and text-subtle"
+
+      refute Enum.any?(greys, &String.starts_with?(&1, "text-base-content/"))
     end
 
     test "set_responsibility_override persists a ResponsibilityOverride row + assignee_for/1 resolves to it",

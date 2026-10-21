@@ -157,7 +157,7 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
               </p>
               <p
                 data-role="message-context-reply-preview"
-                class="mt-0.5 line-clamp-2 break-words text-sm text-base-content/80"
+                class="mt-0.5 line-clamp-2 break-words text-sm text-base-content"
               >
                 {reply.preview}
               </p>
@@ -166,13 +166,13 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
                 data-role="message-context-jump"
                 phx-click="jump_to_answered_message"
                 phx-value-message-id={reply.message_id}
-                class="mt-1 inline-flex min-h-11 items-center gap-1 rounded text-xs font-medium text-base-content/70 hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:min-h-0"
+                class="mt-1 inline-flex min-h-11 items-center gap-1 rounded text-xs font-medium text-base-content hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:min-h-0"
               >
                 Jump to message <span class="hero-arrow-right size-3" aria-hidden="true"></span>
               </button>
             </div>
           <% _ -> %>
-            <p data-role="message-context-no-access" class="mt-1 text-sm text-base-content/70">
+            <p data-role="message-context-no-access" class="mt-1 text-sm text-base-content">
               Replying to a message you don't have access to
             </p>
         <% end %>
@@ -203,12 +203,12 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
           <% {:error, :not_configured} -> %>
             <p
               data-role="message-context-summary-unavailable"
-              class="mt-2 text-sm text-base-content/70"
+              class="mt-2 text-sm text-base-content"
             >
               Summaries are not available on this install.
             </p>
           <% {:error, :no_history} -> %>
-            <p data-role="message-context-summary-empty" class="mt-2 text-sm text-base-content/70">
+            <p data-role="message-context-summary-empty" class="mt-2 text-sm text-base-content">
               There are no earlier messages you can see to summarise.
             </p>
           <% {:error, _reason} -> %>

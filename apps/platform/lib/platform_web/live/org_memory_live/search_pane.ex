@@ -270,7 +270,8 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   attr(:channel, :string, required: true)
   attr(:down, :boolean, required: true)
 
-  # Live-chip text is `text-base-content/70`, and the tier was CHOSEN BY
+  # Live-chip text is body `text-base-content` (task 01a15907 stage 3; it
+  # shipped at 70% strength, below). The 70% tier was CHOSEN BY
   # SAMPLING, not derived from tokens. Measured with Chrome's own rasterised
   # pixels on the dev server (task 01a0941e stage 4), on the base-200 ground:
   #
@@ -278,10 +279,10 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   #                                                        tier; fails both
   #   text-neutral          light 6.69:1  dark 2.25:1  <- PRESCRIBED, and it
   #                                                        fails dark
-  #   text-base-content/70  light 8.17:1  dark 8.68:1  <- shipped, passes both
+  #   base-content at 70%   light 8.17:1  dark 8.68:1  <- shipped, passes both
   #
   # Alpha tiers are composited over the ground before the ratio is taken;
-  # comparing the un-composited colour reports base-content/70 as 18.8:1.
+  # comparing the un-composited colour reports base-content at 70% as 18.8:1.
   #
   # `--color-neutral` was the prescribed quiet slot on the strength of a
   # token-derived 2.2:1 figure for base-content/30 in LIGHT. That figure is
@@ -315,7 +316,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   defp channel_chip(assigns) do
     ~H"""
     <span
-      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-base-content/70"
+      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-base-content"
       data-role="channel-chip"
       data-channel={@channel}
       data-state="live"

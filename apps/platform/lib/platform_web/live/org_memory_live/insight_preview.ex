@@ -93,7 +93,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
       data-role="insight-preview"
       data-preview-type="page_edit"
     >
-      <div class="border-b border-edge px-3 py-1.5 font-mono text-xs text-base-content/70">
+      <div class="border-b border-edge px-3 py-1.5 font-mono text-xs text-base-content">
         <span data-role="insight-preview-path">{@target || "(no page named)"}</span>
       </div>
       <div class="font-mono text-xs leading-relaxed">
@@ -176,7 +176,7 @@ defmodule PlatformWeb.OrgMemoryLive.InsightPreview do
 
   def preview(assigns) do
     ~H"""
-    <div class="mt-2 text-sm text-base-content/70" data-role="insight-preview">
+    <div class="mt-2 text-sm text-base-content" data-role="insight-preview">
       {sentence(@insight)}
     </div>
     """

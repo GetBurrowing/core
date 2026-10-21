@@ -257,7 +257,7 @@ defmodule PlatformWeb.Tasks.CanvasPickerComponent do
           <ul class="min-h-0 flex-1 divide-y divide-edge overflow-y-auto" role="listbox">
             <li
               :if={@candidates == []}
-              class="px-3 py-4 text-sm text-base-content/70"
+              class="px-3 py-4 text-sm text-base-content"
               data-role="canvas-picker-empty"
             >
               {if String.trim(@query) == "",

@@ -200,7 +200,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
       <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
         Schedule deletion for {@resource.name}?
       </h2>
-      <p id="schedule-delete-body" class="mt-2 text-sm text-base-content/70">
+      <p id="schedule-delete-body" class="mt-2 text-sm text-base-content">
         {schedule_body(@resource.type)} It stays recoverable from the
         Recovery view for <span class="font-semibold text-base-content">{@retention_days} days</span>,
         then it's permanently deleted. You can bring it back any time before then.
@@ -254,7 +254,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         <h2 id="schedule-delete-title" class="text-base font-semibold text-base-content">
           Delete {@resource.name} permanently?
         </h2>
-        <p id="schedule-delete-body" class="mt-2 text-sm text-base-content/70">
+        <p id="schedule-delete-body" class="mt-2 text-sm text-base-content">
           Everything below is scheduled for permanent deletion in
           <span class="font-semibold text-base-content">{@retention_days} days</span>
           and stays recoverable until then. Check anything you want to keep — it stays archived on its own and survives the delete.
@@ -272,7 +272,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
             type="button"
             phx-click="delete_keep_all"
             data-role="purge-keep-all"
-            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content/70 hover:bg-base-200 hover:text-base-content"
+            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content hover:bg-base-200 hover:text-base-content"
           >
             Keep all
           </button>
@@ -280,7 +280,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
             type="button"
             phx-click="delete_include_all"
             data-role="purge-include-all"
-            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content/70 hover:bg-base-200 hover:text-base-content"
+            class="focus-visible-ring rounded-lg px-2.5 py-1 text-xs font-medium text-base-content hover:bg-base-200 hover:text-base-content"
           >
             Delete all
           </button>
@@ -360,7 +360,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
         <span class={[
           "truncate text-sm",
           @kept && "text-base-content",
-          !@kept && "text-base-content/70 line-through decoration-error/40"
+          !@kept && "text-base-content line-through decoration-error/40"
         ]}>
           {@item.name}
         </span>
@@ -484,7 +484,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
           <h2 id="restore-all-title" class="text-base font-semibold text-base-content">
             Restore {@restore.org.name}?
           </h2>
-          <p id="restore-all-body" class="mt-2 text-sm text-base-content/70">
+          <p id="restore-all-body" class="mt-2 text-sm text-base-content">
             These items are counting down to permanent deletion. Restoring brings them all back too.
             Check any you'd rather keep scheduled — they stay on their countdown.
           </p>
