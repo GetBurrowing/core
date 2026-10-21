@@ -19,7 +19,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       `:expanded_stacks`,
       `:review_counts`, `:pending_plan_count`, `:scope_counts`,
       `:scope_counts_db`, `:visible_task_count`,
-      `:review_request_subscriptions`
+      `:review_request_subscriptions`, `:my_tasks`, `:my_needs_you`
     * Info: `{:task_updated, _}`, `{:task_created, _}`, `{:task_deleted, _}`,
       `{:tasks_batch_deleted, _, _}`, `{:epic_created, _}`,
       `{:epic_updated, _}`, `{:plan_updated, _}`,
@@ -252,6 +252,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign_new(:root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
     |> assign(:visible_task_count, length(tasks))
     |> sync_review_request_subscriptions(tasks)
+    |> assign_my_tasks(board_sort)
     # An active search must survive PubSub-driven refreshes — the assigns
     # above are the unfiltered sources; re-narrow the derived shapes.
     |> maybe_reapply_search()
@@ -411,10 +412,42 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   end
 
   @doc "Count of tasks carrying a plan awaiting review — the header badge."
-  def count_pending_plans(tasks) do
-    Enum.count(tasks, fn task ->
-      Enum.any?(task.plans || [], &(&1.status == "pending_review"))
-    end)
+  def count_pending_plans(tasks), do: Enum.count(tasks, &plan_awaiting_review?/1)
+
+  # The one "a plan is awaiting review" predicate, shared by the header badge
+  # and `:my_needs_you`. Answered from the preloaded `:plans`, no query (an
+  # unloaded or nil `:plans` answers false rather than querying).
+  defp plan_awaiting_review?(task), do: Tasks.plan_pending_review?(task)
+
+  # `:my_tasks` / `:my_needs_you` (task 01a1557a-b20a stage 1), the phone
+  # Tasks tab's "mine" list. The query is DELIBERATELY independent of the
+  # board's project / epic / sponsor / kind / origin / search filters: the
+  # list is the viewer's own open tasks whatever the board is filtered to.
+  # It honours only `:access_scope`. Sorted with the board's own `board_sort`.
+  #
+  # Cost per refresh: one task query + one plans preload + one project
+  # preload (`list_my_open_tasks/2`) and one grouped ReviewRequest count over
+  # the my-tasks ids (`pending_review_counts/1`). Constant, not per task.
+  #
+  # `:my_needs_you` is the set of my task ids gated on a human: a pending
+  # ReviewRequest, or a plan in `pending_review`.
+  defp assign_my_tasks(socket, board_sort) do
+    my_tasks =
+      socket.assigns[:current_user_id]
+      |> Tasks.list_my_open_tasks(access_scope: access_scope(socket))
+      |> BoardData.sort_items(board_sort)
+
+    review_counts = pending_review_counts(my_tasks)
+
+    needs_you =
+      for task <- my_tasks,
+          Map.get(review_counts, task.id, 0) > 0 or plan_awaiting_review?(task),
+          into: MapSet.new(),
+          do: task.id
+
+    socket
+    |> assign(:my_tasks, my_tasks)
+    |> assign(:my_needs_you, needs_you)
   end
 
   # No-op passthrough when there is no active query, so the DB-computed

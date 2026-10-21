@@ -25,8 +25,17 @@
     current_user_id={@current_user_id}
   />
 
+  <%!-- Phone my-tasks list (task 01a1557a-b20a stage 2). Below lg it is the
+       view at load; "All tasks" swaps to #tasks-main by a sticky JS class op. --%>
+  <PlatformWeb.Tasks.MyTasksList.my_tasks_list
+    my_tasks={@my_tasks}
+    my_needs_you={@my_needs_you}
+    mask_names?={@mask_names?}
+    mask_labels={@mask_labels}
+  />
+
   <%!-- Main content area --%>
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+  <div id="tasks-main" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-lg:hidden">
     <%!-- Board header (re-skin Phase 2 stage 2, task 019f51ca): page_header
          replaces the ad-hoc header row. The count badge stays the
          UNFILTERED total (search narrows the board, not the headline).
@@ -39,6 +48,15 @@
       count={@visible_task_count || length(@all_tasks)}
     >
       <:leading>
+        <button
+          type="button"
+          data-role="tasks-show-mine"
+          aria-label="My tasks"
+          phx-click={PlatformWeb.Tasks.MyTasksList.show_mine()}
+          class="inline-flex size-11 shrink-0 items-center justify-center rounded-field text-base-content active:bg-base-100 focus-visible-ring lg:hidden"
+        >
+          <span class="hero-chevron-left size-5"></span>
+        </button>
         <%!-- Mobile: project sheet trigger --%>
         <button
           phx-click="sidebar_toggle_project_sheet"

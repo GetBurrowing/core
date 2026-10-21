@@ -134,7 +134,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         toggle_event="taskcreate_toggle_fab"
         toggle_target={@myself}
         label="Create"
-        class={["md:hidden", @selected_task && "max-md:hidden"]}
+        class={["md:hidden max-lg:hidden", @selected_task && "max-md:hidden"]}
         data-role="fab-create"
       >
         <button
