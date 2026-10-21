@@ -211,6 +211,44 @@
      the one other pair that failed it. Black measures 5.3918:1. The red
      itself is unchanged. */
   --color-error-content: oklch(0% 0 0);
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0e7382;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #2d7638;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #925d0c;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #ad4b07;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* theme.js #1e74a6 measures 4.4088:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5320:1. */
+  --ag-blue-text: #1c72a4;
+  --ag-purple: #805eb6;
+  /* theme.js #805eb6 measures 4.3573:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5300:1. */
+  --ag-purple-text: #7e5bb3;
+  --ag-brick: #ae5548;
+  /* theme.js #ae5548 measures 4.3399:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5185:1. */
+  --ag-brick-text: #ab5246;
+  --ag-rose: #a85276;
+  /* theme.js #a85276 measures 4.4047:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5278:1. */
+  --ag-rose-text: #a65074;
+  --ag-indigo: #546aba;
+  /* theme.js #546aba measures 4.3812:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5079:1. */
+  --ag-indigo-text: #5268b8;
+  --ag-lime: #4f7b00;
+  /* theme.js #4f7b00 measures 4.3682:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5457:1. */
+  --ag-lime-text: #4d7802;
+  /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
   --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
@@ -309,6 +347,32 @@
   /* Black, not white: white on this red is 3.8948:1, under AA; black is
      5.3918:1. Same fix, same reason, as the light block. */
   --color-error-content: oklch(0% 0 0);
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #22d3ee;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #6bae75;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #e5a33d;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #f47721;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
   --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
@@ -360,6 +424,46 @@
   --color-info-dim: var(--info-dim);
   --color-success-dim: var(--success-dim);
   --color-warning-dim: var(--warning-dim);
+}
+
+/* Agent slot tints (task 01a1557a rung 3). ONE declaration per slot, here and
+   not per theme block: each theme block declares only --ag-<id>,
+   --ag-<id>-text and --ag-tint-pct.
+
+   OPAQUE, by design: the masters' form, color-mix(in srgb, var(--ag) 8%,
+   var(--surface)), a mix with base-100 and not a translucent hue over
+   whatever ground a row sits on. So name-on-tint is a contrast between two
+   opaque colours the guard knows, whatever the container ground.
+
+   NO HOVER TINT (design deviation, Saru's ruling for rung 3): the masters
+   deepen the tint to 14% on hover (master-desktop.html .group.agent
+   .m:hover). Painted, --subtle on that 14% tint fell under 4.5:1 in 7 of
+   the 8 non-high-contrast blocks (worst Burrow sand dark, 4.34:1), so an
+   agent row keeps its rest tint on hover and takes whatever hover a human
+   row has.
+
+   WHY THE SELECTOR LISTS EVERY THEME-BEARING ELEMENT. A var() inside a custom
+   property is substituted on the element that DECLARES the property, and the
+   result inherits as a finished colour. Declared on :root alone, a nested
+   [data-preset][data-theme] swatch would inherit the page's tint. Matching
+   every element that carries a theme recomputes the mix from that element's
+   own block. High contrast sets the pct to 0%: the tint is base-100 and
+   the rail stays. Painted under Chrome 147 and 151:
+   test/support/fixtures/painted_mix/, held by
+   test/platform/design/agent_slot_tokens_guard_test.exs. */
+:root,
+[data-theme],
+[data-preset] {
+  --ag-teal-tint: color-mix(in srgb, var(--ag-teal) var(--ag-tint-pct), var(--color-base-100));
+  --ag-green-tint: color-mix(in srgb, var(--ag-green) var(--ag-tint-pct), var(--color-base-100));
+  --ag-amber-tint: color-mix(in srgb, var(--ag-amber) var(--ag-tint-pct), var(--color-base-100));
+  --ag-orange-tint: color-mix(in srgb, var(--ag-orange) var(--ag-tint-pct), var(--color-base-100));
+  --ag-blue-tint: color-mix(in srgb, var(--ag-blue) var(--ag-tint-pct), var(--color-base-100));
+  --ag-purple-tint: color-mix(in srgb, var(--ag-purple) var(--ag-tint-pct), var(--color-base-100));
+  --ag-brick-tint: color-mix(in srgb, var(--ag-brick) var(--ag-tint-pct), var(--color-base-100));
+  --ag-rose-tint: color-mix(in srgb, var(--ag-rose) var(--ag-tint-pct), var(--color-base-100));
+  --ag-indigo-tint: color-mix(in srgb, var(--ag-indigo) var(--ag-tint-pct), var(--color-base-100));
+  --ag-lime-tint: color-mix(in srgb, var(--ag-lime) var(--ag-tint-pct), var(--color-base-100));
 }
 
 /* Add variants based on LiveView classes */
@@ -1203,7 +1307,8 @@ body, .font-suite {
 
 /* Dark shadows: light-theme shadows vanish on #191b20 — darker and wider,
    while hairline borders stay the primary depth cue. Same dual-selector
-   pattern as .msg-agent below (explicit data-theme wins over OS preference). */
+   pattern as the chip and focus-ring blocks (explicit data-theme wins over
+   OS preference). */
 [data-theme="dark"] {
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.40);
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
@@ -1227,91 +1332,128 @@ body, .font-suite {
 }
 
 /* ── Agent message differentiation ──────────────────────────────── */
-/* Applied to messages from AI agents in chat.
-   --agent-accent is set per-message via inline style from the agent's stored color.
-   Falls back to the original blue when not set. */
+/* Agent identity slots (task 01a1557a rung 3 stage 2). An agent row
+   carries data-agent-slot="<id>" (Platform.Agents.ColorPalette's ids, from
+   Chat.agent_slot_map_for_participants/1; nil, blank or unknown is "blue").
+   The ten pointer rules below are the ONE place a slot id becomes colour:
+   each points the row-local --ag, --ag-text and --ag-tint at that slot's
+   theme tokens (declared per theme block, measured by
+   test/platform/design/agent_slot_tokens_guard_test.exs). There is no
+   hover pointer: no hover tint exists (see "Agent slot tints" above).
 
-/* --agent-accent clamp (design-system 01-foundations §1.4, re-skin Phase 1):
-   runtime agent colors are clamped to L ∈ [0.35, 0.80] so near-white or
-   near-black accents stay visible as borders, rings, and name text on both
-   themes. Browsers without relative-color syntax get the unclamped
-   passthrough — identical to previous behavior. */
-.msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge {
-  --agent-accent-safe: var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207)));
-}
+   The tokens are already AA-chosen per preset and mode, so nothing here
+   clamps, mixes or translucently layers them: a rule that moved a token off
+   its measured value would void the measurement. */
+[data-agent-slot="teal"] { --ag: var(--ag-teal); --ag-text: var(--ag-teal-text); --ag-tint: var(--ag-teal-tint); }
+[data-agent-slot="green"] { --ag: var(--ag-green); --ag-text: var(--ag-green-text); --ag-tint: var(--ag-green-tint); }
+[data-agent-slot="amber"] { --ag: var(--ag-amber); --ag-text: var(--ag-amber-text); --ag-tint: var(--ag-amber-tint); }
+[data-agent-slot="orange"] { --ag: var(--ag-orange); --ag-text: var(--ag-orange-text); --ag-tint: var(--ag-orange-tint); }
+[data-agent-slot="blue"] { --ag: var(--ag-blue); --ag-text: var(--ag-blue-text); --ag-tint: var(--ag-blue-tint); }
+[data-agent-slot="purple"] { --ag: var(--ag-purple); --ag-text: var(--ag-purple-text); --ag-tint: var(--ag-purple-tint); }
+[data-agent-slot="brick"] { --ag: var(--ag-brick); --ag-text: var(--ag-brick-text); --ag-tint: var(--ag-brick-tint); }
+[data-agent-slot="rose"] { --ag: var(--ag-rose); --ag-text: var(--ag-rose-text); --ag-tint: var(--ag-rose-tint); }
+[data-agent-slot="indigo"] { --ag: var(--ag-indigo); --ag-text: var(--ag-indigo-text); --ag-tint: var(--ag-indigo-tint); }
+[data-agent-slot="lime"] { --ag: var(--ag-lime); --ag-text: var(--ag-lime-text); --ag-tint: var(--ag-lime-tint); }
 
-@supports (color: oklch(from red clamp(0.35, l, 0.8) c h)) {
-  .msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge, .agent-owned {
-    --agent-accent-safe: oklch(from var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207))) clamp(0.35, l, 0.80) c h);
-  }
-}
-
+/* The row: 3px rail at full hue, the slot's opaque tint as its ground.
+   One rule for every theme and mode, because the tokens already differ per
+   block. Hover leaves the tint at rest; see .msg-agent > .message-row-inner
+   below for why the human rows' hover fill is not drawn here. */
 .msg-agent {
-  --agent-accent-fallback: oklch(82% 0.12 207); /* blue default */
-  border-left: 3px solid var(--agent-accent-safe);
-  background: color-mix(in oklch, var(--agent-accent-safe) 6%, transparent);
+  border-left: 3px solid var(--ag);
+  background: var(--ag-tint);
   border-radius: 0 0.5rem 0.5rem 0;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--agent-accent-safe) 8%, transparent);
   margin: 2px 0;
   padding-left: calc(0.75rem + 3px);
 }
 
-.msg-agent:hover {
-  background: color-mix(in oklch, var(--agent-accent-safe) 10%, transparent);
+/* NO ROW-INNER HOVER FILL ON AGENT ROWS (design deviation, Saru's ruling,
+   canvas 01a15b1e-d673 r2). Human rows hover with `hover:bg-base-200/40` on
+   .message-row-inner; over an agent row that composites base-200 at 40%
+   onto the tint under the name, a strength nobody has painted, so its
+   contrast is unknown. Agent rows keep the tint at rest on hover, and keep
+   the human rows' other hover cue: the message actions appearing.
+   Two classes against Tailwind's one hover variant, and unlayered, so this
+   wins in every state. */
+.msg-agent > .message-row-inner,
+.msg-agent > .message-row-inner:hover {
+  background-color: transparent;
 }
 
-/* In dark mode, use neutral stepped surfaces for agent messages to match the
-   comp rather than the older cyan-tinted wash. Keep the accent border as the
-   identity cue, but make the bubble itself part of the surface system. */
-[data-theme="dark"] .msg-agent {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  background: #1c2531;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-  border-left-color: var(--agent-accent-safe);
-}
-
-[data-theme="dark"] .msg-agent:hover {
-  background: #262c3c;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .msg-agent {
-    --agent-accent-fallback: oklch(82% 0.12 207);
-    background: #1c2531;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-    border-left-color: var(--agent-accent-safe);
-  }
-
-  :root:not([data-theme="light"]) .msg-agent:hover {
-    background: #262c3c;
-  }
-}
-
+/* Avatar ring: 2px at full hue. The 10px hue glow is dropped: it was a
+   translucent mix nobody measured, and the ring is the identity cue. */
 .msg-agent-avatar {
-  /* Uses --agent-accent from closest ancestor with the property set */
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  box-shadow: 0 0 0 2px var(--agent-accent-safe),
-              0 0 10px color-mix(in oklch, var(--agent-accent-safe) 20%, transparent);
+  box-shadow: 0 0 0 2px var(--ag);
 }
 
+/* Name: body size, semibold, in the slot TEXT token (Saru: "Name: body
+   size, semibold"). The body is text-sm, so 0.875rem. */
 .msg-agent-name {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  color: var(--agent-accent-safe);
-  font-weight: 700;
-  letter-spacing: 0.03em;
+  color: var(--ag-text);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
 }
 
+/* "AI" pill: the SAME pair as the name, so one measurement covers both
+   (Saru: "Pill: 11-12px medium, uppercase"). Text --ag-text, border --ag,
+   no fill of its own: it sits on the row's tint, the ground the name was
+   measured on. */
 .msg-agent-badge {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  font-size: 0.625rem;
-  font-weight: 700;
+  font-size: 11px;
+  line-height: 1rem;
+  font-weight: 500;
+  text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 1px 5px;
+  padding: 0 5px;
   border-radius: 9999px;
-  border: 1px solid var(--agent-accent-safe);
-  color: var(--agent-accent-safe);
+  border: 1px solid var(--ag);
+  color: var(--ag-text);
+  background: transparent;
   vertical-align: middle;
   margin-left: 4px;
+}
+
+/* Meeting agent tile (task 01a1557a rung 3 stage 3): the same slot skin as
+   .msg-agent, so the rail reads the same in chat and on the tile edge
+   (Saru's canvas 01a15b1e-d673, "Signature element: the 3px rail").
+   Skin only: nothing here changes geometry.
+
+   Rail: an INSET 3px left shadow in var(--ag), not a border, so the tile's
+   box does not move. It is composed with Tailwind's ring shadow variables,
+   because this unlayered rule beats the `ring-2 ring-primary` utility the
+   tile wears while speaking: the speaking ring stays primary (a status)
+   and draws outside the rail.
+
+   Ground: var(--ag-tint), the same 8% opaque tint the chat row paints
+   (0% in high contrast, i.e. base-100), behind avatar AND voice tiles.
+   The masters use 12% on the tile; 8% is a recorded deviation, so one
+   painted tint per slot covers both surfaces. */
+.meeting-agent-tile[data-agent-slot] {
+  background: var(--ag-tint);
+  box-shadow:
+    inset 3px 0 0 var(--ag),
+    var(--tw-ring-offset-shadow, 0 0 #0000),
+    var(--tw-ring-shadow, 0 0 #0000),
+    var(--tw-shadow, 0 0 #0000);
+}
+
+/* Avatar ring: 2px var(--ag), as .msg-agent-avatar. */
+.meeting-agent-tile[data-agent-slot] .agent-tile-avatar {
+  box-shadow: 0 0 0 2px var(--ag);
+}
+
+/* Name chip band. White 10px text on `bg-black/60` (markup), a SOLID band
+   at a painted strength, replacing the old `from-black/60` gradient. The
+   gradient's pixel behind the glyphs' top row (14px above the tile bottom)
+   painted at 2.2257:1 (Burrow light), 2.5422:1 (sand light) and 1.9621:1
+   (high-contrast light) for white text, on HeadlessChrome 147 at 375 and
+   1280; the solid band is measured on every painted tint by
+   agent_slot_tokens_guard_test.exs ("tile chip"). High contrast needs 7:1
+   for name text, which black at 60% over its white base-100 cannot give
+   (5.74:1), so there the band is opaque black (21:1). */
+[data-preset="high-contrast"] .agent-tile-chip {
+  background-color: #000;
 }
 
 .human-avatar {
@@ -1432,12 +1574,12 @@ body, .font-suite {
 
 @keyframes attention-avatar-glow {
   0%, 100% {
-    box-shadow: 0 0 0 2px var(--agent-accent, oklch(82% 0.12 207)),
-                0 0 8px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);
+    box-shadow: 0 0 0 2px var(--ag, var(--ag-blue)),
+                0 0 8px color-mix(in oklch, var(--ag, var(--ag-blue)) 30%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 3px var(--agent-accent, oklch(82% 0.12 207)),
-                0 0 16px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);
+    box-shadow: 0 0 0 3px var(--ag, var(--ag-blue)),
+                0 0 16px color-mix(in oklch, var(--ag, var(--ag-blue)) 50%, transparent);
   }
 }
 
@@ -3234,7 +3376,7 @@ body, .font-suite {
    black foreground into it there would make the labels heavier than designed.
 
    Three-state theming, matching the pattern this file already uses at the
-   `.msg-agent` and `.chip-soft` blocks: an explicit `data-theme="dark"` wins
+   `.chip-soft` blocks: an explicit `data-theme="dark"` wins
    outright, and the unset default follows `prefers-color-scheme`. */
 [data-theme="dark"] .reaction-picker {
   --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
@@ -6742,9 +6884,10 @@ body, .font-suite {
 
   /* Agent-owned marker: the chat .msg-agent accent edge, reusable on any
      container (agent-assigned task cards adopt it in the Tasks pilot).
-     --agent-accent-safe comes from the shared clamp block above. */
+     --ag comes from the container's data-agent-slot pointer rule (task
+     01a1557a rung 3 stage 2); with no slot it is the blue slot's rail. */
   .agent-owned {
-    border-left: 3px solid var(--agent-accent-safe);
+    border-left: 3px solid var(--ag, var(--ag-blue));
   }
 
   /* Form-control height consistency (design review 2026-07-12): inside a
@@ -8440,7 +8583,7 @@ body, .font-suite {
    by reading the painted `getComputedStyle().color` off the live element
    after the change, not by reasoning about the cascade.
 
-   The `prefers-color-scheme` twin is the house pattern (see `.msg-agent`
+   The `prefers-color-scheme` twin is the house pattern (see `.chip-soft`
    above): the dark theme is declared `prefersdark: true`, and a page that
    runs no script (or paints before the `theme-boot` script runs) has no
    `data-theme` at all, so a viewer under a dark OS gets the dark palette

@@ -152,7 +152,6 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={MapSet.new()}
-        agent_colors_map={%{}}
         participants_map={%{}}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}

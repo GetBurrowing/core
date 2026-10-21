@@ -27,9 +27,11 @@
  * master key: black on dark fills, white on light fills, each measured by the
  * guard.
  *
+ * AGENT SLOTS (rung 3): each block declares the ten agTeal ... agLime slots as
+ * --ag-<id> and --ag-<id>-text plus --ag-tint-pct, in its agent-slots region; app.css derives the opaque tints. The ids are
+ * Platform.Agents.ColorPalette's.
+ *
  * NOT PORTED, with the reason:
- *   - the ten agent slots (agTeal ... agLime): agent hues come from
- *     lib/platform/agents/color_palette.ex, not CSS tokens;
  *   - bubbleMe, scrim, shade, viewer, stage, dangerDim: the app has no slot;
  *   - desk: the masters mark it demo only.
  *
@@ -94,6 +96,32 @@
   --warning-dim: #5a4320;
   --color-error: #e5484d;
   --color-error-content: #000000;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #4fd7ea;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #7cc98a;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #f0b24a;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #ff8a3d;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
@@ -138,6 +166,44 @@
   --warning-dim: #e5c38f;
   --color-error: #a3252a;
   --color-error-content: #ffffff;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0b6e7f;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #2a7036;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #8d5a0a;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #b4470a;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* theme.js #1e74a6 measures 4.4043:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5274:1. */
+  --ag-blue-text: #1c72a4;
+  --ag-purple: #805eb6;
+  /* theme.js #805eb6 measures 4.3411:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5132:1. */
+  --ag-purple-text: #7e5bb3;
+  --ag-brick: #ae5548;
+  /* theme.js #ae5548 measures 4.3255:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5035:1. */
+  --ag-brick-text: #ab5246;
+  --ag-rose: #a85276;
+  /* theme.js #a85276 measures 4.3961:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5190:1. */
+  --ag-rose-text: #a65074;
+  --ag-indigo: #546aba;
+  /* theme.js #546aba measures 4.3682:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5039:1. */
+  --ag-indigo-text: #5268b7;
+  --ag-lime: #4f7b00;
+  /* theme.js #4f7b00 measures 4.3545:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5314:1. */
+  --ag-lime-text: #4d7802;
+  /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
@@ -178,6 +244,32 @@
   --warning-dim: #5b4522;
   --color-error: #e5484d;
   --color-error-content: #000000;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #22d3ee;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #6bae75;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #e5a33d;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #e8842e;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-box: 18px;
   --radius-field: 13px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
@@ -235,6 +327,50 @@
   --warning-dim: #dcb77a;
   --color-error: #a3252a;
   --color-error-content: #ffffff;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0e7382;
+  /* theme.js #0e7382 measures 4.4333:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5003:1. */
+  --ag-teal-text: #0a7281;
+  --ag-green: #2d7638;
+  /* theme.js #2d7638 measures 4.4821:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5466:1. */
+  --ag-green-text: #2c7537;
+  --ag-amber: #925d0c;
+  /* theme.js #925d0c measures 4.4483:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5121:1. */
+  --ag-amber-text: #915c0b;
+  --ag-orange: #9c4306;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* theme.js #1e74a6 measures 4.1217:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5498:1. */
+  --ag-blue-text: #146d9f;
+  --ag-purple: #805eb6;
+  /* theme.js #805eb6 measures 4.0390:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5113:1. */
+  --ag-purple-text: #7956ae;
+  --ag-brick: #ae5548;
+  /* theme.js #ae5548 measures 4.0511:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5182:1. */
+  --ag-brick-text: #a64d41;
+  --ag-rose: #a85276;
+  /* theme.js #a85276 measures 4.0926:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5095:1. */
+  --ag-rose-text: #a14b6f;
+  --ag-indigo: #546aba;
+  /* theme.js #546aba measures 4.0865:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5083:1. */
+  --ag-indigo-text: #4e63b3;
+  --ag-lime: #4f7b00;
+  /* theme.js #4f7b00 measures 4.0790:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5380:1. */
+  --ag-lime-text: #4a7302;
+  /* agent-slots:end */
   --radius-box: 18px;
   --radius-field: 13px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
@@ -275,6 +411,37 @@
   --warning-dim: #54431e;
   --color-error: #e5484d;
   --color-error-content: #000000;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #22d3ee;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #6bae75;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #e5a33d;
+  --ag-amber-text: var(--ag-amber);
+  /* MASTERS DEVIATION (task 01a1557a rung 3 stage 3, Dalton's ruling on Saru's
+     pairwise rule). theme.js sets agOrange to the preset accent in sand and
+     forest; forest's accent is the gold #f0a040, so its orange slot was its
+     amber. theme.js #f0a040 is delta E 1.97 from --ag-amber. This is Burrow
+     dark's own orange: delta E 9.76 from --ag-amber. */
+  --ag-orange: #f47721;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-box: 16px;
   --radius-field: 11px;
   --font-sans: "Public Sans", system-ui, sans-serif;
@@ -318,6 +485,48 @@
   --warning-dim: #ddb77e;
   --color-error: #a3252a;
   --color-error-content: #ffffff;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0e7382;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #2d7638;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #925d0c;
+  --ag-amber-text: var(--ag-amber);
+  /* MASTERS DEVIATION (task 01a1557a rung 3 stage 3): forest's orange slot
+     followed its gold accent onto amber (see the dark block).
+     theme.js #a3500a is delta E 4.24 from --ag-amber. This value sits on the
+     hue of the new dark orange #f47721 (8.72 degrees) at delta E 8.50 from --ag-amber. */
+  --ag-orange: #b23e04;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* theme.js #1e74a6 measures 4.3814:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5039:1. */
+  --ag-blue-text: #1c72a4;
+  --ag-purple: #805eb6;
+  /* theme.js #805eb6 measures 4.3183:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5064:1. */
+  --ag-purple-text: #7d5bb3;
+  --ag-brick: #ae5548;
+  /* theme.js #ae5548 measures 4.3004:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5053:1. */
+  --ag-brick-text: #aa5245;
+  --ag-rose: #a85276;
+  /* theme.js #a85276 measures 4.3732:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5197:1. */
+  --ag-rose-text: #a55074;
+  --ag-indigo: #546aba;
+  /* theme.js #546aba measures 4.3424:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5222:1. */
+  --ag-indigo-text: #5267b7;
+  --ag-lime: #4f7b00;
+  /* theme.js #4f7b00 measures 4.3383:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5145:1. */
+  --ag-lime-text: #4d7802;
+  /* agent-slots:end */
   --radius-box: 16px;
   --radius-field: 11px;
   --font-sans: "Public Sans", system-ui, sans-serif;
@@ -356,6 +565,33 @@
   --warning-dim: #4a3600;
   --color-error: #ff6b6b;
   --color-error-content: #000000;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  /* High contrast: the tint is none (0%), the rail stays (Saru's rule). */
+  --ag-tint-pct: 0%;
+  --ag-teal: #5ff0ff;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #8ef59a;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #ffd060;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #ff8c2a;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #7cc8ff;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #d9b8ff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ff9a8a;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #ffa8cc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #a6bcff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #b8f070;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-box: 6px;
   --radius-field: 4px;
   --font-sans: "Public Sans", system-ui, sans-serif;
@@ -399,6 +635,41 @@
   --warning-dim: #f1d59a;
   --color-error: #8f0000;
   --color-error-content: #ffffff;
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  /* High contrast: the tint is none (0%), the rail stays (Saru's rule). */
+  --ag-tint-pct: 0%;
+  --ag-teal: #004f5c;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #0f5a1c;
+  --ag-green-text: var(--ag-green);
+  /* theme.js #6a4000 is 17.80 degrees oklch hue from this preset's dark amber
+     #ffd060, past the 10-degree same-hue rule. This value keeps the master's oklch
+     lightness and turns its hue toward that value (chroma cut only to stay in sRGB):
+     9.00 degrees. */
+  --ag-amber: #654400;
+  --ag-amber-text: var(--ag-amber);
+  /* theme.js #8a3300 is 11.76 degrees oklch hue from this preset's dark orange
+     #ff8c2a, past the 10-degree same-hue rule. This value keeps the master's oklch
+     lightness and turns its hue toward that value (chroma cut only to stay in sRGB):
+     9.74 degrees. */
+  --ag-orange: #883601;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #005e8f;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #69469c;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #933d31;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #8e3b60;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #3e52a0;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #396300;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-box: 6px;
   --radius-field: 4px;
   --font-sans: "Public Sans", system-ui, sans-serif;

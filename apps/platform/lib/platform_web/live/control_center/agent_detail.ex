@@ -437,10 +437,11 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                       "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
                       "peer-checked:border-current border-transparent hover:border-edge"
                     ]}
-                    style={"color: #{color.accent};"}
+                    style={"color: var(#{color.token});"}
                   >
-                    <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
-                    <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
+                    <span class="w-5 h-5 rounded-full" style={"background: var(#{color.token});"}>
+                    </span>
+                    <span class="text-[9px] text-subtle font-medium">{color.label}</span>
                   </span>
                 </label>
               </div>
@@ -838,10 +839,10 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
                   "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
                   "peer-checked:border-current border-transparent hover:border-edge"
                 ]}
-                style={"color: #{color.accent};"}
+                style={"color: var(#{color.token});"}
               >
-                <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
-                <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
+                <span class="w-5 h-5 rounded-full" style={"background: var(#{color.token});"}></span>
+                <span class="text-[9px] text-subtle font-medium">{color.label}</span>
               </span>
             </label>
           </div>

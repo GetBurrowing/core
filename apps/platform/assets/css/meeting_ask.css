@@ -143,3 +143,38 @@
    `.av` only gives up its circle, border and size here. Centred in the
    mockup's 36px avatar column. */
 .meeting-ask .av[data-voice="true"]{width:32px;height:32px;border:0;border-radius:8px;justify-self:center}
+
+/* Agent identity slots on the Ask row (task 01a1557a rung 3 stage 3; Saru's
+   canvas 01a15b1e-d673, "Signature element: the 3px rail ... the element
+   that reads the same in chat, the meeting tile edge and the Ask row").
+
+   ASK SURFACE BLOCK. This section is a fixed-dark port (`--s:#161d24`,
+   `--s2:#1c252e` above) that does not follow the page theme, so the
+   theme's light slot values would sit on a dark ground here. The ten slots
+   are re-declared for THIS surface, measured against #161d24 and #1c252e
+   by test/platform/design/agent_slot_tokens_guard_test.exs ("ask surface"):
+   Burrow dark's own values, every text >= 5.5470:1 on both grounds, so in
+   a light page the Ask row shows a slot's dark value while chat shows its
+   light value. The stage-1 hue rule (within 10 degrees OKLCH of the dark
+   value) is what makes that the same hue. Out of scope: re-tokenising the
+   rest of this section to the page theme. */
+.meeting-ask{--ag-teal:#22d3ee;--ag-teal-text:var(--ag-teal);--ag-green:#6bae75;--ag-green-text:var(--ag-green);--ag-amber:#e5a33d;--ag-amber-text:var(--ag-amber);--ag-orange:#f47721;--ag-orange-text:var(--ag-orange);--ag-blue:#59bbfb;--ag-blue-text:var(--ag-blue);--ag-purple:#c89eff;--ag-purple-text:var(--ag-purple);--ag-brick:#ef806f;--ag-brick-text:var(--ag-brick);--ag-rose:#fc90bc;--ag-rose-text:var(--ag-rose);--ag-indigo:#86a4ff;--ag-indigo-text:var(--ag-indigo);--ag-lime:#9fd959;--ag-lime-text:var(--ag-lime)}
+/* Each `.row` carries `data-agent-slot`; app.css's pointer rules set `--ag`
+   and `--ag-text` from the block above. Rail: an inset shadow, so the row's
+   grid does not move; it stays on the "gone" row. */
+.meeting-ask .row{box-shadow:inset 3px 0 0 var(--ag)}
+.meeting-ask .nm{color:var(--ag-text)}
+/* Idle avatar: initials in the slot text (masters burrow-meeting.js). The
+   border stays PART 1's neutral `--b` edge, as the masters keep `--edge`:
+   in this row the avatar border signals HELD (`.row[data-held] .av` turns
+   it `--a`), and a hued idle border would make that unreadable for an agent
+   on orange (Saru's ruling). Identity is the rail, the name and these
+   initials. */
+.meeting-ask .av{color:var(--ag-text)}
+/* A voice avatar keeps its neutral glyph: the waveform inherits colour, and
+   an activity glyph is status, never the hue. */
+.meeting-ask .av[data-voice="true"]{color:var(--t)}
+/* Not the hue, by design: the Ask button (`.ask`, `--a`), its ring and bars,
+   the held `.av`, the `.tr` popovers, `.kick` and mute, `.confirm`,
+   `.mbtn.danger` and the `.avs` status dot. "An agent hue never appears on
+   a button, link or focus ring." */

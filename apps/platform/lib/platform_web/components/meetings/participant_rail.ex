@@ -172,6 +172,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.ColorPalette
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.AgentDelayReason
@@ -526,6 +527,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :for={{p, info, aid} <- @agents_with_info}
             class="row"
+            data-agent-slot={agent_slot(@agents_by_id, aid)}
             data-participant-id={p.id}
             data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="agent"
@@ -888,6 +890,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :if={@agent_removal_undo}
             class="row"
+            data-agent-slot={ColorPalette.slot_for(Map.get(@agent_removal_undo, :slot))}
             data-kick="gone"
             data-role="meeting-agent-left"
           >
@@ -1169,6 +1172,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     </div>
     """
   end
+
+  # The row's identity slot (task 01a1557a rung 3 stage 3): the agent's stored
+  # `color` through `ColorPalette.slot_for/1`, the same resolution
+  # `Chat.agent_slot_map_for_participants/1` gives the chat row and the gallery
+  # tile, so all three surfaces carry one `data-agent-slot`. nil, blank,
+  # unknown or an unresolved agent is "blue".
+  defp agent_slot(agents_by_id, aid) when is_binary(aid) and is_map(agents_by_id) do
+    case Map.get(agents_by_id, aid) do
+      %{color: color} -> ColorPalette.slot_for(color)
+      _ -> ColorPalette.slot_for(nil)
+    end
+  end
+
+  defp agent_slot(_agents_by_id, _aid), do: ColorPalette.slot_for(nil)
 
   # The face at an agent row's avatar position: the voice waveform for an
   # agent in the call by voice, the mockup's initials otherwise (task

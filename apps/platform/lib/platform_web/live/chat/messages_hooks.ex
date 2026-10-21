@@ -1535,7 +1535,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   singular path. Missing or deleted ids are silently dropped.
 
   Used by hooks that mutate a parent assign affecting many rows — e.g.
-  presence changes that update `@participants_map`, `@agent_colors_map`,
+  presence changes that update `@participants_map`, `@agent_slots_map`,
   `@agent_participant_ids`, `@highlighted_message_id`, or
   `@pinned_message_ids` — to avoid the N+1 that would result from
   per-message `reinsert_stream_message/2` calls. Returns the socket

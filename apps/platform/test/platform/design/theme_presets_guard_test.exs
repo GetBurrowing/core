@@ -61,6 +61,17 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
+  import Platform.Design.ThemeBlocks,
+    only: [
+      preset_blocks: 1,
+      burrow_block: 2,
+      resolve!: 2,
+      declaration: 2,
+      strip_comments: 1,
+      rule_selectors: 1,
+      blocks_after: 2
+    ]
+
   @presets_path Path.expand("../../../assets/css/theme_presets.css", __DIR__)
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
   @plugin_open ~s(@plugin "../vendor/daisyui-theme" {)
@@ -537,80 +548,9 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   defp fixed4(r), do: :erlang.float_to_binary(r / 1, decimals: 4)
   defp fixed2(r), do: :erlang.float_to_binary(r / 1, decimals: 2)
 
-  # Blocks in theme_presets.css, keyed by the canonical selector.
-  defp preset_blocks(css) do
-    Regex.scan(~r/^(\[data-preset[^\n{]*)\{(.*?)\n\}/ms, css, capture: :all_but_first)
-    |> Enum.flat_map(fn [sel, body] ->
-      case Regex.run(@canonical, String.trim(sel)) do
-        [_, id, mode] -> [%{id: id, mode: mode, raw: body, decls: strip_comments(body)}]
-        nil -> []
-      end
-    end)
-  end
-
-  # Burrow's two variants, built from app.css the way the Burrow guard resolves
-  # them: the daisyUI theme block, then the theme-scoped selectors, then :root.
-  defp burrow_block(app_css, mode) do
-    theme =
-      app_css
-      |> blocks_after(@plugin_open)
-      |> Enum.find(&Regex.match?(~r/^\s*name:\s*"#{mode}";/m, &1))
-
-    scoped =
-      if mode == "dark", do: blocks_after(app_css, ~s(\n[data-theme="dark"] {)), else: []
-
-    decls =
-      Enum.map_join(
-        [theme | scoped] ++ blocks_after(app_css, "\n:root {"),
-        "\n",
-        &strip_comments/1
-      )
-
-    %{id: "burrow", mode: mode, raw: "", decls: decls}
-  end
-
-  defp resolve!(b, var, depth \\ 0)
-  defp resolve!(b, var, depth) when depth > 8, do: flunk("#{b.id} #{b.mode}: #{var} loops")
-
-  defp resolve!(b, var, depth) do
-    value = declaration(b.decls, var) || flunk("#{b.id} #{b.mode}: no #{var} declared")
-
-    case Regex.run(~r/^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/, value) do
-      [_, next] -> resolve!(b, next, depth + 1)
-      nil -> W.parse!(value)
-    end
-  end
-
-  defp strip_comments(text), do: Regex.replace(~r{/\*.*?\*/}s, text, "")
-
-  defp rule_selectors(css) do
-    css
-    |> strip_comments()
-    |> then(&Regex.scan(~r/^([^\s{}][^{}]*)\{/m, &1, capture: :all_but_first))
-    |> Enum.map(fn [s] -> String.trim(s) end)
-  end
-
-  defp blocks_after(css, open) do
-    css
-    |> :binary.matches(open)
-    |> Enum.map(fn {at, len} ->
-      start = at + len
-      rest = binary_part(css, start, byte_size(css) - start)
-
-      case Regex.run(~r/\n\s*\}/, rest, return: :index) do
-        [{close, _}] -> binary_part(rest, 0, close)
-        nil -> flunk("a block opened by #{inspect(open)} is never closed")
-      end
-    end)
-  end
-
-  # First match wins, as the Burrow guard reads it.
-  defp declaration(block, var) do
-    case Regex.run(~r/^\s*#{Regex.escape(var)}\s*:\s*([^;]+);/m, block) do
-      [_, value] -> String.trim(value)
-      nil -> nil
-    end
-  end
+  # Block parsing (preset_blocks/1, burrow_block/2, resolve!/2, declaration/2,
+  # strip_comments/1, rule_selectors/1, blocks_after/2) lives in
+  # Platform.Design.ThemeBlocks, shared with agent_slot_tokens_guard_test.exs.
 
   # CSS Selectors 4 specificity {ids, classes/attributes/pseudo-classes, types}
   # for the compound selectors this file and ThemeCss use. :not() and :is()

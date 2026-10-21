@@ -254,7 +254,7 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={@agent_participant_ids}
-        agent_colors_map={%{"p-agent" => "#7c3aed"}}
+        agent_slots_map={%{"p-agent" => "purple"}}
         participants_map={@participants_map}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}
@@ -275,8 +275,8 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
 
       assert letters(plain) == "H"
 
-      # `.msg-agent-avatar` IS the accent ring — a box-shadow keyed off
-      # `--agent-accent`. It lands on the outer wrapper, so that wrapper must
+      # `.msg-agent-avatar` IS the slot ring — a box-shadow keyed off
+      # `--ag`, from the row's `data-agent-slot`. It lands on the outer wrapper, so that wrapper must
       # stay round or a box-shadow ring draws as a rectangle. Both modes.
       for el <- [imaged, plain] do
         assert wrapper_class(el) =~ "msg-agent-avatar"
@@ -340,7 +340,6 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@root}
         current_participant={nil}
         agent_participant_ids={MapSet.new(["p-agent"])}
-        agent_colors_map={%{}}
         participants_map={@participants_map}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}
@@ -753,7 +752,6 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={MapSet.new()}
-        agent_colors_map={%{}}
         participants_map={%{"p-human" => %{name: "Dana Reed", avatar_url: nil, avatar_seed: "s"}}}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}

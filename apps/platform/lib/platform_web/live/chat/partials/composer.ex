@@ -154,7 +154,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:active_space, :any, required: true)
   attr(:current_participant, :any, required: true)
   attr(:agent_participant_ids, :any, required: true)
-  attr(:agent_colors_map, :map, required: true)
+  attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
   attr(:quick_emojis, :list, required: true)
   attr(:pinned_message_ids, :any, required: true)
@@ -279,7 +279,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           msg={msg}
           current_participant={@current_participant}
           agent_participant_ids={@agent_participant_ids}
-          agent_colors_map={@agent_colors_map}
+          agent_slots_map={@agent_slots_map}
           participants_map={@participants_map}
           quick_emojis={@quick_emojis}
           pinned_message_ids={@pinned_message_ids}
@@ -417,11 +417,18 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   end
 
   attr(:streaming_replies, :map, required: true)
-  attr(:agent_colors_map, :map, required: true)
+  # participant id -> palette slot id; the bubble wears the same
+  # `data-agent-slot` the settled row will (task 01a1557a rung 3 stage 2).
+  attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
 
   @doc """
   The in-flight agent reply bubbles — one per streaming chunk.
+
+  Skinned from the same slot tokens as the settled agent row: the row's
+  rail and tint (`msg-agent`), ring and name. The caret is a status (in
+  progress), so it is base-content, never the hue; the body is full
+  base-content, as a settled message body is.
   """
   def streaming_replies(assigns) do
     ~H"""
@@ -431,8 +438,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
       :if={entry.text != nil and entry.text != ""}
       id={"streaming-#{chunk_id}"}
       class="flex-shrink-0 px-5 pb-2 msg-agent"
-      style={
-        "--agent-accent: #{Map.get(@agent_colors_map, entry.participant_id, Platform.Agents.ColorPalette.default_accent())};"
+      data-agent-slot={
+        Platform.Agents.ColorPalette.slot_for(Map.get(@agent_slots_map, entry.participant_id))
       }
     >
       <div class="flex items-start gap-2">
@@ -446,16 +453,13 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           class="msg-agent-avatar"
         />
         <div class="min-w-0 flex-1">
-          <div class="text-xs font-medium mb-0.5 msg-agent-name">
+          <div class="mb-0.5 msg-agent-name">
             {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
           </div>
-          <div
-            class="text-sm text-base-content/80 border-l-2 pl-3"
-            style="border-color: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);"
-          >
+          <div data-role="streaming-body" class="text-sm text-base-content">
             {entry.text}<span
-              class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm"
-              style="background: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);"
+              data-role="streaming-caret"
+              class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm bg-base-content"
             ></span>
           </div>
         </div>

@@ -33,7 +33,6 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={MapSet.new()}
-      agent_colors_map={%{}}
       participants_map={
         %{"p-email" => %{name: "Email (external)", avatar_url: nil, avatar_seed: nil}}
       }
@@ -65,7 +64,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
     assert text =~ "Email to support@acme.test, from Mallory <mallory@evil.test>"
     assert LazyHTML.attribute(line, "class") |> hd() =~ "text-xs"
-    assert LazyHTML.attribute(line, "class") |> hd() =~ "text-base-content/60"
+    assert LazyHTML.attribute(line, "class") |> hd() =~ "text-subtle"
     assert line |> LazyHTML.query(".hero-envelope") |> Enum.count() == 1
 
     [id] = doc |> LazyHTML.query(~s([data-role="mail-inbound-message-id"])) |> Enum.to_list()
@@ -149,6 +148,8 @@ defmodule PlatformWeb.Components.ChatMessageTest do
         metadata: metadata
       },
       agent_ids: if(agent?, do: MapSet.new(["p-agent"]), else: MapSet.new()),
+      slots: Keyword.get(opts, :slots, %{}),
+      highlighted: Keyword.get(opts, :highlighted),
       read_only: Keyword.get(opts, :read_only, false)
     }
 
@@ -158,7 +159,8 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={@agent_ids}
-      agent_colors_map={%{}}
+      agent_slots_map={@slots}
+      highlighted_message_id={@highlighted}
       participants_map={%{"p-agent" => %{name: "Octavius", avatar_url: nil, avatar_seed: nil}}}
       quick_emojis={[]}
       pinned_message_ids={MapSet.new()}
@@ -194,7 +196,9 @@ defmodule PlatformWeb.Components.ChatMessageTest do
     assert LazyHTML.text(trigger) =~ "Context"
     classes = trigger |> LazyHTML.attribute("class") |> hd()
     assert classes =~ "text-[10px]"
-    assert classes =~ "text-base-content/40"
+    # Metadata on the tint is text-subtle (task 01a1557a rung 3 stage 2).
+    assert classes =~ "text-subtle"
+    refute classes =~ "text-base-content/40"
     assert classes =~ "shrink-0"
     assert LazyHTML.attribute(trigger, "phx-click") == ["open_message_context"]
     # The row, not the trigger, carries data-message-id.
@@ -315,5 +319,57 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
     assert anchor.body =~ ~r/position:\s*relative/
     assert Platform.Design.CssRules.matches?(anchor.selector, trigger)
+  end
+
+  # ── Agent identity slot (task 01a1557a rung 3 stage 2) ──────────────
+
+  defp row_attr(html, attr) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#row-a")
+    |> LazyHTML.attribute(attr)
+  end
+
+  test "an agent row carries data-agent-slot for its stored slot" do
+    for id <- Platform.Agents.ColorPalette.ids() do
+      html = agent_row_html(nil, slots: %{"p-agent" => id})
+      assert row_attr(html, "data-agent-slot") == [id]
+    end
+  end
+
+  test "an agent missing from the slot map, or with an unknown id, is the blue slot" do
+    assert row_attr(agent_row_html(nil, []), "data-agent-slot") == ["blue"]
+
+    for stored <- [nil, "", "magenta"] do
+      html = agent_row_html(nil, slots: %{"p-agent" => stored})
+      assert row_attr(html, "data-agent-slot") == ["blue"], inspect(stored)
+    end
+  end
+
+  test "a human row carries no slot, and no row carries an inline accent" do
+    human = agent_row_html(nil, agent?: false, slots: %{"p-agent" => "teal"})
+    assert row_attr(human, "data-agent-slot") == []
+
+    for html <- [human, agent_row_html(nil, slots: %{"p-agent" => "teal"})] do
+      refute html =~ "agent-accent"
+      assert row_attr(html, "style") == []
+    end
+  end
+
+  test "the agent name is msg-agent-name alone, and the pill is the uppercase AI badge" do
+    doc = agent_row_html(nil, []) |> LazyHTML.from_fragment()
+    [name] = doc |> LazyHTML.query(".msg-agent-name") |> Enum.to_list()
+    # No Tailwind size or weight competing with the slot rule's own.
+    assert LazyHTML.attribute(name, "class") == ["msg-agent-name"]
+    [badge] = doc |> LazyHTML.query(".msg-agent-badge") |> Enum.to_list()
+    assert LazyHTML.text(badge) |> String.trim() == "AI"
+  end
+
+  test "a highlighted agent row keeps its slot and the primary ring" do
+    html = agent_row_html(nil, slots: %{"p-agent" => "rose"}, highlighted: "msg-a")
+    assert row_attr(html, "data-agent-slot") == ["rose"]
+    [class] = row_attr(html, "class")
+    assert class =~ "msg-agent"
+    assert class =~ "ring-primary/20"
   end
 end

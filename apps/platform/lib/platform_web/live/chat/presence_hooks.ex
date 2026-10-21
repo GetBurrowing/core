@@ -7,7 +7,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   every other feature's render (MessageList, Threads, Mentions, etc.).
   It owns the WRITES; cross-feature READS happen via the shared socket
   assigns (`@participants_map`, `@agent_participant_ids`,
-  `@agent_colors_map`, …) and through the template helpers exposed
+  `@agent_slots_map`, …) and through the template helpers exposed
   here (`sender_name/2`, `avatar_initial/2`, …).
 
   ## Assigns owned
@@ -15,7 +15,8 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     * `:space_participants` — raw list of chat participants
     * `:participants_map` — id → identity struct for render
     * `:agent_participant_ids` — MapSet of agent participant ids
-    * `:agent_colors_map` — participant id → accent color
+    * `:agent_slots_map` — agent participant id → palette slot id, the
+      `data-agent-slot` an agent row wears (task 01a1557a rung 3 stage 2)
     * `:has_agent_participant`
     * `:online_count` — count of online participants, or `nil` when presence
       could not be reached (see `:presence_status`)
@@ -84,7 +85,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:space_participants, [])
     |> assign(:participants_map, %{})
     |> assign(:agent_participant_ids, MapSet.new())
-    |> assign(:agent_colors_map, %{})
+    |> assign(:agent_slots_map, %{})
     |> assign(:online_count, 0)
     |> assign(:presence_status, :ok)
     |> assign(:agent_presence, default_agent_presence())
@@ -203,7 +204,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     agent_participant_ids =
       participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
 
-    agent_colors_map = Chat.agent_color_map_for_participants(participants)
+    agent_slots_map = Chat.agent_slot_map_for_participants(participants)
     has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
     # Call site 2 of 4: the same exposure one line later, hit on every mount.
@@ -221,7 +222,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:space_participants, participants)
     |> assign(:participants_map, participants_map)
     |> assign(:agent_participant_ids, agent_participant_ids)
-    |> assign(:agent_colors_map, agent_colors_map)
+    |> assign(:agent_slots_map, agent_slots_map)
     |> assign(:has_agent_participant, has_agent_participant)
     |> assign(:online_count, online_count)
     |> assign(:presence_status, presence_status)
@@ -344,7 +345,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   defp handle_info(_msg, socket), do: {:cont, socket}
 
   # Re-render every currently-rendered chat-message row so they pick up
-  # the new participants_map / agent_colors_map / agent_participant_ids.
+  # the new participants_map / agent_slots_map / agent_participant_ids.
   # Phoenix LiveView streams don't auto-re-render existing rows when a
   # parent assign changes (only stream_insert/delete triggers a re-render),
   # so without this call the rows would silently keep their stale author

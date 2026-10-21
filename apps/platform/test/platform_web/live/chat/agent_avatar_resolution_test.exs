@@ -13,7 +13,7 @@ defmodule PlatformWeb.ChatLive.AgentAvatarResolutionTest do
 
   The fix resolves from the `agents` table via
   `Chat.agent_avatar_map_for_participants/1` and threads the result in, exactly
-  the way `agent_color_map_for_participants/1` already resolves `agent.color`.
+  the way `agent_slot_map_for_participants/1` already resolves `agent.color`.
   The participant column is deliberately NOT backfilled — see the
   "denormalisation" test below, which is the guard on that decision.
   """

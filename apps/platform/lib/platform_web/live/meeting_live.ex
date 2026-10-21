@@ -726,6 +726,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
+    |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
     # The lobby's own agent-capability list (task 019e07cd, meetings-vs-
     # mockups audit). `attach_guest/1` below only `assign_new`s an empty
     # default for `:invite_rows` -- it has to, since it also runs on the
@@ -1170,6 +1171,11 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
+          # Task 01a1557a rung 3 stage 3: `participant.id => ColorPalette slot`
+          # for the gallery's promoted agent tile, keyed like the gallery
+          # entries (the live view model's `:id`; its `:participant_id` is the
+          # agent id the lookup reads `agent.color` from).
+          |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
           # The invite-an-agent control's options (task 01a04c2f). Seeded
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
@@ -4489,7 +4495,14 @@ defmodule PlatformWeb.MeetingLive do
 
     socket
     |> clear_agent_removal_error(id)
-    |> assign(:agent_removal_undo, %{agent_id: agent_id, agent_name: name, ref: ref})
+    |> assign(:agent_removal_undo, %{
+      agent_id: agent_id,
+      agent_name: name,
+      ref: ref,
+      # The gone row keeps the agent's rail (task 01a1557a rung 3 stage 3);
+      # the agent has left `@agents_by_id` by the time that row renders.
+      slot: removed_agent_slot(socket, agent_id)
+    })
   end
 
   defp apply_agent_removal_result(socket, id, name, {:ok, {:ok, %{outcome: :removed}}}) do
@@ -4531,6 +4544,13 @@ defmodule PlatformWeb.MeetingLive do
       # again' button").
       Map.put(agent_removal_errors(socket), id, "Couldn't remove #{name}.")
     )
+  end
+
+  defp removed_agent_slot(socket, agent_id) do
+    case socket.assigns[:agents_by_id] do
+      %{^agent_id => %{color: color}} -> Platform.Agents.ColorPalette.slot_for(color)
+      _ -> Platform.Agents.ColorPalette.slot_for(nil)
+    end
   end
 
   defp clear_agent_removal_error(socket, id),
@@ -6096,6 +6116,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
+    |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
     |> assign_invite_rows(space_id, participants)
   end
 

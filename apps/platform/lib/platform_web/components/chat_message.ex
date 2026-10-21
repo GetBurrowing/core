@@ -27,7 +27,11 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr(:msg, :map, required: true)
   attr(:current_participant, :any, default: nil)
   attr(:agent_participant_ids, :any, required: true)
-  attr(:agent_colors_map, :map, required: true)
+  # Task 01a1557a rung 3 stage 2: agent participant id -> palette slot id
+  # (`Platform.Chat.agent_slot_map_for_participants/1`). An agent row renders
+  # `data-agent-slot`; app.css's pointer rules turn it into the slot's theme
+  # tokens. An agent missing from the map is the blue slot.
+  attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
   attr(:quick_emojis, :list, required: true)
   attr(:pinned_message_ids, :any, required: true)
@@ -75,7 +79,7 @@ defmodule PlatformWeb.Components.ChatMessage do
         data-date={@msg.day_label}
       >
         <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2">
+        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
           {format_day_label(@msg.day_label)}
         </span>
         <div class="flex-1 border-t border-edge"></div>
@@ -96,17 +100,9 @@ defmodule PlatformWeb.Components.ChatMessage do
         @current_participant && @msg.participant_id == @current_participant.id &&
           !MapSet.member?(@agent_participant_ids, @msg.participant_id) && "bg-base-200/60"
       ]}
-      style={
-        if MapSet.member?(@agent_participant_ids, @msg.participant_id) do
-          accent =
-            Map.get(
-              @agent_colors_map,
-              @msg.participant_id,
-              Platform.Agents.ColorPalette.default_accent()
-            )
-
-          "--agent-accent: #{accent};"
-        end
+      data-agent-slot={
+        MapSet.member?(@agent_participant_ids, @msg.participant_id) &&
+          Platform.Agents.ColorPalette.slot_for(Map.get(@agent_slots_map, @msg.participant_id))
       }
       data-participant-id={@msg.participant_id}
       data-date={
@@ -132,7 +128,7 @@ defmodule PlatformWeb.Components.ChatMessage do
         data-date={@msg.day_label}
       >
         <div class="flex-1 border-t border-edge"></div>
-        <span class="text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2">
+        <span class="text-[11px] uppercase tracking-widest text-subtle font-semibold px-2">
           {format_day_label(@msg.day_label)}
         </span>
         <div class="flex-1 border-t border-edge"></div>
@@ -146,8 +142,8 @@ defmodule PlatformWeb.Components.ChatMessage do
         <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
         <div class="flex-shrink-0 mt-0.5 message-avatar">
           <%= if MapSet.member?(@agent_participant_ids, @msg.participant_id) do %>
-            <%!-- `msg-agent-avatar` is the accent ring (a box-shadow keyed off
-                 `--agent-accent`, set on the row above). It lands on the
+            <%!-- `msg-agent-avatar` is the slot ring (a box-shadow keyed off
+                 `--ag`, which the row's `data-agent-slot` points at). It lands on the
                  component's OUTER wrapper, which is why that wrapper carries
                  `rounded-full` — see AvatarComponents.render_avatar/1. The ring
                  therefore survives an image avatar unchanged, and `agents.color`
@@ -171,13 +167,12 @@ defmodule PlatformWeb.Components.ChatMessage do
         <%!-- Message body --%>
         <div class="flex-1 min-w-0">
           <div class="flex items-baseline gap-2 message-header">
-            <span class={[
-              "text-sm font-bold",
+            <span class={
               if(MapSet.member?(@agent_participant_ids, @msg.participant_id),
                 do: "msg-agent-name",
-                else: "text-base-content"
+                else: "text-sm font-bold text-base-content"
               )
-            ]}>
+            }>
               {PresenceHooks.sender_name(@participants_map, @msg)}
               <span
                 :if={MapSet.member?(@agent_participant_ids, @msg.participant_id)}
@@ -197,7 +192,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             <.local_time
               id={"message-time-#{@msg.id}"}
               timestamp={Platform.Chat.message_ordered_at(@msg)}
-              class="text-[10px] text-base-content/40"
+              class="text-[10px] text-subtle"
             />
             <%!-- "Context" (task 01a0d8de stage 3; design canvas "Design
                  direction: agent message context"). Rendered only on AGENT
@@ -228,7 +223,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               data-role="message-context-trigger"
               data-context-message-id={@msg.id}
               aria-haspopup="dialog"
-              class="message-context-trigger shrink-0 text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline focus-visible:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+              class="message-context-trigger shrink-0 text-[10px] text-subtle hover:text-base-content hover:underline focus-visible:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
             >
               Context
             </button>
@@ -243,7 +238,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               phx-value-message-id={@msg.id}
               aria-label="Show edit history"
               title="View version history"
-              class="text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+              class="text-[10px] text-subtle hover:text-base-content hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
             >
               (edited)
             </button>
@@ -435,7 +430,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               <p class="truncate text-sm font-semibold text-base-content">
                 {CanvasHooks.message_canvas_title(@msg, @canvases_by_id)}
               </p>
-              <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+              <p class="text-[11px] uppercase tracking-widest text-subtle">
                 Canvas
               </p>
             </div>
@@ -450,7 +445,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             type="button"
             phx-click="scroll_to_message"
             phx-value-id={@msg.corrects_message_id}
-            class="flex items-center gap-1 text-[11px] text-base-content/60 hover:text-base-content/80 transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded"
+            class="flex items-center gap-1 text-[11px] text-subtle hover:text-base-content transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded"
           >
             <span class="hero-arrow-up-circle size-3.5"></span>
             <span>Correction to earlier message</span>
@@ -465,7 +460,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           <div
             :if={email_meta}
             data-role="mail-inbound-provenance"
-            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-base-content/60 mb-1"
+            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-subtle mb-1"
           >
             <span class="hero-envelope size-3.5 shrink-0" aria-hidden="true"></span>
             <span>
@@ -492,7 +487,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           <div
             :if={federation_meta}
             data-role="federation-inbound-provenance"
-            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-base-content/60 mb-1"
+            class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-subtle mb-1"
           >
             <span class="hero-globe-alt size-3.5 shrink-0" aria-hidden="true"></span>
             <span>
@@ -591,7 +586,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 <span class="min-w-0 flex-1 truncate" title={attachment.filename}>
                   {attachment.filename}
                 </span>
-                <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
+                <span class="shrink-0 font-mono text-[11px] tabular-nums text-subtle">
                   {Platform.Chat.UploadLimits.format_bytes(attachment.byte_size || 0)}
                 </span>
                 <a
@@ -612,7 +607,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             >
               <span class="hero-paper-clip size-4"></span>
               <span>{attachment.filename}</span>
-              <span class="text-xs text-base-content/40">
+              <span class="text-xs text-subtle">
                 ({format_bytes(attachment.byte_size)})
               </span>
             </a>
@@ -668,7 +663,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
                 "hover:bg-base-300",
                 r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                !r.reacted_by_me && "border-edge text-base-content/60"
+                !r.reacted_by_me && "border-edge text-subtle"
               ]}
             >
               <span>{r.emoji}</span>

@@ -2307,4 +2307,201 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert reduce =~ "transform: scaleY(var(--wave-mid, 0.5)) !important"
     end
   end
+
+  # ── Agent identity slots on the Ask row (task 01a1557a rung 3 stage 3) ──
+  #
+  # Saru's canvas 01a15b1e-d673: the 3px rail "reads the same in chat, the
+  # meeting tile edge and the Ask row", and "An agent hue never appears on a
+  # button, link or focus ring."
+  describe "agent identity slot on the Ask row" do
+    defp slot_rail(participants, agents_by_id, opts \\ []) do
+      render_component(
+        &ParticipantRail.participant_rail/1,
+        [
+          participants: participants,
+          agents_by_id: agents_by_id,
+          meeting: %{id: "m-1", host_participant_id: "u-1"}
+        ] ++ opts
+      )
+    end
+
+    defp agent_struct(id, color), do: %Platform.Agents.Agent{id: id, name: id, color: color}
+
+    test "each agent row carries its stored slot; nil, unknown or unresolved is blue" do
+      agents = [
+        agent("Teal", "a-teal"),
+        agent("Rose", "a-rose"),
+        agent("Plain", "a-nil"),
+        agent("Odd", "a-odd"),
+        agent_with_unresolved_id("Ghost")
+      ]
+
+      by_id = %{
+        "a-teal" => agent_struct("a-teal", "teal"),
+        "a-rose" => agent_struct("a-rose", "rose"),
+        "a-nil" => agent_struct("a-nil", nil),
+        "a-odd" => agent_struct("a-odd", "magenta")
+      }
+
+      doc = agents |> slot_rail(by_id) |> Floki.parse_fragment!()
+
+      slots =
+        for row <- Floki.find(doc, ~s(li.row[data-participant-type="agent"])),
+            into: %{},
+            do: {attr(row, "data-participant-id"), attr(row, "data-agent-slot")}
+
+      assert slots == %{
+               "p-a-teal" => "teal",
+               "p-a-rose" => "rose",
+               "p-a-nil" => "blue",
+               "p-a-odd" => "blue",
+               "p-unresolved" => "blue"
+             }
+
+      # Human rows carry no slot.
+      doc = [human("Sam", "u-1")] |> slot_rail(%{}) |> Floki.parse_fragment!()
+      assert Floki.find(doc, "[data-agent-slot]") == []
+    end
+
+    test "the gone row keeps the removed agent's slot, so its rail stays" do
+      html =
+        slot_rail([agent("Saru", "saru-1")], %{"saru-1" => agent_struct("saru-1", "lime")},
+          can_remove_agents?: true,
+          agent_removal_undo: %{
+            agent_id: "x-1",
+            agent_name: "Burrow",
+            ref: make_ref(),
+            slot: "amber"
+          }
+        )
+
+      assert [gone] =
+               html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="meeting-agent-left"]))
+
+      assert attr(gone, "data-agent-slot") == "amber"
+
+      # An undo assign from before this stage (no :slot) is blue, not a crash.
+      html =
+        slot_rail([], %{},
+          can_remove_agents?: true,
+          agent_removal_undo: %{agent_id: "x-1", agent_name: "Burrow", ref: make_ref()}
+        )
+
+      assert [gone] =
+               html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="meeting-agent-left"]))
+
+      assert attr(gone, "data-agent-slot") == "blue"
+    end
+
+    test "the Ask button, held state and kick controls carry no slot attribute or inline colour" do
+      html =
+        slot_rail([agent("Teal", "a-teal")], %{"a-teal" => agent_struct("a-teal", "teal")},
+          hold_to_talk?: true,
+          can_remove_agents?: true
+        )
+
+      doc = Floki.parse_fragment!(html)
+
+      for sel <- [".ask", ".kick", ".tr", ".avs"] do
+        nodes = Floki.find(doc, "li.row " <> sel)
+        assert nodes != [], "no #{sel} rendered to check"
+
+        for n <- nodes do
+          refute attr(n, "data-agent-slot"), "#{sel} carries a slot"
+          refute (attr(n, "style") || "") =~ "--ag", "#{sel} carries an inline --ag"
+        end
+      end
+    end
+
+    defp ask_rules do
+      ask_css()
+      |> then(&Regex.replace(~r|/\*.*?\*/|s, &1, ""))
+      |> then(&Regex.scan(~r/([^{}]+)\{([^{}]*)\}/, &1, capture: :all_but_first))
+      |> Enum.map(fn [sel, body] -> {String.trim(sel), body} end)
+    end
+
+    test "meeting_ask.css reads --ag only in the .row rail, the .nm colour and the .av initials colour" do
+      readers =
+        for {sel, body} <- ask_rules(), body =~ ~r/var\(--ag[\),-]/, do: sel
+
+      # The slot block re-declares the ten slots and reads only its own.
+      [block] = for {".meeting-ask", body} <- ask_rules(), body =~ "--ag-teal:", do: body
+
+      assert readers -- [".meeting-ask"] == [
+               ".meeting-ask .row",
+               ".meeting-ask .nm",
+               ".meeting-ask .av"
+             ]
+
+      assert Enum.count(readers, &(&1 == ".meeting-ask")) == 1
+
+      for [_, ref] <- Regex.scan(~r/var\((--[a-z-]+)\)/, block),
+          do: assert(ref =~ ~r/^--ag-[a-z]+$/, "slot block reads #{ref}")
+
+      {_, row} =
+        Enum.find(ask_rules(), &(elem(&1, 0) == ".meeting-ask .row" and elem(&1, 1) =~ "--ag"))
+
+      assert String.trim(row) == "box-shadow:inset 3px 0 0 var(--ag)"
+
+      {_, nm} =
+        Enum.find(ask_rules(), &(elem(&1, 0) == ".meeting-ask .nm" and elem(&1, 1) =~ "--ag"))
+
+      assert String.trim(nm) == "color:var(--ag-text)"
+
+      {_, av} =
+        Enum.find(ask_rules(), &(elem(&1, 0) == ".meeting-ask .av" and elem(&1, 1) =~ "--ag"))
+
+      assert String.trim(av) == "color:var(--ag-text)"
+    end
+
+    # Saru's ruling: in the Ask row the avatar border signals HELD, so no
+    # `.av` rule may put the agent hue on a border.
+    test "no .av rule puts --ag on a border; the idle border stays the neutral --b edge" do
+      offenders =
+        for {sel, body} <- ask_rules(),
+            sel =~ ".av",
+            [_, prop, value] <- Regex.scan(~r/(?:^|;)\s*([a-z-]+)\s*:\s*([^;]+)/, body),
+            prop =~ ~r/^border/ and value =~ "--ag",
+            do: "#{sel} #{prop}:#{value}"
+
+      assert offenders == []
+
+      assert {".meeting-ask .av", _} =
+               Enum.find(
+                 ask_rules(),
+                 &(elem(&1, 0) == ".meeting-ask .av" and
+                     elem(&1, 1) =~ "border:2px solid var(--b)")
+               )
+
+      # The detector fires on the shape it exists for.
+      assert Regex.scan(~r/(?:^|;)\s*([a-z-]+)\s*:\s*([^;]+)/, "color:x;border-color:var(--ag)")
+             |> Enum.any?(fn [_, p, v] -> p =~ ~r/^border/ and v =~ "--ag" end)
+    end
+
+    test "the held avatar keeps --a and out-ranks the idle .av rules" do
+      held = ~s(.meeting-ask .row[data-held="true"] .av)
+      [{^held, body}] = for {^held, _} = r <- ask_rules(), do: r
+      assert body =~ "border-color:var(--a)"
+      refute body =~ "--ag"
+      # Four class-level parts against the idle rule's two.
+      assert length(Regex.scan(~r/\.[a-z]|\[/, held)) >
+               length(Regex.scan(~r/\.[a-z]|\[/, ".meeting-ask .av"))
+
+      # The voice glyph keeps the section's neutral --t.
+      assert {~s(.meeting-ask .av[data-voice="true"]), "color:var(--t)"} in ask_rules()
+    end
+
+    test "no Ask-button, held, popover, kick, confirm, danger or status-dot rule reads --ag" do
+      offenders =
+        for {sel, body} <- ask_rules(),
+            body =~ "--ag",
+            sel =~ ~r/\.ask|data-held|\.tr\b|\.kick|\.confirm|\.mbtn|\.avs|\.ring|\.bars/,
+            do: sel
+
+      assert offenders == []
+
+      # The detector fires on the shape it exists for.
+      assert ".meeting-ask .ask" =~ ~r/\.ask|data-held/
+    end
+  end
 end

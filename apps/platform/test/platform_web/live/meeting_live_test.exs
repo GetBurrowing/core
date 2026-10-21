@@ -13257,6 +13257,42 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert count(silent, ~s([data-agent-tile])) == 0
     end
 
+    # Task 01a1557a rung 3 stage 3: the promoted tile and the agent's Ask row
+    # carry the slot of the agent's stored colour, through the page's own
+    # `:agent_slots` / `:agents_by_id` assigns.
+    test "the promoted agent tile and its Ask row carry the agent's slot",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Speaker")
+      {_participant, agent_id} = seed_meeting_presence(space, "agent", "Rose Agent")
+
+      Platform.Agents.Agent
+      |> Repo.get!(agent_id)
+      |> Ecto.Changeset.change(color: "rose")
+      |> Repo.update!()
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      agent_identity =
+        :sys.get_state(view.pid).socket.assigns.participants
+        |> Enum.find(&(&1.participant_type == "agent"))
+        |> PlatformWeb.MeetingLive.agent_gallery_identity()
+
+      ask_slots =
+        html
+        |> frag()
+        |> LazyHTML.query(~s(li.row[data-participant-type="agent"]))
+        |> LazyHTML.attribute("data-agent-slot")
+
+      assert ask_slots != [] and Enum.uniq(ask_slots) == ["rose"]
+
+      promoted = render_hook(view, "active_speakers", %{"identities" => [agent_identity]})
+
+      assert promoted
+             |> frag()
+             |> LazyHTML.query(~s([data-gallery-grid] [data-agent-tile]))
+             |> LazyHTML.attribute("data-agent-slot") == ["rose"]
+    end
+
     test "a malformed payload is ignored rather than crashing the LV",
          %{conn: conn, meeting: meeting, space: space} do
       seed_meeting_presence(space, "user", "Ada Speaker")

@@ -2116,6 +2116,7 @@
                               }
                             }
                             role={agent_role(p)}
+                            slot={Map.get(assigns[:agent_slots] || %{}, p.id)}
                             activity_state={agent_activity_state(p, assigns[:agent_activity])}
                             avatar_url={Map.get(p, :avatar_url)}
                             speaking?={true}

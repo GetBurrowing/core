@@ -1729,16 +1729,18 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Build a map of `participant.id → accent_color_string` for agent participants in a space.
+  Build a map of `participant.id → agent slot id` for agent participants in a
+  space, the slot whose `--ag-<id>*` theme tokens paint the agent's identity.
 
-  Used to supply per-agent color identity to chat rendering. Agents without a color
-  fall back to the default blue accent via `ColorPalette.accent_for/1`.
+  Agents with a nil, blank or unknown colour resolve to the blue slot via
+  `ColorPalette.slot_for/1`. Used to give every agent surface its
+  `data-agent-slot` (task 01a1557a rung 3; it replaced the OKLCH accent map
+  in stage 2).
   """
-  @spec agent_color_map_for_participants([Participant.t()]) :: %{binary() => binary()}
-  def agent_color_map_for_participants(participants) do
+  @spec agent_slot_map_for_participants([Participant.t()]) :: %{binary() => binary()}
+  def agent_slot_map_for_participants(participants) do
     alias Platform.Agents.ColorPalette
 
-    # Build map: agent_id → participant.id (for agent participants only)
     agent_participant_ids =
       participants
       |> Enum.filter(&(&1.participant_type == "agent"))
@@ -1758,7 +1760,7 @@ defmodule Platform.Chat do
         |> Repo.all()
         |> Map.new(fn {agent_id, color} ->
           participant_id = Map.fetch!(agent_participant_ids, agent_id)
-          {participant_id, ColorPalette.accent_for(color)}
+          {participant_id, ColorPalette.slot_for(color)}
         end)
     end
   end
@@ -1771,7 +1773,7 @@ defmodule Platform.Chat do
   inserts no avatar), and it deliberately stays that way: an avatar is one
   mutable fact about the agent, so copying it onto every participant row in
   every space would mean rewriting all of them whenever the agent's avatar
-  changes. This mirrors `agent_color_map_for_participants/1`, which resolves
+  changes. This mirrors `agent_slot_map_for_participants/1`, which resolves
   `agent.color` the same way and for the same reason.
 
   Agents with no avatar (or a blank one) are ABSENT from the map rather than
