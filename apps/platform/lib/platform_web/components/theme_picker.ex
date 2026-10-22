@@ -54,7 +54,7 @@ defmodule PlatformWeb.Components.ThemePicker do
     assigns = assign(assigns, :pref, Accounts.theme_preference(assigns.user))
 
     ~H"""
-    <div id="theme-picker" class="relative">
+    <div id="theme-picker" class="relative max-lg:hidden">
       <%!-- While the popover is open the trigger pushes nothing: the
             popover's click-away closes it, and a toggle here would reopen it
             in the same click. Below lg the sheet's backdrop covers the

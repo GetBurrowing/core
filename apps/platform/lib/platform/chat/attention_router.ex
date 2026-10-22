@@ -26,6 +26,40 @@ defmodule Platform.Chat.AttentionRouter do
     * `"mention"` — notified only when @mentioned.
     * `"heartbeat"` — queued in ETS; drain with `flush/1`.
 
+  ## Notification level (task 01a1557a-e538 stage 1)
+
+  Each person also holds ONE notification level
+  (`Platform.Accounts.notification_level/1`, stored in `users.preferences`):
+
+  | level | label | effect |
+  |---|---|---|
+  | `"all"` | All messages | every channel message also yields `:all` for you, which pushes while you are not present in that space |
+  | `"mentions"` (default) | Mentions and direct messages | today's routing, unchanged |
+  | `"direct"` | Only direct mentions | only `chat_mention` pushes. DMs, at-here, task, review, meeting and admission alerts are suppressed. VoIP calls still ring. Inbox rows are unaffected |
+
+  ### Gate order for a human recipient
+
+  Every gate that decides whether a person is interrupted runs in this order.
+  A new gate EXTENDS this list at its slot; it is never added beside it.
+
+  1. **The per-space `attention_mode`**, applied by `decide_human_in_space/3`
+     (`"all"`, `"active"`, `"mention"`, `"heartbeat"`, plus the DM rule).
+  2. **The user notification level.** Its "all" floor runs here, right after
+     step 1: a recipient step 1 left undecided whose level is `"all"` gets
+     `:all` (levels are read once per message, `Accounts.notification_levels/1`).
+     Its "direct" gate runs at delivery, in `Platform.Push.permitted?/2`,
+     because it must also cover the alerts that never pass through this
+     router (task, review, meeting and admission pushes).
+  3. **Mute**: the reserved slot for per-channel Off/mute (task 01a14a91).
+     No mute state exists yet. When it lands it goes HERE, after the level,
+     so a muted space silences even an `"all"`-level person, and it extends
+     this order rather than adding a separate gate.
+
+  The `@[here]` branch below bypasses step 1 and the "all" floor (it already
+  notifies everyone); the "direct" gate in `Platform.Push` still applies to
+  its `chat_message` pushes. Presence (`send_push?/2`) is applied after all
+  three, per decision.
+
   ## @[here] broadcast (ADR 0037 + Stage 2 of @here notifications)
 
   When the message content contains the literal `@[here]` sentinel, the
@@ -351,8 +385,15 @@ defmodule Platform.Chat.AttentionRouter do
 
         here_decisions ++ named_mention_decisions
       else
+        # Gate 2 of the order in the moduledoc: the per-user notification
+        # level, read ONCE per message for every human recipient.
+        levels = human_notification_levels(human_recipients)
+
         Enum.flat_map(human_recipients, fn participant ->
-          case decide_human_in_space(space, participant, message) do
+          space
+          |> decide_human_in_space(participant, message)
+          |> apply_level_floor(participant, levels)
+          |> case do
             nil -> []
             reason -> [%{participant_id: participant.id, reason: reason}]
           end
@@ -1082,6 +1123,28 @@ defmodule Platform.Chat.AttentionRouter do
   @spec notification_title(String.t(), atom(), String.t() | nil) :: String.t()
   def notification_title(sender_name, reason, app_name \\ Platform.Branding.app_name()),
     do: Platform.Push.Notification.chat_title(sender_name, nil, reason, app_name)
+
+  # ── Notification level floor (task 01a1557a-e538 stage 1) ─────────────────
+
+  # `%{user_id => level}` for the human recipients that stored one, in ONE
+  # query (`Accounts.notification_levels/1`). Everyone absent is at the
+  # default, "mentions", which changes nothing here.
+  defp human_notification_levels(human_recipients) do
+    human_recipients
+    |> Enum.map(& &1.participant_id)
+    |> Platform.Accounts.notification_levels()
+  end
+
+  # A human the per-space mode left undecided gets `:all` when their level is
+  # "all": the reason `attention_mode "all"` already produces, so every
+  # downstream branch (PubSub, `send_push?/2`'s presence gate, the push) is
+  # existing code. Any decided reason passes through untouched. "direct" is
+  # not applied here: it is a delivery gate in `Platform.Push`.
+  defp apply_level_floor(nil, %Participant{participant_id: user_id}, levels) do
+    if Map.get(levels, user_id) == "all", do: :all, else: nil
+  end
+
+  defp apply_level_floor(reason, _participant, _levels), do: reason
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 

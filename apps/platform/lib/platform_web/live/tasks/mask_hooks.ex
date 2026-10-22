@@ -26,11 +26,22 @@ defmodule PlatformWeb.Tasks.MaskHooks do
   project ids), plus `:mask_labels`, the resolved map every rail render site
   reads through `TaskDisplay.rail_label/2`.
 
-  PURE, SESSION-ONLY, PER-PROCESS VIEW STATE. No column, no Ecto write, no
-  PubSub broadcast, nothing another viewer of the same orgs can observe. This
-  is one person's presentation mode for the duration of one LiveView, not a
-  preference. See `Platform.Chat.SidebarMask`'s moduledoc for why that is
-  load-bearing rather than incidental — and for why this is a COSMETIC
+  `:mask_names?` is SEEDED on every mount from the person's own preference,
+  `Platform.Accounts.mask_names?/1` over the `:current_user_record` ShellLive
+  loaded (no extra query), and the `toggle_mask_names` clause PERSISTS the
+  requested state through `Platform.Accounts.put_mask_names/2`, the one write
+  path (task 01a1557a-e538 stage 2). On means masked for 12 hours; off
+  deletes the key. The product owner approved the 12-hour cross-device scope on
+  2026-10-21: "12 hour cross-device is fine". So a mask turned on in Chat
+  holds on a fresh Tasks mount and the reverse, and a mask set for a call is
+  gone by the next morning.
+
+  Per user only: no PubSub broadcast, no write to any Tasks, org or chat
+  row, nothing another viewer of the same orgs can observe. The state
+  follows the person across their own devices; a LiveView already open
+  elsewhere picks a change up at its next mount. `:revealed_rail_ids` stays
+  per-LiveView and starts empty on every mount, so a mount is fully masked.
+  See `Platform.Chat.SidebarMask`'s moduledoc for why this is a COSMETIC
   PRESENTATION AID and not a security control.
 
   ## The controls
@@ -44,19 +55,21 @@ defmodule PlatformWeb.Tasks.MaskHooks do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4]
 
+  alias Platform.Accounts
   alias PlatformWeb.Tasks.TaskDisplay
 
   @doc """
-  Assign the masking defaults and attach the event hook.
+  Seed the masking state from the person's preference and attach the event
+  hook.
 
   Call from `TasksLive.mount/3` BEFORE `LifecycleHooks.refresh_containers/1`,
-  so that pass's `assign_mask_labels/1` reads these defaults rather than its
-  own fallbacks.
+  so that pass's `assign_mask_labels/1` reads this state rather than its own
+  fallbacks.
   """
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
     socket
-    |> assign(:mask_names?, false)
+    |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
     |> assign(:revealed_rail_ids, MapSet.new())
     |> attach_hook(:tasks_mask_events, :handle_event, &handle_event/3)
   end
@@ -100,6 +113,8 @@ defmodule PlatformWeb.Tasks.MaskHooks do
   # feature failing in the exact direction it exists to prevent.
   defp handle_event("toggle_mask_names", params, socket) do
     masked? = params["masked"] in ["true", "on", true]
+    # Persist the REQUESTED state (the one write path; no-op without a user row).
+    _ = Accounts.put_mask_names(socket.assigns[:current_user_record], masked?)
 
     {:halt,
      socket

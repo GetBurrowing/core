@@ -666,7 +666,7 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
 
     test "/settings and the pages it carries light More" do
-      for path <- ["/settings", "/control/usage", "/admin", "/admin/prompts"] do
+      for path <- ["/settings", "/control/usage", "/admin", "/admin/prompts", "/access"] do
         assert active_keys(render_bottom_rail(%{current_path: path, root_user: true})) == ["more"],
                path
       end
@@ -677,6 +677,11 @@ defmodule PlatformWeb.Components.IconRailTest do
         [more] = more_button(render_bottom_rail(%{more_open: open?}))
         assert LazyHTML.attribute(more, "phx-click") == [event]
       end
+    end
+
+    test "/tasks/pipeline, linked from the Settings Admin sheet, stays under Tasks" do
+      assert active_keys(render_bottom_rail(%{current_path: "/tasks/pipeline", root_user: true})) ==
+               ["tasks"]
     end
 
     test "a path nothing lists lights nothing" do

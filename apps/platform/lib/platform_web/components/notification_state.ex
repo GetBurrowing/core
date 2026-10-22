@@ -14,11 +14,20 @@ defmodule PlatformWeb.Components.NotificationState do
   collided with the Inbox tile beside it, which holds the actual activity
   notifications, and a rail row that navigates nowhere is not a rail row.
   Settings was the obvious alternative and did not exist then — there was no
-  `/settings` route (`PlatformWeb.SettingsLive` arrived later, in task
-  01a1557a-807f, and does not carry this row yet), and the rail's bottom gear
-  is Admin (`root_only?: true`, gated on `root_user`), so external and
-  non-admin internal users would never see it, and this feature has to cover
-  external users.
+  `/settings` route, and the rail's bottom gear is Admin (`root_only?: true`,
+  gated on `root_user`), so external and non-admin internal users would never
+  see it, and this feature has to cover external users.
+
+  ## Settings now carries these states too (task 01a1557a-e538 stage 4)
+
+  `PlatformWeb.SettingsLive`'s Notifications sheet shows the same states on
+  its "Push on this device" row: denied (with the browser's steps behind a
+  "How to allow" disclosure), auto-denied, `:no_participant`,
+  `:subscribe_failed`, and the Android re-ask. The sentences both surfaces
+  share live in this module's public functions (`denied_instruction/1`,
+  `auto_denied_copy/0`, `no_participant_copy/0`, `android_off_copy/0`, with
+  `browser_family/1`), and the row below renders them through the same
+  functions, so desktop /inbox and Settings render ONE source.
 
   `InboxLive` runs the `:authenticated` `live_session`, whose `on_mount` chain
   includes `PlatformWeb.ShellLive`, so `@push_permission` is already in its
@@ -233,8 +242,12 @@ defmodule PlatformWeb.Components.NotificationState do
   ## Colour
 
   `--color-warning` appears ONLY as the 3px left bar on the `denied` row, and
-  `--color-error` never appears at all: notifications being off is a
-  configuration state, and error has to stay reserved for real errors.
+  `--color-error` never appears in this row: notifications being off is a
+  configuration state, and error has to stay reserved for real errors. Settings'
+  subscribe-failed line ("Couldn't turn on notifications on this device.") was
+  briefly error-coloured (task 01a1557a-e538 stage 4, the designer's ruling); the
+  stage 5 painted contrast guard measured error on base-100 under 4.5:1 in
+  five variants, so it is body text now. No line for these states uses error.
 
   That bar is decoration and carries no meaning on its own. The words carry the
   message and the `hero-bell-slash` glyph carries the shape, both at normal
@@ -268,10 +281,8 @@ defmodule PlatformWeb.Components.NotificationState do
     >
       <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div class="min-w-0 flex-1">
-        <p class="text-sm">Notifications are off for Burrow on this phone.</p>
-        <p class="mt-1 text-xs text-subtle">
-          Turn them on to hear about mentions and approvals when Burrow is closed.
-        </p>
+        <p class="text-sm">{elem(android_off_copy(), 0)}</p>
+        <p class="mt-1 text-xs text-subtle">{elem(android_off_copy(), 1)}</p>
       </div>
       <button
         type="button"
@@ -318,10 +329,8 @@ defmodule PlatformWeb.Components.NotificationState do
     >
       <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div :if={@auto_denied} class="min-w-0 flex-1">
-        <p class="text-sm">Your browser turned notifications down without asking you.</p>
-        <p class="mt-1 text-xs text-subtle">
-          That usually means a private window, or notifications are switched off for every site.
-        </p>
+        <p class="text-sm">{elem(auto_denied_copy(), 0)}</p>
+        <p class="mt-1 text-xs text-subtle">{elem(auto_denied_copy(), 1)}</p>
       </div>
       <div :if={not @auto_denied} class="min-w-0 flex-1">
         <p class="text-sm">Your browser is blocking notifications from Burrow.</p>
@@ -344,10 +353,8 @@ defmodule PlatformWeb.Components.NotificationState do
     >
       <.icon name="hero-bell-alert" class="mt-0.5 size-4 flex-shrink-0 text-base-content" />
       <div :if={@registration_failed == :no_participant} class="min-w-0 flex-1">
-        <p class="text-sm">Notifications are on, but you are not in any conversations yet.</p>
-        <p class="mt-1 text-xs text-subtle">
-          Start a conversation in Chat and they will switch on.
-        </p>
+        <p class="text-sm">{elem(no_participant_copy(), 0)}</p>
+        <p class="mt-1 text-xs text-subtle">{elem(no_participant_copy(), 1)}</p>
       </div>
       <div :if={@registration_failed == :subscribe_failed} class="min-w-0 flex-1">
         <p class="text-sm">
@@ -359,30 +366,63 @@ defmodule PlatformWeb.Components.NotificationState do
     """
   end
 
-  # The clicks that actually undo a site-level block, per browser. One line
-  # each, and each names the browser: "your browser's site settings" is a
-  # phrase most people cannot act on, which is the defect this replaces.
-  #
-  # The OS caveat is rendered separately, next to these, because it is the one
-  # case none of these steps can fix.
-  defp denied_instruction(:chrome),
+  @doc """
+  The auto-denied state's two lines: `{headline, detail}`. Shared by the
+  /inbox row and Settings' push row.
+  """
+  @spec auto_denied_copy() :: {String.t(), String.t()}
+  def auto_denied_copy,
+    do:
+      {"Your browser turned notifications down without asking you.",
+       "That usually means a private window, or notifications are switched off for every site."}
+
+  @doc """
+  The `:no_participant` state's two lines: `{headline, detail}`. Shared by
+  the /inbox row and Settings' push row.
+  """
+  @spec no_participant_copy() :: {String.t(), String.t()}
+  def no_participant_copy,
+    do:
+      {"Notifications are on, but you are not in any conversations yet.",
+       "Start a conversation in Chat and they will switch on."}
+
+  @doc """
+  Burrow Android's re-ask (prompt or denied) state: `{headline, detail}`.
+  Shared by the /inbox row and Settings' push row.
+  """
+  @spec android_off_copy() :: {String.t(), String.t()}
+  def android_off_copy,
+    do:
+      {"Notifications are off for Burrow on this phone.",
+       "Turn them on to hear about mentions and approvals when Burrow is closed."}
+
+  @doc """
+  The clicks that actually undo a site-level block, for a `browser_family/1`
+  result. One line each, and each names the browser: "your browser's site
+  settings" is a phrase most people cannot act on, which is the defect this
+  replaces. The OS caveat is rendered separately, because it is the one case
+  none of these steps can fix.
+  """
+  @spec denied_instruction(atom()) :: String.t()
+  def denied_instruction(:chrome),
     do:
       "In Chrome, click the icon at the left of the address bar, then Notifications, then Allow."
 
-  defp denied_instruction(:edge),
+  def denied_instruction(:edge),
     do: "In Edge, click the icon at the left of the address bar, then Notifications, then Allow."
 
-  defp denied_instruction(:safari),
+  def denied_instruction(:safari),
     do: "In Safari, open Settings, then Websites, then Notifications, and allow this site."
 
-  defp denied_instruction(:firefox),
+  def denied_instruction(:firefox),
     do:
       "In Firefox, click the padlock in the address bar, then clear the notifications permission."
 
   # The default, and the right answer whenever we are not sure. A confidently
   # wrong set of clicks costs the reader more than a vague true sentence: they
   # follow it, find no such menu, and conclude the product is broken.
-  defp denied_instruction(:other), do: "Allow them in your browser's site settings for this page."
+  def denied_instruction(_other),
+    do: "Allow them in your browser's site settings for this page."
 
   # Every browser lies in this header, so ORDER is the whole implementation:
   #
@@ -396,7 +436,9 @@ defmodule PlatformWeb.Components.NotificationState do
   #
   # Opera is Chromium but its address-bar affordance does not match the
   # wording above, so it takes the generic line rather than a near-miss.
-  defp browser_family(ua) when is_binary(ua) do
+  @doc "The browser family a user-agent string names, for `denied_instruction/1`."
+  @spec browser_family(String.t() | nil) :: :chrome | :edge | :safari | :firefox | :other
+  def browser_family(ua) when is_binary(ua) do
     cond do
       String.contains?(ua, ["CriOS", "FxiOS", "EdgiOS"]) -> :other
       String.contains?(ua, "Edg/") -> :edge
@@ -409,5 +451,5 @@ defmodule PlatformWeb.Components.NotificationState do
     end
   end
 
-  defp browser_family(_), do: :other
+  def browser_family(_), do: :other
 end

@@ -17,6 +17,18 @@ defmodule Platform.Push do
   transport, so they cannot disagree about what a notification says. Only
   USER recipients get APNs or FCM; agent rows have no app.
 
+  ## The notification-level gate (task 01a1557a-e538 stage 1)
+
+  Right after the archived-user check, and BEFORE any subscription read,
+  both send functions read the USER recipient's
+  `Platform.Accounts.notification_level/1` and ask `permitted?/2`. At
+  `"direct"` only a `chat_mention` is sent; everything else returns `:ok`
+  having delivered nothing. Each decision emits
+  `[:platform, :push, :notification_level]` (`decision: :sent | :suppressed`)
+  and a debug log line that names the user, kind, level and decision, never
+  the title or body. Agent recipients are never level-gated. The VoIP ring
+  does not pass through here and is not gated: a call still rings.
+
   ## The VAPID resolution invariant
 
   `vapid_details/0` is the SINGLE source of truth for VAPID credentials, and it
@@ -173,6 +185,40 @@ defmodule Platform.Push do
   end
 
   @doc """
+  Forget one browser endpoint for a USER: delete its subscription rows across
+  every user-typed `chat_participants` row that user holds (the same join
+  `distinct_endpoint_subscriptions/1` resolves devices through). Returns the
+  number of rows deleted.
+
+  Settings' "Push on this device" switch calls this when the person turns push
+  off (task 01a1557a-e538 stage 4). Only that user's rows go: another user's
+  row with the same endpoint (a shared browser) is never touched, because the
+  participant join is filtered on this user id.
+  """
+  @spec unsubscribe_for_user(binary(), String.t()) :: non_neg_integer()
+  def unsubscribe_for_user(user_id, endpoint) when is_binary(user_id) and is_binary(endpoint) do
+    if Platform.UUID.valid?(user_id) do
+      participant_ids =
+        from(p in Participant,
+          where: p.participant_type == "user" and p.participant_id == ^user_id,
+          select: p.id
+        )
+
+      {count, _} =
+        from(s in Subscription,
+          where: s.endpoint == ^endpoint and s.participant_id in subquery(participant_ids)
+        )
+        |> Repo.delete_all()
+
+      count
+    else
+      0
+    end
+  end
+
+  def unsubscribe_for_user(_user_id, _endpoint), do: 0
+
+  @doc """
   Send a web push notification addressed to one `chat_participants` row.
 
   Addressing stays per-participant (the archived guard and the external
@@ -199,32 +245,78 @@ defmodule Platform.Push do
 
       :ok
     else
-      subscriptions = subscriptions_for_recipient(participant_id)
+      # Resolved BEFORE any subscription read so the notification-level gate
+      # decides with no device registered. `nil` for an agent row (or an id
+      # with no `chat_participants` row): agents are never level-gated.
+      user_id = apns_user_id(participant_id)
 
-      # Redact the notification for external recipients before it leaves the
-      # box, ONCE, before the transport split: web push and APNs serialise the
-      # same redacted struct. The archived guard above still wins — an
-      # archived external user is suppressed entirely and never reaches this
-      # swap.
-      notification = preview_for_recipient(participant_id, notification)
-
-      send_web_push(subscriptions, notification)
-
-      # Native push only for a USER-typed recipient. An agent row's
-      # `participant_id` is an agent id and has no app devices, and no
-      # unread count is read for it.
-      case apns_user_id(participant_id) do
-        nil ->
-          :ok
-
-        user_id ->
-          notification = stamp_unread(notification, user_id)
-          deliver_apns(user_id, notification)
-          deliver_fcm(user_id, notification)
+      if is_nil(user_id) or level_permits?(user_id, notification) do
+        deliver_to_participant(participant_id, user_id, notification)
       end
 
       :ok
     end
+  end
+
+  defp deliver_to_participant(participant_id, user_id, %Notification{} = notification) do
+    subscriptions = subscriptions_for_recipient(participant_id)
+
+    # Redact the notification for external recipients before it leaves the
+    # box, ONCE, before the transport split: web push and APNs serialise the
+    # same redacted struct. The archived guard above still wins — an
+    # archived external user is suppressed entirely and never reaches this
+    # swap.
+    notification = preview_for_recipient(participant_id, notification)
+
+    send_web_push(subscriptions, notification)
+
+    # Native push only for a USER-typed recipient. An agent row's
+    # `participant_id` is an agent id and has no app devices, and no
+    # unread count is read for it.
+    if user_id do
+      notification = stamp_unread(notification, user_id)
+      deliver_apns(user_id, notification)
+      deliver_fcm(user_id, notification)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Whether a person at notification `level` (`Platform.Accounts.notification_level/1`)
+  may be interrupted by `notification`. Pure.
+
+  `"direct"` permits only `kind == "chat_mention"`. `"all"` and `"mentions"`
+  permit every kind: the "all" widening happens upstream, in
+  `Platform.Chat.AttentionRouter`, which decides who gets a chat decision at
+  all. Any other level reads as the default and permits every kind.
+
+  Only alert pushes pass through here. The VoIP ring
+  (`Platform.Push.APNs.deliver_voip_to_user/2`) is a call, not an alert, and
+  is never level-gated; Inbox rows are written regardless.
+  """
+  @spec permitted?(String.t() | nil, Notification.t()) :: boolean()
+  def permitted?("direct", %Notification{kind: kind}), do: kind == "chat_mention"
+  def permitted?(_level, %Notification{}), do: true
+
+  # The notification-level gate for one USER recipient. Emits
+  # `[:platform, :push, :notification_level]` on both branches and a debug
+  # line naming the decision; never the title or body.
+  defp level_permits?(user_id, %Notification{kind: kind} = notification) do
+    level = Platform.Accounts.notification_level(user_id)
+    decision = if permitted?(level, notification), do: :sent, else: :suppressed
+
+    :telemetry.execute(
+      [:platform, :push, :notification_level],
+      %{count: 1},
+      %{user_id: user_id, kind: kind, level: level, decision: decision}
+    )
+
+    Logger.debug(
+      "[Push] notification_level user_id=#{user_id} kind=#{kind} level=#{level} decision=#{decision}"
+    )
+
+    decision == :sent
   end
 
   defp send_web_push([], _notification), do: :ok
@@ -414,10 +506,11 @@ defmodule Platform.Push do
   delivers exactly once per endpoint. Prefer this over `send_notification/2`
   for anything addressed to a *user* rather than a specific participant/space.
 
-  Inherits `send_notification/2`'s two guards, evaluated once at the user level
+  Inherits `send_notification/2`'s guards, evaluated once at the user level
   (every resolved row belongs to `user_id`, so the decision is uniform):
-  archived users are suppressed with the same telemetry, and external users get
-  the redacted `external_safe_preview/1`. 410-expired subscriptions are pruned
+  archived users are suppressed with the same telemetry, the notification
+  level gate (`permitted?/2`) runs next, and external users get the redacted
+  `external_safe_preview/1`. 410-expired subscriptions are pruned
   by `do_send_push/2` exactly as in the per-participant path.
   """
   @spec send_to_user(binary(), Notification.t() | map()) :: :ok
@@ -433,22 +526,30 @@ defmodule Platform.Push do
 
       :ok
     else
-      subscriptions = distinct_endpoint_subscriptions(user_id)
-
-      # Redact once at the user level before the notification leaves the box
-      # (all resolved rows belong to `user_id`, so external-ness is uniform),
-      # and BEFORE the transport split: web push and APNs both serialise this
-      # one redacted struct, so they cannot disagree about content.
-      notification = preview_for_user(user_id, notification)
-
-      send_web_push(subscriptions, notification)
-
-      notification = stamp_unread(notification, user_id)
-      deliver_apns(user_id, notification)
-      deliver_fcm(user_id, notification)
+      if level_permits?(user_id, notification) do
+        deliver_to_user(user_id, notification)
+      end
 
       :ok
     end
+  end
+
+  defp deliver_to_user(user_id, %Notification{} = notification) do
+    subscriptions = distinct_endpoint_subscriptions(user_id)
+
+    # Redact once at the user level before the notification leaves the box
+    # (all resolved rows belong to `user_id`, so external-ness is uniform),
+    # and BEFORE the transport split: web push and APNs both serialise this
+    # one redacted struct, so they cannot disagree about content.
+    notification = preview_for_user(user_id, notification)
+
+    send_web_push(subscriptions, notification)
+
+    notification = stamp_unread(notification, user_id)
+    deliver_apns(user_id, notification)
+    deliver_fcm(user_id, notification)
+
+    :ok
   end
 
   # One `push_subscriptions` row per distinct endpoint for `user_id`, resolved

@@ -454,7 +454,7 @@
               control it replaced: a plain GET link to /auth/logout. --%>
         <div
           id="account-menu"
-          class="relative"
+          class="relative max-lg:hidden"
           phx-click-away={
             JS.hide(to: "#account-menu-list")
             |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")

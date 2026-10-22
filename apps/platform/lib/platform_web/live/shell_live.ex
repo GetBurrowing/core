@@ -226,6 +226,10 @@ defmodule PlatformWeb.ShellLive do
       # sites). Deliberately a flag beside `:push_permission` and not a value
       # of it. See the `push_permission_state` clause below.
       |> assign(:push_auto_denied, false)
+      # Task 01a1557a-e538 stage 4: this browser's "Push on this device" is
+      # turned off in Settings (a per-browser opt-out the PushSubscribe hook
+      # keeps). Another fact beside `:push_permission`, which stays "granted".
+      |> assign(:push_opted_out, false)
       # Task 01a10d8e: the native shell the PushSubscribe hook runs in
       # ("android" | "ios"), or nil in a browser. Another fact beside
       # `:push_permission`, never a value of it. Inside Burrow Android
@@ -873,6 +877,7 @@ defmodule PlatformWeb.ShellLive do
               {:halt,
                socket
                |> assign(:push_registration_failed, nil)
+               |> assign(:push_opted_out, false)
                |> assign(:push_permission, "granted")}
 
             {:error, reason} ->
@@ -896,6 +901,7 @@ defmodule PlatformWeb.ShellLive do
            socket
            |> assign(:push_permission, state)
            |> assign(:push_auto_denied, params["auto_denied"] == true)
+           |> assign(:push_opted_out, params["opted_out"] == true)
            |> assign(:push_native_platform, native_platform(params["native_platform"]))}
 
         "push_unsupported", _params, socket ->
@@ -930,6 +936,26 @@ defmodule PlatformWeb.ShellLive do
         # same handler on every surface that runs this on_mount chain.
         "enable_notifications", _params, socket ->
           {:halt, push_event(socket, "request_push_permission", %{})}
+
+        # Settings' "Push on this device" switch turned off (task 01a1557a-e538
+        # stage 4). Web push only: the hook unsubscribes this browser, sets
+        # its opt-out and answers with `push_unsubscribed`.
+        "disable_notifications", _params, socket ->
+          {:halt, push_event(socket, "disable_push", %{})}
+
+        # The hook dropped this browser's subscription. Forget the endpoint for
+        # THIS user only (`Push.unsubscribe_for_user/2` never touches another
+        # user's row for the same endpoint) and show the switch off.
+        "push_unsubscribed", params, socket ->
+          case {socket.assigns[:current_user_id], params["endpoint"]} do
+            {user_id, endpoint} when is_binary(user_id) and is_binary(endpoint) ->
+              Push.unsubscribe_for_user(user_id, endpoint)
+
+            _ ->
+              :ok
+          end
+
+          {:halt, assign(socket, :push_opted_out, true)}
 
         _event, _params, socket ->
           {:cont, socket}

@@ -525,7 +525,10 @@ defmodule PlatformWeb.Components.IconRail do
   # everything under it, Prompts), so those paths join the same longest-prefix
   # match as the rows: /control/usage resolves to Settings, not to Agents'
   # /control, and /control/experiments still resolves to Experiments.
-  @settings_paths ["/settings", "/control/usage", "/admin", "/admin/prompts"]
+  # `/access` joined with the Settings Admin sheet (task 01a1557a-e538 stage
+  # 3), which links it; `/tasks/pipeline`, also in that sheet, stays under
+  # Tasks by the same longest-prefix rule.
+  @settings_paths ["/settings", "/control/usage", "/admin", "/admin/prompts", "/access"]
 
   @doc """
   The clusters the desktop rail (`icon_rail/1`) renders, in order. A

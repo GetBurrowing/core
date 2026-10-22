@@ -446,33 +446,31 @@ defmodule PlatformWeb.ChatLive do
     socket =
       socket
       |> assign(:page_title, "Chat")
-      # Screen-share name masking (task 01a00c66). Session-only view state:
-      # OFF by default, never persisted to a preferences row / cookie /
-      # localStorage, never broadcast.
+      # Screen-share name masking (task 01a00c66; persisted per user by task
+      # 01a1557a-e538 stage 2). Seeded on EVERY mount from the person's own
+      # preference, `Accounts.mask_names?/1`, which reads the `%User{}` that
+      # ShellLive's on_mount loaded (`:current_user_record`), so it costs no
+      # query.
       #
-      # THESE TWO LINES ARE THE WHOLE PERSISTENCE MODEL, and they only hold
-      # because channel switching is a `patch`, not a `navigate`. Stage 6
-      # found the opposite: every rail row in `chat_live.html.heex` used
-      # `<.link navigate=…>`, which remounts ChatLive over the same socket, so
-      # `mount/3` re-ran and BOTH the mask flag and the per-org reveal set were
-      # reset mid-screen-share — real names silently repainting, with the strip
-      # that would have signalled it gone from the DOM too. Those rows are now
-      # `<.link patch=…>`; `handle_params/3` already did 100% of the
-      # per-channel work, so no state had to move.
-      #
-      # The LiveView process lifetime IS the session scope, structurally:
-      #   * in-session nav → patch → same process → both assigns survive
-      #   * full page reload → new process → assigns start fresh → the rail
-      #     comes back with REAL names, which is deliberate. Someone who
-      #     masked for one call and returns next morning must not find a rail
-      #     where their orgs appear to be missing.
-      # Do NOT "improve" this with sessionStorage: it survives a reload and
-      # would break the second bullet.
-      #
-      # If you add a new way to reach `/chat/:space_slug` from inside this
-      # LiveView, it must be a patch. A `navigate` re-enters `mount/3` here
-      # and silently unmasks.
-      |> assign(:mask_names?, false)
+      # The model:
+      #   * ON stores `preferences["mask_names_until"] = now + 12h`; OFF
+      #     deletes it. Masked iff that instant is in the future. The product owner
+      #     approved the 12-hour cross-device scope on 2026-10-21: "12 hour
+      #     cross-device is fine".
+      #   * A reload or a navigate within 12 hours comes back MASKED: the
+      #     mount reads the preference, so a remount can no longer silently
+      #     unmask mid-screen-share.
+      #   * After 12 hours it comes back with REAL names. That keeps
+      #     01a00c66's next-morning rule: someone who masked for one call and
+      #     returns next morning must not find a rail where their orgs appear
+      #     to be missing.
+      #   * Per user, no broadcast, no write to chat_spaces or org rows. The
+      #     state follows the person across their own devices; a LiveView
+      #     already open elsewhere picks a change up at its next mount.
+      #   * The per-section reveal set below stays per-LiveView and starts
+      #     empty on every mount, so a fresh mount is fully masked.
+      # Do NOT add sessionStorage or a PubSub broadcast on top of this.
+      |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
       |> assign(:revealed_section_ids, MapSet.new())
       |> assign(:user_id, user_id)
       # The HELD PubSub subscribe set is NOT an assign of this module. Task
@@ -2274,9 +2272,13 @@ defmodule PlatformWeb.ChatLive do
   # resurrected on the next share and one org is silently visible — the feature
   # failing in the exact direction it exists to prevent.
   #
-  # Pure view state: no write, no broadcast.
+  # The REQUESTED state is persisted through `Accounts.put_mask_names/2`, the
+  # one write path (12-hour expiry, per user), before it is assigned. No
+  # broadcast. An anonymous session has no user row: the write is a no-op
+  # and the assign alone carries the mode for this LiveView.
   def handle_event("toggle_mask_names", params, socket) do
     masked? = truthy?(params["masked"])
+    _ = Accounts.put_mask_names(socket.assigns[:current_user_record], masked?)
 
     {:noreply,
      socket

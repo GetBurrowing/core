@@ -824,4 +824,206 @@ defmodule Platform.Accounts do
   end
 
   def put_theme_preference(_, _), do: {:error, :not_found}
+
+  # ── Notification level (task 01a1557a-e538 stage 1) ─────────────────────
+  #
+  # Stored as `preferences["notification_level"]`, in the same JSONB map as
+  # the theme above, no migration. Read by `Platform.Push` (the "direct"
+  # gate) and `Platform.Chat.AttentionRouter` (the "all" floor).
+
+  @notification_level_key "notification_level"
+  @notification_levels ~w(all mentions direct)
+  @default_notification_level "mentions"
+
+  @doc "The level a person with no stored choice gets: `\"mentions\"`."
+  @spec default_notification_level() :: String.t()
+  def default_notification_level, do: @default_notification_level
+
+  @doc """
+  The person's notification level: when Burrow may interrupt them with a push.
+
+  | level | label | effect |
+  |---|---|---|
+  | `"all"` | All messages | every channel message also yields `:all` for you, which pushes while you are not present in that space |
+  | `"mentions"` (default) | Mentions and direct messages | today's routing, unchanged |
+  | `"direct"` | Only direct mentions | only `chat_mention` pushes. DMs, at-here, task, review, meeting and admission alerts are suppressed. VoIP calls still ring. Inbox rows are unaffected |
+
+  The "all" floor is applied in `Platform.Chat.AttentionRouter`; the
+  "direct" gate in `Platform.Push.send_to_user/2` and
+  `Platform.Push.send_notification/2`.
+
+  Lenient: nil, an unknown id, a user with no stored level, or a stored value
+  that is not a level all read as `"mentions"`. A `%User{}` is read from the
+  struct with no query; an id costs one query.
+  """
+  @spec notification_level(User.t() | binary() | nil) :: String.t()
+  def notification_level(%User{preferences: prefs}) when is_map(prefs),
+    do: normalize_notification_level(Map.get(prefs, @notification_level_key))
+
+  def notification_level(%User{}), do: @default_notification_level
+
+  def notification_level(user_id) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      from(u in User,
+        where: u.id == ^user_id,
+        select: fragment("?->>?", u.preferences, ^@notification_level_key)
+      )
+      |> Repo.one()
+      |> normalize_notification_level()
+    else
+      @default_notification_level
+    end
+  end
+
+  def notification_level(_), do: @default_notification_level
+
+  @doc """
+  Store the person's notification level: `"all"`, `"mentions"` or `"direct"`.
+
+  Strict: returns `{:ok, %User{}}`; `{:error, :invalid}` with nothing written
+  when `level` is not a level; `{:error, :not_found}` when no user has that id.
+  Every other preference key (the theme included) is kept.
+  """
+  @spec put_notification_level(User.t() | binary() | nil, term()) ::
+          {:ok, User.t()} | {:error, :invalid | :not_found | Ecto.Changeset.t()}
+  def put_notification_level(%User{id: user_id}, level),
+    do: put_notification_level(user_id, level)
+
+  def put_notification_level(user_id, level) when is_binary(user_id) do
+    if level in @notification_levels do
+      update_user_preference(user_id, @notification_level_key, level)
+    else
+      {:error, :invalid}
+    end
+  end
+
+  def put_notification_level(_, _), do: {:error, :not_found}
+
+  @doc """
+  The stored notification level of each of `user_ids`, in ONE query.
+
+  Returns `%{user_id => level}` holding ONLY users with a valid stored level;
+  callers default every other id to `default_notification_level/0`. Invalid
+  ids are dropped before the query; an empty list costs no query.
+  """
+  @spec notification_levels([binary()]) :: %{binary() => String.t()}
+  def notification_levels(user_ids) when is_list(user_ids) do
+    ids = user_ids |> Enum.filter(&(is_binary(&1) and Platform.UUID.valid?(&1))) |> Enum.uniq()
+
+    if ids == [] do
+      %{}
+    else
+      from(u in User,
+        where: u.id in ^ids,
+        where:
+          fragment("?->>?", u.preferences, ^@notification_level_key) in ^@notification_levels,
+        select: {u.id, fragment("?->>?", u.preferences, ^@notification_level_key)}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  defp normalize_notification_level(level) when level in @notification_levels, do: level
+  defp normalize_notification_level(_), do: @default_notification_level
+
+  # ── Mask names (task 01a1557a-e538 stage 2) ─────────────────────────────
+  #
+  # Stored as `preferences["mask_names_until"]`, an ISO8601 UTC instant, in
+  # the same JSONB map as the theme and the notification level.
+
+  @mask_names_key "mask_names_until"
+  @mask_names_ttl_seconds 12 * 60 * 60
+
+  @doc """
+  Whether screen-share name masking is on for this person at `now`.
+
+  Masking is a per-user preference with a 12-hour expiry: turning it on
+  stores `now + 12h` under `preferences["mask_names_until"]`, and the person
+  is masked while that instant is in the future. The product owner approved the 12-hour,
+  cross-device scope on 2026-10-21: "12 hour cross-device is fine". The
+  expiry keeps task 01a00c66's next-morning rule: a mask set for one call is
+  gone by the next morning, so nobody returns to a rail whose orgs appear to
+  be missing.
+
+  Every masking LiveView (ChatLive, and TasksLive through
+  `PlatformWeb.Tasks.MaskHooks`) seeds `:mask_names?` from this on mount.
+  The state follows the person across their own devices; nothing is
+  broadcast, so a LiveView already open elsewhere picks a change up at its
+  next mount. Another user is never affected.
+
+  Lenient: nil, a user with no stored value, an unparseable value or a past
+  instant all read as `false`. Reads the `%User{}`'s preferences, so a mount
+  costs no query.
+  """
+  @spec mask_names?(User.t() | nil, DateTime.t()) :: boolean()
+  def mask_names?(user, now \\ DateTime.utc_now())
+
+  def mask_names?(user, %DateTime{} = now) do
+    case mask_names_until(user) do
+      %DateTime{} = until -> DateTime.compare(until, now) == :gt
+      nil -> false
+    end
+  end
+
+  @doc """
+  The stored end of this person's mask (`mask_names_until`) as a UTC
+  `DateTime`, or nil when there is none or it does not parse. It can be in
+  the past; `mask_names?/2` decides whether it is still on. Settings reads it
+  to say when masking ends. No query: reads the `%User{}`'s preferences.
+  """
+  @spec mask_names_until(User.t() | nil) :: DateTime.t() | nil
+  def mask_names_until(%User{preferences: prefs}) when is_map(prefs) do
+    with value when is_binary(value) <- Map.get(prefs, @mask_names_key),
+         {:ok, until, _offset} <- DateTime.from_iso8601(value) do
+      until
+    else
+      _ -> nil
+    end
+  end
+
+  def mask_names_until(_user), do: nil
+
+  @doc """
+  Turn screen-share name masking on (`now + 12h`) or off (the key is deleted)
+  for this person. THE one write path for the mask state: ChatLive's and
+  TasksLive's `toggle_mask_names` handlers call it, and so does the shell's
+  `set_mask_names` writer that comes later.
+
+  Returns `{:ok, %User{}}`, or `{:error, :not_found}` when no user has that id
+  (anonymous sessions use a generated id): nothing is written and the caller
+  keeps its own assign. Every other preference key is kept.
+  """
+  @spec put_mask_names(User.t() | binary() | nil, boolean(), DateTime.t()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def put_mask_names(user, on?, now \\ DateTime.utc_now())
+
+  def put_mask_names(%User{id: user_id}, on?, now), do: put_mask_names(user_id, on?, now)
+
+  def put_mask_names(user_id, on?, %DateTime{} = now)
+      when is_binary(user_id) and is_boolean(on?) do
+    case get_user(user_id) do
+      %User{} = user ->
+        prefs = user.preferences || %{}
+
+        next =
+          if on? do
+            until =
+              now |> DateTime.add(@mask_names_ttl_seconds, :second) |> DateTime.truncate(:second)
+
+            Map.put(prefs, @mask_names_key, DateTime.to_iso8601(until))
+          else
+            Map.delete(prefs, @mask_names_key)
+          end
+
+        user
+        |> User.changeset(%{preferences: next})
+        |> Repo.update()
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  def put_mask_names(_user, _on?, _now), do: {:error, :not_found}
 end

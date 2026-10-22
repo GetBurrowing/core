@@ -604,7 +604,11 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `:drawer_search_intent` assigns, the `toggle_mobile_browser` and
   # `close_mobile_browser` handlers and `default_chat_landing/2`; the `:index`
   # branch of `handle_params/3` lost its external-user landing.
-  @chat_live_code_line_count 2599
+  # Task 01a1557a-e538 stage 2 (mask names persisted per user): +1. The
+  # `toggle_mask_names` handler persists the requested state through
+  # `Accounts.put_mask_names/2`; the mount seed stays one line. Re-measured on
+  # top of the stage 5 tree above: 2599 + 1 = 2600.
+  @chat_live_code_line_count 2600
 
   @doc """
   Count the CODE lines of a source file.

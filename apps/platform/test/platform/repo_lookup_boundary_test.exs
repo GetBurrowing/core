@@ -616,8 +616,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause. Count 3 -> 4 at task 01a10882 stage 2: `apns_user_id/1` reads the same recipient id to decide whether the row is USER-typed (APNs) or not; same provenance, and it is additionally behind its own Platform.UUID.valid?/1 guard (this file's :platform_uuid_guard 1 -> 2)"},
     {"platform/push.ex", :get, "User", 2, :safe_internal,
      "`user_id` is `participant.participant_id` off the `%Participant{}` loaded on the line above, or a recipient id from the same list"},
-    {"platform/push.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "task 01a10882 stage 2 (1 -> 2): `apns_user_id/1` guards the participant id before `Repo.get(Participant, _)` so `send_notification/2`, which is public, cannot raise on a malformed recipient id on the APNs leg. task 019ffe52: `anchor_participant_id/1` pins `p.participant_id == ^user_id` on a `:binary_id` column, which raises Ecto.Query.CastError on a malformed binary exactly as Repo.get/2 does. `subscribe_for_user/2` is public API and the id is not derived from a loaded row, so the guard belongs at the query. Today's only caller is ShellLive's `push_subscribed` clause reading `:current_user_id`, which is unvalidated (assigned from `session[\"current_user_id\"]` behind an is_binary/1 check) but unreachable with a malformed value in practice: the shell mount raises earlier on the same id in `Tenancy.visibility/1`. Covered by `subscribe_for_user/2 a malformed user id is refused, not raised on` in push_test.exs"},
+    {"platform/push.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "Count 2 -> 3 at task 01a1557a-e538 stage 4: `unsubscribe_for_user/2` guards the user id before `where: p.participant_id == ^user_id` on the binary_id column; it is public and its id comes from ShellLive's `:current_user_id`, so the guard is at the query. task 01a10882 stage 2 (1 -> 2): `apns_user_id/1` guards the participant id before `Repo.get(Participant, _)` so `send_notification/2`, which is public, cannot raise on a malformed recipient id on the APNs leg. task 019ffe52: `anchor_participant_id/1` pins `p.participant_id == ^user_id` on a `:binary_id` column, which raises Ecto.Query.CastError on a malformed binary exactly as Repo.get/2 does. `subscribe_for_user/2` is public API and the id is not derived from a loaded row, so the guard belongs at the query. Today's only caller is ShellLive's `push_subscribed` clause reading `:current_user_id`, which is unvalidated (assigned from `session[\"current_user_id\"]` behind an is_binary/1 check) but unreachable with a malformed value in practice: the shell mount raises earlier on the same id in `Tenancy.visibility/1`. Covered by `subscribe_for_user/2 a malformed user id is refused, not raised on` in push_test.exs"},
     {"platform/push/apns.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "task 01a10882 stage 2: `devices_for_user/1` guards `user_id` with Platform.UUID.valid?/1 before `where: d.user_id == ^user_id` on the `apns_devices.user_id` binary_id column. `deliver_to_user/2` is public; today's callers in `Platform.Push` pass a user id read off a loaded `%User{}`/`%Participant{}` row, so the guard is for the next caller. Count 1 -> 2 with task 01a10db7 stage 1: `voip_devices_for_user/1`, the same guard on the same shape for `apns_voip_devices.user_id`, ahead of `deliver_voip_to_user/2`, which is public"},
     {"platform/push/fcm.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -865,8 +865,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # failures, each naming the file, derived from source rather than from
     # anyone remembering to write a behavioural test.
 
-    {"platform/accounts.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "Accounts.get_user/1's guard, added by stage 2 of task 019fa129. Tracked as its own key so re-simplifying it back to a bare cast trips BOTH the unclassified-site test and the count-drift test"},
+    {"platform/accounts.ex", :platform_uuid_guard, "-", 3, :safe_internal,
+     "Accounts.get_user/1's guard, added by stage 2 of task 019fa129. Tracked as its own key so re-simplifying it back to a bare cast trips BOTH the unclassified-site test and the count-drift test. Count 1 -> 3 at task 01a1557a-e538 stage 1: `notification_level/1` (by id) guards before `where: u.id == ^user_id`, and `notification_levels/1` drops non-UUID ids before `where: u.id in ^ids`; both are public and take ids that are not read off a loaded row (Platform.Push and the AttentionRouter pass recipient ids)"},
     {"platform/changelog.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "Changelog.get_entry/1's guard on an entry id with no in-repo caller pinning its provenance"},
     {"platform/chat.ex", :platform_uuid_guard, "-", 19, :safe_internal,
@@ -1505,6 +1505,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # walks. Each `where:` pins an id that `resolve/1` has already passed
     # through Platform.UUID.cast/1, or a UUID column of a row just read.
     "platform/access/task_target.ex" => 3,
+    # 0 -> 1 for task 01a1557a-e538 stage 1's `Accounts.notification_level/1`:
+    # its `where: u.id == ^user_id` pins an id that can arrive from a boundary
+    # (Platform.Push passes recipient ids), so it sits behind the
+    # Platform.UUID.valid?/1 guard counted under this file's
+    # :platform_uuid_guard key; a malformed id reads as the default level.
+    "platform/accounts.ex" => 1,
     # 0 → 1 for task 019ffe52's `anchor_participant_id/1`, which resolves the
     # `chat_participants` row a user-level push subscription is filed against.
     # Triaged by hand as this map asks: the `where:` clause pins

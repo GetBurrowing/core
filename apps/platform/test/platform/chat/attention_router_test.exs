@@ -1959,4 +1959,187 @@ defmodule Platform.Chat.AttentionRouterTest do
       end
     end
   end
+
+  # ── Notification level (task 01a1557a-e538 stage 1) ────────────────────────
+  #
+  # User A is in the default "mention" mode and absent from the space (no
+  # presence is tracked in the test). The `:notifications_module` seam makes
+  # `deliver_push/2` call `fan_out_to_user/2` synchronously, so the push the
+  # router decided is observable without Push itself.
+  defmodule LevelRecorder do
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:level_push, user_id, payload})
+      :ok
+    end
+
+    def fan_out_to_humans(ids, payload, opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:level_push_humans, ids, payload, opts})
+      :ok
+    end
+  end
+
+  describe "notification level" do
+    setup do
+      Application.put_env(:platform, :notifications_module, LevelRecorder)
+      :persistent_term.put({LevelRecorder, :owner}, self())
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :notifications_module)
+        :persistent_term.erase({LevelRecorder, :owner})
+      end)
+
+      :ok
+    end
+
+    defp level_user(level) do
+      user = insert_test_user(name: "Level #{level}")
+      if level, do: {:ok, _} = Platform.Accounts.put_notification_level(user.id, level)
+      user
+    end
+
+    defp join_level_space(space, user, display_name) do
+      create_participant(space.id, %{
+        participant_id: user.id,
+        display_name: display_name,
+        attention_mode: "mention"
+      })
+    end
+
+    defp decisions_for(decisions, participant),
+      do:
+        decisions |> Enum.filter(&(&1.participant_id == participant.id)) |> Enum.map(& &1.reason)
+
+    defp setup_channel(level) do
+      space = create_space(%{kind: "channel"})
+      a = level_user(level)
+      a_row = join_level_space(space, a, "Avery Level")
+      author = create_participant(space.id, %{display_name: "Blake Author"})
+      {space, a, a_row, author}
+    end
+
+    test "level all: a plain channel message gives A an :all decision and one push" do
+      {space, a, a_row, author} = setup_channel("all")
+
+      message = create_message(space.id, author.id, %{content: "plain update"})
+      {:ok, decisions} = AttentionRouter.route(message)
+      drain()
+
+      assert decisions_for(decisions, a_row) == [:all]
+      a_id = a.id
+      assert_received {:level_push, ^a_id, %{kind: "chat_message"}}
+      refute_received {:level_push, _, _}
+    end
+
+    test "level mentions (stored, and the unset default): no decision and no push" do
+      for level <- ["mentions", nil] do
+        {space, _a, a_row, author} = setup_channel(level)
+
+        message = create_message(space.id, author.id, %{content: "plain update"})
+        {:ok, decisions} = AttentionRouter.route(message)
+        drain()
+
+        assert decisions_for(decisions, a_row) == []
+        refute_received {:level_push, _, _}
+      end
+    end
+
+    test "level direct: the router decides as today (the gate lives in Push)" do
+      {space, a, a_row, author} = setup_channel("direct")
+
+      plain = create_message(space.id, author.id, %{content: "plain update"})
+      {:ok, plain_decisions} = AttentionRouter.route(plain)
+      drain()
+      assert decisions_for(plain_decisions, a_row) == []
+      refute_received {:level_push, _, _}
+
+      mention = create_message(space.id, author.id, %{content: "@[Avery Level] look"})
+      {:ok, mention_decisions} = AttentionRouter.route(mention)
+      drain()
+      assert decisions_for(mention_decisions, a_row) == [:mention]
+      a_id = a.id
+      assert_received {:level_push, ^a_id, %{kind: "chat_mention"}}
+    end
+
+    test "level mentions: a DM still decides :all and an at-here still decides :here" do
+      dm = create_space(%{kind: "dm"})
+      a = level_user("mentions")
+      a_row = join_level_space(dm, a, "Avery Level")
+      author = create_participant(dm.id, %{display_name: "Blake Author"})
+
+      {:ok, dm_decisions} =
+        AttentionRouter.route(create_message(dm.id, author.id, %{content: "hi"}))
+
+      drain()
+      assert decisions_for(dm_decisions, a_row) == [:all]
+
+      {space, _a, ch_row, ch_author} = setup_channel("mentions")
+
+      {:ok, here_decisions} =
+        AttentionRouter.route(
+          create_message(space.id, ch_author.id, %{content: "@[here] standup"})
+        )
+
+      drain()
+      assert decisions_for(here_decisions, ch_row) == [:here]
+    end
+
+    # The router reads every human recipient's level in ONE query. The router
+    # runs the query in its own process, so the handler keys on the query's
+    # params instead: the "notification_level" key plus one of THIS test's
+    # user ids, which no sibling test can produce.
+    test "levels are read in ONE query per message, however many humans are present" do
+      space = create_space(%{kind: "channel"})
+      users = for level <- ["all", "mentions", nil], do: level_user(level)
+      Enum.with_index(users, fn u, i -> join_level_space(space, u, "Level Reader #{i}") end)
+      author = create_participant(space.id, %{display_name: "Blake Author"})
+      ids = MapSet.new(Enum.flat_map(users, &[&1.id, Ecto.UUID.dump!(&1.id)]))
+
+      parent = self()
+      handler_id = "router-level-queries-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :repo, :query],
+          fn _e, _m, meta, _c ->
+            params = List.flatten(meta[:params] || [])
+
+            if "notification_level" in params and Enum.any?(params, &MapSet.member?(ids, &1)) do
+              send(parent, {:level_query, handler_id})
+            end
+          end,
+          nil
+        )
+
+      try do
+        {:ok, _} = AttentionRouter.route(create_message(space.id, author.id, %{content: "hi"}))
+        drain()
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      count =
+        Stream.repeatedly(fn ->
+          receive do
+            {:level_query, ^handler_id} -> 1
+          after
+            0 -> nil
+          end
+        end)
+        |> Enum.take_while(& &1)
+        |> length()
+
+      assert count == 1
+    end
+
+    test "level all: an at-here message still yields exactly one :here for A" do
+      {space, _a, a_row, author} = setup_channel("all")
+
+      {:ok, decisions} =
+        AttentionRouter.route(create_message(space.id, author.id, %{content: "@[here] standup"}))
+
+      drain()
+      assert decisions_for(decisions, a_row) == [:here]
+    end
+  end
 end

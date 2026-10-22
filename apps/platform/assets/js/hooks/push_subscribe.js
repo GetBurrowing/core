@@ -1,3 +1,17 @@
+import ClientState from "../client_state.js";
+
+// Per-browser "Push on this device: off" (task 01a1557a-e538 stage 4). Set
+// when the person turns push off in Settings; while it is set, a mount with
+// the permission granted reports `opted_out` and does NOT re-subscribe, so a
+// reload cannot quietly turn push back on. Cleared by the next explicit
+// request (the switch, or any "Turn on notifications" control).
+const OPT_OUT_NS = "push";
+const OPT_OUT_KEY = "opted_out";
+
+export function pushOptedOut() {
+  return ClientState.get(OPT_OUT_NS, OPT_OUT_KEY, false) === true;
+}
+
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -90,7 +104,10 @@ const PushSubscribe = {
       return;
     }
 
-    if (Notification.permission === "granted") {
+    if (Notification.permission === "granted" && pushOptedOut()) {
+      // Turned off on this browser in Settings: report it, never resubscribe.
+      this.pushEvent("push_permission_state", { state: "granted", opted_out: true });
+    } else if (Notification.permission === "granted") {
       // Already granted — subscribe silently
       this.autoSubscribe();
       this.pushEvent("push_permission_state", { state: "granted" });
@@ -106,10 +123,49 @@ const PushSubscribe = {
       this.pushEvent("push_permission_state", { state: "prompt" });
     }
 
-    // Listen for the user clicking the enable button
+    // Listen for the user clicking the enable button. An explicit request
+    // clears the per-browser opt-out before anything subscribes.
     this.handleEvent("request_push_permission", () => {
+      ClientState.remove(OPT_OUT_NS, OPT_OUT_KEY);
       this.requestPermission();
     });
+
+    // Settings' "Push on this device" switch, turned off: drop this
+    // browser's subscription, remember the choice, and tell the server which
+    // endpoint to forget.
+    this.handleEvent("disable_push", () => {
+      this.disablePush();
+    });
+  },
+
+  // The person's intent is "off": the opt-out is stored first and the server
+  // is ALWAYS told to forget the endpoint, even when the browser-side
+  // unsubscribe rejects. A failed browser unsubscribe must not leave the
+  // server sending to this device or the switch showing on. The rejection is
+  // logged here and not reported as `push_subscribe_failed`, which would
+  // show "Couldn't turn on notifications" right after turning them off.
+  disablePush() {
+    const hook = this;
+    let endpoint = null;
+    return Promise.resolve(navigator.serviceWorker?.ready)
+      .then(reg => reg?.pushManager?.getSubscription())
+      .then(sub => {
+        ClientState.set(OPT_OUT_NS, OPT_OUT_KEY, true);
+        if (!sub) return;
+        endpoint = sub.endpoint || sub.toJSON?.().endpoint || null;
+        return Promise.resolve()
+          .then(() => sub.unsubscribe())
+          .catch(err => {
+            console.warn("[PushSubscribe] unsubscribe failed:", err?.name || "Error", err?.message || "");
+          });
+      })
+      .catch(err => {
+        ClientState.set(OPT_OUT_NS, OPT_OUT_KEY, true);
+        console.warn("[PushSubscribe] disable_push failed:", err?.name || "Error", err?.message || "");
+      })
+      .then(() => {
+        hook.pushEvent("push_unsubscribed", { endpoint });
+      });
   },
 
   // Native branch. The honesty rule from task 019ffe52 applies unchanged:
