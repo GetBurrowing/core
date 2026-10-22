@@ -5,7 +5,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   message-actions bottom sheet and the junk-batch confirmation modal.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
-  `ChatLive.Partials.Rail`, `ChatLive.Partials.MobileBrowser`,
+  `ChatLive.Partials.Rail`, `ChatLive.Partials.ChatList`,
   `ChatLive.Partials.Conversation` and `ChatLive.Partials.Composer`
   (ADR 0035): function components, no state, each taking a declared set
   of attrs. Extracted from `chat_live.html.heex` in task 01a0312e stage 7

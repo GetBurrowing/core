@@ -107,6 +107,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.ClosedDms
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.ChatListData
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.NativeDonation
 
@@ -1097,6 +1098,13 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     is_own_message =
       not is_nil(current_participant) and msg.participant_id == current_participant.id
 
+    # The phone Chat list's excerpt for this space (task 01a1557a-8562
+    # stage 2), patched from the message in hand: no query. Every arrival,
+    # background or not, so the list is current when the reader patches
+    # back to it. `ChatListData.put_message/2` ignores thread replies and
+    # spaces the list does not show.
+    socket = ChatListData.put_message(socket, msg)
+
     socket =
       if is_background_dm and not is_own_message do
         socket
@@ -1244,6 +1252,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:message_deleted, msg}, socket) do
+    # A deleted top-level message may have been its space's list excerpt, so
+    # re-read that ONE space (task 01a1557a-8562 stage 2). A thread reply
+    # never is, so it costs nothing.
+    socket =
+      if is_nil(msg.thread_id),
+        do: ChatListData.refresh_space(socket, msg.space_id),
+        else: socket
+
     if same_active_space?(socket, msg) do
       rendered_ids = MapSet.delete(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
 

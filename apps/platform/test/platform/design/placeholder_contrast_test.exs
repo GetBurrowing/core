@@ -66,10 +66,67 @@ defmodule Platform.Design.PlaceholderContrastTest do
 
   @template_sites [
     "platform_web/live/chat/partials/external_rail.ex",
-    "platform_web/live/chat/partials/mobile_browser.ex",
+    "platform_web/live/chat/partials/chat_list.ex",
     "platform_web/live/chat/partials/rail.ex",
     "platform_web/live/meeting_live.html.heex"
   ]
+
+  # Every OTHER file under lib/platform_web that renders a `placeholder=`
+  # attribute, with the reason it is not a template site (task 01a1557a-8562
+  # stage 5: the site list had no completeness check, so dropping a file from
+  # it narrowed the guard without failing it). Each reason is checked below:
+  #
+  #   * `:global_default`: the file carries no `placeholder:` colour utility,
+  #     so its placeholders take the `@layer base` `::placeholder` rule the
+  #     first test pins to `--subtle`.
+  #   * `:rule_painted`: the placeholder sits on `.thread-input` or
+  #     `.compose-pill-bar`, whose `::placeholder` rules the second test pins.
+  #
+  # A file that gains a `placeholder:` utility cannot stay here: it moves to
+  # `@template_sites`.
+  @placeholder_exclusions %{
+    "platform_web/components/action_patterns.ex" => :global_default,
+    "platform_web/components/chat_message.ex" => :rule_painted,
+    "platform_web/components/meetings/intents_collapse.ex" => :global_default,
+    "platform_web/components/meetings/invite_control.ex" => :global_default,
+    "platform_web/live/admin_branding_live.html.heex" => :global_default,
+    "platform_web/live/admin_orgs_live.html.heex" => :global_default,
+    "platform_web/live/admin_prompts_live.html.heex" => :global_default,
+    "platform_web/live/admin_prototypes_live.ex" => :global_default,
+    "platform_web/live/admin_sign_in_users_live.html.heex" => :global_default,
+    "platform_web/live/admin_vault_live.ex" => :global_default,
+    "platform_web/live/admin_vault_live.html.heex" => :global_default,
+    "platform_web/live/chat/new_channel_component.ex" => :global_default,
+    "platform_web/live/chat/new_conversation_component.ex" => :global_default,
+    "platform_web/live/chat/partials.ex" => :global_default,
+    "platform_web/live/chat/partials/composer.ex" => :rule_painted,
+    "platform_web/live/chat/partials/conversation.ex" => :global_default,
+    "platform_web/live/chat/settings_component.ex" => :global_default,
+    "platform_web/live/control_center/agent_detail.ex" => :global_default,
+    "platform_web/live/control_center/native_files.ex" => :global_default,
+    "platform_web/live/control_center/native_login.ex" => :global_default,
+    "platform_web/live/control_center/onboarding.ex" => :global_default,
+    "platform_web/live/email_live.ex" => :global_default,
+    "platform_web/live/email_live.html.heex" => :global_default,
+    "platform_web/live/experiments_live.ex" => :global_default,
+    "platform_web/live/external_recovery_live.ex" => :global_default,
+    "platform_web/live/external_recovery_live.html.heex" => :global_default,
+    "platform_web/live/files_live.html.heex" => :global_default,
+    "platform_web/live/org_memory_live/journal_pane.ex" => :global_default,
+    "platform_web/live/org_memory_live/mobile_shell.ex" => :global_default,
+    "platform_web/live/org_memory_live/search_pane.ex" => :global_default,
+    "platform_web/live/org_memory_live/view.ex" => :global_default,
+    "platform_web/live/skills_live.html.heex" => :global_default,
+    "platform_web/live/tasks/canvas_picker_component.ex" => :global_default,
+    "platform_web/live/tasks/gate_panel_component.ex" => :global_default,
+    "platform_web/live/tasks/sidebar_component.ex" => :global_default,
+    "platform_web/live/tasks/stacks_component.ex" => :global_default,
+    "platform_web/live/tasks/steering_component.ex" => :global_default,
+    "platform_web/live/tasks/supersede_component.ex" => :global_default,
+    "platform_web/live/tasks/task_create_component.ex" => :global_default,
+    "platform_web/live/tasks/task_detail_component.ex" => :global_default,
+    "platform_web/live/tasks_live.html.heex" => :global_default
+  }
 
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
 
@@ -150,6 +207,46 @@ defmodule Platform.Design.PlaceholderContrastTest do
 
       assert source =~ "placeholder:text-subtle",
              "#{rel} has no placeholder:text-subtle; the site moved or its class changed."
+    end
+  end
+
+  test "every file rendering placeholder= is a template site or an explained exclusion" do
+    found =
+      Path.join(@lib, "platform_web/**/*.{ex,heex}")
+      |> Path.wildcard()
+      |> Enum.filter(&(File.read!(&1) =~ "placeholder="))
+      |> Enum.map(&Path.relative_to(&1, @lib))
+      |> Enum.sort()
+
+    # Anti-vacuity: the scan finds the template sites themselves.
+    for rel <- @template_sites do
+      assert rel in found, "the scan did not find template site #{rel}; the glob is broken."
+    end
+
+    unlisted = found -- (@template_sites ++ Map.keys(@placeholder_exclusions))
+
+    assert unlisted == [],
+           "#{inspect(unlisted)} render placeholder= but are neither in @template_sites nor " <>
+             "in @placeholder_exclusions with a reason. Add each to one of them."
+
+    stale = Map.keys(@placeholder_exclusions) -- found
+
+    assert stale == [],
+           "#{inspect(stale)} are excluded but no longer render placeholder=; delete the entries."
+
+    for {rel, reason} <- @placeholder_exclusions do
+      source = File.read!(Path.join(@lib, rel))
+
+      refute source =~ ~r/placeholder:text-/,
+             "#{rel} paints a placeholder: colour utility, so it is a template site, " <>
+               "not an exclusion. Move it to @template_sites."
+
+      if reason == :rule_painted do
+        assert source =~ "thread-input" or source =~ "compose-pill-bar",
+               "#{rel} is :rule_painted but carries neither .thread-input nor .compose-pill-bar."
+      else
+        assert reason == :global_default, "#{rel}: unknown reason #{inspect(reason)}"
+      end
     end
   end
 

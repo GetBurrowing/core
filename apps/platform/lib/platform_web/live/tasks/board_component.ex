@@ -362,7 +362,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          unchanged.
 
          Status-filter pill bar (design review, 2026-05-12) reuses the chat
-         channel-pill pattern. Default-active = "in_progress" so users land
+         pills pattern of the time. Default-active = "in_progress" so users land
          on actionable work; previously the section iteration began at
          "Backlog" which buried in-progress work below the scroll fold. The
          @mobile_columns order (in_progress first) controls both the pill

@@ -159,6 +159,16 @@ function stripTransientParams(moduleId, pathAndSearch) {
   return rest.length > 0 ? path + "?" + rest : path;
 }
 
+// True when `anchor` is a phone tab-bar tab (inside `[data-bottom-rail]`,
+// icon_rail.ex `bottom_rail/1`) for the module the reader is already in.
+function isActiveBottomTab(anchor, moduleId) {
+  if (typeof anchor.closest !== "function" || !anchor.closest("[data-bottom-rail]")) {
+    return false;
+  }
+  const loc = window.location || {};
+  return moduleFromPath(loc.pathname || "") === moduleId;
+}
+
 // Strip anything after the first `?` or `#`. We only need this for prefix
 // matching — the actual saved value keeps the query so we can restore it on
 // intercept. Returns the input unchanged when neither char is present.
@@ -259,6 +269,12 @@ const RouteResume = {
 
     const moduleId = anchor.dataset.moduleId;
     if (!moduleId) return;
+
+    // Tapping the ACTIVE tab of the phone tab bar pops to that module's root,
+    // as an iOS tab bar does (task 01a1557a-8562): on /chat/<slug>, Chat goes
+    // to the /chat list. Arriving from another tab still resumes. Scoped to
+    // the tab bar (`data-bottom-rail`): the desktop icon rail keeps resuming.
+    if (isActiveBottomTab(anchor, moduleId)) return;
 
     const saved = ClientState.get("route_resume", moduleId);
     if (typeof saved !== "string" || saved.length === 0) return;

@@ -24,9 +24,9 @@ defmodule PlatformWeb.ChatLive do
 
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.ChatLive.Partials.Composer
+  import PlatformWeb.ChatLive.Partials.ChatList
   import PlatformWeb.ChatLive.Partials.Conversation
   import PlatformWeb.ChatLive.Partials.ExternalRail
-  import PlatformWeb.ChatLive.Partials.MobileBrowser
   import PlatformWeb.ChatLive.Partials.Overlays
   import PlatformWeb.ChatLive.Partials.MessageContext, only: [message_context_overlay: 1]
   import PlatformWeb.ChatLive.Partials.Rail
@@ -45,6 +45,8 @@ defmodule PlatformWeb.ChatLive do
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.ChatListData
+  alias PlatformWeb.ChatLive.ChatListHooks
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
@@ -696,23 +698,18 @@ defmodule PlatformWeb.ChatLive do
       # / `close_junk_batch_modal` below.
       |> assign(:show_junk_batch_modal, false)
       |> assign(:junk_batch_target, nil)
-      |> assign(:mobile_browser_open, false)
-      # Drawer search query (mobile channel search Stage 1). Filters the
-      # drawer's rendered sections/DMs in-memory at RENDER time via the
-      # drawer_filter_* helpers — the underlying assigns stay unfiltered
-      # because the desktop rail renders from the same data and must never
-      # be filtered by the mobile drawer's search.
+      # The external mobile switcher's search query (`drawer_search` /
+      # `drawer_search_clear`, its own live event names). Filters the
+      # switcher's rows at RENDER time; the underlying assigns stay
+      # unfiltered because the desktop rail renders from the same data.
       |> assign(:drawer_query, "")
-      # Stage 2: whether the CURRENT drawer open was declared as a search
-      # (magnifying-glass entry) — drives client-side focus via the
-      # DrawerSearchFocus hook. Recomputed on every toggle.
-      |> assign(:drawer_search_intent, false)
-      # Channel-row reorder Stage 3 (a11y): text for the drawer's polite
-      # aria-live region, set after every row move so screen-reader users
-      # get confirmation the reorder happened. nil renders an empty region.
-      |> assign(:drawer_reorder_announcement, nil)
-      # Mobile drawer row-actions sheet (task 019fe998): nil when closed,
-      # else the space_id of the row whose overflow control was tapped. Only
+      # Text for the reorder announcer's polite aria-live region (the phone
+      # Chat list's Edit order, task 01a1557a-8562 stage 4), set after every
+      # row move so screen-reader users hear that it happened.
+      |> assign(:reorder_announcement, nil)
+      # The desktop rail's row-actions dialog (task 019ff8ba; the phone's row
+      # sheet opens from `@list_sheet` instead since task 01a1557a-8562): nil
+      # when closed, else the space_id of the row whose trigger was clicked. Only
       # the ID is held — name and pinned-ness are re-derived at render by
       # `row_actions_target/5`, so the sheet's header and its Pin/Unpin verb
       # stay correct after any change to the underlying row. Same shape as
@@ -754,6 +751,11 @@ defmodule PlatformWeb.ChatLive do
       # under runs. Seeding it a second time here would overwrite a state the
       # hook may already have reported.
       |> assign(:unread_counts, Chat.unread_counts_for_user(user_id))
+      # The phone Chat list's data (task 01a1557a-8562 stage 2). Seeded empty;
+      # `handle_params/3` for `:index` loads both, because that is the only
+      # live action that renders the list, and it runs straight after mount.
+      |> assign(:list_excerpts, %{})
+      |> assign(:list_identities, %{})
       |> assign(:lightbox_url, nil)
       # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
       # added by task 01a0419a stage 4). Both booleans are reported by the
@@ -870,6 +872,7 @@ defmodule PlatformWeb.ChatLive do
       |> MessagesHooks.attach()
       |> PinHooks.attach()
       |> SearchHooks.attach()
+      |> ChatListHooks.attach()
       |> MentionsHooks.attach()
       # Before UploadHooks, which halts "upload_dialog_close" (task 01a120be).
       |> LargeUploadHooks.attach()
@@ -1004,51 +1007,7 @@ defmodule PlatformWeb.ChatLive do
 
   @impl true
   def handle_params(%{"space_slug" => slug_or_id} = params, _url, socket) do
-    # Save the outgoing channel's draft AND cancel any staged uploads —
-    # the upload slots are LV-process-scoped, not per-space, so without
-    # an explicit cancel, a file staged in space A remains visible and
-    # send-eligible in space B's composer (BACKLOG #10).
-    socket =
-      if prev = socket.assigns.active_space do
-        # Release ONLY the active-space hold. Task 01a011e9 had to
-        # unsubscribe-then-conditionally-resubscribe here, because
-        # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` on a
-        # `keys: :duplicate` registry and so dropped every entry this pid held
-        # for the topic — including the one `mount/3` took to feed the unread
-        # badge of a space nobody is looking at. That workaround is gone
-        # (task 01a01a1b): `SpaceTopics.release/3` unsubscribes only when the
-        # holder set empties, so a rail space keeps its `:chat_rail` hold
-        # through the navigation and a space reached only by URL — an execution
-        # space, say, which the rail never lists — has nothing left holding it
-        # and is unsubscribed. Same two end states as the restore branch
-        # produced, with no window in which the registration does not exist.
-        socket = unsubscribe_space(socket, prev.id, :chat_active)
-
-        # Deliberately NOT given the same treatment: only the enter path below
-        # subscribes `active_agent:`, so removing every entry is the whole of the
-        # correct behaviour there.
-        Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
-
-        {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
-        {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
-
-        # Message bookkeeping keyed by id, with no space in it
-        # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
-        # stop being on screen the moment we leave `prev`. Drop it here, in
-        # the same teardown as the draft and the presence untrack, so nothing
-        # between this point and the new space's loader can re-hydrate the
-        # outgoing space's messages into the incoming space's stream
-        # (task 01a0119e).
-        socket =
-          socket
-          |> PresenceHooks.leave_space(prev.id)
-          |> MessagesHooks.save_draft(prev.id)
-          |> MessagesHooks.clear_rendered_messages()
-
-        flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
-      else
-        socket
-      end
+    socket = leave_active_space(socket)
 
     # Try slug first, then ID fallback (for DM/group spaces without slugs).
     # The `:org_id` opt scopes ambiguous slugs (e.g. "general", which now
@@ -1201,11 +1160,11 @@ defmodule PlatformWeb.ChatLive do
        |> PresenceHooks.enter_space(space, participant, participants)
        |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
+       |> ChatListHooks.reset()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)
        |> ActiveAgentHooks.resolve_for_space(space.id, participants)
-       |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
        |> assign(:restricted_channel_ids, restricted_channel_ids)
@@ -1239,28 +1198,94 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # `/chat` (`:index`). Since task 01a1557a-8562 stage 2 this is the phone
+  # Chat list (`Partials.ChatList`), not a redirect to the first channel:
+  # the open space is released and the list's data loaded, and nothing
+  # navigates. Desktop still lands in a channel, but through
+  # `handle_event("chat_viewport", ...)` once the `ViewportBreakpoint` hook
+  # reports `below: false`. The deliberate cost: a desktop GET /chat no longer
+  # 302s on the dead render; it patches after connect.
+  #
+  # External users land here too, on their own list: with no active space the
+  # external mobile switcher (`ExternalRail.external_mobile_switcher/1`) is
+  # what a phone shows at /chat, and a desktop patches into its first channel
+  # through the same `chat_viewport` report (task 01a1557a-8562 stage 5).
   def handle_params(_params, _url, socket) do
     restricted_ids =
       restricted_channel_ids(socket, socket.assigns.channels, socket.assigns.archived_channels)
 
-    socket = assign(socket, :restricted_channel_ids, restricted_ids)
+    socket =
+      socket
+      |> assign(:restricted_channel_ids, restricted_ids)
+      |> leave_active_space()
+      |> assign(:active_space, nil)
+      |> assign(:current_participant, nil)
 
-    # A denied deep link navigates here with this flash. Keep /chat as its
-    # landing URL instead of immediately selecting an unrelated channel.
-    if Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin" do
+    if socket.assigns.external? do
       {:noreply, socket}
     else
-      default_chat_landing(socket, restricted_ids)
+      {:noreply, socket |> assign(:page_title, "Chat") |> ChatListData.assign_all()}
     end
   end
 
-  defp default_chat_landing(socket, restricted_ids) do
-    case Enum.reject(socket.assigns.channels, &MapSet.member?(restricted_ids, &1.id)) do
-      [first | _] ->
-        {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
+  # A denied deep link navigates to /chat with this flash. /chat stays its
+  # landing URL instead of immediately selecting an unrelated channel.
+  defp restricted_flash?(socket),
+    do: Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin"
 
-      [] ->
-        {:noreply, socket}
+  # Release the outgoing space (task 01a1557a-8562 stage 2 factored this out
+  # of the `:show` branch so `:index` runs the same teardown): save its draft,
+  # cancel staged uploads, drop the `:chat_active` hold and the `active_agent:`
+  # subscription, and leave presence. A no-op when no space is open.
+  #
+  # Called from BOTH `handle_params/3` branches. On `:index` the caller then
+  # assigns `active_space: nil`, so a message arriving in the space just left
+  # takes the background path in `MessagesHooks` and counts as unread on the
+  # list instead of being swallowed as "already on screen".
+  defp leave_active_space(socket) do
+    # Save the outgoing channel's draft AND cancel any staged uploads —
+    # the upload slots are LV-process-scoped, not per-space, so without
+    # an explicit cancel, a file staged in space A remains visible and
+    # send-eligible in space B's composer (BACKLOG #10).
+    if prev = socket.assigns.active_space do
+      # Release ONLY the active-space hold. Task 01a011e9 had to
+      # unsubscribe-then-conditionally-resubscribe here, because
+      # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` on a
+      # `keys: :duplicate` registry and so dropped every entry this pid held
+      # for the topic — including the one `mount/3` took to feed the unread
+      # badge of a space nobody is looking at. That workaround is gone
+      # (task 01a01a1b): `SpaceTopics.release/3` unsubscribes only when the
+      # holder set empties, so a rail space keeps its `:chat_rail` hold
+      # through the navigation and a space reached only by URL — an execution
+      # space, say, which the rail never lists — has nothing left holding it
+      # and is unsubscribed. Same two end states as the restore branch
+      # produced, with no window in which the registration does not exist.
+      socket = unsubscribe_space(socket, prev.id, :chat_active)
+
+      # Deliberately NOT given the same treatment: only the enter path below
+      # subscribes `active_agent:`, so removing every entry is the whole of the
+      # correct behaviour there.
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
+
+      {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
+      {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
+
+      # Message bookkeeping keyed by id, with no space in it
+      # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
+      # stop being on screen the moment we leave `prev`. Drop it here, in
+      # the same teardown as the draft and the presence untrack, so nothing
+      # between this point and the new space's loader can re-hydrate the
+      # outgoing space's messages into the incoming space's stream
+      # (task 01a0119e).
+      socket =
+        socket
+        |> PresenceHooks.leave_space(prev.id)
+        |> MessagesHooks.save_draft(prev.id)
+        |> MessagesHooks.clear_rendered_messages()
+
+      flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
+    else
+      socket
     end
   end
 
@@ -1387,7 +1412,7 @@ defmodule PlatformWeb.ChatLive do
   # Stage 2 (search-forward entry): the opener can declare a search intent
   # (phx-value-intent="search" on the pills-strip magnifying glass — whose
   # aria-label has always promised "Search channels and DMs"). The intent
-  # rides to the drawer's input as a data attribute; the DrawerSearchFocus
+  # rides to the drawer's input as a data attribute; the SearchFocus
   # hook focuses the field client-side on mount. Openers WITHOUT the intent
   # get a plain browse drawer — no focus, no keyboard.
   # ── Agents goal editing (task 01a0b491 stage 4) ───────────────────────────
@@ -1479,26 +1504,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("toggle_mobile_browser", params, socket) do
-    opening = !socket.assigns.mobile_browser_open
-
-    {:noreply,
-     socket
-     |> assign(:mobile_browser_open, opening)
-     |> assign(:drawer_search_intent, opening and params["intent"] == "search")
-     # Toggling closed discards the search, same as close_mobile_browser.
-     |> then(&if(opening, do: &1, else: assign(&1, :drawer_query, "")))}
-  end
-
-  def handle_event("close_mobile_browser", _params, socket) do
-    # Closing the drawer discards any in-progress search — reopening always
-    # starts from the full browse list, never stale state.
-    {:noreply,
-     socket
-     |> assign(:mobile_browser_open, false)
-     |> assign(:drawer_query, "")}
-  end
-
   # ── Junk-batch confirmation modal (M5b/019f6e2c stage 4) ────────────────
   #
   # `CanvasHooks` opens the modal by assigning `:show_junk_batch_modal`
@@ -1563,7 +1568,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # Filter-as-you-type over the drawer's already-loaded sections + DMs.
   # Pure assign write — the filtering itself happens at render via the
-  # drawer_filter_* helpers, so there is no query cost and the desktop
+  # list_filter_* helpers, so there is no query cost and the desktop
   # rail (same underlying assigns) is untouched. The input is debounced
   # client-side (phx-debounce) and the value is length-capped here because
   # it is external input, even though it only ever feeds String.contains?.
@@ -2667,6 +2672,21 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :notification_banner_dismissed, true)}
   end
 
+  # The `ViewportBreakpoint` report from `/chat` (task 01a1557a-8562 stage 2).
+  # `/chat` is the phone Chat list, which is `lg:hidden`; a desktop viewport
+  # would see nothing, so `below: false` at `:index` patches into the first
+  # unrestricted channel, the landing desktop has always had. The restricted
+  # deep-link flash keeps /chat as before. `below: true` (a phone) stays on
+  # the list. Any other payload, or any other live action, is ignored.
+  def handle_event("chat_viewport", %{"below" => false}, socket) do
+    case not restricted_flash?(socket) && ChatListData.desktop_landing(socket.assigns) do
+      %{} = first -> {:noreply, push_patch(socket, to: ~p"/chat/#{space_nav_target(first)}")}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("chat_viewport", _params, socket), do: {:noreply, socket}
+
   # Cross-feature: upload_send creates a message + attachments. Delegates
   # post+stream writes to MessagesHooks, resets UploadHooks on success.
   def handle_event("upload_send", _params, socket) do
@@ -3213,7 +3233,7 @@ defmodule PlatformWeb.ChatLive do
         {name, nil} -> "Moved ##{name}"
       end
 
-    assign(socket, :drawer_reorder_announcement, text)
+    assign(socket, :reorder_announcement, text)
   end
 
   defp apply_channel_move(socket, section_id, ids) do
@@ -3311,7 +3331,7 @@ defmodule PlatformWeb.ChatLive do
         {name, nil} -> "Moved #{name}"
       end
 
-    assign(socket, :drawer_reorder_announcement, text)
+    assign(socket, :reorder_announcement, text)
   end
 
   # Recompute `@sidebar_sections` from the current channel list + saved
@@ -4350,7 +4370,9 @@ defmodule PlatformWeb.ChatLive do
       # sites already emit `:sidebar_changed`, every one of them changes what
       # the viewer can see, and a grant path added later that forgets a second
       # bespoke broadcast would re-create this exact defect one layer up.
-      reconcile_rail_subscriptions(socket)
+      socket
+      |> reconcile_rail_subscriptions()
+      |> ChatListData.maybe_refresh()
     end
   end
 
@@ -5637,6 +5659,7 @@ defmodule PlatformWeb.ChatLive do
         socket
         |> assign(:pinned_task_spaces, pinned)
         |> assign(:spaces, channels ++ pinned ++ dm_conversations)
+        |> ChatListData.maybe_refresh()
     end
   end
 

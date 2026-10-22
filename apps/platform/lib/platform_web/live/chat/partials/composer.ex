@@ -4,7 +4,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   message scroller, the streaming/typing indicators and the composer.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
-  `ChatLive.Partials.Rail`, `ChatLive.Partials.MobileBrowser` and
+  `ChatLive.Partials.Rail`, `ChatLive.Partials.ChatList` and
   `ChatLive.Partials.Conversation` (ADR 0035): function components, no
   state, each taking a declared set of attrs. Extracted from
   `chat_live.html.heex` in task 01a0312e stage 6 as a PURE MOVE — every

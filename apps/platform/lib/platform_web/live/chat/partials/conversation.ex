@@ -4,7 +4,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   `<div id="chat-drop-zone">` and the message list.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
-  `ChatLive.Partials.Rail` and `ChatLive.Partials.MobileBrowser` (ADR 0035):
+  `ChatLive.Partials.Rail` and `ChatLive.Partials.ChatList` (ADR 0035):
   function components, no state, each taking a declared set of attrs.
   Extracted from `chat_live.html.heex` in task 01a0312e stage 5 as a PURE
   MOVE — every `id`, `phx-hook`, `phx-click`, `phx-value-*`, `data-*` and
@@ -15,9 +15,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     * `space_header/1` — the `<header>` space bar: the mobile and desktop
       title branches, the group promote form, the Meet button, the search
       form, the canvas/pin counters, the agent eye and settings
-    * `mobile_pinned_strip/1` — `<nav data-role="mobile-pinned-strip">`
-    * `channel_pills/1` — `<nav aria-label="Channel switcher">`, including
-      the left-anchored magnifying-glass button
     * `search_drawer/1` — the search-results drawer
     * `pins_drawer/1` — the pinned-messages drawer
     * `canvases_drawer/1` — the live-canvases drawer and its new-canvas form
@@ -50,19 +47,22 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   that FORGETS to declare them does not crash and does not render blank — it
   silently renders REAL WORKSPACE NAMES with the mask switched on, and every
   markup assertion still passes. So all three are declared on `space_header/1`
-  (both branches), `mobile_pinned_strip/1` and `channel_pills/1`.
+  (both branches). The phone's pinned strip and channel pills, which declared
+  them too, were deleted with the drawer (task 01a1557a-8562 stage 5); the
+  phone Chat list replaced all three.
 
-  ## WHY THE TWO MASK CALLS ARE WRAPPED, NOT QUALIFIED
+  ## WHY THE MASK CALL IS WRAPPED, NOT QUALIFIED
 
-  `space_mask/1` and `masked_space_name/2` live in `PlatformWeb.ChatLive`,
-  which imports this module — so they cannot be imported back. They are
-  wrapped in private functions of the SAME NAME AND ARITY rather than called
-  as `ChatLive.space_mask(...)` because two of the call sites sit inside
-  `truncate` spans on lines already close to the formatter's width: a longer
-  call reflows the interpolation onto its own line, which puts whitespace
-  INSIDE the span and changes the rendered text while every markup assertion
-  stays green (task 01a0312e stage 3 finding). Same call text, same wrapping,
-  no reflow.
+  `space_mask/1` lives in `PlatformWeb.ChatLive`, which imports this module —
+  so it cannot be imported back. It is wrapped in a private function of the
+  SAME NAME AND ARITY rather than called as `ChatLive.space_mask(...)`
+  because call sites inside `truncate` spans sit on lines already close to
+  the formatter's width: a longer call reflows the interpolation onto its own
+  line, which puts whitespace INSIDE the span and changes the rendered text
+  while every markup assertion stays green (task 01a0312e stage 3 finding).
+  Same call text, same wrapping, no reflow. The `masked_space_name/2` and
+  `space_nav_target/1` wrappers left with their only callers, the channel
+  pills and the pinned strip (task 01a1557a-8562 stage 5).
   """
 
   use Phoenix.Component
@@ -71,12 +71,9 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   import PlatformWeb.ChatLive.RenderHelpers,
     only: [
       search_headline: 1,
-      sidebar_display_name: 2,
-      space_header_name: 4,
-      unread_label: 1
+      space_header_name: 4
     ]
 
-  import PlatformWeb.ChatLive.Partials, only: [brand_new_user_empty_state: 1]
   # `relative_time/1` left this list in task 01a0740d stage 3 along with the
   # flat canvas rows that used it. The explorer's browse row is title-only by
   # design (the group header has already said where you are) and its search row
@@ -91,7 +88,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias Phoenix.LiveView.JS
-  alias Platform.Chat.Sidebar
   alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.GoalCadenceForm
@@ -154,7 +150,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   canvas/pin counters, the agent eye and settings.
 
   The `@active_space && !@embedded` gate travelled INTO the component with
-  the markup (same convention as `Rail.rail/1` and `MobileBrowser.mobile_browser/1`),
+  the markup (same convention as `Rail.rail/1` and `ChatList.chat_list/1`),
   so the call site states no render condition of its own.
   """
   def space_header(assigns) do
@@ -172,17 +168,26 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            titles are separate nodes, and a mask applied to one of them is the
            shape of bug this stage exists to find. --%>
       <div class="flex items-center gap-2 overflow-hidden">
-        <%!-- Mobile: static channel name. Channel switching now happens via the
-             pills strip below the header (Refined Option A — design approval
-             2026-05-10). The previous tap-channel-name-to-open-browser flow
-             was confusing with the shell's hamburger menu — both opened
-             drawers, so users could tap one when they meant the other. The
-             pills strip makes channel switching 1-tap and removes the
-             dual-affordance ambiguity. The overflow magnifying-glass icon at
-             the right of the strip still opens the full channel browser
-             (this template's @mobile_browser_open overlay) for the long-tail
-             jump-to-channel case. --%>
+        <%!-- Mobile: static channel name. Channel switching on the phone is the
+             Chat list (task 01a1557a-8562), reached through the back chevron
+             below or the tab bar's Chat tab; the pills strip and the drawer
+             it opened were deleted in that task's stage 5. --%>
         <div class="flex items-center gap-2 overflow-hidden lg:hidden">
+          <%!-- Back to the phone Chat list (task 01a1557a-8562 stage 2,
+               coverage row 64). A plain patch link with NO phx-click: a bare
+               `phx-click` on a patch link throws in the client, and anything
+               that must reset on the way back resets in `handle_params/3`.
+               An external user follows it too: their /chat has no active
+               space, so it lands on `#external-mobile-switcher`, their own
+               list. Rung 7 restyles the rest of this header. --%>
+          <.link
+            patch={~p"/chat"}
+            class="-ml-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-base-content lg:hidden focus-visible-ring"
+            aria-label="Back to chat list"
+            data-role="chat-back"
+          >
+            <span class="hero-chevron-left size-5" aria-hidden="true"></span>
+          </.link>
           <span :if={@active_space.kind == "channel"} class="text-subtle">#</span>
           <span class="truncate font-semibold">
             {space_header_name(
@@ -757,8 +762,8 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                  no-chrome contract above forbids that. `max-sm:` rather than
                  a `sm:` reset is deliberate: it adds no class that is live
                  at >=640px, so the desktop computed box stays 32 x 21 with
-                 nothing to restore. Matches the drawer's own `min-h-11
-                 min-w-11` treatment (`mobile_browser.ex:178`). --%>
+                 nothing to restore. Matches the 44px touch floor every phone
+                 control here keeps (`min-h-11 min-w-11`). --%>
             <button
               :if={@can_edit_goal?}
               type="button"
@@ -859,409 +864,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   defp cadence_of(%{cadence: cadence}), do: cadence
   defp cadence_of(_), do: nil
-
-  attr(:active_space, :any, required: true)
-  attr(:embedded, :boolean, required: true)
-  attr(:pinned_task_spaces, :list, required: true)
-  attr(:channel_sections, :map, required: true)
-  attr(:agents_block, :any, required: true)
-  attr(:unread_counts, :map, required: true)
-  attr(:user_id, :any, required: true)
-  # Masking attrs: the channel-chip branch calls `masked_space_name/2`.
-  attr(:mask_names?, :boolean, required: true)
-  attr(:revealed_section_ids, :any, required: true)
-  attr(:sidebar_sections, :list, required: true)
-
-  @doc """
-  The mobile Pinned strip — `<nav data-role="mobile-pinned-strip">`.
-  """
-  def mobile_pinned_strip(assigns) do
-    ~H"""
-    <%!-- Mobile Pinned strip (task 019f923b Stage 1). `lg:hidden` mirrors the
-         `hidden lg:flex` gate on <aside id="chat-sidebar">: without this
-         strip, pinned spaces (both task-exec pins from `@pinned_task_spaces`
-         and channel pins from `@channel_sections.pinned`) are unreachable
-         on <lg viewports because the desktop rail is hidden.
-
-         Renders horizontally-scrollable chips that mirror the desktop
-         rail's mental model — `hero-clipboard-document-list-mini` for
-         task-exec pins and, for pinned conversations, the desktop Pinned
-         block's row identity: a bare name for a person, `#` for a channel.
-         Chips carry the unread badge from `unread_label/1` when the space
-         has unread messages, using the same visual language as the
-         channel-pills strip immediately below.
-
-         Auto-hides when BOTH lists are empty — no permanent header. The
-         `:if` OR-guard means a user with only pinned tasks (or only pinned
-         channels, once channel-pinning ships) still gets the strip; the
-         strip only disappears when the user has no pins at all.
-
-         Sits ABOVE the channel-pills strip so pinned spaces are the first
-         navigation surface a user sees when landing in a channel on mobile.
-         Pinned channels intentionally re-appear in the channel-pills strip
-         below (via `Sidebar.flatten_sections/1`) — that duplication is
-         deliberate visual emphasis on pinned items, not a bug to
-         deduplicate.
-
-         Conversation pinning IS wired as of task 019fd80f stage 2: every
-         `channel_sections/4` call site passes the user's real pin list, so
-         the conversation-chip branch below is live. It was dead before
-         that, which is why it rendered `{space.name}` for every kind and
-         produced a blank chip for a pinned DM. Render coverage for both
-         kinds is in `chat_live_pinned_block_test.exs`. --%>
-    <nav
-      :if={
-        @active_space && !@embedded &&
-          (@agents_block != nil || @pinned_task_spaces != [] ||
-             @channel_sections.pinned != [])
-      }
-      class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10 bg-base-200/40"
-      style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-      aria-label="Pinned"
-      data-role="mobile-pinned-strip"
-    >
-      <%!-- The Agents chip (task 01a0b491 v2 stage 2). FIRST child, mirroring
-           the rail order where `agents_block/1` sits above `pinned_block/1`.
-
-           The strip's `:if` above was widened for a non-nil `@agents_block`:
-           it previously fired only when the user had pins, so a user with no
-           pins never got the strip at all and an Agents chip inside the old
-           guard would have been invisible to exactly the people with nothing
-           else on this surface.
-
-           NO GLYPH SLOT when no leader resolves — not an empty span. That is
-           this strip's own recorded rule (see the comment on the channel
-           chips below): a blank 20px inside a pill reads as broken padding
-           rather than as an absent glyph. It is deliberately the OPPOSITE of
-           the rail and drawer rows, which keep their empty `w-5` column to
-           hold the name column straight. Both are right on their own surface
-           and must not be harmonised. --%>
-      <%= if @agents_block do %>
-        <% agents_space = @agents_block.space %>
-        <% agents_leader = @agents_block.leader %>
-        <.link
-          patch={~p"/chat/#{space_nav_target(agents_space)}"}
-          data-role="agents-pinned-strip-chip"
-          data-space-id={agents_space.id}
-          class={[
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-            if(@active_space.id == agents_space.id,
-              do: "bg-primary text-primary-content",
-              else: "bg-base-100 text-base-content border border-base-content/10"
-            )
-          ]}
-        >
-          <.agent_avatar
-            :if={agents_leader}
-            name={agents_leader.name}
-            avatar_url={agents_leader.avatar_url}
-            size="xs"
-            class="ring-2 ring-focus-ring"
-            title={"#{agents_leader.name} leads"}
-          />
-          <span class="truncate max-w-[10rem]">{agents_space.name}</span>
-          <span
-            :if={unread_label(Map.get(@unread_counts, agents_space.id, 0))}
-            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-          >
-            {unread_label(Map.get(@unread_counts, agents_space.id, 0))}
-          </span>
-        </.link>
-      <% end %>
-      <.link
-        :for={space <- @pinned_task_spaces}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        data-role="mobile-pinned-task-chip"
-        data-space-id={space.id}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-          if(@active_space.id == space.id,
-            do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content border border-base-content/10"
-          )
-        ]}
-      >
-        <%!-- The task marker, and the SAME glyph the two rail surfaces use
-             for a task row. It was `hero-map-pin-mini` here until
-             2026-08-11: one concept carried two glyphs depending on which
-             surface a person happened to be looking at, and the glyph is
-             the only thing distinguishing the three kinds, so the two had
-             to converge. `hero-clipboard-document-list-mini` is what Saru's
-             design canvas for 019feec6-73d9 specifies. --%>
-        <span class={[
-          "hero-clipboard-document-list-mini size-3.5",
-          if(@active_space.id == space.id,
-            do: "text-primary-content/80",
-            else: "text-subtle"
-          )
-        ]}>
-        </span>
-        <span class="truncate max-w-[10rem]">
-          {Platform.Tasks.ChatPins.display_name_for_space(space)}
-        </span>
-        <span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >
-          {unread_label(Map.get(@unread_counts, space.id, 0))}
-        </span>
-      </.link>
-      <.link
-        :for={space <- @channel_sections.pinned}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        data-role="mobile-pinned-channel-chip"
-        data-space-id={space.id}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-          if(@active_space.id == space.id,
-            do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content border border-base-content/10"
-          )
-        ]}
-      >
-        <%!-- Same identity rule as the two rail surfaces: `#` plus a name
-             for a channel, a bare name for a person.
-
-             No `hero-bookmark-solid`: every chip in this strip is a pin, so
-             a pin marker on all of them never varied and carried nothing.
-             The task chips above carry `hero-clipboard-document-list-mini`,
-             which does vary, since it separates a task from a
-             conversation — and it is the same glyph the rail uses, so one
-             concept has one mark on every surface.
-
-             No empty indent slot on the person chips either, unlike the two
-             rail surfaces. Chips sit in a horizontal scroller, so there is
-             no name column to keep straight, and a blank 20px inside a pill
-             would read as broken padding rather than as an absent glyph. --%>
-        <%= if space.kind in ["dm", "group"] do %>
-          <span class="truncate max-w-[10rem]">{sidebar_display_name(space, @user_id)}</span>
-        <% else %>
-          <span
-            class={[
-              "shrink-0",
-              if(@active_space.id == space.id,
-                do: "text-primary-content/80",
-                else: "text-subtle"
-              )
-            ]}
-            data-role="pinned-row-hash"
-          >
-            #
-          </span>
-          <span class="truncate max-w-[10rem]">{masked_space_name(assigns, space.name)}</span>
-        <% end %>
-        <span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >
-          {unread_label(Map.get(@unread_counts, space.id, 0))}
-        </span>
-      </.link>
-    </nav>
-    """
-  end
-
-  attr(:active_space, :any, required: true)
-  attr(:embedded, :boolean, required: true)
-  attr(:external?, :boolean, required: true)
-  attr(:channels, :list, required: true)
-  attr(:dm_conversations, :list, required: true)
-  attr(:unread_counts, :map, required: true)
-  attr(:user_id, :any, required: true)
-  # Masking attrs: the channel pills call `masked_space_name/2`, and
-  # `@sidebar_sections` is also the pill ORDER source for internal users.
-  attr(:mask_names?, :boolean, required: true)
-  attr(:revealed_section_ids, :any, required: true)
-  attr(:sidebar_sections, :list, required: true)
-  attr(:restricted_channel_ids, :any, required: true)
-
-  @doc """
-  The mobile channel-pills strip — `<nav aria-label="Channel switcher">`.
-
-  Its left-anchored magnifying-glass button is the ONLY mobile entry that
-  carries `phx-value-intent="search"`, i.e. the one opener that asks
-  `MobileBrowser.mobile_browser/1` for a search-focused drawer rather than a
-  browse-first one. Losing that attribute silently downgrades the drawer.
-  """
-  def channel_pills(assigns) do
-    ~H"""
-    <%!-- Mobile-only channel pills strip — Refined Option A nav (design approval 2026-05-10).
-         Replaces the previous tap-channel-name-to-open-browser flow. Horizontally
-         scrollable pills with the active channel highlighted; the magnifying-glass
-         icon at the LEFT opens the @mobile_browser_open drawer (search + full
-         channel/DM list). 1-tap switching for the pills shown; 2-tap
-         (magnifying glass → search) for the long tail.
-
-         ORDERING CONTRACT (design decision 2026-07-05, this task's Stage 3):
-         pills render `Sidebar.flatten_sections(@sidebar_sections)` — the user's
-         curated drawer arrangement flattened left-to-right — NOT the raw
-         @channels list. Consequences, both deliberate: (1) dragging sections
-         in the drawer reorders the pills identically (one mental model,
-         stable muscle memory — the unread badge signals activity without
-         moving pills); (2) hidden channels/sections are absent here too —
-         hidden means hidden everywhere. Historical note: the raw @channels
-         order this replaced was channel CREATION order (Chat.list_spaces
-         sorts by inserted_at), not "alphabetical" as previously claimed
-         here. The old Stage 1B localStorage-pinning idea is superseded by
-         the server-side section order. --%>
-    <nav
-      :if={@active_space && !@embedded}
-      class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10"
-      style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-      aria-label="Channel switcher"
-    >
-      <%!-- Search/jump button anchored at the LEFT of the pills strip
-           (operator request, design approval 2026-05-11). Sticks to the left
-           edge so it stays in reach even as the channel pills overflow
-           horizontally and scroll. phx-value-intent="search" (Stage 2):
-           this entry declares search intent, so the drawer opens with the
-           search field focused — other openers get a browse-first drawer. --%>
-      <button
-        phx-click="toggle_mobile_browser"
-        phx-value-intent="search"
-        class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-subtle hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
-        aria-label="Search channels and direct messages"
-        title="Search channels and DMs"
-      >
-        <span class="hero-magnifying-glass size-4"></span>
-      </button>
-
-      <%!-- Channel pill source (task 019f9257-a83e): internal users get their
-           curated flattened section order; external users have no
-           `@sidebar_sections` (that resolver-driven org tree is empty for
-           them), so their pills come from the flat granted-channel list
-           `@channels` — the same set the external rail + switcher render.
-           Without this branch the external pills strip showed only DMs and
-           none of the user's channels. --%>
-      <% switcher_channel_pills =
-        if @external?, do: @channels, else: Sidebar.flatten_sections(@sidebar_sections) %>
-      <%= for space <- switcher_channel_pills do %>
-        <.link
-          :if={not MapSet.member?(@restricted_channel_ids, space.id)}
-          patch={~p"/chat/#{space_nav_target(space)}"}
-          data-role="channel-pill"
-          data-space-id={space.id}
-          class={[
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-            if @active_space.id == space.id do
-              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-            else
-              "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
-            end
-          ]}
-        >
-          <span class={[
-            if(@active_space.id == space.id,
-              do: "text-primary-content/80",
-              else: "text-subtle"
-            )
-          ]}>#</span>{masked_space_name(assigns, space.name)}<span
-            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-          >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
-        </.link>
-
-        <div
-          :if={MapSet.member?(@restricted_channel_ids, space.id)}
-          data-role="restricted-channel-pill"
-          data-space-id={space.id}
-          aria-disabled="true"
-          title="Restricted, ask an admin"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-subtle border border-base-content/10"
-        >
-          <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
-        </div>
-      <% end %>
-
-      <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
-      <.link
-        :for={space <- @dm_conversations}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-          "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-          if @active_space.id == space.id do
-            "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-          else
-            "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
-          end
-        ]}
-      >
-        {sidebar_display_name(space, @user_id)}<span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
-      </.link>
-    </nav>
-    """
-  end
-
-  attr(:embedded, :boolean, required: true)
-  attr(:external?, :boolean, required: true)
-  attr(:active_space, :any, default: nil)
-  attr(:channels, :list, required: true)
-  attr(:dm_conversations, :list, required: true)
-  attr(:archived_channels, :list, required: true)
-
-  @doc """
-  The brand-new-user pane for the MOBILE content region — the only
-  create/join affordance a user with zero spaces gets below `lg`.
-
-  ## The defect this exists to close (task 01a0312e stage 8)
-
-  At 390px, a user whose `Chat.list_spaces/0`, `list_archived_spaces/0` and
-  `list_user_conversations/1` are all empty rendered a content pane whose
-  `innerText` was literally zero characters. Everything in the pane is gated
-  on `@active_space`, and they have none. The two empty states that should
-  have covered them could not:
-
-    * `Rail.rail/1`'s §5.1 state IS in the DOM, but it is inside
-      `#chat-sidebar`, which is `display: none` below `lg`.
-    * `MobileBrowser.mobile_browser/1`'s §5.1 state is unreachable: the
-      overlay opens on `toggle_mobile_browser`, whose only trigger is the
-      magnifying glass in `channel_pills/1` — and that `<nav>` is gated on
-      `@active_space && !@embedded`. Zero spaces means no active space means
-      no trigger. The empty state sat behind a door with no handle.
-
-  Fixing it by rendering the trigger unconditionally was the alternative
-  considered and rejected: it changes what a user WITH channels sees on
-  every route where no space is active, and it hands them a search box for a
-  list they cannot see from there. Rendering the state directly in the
-  content region touches exactly one population.
-
-  ## Why the condition is this exact conjunction
-
-    * `@active_space == nil` — with a space entered, the pane is the
-      conversation and `Composer.message_scroller/1` owns its own empty
-      state (§5.2).
-    * `@channels == [] and @dm_conversations == []` — anyone with either has
-      somewhere to go; showing them "no spaces yet" would be a lie.
-    * `@archived_channels == []` — same test the rail applies, for the same
-      reason (task 019f4eaa): archived channels are proof you are NOT new,
-      and org-archive empties every channel of an org at once.
-    * `!@embedded and !@external?` — the embedded surface is scoped to one
-      space and has no new-channel affordance to offer, and external users
-      never get one at all (`NewChannelComponent` is gated off their
-      surface, so the chip would open nothing).
-
-  `lg:hidden` keeps the desktop render untouched: above `lg` the rail's copy
-  is the visible one and this node contributes no visible text.
-  """
-  def mobile_no_spaces_pane(assigns) do
-    ~H"""
-    <div
-      :if={
-        !@embedded and !@external? and is_nil(@active_space) and @channels == [] and
-          @dm_conversations == [] and @archived_channels == []
-      }
-      id="chat-mobile-no-spaces"
-      class="lg:hidden flex-1 min-h-0 overflow-y-auto px-4 py-6"
-    >
-      <.brand_new_user_empty_state />
-    </div>
-    """
-  end
 
   attr(:search_query, :any, required: true)
   attr(:search_results, :list, required: true)
@@ -1786,15 +1388,12 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # `split_marked_snippet/1` left this module's import list with it; they had
   # no other caller here.
 
-  # Wrappers, not qualified calls — see "WHY THE TWO MASK CALLS ARE WRAPPED"
-  # in the moduledoc. Same name, same arity, same call text at the call site,
-  # so no line grows and no interpolation reflows into a `truncate` span.
   # The goal space's stored scope as the select's value: "" (All projects)
   # when the key is absent.
   defp goal_scope_value(%{metadata: %{"goal_project_id" => id}}) when is_binary(id), do: id
   defp goal_scope_value(_space), do: ""
 
+  # A wrapper, not a qualified call — see "WHY THE MASK CALL IS WRAPPED" in
+  # the moduledoc.
   defp space_mask(assigns), do: ChatLive.space_mask(assigns)
-  defp masked_space_name(assigns, name), do: ChatLive.masked_space_name(assigns, name)
-  defp space_nav_target(space), do: ChatLive.space_nav_target(space)
 end

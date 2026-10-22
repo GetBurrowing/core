@@ -62,17 +62,6 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert html =~ "hero-lock-closed-mini"
     refute html =~ marker
 
-    assert html
-           |> Floki.parse_document!()
-           |> Floki.find(~s(a[data-role="channel-pill"][data-space-id="#{finance.id}"])) == []
-
-    assert html
-           |> Floki.parse_document!()
-           |> Floki.find(
-             ~s([data-role="restricted-channel-pill"][data-space-id="#{finance.id}"][aria-disabled="true"])
-           )
-           |> length() == 1
-
     [restricted_row] =
       Regex.run(
         ~r/<div[^>]*data-role="restricted-channel-row"[^>]*data-space-id="#{finance.id}"[^>]*>.*?<\/div>/s,
@@ -90,20 +79,10 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     refute restricted_row =~ "<button "
     refute restricted_row =~ "channel-row-unread-pill"
 
-    member_view |> element(~s(button[phx-click="toggle_mobile_browser"])) |> render_click()
-    mobile = render(member_view)
-    assert mobile =~ ~s(id="mobile-channel-browser")
-    assert mobile =~ ~s(data-role="restricted-channel-row")
-
-    mobile_row =
-      mobile
-      |> Floki.parse_document!()
-      |> Floki.find(
-        ~s(#mobile-channel-browser [data-role="restricted-channel-row"][data-space-id="#{finance.id}"])
-      )
-
-    assert length(mobile_row) == 1
-    assert Floki.find(mobile_row, "a, button") == []
+    # The phone's restricted row lives on the Chat list since task
+    # 01a1557a-8562 (the drawer and pills that carried it here were deleted):
+    # chat_live_chat_list_test.exs "a restricted channel renders the
+    # restricted row with no excerpt and no link".
 
     participant_count = length(Chat.list_participants(finance.id))
     denied = live(member_conn, ~p"/chat/#{finance.id}")

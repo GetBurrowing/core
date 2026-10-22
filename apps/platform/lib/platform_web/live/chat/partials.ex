@@ -10,16 +10,15 @@ defmodule PlatformWeb.ChatLive.Partials do
     * `notification_banner/1` — notification opt-in bar
     * `move_to_org_picker/1` — the admin destination chooser for a channel
     * `move_to_org_dialog/1` — the confirmation a chosen destination opens
-    * `row_actions_control/1` — per-row overflow control in the mobile drawer
-    * `row_actions_sheet/1` — the bottom sheet that control opens
+    * `row_actions_sheet/1` — the phone Chat list's row sheet (long-press)
     * `row_actions_trigger/1` — per-row overflow control in the desktop rail
     * `row_actions_dialog/1` — the centred menu that trigger opens
     * `upload_dialog/1` — staging modal for attachments
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
     * `image_lightbox/1` — full-screen image viewer
-    * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, shared
-      by the desktop rail and the mobile content pane
+    * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, in
+      the desktop rail
   """
 
   use Phoenix.Component
@@ -39,22 +38,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   "no spaces yet": what is empty, why, and the two agent-mediated actions
   (create a space / connect an agent).
 
-  Lives HERE, in the shared module, because it renders on TWO surfaces that
-  are mutually exclusive at any one viewport width: the desktop rail
-  (`Rail.rail/1`, inside `#chat-sidebar`, which is `display: none` below
-  `lg`) and the mobile content pane (`Conversation.mobile_no_spaces_pane/1`,
-  which is `lg:hidden`). Before task 01a0312e stage 8 only the rail copy
-  existed, so a brand-new user on a phone got a literally blank content pane
-  with no create, join or browse affordance anywhere on screen — the
-  `MobileBrowser` zero-state that should have covered them is opened by
-  `toggle_mobile_browser`, and that trigger lives in the channel-pills strip,
-  which is itself gated on `@active_space` and therefore never renders for a
-  user who has no spaces to be active in. The empty state was behind a door
-  with no handle.
-
-  One definition rather than two so the §5.1 copy cannot drift between the
-  two breakpoints. The component renders no wrapper of its own — each caller
-  owns its own positioning and its own render condition.
+  Rendered by the desktop rail (`Rail.rail/1`, inside `#chat-sidebar`). Its
+  phone twin, the conversation pane's no-spaces state, was deleted in task
+  01a1557a-8562 stage 5: the phone Chat list's own empty states (coverage
+  rows 35 and 37) replaced it. The component renders no wrapper of its own —
+  the caller owns its positioning and its render condition.
   """
   def brand_new_user_empty_state(assigns) do
     ~H"""
@@ -159,7 +147,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div
       :if={@push_permission == "prompt" and not @dismissed}
-      class="flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
+      class="hidden lg:flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
       role="status"
       data-role="chat-notification-banner"
     >
@@ -372,135 +360,70 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc """
-  Overflow control for one MOBILE DRAWER conversation row (task 019fe998).
+  The phone row sheet: the bottom sheet a Chat list row's long-press opens
+  (task 01a1557a-8562 stage 4). It began as the drawer's row sheet (task
+  019fe998); the drawer and its row control were deleted in stage 5.
 
-  The touch counterpart to the rail's `row_actions_trigger/1`. Before either
-  existed the rail row carried its actions directly, and a phone could reach
-  none of them. "Move to organisation…" was `opacity-0` with
-  `group-hover/row:opacity-100 focus-within:opacity-100` carried inline, and
-  Tailwind compiles `group-hover:` inside `@media (hover: hover)`, which never
-  matches on a touch device. The sub-org row's `.channel-row-hide-button` was
-  `opacity-0` revealed by a plain-CSS `.channel-row-wrap:hover` /
-  `:focus-within`: not media-gated, still asking a finger for a hover it
-  cannot produce. Only the pin was visible at rest, and only from 2026-08-11.
-
-  This control is therefore ALWAYS visible: no `opacity-0` and no hover
-  variant anywhere in its class list, which
-  `chat_live_drawer_row_actions_test.exs` asserts by refutation.
-
-  ## One control, not a row of icons
-
-  44px is the touch floor, so pin beside hide is 88px taken permanently from a
-  375px drawer whose names already truncate. One overflow costs 44px once and
-  holds every action the row grows later. The name keeps `flex-1 min-w-0
-  truncate` on the sibling link and this control is `flex-shrink-0`, so a long
-  display name can never crush it.
-
-  ## Accessible name
-
-  Carries the verb AND the target: "More actions for Alex Morgan". A bare
-  "More" is meaningless in a list of twenty identical controls, and a DM has
-  no `name` field — reaching for `space.name` renders it empty, which has
-  already shipped on this surface once. Callers pass the row's resolved label.
-
-  Renders as a SIBLING of the row's navigate-link, never a child: a `<button>`
-  inside an `<a>` is invalid HTML, and LiveView binds click on `window` in the
-  bubble phase, so a nested control needs a `stopPropagation` guard that
-  swallows navigation along with the event.
-
-  ## Right gutter
-
-  `mr-2` is load-bearing, not spacing taste. Without it the control's border
-  box ends exactly on the viewport's right edge (measured: right 375 on a
-  375px screen), and `focus-visible:ring-2` draws 2px OUTSIDE that box, so the
-  keyboard focus ring was clipped by the screen edge. 8px is also the gutter
-  the drawer's existing row control already uses (the pinned-task row's unpin
-  button), so this matches the neighbouring control rather than inventing a
-  third value.
-  """
-  attr(:space_id, :string, required: true)
-  attr(:name, :string, required: true)
-
-  def row_actions_control(assigns) do
-    ~H"""
-    <button
-      type="button"
-      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-      phx-click="open_row_actions"
-      phx-value-space_id={@space_id}
-      data-role="drawer-row-actions"
-      data-space-id={@space_id}
-      aria-haspopup="dialog"
-      aria-label={"More actions for #{@name}"}
-    >
-      <span class="hero-ellipsis-vertical size-5"></span>
-    </button>
-    """
-  end
-
-  @doc """
-  The bottom sheet `row_actions_control/1` opens (task 019fe998).
-
-  Wraps the shared `PlatformWeb.Components.Sheet` primitive — the same one
-  `Components.MoreSheet` wraps. No second sheet, no bespoke popover.
+  Wraps the shared `PlatformWeb.Components.Sheet` primitive with rung 5's
+  `handle_close` and `swipe_dismiss`. No second sheet, no bespoke popover.
 
   ## Placement and breakpoint
 
-  Rendered at the TEMPLATE ROOT, not inside `#mobile-channel-browser`. `.sheet`
-  is `position: fixed`, and a CSS `transform` on any ancestor becomes the
-  containing block for fixed descendants — an overlay rendered inside a
-  transformed rail centres on the rail instead of the viewport, which has
-  shipped here before.
+  Rendered at the TEMPLATE ROOT. `.sheet` is `position: fixed`, and a CSS
+  `transform` on any ancestor becomes the containing block for fixed
+  descendants, which has shipped here before. `lg:hidden` is load-bearing:
+  the design system scopes sheets to mobile; desktop keeps
+  `row_actions_dialog/1`.
 
-  `lg:hidden` is load-bearing, not decoration. The designer reported the bottom-sheet
-  component rendering on desktop at all widths on 2026-07-12; the design
-  system scopes sheets to mobile. Desktop keeps its hover-and-focus reveal.
+  ## Items (prototype master-mobile.html v3 :1299-1304, copy verbatim)
 
-  ## Actions
+    * 'Pin to top' / 'Unpin from top' fire the EXISTING `toggle_pinned`,
+      which takes the desired next state, so a duplicated event is
+      idempotent rather than a silent unpin.
+    * 'Hide channel' ('hidden everywhere until you unhide') on a channel the
+      resolver marks `hideable` (`hide_channel`). A DM no longer shows Hide:
+      the Hidden drawer that reverses it lists channels only, so a hidden DM
+      had no way back (prototype :1302).
+    * 'Close conversation' ('hides it until the next message') on a DM or
+      group (`close_dm`). Nothing is deleted, so the red this sheet has never
+      spent stays unspent.
+    * 'Edit order' enters the list's arranging mode (`toggle_sidebar_edit`,
+      the same mode as the desktop rail's personal edit) and closes the sheet.
 
-  Both reuse the EXISTING server handlers. `toggle_pinned` takes the desired
-  next state rather than flipping what it finds, so a duplicated event from a
-  render race is idempotent instead of a silent unpin. `hide_channel` takes
-  `id`. Nothing here is destructive, so `--color-error` stays unspent: the day
-  something in this sheet is destructive, it reads instantly.
+  NOT built: 'Mute' / 'Unmute' ('mentions still notify'). There is no mute
+  state to read or write: `chat_participants.attention_mode` defaults to
+  "mention", which already notifies on mentions only, so mapping Mute onto it
+  would show a false muted state for most people. Task 01a14a91 (per-channel
+  notifications) adds the Off mode, this row and the muted marker.
 
-  `@target` is nil whenever the sheet is closed, which keeps the header empty
-  rather than holding the last-opened conversation's name.
+  Every item is a button, never a link, and every one closes the sheet: the
+  handlers reset `@row_actions_space_id`, and `ChatListHooks` resets
+  `@list_sheet` on the same events.
 
-  ## Close (task 019ffc5f stage 2)
+  ## Title
 
-  A third item, gated on `@target.closeable` (DM and group rows), rendering
-  the touch counterpart of the rail dialog's Close from the SAME resolver.
-  Its `data-role` is `row-actions-close-dm`, not `row-actions-close`: that
-  bare name already belongs to the rail dialog's dismiss button, and both
-  chromes sit in the DOM at every width, so sharing it would make the
-  selector match two nodes.
-
-  Close reads as the least of the three and is styled identically to them.
-  Nothing is deleted and the row returns on the next message in that DM, so
-  the red this sheet has never spent stays unspent.
-
-  Hide is still offered on every row this sheet opens on, including DMs where
-  it has no reverse. That predates this stage and is untouched by it.
+  The row's name, masked through the org rule like the row itself (the
+  caller passes a masked target). It renders visibly in the body because
+  `handle_close` keeps the sheet's own title for the dialog's accessible name
+  only.
 
   ## Accessible name on the pin row
 
-  This is the drawer's unpin path, the touch counterpart to the pin item in
-  the rail's `row_actions_dialog/1`, so it holds the same rule: the accessible
-  name carries the verb AND the target. The visible label stays "Unpin
-  conversation" and the `aria-label` extends it to "Unpin conversation Alex
-  Morgan". Extends rather than replaces, because WCAG 2.5.3 requires the
-  accessible name to contain the visible label, so "Unpin Alex Morgan"
-  alone would break speech input on a control reading "Unpin conversation".
-
-  The sheet title already shows the name, but a title is context a screen
-  reader announces once on open, and the buttons below it are then two
-  identical verbs. Naming the target on the control costs no width here: the
-  sheet row is full-bleed and the string is never rendered.
+  The accessible name carries the verb AND the target: the visible label
+  stays "Unpin from top" and the `aria-label` extends it to "Unpin from top
+  Alex Morgan". Extends rather than replaces, because WCAG 2.5.3 requires
+  the accessible name to contain the visible label. Close follows the same
+  rule.
   """
   attr(:target, :any,
     default: nil,
-    doc: "nil when closed, else %{space_id:, name:, pinned:} for the row that opened it"
+    doc:
+      "nil when closed, else the `row_actions_target/5` map (space_id, name, pinned, hideable, closeable)"
+  )
+
+  attr(:sidebar_edit, :boolean,
+    default: false,
+    doc: "the arranging mode is on; 'Edit order' then leaves it on rather than toggling it off"
   )
 
   def row_actions_sheet(assigns) do
@@ -510,53 +433,80 @@ defmodule PlatformWeb.ChatLive.Partials do
       open={@target != nil}
       placement={:bottom}
       on_close="close_row_actions"
-      class="lg:hidden"
+      class="chat-list-sheet lg:hidden"
+      handle_close
+      swipe_dismiss
     >
       <:title>{@target && @target.name}</:title>
 
-      <ul class="flex flex-col" role="list">
+      <p
+        :if={@target}
+        data-role="row-actions-title"
+        class="truncate px-4 pb-2 text-[15px] font-semibold text-base-content"
+      >
+        {@target.name}
+      </p>
+
+      <ul class="flex flex-col pb-2" role="list">
         <li>
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="toggle_pinned"
             phx-value-space_id={@target && @target.space_id}
             phx-value-pinned={@target && to_string(not @target.pinned)}
             data-role="row-actions-pin"
-            aria-label={
-              @target &&
-                "#{if @target.pinned, do: "Unpin", else: "Pin"} conversation #{@target.name}"
-            }
+            aria-label={@target && "#{pin_label(@target)} #{@target.name}"}
           >
             <span class="hero-map-pin size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>
-              {if @target && @target.pinned, do: "Unpin conversation", else: "Pin conversation"}
-            </span>
+            <span>{@target && pin_label(@target)}</span>
           </button>
         </li>
-        <li class="border-t border-edge">
+        <li :if={@target && @target.hideable} class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="hide_channel"
-            phx-value-id={@target && @target.space_id}
+            phx-value-id={@target.space_id}
             data-role="row-actions-hide"
+            aria-label={"Hide channel #{@target.name}"}
           >
             <span class="hero-eye-slash size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>Hide from my rail</span>
+            <span class="min-w-0">
+              <span class="block">Hide channel</span>
+              <span class="block text-[13px] text-subtle">hidden everywhere until you unhide</span>
+            </span>
           </button>
         </li>
         <li :if={@target && @target.closeable} class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="close_dm"
             phx-value-id={@target.space_id}
             data-role="row-actions-close-dm"
-            aria-label={"Close #{@target.name}"}
+            aria-label={"Close conversation #{@target.name}"}
           >
             <span class="hero-minus-circle size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>Close</span>
+            <span class="min-w-0">
+              <span class="block">Close conversation</span>
+              <span class="block text-[13px] text-subtle">hides it until the next message</span>
+            </span>
+          </button>
+        </li>
+        <li :if={@target} class="border-t border-edge">
+          <button
+            type="button"
+            class={row_sheet_item_class()}
+            phx-click={
+              if @sidebar_edit,
+                do: JS.push("close_row_actions"),
+                else: JS.push("close_row_actions") |> JS.push("toggle_sidebar_edit")
+            }
+            data-role="row-actions-edit-order"
+          >
+            <span class="hero-arrows-up-down size-5 flex-shrink-0" aria-hidden="true"></span>
+            <span>Edit order</span>
           </button>
         </li>
       </ul>
@@ -564,11 +514,20 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
+  # The row sheet's items: base-content on the base-100 sheet, pressed on
+  # base-200 (the More sheet's paint). No hover state anywhere on the phone.
+  defp row_sheet_item_class,
+    do:
+      "flex min-h-11 w-full items-center gap-3 rounded-field px-4 py-3 text-left text-[15px] text-base-content active:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+
+  defp pin_label(%{pinned: true}), do: "Unpin from top"
+  defp pin_label(_target), do: "Pin to top"
+
   @doc """
   Overflow trigger for one DESKTOP RAIL conversation row (task 019ff8ba stage 1).
 
-  The desktop counterpart to `row_actions_control/1`. Same event, same
-  payload, different chrome: the drawer opens a bottom sheet, the rail opens
+  The desktop row control. It began as the counterpart to the deleted drawer's
+  row control (same event, same payload); the rail opens
   `row_actions_dialog/1`.
 
   ## Why the row's controls moved behind it
@@ -833,8 +792,8 @@ defmodule PlatformWeb.ChatLive.Partials do
             </li>
             <%!-- Closes this dialog on the way, client-side, so the
                  destination chooser never opens on top of it. Same shape as
-                 the drawer's `new_conversation_open |> close_mobile_browser`
-                 pair; no new server event. --%>
+                 Chat list's `close_list_sheet |> new_channel_open` pair; no
+                 new server event. --%>
             <li :if={@root_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"

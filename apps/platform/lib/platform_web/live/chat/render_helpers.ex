@@ -72,8 +72,9 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   def sidebar_row_label(%{kind: "channel", name: name}, _user_id), do: name
   def sidebar_row_label(space, user_id), do: sidebar_display_name(space, user_id)
 
-  # The mobile drawer's row-actions sheet target (task 019fe998). nil closes
-  # the sheet; a map opens it with the row's own name and pinned state.
+  # The row-actions target (task 019fe998): the phone Chat list's row sheet and
+  # the desktop rail's dialog both read it. nil closes; a map opens with the
+  # row's own name and pinned state.
   #
   # Derived at RENDER from `@row_actions_space_id` rather than snapshotted
   # when the control was tapped, so the header and the Pin/Unpin verb follow
@@ -86,6 +87,14 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # bucket it was tapped in. An id matching nothing — a stale click racing a
   # hide, or a hand-crafted payload — resolves to nil and the sheet stays
   # shut, which is why this returns nil rather than raising.
+  # The row sheet's title and accessible names carry the row's name, so they
+  # mask exactly as the row does (`ChatLive.masked_space_name/2`, the org
+  # rule). nil stays nil: the sheet is closed.
+  def mask_row_target(nil, _assigns), do: nil
+
+  def mask_row_target(%{name: name} = target, assigns),
+    do: %{target | name: PlatformWeb.ChatLive.masked_space_name(assigns, name)}
+
   def row_actions_target(nil, _channels, _dms, _pinned_ids, _user_id), do: nil
 
   # `hideable` and `movable` are the DESKTOP menu's item gates (task 019ff8ba
@@ -107,9 +116,8 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # goes quiet only once the pin comes off. Offering Close on a pinned DM and
   # having it appear to do nothing is the cost, stated rather than discovered.
   #
-  # `row_actions_sheet/1` (the phone drawer) reads `closeable` but still
-  # ignores `hideable`, so its Hide item remains on every row it opens on.
-  # That predates this stage and Hide is out of its scope.
+  # `row_actions_sheet/1` (the phone Chat list's row sheet) reads both since
+  # task 01a1557a-8562 stage 4: Hide where `hideable`, Close where `closeable`.
   def row_actions_target(space_id, channels, dms, pinned_ids, user_id) do
     case Enum.find(channels ++ dms, &(&1.id == space_id)) do
       nil ->
@@ -179,11 +187,11 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     end
   end
 
-  # ── Drawer search filters (mobile channel search Stage 1) ─────────────
+  # ── Name filters (mobile channel search Stage 1; the phone Chat list's
+  # search sheet and the external switcher since task 01a1557a-8562) ──────
   #
-  # Render-time, in-memory filters over the drawer's already-computed
-  # assigns. An empty query passes everything through unchanged, so the
-  # non-searching drawer renders exactly what it did before this stage.
+  # Render-time, in-memory filters over already-computed assigns. An empty
+  # query passes everything through unchanged.
   # Case-insensitive substring — no fuzzy matching at this scale
   # (~5 sections / <30 channels), where "just filtering" is enough.
 
@@ -199,9 +207,9 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # `space.name` for all three — what the block's two halves used to do
   # separately — drops every pinned DM from search results, because a DM row
   # has no `name`.
-  def drawer_filter_pinned(entries, "", _user_id), do: entries
+  def list_filter_pinned(entries, "", _user_id), do: entries
 
-  def drawer_filter_pinned(entries, query, user_id) do
+  def list_filter_pinned(entries, query, user_id) do
     Enum.filter(entries, fn %{kind: kind, space: space} ->
       drawer_match?(pinned_row_label(kind, space, user_id), query)
     end)
@@ -211,8 +219,8 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # switcher renders `@channels ++ @dm_conversations` as ONE flat list (no
   # sub-org sections), so its filter matches channels on `space.name` and
   # DM/group rows on their computed display name — the same label split the
-  # rows themselves render. Kept separate from `drawer_filter_pinned`
-  # (kind-tagged entries) and `drawer_filter_dms` (display-name-only) because
+  # rows themselves render. Kept separate from `list_filter_pinned`
+  # (kind-tagged entries) and `list_filter_dms` (display-name-only) because
   # this list is a flat list of plain spaces mixing both kinds.
   def drawer_filter_external_spaces(spaces, "", _user_id), do: spaces
 
@@ -230,9 +238,9 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # DM rows are labeled by their computed display name (the other
   # participant / group title), so that is what the filter must match —
   # a DM's underlying space.name is not what the user sees.
-  def drawer_filter_dms(dms, "", _user_id), do: dms
+  def list_filter_dms(dms, "", _user_id), do: dms
 
-  def drawer_filter_dms(dms, query, user_id) do
+  def list_filter_dms(dms, query, user_id) do
     Enum.filter(dms, &drawer_match?(sidebar_display_name(&1, user_id), query))
   end
 
@@ -240,7 +248,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # matches entirely (their headers would be noise), but keep headers on
   # sections that DO match — two orgs can hold same-named channels and the
   # section label is the only disambiguator.
-  def drawer_filter_sections(sections, "", _mask_ctx), do: sections
+  def list_filter_sections(sections, "", _mask_ctx), do: sections
 
   # Screen-share masking (task 01a00c66 stage 3): the filter runs against the
   # DISPLAYED channel label, never the stored name. Matching the stored name
@@ -248,7 +256,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   # the drawer reads `Workspace B` and the matching row surfaces, confirming
   # the client list to anyone watching the share. A masked row must not be
   # reachable by the string it is hiding.
-  def drawer_filter_sections(sections, query, mask_ctx) do
+  def list_filter_sections(sections, query, mask_ctx) do
     sections
     |> Enum.map(fn %{section: section, channels: channels} = entry ->
       %{
@@ -263,60 +271,6 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
     end)
     |> Enum.filter(fn %{channels: channels} -> channels != [] end)
   end
-
-  # True when an active search matched nothing anywhere — drives the
-  # dedicated "No matches" state (NOT the genuinely-empty-account copy).
-  # Takes the drawer's mask context so the empty-state and the list agree.
-  # Without it, a masked search for a real org name renders an EMPTY list with
-  # no "No matches" line, and the difference between "blank" and "No matches"
-  # is itself the oracle the masked filter just closed.
-  def drawer_no_matches?(
-        _pinned,
-        _channel_sections,
-        _sidebar_sections,
-        "",
-        _user_id,
-        _mask_ctx,
-        _agents_block
-      ),
-      do: false
-
-  def drawer_no_matches?(
-        pinned_entries,
-        channel_sections,
-        sidebar_sections,
-        query,
-        user_id,
-        mask_ctx,
-        agents_block
-      ) do
-    # Takes the MERGED Pinned block rather than `channel_sections.pinned`:
-    # the block now holds task conversations too, and a query that matches
-    # only a pinned task would otherwise render a row and the "No matches"
-    # copy at the same time.
-    # The Agents block is the FOURTH list this gate consults (task 01a0b491
-    # v2 stage 1). Without it, a query matching only the Agents space renders
-    # a navigable row AND the "No matches" copy at once — the exact defect the
-    # pinned-task comment above records having already shipped once.
-    not drawer_agents_visible?(agents_block, query) and
-      drawer_filter_pinned(pinned_entries, query, user_id) == [] and
-      drawer_filter_dms(channel_sections.dms, query, user_id) == [] and
-      drawer_filter_sections(sidebar_sections, query, mask_ctx) == []
-  end
-
-  @doc """
-  Whether the drawer's Agents row survives the active search.
-
-  Nil block (flag off, or no space carries a goal) never renders. An empty
-  query always renders. Otherwise the space's name is matched with the same
-  case-insensitive substring rule `drawer_filter_pinned/3` uses, so the row
-  and `drawer_no_matches?/7` can never disagree about it.
-  """
-  def drawer_agents_visible?(nil, _query), do: false
-  def drawer_agents_visible?(_agents_block, ""), do: true
-
-  def drawer_agents_visible?(%{space: space}, query),
-    do: drawer_match?(space.name, query)
 
   def unread_label(count) when count >= 9, do: "9+"
   def unread_label(count) when count > 0, do: Integer.to_string(count)

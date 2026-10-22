@@ -468,14 +468,17 @@ defmodule PlatformWeb.ChatLiveMessageAnchorTest do
     test "the pre-fix url shape would NOT have resolved to the DM", %{conn: conn} do
       # The control for the case above: prove the old url was actually
       # broken rather than merely ugly. `/chat/?message=…` has no space
-      # segment, so it is the paramless route and the reader is bounced
-      # to their first channel.
+      # segment, so it is the paramless route: since task 01a1557a-8562
+      # stage 2 that is the phone Chat list, with no space open (before it,
+      # the reader was bounced to their first channel). Either way, not the
+      # DM.
       {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true, name: nil})
       peer = add_participant(dm, "peer")
       [msg | _] = seed_messages(dm, peer, 1, "dm")
 
-      assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/chat/?message=#{msg.id}")
-      refute to =~ dm.id
+      assert {:ok, view, _html} = live(conn, "/chat/?message=#{msg.id}")
+      assert :sys.get_state(view.pid).socket.assigns.active_space == nil
+      refute msg.id in rendered_ids(view)
     end
 
     test "a deep link never auto-creates a channel", %{conn: conn} do

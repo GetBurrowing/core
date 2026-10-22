@@ -252,8 +252,13 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     |> Enum.count()
   end
 
+  # Opens BOTH chromes for one row: the desktop dialog (the rail row's
+  # trigger) and the phone sheet (the Chat list row's long-press, the only
+  # way the sheet opens since task 01a1557a-8562 stage 5 deleted the drawer
+  # trigger that used to share `open_row_actions`).
   defp open_menu(view, space_id) do
     render_click(view, "open_row_actions", %{"space_id" => space_id})
+    render_click(view, "open_list_sheet", %{"sheet" => "row", "space_id" => space_id})
   end
 
   defp button_by_role(nil, _role), do: nil
@@ -664,21 +669,22 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       sheet_close = button_by_role(dm_sheet, "row-actions-close-dm")
       sheet_pin = button_by_role(dm_sheet, "row-actions-pin")
 
-      # The sheet's Hide is still on this list, on a DM, where it has no
-      # reverse. That predates this stage (019fe998 shipped the sheet offering
-      # hide on every row it opens on) and Hide is explicitly out of scope
-      # here. Asserted rather than refuted so the day it is fixed, this line
-      # is what says so.
+      # The sheet's Hide on a DM, which had no reverse, is gone: task
+      # 01a1557a-8562 stage 4 re-skinned the sheet to the prototype's items
+      # (Pin, Close conversation, Edit order on a DM; prototype :1302). This
+      # is the line that was waiting to say so.
       assert item_roles(dm_sheet) == [
                "row-actions-pin",
-               "row-actions-hide",
-               "row-actions-close-dm"
+               "row-actions-close-dm",
+               "row-actions-edit-order"
              ]
 
       assert item_wrapper_class(dm_sheet, "row-actions-close-dm") == "border-t border-edge",
              "the sheet's Close item has no hairline above it"
 
-      assert visible_text(sheet_close) == "Close"
+      # Label and meta are two block spans (prototype :1302 copy).
+      assert visible_text(sheet_close) =~ "Close conversation"
+      assert visible_text(sheet_close) =~ "hides it until the next message"
       assert attr(sheet_close, "class") == attr(sheet_pin, "class")
       assert attr(sheet_close, "phx-click") == "close_dm"
       assert attr(sheet_close, "phx-value-id") == dm.id

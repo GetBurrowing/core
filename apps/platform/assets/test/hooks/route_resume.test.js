@@ -115,7 +115,7 @@ function makeFakeDocument() {
 // match for the selector `a[data-module-id]`. `href` is split into path
 // and query so the hook's path+search compare works the same way it does
 // against a real HTMLAnchorElement.
-function makeAnchor({ moduleId, href }) {
+function makeAnchor({ moduleId, href, bottomRail = false }) {
   const qIdx = href.indexOf("?")
   const path = qIdx >= 0 ? href.slice(0, qIdx) : href
   const search = qIdx >= 0 ? href.slice(qIdx) : ""
@@ -128,8 +128,11 @@ function makeAnchor({ moduleId, href }) {
       return name === "href" ? href : null
     },
     closest(sel) {
-      // Only handle the exact selector the hook uses.
-      return sel === "a[data-module-id]" ? anchor : null
+      // Only handle the exact selectors the hook uses. `bottomRail` stands
+      // in for an anchor inside the phone tab bar's `[data-bottom-rail]`.
+      if (sel === "a[data-module-id]") return anchor
+      if (sel === "[data-bottom-rail]") return bottomRail ? {} : null
+      return null
     },
   }
   return anchor
@@ -976,5 +979,68 @@ describe("RouteResume transient anchor persistence", () => {
       null,
       anchor,
     )
+  })
+})
+
+// The ACTIVE tab of the phone tab bar pops to its module's root, as an iOS
+// tab bar does (task 01a1557a-8562). Arriving from another tab still resumes.
+describe("RouteResume active tab-bar tab", () => {
+  let shims
+  let historyRedirect
+
+  beforeEach(() => {
+    shims = installShims()
+    __resetForTests()
+    historyRedirect = vi.fn()
+    shims.win.liveSocket = { historyRedirect }
+  })
+
+  afterEach(() => {
+    uninstallShims()
+    __resetForTests()
+  })
+
+  it("on /chat/x, tapping the Chat tab is left to LiveView, which goes to /chat", () => {
+    shims.win.location.pathname = "/chat/x"
+    const hook = buildHook()
+    hook.mounted()
+    // mounted() saved /chat/x as the resume target: the resume path is armed.
+    expect(ClientState.get("route_resume", "chat")).toBe("/chat/x")
+
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat", bottomRail: true })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(false)
+    expect(evt.propagationStopped).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+  })
+
+  it("on /tasks after visiting /chat/x, tapping the Chat tab resumes /chat/x", () => {
+    shims.win.location.pathname = "/chat/x"
+    const hook = buildHook()
+    hook.mounted()
+    shims.win.location.pathname = "/tasks"
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat", bottomRail: true })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledWith(evt, "/chat/x", "push", null, anchor)
+  })
+
+  it("the desktop icon rail (not the tab bar) still resumes from inside its module", () => {
+    shims.win.location.pathname = "/chat/x"
+    const hook = buildHook()
+    hook.mounted()
+    ClientState.set("route_resume", "chat", "/chat/y")
+
+    const anchor = makeAnchor({ moduleId: "chat", href: "/chat" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(historyRedirect).toHaveBeenCalledWith(evt, "/chat/y", "push", null, anchor)
   })
 })

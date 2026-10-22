@@ -74,8 +74,8 @@
   <%!-- Desktop sidebar — sectioned channel rail (chat plan v2 Stage 2).
 
        The `hidden lg:flex` responsive gate keeps this whole rail invisible
-       on mobile; the mobile flat-list path lives in the `mobile_browser_open`
-       overlay below and is intentionally untouched. Same pattern as the
+       on mobile; the phone's surface is the Chat list (`chat_list/1`, task
+       01a1557a-8562), which replaced the drawer overlay. Same pattern as the
        icon-rail / bottom-rail split in shell.html.heex.
 
        Section order:
@@ -137,16 +137,36 @@
     move_toast={@move_toast}
   />
 
-  <%!-- Mobile channel browser overlay — markup lives in
-       `ChatLive.Partials.MobileBrowser.mobile_browser/1` (task 01a0312e
-       stage 4). The `@mobile_browser_open and !@embedded and !@external?`
-       gate moved INSIDE the component with it. --%>
-  <.mobile_browser
-    restricted_channel_ids={@restricted_channel_ids}
-    mobile_browser_open={@mobile_browser_open}
+  <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
+       `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
+       01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
+       INSIDE the component with it. --%>
+  <.external_mobile_switcher
+    external?={@external?}
+    embedded={@embedded}
+    external_user={@external_user}
+    channels={@channels}
+    dm_conversations={@dm_conversations}
+    active_space={@active_space}
+    unread_counts={@unread_counts}
+    user_id={@user_id}
+    drawer_query={@drawer_query}
+    sidebar_sections={@sidebar_sections}
+    mask_names?={@mask_names?}
+    revealed_section_ids={@revealed_section_ids}
+  />
+
+  <%!-- The phone Chat tab: the conversation list at /chat (task 01a1557a-8562
+       stage 2). Markup and its gate (`:index`, not embedded, not external)
+       live in `ChatLive.Partials.ChatList.chat_list/1`; it is `lg:hidden`. --%>
+  <%!-- `:if` short-circuits attribute evaluation, which is what keeps the
+       embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
+       (ShellLive's on_mount seeds it on routed mounts only). --%>
+  <.chat_list
+    :if={!@embedded}
+    live_action={@live_action}
     embedded={@embedded}
     external?={@external?}
-    sidebar_edit={@sidebar_edit}
     mask_names?={@mask_names?}
     revealed_section_ids={@revealed_section_ids}
     sidebar_sections={@sidebar_sections}
@@ -157,36 +177,43 @@
     dm_conversations={@dm_conversations}
     archived_channels={@archived_channels}
     archived_open={@archived_open}
-    active_space={@active_space}
+    restricted_channel_ids={@restricted_channel_ids}
     unread_counts={@unread_counts}
-    user_id={@user_id}
-    drawer_query={@drawer_query}
-    drawer_search_intent={@drawer_search_intent}
-    drawer_reorder_announcement={@drawer_reorder_announcement}
+    list_excerpts={@list_excerpts}
+    list_identities={@list_identities}
+    push_permission={@push_permission}
+    notification_banner_dismissed={@notification_banner_dismissed}
+    list_sheet={@list_sheet}
+    list_search_query={@list_search_query}
+    list_search_results={@list_search_results}
+    sidebar_edit={@sidebar_edit}
+    reorder_announcement={@reorder_announcement}
   />
 
-  <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
-       `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
-       01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
-       INSIDE the component with it. --%>
-  <.external_mobile_switcher
-    external?={@external?}
-    embedded={@embedded}
-    mobile_browser_open={@mobile_browser_open}
-    external_user={@external_user}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    active_space={@active_space}
-    unread_counts={@unread_counts}
-    user_id={@user_id}
-    drawer_query={@drawer_query}
-    drawer_search_intent={@drawer_search_intent}
-    sidebar_sections={@sidebar_sections}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-  />
+  <%!-- Desktop still lands in a channel from /chat: this reports which side
+       of `lg` the viewport is on, and `handle_event("chat_viewport", ...)`
+       patches into the first channel when it is not below it. --%>
+  <div
+    :if={!@embedded and @live_action == :index}
+    id="chat-viewport-breakpoint"
+    phx-hook="ViewportBreakpoint"
+    data-breakpoint="1024"
+    data-event="chat_viewport"
+    class="hidden"
+  >
+  </div>
 
-  <div class="flex flex-1 overflow-hidden min-w-0 min-h-0">
+  <%!-- At /chat a phone sees only the list: the conversation column is
+       `max-lg:hidden` there (the stage text's `hidden lg:flex`, written as
+       one variant so the column's own `flex` keeps its literal class string
+       on every other route; chat_live_test.exs pins that string). Desktop is
+       unchanged. --%>
+  <div class={
+    if(!@embedded and !@external? and @live_action == :index,
+      do: "flex flex-1 overflow-hidden min-w-0 min-h-0 max-lg:hidden",
+      else: "flex flex-1 overflow-hidden min-w-0 min-h-0"
+    )
+  }>
     <div
       id="chat-drop-zone"
       phx-hook="DragDropUpload"
@@ -226,49 +253,6 @@
         goal_scope_error={@goal_scope_error}
         goal_cadence_form={@goal_cadence_form}
         goal_time_zone={@goal_time_zone}
-      />
-
-      <.mobile_pinned_strip
-        active_space={@active_space}
-        embedded={@embedded}
-        pinned_task_spaces={@pinned_task_spaces}
-        channel_sections={@channel_sections}
-        agents_block={@agents_block}
-        unread_counts={@unread_counts}
-        user_id={@user_id}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-      />
-
-      <.channel_pills
-        active_space={@active_space}
-        embedded={@embedded}
-        external?={@external?}
-        channels={@channels}
-        dm_conversations={@dm_conversations}
-        unread_counts={@unread_counts}
-        user_id={@user_id}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        restricted_channel_ids={@restricted_channel_ids}
-      />
-
-      <%!-- Brand-new-user pane for the mobile content region (stage 8). Below
-           `lg` the rail is `display: none` and the mobile browser's own
-           zero-state is unreachable (its `toggle_mobile_browser` trigger
-           lives in `.channel_pills`, which needs an `@active_space`), so a
-           user with no spaces at all had no create/join affordance on screen
-           at any point. `lg:hidden` inside the component keeps desktop as it
-           was. --%>
-      <.mobile_no_spaces_pane
-        embedded={@embedded}
-        external?={@external?}
-        active_space={@active_space}
-        channels={@channels}
-        dm_conversations={@dm_conversations}
-        archived_channels={@archived_channels}
       />
 
       <.search_drawer
@@ -586,31 +570,25 @@
   external?={@external?}
 />
 
-<%!-- Mobile drawer row-actions sheet (task 019fe998). Pin / unpin / hide for
-     one drawer conversation row, opened by that row's overflow control.
-
-     Rendered HERE, at the template root, and NOT inside
-     `#mobile-channel-browser`: `.sheet` is `position: fixed`, and a CSS
-     `transform` on any ancestor becomes the containing block for fixed
-     descendants, which centres the panel on the rail instead of the
-     viewport. Same reason the guest-invite sheet sits at its LiveView's root.
-
-     Gated to the internal, non-embedded surface, matching the drawer it
-     serves. Always rendered (not `:if`-gated on the target) so the panel can
-     transition in — `.sheet` is `visibility: hidden` until `.sheet-open`, and
-     an element inserted already-open has no starting frame to animate from.
-     `row_actions_target/5` returns nil while closed, which keeps the header
-     empty rather than holding the last-opened conversation's name. --%>
+<%!-- The row sheet (task 019fe998; the phone Chat list's since task
+     01a1557a-8562). Rendered HERE, at the template root: `.sheet` is
+     `position: fixed`, and a CSS `transform` on any ancestor becomes the
+     containing block for fixed descendants, which would centre the panel on
+     that ancestor instead of the viewport. Same reason the guest-invite sheet
+     sits at its LiveView's root. Always rendered (not `:if`-gated on the
+     target) so the panel can transition in; `row_actions_target/5` returns
+     nil while closed, which keeps the header empty. --%>
+<%!-- The phone row sheet. A Chat list row's long-press opens it through
+     `@list_sheet == {:row, id}` (task 01a1557a-8562 stage 4). The desktop
+     rail's `@row_actions_space_id` drives `row_actions_dialog/1` only. The
+     name is masked like the row it came from. --%>
 <.row_actions_sheet
   :if={!@embedded and !@external?}
+  sidebar_edit={@sidebar_edit}
   target={
-    row_actions_target(
-      @row_actions_space_id,
-      @channels,
-      @dm_conversations,
-      @pinned_space_ids,
-      @user_id
-    )
+    ChatListHooks.row_sheet_space_id(@list_sheet)
+    |> row_actions_target(@channels, @dm_conversations, @pinned_space_ids, @user_id)
+    |> mask_row_target(assigns)
   }
 />
 

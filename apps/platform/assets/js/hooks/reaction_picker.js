@@ -75,7 +75,9 @@
  * is empty and the result count while it is not. `aria-live` MUST NOT go on
  * that row: swapping its contents destroys and recreates nodes, and a live
  * region created at the moment its text changes announces nothing. The
- * codebase documents that at `live/chat/partials/mobile_browser.ex:280-284`.
+ * codebase documented that on the deleted mobile drawer's reorder announcer
+ * (task 01a1557a-8562 removed the drawer; the Chat list's announcer keeps the
+ * same rule).
  * The live region here is a separate visually-hidden element created in
  * `mounted()`, present and empty from mount, and the visible count is
  * `aria-hidden`.
@@ -209,7 +211,7 @@ const ReactionPicker = {
     // THE LIVE REGION IS CREATED HERE, NOT AT PAINT TIME. `aria-live` only
     // announces CHANGES to a region that was already in the DOM; one created
     // in the same operation that fills it announces nothing. Same reasoning,
-    // and the same markup, as `mobile_browser.ex:284`.
+    // and the same markup, as the Chat list's reorder announcer.
     this.liveEl = document.createElement("div")
     this.liveEl.className = "reaction-picker-sr"
     this.liveEl.setAttribute("aria-live", "polite")
@@ -238,7 +240,7 @@ const ReactionPicker = {
 
     this.onViewportResize = () => this._scheduleKeyboardSync()
 
-    // ONE SWIPE DROPS THE KEYBOARD. Adopted from `drawer_search_focus.js:26-33`,
+    // ONE SWIPE DROPS THE KEYBOARD. Adopted from `search_focus.js (its blur-on-scroll)`,
     // which pairs it with focus-on-entry for the same reason: a field that can
     // raise the keyboard needs a gesture that puts it away, or the user is
     // trapped typing on a surface they came to browse. Passive because nothing
@@ -328,7 +330,7 @@ const ReactionPicker = {
 
   _focusOnOpen() {
     if (this._isDesktop() && this.searchInput) {
-      // NOT the HTML `autofocus` attribute. `drawer_search_focus.js:8-14`
+      // NOT the HTML `autofocus` attribute. `search_focus.js (its focus-on-mount)`
       // records that it no-ops on iOS Safari when the element renders after a
       // LiveView round trip, outside the original tap's gesture chain.
       // preventScroll so focusing never yanks the freshly-opened panel.

@@ -1812,6 +1812,25 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  `%{space_id => [Participant.t()]}` for many spaces in ONE query, each
+  space's rows ordered by `joined_at` (the order `list_participants/2` uses).
+  A space with no participants is absent from the map.
+
+  Decides nothing about access: the caller passes only spaces already on the
+  user's own list (the phone Chat list passes its DMs and group
+  conversations). A caller passing an arbitrary id gets that space's
+  participant rows.
+  """
+  @spec participants_by_space([binary()]) :: %{binary() => [Participant.t()]}
+  def participants_by_space([]), do: %{}
+
+  def participants_by_space(space_ids) when is_list(space_ids) do
+    from(p in Participant, where: p.space_id in ^space_ids, order_by: [asc: p.joined_at])
+    |> Repo.all()
+    |> Enum.group_by(& &1.space_id)
+  end
+
+  @doc """
   Resolve an agent principal's human-readable name (`agents.name`, falling back
   to `agents.slug`). Returns `nil` when the agent no longer exists.
 
@@ -3028,52 +3047,107 @@ defmodule Platform.Chat do
   def search_messages(_space_id, query, _opts) when not is_binary(query) or query == "", do: []
 
   def search_messages(space_id, query, opts) do
-    limit = Keyword.get(opts, :limit, 20)
-    scope = Keyword.get(opts, :scope)
     trimmed_query = String.trim(query)
 
     if trimmed_query == "" do
       []
     else
-      # Apply the external scope to the row filter FIRST — an out-of-scope
-      # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
-      # ever runs, so no highlighted fragment of an off-limits message is
-      # produced (design canvas §9).
-      base =
-        from(m in Message,
-          where:
-            m.space_id == ^space_id and
-              is_nil(m.deleted_at) and
-              fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
-        )
-        |> ExternalScope.scope_by_space_id(scope)
-
-      from(m in base,
-        select_merge: %{
-          search_rank:
-            fragment(
-              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
-              ^trimmed_query
-            ),
-          search_headline:
-            fragment(
-              "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=5')",
-              m.content,
-              ^trimmed_query
-            )
-        },
-        order_by: [
-          desc:
-            fragment(
-              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
-              ^trimmed_query
-            ),
-          desc: m.inserted_at
-        ],
-        limit: ^limit
-      )
-      |> Repo.all()
+      from(m in Message, where: m.space_id == ^space_id)
+      |> ranked_message_search(trimmed_query, opts)
     end
+  end
+
+  @doc """
+  Full-text search messages across several spaces at once. The cross-space
+  sibling of `search_messages/3`, with the same parse, rank, headline and
+  external-scope ordering.
+
+  Returns up to `:limit` (default 20) `%Message{}` hits ordered by search rank
+  (highest first), then newest first, each carrying the virtual
+  `search_rank` and `search_headline` fields. Top-level messages AND thread
+  replies match; every hit carries its own `space_id` (and `thread_id`), so a
+  caller can link `?message=<id>` into the right space.
+
+  Returns `[]` for an empty `space_ids` list, a blank query, or a query that
+  parses to no lexemes (see `searchable_query?/1`).
+
+  **This function does not decide which spaces a user may read.** The caller
+  passes only the spaces already on that user's list (the Chat list passes
+  channels ++ DMs minus restricted channels). A caller that passes an
+  arbitrary space id gets that space's rows, exactly as `search_messages/3`
+  does today. `:scope` (an `ExternalScope` or `Access.Scope`) narrows the
+  rows further and is applied BEFORE `ts_headline` runs.
+
+  Naming the author: a hit is a full `%Message{}`, so the existing
+  `PlatformWeb.ChatLive.PresenceHooks.sender_name/2` message clause resolves
+  it (the live participant name when the caller has it in its participants
+  map, else the `author_display_name` snapshot). Naming the space is the
+  caller's job, from the same list it took `space_ids` from.
+  """
+  @spec search_messages_in_spaces([binary()], String.t(), keyword()) :: [Message.t()]
+  def search_messages_in_spaces(space_ids, query, opts \\ [])
+  def search_messages_in_spaces([], _query, _opts), do: []
+
+  def search_messages_in_spaces(_space_ids, query, _opts)
+      when not is_binary(query) or query == "",
+      do: []
+
+  def search_messages_in_spaces(space_ids, query, opts) when is_list(space_ids) do
+    trimmed_query = String.trim(query)
+
+    if searchable_query?(trimmed_query) do
+      from(m in Message, where: m.space_id in ^space_ids)
+      |> ranked_message_search(trimmed_query, opts)
+    else
+      []
+    end
+  end
+
+  # The shared body of `search_messages/3` and `search_messages_in_spaces/3`.
+  # `base` carries the caller's space filter; everything else (deleted rows
+  # out, the tsquery match, the external scope, rank, headline, order, limit)
+  # is defined once here so the two searches cannot drift.
+  defp ranked_message_search(base, trimmed_query, opts) do
+    limit = Keyword.get(opts, :limit, 20)
+    scope = Keyword.get(opts, :scope)
+
+    # Apply the external scope to the row filter FIRST — an out-of-scope
+    # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
+    # ever runs, so no highlighted fragment of an off-limits message is
+    # produced (design canvas §9).
+    filtered =
+      from(m in base,
+        where:
+          is_nil(m.deleted_at) and
+            fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
+      )
+      |> ExternalScope.scope_by_space_id(scope)
+
+    from(m in filtered,
+      select_merge: %{
+        search_rank:
+          fragment(
+            "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+            ^trimmed_query
+          ),
+        search_headline:
+          fragment(
+            "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=5')",
+            m.content,
+            ^trimmed_query
+          )
+      },
+      order_by: [
+        desc:
+          fragment(
+            "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+            ^trimmed_query
+          ),
+        desc: m.inserted_at
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
   end
 
   @typedoc """
@@ -6379,6 +6453,69 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @excerpt_max_graphemes 140
+
+  @doc """
+  The newest top-level message of each space, as a one-line excerpt for the
+  Chat conversation list.
+
+  Returns `%{space_id => %{content: String.t(), author_name: String.t() | nil,
+  inserted_at: DateTime.t()}}`. "Newest" is the newest non-deleted TOP-LEVEL
+  message: thread replies are excluded, so a reply buried in a thread does not
+  become a channel's headline. A space with no such message is absent from
+  the map. `content` has its whitespace (newlines included) collapsed to
+  single spaces and is truncated to #{@excerpt_max_graphemes} graphemes.
+  `author_name` is the message's `author_display_name` snapshot, the same
+  fallback `PresenceHooks.sender_name/2` uses, and may be `nil`.
+
+  One query for all spaces, and the SAME query `mark_all_chat_spaces_read/1`
+  takes its per-space tip from (ordered by the UUIDv7 id), so the excerpt and
+  the unread watermark can never disagree about which message is newest.
+
+  **This function does not decide which spaces a user may read.** The caller
+  passes only the spaces already on that user's list. A caller that passes an
+  arbitrary space id gets that space's newest message. `:scope` (an
+  `ExternalScope` or `Access.Scope`) narrows the rows further.
+  """
+  @spec last_message_excerpts([binary()], keyword()) :: %{
+          optional(binary()) => %{
+            content: String.t(),
+            author_name: String.t() | nil,
+            inserted_at: DateTime.t()
+          }
+        }
+  def last_message_excerpts(space_ids, opts \\ [])
+  def last_message_excerpts([], _opts), do: %{}
+
+  def last_message_excerpts(space_ids, opts) when is_list(space_ids) do
+    space_ids
+    |> newest_top_level_messages_query()
+    |> ExternalScope.scope_by_space_id(Keyword.get(opts, :scope))
+    |> select([m], {m.space_id, m.content, m.author_display_name, m.inserted_at})
+    |> Repo.all()
+    |> Map.new(fn {space_id, content, author_name, inserted_at} ->
+      {space_id,
+       %{content: message_excerpt(content), author_name: author_name, inserted_at: inserted_at}}
+    end)
+  end
+
+  @doc """
+  One message body as a list excerpt: whitespace (newlines included) collapsed
+  to single spaces, truncated to #{@excerpt_max_graphemes} graphemes. `nil`
+  gives `""`. The SAME shaping `last_message_excerpts/2` applies, exposed so
+  a LiveView that patches one entry from an arriving message cannot shape it
+  differently from the query that loaded the rest.
+  """
+  @spec message_excerpt(String.t() | nil) :: String.t()
+  def message_excerpt(nil), do: ""
+
+  def message_excerpt(content) when is_binary(content) do
+    content
+    |> String.split()
+    |> Enum.join(" ")
+    |> String.slice(0, @excerpt_max_graphemes)
+  end
+
   # `%{space_id => newest top-level, non-deleted message id}`, one row per
   # space via `DISTINCT ON`, so each space gets its own tip out of a single
   # query rather than N.
@@ -6390,14 +6527,25 @@ defmodule Platform.Chat do
   defp newest_top_level_message_ids([]), do: %{}
 
   defp newest_top_level_message_ids(space_ids) do
+    space_ids
+    |> newest_top_level_messages_query()
+    |> select([m], {m.space_id, m.id})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # THE NEWEST-MESSAGE QUERY, defined once. One row per space (`DISTINCT ON
+  # space_id`): its newest top-level, non-deleted message, newest by the
+  # UUIDv7 id. Both the read-cursor tip (`newest_top_level_message_ids/1`) and
+  # the list excerpt (`last_message_excerpts/2`) read it, so the unread
+  # watermark and the excerpt cannot name different messages. Do not give
+  # either one its own predicate or its own ordering.
+  defp newest_top_level_messages_query(space_ids) do
     from(m in Message,
       where: m.space_id in ^space_ids and is_nil(m.thread_id) and is_nil(m.deleted_at),
       distinct: [asc: m.space_id],
-      order_by: [asc: m.space_id, desc: m.id],
-      select: {m.space_id, m.id}
+      order_by: [asc: m.space_id, desc: m.id]
     )
-    |> Repo.all()
-    |> Map.new()
   end
 
   # Forward-only cursor write. The clause below skips the space entirely when

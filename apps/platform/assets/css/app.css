@@ -4986,6 +4986,52 @@ body, .font-suite {
   }
 }
 
+/* Phone Chat list rows (task 01a1557a-8562 stages 2 and 4). A row opens its
+   sheet on a long-press (the RowLongPress hook), so iOS must not raise its own
+   callout or start a text selection under the finger (Saru, canvas 01a15d7c `states`). No
+   colour here: the row's paint is utilities (`active:bg-base-100` on the
+   base-200 list), measured in chat_list_contrast_guard_test.exs. */
+[data-role="chat-list-row"] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The Chat list's sheets (task 01a1557a-8562 stage 3): search, New and Chat
+   list options. The shared `.sheet*` rules paint the base-100 surface; only
+   these three are the list's own. */
+
+/* The handle is the Close button (`handle_close`). base-300 measures under
+   3:1 on base-100 (more_sheet_contrast_guard_test.exs H-handle), so it paints
+   with --color-subtle, as the More sheet's does. */
+.chat-list-sheet .sheet-handle {
+  background: var(--color-subtle);
+}
+
+/* Search keeps a full-height feel within the shared 90vh cap, so the field
+   does not jump as the result groups grow and shrink. */
+.chat-list-search-sheet .sheet-panel {
+  min-height: 85dvh;
+}
+
+/* A match is carried by weight, not a highlight colour (Saru, canvas
+   01a15d7c `states`): `ts_headline`'s <mark> keeps the snippet's own colour
+   and ground. Scoped to this sheet; the in-space search drawer keeps its own
+   treatment. */
+.chat-list-search-sheet mark {
+  background: transparent;
+  color: inherit;
+  font-weight: 500;
+}
+
+/* The native `type="search"` clear glyph paints in the browser's own blue,
+   outside the palette and unmeasured. The field drops it; clearing is the
+   keyboard's job, as it is in the prototype. */
+.chat-list-search-sheet input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 /* Under reduced motion it simply disappears (Saru's rule 8). */
 @media (prefers-reduced-motion: reduce) {
   .bottom-nav {
@@ -6025,8 +6071,8 @@ body, .font-suite {
 
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
    Per-section container + header + row affordances. The rail is desktop
-   only; mobile uses the existing flat browser overlay (see
-   chat_live.html.heex `mobile_browser_open` block).
+   only; the phone uses the Chat list (`Partials.ChatList`, task
+   01a1557a-8562).
 
    The drag-handle (`.channel-section-drag-handle`) is opacity-0 by
    default and lifts to opacity-100 on `group-hover` of the parent
@@ -6085,15 +6131,6 @@ body, .font-suite {
   .channel-section-reveal-button {
     @apply inline-flex flex-shrink-0 items-center justify-center rounded p-0.5;
     @apply text-subtle hover:bg-base-200 hover:text-base-content;
-  }
-
-  /* The drawer's reveal control (task 01a00c66 stage 3). Same control, same
-     event, same accessible name as the rail's — only the hit area grows, to
-     the 44px touch floor the rest of the drawer's controls already use.
-     `ml-auto` pushes it to the trailing edge of the header row, where the
-     drawer's other per-row controls sit. */
-  .channel-section-reveal-button--touch {
-    @apply ml-auto min-h-11 min-w-11 p-0;
   }
 
   /* One org deliberately shown while the mode is on. The border marks it as an
@@ -6176,161 +6213,13 @@ body, .font-suite {
     cursor: grabbing;
   }
 
-  /* Touch variant of the drag handle — mobile channel-browser overlay only
-     (chat sidebar mobile Stage 3). Touch has no hover, so the handle is
-     always visible while rendered (it's edit-gated in the template instead),
-     and its hit box is >=44x44px (iOS guideline) even though the glyph
-     paints small.
-
-     Suppression rules — each fixes ONE native behavior that otherwise
-     steals the long-press gesture (rationale mirrored in
-     section_reorder_touch.js's header; keep the two in sync):
-       - touch-action: none — on the HANDLE ONLY, so the browser never
-         claims a handle-origin touch for scrolling (we'd get pointercancel
-         mid-hold). On the row/section it would kill scroll-into-drag.
-       - -webkit-touch-callout: none — suppresses the iOS long-press
-         copy/paste callout, which fires at ~the same threshold as our
-         400ms hold and swallows the gesture. */
-  .channel-section-drag-handle--touch {
-    /* ml-0 overrides the base class's ml-auto: in the mobile drawer the
-       handle always renders as the last child of the right-aligned control
-       cluster (after .channel-section-move-controls, which owns ml-auto) —
-       two auto margins would split the free space and float the cluster
-       mid-row. */
-    @apply flex items-center justify-center opacity-100 min-h-11 min-w-11 ml-0;
-    touch-action: none;
-    -webkit-touch-callout: none;
-  }
-
-  /* Active-drag state toggled by SectionReorderTouch on the mobile rail.
-     user-select is suppressed ONLY while a drag is live — statically it
-     would break legitimate text selection in the drawer; without it iOS
-     starts selecting the section label mid-drag. */
-  .section-touch-drag-active {
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  /* Up/down section move controls in the mobile drawer (Stage 4 — the
-     WCAG 2.5.7 non-drag alternative to the long-press drag). ml-auto pulls
-     the control cluster (buttons + drag handle after it) to the right edge
-     of the section header. Buttons are full 44px touch targets; disabled
-     (boundary) buttons dim rather than disappear so the control cluster
-     doesn't shift as sections move. */
-  .channel-section-move-controls {
-    @apply ml-auto flex items-center;
-  }
-
-  .channel-section-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-    touch-action: manipulation;
-  }
-
-  /* Disabled (boundary) buttons: solid /40 token, NOT an opacity multiplier.
-     opacity-30 stacked on the /60 base color rendered ≈18% white (≈1.8:1 on
-     the drawer bg) — invisible on a real phone (design review, 2026-07-09). /40 is
-     ≈3.5:1: clearly dimmer than enabled (≈6:1) but unmistakably present.
-     WCAG 1.4.11 exempts disabled controls; we hold its 3:1 floor anyway
-     because "present but disabled" is this drawer's whole convention. */
-  .channel-section-move-button--touch:disabled {
-    @apply opacity-100 text-disabled hover:bg-transparent hover:text-disabled;
-  }
-
-  /* Channel-ROW reorder chrome in the mobile drawer (row reorder Stage 1;
-     always-visible since the 2026-07-09 a11y revision). Every edit-mode row
-     renders its ▲▼ pair + ☰ handle in this single flush cluster — no
-     internal gap, so the row's arrow columns align exactly with the section
-     header's (the row container's gap-3 otherwise offset them 12px). Same
-     44px targets and disabled treatment as the section buttons. */
-  .channel-row-move-controls--touch {
-    @apply flex items-center flex-shrink-0;
-  }
-
-  .channel-row-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-subtle hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-    touch-action: manipulation;
-  }
-
-  .channel-row-move-button--touch:disabled {
-    @apply opacity-100 text-disabled hover:bg-transparent hover:text-disabled;
-  }
-
-  /* Row touch-drag handle (channel-row reorder Stage 2 — activates the slot
-     Stage 1 held with an inert placeholder). Deliberately smaller and dimmer
-     than the section handle (text-sm glyph vs the section's full-size ☰) so
-     the two drag scopes read differently at a glance. touch-action +
-     -webkit-touch-callout mirror the section handle's suppression CSS — see
-     the rationale block above .channel-section-drag-handle--touch; each rule
-     fixes one specific gesture failure. */
-  .channel-row-drag-handle {
-    /* /45 not /30: this is an ENABLED control, so WCAG 1.4.11's 3:1 floor
-       genuinely applies (/30 ≈ 2.6:1 on the drawer bg). Still visibly
-       quieter than the section handle's /60. */
-    @apply flex items-center justify-center min-h-11 min-w-11 flex-shrink-0 text-sm text-subtle;
-    touch-action: none;
-    -webkit-touch-callout: none;
-  }
-
-  /* Active-drag state toggled by RowReorderTouch on its wrapper — same
-     drag-scoped user-select suppression as .section-touch-drag-active
-     (statically it would break text selection; without it iOS starts
-     selecting the row label mid-drag). */
-  .row-touch-drag-active {
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  /* Row being touch-dragged (Stage 3): the row goes fully invisible — its
-     vacated space IS the open slot the siblings shift around, and the
-     fixed-position ghost is what the user sees under their finger. (The
-     Stage 2 interim dimmed it to 50%; two half-visible copies read as a
-     rendering glitch once the ghost exists.) */
-  .channel-row-wrap--touch-dragging {
-    @apply opacity-0;
-  }
-
-  /* Finger-tracked ghost (Stage 3 lift): fixed clone of the dragged row,
-     scaled 1.02 with an elevation shadow, solid drawer-surface background
-     so it stays readable while passing over other rows. pointer-events
-     none — elementFromPoint/slot math must see through it. */
-  .channel-row-ghost {
-    @apply fixed z-50 pointer-events-none flex items-center gap-3 px-4 py-3 text-sm rounded-lg bg-base-200 shadow-lg;
-    transform: scale(1.02);
-  }
-
-  /* Slot-opening motion (Stage 3): sibling rows glide between their two
-     possible positions while a row drag is live. transform-only — no
-     height/layout animation. Scoped to the drag-active class so rows cost
-     nothing at rest. */
-  .row-touch-drag-active [data-channel-id] {
-    transition: transform 180ms ease;
-  }
-
-  /* prefers-reduced-motion: siblings jump instantly between positions
-     instead of gliding; the ghost still tracks the finger (direct
-     manipulation, not decorative motion). */
-  @media (prefers-reduced-motion: reduce) {
-    .row-touch-drag-active [data-channel-id] {
-      transition: none;
-    }
-  }
-
-  /* During a row drag, every section EXCEPT the drag's source dims —
-     communicates the within-section clamp mid-gesture (designer rec 17):
-     the dimmed areas visibly aren't drop targets. */
-  .row-touch-drag-active section:not(.channel-section--row-drag-source) {
-    @apply opacity-50;
-    transition: opacity 150ms ease;
-  }
-
-  /* Mobile drawer footer ("+ New channel"): normal spacing-3 bottom padding
-     PLUS the device safe-area inset. The shared .safe-area-bottom utility
+  /* Full-screen list footer (the external switcher's "+ New conversation"):
+     normal spacing-3 bottom
+     padding PLUS the device safe-area inset. The shared .safe-area-bottom utility
      REPLACES padding-bottom with the inset, which is 0 everywhere except
      notched iOS — on desktop PWA the window's rounded corners then clipped
      the label (found in design review, 2026-07-05). */
-  .mobile-drawer-footer-safe {
+  .footer-safe-bottom {
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
 

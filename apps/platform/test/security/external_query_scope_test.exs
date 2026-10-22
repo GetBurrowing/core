@@ -126,6 +126,27 @@ defmodule Platform.Security.ExternalQueryScopeTest do
 
       refute results_blob =~ "for B"
     end
+
+    test "search_messages_in_spaces filters BEFORE ts_headline across spaces", ctx do
+      hits = Chat.search_messages_in_spaces([ctx.a.id, ctx.b.id], "quarterly", scope: ctx.ext)
+
+      assert Enum.map(hits, & &1.id) == [ctx.msg_a.id]
+      assert Chat.search_messages_in_spaces([ctx.b.id], "quarterly", scope: ctx.ext) == []
+
+      results_blob =
+        hits
+        |> Enum.map(fn m -> "#{m.content} #{m.search_headline}" end)
+        |> Enum.join(" ")
+
+      refute results_blob =~ "for B"
+    end
+
+    test "last_message_excerpts omits a non-member space", ctx do
+      excerpts = Chat.last_message_excerpts([ctx.a.id, ctx.b.id], scope: ctx.ext)
+
+      assert Map.keys(excerpts) == [ctx.a.id]
+      assert excerpts[ctx.a.id].content == "quarterly numbers for A"
+    end
   end
 
   # ── Attachment + canvas reads ──────────────────────────────────────────
@@ -163,6 +184,13 @@ defmodule Platform.Security.ExternalQueryScopeTest do
       assert [hit] = Chat.search_messages(ctx.b.id, "quarterly", scope: ctx.int)
       assert hit.id == ctx.msg_b.id
       assert %{id: ^bmid} = Chat.get_message(ctx.msg_b.id, scope: ctx.int)
+
+      cross = Chat.search_messages_in_spaces([ctx.a.id, ctx.b.id], "quarterly", scope: ctx.int)
+      assert Enum.sort(Enum.map(cross, & &1.id)) == Enum.sort([ctx.msg_a.id, bmid])
+
+      excerpts = Chat.last_message_excerpts([ctx.a.id, ctx.b.id], scope: ctx.int)
+      assert excerpts[ctx.b.id].content == "quarterly numbers for B"
+      assert Chat.last_message_excerpts([ctx.b.id]) |> Map.has_key?(ctx.b.id)
     end
 
     test "attachments / canvases", ctx do

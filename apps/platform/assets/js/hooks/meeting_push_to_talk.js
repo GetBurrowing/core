@@ -39,12 +39,11 @@ import { getHold, beginHold, patchHold, clearHold, appendHoldText } from "./lib/
  * move/up keep flowing to this element wherever the finger goes, and the
  * `pointerleave` cancel is suppressed. `setPointerCapture` throws when
  * the pointer is no longer active — it ended before we got here and no
- * `pointerup` / `pointercancel` will ever arrive for it (the same case
- * `lib/long_press_drag.js` tears down on). Left uncaught, that would be
- * SILENCE: a button that reads as pressed while nothing is listening. On
- * throw the press is torn down and refused with reason `pointer-lost`,
- * which the template renders through the same `data-rejected` slot as
- * every other refusal.
+ * `pointerup` / `pointercancel` will ever arrive for it. Left uncaught,
+ * that would be SILENCE: a button that reads as pressed while nothing is
+ * listening. On throw the press is torn down and refused with reason
+ * `pointer-lost`, which the template renders through the same
+ * `data-rejected` slot as every other refusal.
  */
 
 const SILENCE = 128 // getByteTimeDomainData's zero point
@@ -555,8 +554,7 @@ const MeetingPushToTalk = {
 
   /**
    * Hold the pointer so drift off the target does not end the press.
-   * Mirrors `lib/long_press_drag.js`: `setPointerCapture` throws when the
-   * pointer already ended, and then nothing will ever release us — so the
+   * `setPointerCapture` throws when the pointer already ended, and then nothing will ever release us — so the
    * press is torn down here and marked refused rather than left armed and
    * deaf.
    */

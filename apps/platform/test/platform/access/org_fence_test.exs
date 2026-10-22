@@ -365,6 +365,30 @@ defmodule Platform.Access.OrgFenceTest do
       assert [_ | _] = Chat.search_messages(ctx.dm.id, q, scope: scope(ctx.m))
     end
 
+    test "search_messages_in_spaces and last_message_excerpts drop an R space for M", ctx do
+      q = "fencepost"
+      ids = [ctx.cr.id, ctx.dm.id]
+
+      # Positive control: a root member gets the R channel from both reads.
+      root = scope(ctx.root_member)
+
+      assert ctx.cr.id in Enum.map(
+               Chat.search_messages_in_spaces(ids, q, scope: root),
+               & &1.space_id
+             )
+
+      assert Map.has_key?(Chat.last_message_excerpts(ids, scope: root), ctx.cr.id)
+
+      m = scope(ctx.m)
+      hits = Chat.search_messages_in_spaces(ids, q, scope: m)
+      refute ctx.cr.id in Enum.map(hits, & &1.space_id)
+      assert ctx.dm.id in Enum.map(hits, & &1.space_id)
+
+      excerpts = Chat.last_message_excerpts(ids, scope: m)
+      refute Map.has_key?(excerpts, ctx.cr.id)
+      assert Map.has_key?(excerpts, ctx.dm.id)
+    end
+
     test "M is refused /chat/<R channel> by slug and by id, and no participant row is written",
          ctx do
       before = user_rows(ctx.cr)

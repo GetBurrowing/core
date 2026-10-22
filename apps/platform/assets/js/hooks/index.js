@@ -19,7 +19,7 @@ import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
-import DrawerSearchFocus from "./drawer_search_focus"
+import SearchFocus from "./search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import PrototypeFullscreen from "./prototype_fullscreen"
 import ExecutionLogScroll from "./execution_log_scroll"
@@ -61,10 +61,9 @@ import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
-import RowReorderTouch from "./row_reorder_touch"
+import RowLongPress from "./row_long_press"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
-import SectionReorderTouch from "./section_reorder_touch"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
@@ -90,7 +89,7 @@ export default {
   CopyToClipboard,
   DoneColumnState,
   DragDropUpload,
-  DrawerSearchFocus,
+  SearchFocus,
   EmbedCanvasScale,
   PrototypeFullscreen,
   ExecutionLogScroll,
@@ -134,10 +133,9 @@ export default {
   ReactorPopover,
   ResizableSidebar,
   RouteResume,
-  RowReorderTouch,
+  RowLongPress,
   ScrollToBottom,
   SectionReorder,
-  SectionReorderTouch,
   Sheet,
   SheetHandleClock,
   SidebarCollapse,
