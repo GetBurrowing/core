@@ -1,5 +1,16 @@
 <div class="relative h-full min-h-0">
-  <div class="h-full overflow-y-auto clears-tab-bar" data-role="inbox-surface">
+  <%!-- The phone Inbox (redesign rung 14). Below `lg` it replaces everything
+       else here; the four desktop pieces below carry `max-lg:hidden`. --%>
+  <PlatformWeb.Inbox.InboxList.inbox_list
+    rows={@streams.inbox_rows}
+    row_count={clearable_count(@review_count, @mention_count, @meeting_count)}
+    undo={@undo}
+    mention_authors={@mention_authors}
+    mention_space_labels={@mention_space_labels}
+    source_titles={@source_titles}
+    row_sheet={@row_sheet}
+  />
+  <div class="h-full overflow-y-auto clears-tab-bar max-lg:hidden" data-role="inbox-surface">
     <div class="mx-auto max-w-3xl p-6">
       <header class="mb-6 flex items-start justify-between gap-4">
         <div class="min-w-0">
@@ -170,7 +181,7 @@
   <div
     :if={@selected != %{}}
     data-role="selection-bar"
-    class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-1/2 z-40 -translate-x-1/2"
+    class="max-lg:hidden fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-1/2 z-40 -translate-x-1/2"
   >
     <div class="flex items-center gap-3 rounded-full border border-edge bg-base-100 px-4 py-2 shadow-md">
       <span
@@ -223,7 +234,7 @@
     data-variant="single"
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm"
+    class="max-lg:hidden fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm"
   >
     <div class="flex items-center gap-3 rounded-lg border border-edge bg-base-100 pl-4 pr-2 shadow-md">
       <p class="min-w-0 flex-1 truncate text-sm text-base-content" data-role="toast-message">
@@ -245,7 +256,7 @@
     data-role="inbox-toast"
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-4 z-50 max-w-sm"
+    class="max-lg:hidden fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-4 z-50 max-w-sm"
   >
     <div class="flex items-start gap-3 rounded-lg border border-edge bg-base-100 px-4 py-3 shadow-md">
       <div class="min-w-0 flex-1">

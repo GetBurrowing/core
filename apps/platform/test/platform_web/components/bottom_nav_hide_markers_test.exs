@@ -98,6 +98,7 @@ defmodule PlatformWeb.Components.BottomNavHideMarkersTest do
     # `clears-tab-bar` (app.css: padding-bottom 1rem + --bottom-nav-clearance).
     @scrollers [
       {"live/inbox_live.html.heex", ~s(data-role="inbox-surface")},
+      {"live/inbox/inbox_list.ex", ~s(data-role="inbox-phone-list")},
       {"live/files_live.html.heex", ~s(data-role="file-dropzone")},
       {"live/meeting_live.html.heex", ~s(overflow-y-auto px-3 py-3 sm:px-6 sm:py-5)},
       {"live/admin_branding_live.html.heex", ~s(overflow-y-auto px-4 py-6)},

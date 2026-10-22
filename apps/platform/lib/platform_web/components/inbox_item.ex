@@ -193,23 +193,53 @@ defmodule PlatformWeb.Components.InboxItem do
 
   # ── Kind → label / icon ────────────────────────────────────────────────
 
-  @doc false
-  def kind_label("review_request_pending"), do: "Review requested"
-  def kind_label("task_plan_review"), do: "Plan needs review"
-  def kind_label("chat_mention"), do: "Mention"
-  def kind_label("meeting_starting"), do: "Meeting starting"
-  # MUST sit above the humanizing catch-all: it would render "Meeting invited"
-  # — a one-character difference that reads as correct at a glance.
-  def kind_label("meeting_invited"), do: "Meeting invite"
+  # ONE table for every core kind's label, in both forms (redesign rung 14):
+  #
+  #   * `:long`, the desktop row's label (`kind_label/1`), unchanged;
+  #   * `:short`, the phone Inbox's kind word on the meta line (Saru, Inbox
+  #     canvas 01a15ec4 rev 2), read by `PlatformWeb.Inbox.InboxList`.
+  #
+  # "Meeting invite" is spelled out, not humanized: the humanizing fallback
+  # would render "Meeting invited", a one-character difference that reads as
+  # correct at a glance. An extension kind and an unknown kind share ONE
+  # fallback for both forms (`kind_label/2`).
+  @kind_labels %{
+    "review_request_pending" => %{long: "Review requested", short: "Review"},
+    "task_plan_review" => %{long: "Plan needs review", short: "Plan review"},
+    "chat_mention" => %{long: "Mention", short: "Mention"},
+    "meeting_starting" => %{long: "Meeting starting", short: "Starting now"},
+    "meeting_invited" => %{long: "Meeting invite", short: "Meeting invite"},
+    "task_sponsor_assigned" => %{long: "Task sponsor assigned", short: "Sponsor"},
+    "lifecycle_step_failed" => %{long: "Lifecycle step failed", short: "Step failed"}
+  }
 
-  def kind_label(other) when is_binary(other) do
-    case Platform.Extensions.inbox_kind(other) do
-      %{label: label} -> label
-      nil -> Phoenix.Naming.humanize(other)
+  @doc "The core kinds `kind_label/2` has an explicit entry for."
+  def labelled_kinds, do: Map.keys(@kind_labels)
+
+  @doc false
+  def kind_label(kind), do: kind_label(kind, :long)
+
+  @doc """
+  A kind's label in `form` `:long` (the desktop row) or `:short` (the phone
+  Inbox's kind word). Core kinds read `@kind_labels`. Any other kind falls
+  back, in both forms, to the registered extension's declared `label`, then to
+  the humanized key; a non-string kind is "Notification".
+  """
+  def kind_label(kind, form) when is_binary(kind) and form in [:long, :short] do
+    case Map.fetch(@kind_labels, kind) do
+      {:ok, labels} -> Map.fetch!(labels, form)
+      :error -> fallback_label(kind)
     end
   end
 
-  def kind_label(_), do: "Notification"
+  def kind_label(_kind, form) when form in [:long, :short], do: "Notification"
+
+  defp fallback_label(kind) do
+    case Platform.Extensions.inbox_kind(kind) do
+      %{label: label} -> label
+      nil -> Phoenix.Naming.humanize(kind)
+    end
+  end
 
   @doc false
   def kind_icon("review_request_pending"), do: "hero-clipboard-document-check"

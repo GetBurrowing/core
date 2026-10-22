@@ -1126,6 +1126,147 @@ defmodule Platform.InboxTest do
       refute_received {:inbox_changed, _}
     end
   end
+
+  # ── Phone list author slot (redesign rung 14, task 01a1557a-ad2d) ─────
+
+  describe "mention_authors/1" do
+    defp mention_space! do
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Authors",
+          slug: "authors-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      space
+    end
+
+    defp author!(space, type, name, avatar_url \\ nil) do
+      {:ok, participant} =
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: type,
+          participant_id: Ecto.UUID.generate(),
+          display_name: name,
+          avatar_url: avatar_url,
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    defp message!(space, participant, content) do
+      {:ok, message} =
+        Platform.Chat.post_message(%{
+          space_id: space.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: content
+        })
+
+      message
+    end
+
+    test "returns a user author and an agent author, keyed by item id" do
+      user = insert_user()
+      space = mention_space!()
+      person = author!(space, "user", "Pat Person", "https://example.test/pat.png")
+      agent = author!(space, "agent", "Pixel")
+
+      from_person = message!(space, person, "hi @you")
+      from_agent = message!(space, agent, "hello @you")
+
+      {:ok, person_row} = Inbox.emit(valid_attrs(user, %{source_id: from_person.id}))
+      {:ok, agent_row} = Inbox.emit(valid_attrs(user, %{source_id: from_agent.id}))
+
+      authors = Inbox.mention_authors([person_row, agent_row])
+
+      assert authors == %{
+               person_row.id => %{
+                 name: "Pat Person",
+                 avatar_url: "https://example.test/pat.png",
+                 agent?: false
+               },
+               agent_row.id => %{name: "Pixel", avatar_url: nil, agent?: true}
+             }
+    end
+
+    test "omits a deleted message, a missing message and a non-mention row" do
+      user = insert_user()
+      space = mention_space!()
+      person = author!(space, "user", "Pat Person")
+
+      live = message!(space, person, "still here")
+      gone = message!(space, person, "deleted later")
+      {:ok, _} = Platform.Chat.delete_message(gone)
+
+      {:ok, live_row} = Inbox.emit(valid_attrs(user, %{source_id: live.id}))
+      {:ok, gone_row} = Inbox.emit(valid_attrs(user, %{source_id: gone.id}))
+      {:ok, missing_row} = Inbox.emit(valid_attrs(user, %{source_id: Ecto.UUID.generate()}))
+
+      # Same message as `live_row`, but not a mention: the kind gates the lookup.
+      {:ok, other_kind} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "meeting_invited",
+            source_type: "meeting",
+            source_id: Ecto.UUID.generate()
+          })
+        )
+
+      authors = Inbox.mention_authors([live_row, gone_row, missing_row, other_kind])
+
+      # Positive control first: the lookup can hit in this fixture.
+      assert Map.keys(authors) == [live_row.id]
+      refute Map.has_key?(authors, gone_row.id)
+      refute Map.has_key?(authors, missing_row.id)
+      refute Map.has_key?(authors, other_kind.id)
+    end
+
+    test "[] gives %{}" do
+      assert Inbox.mention_authors([]) == %{}
+    end
+  end
+
+  describe "source_titles/1" do
+    test "maps task and meeting rows to their source's title; mentions get none" do
+      user = insert_user()
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{project_id: project!().id, title: "Ship the inbox"})
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{project_id: project!().id, name: "Design sync"})
+
+      {:ok, task_row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "task_plan_review",
+            source_type: "task",
+            source_id: task.id,
+            title: "Plan ready for review: Ship the inbox"
+          })
+        )
+
+      {:ok, meeting_row} =
+        Inbox.emit(
+          valid_attrs(user, %{
+            kind: "meeting_invited",
+            source_type: "meeting",
+            source_id: meeting.id,
+            title: "Invited"
+          })
+        )
+
+      {:ok, mention_row} = Inbox.emit(valid_attrs(user))
+
+      assert Inbox.source_titles([task_row, meeting_row, mention_row]) == %{
+               task_row.id => "Ship the inbox",
+               meeting_row.id => "Design sync"
+             }
+
+      assert Inbox.source_titles([]) == %{}
+    end
+  end
 end
 
 defmodule Platform.InboxPushTest do

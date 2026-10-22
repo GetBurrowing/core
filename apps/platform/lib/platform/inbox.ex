@@ -316,6 +316,134 @@ defmodule Platform.Inbox do
     |> restrict_sources(scope)
   end
 
+  @typedoc "A mention row's author, read off the message's ADR 0038 snapshot."
+  @type mention_author :: %{name: String.t(), avatar_url: String.t() | nil, agent?: boolean()}
+
+  @doc """
+  The author of each `chat_mention` row in `items`, keyed by ITEM id (redesign
+  rung 14, task 01a1557a-ad2d): `%{item_id => %{name:, avatar_url:, agent?:}}`.
+
+  Only rows with `kind == "chat_mention"` and `source_type == "chat_message"`
+  are looked up, in ONE query on `Platform.Chat.Message` over their source ids,
+  excluding soft-deleted messages. The fields are the author identity snapshot
+  the message carries (ADR 0038: `author_display_name`, `author_avatar_url`,
+  `author_participant_type`, `author_agent_id`), so a participant who has since
+  left still renders as they were when they spoke. `agent?` is true when the
+  snapshot says the author was an agent.
+
+  No entry is returned for: a row of another kind, a deleted or missing
+  message, or a message whose snapshot carries no display name (a caller falls
+  back to the space label). `[]` gives `%{}` without a query.
+
+  THIS DOES NOT AUTHORISE. It reads author fields for whatever ids it is
+  handed; callers pass only rows already in the viewer's reachable list
+  (`reachable_unread_scope/3`), which is where the read check lives.
+  """
+  @spec mention_authors([Item.t()]) :: %{Ecto.UUID.t() => mention_author()}
+  def mention_authors(items) when is_list(items) do
+    by_source =
+      for %Item{kind: "chat_mention", source_type: "chat_message"} = item <- items,
+          reduce: %{} do
+        acc -> Map.update(acc, item.source_id, [item.id], &[item.id | &1])
+      end
+
+    if by_source == %{} do
+      %{}
+    else
+      source_ids = Map.keys(by_source)
+
+      from(m in Message,
+        where: m.id in ^source_ids and is_nil(m.deleted_at),
+        select:
+          {m.id, m.author_display_name, m.author_avatar_url, m.author_participant_type,
+           m.author_agent_id}
+      )
+      |> Repo.all()
+      |> Enum.flat_map(fn {message_id, name, avatar_url, participant_type, agent_id} ->
+        if is_binary(name) and String.trim(name) != "" do
+          author = %{
+            name: name,
+            avatar_url: avatar_url,
+            agent?: participant_type == "agent" or not is_nil(agent_id)
+          }
+
+          for item_id <- Map.fetch!(by_source, message_id), do: {item_id, author}
+        else
+          []
+        end
+      end)
+      |> Map.new()
+    end
+  end
+
+  @doc """
+  The title of the task or meeting each non-mention row points at, keyed by
+  ITEM id (redesign rung 14): the phone Inbox's author slot for rows that have
+  no person behind them (Saru, Inbox canvas 01a15ec4 rev 2: "the source — a
+  person or agent, or the task or meeting title").
+
+    * `task` / `task_review` sources → the task's title (not soft-deleted);
+    * `review_request` sources → the title of the request's task;
+    * `meeting` sources → the meeting's name.
+
+  At most one query per source table that actually occurs in `items` (tasks,
+  review requests joined to tasks, meetings); `[]` gives `%{}` without a
+  query. Rows of any other source type (chat messages, extension sources), and
+  rows whose source is gone or carries a blank title, get no entry: the caller
+  falls back to the kind label.
+
+  THIS DOES NOT AUTHORISE, exactly like `mention_authors/1`: pass only rows
+  already in the viewer's reachable list.
+  """
+  @spec source_titles([Item.t()]) :: %{Ecto.UUID.t() => String.t()}
+  def source_titles(items) when is_list(items) do
+    task_rows = for %Item{source_type: st} = i <- items, st in ["task", "task_review"], do: i
+    review_rows = for %Item{source_type: "review_request"} = i <- items, do: i
+    meeting_rows = for %Item{source_type: "meeting"} = i <- items, do: i
+
+    task_titles =
+      title_lookup(task_rows, fn ids ->
+        from(t in Task, where: t.id in ^ids and is_nil(t.deleted_at), select: {t.id, t.title})
+      end)
+
+    review_titles =
+      title_lookup(review_rows, fn ids ->
+        from(r in ReviewRequest,
+          join: t in Task,
+          on: t.id == r.task_id,
+          where: r.id in ^ids and is_nil(t.deleted_at),
+          select: {r.id, t.title}
+        )
+      end)
+
+    meeting_titles =
+      title_lookup(meeting_rows, fn ids ->
+        from(m in Meeting, where: m.id in ^ids, select: {m.id, m.name})
+      end)
+
+    task_titles |> Map.merge(review_titles) |> Map.merge(meeting_titles)
+  end
+
+  # One query over the rows' distinct source ids, then fan the source title back
+  # out to every item id pointing at it. Blank titles are dropped.
+  defp title_lookup([], _query_fun), do: %{}
+
+  defp title_lookup(rows, query_fun) do
+    titles =
+      rows
+      |> Enum.map(& &1.source_id)
+      |> Enum.uniq()
+      |> query_fun.()
+      |> Repo.all()
+      |> Map.new()
+
+    for %Item{id: id, source_id: source_id} <- rows,
+        title = Map.get(titles, source_id),
+        is_binary(title) and String.trim(title) != "",
+        into: %{},
+        do: {id, title}
+  end
+
   @doc """
   The BADGE scope: the rows of `unread_scope/1` the user has not opened
   (`read_at` nil). Task `01a11703`.
