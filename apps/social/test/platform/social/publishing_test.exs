@@ -238,6 +238,28 @@ defmodule Platform.Social.PublishingTest do
                Fake.calls(:publish)
     end
 
+    test "an Instagram account with an unknown type (nil) reaches the publisher; its error lands on the row",
+         ctx do
+      {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: nil})
+      assert insta.platform_account_type == nil
+      reel = fn -> [{media_file!(ctx.org_id, "video/mp4"), %{"duration_s" => 30}}] end
+
+      allowed = post_with_media(ctx, insta, reel.())
+      assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, allowed.id)
+      assert [{:publish, _, _}] = Fake.calls(:publish)
+
+      refused = post_with_media(ctx, insta, reel.())
+      Fake.fail_next(:publish, "Instagram rejected the media")
+
+      assert {:error, {:publish_failed, "Instagram rejected the media"}} =
+               Publishing.publish_post(ctx.org_id, refused.id)
+
+      assert length(Fake.calls(:publish)) == 2
+      row = Repo.get!(Post, refused.id)
+      assert row.status == "failed"
+      assert row.error == "Instagram rejected the media"
+    end
+
     test "a media file from another org is refused", ctx do
       foreign = media_file!(org_id!(), "image/png")
       post = approved_post!(ctx.org_id, ctx.account, %{media_file_ids: [foreign.id]})

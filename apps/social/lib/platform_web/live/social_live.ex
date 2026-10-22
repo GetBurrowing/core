@@ -94,9 +94,15 @@ defmodule PlatformWeb.SocialLive do
   `select_tab` "connections", and `load_profile/2` while the tab already is
   (a profile switch reconciles the NEW profile). It runs only on a connected
   socket, for a viewer who passes `authorize/1`, on a profile with a
-  `provider_profile_ref`, while at least one never-connected row is listed;
+  `provider_profile_ref`, while at least one never-connected row is listed,
+  or while a connected row has a nil `platform_account_type` (task 01a1653a)
+  and this LiveView has not asked yet: that type check runs at most ONCE per
+  LiveView process, so an Instagram row Zernio never types costs one list
+  call per page session, not one per tab click. The same call backfills the
+  type on connected rows when Zernio reports one (no notice, no copy change).
   `Platform.Social.reconcile_accounts/3` re-checks the approver and the ref
-  and sends nothing when no row is pending. Picked-up rows show Connected
+  and sends nothing when no row is pending and no connected row lacks a
+  type. Picked-up rows show Connected
   with their handle and a "Picked up" notice; a vendor error shows a
   couldn't-check notice and writes nothing; no key sends nothing and adds no
   notice (the key alert already says it). RETRY: rows the vendor does not
@@ -162,6 +168,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:user, user)
       |> assign(:tab, "queue")
       |> assign(:queue_canvas_ids, [])
+      |> assign(:type_checked?, false)
       |> assign(:week_start, Cal.week_start(Date.utc_today()))
       |> assign(:detail, nil)
       |> assign(:notice, nil)
@@ -704,6 +711,7 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:can_edit?, false)
     |> assign(:accounts_empty?, true)
     |> assign(:pending_accounts?, false)
+    |> assign(:untyped_accounts?, false)
     |> assign(:connectable_platforms, [])
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form([]))
@@ -725,7 +733,7 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:removing, nil)
     |> assign(:can_edit?, can_edit?)
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign_reconcile_flags(accounts)
     |> assign(:connectable_platforms, platforms)
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form(platforms))
@@ -890,7 +898,7 @@ defmodule PlatformWeb.SocialLive do
 
     socket
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign_reconcile_flags(accounts)
   end
 
   defp assign_account_flags(socket), do: socket
@@ -925,7 +933,7 @@ defmodule PlatformWeb.SocialLive do
 
     socket
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign_reconcile_flags(accounts)
     |> stream(
       :accounts,
       Enum.map(accounts, &account_item(&1, removing, Map.get(errors, &1.id))),
@@ -940,26 +948,60 @@ defmodule PlatformWeb.SocialLive do
 
   defp never_connected?(_account), do: false
 
+  # Connected rows whose vendor account type we have never learned (task
+  # 01a1653a): `reconcile_accounts/3` backfills them. Mirrors the context's
+  # own predicate.
+  defp untyped_connected?(%Account{
+         status: "connected",
+         provider_account_ref: ref,
+         archived_at: nil,
+         platform_account_type: nil
+       })
+       when is_binary(ref),
+       do: true
+
+  defp untyped_connected?(_account), do: false
+
+  defp assign_reconcile_flags(socket, accounts) do
+    socket
+    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign(:untyped_accounts?, Enum.any?(accounts, &untyped_connected?/1))
+  end
+
   # ── Reconcile on opening Connections (task 01a14807) ────────────────
 
-  # Picks up accounts connected at the vendor whose return never reached us.
+  # Picks up accounts connected at the vendor whose return never reached us,
+  # and backfills the account type on connected rows that have none.
   # Runs only on the Connections tab, on a connected socket, for a viewer who
   # passes `authorize/1`, on a profile with a vendor ref, while a
-  # never-connected row is listed. `reconcile_accounts/3` re-checks the
-  # approver and the ref and sends nothing when no row is pending, so once
-  # every row is connected this costs zero requests. Synchronous: the
+  # never-connected row is listed, or while a connected row has a nil
+  # `platform_account_type` and this LiveView has not yet asked (an Instagram
+  # row Zernio can never type costs one list call per page session, not one
+  # per tab click). `reconcile_accounts/3` re-checks the approver and the ref
+  # and sends nothing when there is nothing to do, so once every row is
+  # connected and typed this costs zero requests. Synchronous: the
   # publisher's 5s receive_timeout bounds how long the click can block.
-  defp maybe_reconcile(%{assigns: %{tab: "connections", pending_accounts?: true}} = socket) do
+  defp maybe_reconcile(%{assigns: %{tab: "connections"} = assigns} = socket) do
+    if reconcile_due?(assigns), do: reconcile(socket), else: socket
+  end
+
+  defp maybe_reconcile(socket), do: socket
+
+  defp reconcile_due?(%{pending_accounts?: true}), do: true
+  defp reconcile_due?(%{untyped_accounts?: true, type_checked?: false}), do: true
+  defp reconcile_due?(_assigns), do: false
+
+  defp reconcile(socket) do
     with true <- connected?(socket),
          {:ok, fresh, user_id} <- authorize(socket),
          ref when is_binary(ref) and ref != "" <- fresh.provider_profile_ref do
-      reconciled(socket, Social.reconcile_accounts(fresh.org_id, fresh, user_id))
+      socket
+      |> assign(:type_checked?, true)
+      |> reconciled(Social.reconcile_accounts(fresh.org_id, fresh, user_id))
     else
       _ -> socket
     end
   end
-
-  defp maybe_reconcile(socket), do: socket
 
   defp reconciled(socket, {:ok, %{connected: [_ | _] = accounts}}) do
     n = length(accounts)
@@ -970,6 +1012,9 @@ defmodule PlatformWeb.SocialLive do
     |> restream_accounts()
     |> notice("Picked up #{n} connected #{noun} from Zernio: #{names}.")
   end
+
+  # A backfilled type changes no copy; restream so the flags are current.
+  defp reconciled(socket, {:ok, %{typed: [_ | _]}}), do: restream_accounts(socket)
 
   defp reconciled(socket, {:ok, _nothing_new}), do: socket
 

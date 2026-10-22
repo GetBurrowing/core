@@ -799,7 +799,12 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       reopen(child)
       assert requests() == []
 
-      _fresh = open_profile(build_conn(), ctx.h1, ctx.solo)
+      # A NEW LiveView asks once more: the picked-up row has no account type
+      # yet (task 01a1653a), and the type check runs once per LiveView.
+      fresh = open_profile(build_conn(), ctx.h1, ctx.solo)
+      assert requests() == [list_get("zprof_pickup_solo")]
+
+      reopen(fresh)
       assert requests() == []
     end
 
@@ -884,6 +889,65 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert requests() == []
       refute notice?(child)
       assert Repo.get!(Account, ctx.a_li.id).status == nil
+    end
+  end
+
+  describe "type backfill on opening Connections (task 01a1653a)" do
+    setup ctx do
+      profile = linked_profile!(ctx, "Typed", "zprof_typed")
+      %{typed_profile: profile}
+    end
+
+    # The profile's ONLY row: connected, with no account type.
+    defp untyped_row!(ctx, platform, ref) do
+      {:ok, account} = Social.create_account(ctx.org_id, ctx.typed_profile, %{platform: platform})
+
+      account
+      |> Ecto.Changeset.change(status: "connected", provider_account_ref: ref)
+      |> Repo.update!()
+    end
+
+    defp listed(ref, platform, account_type) do
+      %{
+        ref: ref,
+        platform: platform,
+        profile_ref: "zprof_typed",
+        username: "user-#{ref}",
+        active?: true,
+        account_type: account_type
+      }
+    end
+
+    test "opening Connections with only an untyped connected row asks once and backfills it",
+         %{conn: conn} = ctx do
+      tiktok = untyped_row!(ctx, "tiktok", "zacct_tt")
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_tt", "tiktok", "business")]})
+
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+
+      assert [{:list_accounts, [%Profile{id: id}], _}] = Fake.calls(:list_accounts)
+      assert id == ctx.typed_profile.id
+      assert Repo.get!(Account, tiktok.id).platform_account_type == "business"
+      assert has_element?(child, row(tiktok) <> " [data-state='connected']", "Connected")
+      refute notice?(child)
+
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 1
+    end
+
+    test "a row the vendor never types costs one call per LiveView, not one per tab open",
+         %{conn: conn} = ctx do
+      ig = untyped_row!(ctx, "instagram", "zacct_ig")
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_ig", "instagram", nil)]})
+
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+      assert length(Fake.calls(:list_accounts)) == 1
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
+
+      reopen(child)
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 1
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
     end
   end
 

@@ -662,15 +662,58 @@ defmodule Platform.Social.Publisher.ZernioTest do
                  platform: "linkedin",
                  profile_ref: "zprof_1",
                  username: "brand-li",
-                 active?: true
+                 active?: true,
+                 account_type: nil
                },
                %{
                  ref: "zacct_tw",
                  platform: "x",
                  profile_ref: "zprof_1",
                  username: "brand_x",
-                 active?: false
+                 active?: false,
+                 account_type: nil
                }
+             ]
+    end
+
+    test "account_type comes only from the documented tiktokAccountType; Instagram is nil",
+         ctx do
+      profile = linked_profile!(ctx.org_id)
+      put_key!()
+
+      stub_accounts(200, %{
+        "hasAnalyticsAccess" => false,
+        "accounts" => [
+          %{
+            "_id" => "zacct_tt_biz",
+            "platform" => "tiktok",
+            "profileId" => "zprof_1",
+            "tiktokAccountType" => "business",
+            "isActive" => true
+          },
+          %{
+            "_id" => "zacct_tt_unknown",
+            "platform" => "tiktok",
+            "profileId" => "zprof_1",
+            "tiktokAccountType" => "unknown",
+            "isActive" => true
+          },
+          %{
+            "_id" => "zacct_ig",
+            "platform" => "instagram",
+            "profileId" => "zprof_1",
+            "metadata" => %{"loginMethod" => "instagram", "instagramScopedId" => "1789"},
+            "isActive" => true
+          }
+        ]
+      })
+
+      assert {:ok, accounts} = Zernio.list_accounts(profile)
+
+      assert Enum.map(accounts, &{&1.ref, &1.account_type}) == [
+               {"zacct_tt_biz", "business"},
+               {"zacct_tt_unknown", nil},
+               {"zacct_ig", nil}
              ]
     end
 

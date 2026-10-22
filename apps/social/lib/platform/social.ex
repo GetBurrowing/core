@@ -689,7 +689,8 @@ defmodule Platform.Social do
        and the platform used is the LISTED one: `params.platform` is ignored;
     5. under the profile row lock, in one transaction: a live row of this
        profile already holding `ref` answers `{:ok, account,
-       :already_connected}` with no write. Otherwise the never-connected row
+       :already_connected}`, writing at most a newly reported account type
+       (never nil over a stored one). Otherwise the never-connected row
        on (profile, listed platform) gets ONLY `provider_account_ref`,
        `status` and (when its `handle` is nil) `handle`, through a dedicated
        `Changeset.change/2`: `{:ok, account, :connected}`. No such row is
@@ -745,22 +746,28 @@ defmodule Platform.Social do
   The pre-ship pickup: fills our never-connected rows from the vendor's list,
   for a return that never reached us. Same guards as `complete_connect/4`
   (scope, approver first, ref present). A profile with no never-connected
-  row answers `{:ok, %{connected: [], unmatched: 0}}` with NO request.
+  row AND no live connected row lacking a `platform_account_type` answers
+  `{:ok, %{connected: [], unmatched: 0, typed: []}}` with NO request.
   Otherwise ONE `list_accounts/1` call; each listed entry (matching
   `profile_ref`, `active?` true) whose ref no live row holds fills the
   oldest never-connected row on its platform, one entry per row, in list
   order, under the profile lock. `unmatched` counts the eligible entries
   that are neither already on one of this profile's rows nor filled now.
+
+  Type backfill (task 01a1653a): an entry whose ref is already on one of
+  this profile's live rows updates ONLY that row's `platform_account_type`,
+  when the entry reports a known type that differs from the stored one.
+  nil never overwrites a stored type. Those rows are returned in `typed`.
   """
   @spec reconcile_accounts(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term()) ::
-          {:ok, %{connected: [Account.t()], unmatched: non_neg_integer()}}
+          {:ok, %{connected: [Account.t()], unmatched: non_neg_integer(), typed: [Account.t()]}}
           | {:error, connect_refusal()}
   def reconcile_accounts(org_id, profile, user_id) do
     with {:ok, profile} <- fetch(Profile, org_id, profile),
          :ok <- approver_check(org_id, profile, user_id),
          :ok <- linked(profile) do
-      if pending_accounts(profile) == [] do
-        {:ok, %{connected: [], unmatched: 0}}
+      if pending_accounts(profile) == [] and untyped_connected_accounts(profile) == [] do
+        {:ok, %{connected: [], unmatched: 0, typed: []}}
       else
         with {:ok, entries} <- publisher_list_accounts(profile) do
           fill_pending(org_id, profile, Enum.filter(entries, &listed_under?(&1, profile)))
@@ -846,7 +853,7 @@ defmodule Platform.Social do
 
       case live_account_with_ref(locked, entry.ref) do
         %Account{} = account ->
-          {account, :already_connected}
+          {backfill_type!(account, entry), :already_connected}
 
         nil ->
           case never_connected_account(locked, entry.platform) do
@@ -869,33 +876,35 @@ defmodule Platform.Social do
       held =
         Account
         |> where([a], a.provider_account_ref in ^refs and is_nil(a.archived_at))
-        |> select([a], {a.provider_account_ref, a.profile_id})
+        |> select([a], {a.provider_account_ref, a})
         |> Repo.all()
         |> Map.new()
 
       pending = locked |> pending_accounts() |> Enum.group_by(& &1.platform)
 
-      {connected, unmatched, _pending} =
+      {connected, unmatched, typed, _pending} =
         entries
         |> Enum.uniq_by(& &1.ref)
-        |> Enum.reduce({[], 0, pending}, fn entry, {connected, unmatched, pending} ->
+        |> Enum.reduce({[], 0, [], pending}, fn entry, {connected, unmatched, typed, pending} ->
           case {Map.fetch(held, entry.ref), Map.get(pending, entry.platform, [])} do
-            {{:ok, profile_id}, _} when profile_id == locked.id ->
-              {connected, unmatched, pending}
+            {{:ok, %Account{profile_id: profile_id} = account}, _} when profile_id == locked.id ->
+              if type_backfill?(account, entry),
+                do: {connected, unmatched, [backfill_type!(account, entry) | typed], pending},
+                else: {connected, unmatched, typed, pending}
 
             {{:ok, _another_profile}, _} ->
-              {connected, unmatched + 1, pending}
+              {connected, unmatched + 1, typed, pending}
 
             {:error, []} ->
-              {connected, unmatched + 1, pending}
+              {connected, unmatched + 1, typed, pending}
 
             {:error, [account | rest]} ->
-              {[mark_connected!(account, entry) | connected], unmatched,
+              {[mark_connected!(account, entry) | connected], unmatched, typed,
                Map.put(pending, entry.platform, rest)}
           end
         end)
 
-      %{connected: Enum.reverse(connected), unmatched: unmatched}
+      %{connected: Enum.reverse(connected), unmatched: unmatched, typed: Enum.reverse(typed)}
     end)
   end
 
@@ -917,14 +926,55 @@ defmodule Platform.Social do
     |> Repo.all()
   end
 
-  # The ONLY write: ref, status and a missing handle. Not the editable cast.
-  # Call inside a transaction; a collision on the live-ref index rolls back
-  # with :ref_in_use.
+  # Live connected rows of this profile whose account type we never learned:
+  # the rows the type backfill can fill (task 01a1653a).
+  defp untyped_connected_accounts(%Profile{id: profile_id}) do
+    Account
+    |> where([a], a.profile_id == ^profile_id)
+    |> where([a], is_nil(a.archived_at) and a.status == "connected")
+    |> where([a], not is_nil(a.provider_account_ref) and is_nil(a.platform_account_type))
+    |> Repo.all()
+  end
+
+  # A known reported type that differs from the stored one. nil (or an entry
+  # without the key) never qualifies, so nil never overwrites a stored type.
+  defp type_backfill?(%Account{platform_account_type: stored}, entry) do
+    reported = Map.get(entry, :account_type)
+    reported in Account.platform_account_types() and reported != stored
+  end
+
+  # Writes ONLY platform_account_type, through a dedicated change (not the
+  # editable cast). A no-op returns the row unchanged.
+  defp backfill_type!(%Account{} = account, entry) do
+    if type_backfill?(account, entry) do
+      account
+      |> Changeset.change(platform_account_type: Map.get(entry, :account_type))
+      |> Repo.update()
+      |> case do
+        {:ok, account} -> account
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    else
+      account
+    end
+  end
+
+  # The ONLY write: ref, status, a missing handle and a reported account type.
+  # Not the editable cast. A type is written only when the vendor reported one
+  # we know; nil never overwrites a stored type (an entry without the key is
+  # nil). Call inside a transaction; a collision on the live-ref index rolls
+  # back with :ref_in_use.
   defp mark_connected!(%Account{} = account, entry) do
+    account_type = Map.get(entry, :account_type)
+
     changes =
       [provider_account_ref: entry.ref, status: "connected"] ++
         if(is_nil(account.handle) and is_binary(entry.username),
           do: [handle: entry.username],
+          else: []
+        ) ++
+        if(account_type in Account.platform_account_types(),
+          do: [platform_account_type: account_type],
           else: []
         )
 

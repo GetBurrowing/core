@@ -13,8 +13,16 @@ defmodule Platform.Social.MediaRules do
     * TikTok, from https://docs.zernio.com/platforms/tiktok: media is
       required; ONE video (MP4, MOV or WebM, 3 to 600 seconds, at most 4 GB)
       or 1 to 35 images (JPEG, PNG or WebP, at most 20 MB each), never both.
-    * Instagram: a video is a Reel and needs a Business or Creator account.
-      ASSUMED platform rule; the vendor's spec does not state it.
+    * Instagram: a video is a Reel and is refused here ONLY when the account
+      type is known to be `"personal"`. `nil` (or no account) means the type
+      is unknown and the Reel is allowed: the platform decides at publish and
+      its error lands on the post row. Zernio does not report an Instagram
+      account type (its OpenAPI v1.333.2 SocialAccount schema, fetched
+      2026-10-22 from https://docs.zernio.com/api/openapi, carries only
+      `tiktokAccountType`), and https://docs.zernio.com/platforms/instagram
+      states Instagram requires a Business or Creator account, converting
+      the account to professional before consent, so an unknown type is
+      almost always a professional one.
       A Reel runs 3 to 900 seconds and is at most 1 GB (Social 5/7, checked
       at clip render time too). ASSUMED platform rule, from
       https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media#reel-specifications
@@ -85,7 +93,7 @@ defmodule Platform.Social.MediaRules do
     videos = Enum.filter(media, &(&1.kind == :video))
 
     account_rule =
-      if videos != [] and account_type(account) not in ["business", "creator"],
+      if videos != [] and account_type(account) == "personal",
         do: ["Instagram Reels need a Business or Creator account"],
         else: []
 

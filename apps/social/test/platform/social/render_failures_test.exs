@@ -29,9 +29,9 @@ defmodule Platform.Social.RenderFailuresTest do
     :ok
   end
 
-  defp render_and_wait(world, clip) do
+  defp render_and_wait(world, clip, opts \\ []) do
     Phoenix.PubSub.subscribe(Platform.PubSub, Social.clips_topic(world.profile.id))
-    {:ok, _} = Social.render_clip(world.scope, clip.id)
+    {:ok, _} = Social.render_clip(world.scope, clip.id, opts)
     id = clip.id
 
     assert_receive {:social_clip, %Clip{id: ^id, status: status} = clip}
@@ -61,6 +61,31 @@ defmodule Platform.Social.RenderFailuresTest do
     assert Fake.calls() == []
     assert failed.render_file_id == nil
     assert files_in(world.project) == before
+  end
+
+  test "an Instagram account of unknown type (nil) is not refused a Reel at render; personal is" do
+    world = render_world!()
+
+    {:ok, insta} =
+      Social.create_account(world.org_id, world.profile, %{
+        platform: "instagram",
+        handle: "@show",
+        platform_account_type: nil
+      })
+
+    {:ok, _youtube} =
+      Social.create_account(world.org_id, world.profile, %{platform: "youtube", handle: "@show"})
+
+    platforms = ["instagram", "youtube"]
+
+    ok = render_and_wait(world, file_clip!(world, 4.0, 12.0), platforms: platforms)
+    assert {ok.status, ok.error} == {"rendered", nil}
+
+    insta |> Ecto.Changeset.change(platform_account_type: "personal") |> Repo.update!()
+
+    refused = render_and_wait(world, file_clip!(world, 4.0, 12.0), platforms: platforms)
+    assert refused.status == "failed"
+    assert refused.error =~ "Instagram Reels need a Business or Creator account"
   end
 
   test "a renderer error is the clip's error; the queue serves the next one" do

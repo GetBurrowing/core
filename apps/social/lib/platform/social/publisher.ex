@@ -108,13 +108,17 @@ defmodule Platform.Social.Publisher do
   One account the vendor lists under a profile. `ref` is the vendor's account
   id (stored verbatim as `provider_account_ref`); `platform` is in our names;
   `profile_ref` is the vendor profile id the entry says it belongs to.
+  `account_type` is the platform's account kind when the vendor documents one
+  (a value in `Platform.Social.Account.platform_account_types/0`), else nil.
+  An entry without the key reads as nil.
   """
   @type connected_account :: %{
           ref: String.t(),
           platform: String.t(),
           profile_ref: String.t() | nil,
           username: String.t() | nil,
-          active?: boolean()
+          active?: boolean(),
+          account_type: String.t() | nil
         }
 
   @doc "Starts OAuth for `account`. `opts` carries `:redirect_url` (and `:profile`)."
