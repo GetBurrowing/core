@@ -132,11 +132,25 @@ defmodule Platform.Social.Publisher.Zernio do
         url: "/v1/connect/#{platform}",
         params: [profileId: profile_ref, redirect_url: redirect_url]
       )
-      |> handle(fn
-        %{"authUrl" => url} when is_binary(url) -> {:ok, url}
-        _ -> {:error, :unexpected_response}
-      end)
+      |> connect_result()
     end
+  end
+
+  # The connect URL's own answers. A 403 here is not only a bad key: the
+  # docs list "no access to profile" and the legacy-plan
+  # `platform_account_limit`, so Zernio's own message is kept (a bad key is
+  # a 401). A 402 (`PAYMENT_REQUIRED`, e.g. `free_tier_exceeded` once the
+  # team has more than 2 connected accounts) falls through to handle/2's
+  # 4xx clause, which also keeps the message. Every string here is shown to
+  # the approver who clicked, so it never carries the authUrl or the key.
+  defp connect_result({:ok, %Req.Response{status: 403, body: body}}),
+    do: {:error, "Zernio refused the request (HTTP 403): #{message(body)}"}
+
+  defp connect_result(result) do
+    handle(result, fn
+      %{"authUrl" => url} when is_binary(url) -> {:ok, url}
+      _ -> {:error, :unexpected_response}
+    end)
   end
 
   # Profile ref first, then the key, then the ONE request: no ref or no key
@@ -385,6 +399,7 @@ defmodule Platform.Social.Publisher.Zernio do
   defp handle({:error, exception}, _),
     do: {:error, "Zernio could not be reached: #{Exception.message(exception)}"}
 
+  defp message(%{"error" => %{"message" => m}}) when is_binary(m), do: m
   defp message(%{"error" => e}) when is_binary(e), do: e
   defp message(%{"message" => m}) when is_binary(m), do: m
   defp message(_), do: "no detail"

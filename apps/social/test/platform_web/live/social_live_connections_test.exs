@@ -564,13 +564,17 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       child = open_profile(conn, ctx.h1, ctx.empty)
       add(child, "linkedin")
 
-      assert has_element?(
-               child,
-               "[data-role='social-notice']",
-               "That account could not be connected. Try again."
-             )
+      reason = "Couldn't connect LinkedIn. Zernio refused the request (HTTP 403): forbidden"
+      assert has_element?(child, "[data-role='social-notice']", reason)
 
       assert [%Account{} = account] = accounts_of(ctx.empty)
+      # The reason also sits on the row that was clicked, not only up top.
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
       assert ref_of(ctx.empty) == "zprof_added_1"
       refute has_element?(child, "[data-pane='connections'] [data-role='social-empty']")
       assert has_element?(child, row(account) <> " " <> @connect, "Connect")
@@ -582,6 +586,63 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert [{"GET", "/api/v1/connect/linkedin", %{"profileId" => "zprof_added_1"}}] = requests()
       assert [%Account{id: id}] = accounts_of(ctx.empty)
       assert id == account.id
+    end
+
+    test "a connect 402 (Zernio's free tier is full) names Zernio's reason on the clicked row",
+         %{conn: conn} = ctx do
+      select_zernio(ctx)
+      ok = zernio_ok()
+
+      payment_required = fn conn ->
+        conn
+        |> Plug.Conn.put_status(402)
+        |> Req.Test.json(%{
+          "error" => "Add a payment method to connect more than 2 accounts.",
+          "code" => "PAYMENT_REQUIRED",
+          "reason" => "free_tier_exceeded",
+          "dashboard_url" => "https://vendor.example.test/billing?add_payment_method=1"
+        })
+      end
+
+      record_requests(fn
+        %{method: "GET"} = conn -> payment_required.(conn)
+        conn -> ok.(conn)
+      end)
+
+      child = open_profile(conn, ctx.h1, ctx.empty)
+      add(child, "instagram")
+
+      reason =
+        "Couldn't connect Instagram. Zernio refused the request (HTTP 402): " <>
+          "Add a payment method to connect more than 2 accounts."
+
+      assert [%Account{platform: "instagram"} = account] = accounts_of(ctx.empty)
+
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
+      assert has_element?(child, "[data-role='social-notice'][data-tone='warning']", reason)
+      # Neither the vendor's URLs nor the key reach the page.
+      html = render(child)
+      refute html =~ "vendor.example.test"
+      refute html =~ "zk-add-not-real"
+
+      assert [{"POST", _, _}, {"GET", "/api/v1/connect/instagram", _}] = requests()
+
+      # Connect on the same row fails the same way, on that row.
+      record_requests(payment_required)
+      child |> element(row(account) <> " " <> @connect) |> render_click()
+
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
+      assert [{"GET", "/api/v1/connect/instagram", _}] = requests()
     end
 
     test "Connect on a never-connected row that predates the vendor profile creates the profile first",

@@ -293,6 +293,34 @@ defmodule Platform.Social.Publisher.ZernioTest do
                Zernio.connect_url(account, redirect_url: "x", profile: nil)
     end
 
+    test "connect_url keeps Zernio's reason on a 402 and a 403; a 401 is the key", ctx do
+      {profile, account} = account!(ctx.org_id, "instagram")
+      put_key!(account)
+
+      connect = fn status, body ->
+        Req.Test.stub(Zernio, fn conn ->
+          conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+        end)
+
+        Zernio.connect_url(account,
+          redirect_url: "https://suite.example.test/cb",
+          profile: profile
+        )
+      end
+
+      assert {:error, "Zernio refused the request (HTTP 402): Add a payment method."} =
+               connect.(402, %{
+                 "error" => "Add a payment method.",
+                 "code" => "PAYMENT_REQUIRED",
+                 "reason" => "free_tier_exceeded"
+               })
+
+      assert {:error, "Zernio refused the request (HTTP 403): No access to profile"} =
+               connect.(403, %{"error" => "No access to profile"})
+
+      assert {:error, :credentials_rejected} = connect.(401, %{"error" => "Invalid API key"})
+    end
+
     test "status/2 maps published, failed, partial, cancelled and scheduled", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
       put_key!(account)

@@ -57,7 +57,9 @@ defmodule PlatformWeb.SocialLive do
   vendor profile first and re-checks the approver itself), then the
   publisher's `connect_url/2`, then an external redirect. A connect failure
   AFTER the row exists re-streams the rows so it shows with Connect; the row
-  is kept and retried, never deleted. `connect_account` also runs
+  is kept and retried, never deleted. Any connect failure names its reason
+  (the vendor's status and message, never the URL or key) on the clicked
+  row itself as well as in the pane's notice line. `connect_account` also runs
   `Platform.Social.ensure_provider_profile/2` first, so Connect on a row that
   predates the vendor profile works. The vendor URL and the key are never
   logged.
@@ -317,21 +319,18 @@ defmodule PlatformWeb.SocialLive do
   # install's own /m/social as the redirect. The vendor URL is never logged.
   def handle_event("connect_account", %{"id" => id}, socket) do
     with {:ok, profile, _user} <- authorize(socket),
-         %Account{} = account <- profile_account(profile, id),
-         publisher when is_atom(publisher) <- Publisher.impl(),
-         {:ok, profile} <- Social.ensure_provider_profile(profile.org_id, profile),
-         {:ok, url} <-
-           publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
-      {:noreply, redirect(socket, external: url)}
+         %Account{} = account <- profile_account(profile, id) do
+      with publisher when is_atom(publisher) <- Publisher.impl(),
+           {:ok, profile} <- Social.ensure_provider_profile(profile.org_id, profile),
+           {:ok, url} <-
+             publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
+        {:noreply, redirect(socket, external: url)}
+      else
+        error -> {:noreply, connect_failed(socket, account, error)}
+      end
     else
-      {:error, :publisher_not_configured} ->
-        {:noreply, notice(socket, "Publishing isn't configured on this install.")}
-
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
-
-      {:error, {:profile_name_taken, _name} = reason} ->
-        {:noreply, notice(socket, add_error_copy(reason))}
 
       _ ->
         {:noreply, notice(socket, "That account could not be connected. Try again.")}
@@ -365,11 +364,7 @@ defmodule PlatformWeb.SocialLive do
              publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
         {:noreply, redirect(socket, external: url)}
       else
-        _ ->
-          {:noreply,
-           socket
-           |> restream_accounts()
-           |> notice("That account could not be connected. Try again.")}
+        error -> {:noreply, connect_failed(socket, account, error)}
       end
     else
       {:error, reason} -> {:noreply, notice(socket, add_error_copy(reason))}
@@ -769,11 +764,83 @@ defmodule PlatformWeb.SocialLive do
   end
 
   # A stream row; `removal` is the open confirm panel's preview, else nil.
-  defp account_item(account, %{account_id: id, preview: preview}) when id == account.id,
-    do: %{id: account.id, account: account, removal: preview, owner: owner_of(account)}
+  defp account_item(account, removing, connect_error \\ nil)
 
-  defp account_item(account, _removing),
-    do: %{id: account.id, account: account, removal: nil, owner: owner_of(account)}
+  defp account_item(account, %{account_id: id, preview: preview}, connect_error)
+       when id == account.id,
+       do: %{
+         id: account.id,
+         account: account,
+         removal: preview,
+         owner: owner_of(account),
+         connect_error: connect_error
+       }
+
+  defp account_item(account, _removing, connect_error),
+    do: %{
+      id: account.id,
+      account: account,
+      removal: nil,
+      owner: owner_of(account),
+      connect_error: connect_error
+    }
+
+  # Connect (or the connect step of Add account) failed: the reason goes on
+  # the row that was clicked AND in the pane's notice line, because the
+  # notice sits at the top of Connections and is off-screen under a long
+  # list or on a phone (2026-10-21: "nothing happens"). The rows are re-read
+  # so an account that Add just created shows with Connect.
+  defp connect_failed(socket, %Account{} = account, error) do
+    text = connect_error_copy(account, error)
+
+    socket
+    |> restream_accounts(%{account.id => text})
+    |> notice(text, :warning)
+  end
+
+  @platform_labels %{
+    "x" => "X",
+    "linkedin" => "LinkedIn",
+    "tiktok" => "TikTok",
+    "instagram" => "Instagram",
+    "youtube" => "YouTube"
+  }
+
+  defp connect_error_copy(%Account{platform: platform}, error) do
+    "Couldn't connect #{Map.get(@platform_labels, platform, platform)}. " <>
+      connect_reason(error)
+  end
+
+  # Strings come from the publisher's response handling (status code plus
+  # the vendor's own message, never the URL or the key).
+  defp connect_reason({:error, reason}) when is_binary(reason), do: reason
+
+  defp connect_reason({:error, :publisher_not_configured}),
+    do: "Publishing isn't configured on this install."
+
+  defp connect_reason({:error, :credentials_unavailable}),
+    do: "Add the Zernio API key in Settings first."
+
+  defp connect_reason({:error, :credentials_rejected}),
+    do: "Zernio rejected the API key (HTTP 401). Check the key in Settings."
+
+  defp connect_reason({:error, :rate_limited}),
+    do: "Zernio is rate limiting requests (HTTP 429). Try again in a minute."
+
+  defp connect_reason({:error, :not_found}),
+    do: "Zernio couldn't find this profile (HTTP 404). Try again."
+
+  defp connect_reason({:error, :unexpected_response}),
+    do: "Zernio answered without a sign-in link. Try again."
+
+  defp connect_reason({:error, :profile_not_linked}),
+    do: "This profile isn't linked to Zernio yet. Try again."
+
+  defp connect_reason({:error, {:unsupported_platform, _}}),
+    do: "That platform can't be connected on this install."
+
+  defp connect_reason({:error, {:profile_name_taken, _} = reason}), do: add_error_copy(reason)
+  defp connect_reason(_), do: "Try again."
 
   # The owner line (task 01a14ce1, stage 4): only an owned account carries
   # one. Display fields only.
@@ -847,15 +914,21 @@ defmodule PlatformWeb.SocialLive do
     |> Enum.join(" ")
   end
 
-  defp restream_accounts(%{assigns: %{profile: nil}} = socket), do: socket
+  # `errors` maps an account id to the connect failure shown on its row.
+  defp restream_accounts(socket, errors \\ %{})
 
-  defp restream_accounts(%{assigns: %{profile: profile}} = socket) do
+  defp restream_accounts(%{assigns: %{profile: nil}} = socket, _errors), do: socket
+
+  defp restream_accounts(%{assigns: %{profile: profile}} = socket, errors) do
     accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
+    removing = socket.assigns.removing
 
     socket
     |> assign(:accounts_empty?, accounts == [])
     |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
-    |> stream(:accounts, Enum.map(accounts, &account_item(&1, socket.assigns.removing)),
+    |> stream(
+      :accounts,
+      Enum.map(accounts, &account_item(&1, removing, Map.get(errors, &1.id))),
       reset: true
     )
   end
@@ -1809,6 +1882,15 @@ defmodule PlatformWeb.SocialLive do
                     can_edit?={@can_edit?}
                     can_connect?={@can_edit? and not @zernio_blocks_connect?}
                   />
+                  <p
+                    :if={row.connect_error}
+                    role="alert"
+                    class="flex w-full basis-full items-start gap-2 text-sm text-error"
+                    data-role="social-account-connect-error"
+                  >
+                    <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
+                    <span>{row.connect_error}</span>
+                  </p>
                   <.remove_panel
                     :if={@can_edit? and row.removal}
                     account={row.account}
