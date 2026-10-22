@@ -133,6 +133,15 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     {"mask_hooks", "toggle_mask_names"},
     {"mask_hooks", "reveal_rail_item"},
     {"mask_hooks", "remask_all"},
+    # Task 01a161fd stage 3: the phone filter sheets' open/close/drill-in.
+    # Sheet state only; every filter change is a patch link.
+    {"filter_hooks", "tasks_filter_open"},
+    {"filter_hooks", "tasks_filter_close"},
+    {"filter_hooks", "tasks_filter_epics"},
+    {"filter_hooks", "tasks_filter_back"},
+    # Stage 5: a replace patch to `?project=<id>`; the selection then goes
+    # through handle_params and its readability check like any URL.
+    {"filter_hooks", "tasks_restore_device_project"},
     {"sidebar_component", "sidebar_toggle"},
     {"sidebar_component", "sidebar_toggle_projects_section"},
     {"sidebar_component", "sidebar_toggle_epics_panel"},

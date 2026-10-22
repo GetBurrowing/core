@@ -32,6 +32,26 @@ defmodule PlatformWeb.Tasks.StatusLabels do
           "status_label/1 has no clause for #{inspect(other)}"
   end
 
+  @doc """
+  The status word in sentence case ("In progress", "Waiting"), for the phone
+  Tasks list and its filter sheet (task 01a161fd stage 3).
+  """
+  def status_sentence(status), do: status |> status_label() |> String.capitalize()
+
+  @doc """
+  The status dot's colour slot, the binding palette of canvas 01a15db1 node
+  `dots` (task 01a161fd stage 3): in_progress and deploying are `bg-info`,
+  blocked is `bg-warning`, done is `bg-success`, and backlog, planning,
+  in_review, stack_pending, cancelled and anything else are the neutral
+  `bg-edge`. The dot is decorative (`aria-hidden`); the status word beside it
+  carries the meaning. The board's own `status_dot_class/1` is NOT this
+  function: unifying the two belongs to task 01a15dc7.
+  """
+  def dot_class(status) when status in ~w(in_progress deploying), do: "bg-info"
+  def dot_class("blocked"), do: "bg-warning"
+  def dot_class("done"), do: "bg-success"
+  def dot_class(_status), do: "bg-edge"
+
   @doc "Phase key → the label the UI shows for it."
   def phase_label("planning"), do: "Planning"
   def phase_label("execution"), do: "Implementation"

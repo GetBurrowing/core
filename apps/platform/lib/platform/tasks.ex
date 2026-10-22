@@ -6635,6 +6635,45 @@ defmodule Platform.Tasks do
 
   def list_my_open_tasks(_user_id, _opts), do: []
 
+  @doc """
+  True when `task` is the user's: they sponsor it, or they are a `"user"`
+  assignee in ANY phase (the flat current-phase column or any
+  `phase_assignees` slot).
+
+  The in-memory twin of the `mine` dynamic in `list_my_open_tasks/2`
+  (`sponsor_user_id == user OR assignee_dynamic(user, "user")`), and the ONE
+  home of that rule outside SQL, so the board's in-memory narrowing
+  (`PlatformWeb.Tasks.BoardData.narrow_list/3`) never re-derives it. A parity
+  test pins it to the query. Like `assignee_dynamic/2`, a slot only counts
+  when it is a map whose `assignee_type` is `"user"`; an agent assignee with
+  the same id is not mine. A nil or non-binary `user_id` is never mine.
+  """
+  @spec mine?(Task.t() | map(), term()) :: boolean()
+  def mine?(%{} = task, user_id) when is_binary(user_id) do
+    Map.get(task, :sponsor_user_id) == user_id or
+      (Map.get(task, :assignee_id) == user_id and Map.get(task, :assignee_type) == "user") or
+      phase_slot_assigned?(Map.get(task, :phase_assignees), user_id)
+  end
+
+  def mine?(_task, _user_id), do: false
+
+  defp phase_slot_assigned?(slots, user_id) when is_map(slots) do
+    Enum.any?(slots, fn
+      {_phase, %{} = slot} ->
+        slot_value(slot, "assignee_id") == user_id and
+          slot_value(slot, "assignee_type") == "user"
+
+      _ ->
+        false
+    end)
+  end
+
+  defp phase_slot_assigned?(_slots, _user_id), do: false
+
+  # jsonb loads string keys; an unsaved struct may still carry atom keys.
+  defp slot_value(slot, key),
+    do: Map.get(slot, key) || Map.get(slot, String.to_existing_atom(key))
+
   defp maybe_filter_project(query, nil), do: query
   defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
 

@@ -16,6 +16,8 @@ defmodule PlatformWeb.Tasks.BoardData do
   is priority rank (`Platform.Tasks.Task.priority_rank/1`), then newest
   `inserted_at`, then id descending. `:updated` is `updated_at` descending,
   then id descending — the board's pre-task-01a0cef1 recency order.
+  `:newest` and `:oldest` (task 01a161fd stage 1) are `inserted_at`
+  descending / ascending, then id descending.
 
   The ordering lives HERE and not in the queries on purpose: the in-memory
   re-sorts run after `Platform.Tasks.list_all_tasks/1` /
@@ -95,18 +97,24 @@ defmodule PlatformWeb.Tasks.BoardData do
     "done" => ~w(done cancelled)
   }
 
-  @sort_modes [:priority, :updated]
+  @sort_modes [:priority, :updated, :newest, :oldest]
   @task_kinds Task.kinds()
+  @task_statuses Task.statuses()
 
-  @spec sort_modes() :: [:priority | :updated]
+  @type sort_mode :: :priority | :updated | :newest | :oldest
+
+  @spec sort_modes() :: [sort_mode()]
   def sort_modes, do: @sort_modes
 
   @doc """
-  Decode a `?sort=` value. `"updated"` selects `:updated`; anything else —
-  `nil`, `"priority"`, `"bogus"` — is the default `:priority`.
+  Decode a `?sort=` value. `"updated"`, `"newest"` and `"oldest"` select
+  their mode; anything else — `nil`, `"priority"`, `"bogus"` — is the
+  default `:priority`.
   """
-  @spec decode_sort(term()) :: :priority | :updated
+  @spec decode_sort(term()) :: sort_mode()
   def decode_sort("updated"), do: :updated
+  def decode_sort("newest"), do: :newest
+  def decode_sort("oldest"), do: :oldest
   def decode_sort(_other), do: :priority
 
   # A pasted/forged URL is untrusted input (task 01a08df0 stage 1
@@ -168,6 +176,93 @@ defmodule PlatformWeb.Tasks.BoardData do
   def decode_origin_param(_origin), do: :all
 
   @doc """
+  Decode `?project=` (task 01a161fd stage 1): a canonical UUID (downcased,
+  `Platform.UUID.cast/1`) selects that project; `"all"`, a non-UUID or a
+  missing value is `nil`, the All projects view. Whether the key was
+  present at all is the caller's question (`BoardHooks.apply_url_filters/3`
+  keeps today's selection when it is absent); readability is checked later,
+  on the shell's selection path.
+  """
+  @spec decode_project_param(term()) :: String.t() | nil
+  def decode_project_param(value), do: decode_uuid_param(value)
+
+  @doc "Decode `?epic=`: a canonical UUID, else `nil`. Membership is checked by the caller."
+  @spec decode_epic_param(term()) :: String.t() | nil
+  def decode_epic_param(value), do: decode_uuid_param(value)
+
+  defp decode_uuid_param(value) do
+    case Platform.UUID.cast(value) do
+      {:ok, id} -> id
+      :error -> nil
+    end
+  end
+
+  @doc """
+  Decode `?status=`, a comma list, to the subset of `Task.statuses/0` it
+  names, in `Task.statuses/0` order with no duplicates. Unknown values are
+  dropped; nothing valid is `[]` (every status shows).
+  """
+  @spec decode_status_param(term()) :: [String.t()]
+  def decode_status_param(value), do: decode_list_param(value, @task_statuses)
+
+  @doc """
+  Decode `?kind=` as a LIST (`:kind_filters`): the subset of `Task.kinds/0`
+  it names, in `Task.kinds/0` order. `decode_kind_param/1` stays the
+  single-value reading the old kind select and the DB opt use.
+  """
+  @spec decode_kind_list_param(term()) :: [String.t()]
+  def decode_kind_list_param(value), do: decode_list_param(value, @task_kinds)
+
+  defp decode_list_param(value, allowed) when is_binary(value) do
+    named = value |> String.split(",") |> Enum.map(&String.trim/1)
+    Enum.filter(allowed, &(&1 in named))
+  end
+
+  defp decode_list_param(_value, _allowed), do: []
+
+  @doc """
+  The single `:kind_filter` derived from `:kind_filters`: the one kind when
+  exactly one is set, otherwise `:all` (so a multi-kind URL narrows in
+  memory, not in the DB query). A single `?kind=bug` decodes exactly as
+  `decode_kind_param/1` always did.
+  """
+  @spec kind_filter_from_list([String.t()]) :: :all | String.t()
+  def kind_filter_from_list([kind]), do: kind
+  def kind_filter_from_list(_kinds), do: :all
+
+  @doc """
+  Decode `?mine=1` to `:mine_filter`. Only `"1"` is on. (The prototype spells
+  it `scope=mine`, but `?scope=` is already the org-scope param.)
+  """
+  @spec decode_mine_param(term()) :: boolean()
+  def decode_mine_param("1"), do: true
+  def decode_mine_param(_value), do: false
+
+  @doc """
+  Decode every task-01a161fd board param from a raw `params` map into the
+  assign-shaped map `tasks_path/1` reads back, so
+  `decode_filter_params(params_of(tasks_path(x)))` round-trips `x`.
+
+  `:selected_project_id` / `:selected_epic_id` here are the URL's own
+  values; `BoardHooks.apply_url_filters/3` decides whether they apply
+  (absent key, epic membership, readability).
+  """
+  @spec decode_filter_params(map()) :: map()
+  def decode_filter_params(params) when is_map(params) do
+    kind_filters = decode_kind_list_param(params["kind"])
+
+    %{
+      board_sort: decode_sort(params["sort"]),
+      selected_project_id: decode_project_param(params["project"]),
+      selected_epic_id: decode_epic_param(params["epic"]),
+      status_filters: decode_status_param(params["status"]),
+      kind_filters: kind_filters,
+      kind_filter: kind_filter_from_list(kind_filters),
+      mine_filter: decode_mine_param(params["mine"])
+    }
+  end
+
+  @doc """
   The board URL for a sponsor filter, a sort mode, a search query, a
   status scope and a task kind — the ONE builder for every patch back to `/tasks` (task
   01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
@@ -184,7 +279,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   """
   @spec tasks_path(
           :all | :mine | nil,
-          :priority | :updated | nil,
+          sort_mode() | nil,
           String.t() | nil,
           :all | String.t() | nil,
           :all | String.t() | nil
@@ -211,7 +306,7 @@ defmodule PlatformWeb.Tasks.BoardData do
       Enum.reject(
         [
           sponsor: sponsor_filter == :mine && "mine",
-          sort: board_sort == :updated && "updated",
+          sort: board_sort in [:updated, :newest, :oldest] && Atom.to_string(board_sort),
           q: search_active?(task_search_query) && task_search_query,
           scope: scope_filter not in [:all, nil] && scope_filter,
           kind: kind_filter not in [:all, nil] && kind_filter,
@@ -220,11 +315,26 @@ defmodule PlatformWeb.Tasks.BoardData do
         fn {_key, value} -> value == false end
       )
 
-    # `URI.encode_query/1` keeps the keyword order; `~p"/tasks?#{query}"`
-    # does NOT (it emits `sort` before `sponsor`), and the fixed order is
-    # what keeps `assert_patched` strings and shared URLs stable.
-    if query == [], do: ~p"/tasks", else: ~p"/tasks" <> "?" <> URI.encode_query(query)
+    build_tasks_path(query)
   end
+
+  # `URI.encode_query/1`'s pair encoding, done pair by pair so a LIST value
+  # (status, the kind list) comes out as a literal comma list
+  # (`status=in_progress,blocked`) instead of `%2C`. A string value encodes
+  # byte-identically to `URI.encode_query/1`. The keyword order is kept;
+  # `~p"/tasks?#{query}"` does NOT keep it (it emits `sort` before
+  # `sponsor`), and the fixed order is what keeps `assert_patched` strings
+  # and shared URLs stable.
+  defp build_tasks_path([]), do: ~p"/tasks"
+
+  defp build_tasks_path(query) do
+    ~p"/tasks" <> "?" <> Enum.map_join(query, "&", &encode_pair/1)
+  end
+
+  defp encode_pair({key, values}) when is_list(values),
+    do: "#{key}=" <> Enum.map_join(values, ",", &URI.encode_www_form/1)
+
+  defp encode_pair({key, value}), do: URI.encode_query([{key, value}])
 
   def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter),
     do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, :all)
@@ -243,28 +353,58 @@ defmodule PlatformWeb.Tasks.BoardData do
       iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated)
       "/tasks?sponsor=mine&sort=updated"
   """
-  @spec tasks_path(:all | :mine | nil, :priority | :updated | nil) :: String.t()
+  @spec tasks_path(:all | :mine | nil, sort_mode() | nil) :: String.t()
   def tasks_path(sponsor_filter, board_sort),
     do: tasks_path(sponsor_filter, board_sort, "", :all, :all)
 
   @doc """
-  `tasks_path/5` read off a socket's (or component's) assigns
-  (`:sponsor_filter`, `:board_sort`, `:task_search_query`, `:scope_filter`,
-  `:kind_filter`),
-  so a shell/component call site stays one line. An absent assign is the
-  default.
+  The board URL read off a socket's (or component's) assigns — the ONE
+  builder every patch back to `/tasks` goes through, so a control that
+  changes one param can never drop another.
+
+  Reads `:sponsor_filter`, `:board_sort`, `:task_search_query`,
+  `:scope_filter`, `:kind_filter`, `:origin_filter`, and (task 01a161fd
+  stage 1) `:selected_project_id`, `:selected_epic_id`, `:status_filters`,
+  `:kind_filters` and `:mine_filter`. Keys come out in a fixed order:
+  sponsor, sort, q, scope, kind, origin, project, epic, status, mine. `kind`
+  is the comma list of `:kind_filters` when it is non-empty, else
+  `:kind_filter`. An absent assign is the default and defaults emit nothing,
+  so a bare board is still `/tasks`:
+
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(%{})
+      "/tasks"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(%{board_sort: :oldest, status_filters: ["in_progress", "blocked"], kind_filters: ["feature", "bug"], mine_filter: true})
+      "/tasks?sort=oldest&kind=feature,bug&status=in_progress,blocked&mine=1"
   """
   @spec tasks_path(map()) :: String.t()
   def tasks_path(%{} = assigns) do
-    tasks_path(
-      assigns[:sponsor_filter],
-      assigns[:board_sort],
-      assigns[:task_search_query],
-      assigns[:scope_filter],
-      assigns[:kind_filter],
-      assigns[:origin_filter]
-    )
+    kind_filters = list_assign(assigns[:kind_filters])
+    status_filters = list_assign(assigns[:status_filters])
+
+    [
+      sponsor: assigns[:sponsor_filter] == :mine && "mine",
+      sort:
+        assigns[:board_sort] in [:updated, :newest, :oldest] &&
+          Atom.to_string(assigns[:board_sort]),
+      q: search_active?(assigns[:task_search_query]) && assigns[:task_search_query],
+      scope: assigns[:scope_filter] not in [:all, nil] && assigns[:scope_filter],
+      kind:
+        if(kind_filters == [],
+          do: assigns[:kind_filter] not in [:all, nil] && assigns[:kind_filter],
+          else: kind_filters
+        ),
+      origin: assigns[:origin_filter] == "external_feedback" && assigns[:origin_filter],
+      project: is_binary(assigns[:selected_project_id]) && assigns[:selected_project_id],
+      epic: is_binary(assigns[:selected_epic_id]) && assigns[:selected_epic_id],
+      status: status_filters != [] && status_filters,
+      mine: assigns[:mine_filter] == true && "1"
+    ]
+    |> Enum.reject(fn {_key, value} -> value in [false, nil] end)
+    |> build_tasks_path()
   end
+
+  defp list_assign(values) when is_list(values), do: values
+  defp list_assign(_values), do: []
 
   @doc """
   Order a board list of `%Task{}` and `%Stack{}` items. A TOTAL order: the id
@@ -278,11 +418,13 @@ defmodule PlatformWeb.Tasks.BoardData do
       priorities, after `"low"`). A stack's newest-key is its own
       `inserted_at`.
     * `:updated` — `{updated_at desc, id desc}`.
+    * `:newest` — `{inserted_at desc, id desc}`.
+    * `:oldest` — `{inserted_at asc, id desc}`.
 
   Timestamps compare as integer microseconds, never by term order on
   `%DateTime{}` structs.
   """
-  @spec sort_items([%Task{} | %Stack{}], :priority | :updated, map() | nil) ::
+  @spec sort_items([%Task{} | %Stack{}], sort_mode(), map() | nil) ::
           [%Task{} | %Stack{}]
   def sort_items(items, mode, stack_board_data \\ %{}) when mode in @sort_modes do
     stack_board_data = stack_board_data || %{}
@@ -299,6 +441,8 @@ defmodule PlatformWeb.Tasks.BoardData do
     do: {item_rank(item, stack_board_data), -timestamp_us(item.inserted_at)}
 
   defp sort_key(item, :updated, _stack_board_data), do: {-timestamp_us(item.updated_at)}
+  defp sort_key(item, :newest, _stack_board_data), do: {-timestamp_us(item.inserted_at)}
+  defp sort_key(item, :oldest, _stack_board_data), do: {timestamp_us(item.inserted_at)}
 
   defp item_rank(%Task{priority: priority}, _stack_board_data), do: Task.priority_rank(priority)
 
@@ -427,6 +571,107 @@ defmodule PlatformWeb.Tasks.BoardData do
       {String.to_existing_atom(col_key), bucket}
     end)
   end
+
+  @doc """
+  The ONE narrowed task list (task 01a161fd stage 1): every board filter
+  applied in memory over already-loaded tasks, then `sort_items/3`.
+
+  `filters` is assign-shaped (the socket's assigns work as-is):
+  `:selected_project_id`, `:selected_epic_id`, `:status_filters`,
+  `:kind_filters` / `:kind_filter`, `:mine_filter`, `:sponsor_filter`,
+  `:task_search_query`, `:origin_filter`, `:scope_filter`, `:board_sort`.
+  `ctx` carries `:current_user_id`, `:agent_names` and `:root_org_slug`.
+  An absent key is that filter's default, which keeps everything; by default
+  every status shows, done included.
+
+    * mine — `Platform.Tasks.mine?/2` (sponsor, or a `"user"` assignee in
+      any phase), the same rule as `Tasks.list_my_open_tasks/2`.
+    * org scope — mirrors `BoardComponent`'s `board_scope/1` +
+      `desktop_column_items_for_scope/6`: `:all`, `nil` or the root org's
+      slug keeps everything; any other org slug is empty today.
+    * kind — the `:kind_filters` set when non-empty, else the single
+      `:kind_filter`.
+
+  Pure: no Repo, no socket.
+  """
+  @spec narrow_list([%Task{}], map(), map()) :: [%Task{}]
+  def narrow_list(tasks, filters, ctx) when is_list(tasks) do
+    user_id = ctx[:current_user_id]
+    q = normalize_search(filters[:task_search_query])
+    agent_names = ctx[:agent_names] || %{}
+    statuses = list_assign(filters[:status_filters])
+    kinds = narrow_kinds(filters)
+
+    if org_scope_empty?(filters[:scope_filter], ctx[:root_org_slug]) do
+      []
+    else
+      tasks
+      |> Enum.filter(fn task ->
+        matches_id?(task.project_id, filters[:selected_project_id]) and
+          matches_id?(task.epic_id, filters[:selected_epic_id]) and
+          board_keep?(task, statuses, kinds, filters[:mine_filter] == true, user_id) and
+          (filters[:sponsor_filter] != :mine or
+             (is_binary(user_id) and task.sponsor_user_id == user_id)) and
+          (filters[:origin_filter] != "external_feedback" or
+             task.origin == "external_feedback") and
+          (q == "" or task_matches_search?(task, q, agent_names))
+      end)
+      |> sort_items(narrow_sort(filters[:board_sort]))
+    end
+  end
+
+  @doc """
+  True when the desktop board needs `narrow_board/3` (task 01a161fd stage 4):
+  a status set, Mine, or MORE than one kind. A single kind already narrows the
+  board's DB query (`:kind_filter`), and project, epic, sponsor and origin are
+  DB opts too, so with none of these three set the board is today's board.
+  """
+  @spec board_narrowing?(map()) :: boolean()
+  def board_narrowing?(filters) do
+    list_assign(filters[:status_filters]) != [] or filters[:mine_filter] == true or
+      length(list_assign(filters[:kind_filters])) > 1
+  end
+
+  @doc """
+  The desktop board's narrowing (task 01a161fd stage 4): the status set, the
+  kind set and Mine, through the SAME predicate `narrow_list/3` applies.
+  Order-preserving; it filters and never sorts, so the board's own sort and
+  bucketing stay in charge.
+  """
+  @spec narrow_board([%Task{}], map(), map()) :: [%Task{}]
+  def narrow_board(tasks, filters, ctx) when is_list(tasks) do
+    statuses = list_assign(filters[:status_filters])
+    kinds = narrow_kinds(filters)
+    mine? = filters[:mine_filter] == true
+    user_id = ctx[:current_user_id]
+
+    Enum.filter(tasks, &board_keep?(&1, statuses, kinds, mine?, user_id))
+  end
+
+  defp board_keep?(task, statuses, kinds, mine?, user_id) do
+    (statuses == [] or task.status in statuses) and
+      (kinds == [] or task.kind in kinds) and
+      (not mine? or Platform.Tasks.mine?(task, user_id))
+  end
+
+  defp matches_id?(_value, nil), do: true
+  defp matches_id?(value, id), do: value == id
+
+  defp narrow_kinds(filters) do
+    case {list_assign(filters[:kind_filters]), filters[:kind_filter]} do
+      {[], kind} when is_binary(kind) -> [kind]
+      {kinds, _kind} -> kinds
+    end
+  end
+
+  defp narrow_sort(mode) when mode in @sort_modes, do: mode
+  defp narrow_sort(_mode), do: :priority
+
+  # `BoardComponent.board_scope/1`: the root org's chip is the unfiltered
+  # board; `desktop_column_items_for_scope/6`: any other binary scope is
+  # empty.
+  defp org_scope_empty?(scope, root_slug) when is_binary(scope), do: scope != root_slug
+  defp org_scope_empty?(_scope, _root_slug), do: false
 
   @doc "Downcased, trimmed search query. `nil` normalises to an empty string."
   def normalize_search(nil), do: ""

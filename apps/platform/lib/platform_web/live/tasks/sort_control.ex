@@ -44,10 +44,17 @@ defmodule PlatformWeb.Tasks.SortControl do
   alias Phoenix.LiveView.JS
   alias PlatformWeb.Tasks.BoardData
 
-  @labels %{priority: "Sort: Priority", updated: "Sort: Updated"}
+  # One label per `BoardData.sort_modes/0` member: `label/1` is a
+  # `Map.fetch!`, so a mode without a label crashes the control.
+  @labels %{
+    priority: "Sort: Priority",
+    updated: "Sort: Updated",
+    newest: "Sort: Newest",
+    oldest: "Sort: Oldest"
+  }
 
   @doc "The visible label for a sort mode."
-  @spec label(:priority | :updated) :: String.t()
+  @spec label(BoardData.sort_mode()) :: String.t()
   def label(mode), do: Map.fetch!(@labels, mode)
 
   attr :id, :string, required: true
@@ -61,6 +68,13 @@ defmodule PlatformWeb.Tasks.SortControl do
   attr :scope_filter, :any, default: :all
   attr :kind_filter, :any, default: :all
   attr :origin_filter, :any, default: :all
+  # Task 01a161fd stage 1: the new URL params, threaded through so a sort
+  # click's patch preserves them too.
+  attr :selected_project_id, :any, default: nil
+  attr :selected_epic_id, :any, default: nil
+  attr :status_filters, :list, default: []
+  attr :kind_filters, :list, default: []
+  attr :mine_filter, :boolean, default: false
   attr :mobile?, :boolean, default: false, doc: "44px touch target"
   attr :class, :string, default: nil
 
@@ -127,7 +141,12 @@ defmodule PlatformWeb.Tasks.SortControl do
                 task_search_query: @task_search_query,
                 scope_filter: @scope_filter,
                 kind_filter: @kind_filter,
-                origin_filter: @origin_filter
+                origin_filter: @origin_filter,
+                selected_project_id: @selected_project_id,
+                selected_epic_id: @selected_epic_id,
+                status_filters: @status_filters,
+                kind_filters: @kind_filters,
+                mine_filter: @mine_filter
               })
             }
             role="menuitemradio"

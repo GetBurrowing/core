@@ -19,12 +19,16 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       `:expanded_stacks`,
       `:review_counts`, `:pending_plan_count`, `:scope_counts`,
       `:scope_counts_db`, `:visible_task_count`,
-      `:review_request_subscriptions`, `:my_tasks`, `:my_needs_you`
+      `:review_request_subscriptions`, `:my_tasks`, `:my_needs_you`,
+      and (task 01a161fd stage 1) `:status_filters`, `:kind_filters`,
+      `:mine_filter`, `:filtered_tasks`, `:filtered_count`, and (stage 2)
+      `:tasks_project_source`, and (stage 3, through `FilterHooks`)
+      `:tasks_filter_sheet`, `:tasks_filter_epics`
     * Info: `{:task_updated, _}`, `{:task_created, _}`, `{:task_deleted, _}`,
       `{:tasks_batch_deleted, _, _}`, `{:epic_created, _}`,
       `{:epic_updated, _}`, `{:plan_updated, _}`,
       `{:stack_gate_opened, _, _}`, `{:review_request_pending, _}`,
-      `{:review_request_resolved, _}`
+      `{:review_request_resolved, _}`, `{:tasks_pref_settled}` (stage 2)
 
   The component re-renders from the assigns the hook writes — no
   `send_update/2` mediation is needed for board data, because
@@ -55,6 +59,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   alias Platform.Tasks.ReviewRequests
   alias Platform.Tasks.Stacks
   alias PlatformWeb.Tasks.BoardData
+  alias PlatformWeb.Tasks.FilterHooks
+  alias PlatformWeb.Tasks.FilterPrefs
   alias PlatformWeb.Tasks.Selection
   alias PlatformWeb.Tasks.StacksComponent
 
@@ -72,6 +78,15 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # The External Feedback lane (task 01a11ec3 stage 4). Defaulted here, not
     # in the budgeted shell; `apply_url_filters/3` is its only other writer.
     |> assign(:origin_filter, :all)
+    # Task 01a161fd stage 1: the multi-value URL filters, likewise defaulted
+    # here and written only by `apply_url_filters/3`.
+    |> assign(:status_filters, [])
+    |> assign(:kind_filters, [])
+    |> assign(:mine_filter, false)
+    # Task 01a161fd stage 2: "pref" when a stored project was applied.
+    |> assign(:tasks_project_source, nil)
+    # Task 01a161fd stage 3: the phone header's sheet state and events.
+    |> FilterHooks.attach()
     |> attach_hook(:board_info, :handle_info, &handle_info/2)
   end
 
@@ -107,6 +122,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   defp handle_info({:stack_gate_opened, _stack_id, _executable_ids}, socket),
     do: {:halt, socket}
 
+  # Task 01a161fd stage 2: the URL selection's messages have all been handled.
+  defp handle_info({:tasks_pref_settled}, socket), do: {:halt, FilterPrefs.settled(socket)}
+
   defp handle_info(_message, socket), do: {:cont, socket}
 
   # Board + open detail panel + open stack panel all re-read. Used by the
@@ -139,6 +157,10 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   search-only rebuild on top of that would be redundant work, not a
   correctness fix.
 
+  Task 01a161fd stage 4: a status set, Mine or kind-list change is a
+  `refresh_board/1` too, because the desktop board honours them
+  (`maybe_reapply_search/1` re-narrows through `BoardData.narrow_board/3`).
+
   No expanded-stack assign is touched BY THIS FUNCTION directly — a plain,
   unchanged `refresh_board/1` still resets `:expanded_stacks` (pre-existing,
   ADR 0041 acceptance criterion 3) and a plain `rebuild_board_shapes/1`
@@ -156,12 +178,35 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       ) do
     # `?origin=` (task 01a11ec3 stage 4) is decoded HERE from the raw params
     # rather than in `TasksLive.handle_params/3`, whose line count is pinned.
+    # So are task 01a161fd stage 1's `project`, `epic`, `status`, the kind
+    # LIST and `mine`. With no `project` key, the person's stored project
+    # and epic (stage 2, `FilterPrefs`) stand in for it on the first call.
+    {socket, params} = FilterPrefs.apply_stored(socket, params)
     new_origin = BoardData.decode_origin_param(params["origin"])
+    decoded = BoardData.decode_filter_params(params)
+
+    # parallel-ui: tasks.kind_filter_single
+    # `:kind_filter` (the old select's value and the DB opt) is DERIVED from
+    # the list: the one kind when exactly one is set, else `:all`, so a
+    # multi-kind URL narrows in memory and a single `?kind=bug` decodes
+    # exactly as before.
+    new_kind = if decoded.kind_filters == [], do: new_kind, else: decoded.kind_filter
+
+    narrow =
+      {decoded.status_filters, decoded.kind_filters, decoded.mine_filter}
+
+    narrow_changed? =
+      narrow !=
+        {socket.assigns[:status_filters], socket.assigns[:kind_filters],
+         socket.assigns[:mine_filter]}
+
+    {socket, selection_changed?} = apply_url_selection(socket, params, decoded)
 
     board_changed? =
-      {new_sponsor, new_sort, new_kind, new_origin} !=
-        {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
-         socket.assigns[:kind_filter], socket.assigns[:origin_filter]}
+      selection_changed? or
+        {new_sponsor, new_sort, new_kind, new_origin} !=
+          {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
+           socket.assigns[:kind_filter], socket.assigns[:origin_filter]}
 
     search_changed? = new_query != socket.assigns[:task_search_query]
 
@@ -173,12 +218,141 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> assign(:scope_filter, new_scope)
       |> assign(:kind_filter, new_kind)
       |> assign(:origin_filter, new_origin)
+      |> assign(:status_filters, decoded.status_filters)
+      |> assign(:kind_filters, decoded.kind_filters)
+      |> assign(:mine_filter, decoded.mine_filter)
+
+    socket =
+      cond do
+        board_changed? -> refresh_board(socket)
+        search_changed? -> rebuild_board_shapes(socket)
+        # Stage 4: the desktop board narrows by these too. A re-query, so
+        # clearing the last one restores the DB-derived shapes exactly.
+        narrow_changed? -> refresh_board(socket)
+        true -> socket
+      end
+
+    # A URL that changes nothing (`project=all` over a stored project) still
+    # stores its resolved selection. Stage 3: a pick closes the project sheet.
+    # Stage 5: the bare entry the LiveView opened on is rewritten in place to
+    # the selection it shows, so Back to it shows that selection again.
+    socket |> FilterHooks.after_patch() |> FilterPrefs.sync() |> FilterPrefs.pin_url()
+  end
+
+  # `?project=` / `?epic=` (task 01a161fd stage 1). The selection itself is
+  # the shell's: a changed project goes through `{:sidebar_project_selected,
+  # id}` (readability check, archived fallback, epic reload,
+  # `selected_project_changed` push) and `nil` through
+  # `{:tasks_filters_cleared}`, so there is no second selection path.
+  #
+  # Those are messages, handled AFTER this render. Measured: without help
+  # the first connected render still shows the previous project. So a
+  # project the viewer can read (and that is not archived) is ALSO assigned
+  # here, with its epic and epic list, before the send, and the dead render
+  # (where nothing is sent) shows it too. An unreadable or archived id is
+  # never pre-assigned; the shell's fallback resolves it.
+  #
+  # Absent `project` keeps today's selection. Absent `epic` keeps the
+  # current epic only when `project` is absent too. An epic is honoured only
+  # when it belongs to the target project. `{:sidebar_epic_selected, id}`
+  # TOGGLES, so it is sent only when the epic actually differs.
+  defp apply_url_selection(socket, params, decoded) do
+    current_project = socket.assigns[:selected_project_id]
+    current_epic = socket.assigns[:selected_epic_id]
+    project_key? = Map.has_key?(params, "project")
+
+    target_project = if project_key?, do: decoded.selected_project_id, else: current_project
+
+    target_epic =
+      cond do
+        Map.has_key?(params, "epic") -> epic_in_project(decoded.selected_epic_id, target_project)
+        project_key? -> nil
+        true -> current_epic
+      end
 
     cond do
-      board_changed? -> refresh_board(socket)
-      search_changed? -> rebuild_board_shapes(socket)
-      true -> socket
+      target_project != current_project ->
+        {select_url_project(socket, target_project, target_epic), true}
+
+      # Connected, the epic message refreshes the board itself.
+      target_epic != current_epic ->
+        {select_url_epic(socket, target_epic, current_epic), not connected?(socket)}
+
+      true ->
+        {socket, false}
     end
+  end
+
+  defp select_url_project(socket, nil, _epic) do
+    socket =
+      if connected?(socket) do
+        send(self(), {:tasks_filters_cleared})
+        FilterPrefs.hold(socket)
+      else
+        socket
+      end
+
+    assign_selection(socket, nil, nil)
+  end
+
+  defp select_url_project(socket, project_id, epic_id) do
+    project = Selection.readable_project(socket, project_id)
+    readable? = not is_nil(project) and not Platform.Projects.archived?(project)
+
+    if connected?(socket) do
+      send(self(), {:sidebar_project_selected, project_id})
+      # `select_project/2` resets the epic to nil first, so this toggle sets it.
+      if readable? and epic_id, do: send(self(), {:sidebar_epic_selected, epic_id})
+    end
+
+    socket = if connected?(socket), do: FilterPrefs.hold(socket), else: socket
+    if readable?, do: assign_selection(socket, project_id, epic_id), else: socket
+  end
+
+  defp select_url_epic(socket, epic_id, current_epic) do
+    if connected?(socket) do
+      send(self(), {:sidebar_epic_selected, epic_id || current_epic})
+      FilterPrefs.hold(socket)
+    else
+      assign(socket, :selected_epic_id, epic_id)
+    end
+  end
+
+  defp assign_selection(socket, project_id, epic_id) do
+    socket
+    |> assign(:selected_project_id, project_id)
+    |> assign(:selected_epic_id, epic_id)
+    |> PlatformWeb.Tasks.EpicLoaders.reload_epics()
+  end
+
+  defp epic_in_project(nil, _project_id), do: nil
+  defp epic_in_project(_epic_id, nil), do: nil
+
+  defp epic_in_project(epic_id, project_id) do
+    case Tasks.get_epic(epic_id) do
+      %{project_id: ^project_id} -> epic_id
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The ONE narrowed task list (task 01a161fd stage 1): `:filtered_tasks` and
+  `:filtered_count`, `BoardData.narrow_list/3` over `:all_tasks` with the
+  socket's own filter assigns. Written by `refresh_board/1` and
+  `rebuild_board_shapes/1`, and alone when only an in-memory filter changed.
+  """
+  def assign_filtered(socket) do
+    ctx = %{
+      current_user_id: socket.assigns[:current_user_id],
+      agent_names: socket.assigns[:agent_names] || %{},
+      root_org_slug: socket.assigns[:root_org_slug]
+    }
+
+    filtered = BoardData.narrow_list(socket.assigns[:all_tasks] || [], socket.assigns, ctx)
+
+    socket
+    |> assign(:filtered_tasks, filtered)
+    |> assign(:filtered_count, length(filtered))
   end
 
   @doc """
@@ -256,6 +430,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # An active search must survive PubSub-driven refreshes — the assigns
     # above are the unfiltered sources; re-narrow the derived shapes.
     |> maybe_reapply_search()
+    |> assign_filtered()
+    # Task 01a161fd stage 2: remember the resolved selection, when it changed.
+    |> FilterPrefs.sync()
   end
 
   @doc """
@@ -270,7 +447,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     board_sort = board_sort(socket)
     agent_names = socket.assigns.agent_names
 
-    tasks =
+    searched =
       case q do
         "" ->
           socket.assigns.all_tasks
@@ -282,6 +459,25 @@ defmodule PlatformWeb.Tasks.BoardHooks do
           )
       end
 
+    # Task 01a161fd stage 4: the desktop board also honours the status set,
+    # Mine and a multi-kind set, through narrow_list/3's own predicate. With
+    # none set this is skipped, so the shapes are exactly the search-only ones.
+    narrowing? = BoardData.board_narrowing?(socket.assigns)
+    ctx = %{current_user_id: socket.assigns[:current_user_id]}
+
+    tasks =
+      if narrowing?,
+        do: BoardData.narrow_board(searched, socket.assigns, ctx),
+        else: searched
+
+    # A stack card stays while narrowing only if one of its members survives.
+    kept_stack_ids =
+      if narrowing? do
+        socket.assigns.all_tasks
+        |> BoardData.narrow_board(socket.assigns, ctx)
+        |> MapSet.new(& &1.stack_id)
+      end
+
     # Pair each stack with its board data BEFORE narrowing: the matcher is
     # member-aware (task 01a06df3), and a member's title is only reachable
     # through `:stack_board_data`. Filtering the bare `%Stack{}` list first
@@ -291,7 +487,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       socket.assigns.stacks
       |> Enum.map(&{&1, Map.get(socket.assigns.stack_board_data, &1.id, %{})})
       |> Enum.filter(fn {stack, board_data} ->
-        BoardData.stack_matches_search?(stack, board_data, q)
+        BoardData.stack_matches_search?(stack, board_data, q) and
+          (is_nil(kept_stack_ids) or MapSet.member?(kept_stack_ids, stack.id))
       end)
 
     # Design review 2026-07-12 ("narrow everything"): while a query is active every
@@ -326,6 +523,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign(:scope_counts, scope_counts)
     |> assign(:visible_task_count, length(tasks))
     |> expand_member_matched_stacks(stack_entries, q)
+    |> assign_filtered()
   end
 
   # The active list order; `:priority` until something (the stage-2 `?sort=`
@@ -450,10 +648,13 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign(:my_needs_you, needs_you)
   end
 
-  # No-op passthrough when there is no active query, so the DB-computed
-  # shapes from `refresh_board/1` stay authoritative in the common case.
+  # No-op passthrough when there is no active query and no board narrowing
+  # (status set, Mine, multi kind; task 01a161fd stage 4), so the
+  # DB-computed shapes from `refresh_board/1` stay authoritative in the
+  # common case.
   defp maybe_reapply_search(socket) do
-    if BoardData.search_active?(socket.assigns[:task_search_query]) do
+    if BoardData.search_active?(socket.assigns[:task_search_query]) or
+         BoardData.board_narrowing?(socket.assigns) do
       rebuild_board_shapes(socket)
     else
       socket

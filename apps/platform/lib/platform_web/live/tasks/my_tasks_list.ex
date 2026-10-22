@@ -4,11 +4,15 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   masters prototype 01a137f2 `master-mobile.html` v3 :26, :42-44, :274-280,
   :586-594).
 
-  Renders `@my_tasks` and `@my_needs_you`, both written by
-  `PlatformWeb.Tasks.BoardHooks.refresh_board/1`, so the list follows every
-  PubSub board event without a handler of its own. Below `lg` it is what
-  /tasks shows at load. At `lg` and wider it is `display: none` and the
-  desktop board is unchanged.
+  Renders `@filtered_tasks`, `BoardData.narrow_list/3` over the board's
+  tasks with the URL filters (task 01a161fd stage 1), written by
+  `PlatformWeb.Tasks.BoardHooks`, so the list follows every PubSub board
+  event without a handler of its own. "Mine" is a filter (`?mine=1`), not the
+  list's definition: the default is every task in every status, as in the
+  designer's prototype (canvas 01a16202). The header, chips and sheets are
+  `PlatformWeb.Tasks.FilterBar` and `FilterSheets` (stage 3). Below `lg` it
+  is what /tasks shows at load. At `lg` and wider it is `display: none` and
+  the desktop board is unchanged.
 
   ## Rows are plain patch links
 
@@ -19,9 +23,10 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   `TasksLive.handle_params/3` for `/tasks/:task_id` already does everything an
   open needs, including `Inbox.dismiss_sponsor_row_on_open/2`.
 
-  ## The All tasks / My tasks switch
+  ## The Board / list switch
 
-  Today's phone board stays reachable through "All tasks", because it is
+  Today's phone board stays reachable through "Board" (rung 15 called it
+  "All tasks"), because it is
   still the only phone path to the projects menu, create menu, filters, board
   and task gates (coverage rows 162-166), which have no phone design yet. The
   switch is a client-side class toggle on `#tasks-my-list`, `#tasks-main` and
@@ -38,7 +43,7 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   canvas 01a15db1 (rev 2 and later) rules hover out on phone-only lists,
   although the prototype shows one.
 
-  The status dot is decorative (`aria-hidden`). The status word on the meta
+  The status dot (`StatusLabels.dot_class/1`) is decorative (`aria-hidden`). The status word on the meta
   line carries the same meaning in text, so the dot has no contrast floor
   (WCAG 1.4.11 applies to graphics required to understand the content).
   """
@@ -46,6 +51,8 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   use PlatformWeb, :verified_routes
 
   alias Phoenix.LiveView.JS
+  alias PlatformWeb.Tasks.FilterBar
+  alias PlatformWeb.Tasks.FilterSheets
   alias PlatformWeb.Tasks.StatusLabels
   alias PlatformWeb.Tasks.TaskDisplay
 
@@ -65,52 +72,95 @@ defmodule PlatformWeb.Tasks.MyTasksList do
     |> JS.remove_class("max-lg:hidden", to: "#tasks-my-list")
   end
 
-  attr :my_tasks, :list, required: true
+  attr :filtered_tasks, :list, required: true, doc: "BoardData.narrow_list/3 (stage 1)"
+  attr :filtered_count, :integer, required: true
   attr :my_needs_you, :any, required: true
   attr :mask_names?, :boolean, default: false
   attr :mask_labels, :map, default: %{}
+  attr :projects, :list, default: []
+  attr :epics, :list, default: [], doc: "the selected project's epics"
+  attr :active_scopes, :list, default: []
+  attr :sheet, :any, default: nil, doc: "@tasks_filter_sheet"
+  attr :drill_epics, :list, default: [], doc: "@tasks_filter_epics"
+  # The URL state, read by `FilterBar.url_state/1` for every patch link.
+  attr :selected_project_id, :any, default: nil
+  attr :selected_epic_id, :any, default: nil
+  attr :board_sort, :atom, default: :priority
+  attr :status_filters, :list, default: []
+  attr :kind_filters, :list, default: []
+  attr :kind_filter, :any, default: :all
+  attr :mine_filter, :boolean, default: false
+  attr :sponsor_filter, :atom, default: :all
+  attr :task_search_query, :string, default: ""
+  attr :scope_filter, :any, default: :all
+  attr :origin_filter, :any, default: :all
 
   def my_tasks_list(assigns) do
+    url = FilterBar.url_state(assigns)
+
+    org_label =
+      &FilterBar.org_label(assigns.mask_labels, assigns.mask_names?, assigns.active_scopes, &1)
+
+    filters = FilterBar.active_filters(url, org_label)
+
+    assigns =
+      assigns
+      |> assign(:url, url)
+      |> assign(:filters, filters)
+      |> assign(:clear_href, FilterBar.clear_href(url))
+      |> assign(:project_label, FilterBar.title_project(assigns))
+      |> assign(:epic_label, FilterBar.title_epic(assigns))
+
     ~H"""
     <section
       id="tasks-my-list"
       data-role="tasks-my-list"
       class="lg:hidden flex min-h-0 min-w-0 flex-1 flex-col bg-base-200"
     >
-      <header class="flex h-13 shrink-0 items-center gap-2.5 px-4">
-        <h1 class="min-w-0 flex-1 truncate text-[17px] font-semibold text-base-content">
-          Tasks
-          <span data-role="tasks-my-subtitle" class="block text-xs font-normal text-subtle">
-            mine · {length(@my_tasks)} open
-          </span>
-        </h1>
+      <div class="flex shrink-0 items-center pr-2">
+        <FilterBar.header
+          project_label={@project_label}
+          epic_label={@epic_label}
+          expanded?={FilterSheets.project_open?(@sheet)}
+          count={length(@filters)}
+        />
         <button
           type="button"
           data-role="tasks-show-board"
           phx-click={show_board()}
-          class="inline-flex h-11 min-w-11 shrink-0 items-center justify-center rounded-field px-3 text-sm font-medium text-base-content active:bg-base-100 focus-visible-ring"
+          class="inline-flex h-11 min-w-11 shrink-0 items-center justify-center rounded-field px-2 text-sm font-medium text-base-content active:bg-base-100 focus-visible-ring"
         >
-          All tasks
+          Board
         </button>
-      </header>
+      </div>
+      <FilterBar.search query={@task_search_query} />
+      <FilterBar.chips board_sort={@board_sort} filters={@filters} clear_href={@clear_href} />
       <div class="flex-1 overflow-y-auto overscroll-contain clears-tab-bar">
-        <p
-          :if={@my_tasks == []}
+        <div
+          :if={@filtered_tasks == []}
           data-role="tasks-my-empty"
           class="px-6 py-10 text-center text-sm text-subtle"
         >
-          No tasks assigned to you.
-        </p>
+          <p>No tasks match these filters</p>
+          <.link
+            :if={@filters != []}
+            patch={@clear_href}
+            data-role="tasks-empty-clear"
+            class="mt-1.5 inline-flex min-h-11 items-center text-sm font-medium text-base-content underline focus-visible-ring"
+          >
+            Clear all
+          </.link>
+        </div>
         <.link
-          :for={task <- @my_tasks}
+          :for={task <- @filtered_tasks}
           patch={~p"/tasks/#{task.id}"}
           data-role="tasks-my-row"
-          data-task-id={task.id}
+          data-row-task-id={task.id}
           class="flex min-h-14 items-start gap-3 rounded-box px-[18px] py-3 active:bg-base-100 focus-visible-ring"
         >
           <span
             data-role="tasks-my-dot"
-            class={["mt-1.5 size-2.5 shrink-0 rounded-full", dot_class(task.status)]}
+            class={["mt-1.5 size-2.5 shrink-0 rounded-full", StatusLabels.dot_class(task.status)]}
             aria-hidden="true"
           >
           </span>
@@ -124,40 +174,67 @@ defmodule PlatformWeb.Tasks.MyTasksList do
               {task.title}
             </b>
             <span class="flex min-w-0 gap-1 text-xs text-subtle">
-              <span class="shrink-0">{status_word(task.status)}</span>
+              <span class="shrink-0">{StatusLabels.status_sentence(task.status)}</span>
               <%= if project = loaded_project(task) do %>
                 <span aria-hidden="true">·</span>
                 <span data-role="tasks-my-project" class="min-w-0 truncate">
                   {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, project.id},
                     real: project.name
                   )}
+                  <%= if epic = loaded_epic(task) do %>
+                    <span data-role="tasks-my-epic">
+                      › {TaskDisplay.label_for(@mask_labels, @mask_names?, {:epic, epic.id},
+                        real: epic.name
+                      )}
+                    </span>
+                  <% end %>
                 </span>
               <% end %>
             </span>
           </span>
-          <span
-            :if={MapSet.member?(@my_needs_you, task.id)}
-            data-role="tasks-needs-you"
-            class="shrink-0 self-start whitespace-nowrap rounded-selector bg-warning px-2 py-0.5 text-xs font-medium text-warning-content"
-          >
-            Needs you
+          <span class="flex shrink-0 flex-col items-end gap-1">
+            <span
+              :if={MapSet.member?(@my_needs_you, task.id)}
+              data-role="tasks-needs-you"
+              class="whitespace-nowrap rounded-selector bg-warning px-2 py-0.5 text-xs font-medium text-warning-content"
+            >
+              Needs you
+            </span>
+            <span
+              data-role="tasks-my-priority"
+              class="whitespace-nowrap pt-0.5 text-xs font-semibold text-base-content"
+            >
+              {priority_word(task.priority)}
+            </span>
           </span>
         </.link>
       </div>
+      <FilterSheets.project_sheet
+        sheet={@sheet}
+        url={@url}
+        projects={@projects}
+        drill_epics={@drill_epics}
+        mask_names?={@mask_names?}
+        mask_labels={@mask_labels}
+      />
+      <FilterSheets.filter_sheet
+        open?={@sheet == :filter}
+        url={@url}
+        count={@filtered_count}
+        active_scopes={@active_scopes}
+        mask_names?={@mask_names?}
+        mask_labels={@mask_labels}
+      />
     </section>
     """
   end
 
-  @doc "The status word on the meta line: the board's label, lower-cased."
-  def status_word(status), do: status |> StatusLabels.status_label() |> String.downcase()
+  @doc "The priority word at a row's right: 'Critical', 'High', 'Medium', 'Low'."
+  def priority_word(priority) when is_binary(priority), do: String.capitalize(priority)
+  def priority_word(_priority), do: nil
 
-  @doc """
-  The status dot's slot (prototype `--active` / `--warning` / `--edge`). A
-  status added later falls to the neutral edge slot.
-  """
-  def dot_class(status) when status in ~w(planning in_progress deploying), do: "bg-success"
-  def dot_class(status) when status in ~w(in_review blocked), do: "bg-warning"
-  def dot_class(_status), do: "bg-edge"
+  defp loaded_epic(%{epic: %{id: _} = epic}), do: epic
+  defp loaded_epic(_task), do: nil
 
   defp loaded_project(%{project: %{id: _} = project}), do: project
   defp loaded_project(_task), do: nil

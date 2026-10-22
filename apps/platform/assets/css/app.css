@@ -8980,3 +8980,15 @@ body.screen-share-fullscreen-active {
   overflow: hidden !important;
   overscroll-behavior: none;
 }
+
+/* Tasks filters, desktop hover (task 01a161fd stage 4; the designer's
+   prototype canvas 01a16202, Desktop mode). The title menu's options and the
+   filter popover's toggles take base-200 under a real pointer at lg and up.
+   Plain CSS on named classes, never a `hover:` utility: the same options
+   render in the phone sheets, where hover is ruled out. */
+@media (hover: hover) and (min-width: 1024px) {
+  .tasks-filter-opt:hover,
+  .tasks-filter-tog:hover {
+    background-color: var(--color-base-200);
+  }
+}

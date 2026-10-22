@@ -2,6 +2,7 @@
   id="tasks-last-project"
   phx-hook="LastProject"
   data-selected-project-id={@selected_project_id || "__all__"}
+  data-project-source={@tasks_project_source}
   class="flex h-full min-h-0"
 >
   <%!-- Sidebar / Projects / Epics (task 01a008f6 stage 2). The desktop
@@ -25,13 +26,31 @@
     current_user_id={@current_user_id}
   />
 
-  <%!-- Phone my-tasks list (task 01a1557a-b20a stage 2). Below lg it is the
-       view at load; "All tasks" swaps to #tasks-main by a sticky JS class op. --%>
+  <%!-- Phone Tasks list (task 01a1557a-b20a stage 2; header, sheets and the
+       narrowed list task 01a161fd stage 3). Below lg it is the view at load;
+       "Board" swaps to #tasks-main by a sticky JS class op. --%>
   <PlatformWeb.Tasks.MyTasksList.my_tasks_list
-    my_tasks={@my_tasks}
+    filtered_tasks={@filtered_tasks}
+    filtered_count={@filtered_count}
     my_needs_you={@my_needs_you}
     mask_names?={@mask_names?}
     mask_labels={@mask_labels}
+    projects={@projects}
+    epics={@epics}
+    active_scopes={@active_scopes}
+    sheet={@tasks_filter_sheet}
+    drill_epics={@tasks_filter_epics}
+    selected_project_id={@selected_project_id}
+    selected_epic_id={@selected_epic_id}
+    board_sort={@board_sort}
+    status_filters={@status_filters}
+    kind_filters={@kind_filters}
+    kind_filter={@kind_filter}
+    mine_filter={@mine_filter}
+    sponsor_filter={@sponsor_filter}
+    task_search_query={@task_search_query}
+    scope_filter={@scope_filter}
+    origin_filter={@origin_filter}
   />
 
   <%!-- Main content area --%>
@@ -67,6 +86,8 @@
         >
           <span class="hero-bars-3 size-4"></span>
         </button>
+        <%!-- Desktop picker and filters (task 01a161fd stage 4), lg only. --%>
+        <PlatformWeb.Tasks.FilterDesktop.title_menu shell={assigns} />
       </:leading>
       <:badges>
         <span :if={@pending_plan_count > 0} class="badge badge-warning badge-sm gap-1">
@@ -152,6 +173,7 @@
             </div>
           </div>
 
+          <PlatformWeb.Tasks.FilterDesktop.filter_menu shell={assigns} />
           <.settings_menu access_scope={@access_scope} open?={@settings_menu_open} />
         </div>
       </:primary_action>
@@ -167,6 +189,9 @@
           scope_filter={@scope_filter}
           sponsor_filter={@sponsor_filter}
           kind_filter={@kind_filter}
+          kind_filters={@kind_filters}
+          status_filters={@status_filters}
+          mine_filter={@mine_filter}
           origin_filter={@origin_filter}
           board_sort={@board_sort}
           task_search_query={@task_search_query}
@@ -208,6 +233,9 @@
       scope_filter={@scope_filter}
       sponsor_filter={@sponsor_filter}
       kind_filter={@kind_filter}
+      kind_filters={@kind_filters}
+      status_filters={@status_filters}
+      mine_filter={@mine_filter}
       origin_filter={@origin_filter}
       task_search_query={@task_search_query}
       columns={@columns}

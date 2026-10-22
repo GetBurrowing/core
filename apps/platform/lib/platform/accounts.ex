@@ -536,6 +536,49 @@ defmodule Platform.Accounts do
 
   def insight_delivery_opted_out?(_user_id), do: false
 
+  # ── Tasks project and epic (task 01a161fd stage 2) ─────────────────────
+  #
+  # Stored as `preferences["tasks_project"] = %{"project_id" => uuid | nil,
+  # "epic_id" => uuid | nil}`: the person's last resolved /tasks selection,
+  # remembered per user rather than per device. Written only by
+  # `PlatformWeb.Tasks.FilterPrefs.sync/1`; a nil project is "All projects".
+
+  @tasks_project_key "tasks_project"
+
+  @doc "The `users.preferences` key the remembered /tasks project lives under."
+  @spec tasks_project_pref_key() :: String.t()
+  def tasks_project_pref_key, do: @tasks_project_key
+
+  @doc """
+  The remembered /tasks selection as `{project_id, epic_id}` (either may be
+  nil; `{nil, nil}` is "All projects"), or `nil` when nothing is stored or the
+  stored value is malformed. No query: reads the `%User{}`'s preferences.
+  """
+  @spec tasks_project_pref(User.t() | nil) :: {binary() | nil, binary() | nil} | nil
+  def tasks_project_pref(%User{preferences: %{@tasks_project_key => %{} = pref}}) do
+    project_id = Map.get(pref, "project_id")
+    epic_id = Map.get(pref, "epic_id")
+
+    if (is_binary(project_id) or is_nil(project_id)) and (is_binary(epic_id) or is_nil(epic_id)),
+      do: {project_id, epic_id},
+      else: nil
+  end
+
+  def tasks_project_pref(_user), do: nil
+
+  @doc """
+  Remember a /tasks selection for this person, through
+  `update_user_preference/3` (which re-reads the row before merging).
+  """
+  @spec put_tasks_project_pref(binary(), binary() | nil, binary() | nil) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def put_tasks_project_pref(user_id, project_id, epic_id) when is_binary(user_id) do
+    update_user_preference(user_id, @tasks_project_key, %{
+      "project_id" => project_id,
+      "epic_id" => epic_id
+    })
+  end
+
   # ── Hidden channels (chat sidebar v3 Stage 1) ──────────────────────────
   #
   # Stored as `preferences["hidden_channel_ids"] = ["<uuid>", ...]`. The

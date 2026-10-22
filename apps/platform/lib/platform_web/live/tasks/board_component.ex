@@ -450,6 +450,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             scope_filter={@scope_filter}
             kind_filter={@kind_filter}
             origin_filter={@origin_filter}
+            selected_project_id={@selected_project_id}
+            selected_epic_id={@selected_epic_id}
+            status_filters={@status_filters}
+            kind_filters={@kind_filters}
+            mine_filter={@mine_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />

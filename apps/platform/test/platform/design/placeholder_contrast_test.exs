@@ -109,6 +109,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/email_live.ex" => :global_default,
     "platform_web/live/email_live.html.heex" => :global_default,
     "platform_web/live/experiments_live.ex" => :global_default,
+    "platform_web/live/tasks/filter_bar.ex" => :global_default,
     "platform_web/live/external_recovery_live.ex" => :global_default,
     "platform_web/live/external_recovery_live.html.heex" => :global_default,
     "platform_web/live/files_live.html.heex" => :global_default,

@@ -584,8 +584,10 @@ defmodule PlatformWeb.TasksLiveTest do
     _t4 = create_task(project, %{title: "Delta Done", status: "done"})
 
     conn = authenticated_conn(conn)
-    {:ok, view, html} = live(conn, ~p"/tasks")
-    refute html =~ "Delta Done"
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+    # Scoped to the board (task 01a161fd stage 3): the phone list beside it
+    # shows every status, done included, by default.
+    refute view |> element("#tasks-main") |> render() =~ "Delta Done"
     # Done renders collapsed by default (task 01a13884 stage 3); open it so
     # the done card is in the render.
     html =

@@ -298,14 +298,19 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         <.link
           :for={{lane, label, icon} <- origin_lanes()}
           patch={
-            BoardData.tasks_path(
-              @sponsor_filter,
-              @board_sort,
-              @task_search_query,
-              @scope_filter,
-              @kind_filter,
-              lane
-            )
+            BoardData.tasks_path(%{
+              sponsor_filter: @sponsor_filter,
+              board_sort: @board_sort,
+              task_search_query: @task_search_query,
+              scope_filter: @scope_filter,
+              kind_filter: @kind_filter,
+              origin_filter: lane,
+              selected_project_id: @selected_project_id,
+              selected_epic_id: @selected_epic_id,
+              status_filters: @status_filters,
+              kind_filters: @kind_filters,
+              mine_filter: @mine_filter
+            })
           }
           data-role="origin-lane-tab"
           data-lane={to_string(lane)}
@@ -355,6 +360,11 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         scope_filter={@scope_filter}
         kind_filter={@kind_filter}
         origin_filter={@origin_filter}
+        selected_project_id={@selected_project_id}
+        selected_epic_id={@selected_epic_id}
+        status_filters={@status_filters}
+        kind_filters={@kind_filters}
+        mine_filter={@mine_filter}
         class="hidden lg:inline-flex shrink-0"
       />
     </div>
@@ -445,6 +455,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # Validates the incoming status against the mobile columns to ignore
   # garbage — a stale ClientState value replayed by `tasks_status_filter.js`
   # is the realistic source.
+  # parallel-ui: tasks.mobile_status_pill
   def handle_event("filter_by_status", %{"status" => status}, socket) do
     if Enum.any?(socket.assigns.mobile_columns, fn {key, _label} -> key == status end) do
       {:noreply, announce(socket, %{active_status_filter: status})}
@@ -492,8 +503,18 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   def handle_event("filter_kind", %{"kind" => kind}, socket) do
     parsed = if kind in Task.kinds(), do: kind, else: :all
 
-    {:noreply,
-     push_patch(socket, to: BoardData.tasks_path(%{socket.assigns | kind_filter: parsed}))}
+    # The old single select writes the list too (task 01a161fd stage 1):
+    # `tasks_path/1` emits `:kind_filters` when non-empty, so leaving a
+    # stale multi-kind list here would override the pick.
+    # parallel-ui: tasks.kind_filter_single
+    kind_filters = if parsed == :all, do: [], else: [parsed]
+
+    path =
+      socket.assigns
+      |> Map.merge(%{kind_filter: parsed, kind_filters: kind_filters})
+      |> BoardData.tasks_path()
+
+    {:noreply, push_patch(socket, to: path)}
   end
 
   # Thin push_patch shim: `handle_params/3` in the shell owns the decode, so

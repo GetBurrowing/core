@@ -89,36 +89,60 @@ defmodule PlatformWeb.TasksMyTasksListTest do
     %{me: me, p: p, high: high, low: low, done: done, theirs: theirs}
   end
 
-  test "renders the viewer's open tasks in board-sort order with subtitle, status and project",
+  # Task 01a161fd stage 3: the list renders `@filtered_tasks`, so "mine" is a
+  # FILTER (`?mine=1`), not the list's definition. The default is every task in
+  # every status, as in the prototype's initial view; the 'Tasks' h1 and the
+  # 'mine · N open' subtitle are replaced by the project title picker.
+  test "renders the narrowed list in board-sort order with status, project and priority",
        ctx do
-    {_view, html} = mount(ctx.conn, ctx.me)
+    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}")
     d = doc(html)
 
     rows = q(d, "#tasks-my-list [data-role=tasks-my-row]")
-    assert Enum.map(rows, &attr(&1, "data-task-id")) == [ctx.high.id, ctx.low.id]
 
-    assert d |> q("[data-role=tasks-my-subtitle]") |> hd() |> text() == "mine · 2 open"
+    # Priority, ties newest-created first: high, then the two medium rows
+    # (theirs was created after done), then low.
+    assert Enum.map(rows, &attr(&1, "data-row-task-id")) == [
+             ctx.high.id,
+             ctx.theirs.id,
+             ctx.done.id,
+             ctx.low.id
+           ]
 
-    [high_row, low_row] = rows
-    assert text(high_row) =~ "in progress · #{ctx.p.name}"
-    assert text(low_row) =~ "in review · #{ctx.p.name}"
+    assert q(d, "[data-role=tasks-my-subtitle]") == []
+    assert d |> q("[data-role=tasks-title-project]") |> hd() |> text() == ctx.p.name
 
+    [high_row, _theirs_row, _done_row, low_row] = rows
+    assert text(high_row) =~ "In progress · #{ctx.p.name}"
+    assert text(low_row) =~ "In review · #{ctx.p.name}"
+    assert high_row |> LazyHTML.query("[data-role=tasks-my-priority]") |> text() == "High"
+    assert low_row |> LazyHTML.query("[data-role=tasks-my-priority]") |> text() == "Low"
+
+    # StatusLabels.dot_class/1, the binding palette (canvas 01a15db1 `dots`).
     assert high_row
            |> LazyHTML.query("[data-role=tasks-my-dot]")
            |> classes()
-           |> Enum.member?("bg-success")
+           |> Enum.member?("bg-info")
 
     assert low_row
            |> LazyHTML.query("[data-role=tasks-my-dot]")
            |> classes()
-           |> Enum.member?("bg-warning")
+           |> Enum.member?("bg-edge")
 
     for dot <- q(d, "#tasks-my-list [data-role=tasks-my-dot]"),
         do: assert(attr(dot, "aria-hidden") == "true")
 
     list = d |> q("#tasks-my-list") |> hd() |> text()
-    refute list =~ "Done already"
-    refute list =~ "Not mine"
+    assert list =~ "Done already"
+    assert list =~ "Not mine"
+  end
+
+  test "?mine=1 narrows the list to the viewer's tasks, done included", ctx do
+    {_view, html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&mine=1")
+    rows = html |> doc() |> q("#tasks-my-list [data-role=tasks-my-row]")
+
+    assert Enum.map(rows, &attr(&1, "data-row-task-id")) == [ctx.high.id, ctx.done.id, ctx.low.id]
+    refute html |> doc() |> q("#tasks-my-list") |> hd() |> text() =~ "Not mine"
   end
 
   test "every row is a plain patch link to its task, and no live link carries phx-click", ctx do
@@ -134,7 +158,7 @@ defmodule PlatformWeb.TasksMyTasksListTest do
     for row <- rows do
       assert LazyHTML.tag(row) == ["a"]
       assert attr(row, "data-phx-link") == "patch"
-      assert attr(row, "href") == "/tasks/#{attr(row, "data-task-id")}"
+      assert attr(row, "href") == "/tasks/#{attr(row, "data-row-task-id")}"
     end
 
     assert Enum.filter(links, &(attr(&1, "phx-click") != nil)) == []
@@ -156,7 +180,7 @@ defmodule PlatformWeb.TasksMyTasksListTest do
     assert Repo.get!(Item, row.id).dismissed_at == nil
 
     view
-    |> element(~s(#tasks-my-list [data-role=tasks-my-row][data-task-id="#{ctx.high.id}"]))
+    |> element(~s(#tasks-my-list [data-role=tasks-my-row][data-row-task-id="#{ctx.high.id}"]))
     |> render_click()
 
     assert_patch(view, "/tasks/#{ctx.high.id}")
@@ -185,25 +209,28 @@ defmodule PlatformWeb.TasksMyTasksListTest do
 
     pills = q(d, "[data-role=tasks-needs-you]")
     assert length(pills) == 1
-    assert q(d, ~s([data-task-id="#{ctx.low.id}"] [data-role=tasks-needs-you])) |> length() == 1
-    assert q(d, ~s([data-task-id="#{ctx.high.id}"] [data-role=tasks-needs-you])) == []
+
+    assert q(d, ~s([data-row-task-id="#{ctx.low.id}"] [data-role=tasks-needs-you])) |> length() ==
+             1
+
+    assert q(d, ~s([data-row-task-id="#{ctx.high.id}"] [data-role=tasks-needs-you])) == []
   end
 
-  test "a user with no open tasks sees the empty state", ctx do
-    {view, _html} = mount(ctx.conn, user!())
-    assert view |> element("[data-role=tasks-my-subtitle]") |> render() =~ "mine · 0 open"
+  test "a filter that matches nothing shows the empty state with Clear all", ctx do
+    {view, _html} = mount(ctx.conn, user!(), "/tasks?project=#{ctx.p.id}&mine=1")
 
     assert view |> element("[data-role=tasks-my-empty]") |> render() =~
-             "No tasks assigned to you."
+             "No tasks match these filters"
 
+    assert has_element?(view, "[data-role=tasks-my-empty] [data-role=tasks-empty-clear]")
     refute has_element?(view, "[data-role=tasks-my-row]")
 
-    {mine, _} = mount(ctx.conn, ctx.me)
+    {mine, _} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&mine=1")
     refute has_element?(mine, "[data-role=tasks-my-empty]"), "positive control"
   end
 
   test "masking hides the real project name everywhere in the list", ctx do
-    {view, _html} = mount(ctx.conn, ctx.me)
+    {view, _html} = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}")
     assert list_html(view) =~ ctx.p.name, "positive control: unmasked shows the name"
 
     render_click(view, "toggle_mask_names", %{"masked" => "true"})
@@ -261,7 +288,7 @@ defmodule PlatformWeb.TasksMyTasksListTest do
     # `.line-clamp-2` in the built CSS, so the two together render unclamped
     # (measured on a dev server: a 185-character title painted 4 lines).
     titles = q(html |> doc(), "#tasks-my-list [data-role=tasks-my-title]")
-    assert length(titles) == 2
+    assert length(titles) >= 2
 
     for title <- titles do
       assert "line-clamp-2" in classes([title])
