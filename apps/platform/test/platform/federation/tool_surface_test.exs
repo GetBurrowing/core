@@ -5763,6 +5763,250 @@ defmodule Platform.Federation.ToolSurfaceTest do
       end)
     end
 
+    # ── send_media: attachment_ids (task 01a1655c stage 2) ─────────────
+    #
+    # An agent attaches a file it ALREADY uploaded (attachment_upload_start +
+    # presigned POST) without re-sending bytes. The ready row is built the way
+    # the upload controller builds it: ToolHandlers.upload_start, bytes at the
+    # storage key, then ToolHandlers.finalize_pending.
+
+    defp ready_upload(space_id, context, opts \\ []) do
+      bytes = Keyword.get(opts, :bytes, :crypto.strong_rand_bytes(256))
+      content_type = Keyword.get(opts, :content_type, "video/mp4")
+      hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+      {:ok, started} =
+        Platform.Chat.Attachments.ToolHandlers.upload_start(
+          %{
+            "space_id" => space_id,
+            "filename" => Keyword.get(opts, :filename, "clip.mp4"),
+            "content_type" => content_type,
+            "byte_size" => byte_size(bytes)
+          },
+          context
+        )
+
+      pending = Repo.get!(Platform.Chat.Attachment, started.id)
+
+      {:ok, _} =
+        Platform.Chat.AttachmentStorage.Adapter.LocalDisk.persist(
+          pending.storage_key,
+          {:binary, bytes}
+        )
+
+      {:ok, finalized} =
+        Platform.Chat.Attachments.ToolHandlers.finalize_pending(started.id, %{
+          byte_size: byte_size(bytes),
+          content_hash: hash
+        })
+
+      finalized.id
+    end
+
+    defp agent_in_space(space) do
+      agent = create_agent()
+
+      participant =
+        create_participant(space.id, %{participant_type: "agent", participant_id: agent.id})
+
+      {agent, participant,
+       %{space_id: space.id, agent_id: agent.id, agent_participant_id: participant.id}}
+    end
+
+    test "send_media with attachment_ids links an already-uploaded ready row to the new message" do
+      space = create_space()
+      {_agent, participant, context} = agent_in_space(space)
+
+      with_send_media_fixture(fn _tmp_path, _root ->
+        attachment_id = ready_upload(space.id, context)
+
+        assert {:ok, result} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   %{
+                     "space_id" => space.id,
+                     "attachment_ids" => [attachment_id],
+                     "content" => "the clip"
+                   },
+                   context
+                 )
+
+        assert result.space_id == space.id
+        assert result.attachment_count == 1
+        assert result.attachment_ids == [attachment_id]
+
+        message = Repo.get!(Platform.Chat.Message, result.message_id)
+        assert message.participant_id == participant.id
+        assert message.metadata["attachments_linked_by_id"] == true
+
+        assert [%{id: ^attachment_id, content_type: "video/mp4"}] =
+                 Chat.list_attachments(result.message_id)
+      end)
+    end
+
+    test "send_media with attachment_ids refuses an agent that is not a participant, row untouched" do
+      space = create_space()
+      {_uploader, _participant, uploader_context} = agent_in_space(space)
+      outsider = create_agent()
+
+      with_send_media_fixture(fn _tmp_path, _root ->
+        attachment_id = ready_upload(space.id, uploader_context)
+        before = Repo.get!(Platform.Chat.Attachment, attachment_id)
+
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   %{"space_id" => space.id, "attachment_ids" => [attachment_id]},
+                   transport_context(space.id, outsider)
+                 )
+
+        assert error == ToolSurface.space_write_denied(space.id)
+        assert error.recoverable == false
+
+        after_row = Repo.get!(Platform.Chat.Attachment, attachment_id)
+        assert after_row.message_id == nil
+        assert after_row == before
+
+        assert Repo.aggregate(
+                 from(m in Platform.Chat.Message, where: m.space_id == ^space.id),
+                 :count
+               ) == 0
+      end)
+    end
+
+    test "send_media with attachment_ids checks the calling runtime's scope: a chat.read deny answers not_found" do
+      agent = create_agent()
+      org = Tenancy.get_org_by_slug!("globex")
+      owner = insert_user_for_sponsor()
+      Platform.ExternalUserFixtures.plain_member!(owner, org)
+      space = create_space(%{org_id: org.id})
+
+      participant =
+        create_participant(space.id, %{participant_type: "agent", participant_id: agent.id})
+
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "send-media-#{System.unique_integer([:positive])}",
+          agent_id: agent.id
+        })
+
+      context = %{
+        space_id: space.id,
+        agent_id: agent.id,
+        agent_participant_id: participant.id,
+        runtime_id: runtime.runtime_id
+      }
+
+      with_send_media_fixture(fn _tmp_path, _root ->
+        attachment_id = ready_upload(space.id, context)
+
+        {:ok, _} =
+          Platform.Access.Grants.deny(%{
+            principal: {:agent, agent.id},
+            permission: "chat.read",
+            resource: {:space, space.id}
+          })
+
+        assert {:error, error} =
+                 ToolSurface.execute(
+                   "send_media",
+                   %{"space_id" => space.id, "attachment_ids" => [attachment_id]},
+                   context
+                 )
+
+        assert error.code == "attachment_not_found"
+        assert error.recoverable == true
+        assert is_nil(Repo.get!(Platform.Chat.Attachment, attachment_id).message_id)
+      end)
+    end
+
+    test "send_media refuses attachment_ids combined with file_base64, recoverably and without posting" do
+      space = create_space()
+      {_agent, _participant, context} = agent_in_space(space)
+
+      with_send_media_fixture(fn _tmp_path, root ->
+        attachment_id = ready_upload(space.id, context)
+        files_before = stored_files(root)
+
+        assert {:error, error} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   %{
+                     "space_id" => space.id,
+                     "attachment_ids" => [attachment_id],
+                     "file_base64" => Base.encode64("extra bytes")
+                   },
+                   context
+                 )
+
+        assert error.recoverable == true
+        assert error.error =~ "attachment_ids cannot be combined"
+        assert stored_files(root) == files_before
+        assert Repo.get!(Platform.Chat.Attachment, attachment_id).message_id == nil
+      end)
+    end
+
+    test "send_media maps a pending row to not_ready and an unknown id to not_found, both recoverable" do
+      space = create_space()
+      {_agent, _participant, context} = agent_in_space(space)
+
+      with_send_media_fixture(fn _tmp_path, _root ->
+        {:ok, started} =
+          Platform.Chat.Attachments.ToolHandlers.upload_start(
+            %{
+              "space_id" => space.id,
+              "filename" => "clip.mp4",
+              "content_type" => "video/mp4",
+              "byte_size" => 10
+            },
+            context
+          )
+
+        assert {:error, not_ready} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   %{"space_id" => space.id, "attachment_ids" => [started.id]},
+                   context
+                 )
+
+        assert not_ready.recoverable == true
+        assert not_ready.code == "attachment_not_ready"
+        assert not_ready.suggestion =~ ~r/finish the presigned POST first/i
+
+        ghost = Ecto.UUID.generate()
+
+        assert {:error, not_found} =
+                 ToolArguments.dispatch(
+                   "send_media",
+                   %{"space_id" => space.id, "attachment_ids" => [ghost]},
+                   context
+                 )
+
+        assert not_found.recoverable == true
+        assert not_found.code == "attachment_not_found"
+        assert not_found.suggestion =~ "POST response"
+        assert not_found.suggestion =~ "deduplicated"
+      end)
+    end
+
+    test "send_media and attachment_upload_start document the attachment_ids path" do
+      tools = ToolSurface.tool_definitions()
+      send_media = Enum.find(tools, &(&1.name == "send_media"))
+      upload_start = Enum.find(tools, &(&1.name == "attachment_upload_start"))
+
+      assert Map.has_key?(send_media.parameters, :attachment_ids)
+      assert send_media.parameters.attachment_ids.type == "array"
+      assert send_media.description =~ "attachment_ids"
+      assert send_media.description =~ "attachment_upload_start"
+      assert send_media.when_to_use =~ "attachment_ids"
+      assert send_media.when_to_use =~ "inline in chat"
+
+      assert upload_start.returns =~ "send_media"
+      assert upload_start.returns =~ "POST response"
+      assert upload_start.when_to_use =~ "send_media"
+      assert upload_start.when_to_use =~ "attachment_ids"
+    end
+
     # ── send_media: a context participant from ANOTHER space (task 01a0cbe0) ──
     #
     # Before this task the writer was `context.agent_participant_id ||

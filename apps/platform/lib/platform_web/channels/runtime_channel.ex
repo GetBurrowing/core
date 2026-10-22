@@ -430,25 +430,31 @@ defmodule PlatformWeb.RuntimeChannel do
         # and reported in the ack; the message itself always posts.
         {reply_additions, dropped} = ReplyContext.normalize(params, space_id, participant_id)
 
-        case Chat.post_message(%{
-               space_id: space_id,
-               participant_id: participant_id,
-               content_type: "text",
-               content: content,
-               metadata:
-                 Map.merge(
-                   %{
-                     "source" => "external_runtime",
-                     "runtime_id" => socket.assigns.runtime_id
-                   },
-                   reply_additions
-                 )
-             }) do
+        message_attrs = %{
+          space_id: space_id,
+          participant_id: participant_id,
+          content_type: "text",
+          content: content,
+          metadata:
+            Map.merge(
+              %{
+                "source" => "external_runtime",
+                "runtime_id" => socket.assigns.runtime_id
+              },
+              reply_additions
+            )
+        }
+
+        case post_reply(message_attrs, Map.get(params, "attachment_ids"), socket) do
           {:ok, message} ->
             # Refresh active agent mutex timeout on successful reply
             Platform.Chat.ActiveAgentStore.set_active(space_id, participant_id)
 
             {:reply, {:ok, reply_ack(message.id, space_id, dropped)}, socket}
+
+          {:error, {:attachments, error_map}} ->
+            push(socket, "error", %{error: error_map.error})
+            {:reply, {:error, error_map}, socket}
 
           {:error, changeset} ->
             error_map = %{
@@ -994,6 +1000,70 @@ defmodule PlatformWeb.RuntimeChannel do
         {:ok, participant_id}
     end
   end
+
+  # Task 01a1655c stage 2: an optional `attachment_ids` list links
+  # already-uploaded rows (attachment_upload_start + presigned POST) to the
+  # reply. Absent or empty is today's `Chat.post_message/1` call, unchanged.
+  # The participant check in the caller stays the outer gate; the runtime's
+  # Scope is passed so a denied row answers as not-found. A vanished runtime
+  # row fails closed, as `tool_call` does.
+  defp post_reply(attrs, ids, _socket) when ids in [nil, []], do: Chat.post_message(attrs)
+
+  defp post_reply(attrs, ids, socket) when is_list(ids) do
+    with true <- Enum.all?(ids, &is_binary/1) || {:error, :invalid_attachment_ids},
+         %Platform.Agents.AgentRuntime{} = runtime <-
+           Federation.get_runtime(socket.assigns.runtime_pk) || {:error, :runtime_not_found},
+         {:ok, message, _attachments} <-
+           Chat.post_message_with_existing_attachments(attrs, ids,
+             access_scope: Platform.Access.Scope.for_runtime(runtime)
+           ) do
+      {:ok, message}
+    else
+      {:error, reason} -> {:error, {:attachments, reply_attachment_error(reason)}}
+    end
+  end
+
+  defp post_reply(_attrs, _ids, _socket),
+    do: {:error, {:attachments, reply_attachment_error(:invalid_attachment_ids)}}
+
+  defp reply_attachment_error({:attachment_not_found, id}),
+    do: %{
+      error:
+        "attachment #{inspect(id)} not found in this space: pass the id from the upload POST response; a deduplicated upload returns a different canonical id",
+      code: "attachment_not_found",
+      recoverable: true
+    }
+
+  defp reply_attachment_error({:attachment_not_ready, id}),
+    do: %{
+      error:
+        "attachment #{id} has not finished uploading: finish the presigned POST first, then reply again",
+      code: "attachment_not_ready",
+      recoverable: true
+    }
+
+  defp reply_attachment_error(:invalid_attachment_ids),
+    do: %{
+      error: "attachment_ids must be a list of attachment id strings",
+      code: "invalid_attachment_ids",
+      recoverable: true
+    }
+
+  defp reply_attachment_error(:too_many_attachments),
+    do: %{
+      error: "too many attachment_ids (max 10)",
+      code: "too_many_attachments",
+      recoverable: true
+    }
+
+  defp reply_attachment_error(%Ecto.Changeset{} = changeset),
+    do: %{
+      error: "Failed to post message: #{inspect(changeset_errors(changeset))}",
+      recoverable: false
+    }
+
+  defp reply_attachment_error(reason),
+    do: %{error: "Failed to post message: #{inspect(reason)}", recoverable: false}
 
   defp changeset_errors(%Ecto.Changeset{} = changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

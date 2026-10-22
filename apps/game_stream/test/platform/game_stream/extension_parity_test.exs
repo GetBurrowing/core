@@ -388,8 +388,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # (the name list above carries them), so both tool-definition digests
     # move. Summaries, schemas and metrics are unchanged. Measured on the test rig at
     # the stage's branch (d8f4696c).
-    @main_tool_digest_off "bb26b35b7d27ed046783c6c64ca38f469d81096b5cb3c4a69bbdfca42a6caacf"
-    @main_tool_digest_on "8f53387abc86f20545f7c7f155a8cb8a4b0a91ff3bdf2c3dce1284c527da7b6c"
+    #
+    # Re-pinned by task 01a1655c stage 2: `send_media` gains the optional
+    # `attachment_ids` property and the prose describing it, so both
+    # tool-definition digests move. Names and bundles are unchanged. Measured
+    # by CI on the task branch (c7c3379ce), PR #1320.
+    @main_tool_digest_off "050023b276e3c4fdfc90c392a66d20b31d069de76b73e80909530434a74cbc84"
+    @main_tool_digest_on "4ef38c89f22d96e3758201a3d923cb6af29a132c5a0c775587620f254d12c129"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

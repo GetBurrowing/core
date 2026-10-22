@@ -31,6 +31,56 @@ defmodule PlatformWeb.Components.ChatHelpers do
 
   def attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
 
+  # Task 01a1655c stage 3: the player's poster frame. A stored poster wins
+  # (same-origin paths only, so a row can't make viewers fetch a third-party
+  # URL); otherwise the src carries a #t=0.1 media fragment, which makes iOS
+  # Safari paint the first frame instead of a black box.
+  def video_poster(attachment), do: poster_url(attachment)
+
+  def video_src(attachment) do
+    case poster_url(attachment) do
+      nil -> attachment_url(attachment) <> "#t=0.1"
+      _url -> attachment_url(attachment)
+    end
+  end
+
+  # The clip's stored aspect ratio, when known, so the box is reserved at the
+  # right shape before any bytes load, with the width capped so the box at
+  # that ratio fits under 60vh (stage 4). Otherwise the frame holds 16:9 until
+  # the ChatClip hook applies the clip's own ratio on loadedmetadata.
+  def video_aspect_style(%{metadata: %{"width" => w, "height" => h}})
+      when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+      do: "aspect-ratio: #{w} / #{h}; max-width: min(100%, calc(60vh * #{w} / #{h}))"
+
+  def video_aspect_style(_attachment), do: nil
+
+  # Task 01a1655c stage 4: the file line under a clip, `<stem>.<ext>` split so
+  # the stem can truncate while the extension stays visible.
+  def clip_name_parts(filename) when is_binary(filename) do
+    case String.split(filename, ".") do
+      [_only] -> {filename, ""}
+      parts -> {parts |> Enum.drop(-1) |> Enum.join("."), "." <> List.last(parts)}
+    end
+  end
+
+  def clip_name_parts(_filename), do: {"", ""}
+
+  # Stored duration in seconds as m:ss, or nil when unknown (the ChatClip
+  # hook fills it on loadedmetadata).
+  def clip_duration(%{metadata: %{"duration" => seconds}})
+      when is_number(seconds) and seconds >= 0 do
+    total = round(seconds)
+    "#{div(total, 60)}:#{total |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")}"
+  end
+
+  def clip_duration(_attachment), do: nil
+
+  defp poster_url(%{metadata: %{"poster_url" => "/" <> rest = url}}) when is_binary(rest) do
+    if String.starts_with?(rest, "/"), do: nil, else: url
+  end
+
+  defp poster_url(_attachment), do: nil
+
   def present?(value) when is_binary(value), do: String.trim(value) != ""
   def present?(_value), do: false
 

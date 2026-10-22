@@ -1787,6 +1787,160 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       refute Enum.any?(Chat.list_messages(other_space.id, limit: 10), &(&1.content == "x"))
     end
+
+    # Task 01a1655c stage 2: `attachment_ids` links already-uploaded rows.
+    defp ready_upload!(ctx, content_type \\ "video/mp4") do
+      bytes = :crypto.strong_rand_bytes(128)
+      hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+      {:ok, started} =
+        Platform.Chat.Attachments.ToolHandlers.upload_start(
+          %{
+            "space_id" => ctx.space.id,
+            "filename" => "clip.mp4",
+            "content_type" => content_type,
+            "byte_size" => byte_size(bytes)
+          },
+          %{
+            space_id: ctx.space.id,
+            agent_id: ctx.agent.id,
+            agent_participant_id: ctx.agent_participant.id
+          }
+        )
+
+      pending = Repo.get!(Chat.Attachment, started.id)
+
+      {:ok, _} =
+        Platform.Chat.AttachmentStorage.Adapter.LocalDisk.persist(
+          pending.storage_key,
+          {:binary, bytes}
+        )
+
+      {:ok, finalized} =
+        Platform.Chat.Attachments.ToolHandlers.finalize_pending(started.id, %{
+          byte_size: byte_size(bytes),
+          content_hash: hash
+        })
+
+      finalized.id
+    end
+
+    test "a reply with attachment_ids links the uploaded row to the posted message", ctx do
+      socket = joined_socket(ctx)
+      attachment_id = ready_upload!(ctx)
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "the clip",
+          "attachment_ids" => [attachment_id]
+        })
+
+      assert_reply ref, :ok, %{message_id: message_id, space_id: space_id}
+      assert space_id == ctx.space.id
+
+      message = Repo.get!(Chat.Message, message_id)
+      assert message.content == "the clip"
+      assert message.metadata["source"] == "external_runtime"
+      assert message.metadata["runtime_id"] == ctx.runtime.runtime_id
+      assert message.metadata["attachments_linked_by_id"] == true
+
+      assert [%{id: ^attachment_id}] = Chat.list_attachments(message_id)
+    end
+
+    test "a reply without attachment_ids, or with an empty list, posts a plain message as before",
+         ctx do
+      socket = joined_socket(ctx)
+      attachment_id = ready_upload!(ctx)
+
+      for {params, content} <- [
+            {%{}, "no ids"},
+            {%{"attachment_ids" => []}, "empty ids"}
+          ] do
+        ref =
+          push(
+            socket,
+            "reply",
+            Map.merge(%{"space_id" => ctx.space.id, "content" => content}, params)
+          )
+
+        assert_reply ref, :ok, %{message_id: message_id}
+
+        message = Repo.get!(Chat.Message, message_id)
+        assert message.content == content
+        refute Map.has_key?(message.metadata, "attachments_linked_by_id")
+        assert Chat.list_attachments(message_id) == []
+      end
+
+      assert is_nil(Repo.get!(Chat.Attachment, attachment_id).message_id)
+    end
+
+    test "a reply with attachment_ids checks the runtime's scope: a chat.read deny answers not_found",
+         ctx do
+      socket = joined_socket(ctx)
+      attachment_id = ready_upload!(ctx)
+
+      {:ok, _} =
+        Platform.Access.Grants.deny(%{
+          principal: {:agent, ctx.agent.id},
+          permission: "chat.read",
+          resource: {:space, ctx.space.id}
+        })
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "denied",
+          "attachment_ids" => [attachment_id]
+        })
+
+      assert_reply ref, :error, %{code: "attachment_not_found", recoverable: true}
+      assert is_nil(Repo.get!(Chat.Attachment, attachment_id).message_id)
+      refute Enum.any?(Chat.list_messages(ctx.space.id, limit: 10), &(&1.content == "denied"))
+    end
+
+    test "a reply naming a pending or unknown attachment id is refused recoverably, posting nothing",
+         ctx do
+      socket = joined_socket(ctx)
+
+      {:ok, started} =
+        Platform.Chat.Attachments.ToolHandlers.upload_start(
+          %{
+            "space_id" => ctx.space.id,
+            "filename" => "clip.mp4",
+            "content_type" => "video/mp4",
+            "byte_size" => 10
+          },
+          %{
+            space_id: ctx.space.id,
+            agent_id: ctx.agent.id,
+            agent_participant_id: ctx.agent_participant.id
+          }
+        )
+
+      before = length(Chat.list_messages(ctx.space.id, limit: 50))
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "x",
+          "attachment_ids" => [started.id]
+        })
+
+      assert_reply ref, :error, %{code: "attachment_not_ready", recoverable: true, error: error}
+      assert error =~ "finish the presigned POST first"
+
+      ref =
+        push(socket, "reply", %{
+          "space_id" => ctx.space.id,
+          "content" => "x",
+          "attachment_ids" => [Ecto.UUID.generate()]
+        })
+
+      assert_reply ref, :error, %{code: "attachment_not_found", recoverable: true}
+
+      assert length(Chat.list_messages(ctx.space.id, limit: 50)) == before
+    end
   end
 
   # The wire half of task 019ff292 stage 2. The queue-side anchoring is
