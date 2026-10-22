@@ -41,7 +41,8 @@ defmodule Platform.Memory.Insights.Actions do
       briefing for today, creating the day's canvas or adding to it
       (`Platform.Memory.Insights.Disseminator.deliver_now/3`). This works
       with dissemination OFF, because a person is acting. Refused for a
-      guest; `{:error, :no_addressee}` for an unrouted insight,
+      guest with `{:error, :guest_addressee}` (nothing written,
+      `delivered_at` stays nil); `{:error, :no_addressee}` for an unrouted insight,
       `{:error, :opted_out}` when the addressee opted out, `{:error,
       :no_agent}` when nobody holds `memory.dreaming`. The insight stays
       `open` and gets `delivered_at`: the recipient's Looks right, Flag or
@@ -206,6 +207,7 @@ defmodule Platform.Memory.Insights.Actions do
           | :no_addressee
           | :no_agent
           | :opted_out
+          | :guest_addressee
           | :not_eligible
           | :no_sponsor
           | :no_historian

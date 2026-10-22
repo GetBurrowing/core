@@ -35,7 +35,10 @@ defmodule Platform.Memory.Insights.Disseminator do
      `Platform.Inbox` uses). A same-day re-run that adds items does not
      push again; the row going unread is the signal.
 
-  No DM space and no canvas is created on any path. Briefings only ever go to
+  No DM space and no canvas is created on any path. A guest (an external
+  member) is refused with `{:error, :guest_addressee}` and nothing is
+  written, because the Inbox shows an external viewer no briefing row.
+  Briefings only ever go to
   internal people (`Digest.route/5` targets internal addressees and internal
   root admins), and the Inbox reaches every internal member, so there is no
   case left for the DM. `BriefingCard` and the canvas hooks stay so that
@@ -285,7 +288,25 @@ defmodule Platform.Memory.Insights.Disseminator do
   # written or merged first (node-key dedupe), then the Inbox row, then each
   # new insight is marked delivered, all in one transaction so a failed
   # Inbox write leaves the insights undelivered for the next run.
+  #
+  # A guest (an external member, `Platform.Tenancy.external_user?/1`) is
+  # refused with `{:error, :guest_addressee}` before anything is written: the
+  # Inbox lists only `chat_mention` rows to an external viewer, so a briefing
+  # written for a guest would read as delivered while nobody could see it.
+  # No briefing, no Inbox row, and `delivered_at` stays nil.
   defp deliver(user_id, insights, agent, date, now, notifications) do
+    if Platform.Tenancy.external_user?(%{id: user_id}) do
+      Logger.warning(
+        "[insight_disseminator] briefing for user #{user_id} not delivered: :guest_addressee"
+      )
+
+      {:error, :guest_addressee}
+    else
+      deliver_to_member(user_id, insights, agent, date, now, notifications)
+    end
+  end
+
+  defp deliver_to_member(user_id, insights, agent, date, now, notifications) do
     existing = Repo.get_by(Briefing, user_id: user_id, digest_date: date)
     existing_items = (existing && existing.items) || %{}
 
@@ -371,7 +392,9 @@ defmodule Platform.Memory.Insights.Disseminator do
   Returns `{:ok, n}` with the number of items added (0 when every item is
   already in today's briefing), `{:error, :no_agent}` when nobody holds
   `memory.dreaming`, `{:error, :opted_out}` when the person opted out of
-  insight delivery, or the delivery error.
+  insight delivery, `{:error, :guest_addressee}` when the person is a guest
+  (an external member, who has no Inbox briefing to read), or the delivery
+  error.
 
   Options: `:now`, `:notifications_module` (as `run/1`).
   """

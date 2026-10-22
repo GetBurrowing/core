@@ -1388,6 +1388,9 @@ defmodule PlatformWeb.OrgMemoryLive do
   defp insight_error(:opted_out),
     do: "The addressee has turned off insight briefings and questions."
 
+  defp insight_error(:guest_addressee),
+    do: "This is addressed to a guest. Guests can't receive briefings, so it wasn't delivered."
+
   defp insight_error(:no_agent),
     do: "No agent holds the dreaming responsibility, so there is no briefing to deliver to."
 

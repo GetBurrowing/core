@@ -293,6 +293,32 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
     assert body =~ "need"
   end
 
+  test "deliver_now/3 refuses a guest: no briefing, no Inbox row, not delivered" do
+    dreaming_agent!()
+    guest = person!("member", external: true)
+    asked = insight!(addressee: guest, action_type: "question", body: "Can you renew the cert?")
+
+    assert {:error, :guest_addressee} =
+             Disseminator.deliver_now(guest.id, [asked],
+               now: @now,
+               notifications_module: PushRecorder
+             )
+
+    # Read the tables directly: the Inbox's own listing hides a briefing row
+    # from an external viewer, so asking it would pass whether or not a row
+    # was written.
+    refute Repo.exists?(from(b in Briefing, where: b.user_id == ^guest.id))
+    refute Repo.exists?(from(i in Item, where: i.user_id == ^guest.id))
+    assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, asked.id)
+    refute_received {:push, _, _}
+
+    # Control: the same call for an internal member delivers.
+    member = person!()
+    line = insight!(addressee: member, action_type: "question", body: "Who owns it?")
+    assert {:ok, 1} = Disseminator.deliver_now(member.id, [line], now: @now)
+    assert Repo.exists?(from(b in Briefing, where: b.user_id == ^member.id))
+  end
+
   describe "unattended page edits and tasks (task 01a15587 stage 3)" do
     @journal "org/journal/2026-10-18.md"
 

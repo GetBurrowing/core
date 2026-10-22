@@ -175,12 +175,15 @@ defmodule Platform.Memory.Insights.AnswerTest do
       assert {:error, :unauthorized} = Insights.act(question.id, Scope.for_user(member))
       assert Repo.aggregate(Briefing, :count) == 0
 
-      # Control: a root admin passes the gate, and the question lands in the
-      # guest's Inbox briefing. There is no agent DM to refuse a guest since
-      # task 01a15ee1, so delivery no longer stops at :no_dm.
-      assert {:ok, _} = Insights.act(question.id, Scope.for_user(root_admin!()))
-      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
-      assert user_id == addressee.id
+      # Control: a root admin passes the gate (never :unauthorized), and the
+      # delivery then refuses the guest: the Inbox shows an external viewer
+      # no briefing row, so nothing is written and it is not delivered.
+      assert {:error, :guest_addressee} =
+               Insights.act(question.id, Scope.for_user(root_admin!()))
+
+      assert Repo.aggregate(Briefing, :count) == 0
+      assert Repo.aggregate(Item, :count) == 0
+      assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, question.id)
     end
 
     test "an unrouted question has nowhere to go" do

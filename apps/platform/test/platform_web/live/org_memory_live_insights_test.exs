@@ -241,12 +241,16 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
 
       admin_html = render_click(admin_view, "insight_act", %{"id" => insight.id})
 
-      # The admin passes the gate (no refusal), and the briefing lands in the
-      # guest's Inbox: since task 01a15ee1 there is no agent DM to refuse.
+      # The admin passes the gate (no refusal), and delivery then refuses the
+      # guest: a guest's Inbox shows no briefing, so nothing is delivered.
       refute admin_html =~ "You cannot act on this insight. An install admin decides it."
-      assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, insight.id)
-      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
-      assert user_id == addressee.id
+
+      assert admin_html =~
+               "This is addressed to a guest. Guests can&#39;t receive briefings, so it wasn&#39;t delivered."
+
+      assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, insight.id)
+      refute Repo.exists?(from(b in Briefing, where: b.user_id == ^addressee.id))
+      assert Repo.aggregate(Briefing, :count) == 0
     end
   end
 
