@@ -6,8 +6,9 @@ defmodule PlatformWeb.Components.Sheet do
 
   Spec: `~/projects/core/docs/design-system/components/sheet.md`.
 
-  v1 ships with backdrop-tap + Escape-to-close + focus management.
-  Drag-to-dismiss is deferred to v2 per spec §7.
+  Ships with backdrop-tap + Escape-to-close + focus management. Swipe
+  dismissal is opt-in via `swipe_dismiss`, which requires `handle_close`
+  (see the attr doc: `sheet/1` raises without it).
   """
 
   use Phoenix.Component
@@ -52,7 +53,7 @@ defmodule PlatformWeb.Components.Sheet do
   attr :swipe_dismiss, :boolean,
     default: false,
     doc:
-      "Opt-in (task 01a1557a-807f stage 4). Stamps `data-swipe-dismiss=\"true\"` so the Sheet hook closes the sheet on a downward drag past 60px from the handle, or from the panel while its body is scrolled to the top. Default false: the hook ignores pointer drags."
+      "Opt-in (task 01a1557a-807f stage 4). Stamps `data-swipe-dismiss=\"true\"` so the Sheet hook closes the sheet on a downward drag past 60px from the handle, or from the panel while its body is scrolled to the top. Default false: the hook ignores pointer drags. REQUIRES the handle Close button (`.sheet-handle-button`, `touch-action: none`), which renders only with `handle_close`, `placement: :bottom` and an empty `:handle` slot; a bare `.sheet-handle` has `touch-action: auto`, so a real touch drag on it gets `pointercancel` and never closes. `sheet/1` raises `ArgumentError` at render otherwise (task 01a161c4). Because `handle_close` visually hides the title, render a visible `aria-hidden` title line in the body."
 
   attr :rest, :global,
     doc:
@@ -72,6 +73,8 @@ defmodule PlatformWeb.Components.Sheet do
     # its markup is untouched from before the slot existed.
     assigns =
       assign(assigns, :bare_handle?, assigns.placement == :bottom and assigns.handle == [])
+
+    validate_swipe_dismiss!(assigns)
 
     ~H"""
     <div
@@ -128,7 +131,7 @@ defmodule PlatformWeb.Components.Sheet do
             aria-label="Close"
             phx-click={@on_close}
             phx-target={@on_close_target}
-            class="sheet-close-button rounded-full p-1 text-subtle hover:text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="sheet-close-button rounded-full p-1 text-subtle active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <.icon name="hero-x-mark" class="size-5" />
           </button>
@@ -154,6 +157,34 @@ defmodule PlatformWeb.Components.Sheet do
   # `phx-target` on the markup covers click/tap. For Escape we resolve the
   # nearest enclosing component via the sheet's own id, which the caller can
   # override by passing a selector string instead of `@myself`.
+  # The invariant is "swipe_dismiss implies the handle Close button renders":
+  # that button is the only touch-action:none start point the hook has, so a
+  # non-bottom placement or a filled `:handle` slot fails it as surely as a
+  # missing `handle_close`. Raising (rather than implying `handle_close`) keeps
+  # the title-hiding side effect explicit at the call site: an implied flag
+  # would sr-only the title and drop the X with nothing to tell the author.
+  defp validate_swipe_dismiss!(%{swipe_dismiss: true} = assigns) do
+    unless assigns.bare_handle? and assigns.handle_close do
+      raise ArgumentError, """
+      Sheet id="#{assigns.id}" sets swipe_dismiss without the handle Close button.
+
+      swipe_dismiss needs the `.sheet-handle-button` (touch-action: none) as its drag
+      start point; a bare `.sheet-handle` has touch-action: auto, so a real touch drag
+      gets pointercancel and the sheet never closes. That button renders only with
+      handle_close, placement: :bottom and an empty :handle slot
+      (got handle_close: #{inspect(assigns.handle_close)}, placement: #{inspect(assigns.placement)}, \
+      :handle slot filled: #{assigns.handle != []}).
+
+      Add handle_close. It visually hides the title (it still names the dialog) and
+      drops the header X, so also render a visible aria-hidden title line in the body.
+      """
+    end
+
+    :ok
+  end
+
+  defp validate_swipe_dismiss!(_assigns), do: :ok
+
   defp close_target_selector(nil, _id), do: nil
   defp close_target_selector(target, _id) when is_binary(target), do: target
   defp close_target_selector(_target, id), do: "##{id}"

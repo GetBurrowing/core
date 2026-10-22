@@ -847,13 +847,13 @@ defmodule PlatformWeb.SettingsLiveTest do
           do: assert(String.to_integer(px) >= 12, "text-[#{px}px]")
     end
 
-    test "rendered classes in #settings: no hover: outside the shared Sheet close button" do
+    test "no hover: in #settings" do
       {:ok, view, _html} = live(authed(root!()), "/settings")
       html = open_admin(view)
 
       classes =
         html
-        |> query("#settings [class]:not(.sheet-close-button)")
+        |> query("#settings [class]")
         |> LazyHTML.attribute("class")
 
       # Anti-vacuity: the scan sees the rows.

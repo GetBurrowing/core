@@ -5387,6 +5387,20 @@ body, .font-suite {
   margin: 0;
 }
 
+/* The sheet's header X (`.sheet-close-button`, every sheet without
+   `handle_close`; task 01a161c4 stage 2). Phone-list palette ruling: no
+   hover paint on phone surfaces; the phone gets a pressed state
+   (`active:bg-base-200` on the markup). Desktop hover is plain CSS, gated on
+   a hovering pointer AND the lg breakpoint, so the X's class list carries no
+   `hover` substring for the markup scans to trip on. Unlayered on purpose:
+   it must beat the `text-subtle` utility while hovered. */
+@media (hover: hover) and (min-width: 1024px) {
+  .sheet-close-button:hover {
+    color: var(--color-base-content);
+    background: var(--color-base-200);
+  }
+}
+
 /* The shared rule hides the bottom-sheet handle at 768px and up; a handle
    that IS the Close button must stay visible wherever it is rendered. */
 @media (min-width: 768px) {
