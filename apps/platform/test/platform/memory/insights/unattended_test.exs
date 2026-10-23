@@ -369,6 +369,46 @@ defmodule Platform.Memory.Insights.UnattendedTest do
       assert Repo.aggregate(Task, :count) == tasks_before + 1
     end
 
+    # Regression (prod, 2026-10-23): a 255-character task title made the
+    # `task_sponsor_assigned` Inbox title ("You're now sponsoring: …")
+    # overflow `inbox_items.title` varchar(255). The emit's rescue swallowed
+    # the 22001, but the filing transaction was already aborted, so the
+    # insight UPDATE failed 25P02 and nothing was filed.
+    test "a task with a 255-character title files, and its sponsor inbox row is cut to fit", %{
+      dreamer: dreamer,
+      member: member
+    } do
+      runtime_for!(dreamer, ["task"])
+      project = project!()
+      long_title = String.duplicate("x", 255)
+
+      block =
+        ~s(<synthesis-insight action="task" confidence="high" target="#{project.id}" addressee="#{member.id}">
+        #{long_title}
+        Rotate the deploy key on the build box, ref #{n()}.
+        </synthesis-insight>)
+
+      insight = ingest!(block, dreamer)
+
+      assert {:ok, %Insight{state: "done", artefact_ref: "task:" <> task_id}} =
+               Actions.apply_unattended(insight)
+
+      assert Repo.get!(Insight, insight.id).state == "done"
+      assert Repo.get!(Task, task_id).title == long_title
+
+      [row] =
+        Repo.all(
+          from(i in Platform.Inbox.Item,
+            where: i.user_id == ^member.id and i.kind == "task_sponsor_assigned"
+          )
+        )
+
+      assert row.source_id == task_id
+      assert String.length(row.title) == 255
+      assert String.starts_with?(row.title, "You're now sponsoring: xxx")
+      assert String.ends_with?(row.title, "…")
+    end
+
     test "no addressee -> no task", %{dreamer: dreamer, member: member} do
       runtime_for!(dreamer, ["task"])
       project = project!()

@@ -59,6 +59,38 @@ defmodule Platform.InboxTest do
       assert Keyword.has_key?(changeset.errors, :kind)
       assert Repo.aggregate(from(i in Item, where: i.user_id == ^user.id), :count) == 0
     end
+
+    # `inbox_items.title` is varchar(255) and producers prefix user text
+    # ("You're now sponsoring: <255-char task title>"). Uncut, the insert
+    # raised 22001 and aborted the caller's transaction (prod, 2026-10-23).
+    test "a title longer than the column inserts, cut to 255 characters ending in …" do
+      user = insert_user()
+      title = String.duplicate("a", 300)
+
+      assert {:ok, %Item{} = item} = Inbox.emit(valid_attrs(user, %{title: title}))
+
+      stored = Repo.get!(Item, item.id).title
+      assert String.length(stored) == 255
+      assert stored == String.duplicate("a", 254) <> "…"
+    end
+
+    test "a title that fits is stored unchanged; a cut never splits a grapheme" do
+      user = insert_user()
+      exact = String.duplicate("b", 255)
+
+      assert {:ok, %Item{} = item} = Inbox.emit(valid_attrs(user, %{title: exact}))
+      assert Repo.get!(Item, item.id).title == exact
+
+      # "é" as e + combining acute: one grapheme, two code points (Postgres
+      # counts code points).
+      decomposed = String.duplicate("é", 200)
+      cut = Item.truncate_title(decomposed)
+      assert length(String.codepoints(cut)) <= 255
+      assert String.ends_with?(cut, "…")
+      assert cut |> String.trim_trailing("…") |> String.graphemes() |> Enum.all?(&(&1 == "é"))
+
+      assert {:ok, %Item{}} = Inbox.emit(valid_attrs(user, %{title: decomposed}))
+    end
   end
 
   # An invite gets its own typed row so it can be grouped and counted as an
