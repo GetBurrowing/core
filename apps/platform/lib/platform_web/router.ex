@@ -878,6 +878,7 @@ defmodule PlatformWeb.Router do
       live("/inbox", InboxLive, :index)
       # The day's briefing, opened from its Inbox row (task 01a15ee1 stage 4).
       live("/inbox/briefing/:date", InboxLive, :briefing)
+      live("/inbox/meeting/:meeting_id", InboxLive, :meeting_briefing)
       live("/tasks", TasksLive, :index)
       # Keep the static module-admin route above the task-id catch-all.
       live("/tasks/pipeline", PipelineLive, :index)

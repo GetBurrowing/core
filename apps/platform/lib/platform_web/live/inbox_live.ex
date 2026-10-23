@@ -186,6 +186,21 @@ defmodule PlatformWeb.InboxLive do
   Every `{:inbox_changed, _}` bumps `:briefing_refresh`, which the
   component reads as "reload": a click on another tab, or a receipt written
   by the Insights tab, repaints the detail as well as the row.
+
+  ## The meeting briefing (task 01a1694a stage 4)
+
+  `meeting_briefing` rows are split out the same way `briefing` rows are,
+  render through `PlatformWeb.Components.MeetingBriefingRow` under the
+  Briefing chip, and count toward `:briefing_count`. Their briefings are
+  read with `MeetingBriefings.list_for_attendee/2`, so a row only ever shows
+  a briefing its viewer attended.
+
+  `/inbox/meeting/:meeting_id` (`:meeting_briefing`) mounts
+  `PlatformWeb.InboxLive.MeetingBriefingComponent` in the detail pane (full
+  screen below lg, with the "‹ Inbox" back link) and marks the row read.
+  The component loads only through `MeetingBriefings.get_for_attendee/2`.
+  Every `{:inbox_changed, _}` `send_update/3`s it with `reload: true`: that
+  is how B's open briefing repaints the item A just resolved.
   """
 
   use PlatformWeb, :live_view
@@ -193,15 +208,18 @@ defmodule PlatformWeb.InboxLive do
   import Ecto.Query, only: [order_by: 3]
   import PlatformWeb.Components.BriefingRow, only: [briefing_row: 1]
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
+  import PlatformWeb.Components.MeetingBriefingRow, only: [meeting_briefing_row: 1]
   import PlatformWeb.Components.NotificationState, only: [notification_state_row: 1]
 
   alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Memory.Briefing
+  alias Platform.Meetings.MeetingBriefings
   alias Platform.Memory.Insights.Briefings
   alias Platform.Repo
   alias PlatformWeb.Components.BriefingRow
+  alias PlatformWeb.Components.MeetingBriefingRow
   alias PlatformWeb.MeetingLive.CalendarWindow
 
   @sections [:review, :mentions, :meetings]
@@ -257,6 +275,7 @@ defmodule PlatformWeb.InboxLive do
      |> assign(:filter, "all")
      |> assign(:filters, @filters)
      |> assign(:detail_date, nil)
+     |> assign(:meeting_detail_id, nil)
      |> assign(:briefing_refresh, 0)
      |> assign(:time_zone, viewer_time_zone(socket))
      |> maybe_toast(open_undo_toast(socket, user_id))}
@@ -278,9 +297,10 @@ defmodule PlatformWeb.InboxLive do
       socket
       |> assign(:filter, parse_filter(params["f"]))
       |> assign(:detail_date, detail_date(socket.assigns.live_action, params["date"]))
+      |> assign(:meeting_detail_id, meeting_detail_id(socket.assigns.live_action, params))
       |> reload_sections()
 
-    {:noreply, maybe_open_briefing(socket)}
+    {:noreply, socket |> maybe_open_briefing() |> maybe_open_meeting_briefing()}
   end
 
   defp parse_filter(f) when f in ["briefing", "mentions", "tasks"], do: f
@@ -295,6 +315,33 @@ defmodule PlatformWeb.InboxLive do
 
   defp detail_date(:briefing, _iso), do: :invalid
   defp detail_date(_action, _iso), do: nil
+
+  # The meeting id on `/inbox/meeting/:meeting_id`, as given: the component
+  # answers "There's no briefing here." for anything it cannot load, a
+  # malformed id included, so nothing is filtered here.
+  defp meeting_detail_id(:meeting_briefing, %{"meeting_id" => id}) when is_binary(id), do: id
+  defp meeting_detail_id(:meeting_briefing, _params), do: ""
+  defp meeting_detail_id(_action, _params), do: nil
+
+  # Opening a meeting briefing is reading it, exactly as for the daily
+  # briefing: mark its row read (it stays listed). Connected only.
+  defp maybe_open_meeting_briefing(socket) do
+    user_id = socket.assigns.current_user_id
+    meeting_id = socket.assigns.meeting_detail_id
+
+    case Enum.find(socket.assigns.meeting_briefing_rows, &(&1.meeting_id == meeting_id)) do
+      %{unread?: true, id: id} when is_binary(user_id) and is_binary(meeting_id) ->
+        if connected?(socket) do
+          Inbox.open_item(id, user_id)
+          reload_sections(socket)
+        else
+          socket
+        end
+
+      _ ->
+        socket
+    end
+  end
 
   # Opening the briefing's detail is reading it: mark its row read (it stays
   # listed, `briefing` being in `Inbox.action_kinds/0`). Connected only, so
@@ -346,7 +393,7 @@ defmodule PlatformWeb.InboxLive do
     # stage 4 of task `01a00108` retired read-as-cleared; it no longer does,
     # because the scope no longer does. Move one, move both.
     cond do
-      item.kind == "briefing" ->
+      item.kind in ["briefing", "meeting_briefing"] ->
         # Briefing rows are not streamed; their receipt line is derived.
         {:noreply, reload_sections(socket)}
 
@@ -371,8 +418,13 @@ defmodule PlatformWeb.InboxLive do
   # list from `unread_scope/1`. `init_sections/2` resets the three streams, so
   # the rendered rows always equal exactly what the badge counts. This is the
   # unified source-of-truth: same scope, same diff.
-  def handle_info({:inbox_changed, _user_id}, socket),
-    do: {:noreply, socket |> update(:briefing_refresh, &(&1 + 1)) |> reload_sections()}
+  def handle_info({:inbox_changed, _user_id}, socket) do
+    {:noreply,
+     socket
+     |> update(:briefing_refresh, &(&1 + 1))
+     |> reload_sections()
+     |> reload_meeting_briefing()}
+  end
 
   # The briefing component's success toast (it runs in this process). The
   # same toast the list uses, at the briefing's 5 s.
@@ -440,6 +492,17 @@ defmodule PlatformWeb.InboxLive do
     user_id = socket.assigns.current_user_id
 
     if is_binary(user_id) and Enum.any?(socket.assigns.briefing_rows, &(&1.id == id)) do
+      Inbox.mark_dismissed(id, user_id)
+    end
+
+    {:noreply, reload_sections(socket)}
+  end
+
+  # A meeting briefing row's X, the same owner-scoped dismissal.
+  def handle_event("dismiss_meeting_briefing", %{"id" => id}, socket) do
+    user_id = socket.assigns.current_user_id
+
+    if is_binary(user_id) and Enum.any?(socket.assigns.meeting_briefing_rows, &(&1.id == id)) do
       Inbox.mark_dismissed(id, user_id)
     end
 
@@ -619,6 +682,7 @@ defmodule PlatformWeb.InboxLive do
   # the id → section map (which routes a dismiss to the right stream).
   defp init_sections(socket, items) do
     {briefings, items} = Enum.split_with(items, &(&1.kind == "briefing"))
+    {meeting_briefings, items} = Enum.split_with(items, &(&1.kind == "meeting_briefing"))
     grouped = Enum.group_by(items, &section_for(&1.kind))
     review = Map.get(grouped, :review, [])
     mentions = grouped |> Map.get(:mentions, []) |> sort_mentions()
@@ -637,6 +701,7 @@ defmodule PlatformWeb.InboxLive do
       resolve_mention_labels(mentions, socket.assigns.current_user_id)
     )
     |> assign_briefings(briefings)
+    |> assign_meeting_briefings(meeting_briefings)
     |> prune_selection()
   end
 
@@ -715,6 +780,61 @@ defmodule PlatformWeb.InboxLive do
         :not_found
     end
   end
+
+  # ── Meeting briefing rows (task 01a1694a stage 4) ───────────────────────
+
+  # One row per undismissed `meeting_briefing` item, each with its receipt
+  # line from the briefing's live `MeetingBriefings.view/2` counts. They
+  # count toward `:briefing_count` (they sit under the Briefing chip and in
+  # Clear all), which `assign_briefings/2` has just set to the daily rows.
+  defp assign_meeting_briefings(socket, items) do
+    user_id = socket.assigns.current_user_id
+    zone = socket.assigns[:time_zone]
+    selected = socket.assigns[:meeting_detail_id]
+    briefings = load_meeting_briefings(user_id, items)
+    scope = is_binary(user_id) && Platform.Access.Scope.for_user(%{id: user_id})
+
+    rows =
+      for item <- items do
+        briefing = Map.get(briefings, item.source_id)
+
+        MeetingBriefingRow.assigns_for(item,
+          counts: briefing && MeetingBriefings.view(briefing, scope).counts,
+          ended_at: briefing && briefing.meeting.ended_at,
+          time_zone: zone,
+          selected: is_binary(selected) and MeetingBriefingRow.meeting_id(item.url) == selected
+        )
+      end
+
+    socket
+    |> assign(:meeting_briefing_rows, rows)
+    |> update(:briefing_count, &(&1 + length(rows)))
+  end
+
+  defp load_meeting_briefings(user_id, items) when is_binary(user_id) and items != [],
+    do: MeetingBriefings.list_for_attendee(Enum.map(items, & &1.source_id), user_id)
+
+  defp load_meeting_briefings(_user_id, _items), do: %{}
+
+  # The open meeting briefing re-reads on every `{:inbox_changed, _}`: a
+  # receipt another attendee wrote reaches this viewer here.
+  defp reload_meeting_briefing(socket) do
+    case socket.assigns.meeting_detail_id do
+      id when is_binary(id) ->
+        send_update(PlatformWeb.InboxLive.MeetingBriefingComponent,
+          id: meeting_briefing_component_id(id),
+          reload: true
+        )
+
+        socket
+
+      _ ->
+        socket
+    end
+  end
+
+  @doc "The detail component's id for `meeting_id`."
+  def meeting_briefing_component_id(meeting_id), do: "meeting-briefing-" <> meeting_id
 
   @doc """
   The query string a chip, a row or the back link keeps: `""` for All,

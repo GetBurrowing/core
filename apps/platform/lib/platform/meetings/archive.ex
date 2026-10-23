@@ -92,6 +92,15 @@ defmodule Platform.Meetings.Archive do
   produced — which is what this surface did until task 01a04e16, quietly
   under-reporting a meeting's own output.
 
+  The rule is not written in this module. Both readers compose
+  `Platform.Meetings.meeting_task_scope/0` (task 01a1694a), the one place
+  "which tasks belong to this meeting" is defined, which the meeting
+  briefing reads as well. That rule bounds the triage route by time: a
+  triage task counts for a meeting only when it was inserted at or after the
+  meeting's `started_at`, so a meeting that never started counts no triage
+  task at all. The live route is unbounded, because its stamp names exactly
+  one meeting.
+
   Their titles are turned into a `tsvector` at query time, at weight `B` (an
   action item is a deliberate label of one artifact, exactly like the canvas
   title it came from).
@@ -113,6 +122,8 @@ defmodule Platform.Meetings.Archive do
 
     * canvases have no FK to a meeting:
       `chat_canvases.space_id == meetings.chat_space_id`, `deleted_at IS NULL`;
+    * action items are `Platform.Meetings.meeting_task_scope/0`, never a
+      local restatement of it;
     * transcripts join on `meeting_transcripts.space_id ==
       meetings.chat_space_id`. **Not** `meeting_transcripts.room_id`, which
       holds the LiveKit room identifier rather than a `meetings.id` — that
@@ -214,10 +225,12 @@ defmodule Platform.Meetings.Archive do
       summary imported without its source has the converse.
     * **Action items** — a *count*, `3 action items` (`3 actions` on mobile,
       hence the separate `:short_label`), over the same union of the triage
-      route (canvas → `tasks.metadata->>'source_canvas_id'`) and the live
-      card route (`tasks.metadata->>'meeting_id'`) that `search/2` uses. A
-      task filed by both — which nothing currently does, since the two paths
-      stamp disjoint keys — is counted once.
+      route (canvas → `tasks.metadata->>'source_canvas_id'`, from the
+      meeting's `started_at` on) and the live card route
+      (`tasks.metadata->>'meeting_id'`) that `search/2` uses — both through
+      `Platform.Meetings.meeting_task_scope/0`. A task filed by both — which
+      nothing currently does, since the two paths stamp disjoint keys — is
+      counted once.
 
   ### Join keys, restated
 
@@ -241,6 +254,7 @@ defmodule Platform.Meetings.Archive do
   alias Platform.Chat.Canvas
   alias Platform.Chat.Canvas.Version, as: CanvasVersion
   alias Platform.Chat.Participant, as: ChatParticipant
+  alias Platform.Meetings
   alias Platform.Meetings.Meeting
   alias Platform.Meetings.Transcript
   alias Platform.Repo
@@ -530,57 +544,20 @@ defmodule Platform.Meetings.Archive do
     end)
   end
 
-  # Both filing paths, unioned (task 01a04e16) — see `action_item_scope/0`.
+  # Both filing paths, unioned (task 01a04e16). The rule is
+  # `Platform.Meetings.meeting_task_scope/0` (task 01a1694a) — the ONE place
+  # "which tasks belong to this meeting" is written, shared with the meeting
+  # briefing and with `type_vector(:action_items)` below. It is composed here
+  # over the named bindings `:meeting` (from `scoped_query/2`) and `:task`
+  # (this join), never restated: see that function's doc for the two arms,
+  # the canvas arm's `started_at` lower bound, and why there is no
+  # `ended_at` cap.
   #
-  # `count(distinct)` is now structurally unnecessary: the join reaches
-  # `tasks` directly, so a task matching both arms still contributes one row
-  # rather than one per canvas that claimed it. It is kept because the cost is
-  # nil and because re-introducing a canvas binding here — the shape this
-  # replaced — would silently double a meeting's count without it.
-  defp action_item_chips(scoped) do
-    scoped
-    |> join(:inner, [m], ai in TaskRecord, on: ^action_item_scope())
-    |> group_by([m], m.id)
-    |> select([m, _p, ai], %{meeting_id: m.id, count: count(ai.id, :distinct)})
-    |> Repo.all()
-    |> Map.new(fn %{meeting_id: id, count: count} -> {id, action_item_chips_for(count)} end)
-  end
-
-  # "Every task this meeting filed, by either path."
-  #
-  # The two paths that file a meeting's action items share NO metadata key,
-  # so this is a UNION of two selectors rather than a widening of one:
-  #
-  #   * `Platform.Meetings.Triage.file_tasks_from_canvas/2` — the
-  #     post-meeting reconciliation pass — stamps
-  #     `metadata["source_canvas_id"]` and never a `meeting_id`;
-  #   * `Platform.Meetings.Candidates.graduate/2` — the live card path, given
-  #     a production caller by `CandidateSweeper` (task 01a03fba) and a
-  #     second by `MeetingLive`'s `approve_candidate` button (task 01a03f4e)
-  #     — has no canvas in scope and stamps `metadata["meeting_id"]` +
-  #     `metadata["candidate_id"]` instead.
-  #
-  # Keying on `source_canvas_id` alone was the defect: a meeting's live-path
-  # tasks were absent from its own chip count. Keying on `meeting_id` alone
-  # would be the mirror-image defect, dropping every triage filing.
-  #
-  # ## Why this diverges from `Triage.junk_batch/2` (task 01a04d9f, #870)
-  #
-  # #870 fixed the identical root cause on the identical pair of keys, but
-  # its live arm resolves a meeting FROM a canvas
-  # (`chat_canvases.space_id == meetings.chat_space_id`) because a caller
-  # holding only a canvas id is all it has. That resolution is what makes it
-  # over-sweep: every triage canvas in a meeting's space reaches the whole
-  # meeting's live tasks, and two meetings sharing a space reach each
-  # other's.
-  #
-  # Here the meeting is already the outer binding and the grouping key, so
-  # the live arm compares `metadata["meeting_id"]` to `m.id` directly. A
-  # live-path task names exactly one meeting, so it is attributed to exactly
-  # one — no space-level widening exists to accept or reject. The canvas arm
-  # keeps its pre-existing space-scoped reach unchanged, including its
-  # pre-existing behaviour for two meetings sharing one chat space, which
-  # `ArchiveArtifactsTest` characterises deliberately.
+  # `count(distinct)` is structurally unnecessary: the join reaches `tasks`
+  # directly and the canvas arm is an `EXISTS`, so a task matching both arms
+  # still contributes one row. It is kept because the cost is nil and because
+  # re-introducing a canvas binding here would silently double a meeting's
+  # count without it.
   #
   # `metadata["source"]` is deliberately NOT a selector, for the reason
   # `Candidates.provenance_metadata/1` records: task 01a03fda chose
@@ -588,32 +565,16 @@ defmodule Platform.Meetings.Archive do
   # cannot consume triage's `needs_promotion` budget. Counting by provenance
   # rather than by source string leaves that distinction intact.
   #
-  # ## Cost
-  #
-  # Unindexed either way, as the moduledoc already declares: there is no
-  # functional index on `tasks.metadata` (see
-  # `20260713120000_add_needs_promotion_to_tasks`) and adding one is a change
-  # to a table this module does not own. The canvas arm is an `EXISTS`
-  # rather than a join so that a task reachable through several of the
-  # meeting's canvases still yields one row.
-  defp action_item_scope do
-    dynamic(
-      [m, _p, ai],
-      is_nil(ai.deleted_at) and
-        (fragment("(? ->> 'meeting_id')", ai.metadata) == fragment("?::text", m.id) or
-           fragment(
-             """
-             EXISTS (
-               SELECT 1
-               FROM chat_canvases AS cv
-               WHERE cv.space_id = ? AND cv.deleted_at IS NULL
-                 AND (? ->> 'source_canvas_id') = cv.id::text
-             )\
-             """,
-             m.chat_space_id,
-             ai.metadata
-           ))
-    )
+  # Unindexed, as the moduledoc already declares: there is no functional
+  # index on `tasks.metadata` (see `20260713120000_add_needs_promotion_to_tasks`)
+  # and adding one is a change to a table this module does not own.
+  defp action_item_chips(scoped) do
+    scoped
+    |> join(:inner, [m], ai in TaskRecord, as: :task, on: ^Meetings.meeting_task_scope())
+    |> group_by([m], m.id)
+    |> select([m, _p, ai], %{meeting_id: m.id, count: count(ai.id, :distinct)})
+    |> Repo.all()
+    |> Map.new(fn %{meeting_id: id, count: count} -> {id, action_item_chips_for(count)} end)
   end
 
   defp action_item_chips_for(0), do: []
@@ -803,6 +764,7 @@ defmodule Platform.Meetings.Archive do
 
   defp scoped_query(viewer, opts) do
     from(m in Meeting,
+      as: :meeting,
       join: p in Project,
       on: p.id == m.project_id,
       where: m.status in ^@archived_statuses
@@ -997,42 +959,32 @@ defmodule Platform.Meetings.Archive do
     )
   end
 
-  # The same union `action_item_chips/1` counts (task 01a04e16), so a title
-  # that contributes to a meeting's chip is also a title its meeting can be
-  # found by. Keeping the two in step is the point: a live-path action item
-  # that the chip counted but the search could not reach would be a meeting
-  # advertising work the search box then denies.
+  # The same rule `action_item_chips/1` counts, so a title that contributes
+  # to a meeting's chip is also a title its meeting can be found by: a
+  # meeting advertising work the search box then denies is the drift this
+  # prevents. Both compose `Platform.Meetings.meeting_task_scope/0` (task
+  # 01a1694a); neither restates it.
   #
-  # Driven from `tasks` rather than from `chat_canvases`, because the live
-  # arm has no canvas to drive from. The canvas arm is an `EXISTS` so a task
-  # reachable through several of the meeting's canvases is aggregated once —
-  # the old `JOIN` form repeated its title per matching canvas, inflating
-  # that lexeme's frequency in the vector.
+  # A correlated subquery driven from `tasks`, joined to the outer archive
+  # row through `parent_as(:meeting)`. Its `select` is the weighted-title
+  # aggregate; the outer `coalesce(...)::tsvector` turns a meeting with no
+  # action items into the empty vector rather than NULL.
   defp type_vector(:action_items) do
-    dynamic(
-      [m],
-      fragment(
-        """
-        coalesce((
-          SELECT string_agg(
-                   setweight(to_tsvector('english', coalesce(ai.title, '')), 'B')::text, ' ')
-          FROM tasks AS ai
-          WHERE ai.deleted_at IS NULL
-            AND (
-              (ai.metadata ->> 'meeting_id') = ?::text
-              OR EXISTS (
-                SELECT 1
-                FROM chat_canvases AS cv
-                WHERE cv.space_id = ? AND cv.deleted_at IS NULL
-                  AND (ai.metadata ->> 'source_canvas_id') = cv.id::text
-              )
-            )
-        )::tsvector, ''::tsvector)\
-        """,
-        m.id,
-        m.chat_space_id
+    titles =
+      from(t in TaskRecord,
+        as: :task,
+        join: m in Meeting,
+        as: :meeting,
+        on: m.id == parent_as(:meeting).id,
+        where: ^Meetings.meeting_task_scope(),
+        select:
+          fragment(
+            "string_agg(setweight(to_tsvector('english', coalesce(?, '')), 'B')::text, ' ')",
+            t.title
+          )
       )
-    )
+
+    dynamic(fragment("coalesce((?)::tsvector, ''::tsvector)", subquery(titles)))
   end
 
   defp stored_transcript_vector do

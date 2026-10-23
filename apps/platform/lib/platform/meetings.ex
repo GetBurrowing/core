@@ -769,6 +769,149 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  "Which tasks did this meeting file?" — the ONE place that rule is written
+  (task 01a1694a stage 1). A `dynamic` over the NAMED bindings `:task`
+  (`Platform.Tasks.Task`) and `:meeting` (`Platform.Meetings.Meeting`), so
+  every reader composes it instead of restating it:
+
+    * `meeting_tasks_query/1` — the meeting briefing builder and its revert
+      check;
+    * `Platform.Meetings.Archive` — the action-item chip count AND the
+      action-item search vector.
+
+  A meeting reaches its tasks by two routes, because the two filers stamp
+  different metadata keys (task 01a04e16):
+
+    * **the live arm** — `Platform.Meetings.Candidates.graduate/2` stamps
+      `metadata["meeting_id"]`. That stamp names exactly one meeting, so the
+      arm is unbounded in time.
+    * **the canvas arm** — `Platform.Meetings.Triage.file_tasks_from_canvas/2`
+      stamps `metadata["source_canvas_id"]` and no meeting id. The task
+      belongs to a meeting when that canvas is a live `chat_canvases` row in
+      the meeting's chat space AND the task was inserted at or after the
+      meeting's `started_at`. A meeting that never started (nil `started_at`)
+      matches no canvas-arm task: `inserted_at >= NULL` is never true.
+
+  There is deliberately no `<= ended_at` cap on the canvas arm: triage is
+  the post-meeting reconciliation pass and files AFTER the meeting ends by
+  design. The canvas arm is an `EXISTS` rather than a join, so a task
+  reachable through several of the meeting's canvases still yields one row.
+
+  Soft-deleted tasks (`deleted_at` set) never match.
+  """
+  @spec meeting_task_scope() :: Ecto.Query.dynamic_expr()
+  def meeting_task_scope do
+    dynamic(
+      [task: t, meeting: m],
+      is_nil(t.deleted_at) and
+        (fragment("(? ->> 'meeting_id')", t.metadata) == fragment("?::text", m.id) or
+           (t.inserted_at >= m.started_at and
+              fragment(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM chat_canvases AS cv
+                  WHERE cv.space_id = ? AND cv.deleted_at IS NULL
+                    AND (? ->> 'source_canvas_id') = cv.id::text
+                )\
+                """,
+                m.chat_space_id,
+                t.metadata
+              )))
+    )
+  end
+
+  @doc """
+  The tasks `meeting` filed, as a query over `Platform.Tasks.Task` with the
+  named bindings `:task` and `:meeting`. The rule is `meeting_task_scope/0`;
+  this only binds it to one meeting.
+  """
+  @spec meeting_tasks_query(Meeting.t()) :: Ecto.Query.t()
+  def meeting_tasks_query(%Meeting{id: id}) do
+    from(t in Platform.Tasks.Task,
+      as: :task,
+      join: m in Meeting,
+      as: :meeting,
+      on: m.id == ^id,
+      where: ^meeting_task_scope()
+    )
+  end
+
+  @doc """
+  The users who attended `meeting`: distinct `meeting_participants.user_id`s
+  in the room of the meeting's chat space whose presence overlapped the
+  meeting's actual window `[started_at, coalesce(ended_at, now)]`.
+
+  Time-windowed because the room is per chat space and outlives the meeting:
+  people can rejoin after it ends, and a rejoin is not attendance.
+
+  Agents (`agent_id` set) and anonymous guests (no `user_id`) are excluded,
+  and so is any user who is an EXTERNAL member (role `guest`) of the
+  meeting's own org — the org of the meeting's chat space. That last rule is
+  a declared deviation from "every human attendee"; it mirrors the insight
+  disseminator's `:guest_addressee` refusal, since the Inbox lists only
+  mentions to an external viewer.
+
+  Guest status is decided against the meeting's org ONLY, by the
+  orchestrator's ruling on task 01a1694a: a member of this org who is a
+  guest somewhere else is still an attendee here. A chat space with no org
+  (a project with no org) has no org to be a guest of, so nobody is dropped
+  on that ground.
+
+  A meeting with a nil `started_at` never ran and has no attendees: `[]`.
+  """
+  @spec human_attendee_ids(Meeting.t()) :: [binary()]
+  def human_attendee_ids(%Meeting{started_at: nil}), do: []
+
+  def human_attendee_ids(%Meeting{chat_space_id: space_id, started_at: started_at} = meeting)
+      when is_binary(space_id) do
+    until = meeting.ended_at || DateTime.utc_now()
+
+    from(p in Participant,
+      join: r in Room,
+      on: r.id == p.room_id,
+      where: r.space_id == ^space_id,
+      where: not is_nil(p.user_id) and is_nil(p.agent_id),
+      where: p.joined_at <= ^until,
+      where: is_nil(p.left_at) or p.left_at >= ^started_at,
+      distinct: true,
+      select: p.user_id
+    )
+    |> Repo.all()
+    |> drop_org_guests(space_org_id(space_id))
+    |> Enum.sort()
+  end
+
+  def human_attendee_ids(%Meeting{}), do: []
+
+  @doc """
+  Whether `user_id` is an EXTERNAL member (role `guest`) of `meeting`'s own
+  org — the org of its chat space. The same check `human_attendee_ids/1`
+  drops attendees by, exposed so the briefing's action path refuses exactly
+  the people delivery left out (task 01a1694a stage 3). `false` when the
+  space has no org.
+  """
+  @spec meeting_org_guest?(Meeting.t(), binary()) :: boolean()
+  def meeting_org_guest?(%Meeting{chat_space_id: space_id}, user_id)
+      when is_binary(space_id) and is_binary(user_id) do
+    drop_org_guests([user_id], space_org_id(space_id)) == []
+  end
+
+  def meeting_org_guest?(%Meeting{}, _user_id), do: false
+
+  defp space_org_id(space_id) do
+    Repo.one(from(s in Platform.Chat.Space, where: s.id == ^space_id, select: s.org_id))
+  end
+
+  defp drop_org_guests(user_ids, nil), do: user_ids
+  defp drop_org_guests([], _org_id), do: []
+
+  defp drop_org_guests(user_ids, org_id) do
+    guests = Platform.Tenancy.external_member_ids(org_id, user_ids)
+    Enum.reject(user_ids, &MapSet.member?(guests, &1))
+  end
+
+  @doc """
   Was this meeting *meant* to have happened by `now`, and never started?
 
   This is a REPORT over the `(status, scheduled_start_at, started_at)`
@@ -1313,11 +1456,29 @@ defmodule Platform.Meetings do
           {:meeting_ended, updated}
         )
 
+        deliver_meeting_briefing(updated)
         ok
 
       error ->
         error
     end
+  end
+
+  # Conclusion is the trigger for the after-action briefing (task 01a1694a
+  # stage 2): `end_meeting/1` is the only live→ended transition, so this runs
+  # once per meeting and never when one person leaves. Synchronous — the work
+  # is DB-only — and rescued, because a briefing failure must never fail the
+  # `room_finished` webhook that ended the meeting.
+  defp deliver_meeting_briefing(%Meeting{} = meeting) do
+    Platform.Meetings.MeetingBriefings.deliver(meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] meeting briefing for #{meeting.id} not delivered: " <>
+          Exception.message(error)
+      )
+
+      :error
   end
 
   @doc """
@@ -5468,12 +5629,27 @@ defmodule Platform.Meetings do
         case result do
           {:ok, updated} ->
             maybe_dispatch_scribe_attention(updated)
+            refresh_meeting_briefing(updated)
             {:ok, updated}
 
           error ->
             error
         end
     end
+  end
+
+  # A completed transcript carries the summary the meeting's briefing shows
+  # (task 01a1694a stage 2). Rescued: the transcript is complete either way.
+  defp refresh_meeting_briefing(%Transcript{} = transcript) do
+    Platform.Meetings.MeetingBriefings.refresh_for_transcript(transcript)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] meeting briefing refresh for transcript #{transcript.id} failed: " <>
+          Exception.message(error)
+      )
+
+      :error
   end
 
   # Opportunistic dispatch to the `meeting_scribe` role-assigned agent's linked

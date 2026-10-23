@@ -38,13 +38,18 @@ defmodule Platform.Inbox.Item do
   # day's insight briefing: ONE row per person per `digest_date`, written and
   # refreshed only by `Platform.Inbox.upsert_briefing_item/2`, with
   # `source_type: "briefing"` and `source_id` = the `memory_briefings` id.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing)
+  # `meeting_briefing` (task 01a1694a stage 2) is a concluded meeting's
+  # after-action briefing: ONE row per attendee per meeting, written and
+  # refreshed only by `Platform.Inbox.upsert_meeting_briefing_item/3`, with
+  # `source_type: "meeting_briefing"` and `source_id` = the
+  # `meeting_briefings` id.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
   # the plain `task` source so a rollup dismissal never touches a
   # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
-  @source_types ~w(chat_message task review_request meeting task_review briefing)
+  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing)
 
   # `inbox_items.title` is `varchar(255)` (`add(:title, :string)` in
   # `20260723185711_create_inbox_items.exs`). Producers build titles as a

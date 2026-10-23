@@ -6,7 +6,7 @@
   <div
     class={[
       "h-full min-w-0 flex-1 overflow-y-auto lg:w-95 lg:flex-none lg:border-r lg:border-edge lg:bg-base-100",
-      @live_action == :briefing && "max-lg:hidden"
+      @live_action in [:briefing, :meeting_briefing] && "max-lg:hidden"
     ]}
     data-role="inbox-surface"
   >
@@ -146,6 +146,13 @@
             row={row}
             patch={(row.url || "/inbox") <> filter_query(@filter)}
           />
+          <%!-- A concluded meeting's briefing (task 01a1694a stage 4), under
+               the same Briefing chip. --%>
+          <.meeting_briefing_row
+            :for={row <- @meeting_briefing_rows}
+            row={row}
+            patch={(row.url || "/inbox") <> filter_query(@filter)}
+          />
         </ul>
 
         <%!-- Awaiting your review --%>
@@ -245,18 +252,38 @@
   <section
     class={[
       "min-w-0 flex-1 overflow-auto bg-base-200",
-      @live_action != :briefing && "max-lg:hidden"
+      @live_action not in [:briefing, :meeting_briefing] && "max-lg:hidden"
     ]}
     data-role="inbox-detail-pane"
     aria-label="Inbox item"
   >
     <p
-      :if={is_nil(@briefing_detail)}
+      :if={is_nil(@briefing_detail) and is_nil(@meeting_detail_id)}
       class="flex h-full items-center justify-center p-6 text-sm text-subtle"
       data-role="inbox-detail-empty"
     >
       Select an item
     </p>
+
+    <%!-- A meeting's briefing (task 01a1694a stage 4). The component loads
+         only through MeetingBriefings.get_for_attendee/2 and renders one
+         not-found for everything it cannot load. --%>
+    <div :if={@meeting_detail_id} class="mx-auto max-w-3xl p-6">
+      <.link
+        patch={"/inbox" <> filter_query(@filter)}
+        class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
+        data-role="inbox-detail-back"
+      >
+        ‹ Inbox
+      </.link>
+      <.live_component
+        module={PlatformWeb.InboxLive.MeetingBriefingComponent}
+        id={meeting_briefing_component_id(@meeting_detail_id)}
+        meeting_id={@meeting_detail_id}
+        user_id={@current_user_id}
+        time_zone={@time_zone}
+      />
+    </div>
 
     <div :if={@briefing_detail} class="mx-auto max-w-3xl p-6">
       <.link

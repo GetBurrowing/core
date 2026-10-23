@@ -1068,7 +1068,13 @@ defmodule Platform.InboxTest do
                "lifecycle_step_failed"
              ]
 
-      assert Inbox.action_kinds() == ["task_plan_review", "review_request_pending", "briefing"]
+      assert Inbox.action_kinds() == [
+               "task_plan_review",
+               "review_request_pending",
+               "briefing",
+               "meeting_briefing"
+             ]
+
       assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
     end
 
@@ -1356,6 +1362,126 @@ defmodule Platform.InboxTest do
       assert %Item{read_at: nil, dismissed_at: nil} = Repo.get!(Item, item.id)
       refute_receive {:inbox_item_dismissed, _}, 100
       refute_received {:inbox_changed, _}
+    end
+  end
+
+  # ── Task 01a1694a stage 2: the meeting briefing row ───────────────────────
+
+  describe "upsert_meeting_briefing_item/3 and reconcile_for_user/1 — meeting_briefing (ADR 0049)" do
+    alias Platform.Meetings.Meeting
+    alias Platform.Meetings.MeetingBriefing
+    alias Platform.Meetings.MeetingBriefings
+
+    defp ended_meeting!(ended_at) do
+      n = System.unique_integer([:positive])
+      {:ok, project} = Platform.Tasks.create_project(%{name: "MB Inbox #{n}"})
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{project_id: project.id, name: "MB #{n}"})
+
+      {:ok, live} =
+        meeting
+        |> Meeting.status_changeset("live", %{started_at: DateTime.add(ended_at, -3600, :second)})
+        |> Repo.update()
+
+      {:ok, ended} =
+        live |> Meeting.status_changeset("ended", %{ended_at: ended_at}) |> Repo.update()
+
+      ended
+    end
+
+    defp meeting_briefing_row!(user, ended_at) do
+      meeting = ended_meeting!(ended_at)
+
+      briefing =
+        Repo.insert!(%MeetingBriefing{meeting_id: meeting.id, attendee_user_ids: [user.id]})
+
+      {:ok, item, :created} =
+        Inbox.upsert_meeting_briefing_item(briefing, user.id, %{
+          title: meeting.name,
+          body: "1 item",
+          url: "/inbox/meeting/" <> meeting.id
+        })
+
+      {briefing, item}
+    end
+
+    defp ttl_days, do: Platform.Memory.Insight.default_ttl_days()
+
+    defp live_row?(item), do: is_nil(Repo.get!(Item, item.id).dismissed_at)
+
+    test "one row per attendee: a second upsert updates, and re-lists only when new_items?" do
+      user = insert_user()
+      {briefing, item} = meeting_briefing_row!(user, DateTime.utc_now())
+
+      assert item.kind == "meeting_briefing"
+      assert item.source_type == "meeting_briefing"
+      assert item.source_id == briefing.id
+
+      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+
+      assert {:ok, _, :updated} =
+               Inbox.upsert_meeting_briefing_item(briefing, user.id, %{body: "2 items"})
+
+      refute live_row?(item), "a refresh that added nothing must not re-list the row"
+
+      assert {:ok, _, :updated} =
+               Inbox.upsert_meeting_briefing_item(briefing, user.id, %{new_items?: true})
+
+      assert live_row?(item)
+
+      assert Repo.aggregate(
+               from(i in Item, where: i.user_id == ^user.id and i.kind == "meeting_briefing"),
+               :count
+             ) == 1
+    end
+
+    test "a meeting that ended recently is NOT stale (control); one past the TTL is" do
+      user = insert_user()
+      {_fresh, fresh_item} = meeting_briefing_row!(user, DateTime.utc_now())
+
+      {_old, old_item} =
+        meeting_briefing_row!(user, DateTime.add(DateTime.utc_now(), -(ttl_days() + 1), :day))
+
+      :ok = Inbox.reconcile_for_user(user.id)
+
+      assert live_row?(fresh_item)
+      refute live_row?(old_item)
+    end
+
+    test "a missing briefing row is not confirmation: the Inbox row stays" do
+      user = insert_user()
+
+      {:ok, item} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "meeting_briefing",
+          source_type: "meeting_briefing",
+          source_id: Ecto.UUID.generate(),
+          title: "Gone meeting",
+          url: "/inbox/meeting/x"
+        })
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      assert live_row?(item)
+      refute MeetingBriefings.inbox_row_stale?(item.source_id)
+      refute MeetingBriefings.inbox_row_stale?("not-a-uuid")
+    end
+
+    test "the TTL edge: exactly the TTL is not stale, one second past it is" do
+      ended_at = ~U[2026-10-01 12:00:00.000000Z]
+      meeting = ended_meeting!(ended_at)
+      briefing = Repo.insert!(%MeetingBriefing{meeting_id: meeting.id})
+      edge = DateTime.add(ended_at, ttl_days() * 86_400, :second)
+
+      refute MeetingBriefings.inbox_row_stale?(briefing.id, now: edge)
+      assert MeetingBriefings.inbox_row_stale?(briefing.id, now: DateTime.add(edge, 1, :second))
+    end
+
+    test "meeting_briefing is listed on open but is not a core (Mobile approval) action kind" do
+      assert "meeting_briefing" in Inbox.action_kinds()
+      refute "meeting_briefing" in Inbox.core_action_kinds()
+      refute "meeting_briefing" in Platform.Mobile.AppEntities.approval_kinds()
     end
   end
 end

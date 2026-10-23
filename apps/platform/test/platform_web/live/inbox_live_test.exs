@@ -2062,4 +2062,297 @@ defmodule PlatformWeb.InboxLiveTest do
       assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
     end
   end
+
+  # ── The meeting briefing (task 01a1694a stage 4) ───────────────────────
+
+  describe "the meeting briefing row and detail" do
+    alias Platform.Access.Scope
+    alias Platform.Meetings
+    alias Platform.Meetings.Candidates
+    alias Platform.Meetings.Meeting
+    alias Platform.Meetings.MeetingBriefings
+    alias Platform.Meetings.Participant
+    alias Platform.Meetings.Room
+    alias Platform.Tasks.Task, as: TaskRecord
+    alias Platform.Tenancy.OrgMembership
+
+    defp member! do
+      user = insert_user()
+
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
+      |> Repo.insert!()
+
+      user
+    end
+
+    defp graduate_task!(%Meeting{} = meeting, quote) do
+      {:ok, candidate} =
+        Candidates.create(%{
+          meeting_id: meeting.id,
+          evidence_quote: quote,
+          state: :heard,
+          outcome_kind: :task,
+          acts_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        })
+
+      {:ok, graduated} = Candidates.graduate(candidate)
+      Repo.get!(TaskRecord, graduated.task_id)
+    end
+
+    # A meeting A and B attended, with two backlog tasks, concluded through
+    # `end_meeting/1` so each has the real Inbox row and briefing.
+    defp concluded_meeting! do
+      n = System.unique_integer([:positive])
+
+      {:ok, project} =
+        Platform.Tasks.create_project(%{name: "MB LV #{n}", org_id: acme_org_id()})
+
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "MB sync #{n}"})
+
+      {:ok, live} =
+        meeting
+        |> Meeting.status_changeset("live", %{
+          started_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+        })
+        |> Repo.update()
+
+      room =
+        %Room{}
+        |> Room.changeset(%{
+          space_id: live.chat_space_id,
+          livekit_room_name: "space-#{live.chat_space_id}"
+        })
+        |> Repo.insert!()
+
+      a = member!()
+      b = member!()
+
+      for user <- [a, b] do
+        %Participant{}
+        |> Participant.changeset(%{
+          room_id: room.id,
+          user_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.add(DateTime.utc_now(), -3000, :second)
+        })
+        |> Repo.insert!()
+      end
+
+      t1 = graduate_task!(live, "somebody should rotate the S3 keys")
+      t2 = graduate_task!(live, "somebody should renew the TLS certs")
+      {:ok, ended} = Meetings.end_meeting(live)
+
+      %{meeting: ended, a: a, b: b, t1: t1, t2: t2}
+    end
+
+    defp mb_key(%TaskRecord{id: id}), do: MeetingBriefings.node_key("task:" <> id)
+
+    defp detail_path(%Meeting{id: id}), do: "/inbox/meeting/" <> id
+
+    test "an attendee's row shows the meeting and its receipt line", %{conn: conn} do
+      ctx = concluded_meeting!()
+      {:ok, lv, _html} = live(auth(conn, ctx.a), "/inbox?f=briefing")
+
+      row = ~s([data-role="inbox-meeting-briefing-row"][data-meeting-id="#{ctx.meeting.id}"])
+      assert has_element?(lv, row)
+
+      assert lv |> element(row <> ~s( [data-role="inbox-meeting-briefing-title"])) |> render() =~
+               ctx.meeting.name
+
+      assert lv |> element(row <> ~s( [data-role="inbox-meeting-briefing-kind"])) |> render() =~
+               "Meeting"
+
+      assert lv |> element(row <> ~s( [data-role="inbox-meeting-briefing-summary"])) |> render() =~
+               "2 items · 2 open"
+
+      # Not streamed into a section as a generic item.
+      refute has_element?(lv, ~s([data-role="inbox-item"][data-item-kind="meeting_briefing"]))
+    end
+
+    test "a non-attendee sees no row, and the real id, a random uuid and a malformed id render the same not-found",
+         %{conn: conn} do
+      ctx = concluded_meeting!()
+      outsider = member!()
+
+      {:ok, lv, _html} = live(auth(conn, outsider), "/inbox")
+      refute has_element?(lv, ~s([data-role="inbox-meeting-briefing-row"]))
+
+      texts =
+        for path <- [
+              detail_path(ctx.meeting),
+              "/inbox/meeting/" <> Ecto.UUID.generate(),
+              "/inbox/meeting/not-a-uuid"
+            ] do
+          {:ok, lv, _html} = live(auth(conn, outsider), path)
+          refute has_element?(lv, ~s([data-role="meeting-briefing-detail"]))
+          lv |> element(~s([data-role="meeting-briefing-not-found"])) |> render() |> strip_tags()
+        end
+
+      assert Enum.uniq(texts) == ["There's no briefing here."]
+
+      # Positive control: the attendee DOES see the detail on the real id.
+      {:ok, lv, _html} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+      assert has_element?(lv, ~s([data-role="meeting-briefing-detail"]))
+    end
+
+    test "A reverts and B's open briefing shows Reverted by A live, with no buttons",
+         %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t1)
+      card = ~s([data-key="#{k}"])
+
+      {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+      assert has_element?(lv, ~s([data-role="meeting-briefing-card"]#{card}))
+
+      assert has_element?(
+               lv,
+               ~s([data-role="meeting-briefing-card"]#{card} [data-action="revert"])
+             )
+
+      briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
+
+      assert {:ok, _} =
+               MeetingBriefings.act(
+                 briefing,
+                 k,
+                 :revert,
+                 Scope.for_user(Repo.get!(User, ctx.a.id)),
+                 %{}
+               )
+
+      # The broadcast lands as `{:inbox_changed, _}`, whose handler
+      # `send_update`s the component; the second render is after that update.
+      _ = render(lv)
+      _ = render(lv)
+
+      assert has_element?(lv, ~s([data-role="meeting-briefing-resolved-card"]#{card}))
+      refute has_element?(lv, ~s([data-role="meeting-briefing-card"]#{card}))
+
+      assert lv
+             |> element(
+               ~s([data-role="meeting-briefing-resolved-card"]#{card} [data-role="meeting-briefing-receipt-lead"])
+             )
+             |> render()
+             |> strip_tags() == "Reverted by " <> ctx.a.name
+
+      refute has_element?(lv, ~s(#{card} [data-role="meeting-briefing-action"]))
+    end
+
+    test "B's stale click renders Already handled and changes no task", %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t1)
+      card = ~s([data-key="#{k}"])
+
+      {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+
+      briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
+
+      assert {:ok, _} =
+               MeetingBriefings.act(
+                 briefing,
+                 k,
+                 :revert,
+                 Scope.for_user(Repo.get!(User, ctx.a.id)),
+                 %{}
+               )
+
+      deleted_at = Repo.get!(TaskRecord, ctx.t1.id).deleted_at
+      assert %DateTime{} = deleted_at
+
+      # B's page still holds the stale Revert button: the click reaches the
+      # server before the reload it is about to get.
+      lv
+      |> element(~s([data-role="meeting-briefing-card"]#{card} [data-action="revert"]))
+      |> render_click()
+
+      assert lv |> element(~s([data-role="meeting-briefing-notice"])) |> render() |> strip_tags() ==
+               "Already handled by " <> ctx.a.name
+
+      assert Repo.get!(TaskRecord, ctx.t1.id).deleted_at == deleted_at
+    end
+
+    test "a blank Ask shows the hint and posts nothing", %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t2)
+      card = ~s([data-role="meeting-briefing-card"][data-key="#{k}"])
+
+      {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+
+      lv |> element(card <> ~s( [data-action="ask"])) |> render_click()
+      assert has_element?(lv, card <> ~s( [data-role="meeting-briefing-ask-form"]))
+
+      lv
+      |> form(card <> ~s( [data-role="meeting-briefing-ask-form"]), %{"question" => "  "})
+      |> render_submit()
+
+      assert has_element?(lv, card <> ~s( [data-role="meeting-briefing-blank-hint"]))
+      assert has_element?(lv, card <> ~s( [data-action="ask"]))
+
+      assert Repo.aggregate(
+               from(m in Platform.Chat.Message, where: m.space_id == ^ctx.meeting.chat_space_id),
+               :count
+             ) == 0
+    end
+
+    # Review case 7003: every phone control is at least 44px tall. The
+    # resolved card's "See the question" link was the one that measured 16px.
+    test "the asked receipt's link, and every link and button in the detail, has the 44px phone target",
+         %{conn: conn} do
+      ctx = concluded_meeting!()
+      k = mb_key(ctx.t1)
+      briefing = MeetingBriefings.get_for_attendee(ctx.meeting.id, ctx.a.id)
+
+      assert {:ok, _} =
+               MeetingBriefings.act(
+                 briefing,
+                 k,
+                 :ask,
+                 Scope.for_user(Repo.get!(User, ctx.a.id)),
+                 %{"question" => "Who owns this?"}
+               )
+
+      {:ok, lv, _html} = live(auth(conn, ctx.b), detail_path(ctx.meeting))
+
+      assert has_element?(
+               lv,
+               ~s([data-role="meeting-briefing-resolved-card"][data-key="#{k}"] ) <>
+                 ~s(a.min-h-11[data-role="meeting-briefing-receipt-link"])
+             )
+
+      detail = lv |> element(~s([data-role="meeting-briefing-detail"])) |> render()
+      controls = Regex.scan(~r/<(?:a|button)\b[^>]*>/, detail) |> Enum.map(&hd/1)
+
+      # The detail renders open-card buttons, the transcript link and the
+      # receipt link, so this cannot pass on an empty list.
+      assert length(controls) >= 3
+
+      for tag <- controls do
+        assert tag =~ "min-h-11", "phone control under 44px: " <> tag
+      end
+    end
+
+    test "opening the row marks it read and it stays listed", %{conn: conn} do
+      ctx = concluded_meeting!()
+
+      [item] =
+        Repo.all(from(i in Item, where: i.user_id == ^ctx.a.id and i.kind == "meeting_briefing"))
+
+      assert is_nil(item.read_at)
+
+      {:ok, _lv, _html} = live(auth(conn, ctx.a), detail_path(ctx.meeting))
+
+      reread = Repo.get!(Item, item.id)
+      assert %DateTime{} = reread.read_at
+      assert is_nil(reread.dismissed_at)
+    end
+
+    defp strip_tags(html),
+      do:
+        html
+        |> String.replace(~r/<[^>]*>/, "")
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+        |> html_unescape()
+  end
 end

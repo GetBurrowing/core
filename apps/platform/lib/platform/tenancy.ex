@@ -872,13 +872,38 @@ defmodule Platform.Tenancy do
   def external_user_ids([]), do: MapSet.new()
 
   def external_user_ids(user_ids) when is_list(user_ids) do
+    user_ids
+    |> external_memberships_query()
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  The subset of `user_ids` that are external members OF `org_id`, as a
+  `MapSet` — `external_user_ids/1`'s rule narrowed to one org (task
+  01a1694a). A person external in some other org but internal (or absent)
+  here is not in the set.
+
+  Same id contract as `external_user_ids/1`; an empty list short-circuits.
+  """
+  @spec external_member_ids(binary(), [binary()]) :: MapSet.t(binary())
+  def external_member_ids(_org_id, []), do: MapSet.new()
+
+  def external_member_ids(org_id, user_ids) when is_binary(org_id) and is_list(user_ids) do
+    user_ids
+    |> external_memberships_query()
+    |> where([m], m.org_id == ^org_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  # The one statement of "an external membership" both readers share.
+  defp external_memberships_query(user_ids) do
     from(m in OrgMembership,
       where: m.user_id in ^user_ids and m.external == true,
       select: m.user_id,
       distinct: true
     )
-    |> Repo.all()
-    |> MapSet.new()
   end
 
   # ── Org group-claim mapping (IdP group value → org) ────────────────────
