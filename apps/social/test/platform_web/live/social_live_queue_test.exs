@@ -275,4 +275,269 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     refute has_element?(child, in_row(orphan, "button"))
     refute render(child) =~ "ORPHAN-BODY"
   end
+
+  describe "a refused publish (task 01a165f1, stage 3)" do
+    # An approved post whose publish was refused before the vendor: decided
+    # through the real card (the Fake publishes), then put back to approved
+    # with the refusal Publishing.publish_post/2 records.
+    defp refused!(ctx, kind, attrs \\ []) do
+      {post, card} = pending_post!(ctx, ctx.a, %{body: "REFUSED-#{kind} body"})
+      h1 = Platform.Accounts.get_user(ctx.h1.id)
+      {:ok, _} = Approvals.decide_approve(card.canvas_id, h1, fingerprint(card, ctx.h1))
+      Fake.reset()
+
+      set =
+        Keyword.merge(
+          [
+            status: "approved",
+            external_id: nil,
+            external_url: nil,
+            refused_reason: kind,
+            refused_at: ~U[2026-10-22 23:21:00.000000Z],
+            retry_after: nil,
+            error: "Instagram Reels need a Business or Creator account."
+          ],
+          attrs
+        )
+
+      Repo.update_all(from(p in Post, where: p.id == ^post.id), set: set)
+      {Repo.get!(Post, post.id), card}
+    end
+
+    defp admin!(user, org_id) do
+      Repo.update_all(
+        from(m in Platform.Tenancy.OrgMembership,
+          where: m.user_id == ^user.id and m.org_id == ^org_id
+        ),
+        set: [role: "admin"]
+      )
+    end
+
+    defp action(post), do: in_row(post, "[data-role='social-card-refusal-action']")
+
+    test "each refusal renders its label, reason and one matching action", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+
+      {limited, _} =
+        refused!(ctx, "rate_limited",
+          retry_after: DateTime.add(DateTime.utc_now(), 3600),
+          error: "x"
+        )
+
+      {archived, _} = refused!(ctx, "account_archived")
+      {unset, _} = refused!(ctx, "publisher_not_configured")
+      admin!(ctx.h1, ctx.org_id)
+
+      child = open(conn, ctx.h1)
+      status = "[data-role='social-card-status']"
+      reason = "[data-role='social-card-refusal-reason']"
+
+      assert has_element?(child, in_row(media, status <> "[data-dot='error']"), "Not published")
+      refute has_element?(child, in_row(media, status), "Approved")
+
+      assert has_element?(
+               child,
+               in_row(media, reason),
+               "Instagram Reels need a Business or Creator account."
+             )
+
+      assert has_element?(
+               child,
+               in_row(media, "[data-role='social-card-refused-at']"),
+               "Refused 23:21"
+             )
+
+      assert has_element?(
+               child,
+               action(media) <> "[data-action='retry_publish']",
+               "Retry publish"
+             )
+
+      assert has_element?(
+               child,
+               in_row(limited, status <> "[data-dot='warning']"),
+               "Waiting to retry"
+             )
+
+      clock = Calendar.strftime(limited.retry_after, "%H:%M")
+
+      assert has_element?(
+               child,
+               in_row(limited, reason),
+               "LinkedIn's posting limit is reached. This post goes out at"
+             )
+
+      assert has_element?(child, in_row(limited, "[data-role='social-card-retry-clock']"), clock)
+
+      assert has_element?(child, in_row(archived, status), "Not published")
+
+      assert has_element?(
+               child,
+               in_row(archived, reason),
+               "The LinkedIn account is disconnected."
+             )
+
+      assert has_element?(
+               child,
+               action(archived) <> "[data-action='reconnect'][href*='tab=connections']",
+               "Reconnect account"
+             )
+
+      assert has_element?(
+               child,
+               in_row(unset, reason),
+               "Publishing isn't set up for this profile."
+             )
+
+      assert has_element?(
+               child,
+               action(unset) <> "[data-action='open_settings'][href*='tab=settings']",
+               "Open settings"
+             )
+
+      # Visible text only: the refusal kind rides in data-refusal, never in copy.
+      for post <- [media, limited, archived, unset] do
+        text =
+          child
+          |> element(in_row(post, "[data-role='social-card-refusal']"))
+          |> render()
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.text()
+
+        refute text =~ ~r/media_rejected|rate_limited|account_archived|publisher_not_configured/
+      end
+    end
+
+    test "rate_limited shows Publish now disabled, never Retry publish", %{conn: conn} = ctx do
+      {limited, _} =
+        refused!(ctx, "rate_limited", retry_after: DateTime.add(DateTime.utc_now(), 3600))
+
+      child = open(conn, ctx.h1)
+
+      assert has_element?(
+               child,
+               action(limited) <> "[data-action='publish_now'][disabled]",
+               "Publish now"
+             )
+
+      refute has_element?(child, in_row(limited, "[data-action='retry_publish']"))
+    end
+
+    test "a viewer and an approver who is not an admin get no action", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      {unset, _} = refused!(ctx, "publisher_not_configured")
+
+      viewer = open(conn, ctx.n)
+
+      assert has_element?(
+               viewer,
+               in_row(media, "[data-role='social-card-status']"),
+               "Not published"
+             )
+
+      assert has_element?(
+               viewer,
+               in_row(media, "[data-role='social-card-refusal-reason']"),
+               "Instagram Reels need a Business or Creator account."
+             )
+
+      refute has_element?(viewer, "#social-queue [data-role='social-card-refusal-action']")
+      refute has_element?(viewer, "#social-queue button")
+
+      # H2 approves on the profile but is not an org admin: no Open settings.
+      approver = open(build_conn(), ctx.h2)
+      assert has_element?(approver, action(media), "Retry publish")
+      refute has_element?(approver, action(unset))
+    end
+
+    test "Retry publishes via the Fake and clears the refusal", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+
+      assert has_element?(child, action(media) <> "[phx-disable-with='Publishing']")
+      child |> element(action(media)) |> render_click()
+
+      assert [{:publish, _, _}] = Fake.calls(:publish)
+      row = Repo.get!(Post, media.id)
+      assert {row.status, row.refused_reason, row.refused_at} == {"scheduled", nil, nil}
+      refute has_element?(child, in_row(media, "[data-role='social-card-refusal']"))
+      refute has_element?(child, in_row(media, "[data-role='social-card-notice']"))
+      assert has_element?(child, in_row(media, "[data-role='social-card-status']"), "Approved by")
+    end
+
+    test "a second refusal updates the reason in place with no notice", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected", error: "old reason.")
+      child = open(conn, ctx.h1)
+
+      previous = Application.get_env(:social, :publisher)
+      Application.delete_env(:social, :publisher)
+      on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+
+      child |> element(action(media)) |> render_click()
+
+      assert has_element?(
+               child,
+               in_row(media, "[data-role='social-card-refusal-reason']"),
+               "Publishing isn't set up for this profile."
+             )
+
+      assert [_one] =
+               child
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(in_row(media, "[data-role='social-card-refusal']"))
+               |> Enum.to_list()
+
+      refute has_element?(child, in_row(media, "[data-role='social-card-notice']"))
+    end
+
+    test "the queue lists refused posts, and Not published filters to them",
+         %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+
+      assert has_element?(child, row(ctx.post))
+      assert has_element?(child, row(media))
+
+      child
+      |> element("[data-role='social-queue-chip'][data-filter='not_published']", "Not published")
+      |> render_click()
+
+      assert has_element?(
+               child,
+               "[data-role='social-queue-chip'][aria-pressed='true']",
+               "Not published"
+             )
+
+      assert has_element?(child, row(media))
+      refute has_element?(child, row(ctx.post))
+
+      child
+      |> element(
+        "[data-role='social-queue-chip'][data-filter='needs_approval']",
+        "Needs approval"
+      )
+      |> render_click()
+
+      assert has_element?(child, row(ctx.post))
+      refute has_element?(child, row(media))
+    end
+
+    test "a healthy approved card is unchanged and the queue shows no filter",
+         %{conn: conn} = ctx do
+      {post, card} = pending_post!(ctx, ctx.a, %{body: "HEALTHY"})
+      h1 = Platform.Accounts.get_user(ctx.h1.id)
+      {:ok, _} = Approvals.decide_approve(card.canvas_id, h1, fingerprint(card, ctx.h1))
+
+      view = Approvals.card_view(card.id, {:user, ctx.h1.id})
+      assert view.refusal == nil
+      refute Map.has_key?(view.status, :dot)
+      assert view.status.text =~ "Approved by Hana One"
+
+      child = open(conn, ctx.h1)
+      refute has_element?(child, "[data-role='social-queue-filter']")
+      refute has_element?(child, row(post))
+      refute has_element?(child, "[data-role='social-card-refusal']")
+    end
+  end
 end

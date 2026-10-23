@@ -58,6 +58,13 @@ defmodule Platform.Social.Post do
     belongs_to(:generated_by_agent, Platform.Agents.Agent)
     field(:media_meta, :map, default: %{})
 
+    # Why an approved post did not go out (task 01a165f1). In NO cast list:
+    # only `refusal_changeset/4`, called by `Platform.Social.Publishing`,
+    # sets them, and every success or terminal write clears them.
+    field(:refused_reason, :string)
+    field(:refused_at, :utc_datetime_usec)
+    field(:retry_after, :utc_datetime_usec)
+
     timestamps()
   end
 
@@ -66,6 +73,12 @@ defmodule Platform.Social.Post do
 
   # Social 2/7: the AI-disclosure flags and per-file media facts.
   @publisher_fields ~w(is_aigc ai_disclosure generated_by_agent_id media_meta)a
+
+  @refused_reasons ~w(media_rejected rate_limited account_archived publisher_not_configured)
+
+  @doc "Accepted `refused_reason` values."
+  @spec refused_reasons() :: [String.t()]
+  def refused_reasons, do: @refused_reasons
 
   @doc "Accepted `status` values."
   @spec statuses() :: [String.t()]
@@ -127,6 +140,35 @@ defmodule Platform.Social.Post do
     |> validate_required([:approved_by_user_id, :approved_at])
     |> db_constraints()
   end
+
+  @doc """
+  The ONLY writer of `refused_reason` / `refused_at` / `retry_after`
+  (task 01a165f1): `Platform.Social.Publishing.publish_post/2` refused this
+  approved post before the vendor. Sets the reason, `refused_at` (now), the
+  plain-sentence `error` and `retry_after` (nil unless rate limited). The
+  status is left alone: the post stays `approved`.
+  """
+  @spec refusal_changeset(t(), String.t(), String.t(), DateTime.t() | nil) ::
+          Ecto.Changeset.t()
+  def refusal_changeset(%__MODULE__{} = post, reason, error, retry_after) do
+    post
+    |> change(
+      refused_reason: reason,
+      refused_at: DateTime.utc_now(),
+      error: error,
+      retry_after: retry_after
+    )
+    |> validate_inclusion(:refused_reason, @refused_reasons)
+    |> check_constraint(:refused_reason, name: :social_posts_refused_reason_check)
+    |> db_constraints()
+  end
+
+  @doc """
+  The changes that clear a recorded refusal. Every success or terminal write
+  (`scheduled`, `published`, `failed`) merges these in.
+  """
+  @spec refusal_cleared() :: keyword()
+  def refusal_cleared, do: [refused_reason: nil, refused_at: nil, retry_after: nil]
 
   @max_body 10_000
   @max_reason 2_000

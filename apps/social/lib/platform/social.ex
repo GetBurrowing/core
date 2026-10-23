@@ -448,6 +448,7 @@ defmodule Platform.Social do
   defp cancel_for_removal!(%Post{} = post) do
     post
     |> Changeset.change(status: "failed", error: @removed_error)
+    |> Changeset.change(Post.refusal_cleared())
     |> Changeset.check_constraint(:status, name: :social_posts_status_check)
     |> Changeset.check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check
@@ -1435,8 +1436,9 @@ defmodule Platform.Social do
   `:placed_to` (Social 7/7's calendar: a half-open `[from, to)` range of
   `DateTime`s on the post's PLACEMENT time, `scheduled_at`, or `approved_at`
   for a post published or failed at approval with no schedule; the schema
-  has no published-at column). Rows carry `status`, `error`,
-  `rejection_reason` and `rejected_at`.
+  has no published-at column), and `refused: true` (task 01a165f1:
+  `approved` posts with a `refused_reason`). Rows carry `status`, `error`,
+  `rejection_reason`, `rejected_at` and the refusal fields.
   """
   @spec list_posts(Ecto.UUID.t(), keyword() | map()) :: [Post.t()]
   def list_posts(org_id, filters \\ []) do
@@ -1499,6 +1501,12 @@ defmodule Platform.Social do
         {:ok, task_id} -> where(q, [po], po.task_id == ^task_id)
         :error -> where(q, false)
       end
+    end)
+    |> then(fn q ->
+      # Task 01a165f1: approved posts whose publish was refused before the vendor.
+      if filters[:refused] == true,
+        do: where(q, [po], po.status == "approved" and not is_nil(po.refused_reason)),
+        else: q
     end)
     |> order_by([po], asc: po.inserted_at, asc: po.id)
     |> Repo.all()

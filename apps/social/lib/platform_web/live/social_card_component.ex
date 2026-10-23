@@ -37,17 +37,30 @@ defmodule PlatformWeb.SocialCardComponent do
   `social_card_approve`, `social_card_edit_open`, `social_card_edit_save`,
   `social_card_edit_cancel`, `social_card_reject_open`,
   `social_card_reject_change`, `social_card_reject_submit`,
-  `social_card_reject_cancel`, all targeted at this component
+  `social_card_reject_cancel`, `social_card_retry_publish` (task
+  01a165f1), all targeted at this component
   (`phx-target={@myself}`), so no other hook sees them. A refusal is shown
   as a notice ON the card (`data-role="social-card-notice"`, `role="alert"`)
   rather than the page flash: a LiveComponent's flash does not reach the
   parent page without a redirect. There is no `social_card_tab` event: no
   stack member groups one post across platforms (one post per account), so
   a card has exactly one platform tab.
+
+  ## Refused publish (task 01a165f1)
+
+  An approved post refused before the vendor shows "Not published" (or
+  "Waiting to retry" when rate limited) in place of "Approved", the reason
+  in plain words, when it was refused, and, for an approver only, the one
+  action that fixes it (`card_view/2`'s `refusal.action`). Retry publish and
+  Publish now call `Platform.Social.Publishing.retry_publish/3` as the
+  freshly re-read clicker. A second refusal updates the reason line in
+  place: no notice, no stacked history.
   """
   use Phoenix.LiveComponent
 
-  alias Platform.Social.Approvals
+  import PlatformWeb.CoreComponents, only: [icon: 1]
+
+  alias Platform.Social.{Approvals, Publishing}
 
   @refusals %{
     already_decided: "Someone already decided this post.",
@@ -60,8 +73,14 @@ defmodule PlatformWeb.SocialCardComponent do
     approver_archived: "Your access to this account was removed.",
     draft_only: "This account is draft-only; copy the text and post it by hand.",
     post_changed: "The post changed since you opened it; read the new text and decide again.",
-    reason_required: "Say what should change before rejecting."
+    reason_required: "Say what should change before rejecting.",
+    not_refused: "This post isn't waiting to publish any more.",
+    not_found: "This post is no longer available."
   }
+
+  # A retry refused for the same reason again (task 01a165f1): the reason
+  # line updates in place, so no notice is stacked on top of it.
+  @refused_again [:rate_limited, :account_archived, :publisher_not_configured]
 
   @doc false
   def refusal_copy(reason, view \\ %{})
@@ -69,6 +88,9 @@ defmodule PlatformWeb.SocialCardComponent do
   # Task 01a14ce1 stage 3: the canvas copy names the owner.
   def refusal_copy(:not_the_owner, %{owner_name: name}) when is_binary(name),
     do: "Only #{name} can approve posts to their account."
+
+  def refusal_copy({:wait_until, %DateTime{} = at}, _view),
+    do: "This post goes out at #{Calendar.strftime(at, "%H:%M")}."
 
   def refusal_copy(reason, _view),
     do: Map.get(@refusals, reason, "That did not work: #{inspect(reason)}")
@@ -145,6 +167,37 @@ defmodule PlatformWeb.SocialCardComponent do
     end)
   end
 
+  # Task 01a165f1: Retry publish / Publish now on a refused approved post,
+  # as the clicker re-read from the database now. retry_publish/3 re-checks
+  # the approver rule and the rate limit; the button is only a hint.
+  def handle_event("social_card_retry_publish", _params, socket) do
+    user =
+      case socket.assigns.viewer do
+        {:user, id} -> Platform.Accounts.get_user(id)
+        _ -> nil
+      end
+
+    refusal = socket.assigns.view[:refusal]
+
+    result =
+      cond do
+        is_nil(user) -> {:error, :not_an_approver}
+        is_nil(refusal) -> {:error, :not_refused}
+        true -> Publishing.retry_publish(refusal.org_id, refusal.post_id, user.id)
+      end
+
+    notice =
+      case result do
+        {:ok, _post} -> nil
+        {:error, {:media_rejected, _}} -> nil
+        {:error, {:publish_failed, _}} -> nil
+        {:error, reason} when reason in @refused_again -> nil
+        {:error, reason} -> refusal_copy(reason, socket.assigns.view)
+      end
+
+    {:noreply, socket |> assign(notice: notice) |> refresh()}
+  end
+
   # The user is re-read from the database at click time.
   defp with_clicker(socket, decide) do
     user =
@@ -185,6 +238,8 @@ defmodule PlatformWeb.SocialCardComponent do
       >
         {@view.posts_as}
       </p>
+
+      <.refusal :if={@view[:refusal]} refusal={@view.refusal} myself={@myself} />
 
       <p
         :if={@notice}
@@ -255,17 +310,37 @@ defmodule PlatformWeb.SocialCardComponent do
   defp status_header(assigns) do
     ~H"""
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <%= if @view.status.tone == :warning do %>
-        <span data-role="social-card-status" class="badge badge-warning badge-sm font-medium">
+      <%= if @view.status[:dot] do %>
+        <%!-- Task 01a165f1: a refused publish. The colour is on the dot only;
+           the label stays base-content. --%>
+        <span
+          data-role="social-card-status"
+          data-dot={@view.status.dot}
+          class="inline-flex items-center gap-1.5 text-sm font-medium text-base-content"
+        >
+          <span
+            aria-hidden="true"
+            class={[
+              "inline-block size-2 shrink-0 rounded-full",
+              if(@view.status.dot == :warning, do: "bg-warning", else: "bg-error")
+            ]}
+          >
+          </span>
           {@view.status.text}
         </span>
       <% else %>
-        <span
-          data-role="social-card-status"
-          class={["text-sm font-medium", tone_class(@view.status.tone)]}
-        >
-          {@view.status.text}
-        </span>
+        <%= if @view.status.tone == :warning do %>
+          <span data-role="social-card-status" class="badge badge-warning badge-sm font-medium">
+            {@view.status.text}
+          </span>
+        <% else %>
+          <span
+            data-role="social-card-status"
+            class={["text-sm font-medium", tone_class(@view.status.tone)]}
+          >
+            {@view.status.text}
+          </span>
+        <% end %>
       <% end %>
       <span :if={@view[:profile_name]} class="text-sm font-semibold">{@view.profile_name}</span>
       <span :if={@view[:handle]} class="text-sm text-base-content/60">{@view.handle}</span>
@@ -289,6 +364,79 @@ defmodule PlatformWeb.SocialCardComponent do
     </div>
     """
   end
+
+  attr :refusal, :map, required: true
+  attr :myself, :any, required: true
+
+  # Task 01a165f1, canvas 01a165f1-f2a4 node m2: the reason line, when it
+  # was refused, and at most one action. Viewers get no action at all.
+  defp refusal(assigns) do
+    ~H"""
+    <div
+      data-role="social-card-refusal"
+      data-refusal={@refusal.kind}
+      class="space-y-1.5"
+    >
+      <p
+        data-role="social-card-refusal-reason"
+        class="flex items-start gap-2 text-[15px] leading-snug text-base-content"
+      >
+        <.icon
+          :if={@refusal.kind != :rate_limited}
+          name="hero-exclamation-triangle-mini"
+          class="mt-0.5 size-4 shrink-0 text-error"
+        />
+        <span :if={@refusal.clock}>
+          {String.replace_suffix(@refusal.reason, @refusal.clock <> ".", "")}<span
+            data-role="social-card-retry-clock"
+            class="font-mono tabular-nums"
+          >{@refusal.clock}</span>.
+        </span>
+        <span :if={!@refusal.clock}>{@refusal.reason}</span>
+      </p>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span data-role="social-card-refused-at" class="text-[13px] text-base-content/70">
+          Refused {hhmm(@refusal.refused_at)}
+        </span>
+        <%= case @refusal.action do %>
+          <% %{href: href} = action when is_binary(href) -> %>
+            <.link
+              navigate={href}
+              data-role="social-card-refusal-action"
+              data-action={action.kind}
+              class="btn btn-outline btn-sm"
+            >
+              {action.label}
+            </.link>
+          <% %{} = action -> %>
+            <button
+              type="button"
+              phx-click="social_card_retry_publish"
+              phx-target={@myself}
+              phx-disable-with="Publishing"
+              disabled={action.disabled?}
+              data-role="social-card-refusal-action"
+              data-action={action.kind}
+              class="peer btn btn-outline btn-sm"
+            >
+              {action.label}
+            </button>
+            <span
+              aria-hidden="true"
+              data-role="social-card-retry-spinner"
+              class="hidden text-base-content/70 peer-[.phx-click-loading]:inline-flex"
+            >
+              <.icon name="hero-arrow-path-mini" class="size-4 animate-spin" />
+            </span>
+          <% nil -> %>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  defp hhmm(%DateTime{} = at), do: Calendar.strftime(at, "%H:%M")
+  defp hhmm(_), do: ""
 
   attr :view, :map, required: true
   attr :myself, :any, required: true

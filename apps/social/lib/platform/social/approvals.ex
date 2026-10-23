@@ -146,6 +146,38 @@ defmodule Platform.Social.Approvals do
     )
   end
 
+  @doc """
+  The post's newest approval card in ANY state (task 01a165f1), or nil.
+  READ ONLY. Unlike `live_card/1` it finds a `decided` card, which is what
+  an approved post has.
+  """
+  @spec latest_card(Ecto.UUID.t()) :: ApprovalCard.t() | nil
+  def latest_card(post_id) do
+    Repo.one(
+      from(c in ApprovalCard,
+        where: c.post_id == ^post_id,
+        order_by: [desc: c.inserted_at, desc: c.id],
+        limit: 1
+      )
+    )
+  end
+
+  @doc """
+  Re-renders the post's newest card (`latest_card/1`, then `rerender/1`) so
+  open sessions show a publish retry's outcome. No card is `:ok`; a failed
+  re-render is logged and answered `:ok`: the publish result stands either
+  way.
+  """
+  @spec rerender_latest(Ecto.UUID.t()) :: :ok
+  def rerender_latest(post_id) do
+    with %ApprovalCard{} = card <- latest_card(post_id),
+         {:error, reason} <- rerender(card) do
+      Logger.warning("[Social] card #{card.id} re-render failed: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
   defp create_card(post, profile, account) do
     card_id = Platform.Types.UUIDv7.generate()
 
@@ -756,6 +788,12 @@ defmodule Platform.Social.Approvals do
   A profile approver who fails it only because the account's owner is
   archived or gone (`post_rejecter_check/4`) gets the preview with
   `:reject` as the only action.
+
+  An approved post whose publish was refused before the vendor (task
+  01a165f1) carries `refusal`: `%{kind, label, reason, clock, refused_at,
+  retry_after, action, post_id, org_id}` for every viewer, nil otherwise.
+  `action` (the one fix, see `refusal_action/3`) is set for `role:
+  :approver` only.
   """
   @spec card_view(term(), term()) :: map()
   def card_view(card_id, viewer) do
@@ -775,7 +813,8 @@ defmodule Platform.Social.Approvals do
         platform_label: platform_label(account.platform),
         scheduled_at: post.scheduled_at,
         owner_name: account.owner_user_id && first_name(account.owner_user_id),
-        posts_as: nil
+        posts_as: nil,
+        refusal: refusal(post, account, profile)
       }
 
       case viewer_role(viewer, profile, account) do
@@ -783,6 +822,7 @@ defmodule Platform.Social.Approvals do
           base
           |> Map.merge(approver_view(card, post, account, profile))
           |> Map.put(:posts_as, posts_as(viewer, profile, account))
+          |> Map.update!(:refusal, &refusal_action(&1, viewer, profile))
 
         :rejecter ->
           Map.merge(base, rejecter_view(card, post, account, profile))
@@ -802,6 +842,113 @@ defmodule Platform.Social.Approvals do
         }
     end
   end
+
+  # ── Refused publish (task 01a165f1) ──────────────────────────────────
+
+  @refusal_kinds %{
+    "media_rejected" => :media_rejected,
+    "rate_limited" => :rate_limited,
+    "account_archived" => :account_archived,
+    "publisher_not_configured" => :publisher_not_configured
+  }
+
+  # Everyone who can see the card sees the label and the reason. The action
+  # is added by `refusal_action/3`, for the approver role only.
+  defp refusal(%Post{status: "approved", refused_reason: reason} = post, account, profile)
+       when is_map_key(@refusal_kinds, reason) do
+    kind = Map.fetch!(@refusal_kinds, reason)
+    label = platform_label(account.platform)
+
+    %{
+      kind: kind,
+      label: if(kind == :rate_limited, do: "Waiting to retry", else: "Not published"),
+      reason:
+        refusal_copy(kind, %{
+          platform_label: label,
+          error: post.error,
+          retry_after: post.retry_after
+        }),
+      clock:
+        if(kind == :rate_limited and is_struct(post.retry_after, DateTime),
+          do: hhmm(post.retry_after)
+        ),
+      refused_at: post.refused_at,
+      retry_after: post.retry_after,
+      action: nil,
+      post_id: post.id,
+      org_id: profile.org_id
+    }
+  end
+
+  defp refusal(_post, _account, _profile), do: nil
+
+  @doc """
+  The reason sentence for a refused publish (task 01a165f1), from the refusal
+  kind and `%{platform_label, error, retry_after}`. Plain words, never an
+  atom: `media_rejected` is the stored `MediaRules` sentence.
+  """
+  @spec refusal_copy(atom(), map()) :: String.t()
+  def refusal_copy(:media_rejected, %{error: error}) when is_binary(error) and error != "",
+    do: error
+
+  def refusal_copy(:media_rejected, %{platform_label: label}),
+    do: "#{label} won't accept this post's media."
+
+  def refusal_copy(:rate_limited, %{platform_label: label, retry_after: %DateTime{} = at}),
+    do: "#{label}'s posting limit is reached. This post goes out at #{hhmm(at)}."
+
+  def refusal_copy(:rate_limited, %{platform_label: label}),
+    do: "#{label}'s posting limit is reached. This post goes out when it resets."
+
+  def refusal_copy(:account_archived, %{platform_label: label}),
+    do: "The #{label} account is disconnected."
+
+  def refusal_copy(:publisher_not_configured, _ctx),
+    do: "Publishing isn't set up for this profile."
+
+  # The one action that fixes this refusal, for an approver. Publish now
+  # stays disabled until `retry_after`; Open settings is for an org admin
+  # (`Publishing.can_connect?/2`), nothing for anyone else.
+  defp refusal_action(nil, _viewer, _profile), do: nil
+
+  defp refusal_action(%{kind: kind} = refusal, {:user, user_id}, profile) do
+    action =
+      case kind do
+        :media_rejected ->
+          %{kind: :retry_publish, label: "Retry publish", disabled?: false, href: nil}
+
+        :rate_limited ->
+          waiting? =
+            match?(%DateTime{}, refusal.retry_after) and
+              DateTime.compare(DateTime.utc_now(), refusal.retry_after) == :lt
+
+          %{kind: :publish_now, label: "Publish now", disabled?: waiting?, href: nil}
+
+        :account_archived ->
+          %{
+            kind: :reconnect,
+            label: "Reconnect account",
+            disabled?: false,
+            href: social_path(profile, "connections")
+          }
+
+        :publisher_not_configured ->
+          if Publishing.can_connect?(user_id, profile.org_id),
+            do: %{
+              kind: :open_settings,
+              label: "Open settings",
+              disabled?: false,
+              href: social_path(profile, "settings")
+            }
+      end
+
+    %{refusal | action: action}
+  end
+
+  defp refusal_action(refusal, _viewer, _profile), do: refusal
+
+  defp social_path(profile, tab),
+    do: "/m/social?" <> URI.encode_query(%{"profile" => profile.id, "tab" => tab})
 
   # Re-checked on every render through the owner rule (task 01a14ce1). A
   # profile approver on an owned account with a live owner waits: the post
@@ -944,6 +1091,13 @@ defmodule Platform.Social.Approvals do
 
       post.status == "failed" ->
         %{tone: :error, text: "#{label} refused the post: #{post.error}"}
+
+      # Task 01a165f1: a refused approved post never reads "Approved".
+      post.status == "approved" and post.refused_reason == "rate_limited" ->
+        %{tone: :warning, dot: :warning, text: "Waiting to retry"}
+
+      post.status == "approved" and is_binary(post.refused_reason) ->
+        %{tone: :error, dot: :error, text: "Not published"}
 
       post.status in ~w(approved scheduled) ->
         %{

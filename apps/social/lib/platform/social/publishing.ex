@@ -18,7 +18,13 @@ defmodule Platform.Social.Publishing do
     5. checks `Platform.Social.RateLimit`;
 
   and only then builds the vendor-neutral request and calls the adapter.
-  Steps 2 to 5 never change the row. The row lock is held across the vendor
+  Step 2 never changes the row. A refusal at steps 3 to 5, or no configured
+  publisher, records why on the row under the same lock, in the same
+  transaction (task 01a165f1): `refused_reason`, `refused_at`, a one-sentence
+  `error` and, for the rate limit only, `retry_after` (the end of the
+  current window). The status stays `approved`, so a retry is simply
+  `publish_post/2` again, through the full guard. Every later `scheduled`,
+  `published` or `failed` write clears the three refusal fields. The row lock is held across the vendor
   call, so a concurrent `publish_post/2` on the same post waits and then
   finds it no longer `approved`.
 
@@ -53,27 +59,141 @@ defmodule Platform.Social.Publishing do
   Returns `{:ok, post}` (now `scheduled` or `published`), or one of:
   `{:error, :not_found}`, `{:error, :not_approved}`,
   `{:error, :account_archived}`, `{:error, {:media_rejected, messages}}`,
-  `{:error, :rate_limited}`, `{:error, :publisher_not_configured}` (none of
-  which touches the row), or `{:error, {:publish_failed, reason}}` after the
-  adapter refused, with the row moved to `failed`.
+  `{:error, :rate_limited}`, `{:error, :publisher_not_configured}`, or
+  `{:error, {:publish_failed, reason}}` after the adapter refused, with the
+  row moved to `failed`.
+
+  `:not_found` and `:not_approved` write nothing. The other four refusals
+  keep the post `approved` and write `refused_reason`, `refused_at`, a
+  plain-sentence `error` and (rate limit only) `retry_after`; the return
+  value is the same `{:error, reason}`.
   """
   @spec publish_post(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Post.t()} | {:error, term()}
   def publish_post(org_id, post_id) do
     {:ok, result} =
       Repo.transaction(fn ->
         with {:ok, post} <- lock(org_id, post_id),
-             :ok <- guard(post),
-             {:ok, account} <- active_account(org_id, post),
-             {:ok, media} <- load_media(org_id, post),
-             :ok <- check_media(account, media),
-             :ok <- RateLimit.check(account.id),
-             adapter when is_atom(adapter) <- Publisher.impl() do
-          request = build_request(post, account, media)
-          apply_publish(post, adapter.publish(account, request))
+             :ok <- guard(post) do
+          now_ms = System.system_time(:millisecond)
+
+          post
+          |> attempt(org_id, now_ms)
+          |> record_refusal(post, org_id, now_ms)
         end
       end)
 
     terminal_written(result, post_id)
+  end
+
+  # ── Retry (task 01a165f1, stage 2) ───────────────────────────────────
+
+  @doc """
+  A human's retry of an approved post whose publish was refused before the
+  vendor (`refused_reason` set). Refused, writing nothing, unless:
+
+    * `actor_user_id` passes `Platform.Social.post_approver_check/4` on the
+      post's account RIGHT NOW (its refusal is returned: an agent id is
+      `:not_a_human`, a non-approver `:not_an_approver`, an archived user
+      `:approver_archived`, ...);
+    * the post is `approved` with a `refused_reason`, else
+      `{:error, :not_refused}`;
+    * a `rate_limited` post's `retry_after` has passed, else
+      `{:error, {:wait_until, retry_after}}`.
+
+  Then it is exactly `publish_post/2`, so the lock, the approval guard,
+  `MediaRules` and `RateLimit` all run again; a cause still unfixed records
+  the refusal afresh. The post's approval card is re-rendered after the
+  attempt. There is no agent tool for this.
+  """
+  @spec retry_publish(Ecto.UUID.t(), Ecto.UUID.t(), term()) ::
+          {:ok, Post.t()} | {:error, term()}
+  def retry_publish(org_id, post_id, actor_user_id) do
+    with %Post{} = post <- Social.get_post(org_id, post_id) || {:error, :not_found},
+         {:ok, account} <- account_any(org_id, post),
+         %Social.Profile{} = profile <-
+           Social.get_profile(org_id, account.profile_id) || {:error, :not_found},
+         :ok <- Social.post_approver_check(org_id, profile, account, actor_user_id),
+         :ok <- retryable(post, DateTime.utc_now()) do
+      result = publish_post(org_id, post.id)
+      Platform.Social.Approvals.rerender_latest(post.id)
+      result
+    end
+  end
+
+  defp retryable(%Post{status: "approved", refused_reason: "rate_limited"} = post, now) do
+    case post.retry_after do
+      %DateTime{} = at ->
+        if DateTime.compare(now, at) == :lt, do: {:error, {:wait_until, at}}, else: :ok
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp retryable(%Post{status: "approved", refused_reason: reason}, _now) when is_binary(reason),
+    do: :ok
+
+  defp retryable(%Post{}, _now), do: {:error, :not_refused}
+
+  defp attempt(post, org_id, now_ms) do
+    with {:ok, account} <- active_account(org_id, post),
+         {:ok, media} <- load_media(org_id, post),
+         :ok <- check_media(account, media),
+         :ok <- RateLimit.check(account.id, now_ms),
+         adapter when is_atom(adapter) <- Publisher.impl() do
+      request = build_request(post, account, media)
+      apply_publish(post, adapter.publish(account, request))
+    end
+  end
+
+  # A refusal before the vendor (task 01a165f1): written under the row lock
+  # publish_post/2 still holds. Anything else passes through untouched.
+  defp record_refusal({:error, reason} = error, post, org_id, now_ms) do
+    case refusal(reason, post, org_id, now_ms) do
+      nil ->
+        error
+
+      {code, message, retry_after} ->
+        post
+        |> Post.refusal_changeset(code, readable(message), retry_after)
+        |> Repo.update!()
+
+        error
+    end
+  end
+
+  defp record_refusal(result, _post, _org_id, _now_ms), do: result
+
+  defp refusal({:media_rejected, messages}, _post, _org_id, _now_ms),
+    do: {"media_rejected", sentence(messages), nil}
+
+  defp refusal(:rate_limited, post, org_id, now_ms) do
+    ends_at = DateTime.from_unix!(RateLimit.window_ends_at(now_ms) * 1_000, :microsecond)
+
+    {"rate_limited",
+     "#{label(org_id, post)}'s posting limit is reached. " <>
+       "This post goes out at #{Calendar.strftime(ends_at, "%H:%M")} UTC.", ends_at}
+  end
+
+  defp refusal(:account_archived, post, org_id, _now_ms),
+    do: {"account_archived", "The #{label(org_id, post)} account is disconnected.", nil}
+
+  defp refusal(:publisher_not_configured, _post, _org_id, _now_ms),
+    do: {"publisher_not_configured", "Publishing isn't set up for this profile.", nil}
+
+  defp refusal(_reason, _post, _org_id, _now_ms), do: nil
+
+  defp label(org_id, %Post{account_id: account_id}) do
+    case Social.get_account(org_id, account_id) do
+      %Account{platform: platform} -> Platform.Social.Approvals.platform_label(platform)
+      # Unreachable: the with-chain read this account in this transaction.
+      nil -> "Social"
+    end
+  end
+
+  defp sentence(messages) do
+    text = messages |> List.wrap() |> Enum.map(&to_string/1) |> Enum.join(". ")
+    if String.ends_with?(text, [".", "!", "?"]), do: text, else: text <> "."
   end
 
   @doc false
@@ -185,6 +305,7 @@ defmodule Platform.Social.Publishing do
       external_url: Map.get(result, :external_url) || post.external_url,
       error: nil
     )
+    |> Changeset.change(Post.refusal_cleared())
     |> update()
   end
 
@@ -196,11 +317,17 @@ defmodule Platform.Social.Publishing do
       external_url: Map.get(result, :external_url),
       error: nil
     )
+    |> Changeset.change(Post.refusal_cleared())
     |> update()
   end
 
   defp apply_publish(post, {:error, reason}) do
-    case post |> Changeset.change(status: "failed", error: readable(reason)) |> update() do
+    changeset =
+      post
+      |> Changeset.change(status: "failed", error: readable(reason))
+      |> Changeset.change(Post.refusal_cleared())
+
+    case update(changeset) do
       {:ok, _failed} -> {:error, {:publish_failed, reason}}
       error -> error
     end
@@ -347,6 +474,7 @@ defmodule Platform.Social.Publishing do
       external_url: Map.get(outcome, :external_url) || post.external_url,
       error: nil
     )
+    |> Changeset.change(Post.refusal_cleared())
     |> update()
   end
 
@@ -357,6 +485,7 @@ defmodule Platform.Social.Publishing do
       status: "failed",
       error: readable(Map.get(outcome, :error) || "failed at the vendor")
     )
+    |> Changeset.change(Post.refusal_cleared())
     |> update()
   end
 

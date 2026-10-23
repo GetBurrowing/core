@@ -145,6 +145,9 @@ defmodule PlatformWeb.SocialLive do
 
   @tabs ~w(queue calendar connections settings)
 
+  # The queue's status filter chips (task 01a165f1), in display order.
+  @queue_filters ~w(needs_approval not_published)
+
   @approver_refusals [
     :not_an_approver,
     :not_a_human,
@@ -168,6 +171,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:user, user)
       |> assign(:tab, "queue")
       |> assign(:queue_canvas_ids, [])
+      |> assign(:queue_filter, nil)
       |> assign(:type_checked_profile_ids, MapSet.new())
       |> assign(:week_start, Cal.week_start(Date.utc_today()))
       |> assign(:detail, nil)
@@ -299,6 +303,16 @@ defmodule PlatformWeb.SocialLive do
     do: {:noreply, socket |> assign(:tab, tab) |> maybe_reconcile()}
 
   def handle_event("select_tab", _params, socket), do: {:noreply, socket}
+
+  # Task 01a165f1: the queue's status filter. Pressing the active chip
+  # clears it; the stream is re-read and re-streamed with `reset: true`.
+  def handle_event("queue_filter", %{"filter" => filter}, socket)
+      when filter in @queue_filters do
+    filter = if socket.assigns.queue_filter == filter, do: nil, else: filter
+    {:noreply, socket |> assign(:queue_filter, filter) |> load_queue()}
+  end
+
+  def handle_event("queue_filter", _params, socket), do: {:noreply, socket}
 
   def handle_event("week_" <> which, _params, socket) when which in ~w(prev this next) do
     week =
@@ -682,7 +696,21 @@ defmodule PlatformWeb.SocialLive do
   # ONE place a profile becomes current. Every per-profile stream loads here
   # with `reset: true`, so a switch leaves nothing of the previous profile.
   defp load_profile(socket, profile) do
-    rows = queue_rows(profile)
+    socket
+    |> assign(:profile, profile)
+    |> assign(:detail, nil)
+    |> load_queue()
+    |> assign(:notice, nil)
+    |> load_calendar()
+    |> load_connections()
+    |> maybe_reconcile()
+  end
+
+  # The queue stream for the current profile and filter, with `reset: true`.
+  # `queue_refused?` (any refused post, whatever the filter) shows the chips.
+  defp load_queue(socket) do
+    all = queue_rows(socket.assigns.profile)
+    rows = filter_queue(all, socket.assigns.queue_filter)
     canvas_ids = for %{card: %{canvas_id: id}} <- rows, do: id
 
     if connected?(socket) do
@@ -691,17 +719,16 @@ defmodule PlatformWeb.SocialLive do
     end
 
     socket
-    |> assign(:profile, profile)
-    |> assign(:detail, nil)
     |> assign(:queue_canvas_ids, canvas_ids)
     |> assign(:queue_cards, Map.new(for %{card: %{} = c} <- rows, do: {c.canvas_id, c.id}))
     |> assign(:queue_empty?, rows == [])
+    |> assign(:queue_refused?, Enum.any?(all, & &1.refused?))
     |> stream(:queue, rows, reset: true)
-    |> assign(:notice, nil)
-    |> load_calendar()
-    |> load_connections()
-    |> maybe_reconcile()
   end
+
+  defp filter_queue(rows, "needs_approval"), do: Enum.reject(rows, & &1.refused?)
+  defp filter_queue(rows, "not_published"), do: Enum.filter(rows, & &1.refused?)
+  defp filter_queue(rows, _none), do: rows
 
   # Connections and Settings for the current profile. `can_edit?` is ONLY
   # for rendering; every write handler re-checks through `authorize/1`.
@@ -1540,14 +1567,25 @@ defmodule PlatformWeb.SocialLive do
   # state of their own: the embedded component asks `card_view/2`.
   defp queue_rows(nil), do: []
 
+  #
+  # Task 01a165f1: then its approved posts whose publish was refused before
+  # the vendor (`refused: true`), each with its newest (decided) card.
   defp queue_rows(profile) do
-    profile.org_id
-    |> Social.list_posts(profile_id: profile.id, status: "needs_approval")
-    |> Enum.map(fn post ->
-      card = Approvals.live_card(post.id)
-      %{id: post.id, post: post, card: card, rev: card && card_rev(card)}
-    end)
+    pending =
+      profile.org_id
+      |> Social.list_posts(profile_id: profile.id, status: "needs_approval")
+      |> Enum.map(&queue_row(&1, Approvals.live_card(&1.id), false))
+
+    refused =
+      profile.org_id
+      |> Social.list_posts(profile_id: profile.id, refused: true)
+      |> Enum.map(&queue_row(&1, Approvals.latest_card(&1.id), true))
+
+    pending ++ refused
   end
+
+  defp queue_row(post, card, refused?),
+    do: %{id: post.id, post: post, card: card, rev: card && card_rev(card), refused?: refused?}
 
   defp card_rev(card) do
     case Platform.Chat.get_canvas(card.canvas_id) do
@@ -1824,12 +1862,38 @@ defmodule PlatformWeb.SocialLive do
             <%!-- Every pane stays in the DOM (hidden when inactive) so its
                stream survives a tab change. --%>
             <div class={[@tab != "queue" && "hidden"]} data-pane="queue">
+              <div
+                :if={@queue_refused? or @queue_filter}
+                role="group"
+                aria-label="Filter the queue"
+                class="mb-3 flex flex-wrap gap-2"
+                data-role="social-queue-filter"
+              >
+                <button
+                  :for={{key, label} <- queue_filter_labels()}
+                  type="button"
+                  phx-click="queue_filter"
+                  phx-value-filter={key}
+                  aria-pressed={to_string(@queue_filter == key)}
+                  data-role="social-queue-chip"
+                  data-filter={key}
+                  class={[
+                    "btn btn-sm rounded-full text-base-content",
+                    if(@queue_filter == key,
+                      do: "btn-active border-base-content",
+                      else: "btn-outline border-edge"
+                    )
+                  ]}
+                >
+                  {label}
+                </button>
+              </div>
               <div :if={@queue_empty?} class="space-y-3">
                 <p class="text-base-content/70" data-role="social-empty">
-                  {empty_queue_copy(@profile, @accounts_empty?)}
+                  {empty_queue_copy(@profile, @accounts_empty?, @queue_filter)}
                 </p>
                 <button
-                  :if={@accounts_empty?}
+                  :if={@accounts_empty? and @queue_filter != "not_published"}
                   type="button"
                   class="btn btn-outline btn-sm"
                   phx-click="select_tab"
@@ -2133,10 +2197,17 @@ defmodule PlatformWeb.SocialLive do
 
   # A profile with no accounts can do nothing, so its empty queue points at
   # Connections.
-  defp empty_queue_copy(profile, true),
+  defp empty_queue_copy(profile, _accounts_empty?, "not_published"),
+    do: "Every approved post on #{profile.name} went out."
+
+  defp empty_queue_copy(profile, true, _filter),
     do: "Nothing waiting for approval on #{profile.name}. Connect an account to start."
 
-  defp empty_queue_copy(profile, _), do: "Nothing waiting for approval on #{profile.name}."
+  defp empty_queue_copy(profile, _accounts_empty?, _filter),
+    do: "Nothing waiting for approval on #{profile.name}."
+
+  defp queue_filter_labels,
+    do: [{"needs_approval", "Needs approval"}, {"not_published", "Not published"}]
 
   defp tab_labels(counts, profile) do
     [

@@ -22,6 +22,35 @@ end
 # The default matches the vendor's 25 posts/hour per-account velocity cap.
 config :social, :rate_limit, per_window: 25, window_ms: 3_600_000
 
+# How often Platform.Social.PublishRetry re-publishes rate-limited posts whose
+# window has ended (task 01a165f1).
+config :social, :publish_retry, interval_ms: 60_000
+
+# Dev only: shrink the limit and the retry sweep to watch a rate-limited post
+# go out without waiting an hour. Unset, the defaults above stand.
+if config_env() == :dev do
+  env_int = fn name, default ->
+    case System.get_env(name) do
+      nil -> default
+      value -> String.to_integer(value)
+    end
+  end
+
+  config :social, :rate_limit,
+    per_window: env_int.("SOCIAL_RATE_LIMIT_PER_WINDOW", 25),
+    window_ms: env_int.("SOCIAL_RATE_LIMIT_WINDOW_MS", 3_600_000)
+
+  config :social, :publish_retry,
+    interval_ms: env_int.("SOCIAL_PUBLISH_RETRY_INTERVAL_MS", 60_000)
+end
+
+# Tests start their own PublishRetry with start_supervised!/1 and call
+# sweep_now/1; the application's instance sets no timer, so it never queries
+# outside a test's sandbox.
+if config_env() == :test do
+  config :social, :publish_retry, interval_ms: :infinity
+end
+
 # How long a connect invite link stays usable (task 01a14ce1), in days.
 # `Platform.Social.create_invite/5` reads it when no ttl is passed.
 config :social, :invite_ttl_days, 7
