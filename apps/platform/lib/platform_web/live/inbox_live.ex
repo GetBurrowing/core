@@ -215,26 +215,89 @@ defmodule PlatformWeb.InboxLive do
   on `?open=` because that URL is never recorded.
   `handle_params/3` also resets `@row_sheet` (the long-press sheet's subject,
   set by `open_row_sheet`) on every call.
+
+  ## The daily briefing, filter chips and the detail pane (task 01a15ee1 stage 4)
+
+  `briefing` rows are not streamed: each renders through
+  `PlatformWeb.Components.BriefingRow` above the sections, newest first,
+  with its receipt line recomputed from `Briefings.view/2` counts on every
+  load. Every re-derive (`{:inbox_changed, _}` and friends) goes through
+  `init_sections/2`, so the counts refresh with the list.
+
+  The chips (All / Briefing / Mentions / Tasks) live in the URL as `?f=`;
+  `handle_params/3` reads it and re-derives, because a section that was not
+  rendered has no stream rows left to show when it comes back. Briefing
+  shows only briefing rows, Mentions the mentions section, Tasks the review
+  section, All everything.
+
+  `/inbox/briefing/:date` (`:briefing`) opens the viewer's own briefing for
+  that date (`Briefings.for_user_on/2`, never another person's) in the
+  detail pane, and marks its row read; the row stays listed. At `lg` and up
+  the list is a 380px column beside the pane, which says "Select an item"
+  on `/inbox`. Below `lg`, `/inbox` is the list alone and
+  `/inbox/briefing/:date` is the detail alone, with a "‹ Inbox" back link.
+  Stage 5 mounts the briefing's own component inside the pane.
+
+  ## The briefing detail and its toast (task 01a15ee1 stage 5)
+
+  `PlatformWeb.InboxLive.BriefingComponent` renders the day's briefing in
+  the pane and sends every button to `Briefings.handle/5` / `undo/3`. On a
+  success it sends `{:briefing_toast, toast}` here, and this LiveView raises
+  its OWN toast (`maybe_toast/3`, variant `:briefing`, 5 s instead of 8 s):
+  there is one toast mechanism on this page, not two. Its Undo
+  (`undo_briefing`) is `Briefings.undo/3` with a Scope rebuilt from the user
+  row, then `send_update/3` reloads the component.
+
+  Pausing: the `ToastPause` hook pushes `toast_pause` while the toast is
+  hovered or holds focus and `toast_resume` when it no longer does. A paused
+  toast ignores its timer; resuming re-arms a fresh nonce for whatever was
+  left of the window (at least `@toast_resume_floor_ms`). Every toast on the
+  page pauses the same way.
+
+  Every `{:inbox_changed, _}` bumps `:briefing_refresh`, which the
+  component reads as "reload": a click on another tab, or a receipt written
+  by the Insights tab, repaints the detail as well as the row.
   """
 
   use PlatformWeb, :live_view
 
   import Ecto.Query, only: [order_by: 3]
+  import PlatformWeb.Components.BriefingRow, only: [briefing_row: 1]
   import PlatformWeb.Components.InboxItem, only: [inbox_item: 1]
   import PlatformWeb.Components.NotificationState, only: [notification_state_row: 1]
 
   alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
+  alias Platform.Memory.Briefing
+  alias Platform.Memory.Insights.Briefings
   alias Platform.Repo
+  alias PlatformWeb.Components.BriefingRow
+  alias PlatformWeb.MeetingLive.CalendarWindow
 
   @sections [:review, :mentions, :meetings]
+
+  # The filter chips, in order: `?f=` value, label.
+  @filters [
+    {"all", "All"},
+    {"briefing", "Briefing"},
+    {"mentions", "Mentions"},
+    {"tasks", "Tasks"}
+  ]
 
   # How long the success toast lingers before it auto-dismisses — RecoveryLive's
   # value (`recovery_live.ex`), unchanged: long enough to read the count and
   # reach for Undo. The timer is nonce-guarded so an older sweep's timer can
   # never clear a newer sweep's toast.
   @toast_ttl_ms 8_000
+
+  # The briefing detail's toast: 5 s, the prototype's window. It is a
+  # shortcut, not the only way back: every receipt keeps its inverse for the
+  # rest of the day (WCAG 2.2.1, direction canvas 01a15ee2 node states).
+  @briefing_toast_ttl_ms 5_000
+
+  # A resumed toast never comes back with less than this left to read.
+  @toast_resume_floor_ms 1_500
 
   @impl true
   def mount(_params, session, socket) do
@@ -247,8 +310,8 @@ defmodule PlatformWeb.InboxLive do
     # one process — the badge jumped +2 on `/inbox`. One subscribe per process;
     # our `handle_info/2` clauses below still receive every event.
 
-    items = if is_binary(user_id), do: load_items(user_id), else: []
-
+    # The list itself is derived in handle_params/3 (it depends on `?f=` and
+    # the live action), which always runs before the first render.
     {:ok,
      socket
      |> assign(:page_title, "Inbox")
@@ -266,8 +329,75 @@ defmodule PlatformWeb.InboxLive do
      # See "Phone list" in the moduledoc for what sets and clears it.
      |> assign(:undo, nil)
      |> assign(:row_sheet, nil)
-     |> init_sections(items)
+     |> assign(:filter, "all")
+     |> assign(:filters, @filters)
+     |> assign(:detail_date, nil)
+     |> assign(:briefing_refresh, 0)
+     |> assign(:time_zone, viewer_time_zone(socket))
      |> maybe_toast(open_undo_toast(socket, user_id))}
+  end
+
+  # The viewer's IANA zone from the connect params (app.js sends it), for the
+  # briefing row's "Today's" and its time. nil on the dead render, where
+  # BriefingRow falls back to America/Chicago, the zone `digest_date` is
+  # written in.
+  defp viewer_time_zone(socket) do
+    if connected?(socket),
+      do: CalendarWindow.resolve_time_zone((get_connect_params(socket) || %{})["timezone"]),
+      else: nil
+  end
+
+  # One handle_params/3 for both sides of the main -> feat/redesign sync:
+  # task 01a15ee1's `?f=` filter and briefing detail (the list is derived
+  # here, before the first render), and redesign rung 14's `?open=<id>` phone
+  # open plus the `@row_sheet` reset (see "Open by params" below). The list is
+  # derived on every call, `?open=` included, so no render ever lacks it.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    socket =
+      socket
+      |> assign(:row_sheet, nil)
+      |> assign(:filter, parse_filter(params["f"]))
+      |> assign(:detail_date, detail_date(socket.assigns.live_action, params["date"]))
+      |> reload_sections()
+
+    case params do
+      %{"open" => id} when is_binary(id) -> {:noreply, open_by_params(socket, id)}
+      _ -> {:noreply, maybe_open_briefing(socket)}
+    end
+  end
+
+  defp parse_filter(f) when f in ["briefing", "mentions", "tasks"], do: f
+  defp parse_filter(_f), do: "all"
+
+  defp detail_date(:briefing, iso) when is_binary(iso) do
+    case Date.from_iso8601(iso) do
+      {:ok, date} -> date
+      _ -> :invalid
+    end
+  end
+
+  defp detail_date(:briefing, _iso), do: :invalid
+  defp detail_date(_action, _iso), do: nil
+
+  # Opening the briefing's detail is reading it: mark its row read (it stays
+  # listed, `briefing` being in `Inbox.action_kinds/0`). Connected only, so
+  # the dead render of a GET writes nothing, and only while it is unread.
+  defp maybe_open_briefing(socket) do
+    user_id = socket.assigns.current_user_id
+
+    case socket.assigns.briefing_detail do
+      %{row: %{unread?: true, id: id}} when is_binary(user_id) ->
+        if connected?(socket) do
+          Inbox.open_item(id, user_id)
+          reload_sections(socket)
+        else
+          socket
+        end
+
+      _ ->
+        socket
+    end
   end
 
   # Opening a non-action row dismisses it and navigates away, so the undo
@@ -299,19 +429,25 @@ defmodule PlatformWeb.InboxLive do
     # differently is precisely the #589/#592 drift. It dropped read rows until
     # stage 4 of task `01a00108` retired read-as-cleared; it no longer does,
     # because the scope no longer does. Move one, move both.
-    if is_nil(item.dismissed_at) do
-      section = section_for(item.kind)
+    cond do
+      item.kind == "briefing" ->
+        # Briefing rows are not streamed; their receipt line is derived.
+        {:noreply, reload_sections(socket)}
 
-      {:noreply,
-       socket
-       |> stream_insert(stream_name(section), decorate(item), at: 0)
-       |> stream_insert(:inbox_rows, decorate(item), at: 0)
-       |> update_count(section, +1)
-       |> track_section(item.id, section)
-       |> merge_mention_labels(section, item)
-       |> merge_row_sources(item)}
-    else
-      {:noreply, socket}
+      is_nil(item.dismissed_at) ->
+        section = section_for(item.kind)
+
+        {:noreply,
+         socket
+         |> stream_insert(stream_name(section), decorate(item), at: 0)
+         |> stream_insert(:inbox_rows, decorate(item), at: 0)
+         |> update_count(section, +1)
+         |> track_section(item.id, section)
+         |> merge_mention_labels(section, item)
+         |> merge_row_sources(item)}
+
+      true ->
+        {:noreply, socket}
     end
   end
 
@@ -321,7 +457,24 @@ defmodule PlatformWeb.InboxLive do
   # list from `unread_scope/1`. `init_sections/2` resets the three streams, so
   # the rendered rows always equal exactly what the badge counts. This is the
   # unified source-of-truth: same scope, same diff.
-  def handle_info({:inbox_changed, _user_id}, socket), do: {:noreply, reload_sections(socket)}
+  def handle_info({:inbox_changed, _user_id}, socket),
+    do: {:noreply, socket |> update(:briefing_refresh, &(&1 + 1)) |> reload_sections()}
+
+  # The briefing component's success toast (it runs in this process). The
+  # same toast the list uses, at the briefing's 5 s.
+  def handle_info({:briefing_toast, %{message: message} = toast}, socket) do
+    {:noreply,
+     maybe_toast(
+       socket,
+       %{
+         message: message,
+         variant: :briefing,
+         undo?: Map.get(toast, :undo?, false),
+         briefing: Map.take(toast, [:key, :briefing_id, :component_id])
+       },
+       @briefing_toast_ttl_ms
+     )}
+  end
 
   def handle_info({:inbox_item_dismissed, %Item{}}, socket),
     do: {:noreply, reload_sections(socket)}
@@ -337,6 +490,8 @@ defmodule PlatformWeb.InboxLive do
   # MUST stay above the catch-all below.
   def handle_info({:clear_toast, nonce}, socket) do
     case socket.assigns.toast do
+      # Paused (hovered or focused): the timer is spent, resume re-arms.
+      %{nonce: ^nonce, paused: true} -> {:noreply, socket}
       %{nonce: ^nonce} -> {:noreply, assign(socket, :toast, nil)}
       _ -> {:noreply, socket}
     end
@@ -371,8 +526,20 @@ defmodule PlatformWeb.InboxLive do
        |> assign(:row_sheet, nil)
        |> set_undo(dismissed_ids, "Notification dismissed")}
     else
-      _ -> {:noreply, socket}
+      _ -> {:noreply, dismiss_briefing_row(socket, id)}
     end
+  end
+
+  # A briefing row's X. Briefing rows are not streamed, so this re-derives
+  # rather than deleting a stream row. `mark_dismissed/2` is owner-scoped.
+  def handle_event("dismiss_briefing", %{"id" => id}, socket) do
+    user_id = socket.assigns.current_user_id
+
+    if is_binary(user_id) and Enum.any?(socket.assigns.briefing_rows, &(&1.id == id)) do
+      Inbox.mark_dismissed(id, user_id)
+    end
+
+    {:noreply, reload_sections(socket)}
   end
 
   # ── Selection ──────────────────────────────────────────────────────────
@@ -510,6 +677,54 @@ defmodule PlatformWeb.InboxLive do
 
   def handle_event("dismiss_toast", _params, socket), do: {:noreply, assign(socket, :toast, nil)}
 
+  # The briefing toast's Undo: the receipt's inverse, `Briefings.undo/3`,
+  # with the Scope rebuilt from the user row, then the component reloads.
+  # The briefing is read by owner AND id, so a stale toast can only ever
+  # undo its own person's item.
+  def handle_event("undo_briefing", _params, socket) do
+    user_id = socket.assigns.current_user_id
+
+    with %{briefing: %{key: key, briefing_id: briefing_id} = ref} <- socket.assigns.toast,
+         true <- is_binary(user_id),
+         %Briefing{} = briefing <- Briefings.get_for_user(briefing_id, user_id) do
+      scope = Platform.Access.Scope.for_user(Platform.Accounts.get_user(user_id))
+      _ = Briefings.undo(briefing, key, scope)
+
+      send_update(PlatformWeb.InboxLive.BriefingComponent,
+        id: ref[:component_id] || "briefing-#{briefing_id}",
+        reload: true
+      )
+    end
+
+    {:noreply, assign(socket, :toast, nil)}
+  end
+
+  # The ToastPause hook: hover or focus inside the toast holds it open.
+  def handle_event("toast_pause", _params, socket) do
+    case socket.assigns.toast do
+      %{paused: true} ->
+        {:noreply, socket}
+
+      %{deadline: deadline} = toast ->
+        left = max(deadline - System.monotonic_time(:millisecond), 0)
+        {:noreply, assign(socket, :toast, Map.merge(toast, %{paused: true, left: left}))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toast_resume", _params, socket) do
+    case socket.assigns.toast do
+      %{paused: true} = toast ->
+        left = max(Map.get(toast, :left, 0), @toast_resume_floor_ms)
+        {:noreply, maybe_toast(socket, Map.drop(toast, [:paused, :left, :nonce]), left)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("open", %{"id" => id} = params, socket) do
     user_id = socket.assigns.current_user_id
     if is_binary(user_id), do: Inbox.open_item(id, user_id)
@@ -531,15 +746,7 @@ defmodule PlatformWeb.InboxLive do
   # is a PUSH: the client never records `?open=` (the patch is answered with a
   # redirect), so a replace would overwrite `/inbox` itself and Back would skip
   # the Inbox. The failed-open patch back to `/inbox` stays a replace.
-  @impl true
-  def handle_params(params, _uri, socket) do
-    socket = assign(socket, :row_sheet, nil)
-
-    case params do
-      %{"open" => id} when is_binary(id) -> {:noreply, open_by_params(socket, id)}
-      _ -> {:noreply, socket}
-    end
-  end
+  # `handle_params/3` itself is defined once, above, beside the filter.
 
   defp open_by_params(socket, id) do
     user_id = socket.assigns.current_user_id
@@ -552,6 +759,25 @@ defmodule PlatformWeb.InboxLive do
 
       _ ->
         push_patch(socket, to: ~p"/inbox", replace: true)
+    end
+  end
+
+  # The phone row sheet's Dismiss on a briefing row: briefing rows are not in
+  # `:item_sections` (they are not in a desktop section), so they are matched
+  # against `@briefing_rows` instead, then the list re-derives like
+  # `dismiss_briefing`. Same `dismiss_many/2` + `set_undo/3` as any row.
+  defp dismiss_briefing_row(socket, id) do
+    user_id = socket.assigns.current_user_id
+
+    if is_binary(user_id) and Enum.any?(socket.assigns.briefing_rows, &(&1.id == id)) do
+      {:ok, dismissed_ids} = Inbox.dismiss_many(user_id, [id])
+
+      socket
+      |> assign(:row_sheet, nil)
+      |> reload_sections()
+      |> set_undo(dismissed_ids, "Notification dismissed")
+    else
+      socket
     end
   end
 
@@ -574,7 +800,11 @@ defmodule PlatformWeb.InboxLive do
   # section, seed the per-section counts (which drive section visibility) and
   # the id → section map (which routes a dismiss to the right stream).
   defp init_sections(socket, items) do
-    grouped = Enum.group_by(items, &section_for(&1.kind))
+    # Briefing rows are not in the desktop sections (task 01a15ee1); they
+    # stay in the phone list, which lists every kind (rung 14 D1) and whose
+    # Clear all count includes them.
+    {briefings, sectioned} = Enum.split_with(items, &(&1.kind == "briefing"))
+    grouped = Enum.group_by(sectioned, &section_for(&1.kind))
     review = Map.get(grouped, :review, [])
     mentions = grouped |> Map.get(:mentions, []) |> sort_mentions()
     meetings = Map.get(grouped, :meetings, [])
@@ -591,12 +821,109 @@ defmodule PlatformWeb.InboxLive do
     |> assign(:review_count, length(review))
     |> assign(:mention_count, length(mentions))
     |> assign(:meeting_count, length(meetings))
-    |> assign(:item_sections, section_map(items))
+    |> assign(:item_sections, section_map(sectioned))
     |> assign(
       :mention_space_labels,
       resolve_mention_labels(mentions, socket.assigns.current_user_id)
     )
+    |> assign_briefings(briefings)
     |> prune_selection()
+  end
+
+  # ── Briefing rows + the detail pane ────────────────────────────────────
+
+  # One row per undismissed `briefing` item, newest first (the list query's
+  # order), each with its receipt line recomputed from the briefing's live
+  # `Briefings.view/2` counts. The briefing rows are read by owner AND id,
+  # so a row can only ever show its own person's briefing.
+  defp assign_briefings(socket, items) do
+    user_id = socket.assigns.current_user_id
+    zone = socket.assigns[:time_zone]
+    today = BriefingRow.today(zone)
+    detail_date = socket.assigns[:detail_date]
+    briefings = load_briefings(user_id, items)
+    scope = is_binary(user_id) && Platform.Access.Scope.for_user(%{id: user_id})
+
+    rows =
+      for item <- items do
+        briefing = Map.get(briefings, item.source_id)
+        date = briefing && briefing.digest_date
+
+        BriefingRow.assigns_for(item,
+          counts: briefing && counts(briefing, scope),
+          digest_date: date,
+          today: today,
+          time_zone: zone,
+          selected: is_struct(date, Date) and date == detail_date
+        )
+      end
+
+    socket
+    |> assign(:briefing_today, today)
+    |> assign(:briefing_rows, rows)
+    |> assign(:briefing_count, length(rows))
+    |> assign(:briefing_detail, briefing_detail(socket, detail_date, rows, scope, today))
+  end
+
+  defp load_briefings(user_id, items) when is_binary(user_id) and items != [] do
+    items
+    |> Enum.map(& &1.source_id)
+    |> Briefings.list_for_user(user_id)
+  end
+
+  defp load_briefings(_user_id, _items), do: %{}
+
+  defp counts(%Briefing{} = briefing, %Platform.Access.Scope{} = scope),
+    do: Map.take(Briefings.view(briefing, scope).counts, [:total, :open, :calls])
+
+  defp counts(_briefing, _scope), do: nil
+
+  # The pane's content on `/inbox/briefing/:date`: nil on `/inbox`,
+  # `:not_found` for a malformed date or a date with no briefing of the
+  # viewer's own, else `%{date, row}` where `row` is the list row's slots
+  # (built here when the row itself was dismissed or never listed).
+  defp briefing_detail(_socket, nil, _rows, _scope, _today), do: nil
+  defp briefing_detail(_socket, :invalid, _rows, _scope, _today), do: :not_found
+
+  defp briefing_detail(socket, %Date{} = date, rows, scope, today) do
+    user_id = socket.assigns.current_user_id
+
+    case Briefings.for_user_on(user_id, date) do
+      %Briefing{} = briefing ->
+        row =
+          Enum.find(rows, &(&1.date == date)) ||
+            %{
+              id: nil,
+              unread?: false,
+              title: BriefingRow.title(date, today),
+              summary: BriefingRow.summary(counts(briefing, scope))
+            }
+
+        %{date: date, briefing_id: briefing.id, row: row}
+
+      nil ->
+        :not_found
+    end
+  end
+
+  @doc """
+  The query string a chip, a row or the back link keeps: `""` for All,
+  else `"?f=<filter>"`.
+  """
+  def filter_query("all"), do: ""
+  def filter_query(filter) when is_binary(filter), do: "?f=" <> filter
+  def filter_query(_filter), do: ""
+
+  @doc "Whether `filter` shows `section` (`:briefing`, `:review`, `:mentions`, `:meetings`)."
+  def shows?("all", _section), do: true
+  def shows?("briefing", section), do: section == :briefing
+  def shows?("mentions", section), do: section == :mentions
+  def shows?("tasks", section), do: section == :review
+  def shows?(_filter, _section), do: true
+
+  @doc "Rows the current filter shows, for its empty state."
+  def filtered_count(filter, counts) do
+    Enum.sum(for {section, n} <- counts, shows?(filter, section), do: n)
   end
 
   # Drop selected ids whose row is no longer on screen. Every stream reset
@@ -654,15 +981,18 @@ defmodule PlatformWeb.InboxLive do
     %{message: "#{n} #{pluralize(n, "notification")} cleared", undo_ids: ids}
   end
 
-  defp maybe_toast(socket, nil), do: socket
+  defp maybe_toast(socket, toast, ttl_ms \\ @toast_ttl_ms)
+  defp maybe_toast(socket, nil, _ttl_ms), do: socket
 
   # Mint a nonce, schedule the auto-dismiss against it, and carry it ON the
   # toast. The handler compares the two, which is the whole guard — see the
   # `{:clear_toast, nonce}` clause. Copied from RecoveryLive's `maybe_toast/2`.
-  defp maybe_toast(socket, toast) do
+  # `deadline` (monotonic ms) is what a pause reads the time left from.
+  defp maybe_toast(socket, toast, ttl_ms) do
     nonce = System.unique_integer([:positive])
-    Process.send_after(self(), {:clear_toast, nonce}, @toast_ttl_ms)
-    assign(socket, :toast, Map.put(toast, :nonce, nonce))
+    Process.send_after(self(), {:clear_toast, nonce}, ttl_ms)
+    deadline = System.monotonic_time(:millisecond) + ttl_ms
+    assign(socket, :toast, Map.merge(toast, %{nonce: nonce, deadline: deadline}))
   end
 
   defp pluralize(1, word), do: word
@@ -674,12 +1004,14 @@ defmodule PlatformWeb.InboxLive do
   The three section counts are derived from `unread_scope/1` at load, and
   `Inbox.dismiss_all_unread/1` writes over that same scope — so the number on
   the button is the number the button clears. Public so the template can call it.
+  The briefing rows (task 01a15ee1 stage 4) are in that scope too, so their
+  count is the fourth argument: the sweep clears them as well.
 
-  Takes the three counts rather than `assigns` so HEEx change-tracking still
+  Takes the counts rather than `assigns` so HEEx change-tracking still
   sees which assigns the label depends on.
   """
-  def clearable_count(review_count, mention_count, meeting_count) do
-    review_count + mention_count + meeting_count
+  def clearable_count(review_count, mention_count, meeting_count, briefing_count \\ 0) do
+    review_count + mention_count + meeting_count + briefing_count
   end
 
   # Mentions are sorted by space then recency so same-space rows sit together

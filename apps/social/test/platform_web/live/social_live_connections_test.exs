@@ -564,13 +564,17 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       child = open_profile(conn, ctx.h1, ctx.empty)
       add(child, "linkedin")
 
-      assert has_element?(
-               child,
-               "[data-role='social-notice']",
-               "That account could not be connected. Try again."
-             )
+      reason = "Couldn't connect LinkedIn. Zernio refused the request (HTTP 403): forbidden"
+      assert has_element?(child, "[data-role='social-notice']", reason)
 
       assert [%Account{} = account] = accounts_of(ctx.empty)
+      # The reason also sits on the row that was clicked, not only up top.
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
       assert ref_of(ctx.empty) == "zprof_added_1"
       refute has_element?(child, "[data-pane='connections'] [data-role='social-empty']")
       assert has_element?(child, row(account) <> " " <> @connect, "Connect")
@@ -582,6 +586,63 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert [{"GET", "/api/v1/connect/linkedin", %{"profileId" => "zprof_added_1"}}] = requests()
       assert [%Account{id: id}] = accounts_of(ctx.empty)
       assert id == account.id
+    end
+
+    test "a connect 402 (Zernio's free tier is full) names Zernio's reason on the clicked row",
+         %{conn: conn} = ctx do
+      select_zernio(ctx)
+      ok = zernio_ok()
+
+      payment_required = fn conn ->
+        conn
+        |> Plug.Conn.put_status(402)
+        |> Req.Test.json(%{
+          "error" => "Add a payment method to connect more than 2 accounts.",
+          "code" => "PAYMENT_REQUIRED",
+          "reason" => "free_tier_exceeded",
+          "dashboard_url" => "https://vendor.example.test/billing?add_payment_method=1"
+        })
+      end
+
+      record_requests(fn
+        %{method: "GET"} = conn -> payment_required.(conn)
+        conn -> ok.(conn)
+      end)
+
+      child = open_profile(conn, ctx.h1, ctx.empty)
+      add(child, "instagram")
+
+      reason =
+        "Couldn't connect Instagram. Zernio refused the request (HTTP 402): " <>
+          "Add a payment method to connect more than 2 accounts."
+
+      assert [%Account{platform: "instagram"} = account] = accounts_of(ctx.empty)
+
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
+      assert has_element?(child, "[data-role='social-notice'][data-tone='warning']", reason)
+      # Neither the vendor's URLs nor the key reach the page.
+      html = render(child)
+      refute html =~ "vendor.example.test"
+      refute html =~ "zk-add-not-real"
+
+      assert [{"POST", _, _}, {"GET", "/api/v1/connect/instagram", _}] = requests()
+
+      # Connect on the same row fails the same way, on that row.
+      record_requests(payment_required)
+      child |> element(row(account) <> " " <> @connect) |> render_click()
+
+      assert has_element?(
+               child,
+               row(account) <> " [data-role='social-account-connect-error']",
+               reason
+             )
+
+      assert [{"GET", "/api/v1/connect/instagram", _}] = requests()
     end
 
     test "Connect on a never-connected row that predates the vendor profile creates the profile first",
@@ -738,7 +799,12 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       reopen(child)
       assert requests() == []
 
-      _fresh = open_profile(build_conn(), ctx.h1, ctx.solo)
+      # A NEW LiveView asks once more: the picked-up row has no account type
+      # yet (task 01a1653a), and the type check runs once per LiveView.
+      fresh = open_profile(build_conn(), ctx.h1, ctx.solo)
+      assert requests() == [list_get("zprof_pickup_solo")]
+
+      reopen(fresh)
       assert requests() == []
     end
 
@@ -823,6 +889,108 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert requests() == []
       refute notice?(child)
       assert Repo.get!(Account, ctx.a_li.id).status == nil
+    end
+  end
+
+  describe "type backfill on opening Connections (task 01a1653a)" do
+    setup ctx do
+      profile = linked_profile!(ctx, "Typed", "zprof_typed")
+      %{typed_profile: profile}
+    end
+
+    # The profile's ONLY row: connected, with no account type.
+    defp untyped_row!(ctx, platform, ref), do: untyped_row!(ctx, ctx.typed_profile, platform, ref)
+
+    defp untyped_row!(ctx, profile, platform, ref) do
+      {:ok, account} = Social.create_account(ctx.org_id, profile, %{platform: platform})
+
+      account
+      |> Ecto.Changeset.change(status: "connected", provider_account_ref: ref)
+      |> Repo.update!()
+    end
+
+    defp listed(ref, platform, account_type, profile_ref \\ "zprof_typed") do
+      %{
+        ref: ref,
+        platform: platform,
+        profile_ref: profile_ref,
+        username: "user-#{ref}",
+        active?: true,
+        account_type: account_type
+      }
+    end
+
+    test "opening Connections with only an untyped connected row asks once and backfills it",
+         %{conn: conn} = ctx do
+      tiktok = untyped_row!(ctx, "tiktok", "zacct_tt")
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_tt", "tiktok", "business")]})
+
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+
+      assert [{:list_accounts, [%Profile{id: id}], _}] = Fake.calls(:list_accounts)
+      assert id == ctx.typed_profile.id
+      assert Repo.get!(Account, tiktok.id).platform_account_type == "business"
+      assert has_element?(child, row(tiktok) <> " [data-state='connected']", "Connected")
+      refute notice?(child)
+
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 1
+    end
+
+    test "a row the vendor never types costs one call per LiveView, not one per tab open",
+         %{conn: conn} = ctx do
+      ig = untyped_row!(ctx, "instagram", "zacct_ig")
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_ig", "instagram", nil)]})
+
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+      assert length(Fake.calls(:list_accounts)) == 1
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
+
+      reopen(child)
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 1
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
+    end
+
+    # Task 01a16588: the "asked already" mark is per profile, so switching to
+    # a second profile in the SAME LiveView still types that profile's rows.
+    # A stored type surviving a nil report is covered at the context level by
+    # social_connect_return_test.exs "a nil report keeps a stored creator on
+    # a connected row".
+    test "switching profile in one LiveView types the second profile's row; one call per profile",
+         %{conn: conn} = ctx do
+      profile_b = linked_profile!(ctx, "Typed B", "zprof_typed_b")
+      ig = untyped_row!(ctx, "instagram", "zacct_ig")
+      tiktok = untyped_row!(ctx, profile_b, "tiktok", "zacct_tt_b")
+
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_ig", "instagram", nil)]})
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+      assert length(Fake.calls(:list_accounts)) == 1
+
+      Fake.put_next(
+        :list_accounts,
+        {:ok, [listed("zacct_tt_b", "tiktok", "business", "zprof_typed_b")]}
+      )
+
+      child |> form("#social-profile-switcher", %{profile_id: profile_b.id}) |> render_change()
+      reopen(child)
+
+      assert [
+               {:list_accounts, [%Profile{id: first}], _},
+               {:list_accounts, [%Profile{id: second}], _}
+             ] = Fake.calls(:list_accounts)
+
+      assert first == ctx.typed_profile.id
+      assert second == profile_b.id
+      assert Repo.get!(Account, tiktok.id).platform_account_type == "business"
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
+
+      child
+      |> form("#social-profile-switcher", %{profile_id: ctx.typed_profile.id})
+      |> render_change()
+
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 2
     end
   end
 

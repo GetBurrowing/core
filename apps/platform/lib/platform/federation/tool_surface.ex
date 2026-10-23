@@ -522,11 +522,12 @@ defmodule Platform.Federation.ToolSurface do
             description: "Attach to a specific canvas"
           }
         },
-        returns: "%{id, upload_url, expires_at, max_bytes, url}",
+        returns:
+          "%{id, upload_url, expires_at, max_bytes, url}. The reservation id is not final: POST the bytes to upload_url, and the POST response carries the id to use from then on (a deduplicated upload returns a different, canonical id). To post the file in chat, pass that POST-response id to send_media as attachment_ids.",
         limitations:
-          "Capped at :upload_max_bytes (default 500 MB). The reservation TTL is :pending_ttl_seconds (default 15 min); expired pending rows are reaped.",
+          "Capped at :upload_max_bytes (default 500 MB). The reservation TTL is :pending_ttl_seconds (default 15 min); expired pending rows are reaped. Reserving and POSTing does not post a message; call send_media with attachment_ids for that.",
         when_to_use:
-          "Files over the inline cap, or any case where streaming bytes directly is preferable to base64-in-JSON."
+          "Files over the inline cap (videos especially), or any case where streaming bytes directly is preferable to base64-in-JSON. To share it in chat: attachment_upload_start, POST the bytes, then send_media with attachment_ids set to the id from the POST response; a video plays inline in chat."
       }
     ]
   end
@@ -1228,9 +1229,17 @@ defmodule Platform.Federation.ToolSurface do
     [
       %{
         name: "send_media",
-        description: "Send a message with one or more file attachments to a Burrow space.",
+        description:
+          "Send a message with one or more file attachments to a Burrow space. For a file over the inline cap (e.g. a video), do not re-send the bytes: call attachment_upload_start, POST the bytes to its upload_url, then call send_media with attachment_ids set to the id from the POST response. A video/* attachment plays inline in chat.",
         parameters: %{
           space_id: %{type: "string", required: true, description: "UUID of the Burrow space"},
+          attachment_ids: %{
+            type: "array",
+            required: false,
+            description:
+              "Ids of attachments ALREADY uploaded to this space (attachment_upload_start + presigned POST, or attachment_upload_inline). Pass the id from the upload POST response, not the reservation: a deduplicated upload returns a different canonical id. The upload must be finished (state ready). Up to 10 ids; no bytes are re-sent.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
           file_paths: %{
             type: "array",
             required: false,
@@ -1261,11 +1270,12 @@ defmodule Platform.Federation.ToolSurface do
               "Optional display filename for single-file uploads (file_path or file_base64)"
           }
         },
-        returns: "The message ID, space ID, and attachment count",
+        returns:
+          "%{message_id, space_id, attachment_count}; with attachment_ids also attachment_ids, the ids of the rows now on the message (a row already on another message is linked by a new reference row with its own id).",
         limitations:
-          "Exactly one of file_paths, file_path, or file_base64 is required. file_path/file_paths must exist on the SAME filesystem Core itself reads (:enoent otherwise) — a remote caller should pass file_base64. Agent must be a participant in the space.",
+          "Exactly one of file_paths, file_path, file_base64 or attachment_ids is required; attachment_ids cannot be combined with the others. file_path/file_paths must exist on the SAME filesystem Core itself reads (:enoent otherwise) — a remote caller should pass file_base64. file_base64 is bounded by the inline cap; larger files go through attachment_upload_start + attachment_ids. attachment_ids must belong to this space and be finished uploading. Agent must be a participant in the space.",
         when_to_use:
-          "When you need to share files (images, documents, etc.) in a space. Prefer file_base64 unless you know the caller and Core share a filesystem."
+          "When you need to share files (images, documents, video, etc.) in a space. Small files: file_base64, unless you know the caller and Core share a filesystem. Files over the inline cap, videos especially: attachment_upload_start, POST the bytes, then send_media with attachment_ids (the id from the POST response); the clip plays inline in chat."
       },
       %{
         name: "react",
@@ -4140,7 +4150,7 @@ defmodule Platform.Federation.ToolSurface do
     if is_nil(participant_id) do
       {:error, space_write_denied(space_id)}
     else
-      send_media_as_participant(args, space_id, participant_id, content)
+      send_media_as_participant(args, space_id, participant_id, content, context)
     end
   end
 
@@ -8961,8 +8971,11 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp send_media_as_participant(args, space_id, participant_id, content) do
+  defp send_media_as_participant(args, space_id, participant_id, content, context) do
     case normalize_send_media_attachments(args) do
+      {:ok, {:existing, attachment_ids}} ->
+        send_media_existing(attachment_ids, space_id, participant_id, content, context)
+
       {:ok, attachment_specs} ->
         with {:ok, attachment_attrs} <- persist_send_media_attachments(attachment_specs),
              {:ok, message, attachments} <-
@@ -8998,7 +9011,7 @@ defmodule Platform.Federation.ToolSurface do
            error: message,
            recoverable: true,
            suggestion:
-             "Pass file_paths as a non-empty array, or file_path for a single attachment"
+             "Pass exactly one of file_paths (non-empty array), file_path, file_base64 or attachment_ids (ids of finished uploads)"
          }}
     end
   end
@@ -9011,6 +9024,24 @@ defmodule Platform.Federation.ToolSurface do
   # {:error, message}` directly rather than building a bare list and
   # checking for `[]` afterward, so a malformed `file_base64` can surface
   # its OWN error message instead of the generic "no file path provided".
+  # Task 01a1655c stage 2: `attachment_ids` names rows that are ALREADY
+  # uploaded, so it skips the persist step entirely. It may not be combined
+  # with a byte-carrying shape: which one "wins" would be a silent guess.
+  defp normalize_send_media_attachments(%{"attachment_ids" => ids} = args)
+       when not is_nil(ids) do
+    cond do
+      Enum.any?(~w(file_paths file_path file_base64), &send_media_shape_given?(args, &1)) ->
+        {:error,
+         "Failed to send media: attachment_ids cannot be combined with file_paths, file_path or file_base64; pass exactly one"}
+
+      is_list(ids) and ids != [] and Enum.all?(ids, &is_binary/1) ->
+        {:ok, {:existing, ids}}
+
+      true ->
+        {:error, "Failed to send media: attachment_ids must be a non-empty array of id strings"}
+    end
+  end
+
   defp normalize_send_media_attachments(args) do
     file_paths =
       case Map.get(args, "file_paths") do
@@ -9036,6 +9067,94 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         {:error, "Failed to send media: no file path provided"}
     end
+  end
+
+  defp send_media_shape_given?(args, key) do
+    case Map.get(args, key) do
+      nil -> false
+      "" -> false
+      [] -> false
+      _ -> true
+    end
+  end
+
+  # Called only from `send_media_as_participant/5`, i.e. behind the
+  # participant check in `execute("send_media", ...)`, which stays the outer
+  # gate. The caller's Scope (in-process `:access_scope`, else the calling
+  # runtime's) is passed so a denied row answers as not-found.
+  defp send_media_existing(attachment_ids, space_id, participant_id, content, context) do
+    opts = if is_map(context), do: memory_access_opts(context), else: []
+
+    case Chat.post_message_with_existing_attachments(
+           %{
+             space_id: space_id,
+             participant_id: participant_id,
+             content_type: "text",
+             content: content
+           },
+           attachment_ids,
+           opts
+         ) do
+      {:ok, message, attachments} ->
+        {:ok,
+         %{
+           message_id: message.id,
+           space_id: space_id,
+           attachment_count: length(attachments),
+           attachment_ids: Enum.map(attachments, & &1.id)
+         }}
+
+      {:error, reason} ->
+        {:error, send_media_existing_error(reason)}
+    end
+  end
+
+  defp send_media_existing_error({:attachment_not_found, id}) do
+    %{
+      error: "Failed to send media: attachment #{inspect(id)} not found in this space",
+      code: "attachment_not_found",
+      attachment_id: id,
+      recoverable: true,
+      suggestion:
+        "Pass the id from the upload POST response, not the attachment_upload_start reservation; a deduplicated upload returns a different canonical id. The attachment must belong to this space_id."
+    }
+  end
+
+  defp send_media_existing_error({:attachment_not_ready, id}) do
+    %{
+      error: "Failed to send media: attachment #{id} has not finished uploading",
+      code: "attachment_not_ready",
+      attachment_id: id,
+      recoverable: true,
+      suggestion:
+        "Finish the presigned POST first (POST the bytes to the upload_url from attachment_upload_start), then call send_media again with the id from the POST response."
+    }
+  end
+
+  defp send_media_existing_error(:no_attachments) do
+    %{
+      error: "Failed to send media: attachment_ids is empty",
+      code: "no_attachments",
+      recoverable: true,
+      suggestion: "Pass at least one uploaded attachment id in attachment_ids"
+    }
+  end
+
+  defp send_media_existing_error(:too_many_attachments) do
+    %{
+      error: "Failed to send media: too many attachment_ids (max 10)",
+      code: "too_many_attachments",
+      recoverable: true,
+      suggestion: "Split the attachments across several send_media calls of at most 10 ids"
+    }
+  end
+
+  defp send_media_existing_error(reason) do
+    %{
+      error: "Failed to send media: #{inspect_errors_safe(reason)}",
+      recoverable: true,
+      suggestion: "Check that the attachment ids belong to this space and the space is writable"
+    }
   end
 
   defp decode_send_media_base64(encoded, filename) do

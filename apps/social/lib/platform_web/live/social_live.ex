@@ -57,7 +57,9 @@ defmodule PlatformWeb.SocialLive do
   vendor profile first and re-checks the approver itself), then the
   publisher's `connect_url/2`, then an external redirect. A connect failure
   AFTER the row exists re-streams the rows so it shows with Connect; the row
-  is kept and retried, never deleted. `connect_account` also runs
+  is kept and retried, never deleted. Any connect failure names its reason
+  (the vendor's status and message, never the URL or key) on the clicked
+  row itself as well as in the pane's notice line. `connect_account` also runs
   `Platform.Social.ensure_provider_profile/2` first, so Connect on a row that
   predates the vendor profile works. The vendor URL and the key are never
   logged.
@@ -92,9 +94,15 @@ defmodule PlatformWeb.SocialLive do
   `select_tab` "connections", and `load_profile/2` while the tab already is
   (a profile switch reconciles the NEW profile). It runs only on a connected
   socket, for a viewer who passes `authorize/1`, on a profile with a
-  `provider_profile_ref`, while at least one never-connected row is listed;
+  `provider_profile_ref`, while at least one never-connected row is listed,
+  or while a connected row has a nil `platform_account_type` (task 01a1653a)
+  and this LiveView has not asked yet: that type check runs at most ONCE per
+  LiveView process, so an Instagram row Zernio never types costs one list
+  call per page session, not one per tab click. The same call backfills the
+  type on connected rows when Zernio reports one (no notice, no copy change).
   `Platform.Social.reconcile_accounts/3` re-checks the approver and the ref
-  and sends nothing when no row is pending. Picked-up rows show Connected
+  and sends nothing when no row is pending and no connected row lacks a
+  type. Picked-up rows show Connected
   with their handle and a "Picked up" notice; a vendor error shows a
   couldn't-check notice and writes nothing; no key sends nothing and adds no
   notice (the key alert already says it). RETRY: rows the vendor does not
@@ -106,6 +114,24 @@ defmodule PlatformWeb.SocialLive do
   the host's URL), so a reload replays the return. That is safe because
   `complete_connect/4` is idempotent: a ref already on the row answers
   "already connected" with no write.
+
+  ## Employee accounts: owner line, invites, landing page (task 01a14ce1)
+
+  An owned account's row carries `Owner: <name>`; unowned rows carry
+  nothing. An approver gets "Invite someone to connect" (secondary, next
+  to Add account), a dialog (bottom sheet below sm) that calls
+  `Platform.Social.create_invite/5` and shows the link ONCE, and the
+  pending invites with Cancel (`cancel_invite/3`). Only the token's hash
+  is stored, so a pending row cannot re-show its link.
+
+  `?invite=<token>` renders the invitee landing page INSTEAD of the
+  profile UI, for every state (ready, expired, used, cancelled, not valid,
+  signed out). Continue calls `Platform.Social.start_invite_connect/3`
+  for the viewer, re-read on the click; the vendor return
+  (`?invite_connect=<nonce>`) lands on the success card, or on the failed
+  card whose Try again calls `restart_invite_connect/3`. The token (or
+  nonce) is kept in assigns only while it can still be used, as a lookup
+  key: every event re-resolves it through Social.
   """
   use PlatformWeb, :live_view
 
@@ -119,6 +145,22 @@ defmodule PlatformWeb.SocialLive do
 
   @tabs ~w(queue calendar connections settings)
 
+  # The queue's status filter chips (task 01a165f1), in display order.
+  @queue_filters ~w(needs_approval not_published)
+
+  @approver_refusals [
+    :not_an_approver,
+    :not_a_human,
+    :approver_archived,
+    :approver_no_access,
+    :not_the_owner
+  ]
+
+  @invite_unusable "That invite link can't finish this connection. Nothing changed. Ask for a new link."
+
+  # The invite dialog's expiry choices, in days; 7 is the default.
+  @invite_ttl_days [1, 3, 7, 14]
+
   @impl true
   def mount(_params, session, socket) do
     user = Platform.Accounts.get_user(session["user_id"])
@@ -129,6 +171,8 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:user, user)
       |> assign(:tab, "queue")
       |> assign(:queue_canvas_ids, [])
+      |> assign(:queue_filter, nil)
+      |> assign(:type_checked_profile_ids, MapSet.new())
       |> assign(:week_start, Cal.week_start(Date.utc_today()))
       |> assign(:detail, nil)
       |> assign(:notice, nil)
@@ -141,15 +185,44 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:zernio_mode, :idle)
       |> assign(:zernio_nonce, 0)
       |> assign_zernio()
+      |> assign(:invite_dialog, nil)
+      |> assign(:landing, nil)
+      |> assign(:invite_token, nil)
+      |> assign(:invite_nonce, nil)
 
     socket = load_profile(socket, List.first(profiles))
+    query = session["query"]
 
-    # The OAuth return: connected mount only (the static render sends no
-    # vendor request, so the vendor is asked once), live humans only.
     socket =
-      if connected?(socket) and human?(user),
-        do: handle_return(socket, profiles, return_params(session["query"])),
-        else: socket
+      case landing_params(query) do
+        # The invitee landing page (task 01a14ce1, stage 4): rendered
+        # INSTEAD of the profile UI. Resolving the invite reads only, so it
+        # runs on the static render too.
+        {:invite, token} ->
+          assign_invite_landing(socket, token, user)
+
+        # A cancelled or failed vendor connect started from an invite.
+        {:invite_failed, nonce} ->
+          if connected?(socket),
+            do: assign_failed_landing(socket, nonce, user),
+            else: assign(socket, :landing, %{state: :checking})
+
+        :none ->
+          # The OAuth return: connected mount only (the static render sends
+          # no vendor request, so the vendor is asked once), live humans only.
+          cond do
+            connected?(socket) and human?(user) ->
+              socket
+              |> handle_return(profiles, return_params(query))
+              |> select_from_query(profiles, query)
+
+            is_map(query) and is_map_key(query, "invite_connect") and human?(user) ->
+              assign(socket, :landing, %{state: :checking})
+
+            true ->
+              select_from_query(socket, profiles, query)
+          end
+      end
 
     {:ok, socket}
   end
@@ -231,6 +304,16 @@ defmodule PlatformWeb.SocialLive do
 
   def handle_event("select_tab", _params, socket), do: {:noreply, socket}
 
+  # Task 01a165f1: the queue's status filter. Pressing the active chip
+  # clears it; the stream is re-read and re-streamed with `reset: true`.
+  def handle_event("queue_filter", %{"filter" => filter}, socket)
+      when filter in @queue_filters do
+    filter = if socket.assigns.queue_filter == filter, do: nil, else: filter
+    {:noreply, socket |> assign(:queue_filter, filter) |> load_queue()}
+  end
+
+  def handle_event("queue_filter", _params, socket), do: {:noreply, socket}
+
   def handle_event("week_" <> which, _params, socket) when which in ~w(prev this next) do
     week =
       case which do
@@ -257,21 +340,18 @@ defmodule PlatformWeb.SocialLive do
   # install's own /m/social as the redirect. The vendor URL is never logged.
   def handle_event("connect_account", %{"id" => id}, socket) do
     with {:ok, profile, _user} <- authorize(socket),
-         %Account{} = account <- profile_account(profile, id),
-         publisher when is_atom(publisher) <- Publisher.impl(),
-         {:ok, profile} <- Social.ensure_provider_profile(profile.org_id, profile),
-         {:ok, url} <-
-           publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
-      {:noreply, redirect(socket, external: url)}
+         %Account{} = account <- profile_account(profile, id) do
+      with publisher when is_atom(publisher) <- Publisher.impl(),
+           {:ok, profile} <- Social.ensure_provider_profile(profile.org_id, profile),
+           {:ok, url} <-
+             publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
+        {:noreply, redirect(socket, external: url)}
+      else
+        error -> {:noreply, connect_failed(socket, account, error)}
+      end
     else
-      {:error, :publisher_not_configured} ->
-        {:noreply, notice(socket, "Publishing isn't configured on this install.")}
-
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
-
-      {:error, {:profile_name_taken, _name} = reason} ->
-        {:noreply, notice(socket, add_error_copy(reason))}
 
       _ ->
         {:noreply, notice(socket, "That account could not be connected. Try again.")}
@@ -305,11 +385,7 @@ defmodule PlatformWeb.SocialLive do
              publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
         {:noreply, redirect(socket, external: url)}
       else
-        _ ->
-          {:noreply,
-           socket
-           |> restream_accounts()
-           |> notice("That account could not be connected. Try again.")}
+        error -> {:noreply, connect_failed(socket, account, error)}
       end
     else
       {:error, reason} -> {:noreply, notice(socket, add_error_copy(reason))}
@@ -422,6 +498,133 @@ defmodule PlatformWeb.SocialLive do
   def handle_event("dismiss_notice", _params, socket),
     do: {:noreply, assign(socket, :notice, nil)}
 
+  # ── Invites, approver side (task 01a14ce1, stage 4) ──────────────────
+  # Every handler re-checks the approver through authorize/1 (and
+  # Social.create_invite/5 / cancel_invite/3 re-check again inside). The
+  # raw token lives only in the created dialog's URL, dropped on close.
+
+  def handle_event("open_invite", _params, socket) do
+    case authorize(socket) do
+      {:ok, _profile, _user_id} ->
+        {:noreply,
+         assign(socket, :invite_dialog, %{
+           step: :form,
+           form: invite_form(socket.assigns.connectable_platforms)
+         })}
+
+      _ ->
+        {:noreply, assign(socket, :invite_dialog, nil)}
+    end
+  end
+
+  def handle_event("close_invite", _params, socket),
+    do: {:noreply, assign(socket, :invite_dialog, nil)}
+
+  def handle_event("create_invite", %{"invite" => %{"platform" => platform} = params}, socket)
+      when is_binary(platform) do
+    with {:ok, days} <- invite_days(params["ttl_days"]),
+         {:ok, profile, user_id} <- authorize(socket),
+         {:ok, invite, token} <-
+           Social.create_invite(profile.org_id, profile, user_id, platform, days) do
+      {:noreply,
+       socket
+       |> assign(:invite_dialog, %{
+         step: :created,
+         url: own_url("/m/social?" <> URI.encode_query(%{"invite" => token})),
+         expires_on: short_date(invite.expires_at)
+       })
+       |> restream_invites()}
+    else
+      {:error, reason} when reason in @approver_refusals ->
+        {:noreply,
+         socket
+         |> assign(:invite_dialog, nil)
+         |> notice("Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply,
+         socket
+         |> assign(:invite_dialog, nil)
+         |> notice("That invite link could not be created. Try again.")}
+    end
+  end
+
+  def handle_event("create_invite", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_invite", %{"id" => id}, socket) when is_binary(id) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, _invite} <- Social.cancel_invite(profile.org_id, id, user_id) do
+      {:noreply, socket |> restream_invites() |> notice("Invite cancelled.")}
+    else
+      {:error, :used} ->
+        {:noreply, socket |> restream_invites() |> notice("That invite was already used.")}
+
+      {:error, reason} when reason in @approver_refusals ->
+        {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply, socket |> restream_invites() |> notice("That invite is already gone.")}
+    end
+  end
+
+  def handle_event("cancel_invite", _params, socket), do: {:noreply, socket}
+
+  # ── Invites, invitee side (task 01a14ce1, stage 4) ───────────────────
+  # The user is re-read and the invite re-resolved through Social on every
+  # event; the token or nonce in assigns is only a lookup key, never proof.
+
+  def handle_event("invite_continue", _params, socket) do
+    user = fresh_user(socket)
+
+    case {user, socket.assigns.invite_token} do
+      {%User{archived_at: nil} = user, token} when is_binary(token) ->
+        case Social.start_invite_connect(token, user.id) do
+          {:ok, url} ->
+            {:noreply, redirect(socket, external: url)}
+
+          {:error, _reason} ->
+            {:noreply,
+             socket
+             |> assign_invite_landing(token, user)
+             |> landing_error("Couldn't start the LinkedIn connection. Try again.")}
+        end
+
+      # No usable invite on this page (expired, used, forged...): nothing
+      # to start, and no request.
+      {_user, nil} ->
+        {:noreply, socket}
+
+      {_user, token} ->
+        {:noreply, assign_invite_landing(socket, token, user)}
+    end
+  end
+
+  def handle_event("invite_retry", _params, socket) do
+    user = fresh_user(socket)
+
+    case {user, socket.assigns.invite_nonce} do
+      {%User{archived_at: nil} = user, nonce} when is_binary(nonce) ->
+        case Social.restart_invite_connect(nonce, user.id) do
+          {:ok, url} ->
+            {:noreply, redirect(socket, external: url)}
+
+          {:error, _reason} ->
+            {:noreply,
+             socket
+             |> assign_failed_landing(nonce, user)
+             |> landing_error(
+               "Couldn't start the LinkedIn connection. Open your invite link again."
+             )}
+        end
+
+      {_user, nil} ->
+        {:noreply, socket}
+
+      {_user, nonce} ->
+        {:noreply, assign_failed_landing(socket, nonce, user)}
+    end
+  end
+
   # The install's Zernio key. The user is re-read NOW and must be a live
   # human; anyone else (an agent session, nil, an archived user) is refused
   # with nothing written. The submitted value goes straight to Secrets and
@@ -493,7 +696,21 @@ defmodule PlatformWeb.SocialLive do
   # ONE place a profile becomes current. Every per-profile stream loads here
   # with `reset: true`, so a switch leaves nothing of the previous profile.
   defp load_profile(socket, profile) do
-    rows = queue_rows(profile)
+    socket
+    |> assign(:profile, profile)
+    |> assign(:detail, nil)
+    |> load_queue()
+    |> assign(:notice, nil)
+    |> load_calendar()
+    |> load_connections()
+    |> maybe_reconcile()
+  end
+
+  # The queue stream for the current profile and filter, with `reset: true`.
+  # `queue_refused?` (any refused post, whatever the filter) shows the chips.
+  defp load_queue(socket) do
+    all = queue_rows(socket.assigns.profile)
+    rows = filter_queue(all, socket.assigns.queue_filter)
     canvas_ids = for %{card: %{canvas_id: id}} <- rows, do: id
 
     if connected?(socket) do
@@ -502,17 +719,16 @@ defmodule PlatformWeb.SocialLive do
     end
 
     socket
-    |> assign(:profile, profile)
-    |> assign(:detail, nil)
     |> assign(:queue_canvas_ids, canvas_ids)
     |> assign(:queue_cards, Map.new(for %{card: %{} = c} <- rows, do: {c.canvas_id, c.id}))
     |> assign(:queue_empty?, rows == [])
+    |> assign(:queue_refused?, Enum.any?(all, & &1.refused?))
     |> stream(:queue, rows, reset: true)
-    |> assign(:notice, nil)
-    |> load_calendar()
-    |> load_connections()
-    |> maybe_reconcile()
   end
+
+  defp filter_queue(rows, "needs_approval"), do: Enum.reject(rows, & &1.refused?)
+  defp filter_queue(rows, "not_published"), do: Enum.filter(rows, & &1.refused?)
+  defp filter_queue(rows, _none), do: rows
 
   # Connections and Settings for the current profile. `can_edit?` is ONLY
   # for rendering; every write handler re-checks through `authorize/1`.
@@ -522,12 +738,16 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:can_edit?, false)
     |> assign(:accounts_empty?, true)
     |> assign(:pending_accounts?, false)
+    |> assign(:untyped_accounts?, false)
     |> assign(:connectable_platforms, [])
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form([]))
     |> assign(:settings_options, %{approvers: [], spaces: []})
     |> assign(:settings_form, nil)
+    |> assign(:invite_dialog, nil)
+    |> assign(:invites_empty?, true)
     |> stream(:accounts, [], reset: true)
+    |> stream(:invites, [], reset: true)
   end
 
   defp load_connections(%{assigns: %{profile: profile}} = socket) do
@@ -540,20 +760,145 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:removing, nil)
     |> assign(:can_edit?, can_edit?)
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign_reconcile_flags(accounts)
     |> assign(:connectable_platforms, platforms)
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form(platforms))
     |> assign(:settings_options, settings_options(profile, can_edit?))
     |> assign(:settings_form, settings_form(profile, %{}))
+    |> assign(:invite_dialog, nil)
     |> stream(:accounts, Enum.map(accounts, &account_item(&1, nil)), reset: true)
+    |> restream_invites()
+  end
+
+  # Pending invites (unused, uncancelled, unexpired) for an APPROVER of the
+  # current profile only; anyone else gets an empty list. Used and expired
+  # invites drop off because list_pending_invites/2 never returns them.
+  defp restream_invites(%{assigns: %{profile: %{}}} = socket) do
+    invites =
+      case authorize(socket) do
+        {:ok, fresh, _user_id} -> Social.list_pending_invites(fresh.org_id, fresh)
+        _ -> []
+      end
+
+    socket
+    |> assign(:invites_empty?, invites == [])
+    |> stream(:invites, Enum.map(invites, &invite_item/1), reset: true)
+  end
+
+  defp restream_invites(socket), do: socket
+
+  # Only display fields: never the token (it is not stored) or its hash.
+  defp invite_item(invite) do
+    %{
+      id: invite.id,
+      platform: invite.platform,
+      expires_on: short_date(invite.expires_at),
+      expiring?: DateTime.diff(invite.expires_at, DateTime.utc_now()) < 86_400
+    }
   end
 
   # A stream row; `removal` is the open confirm panel's preview, else nil.
-  defp account_item(account, %{account_id: id, preview: preview}) when id == account.id,
-    do: %{id: account.id, account: account, removal: preview}
+  defp account_item(account, removing, connect_error \\ nil)
 
-  defp account_item(account, _removing), do: %{id: account.id, account: account, removal: nil}
+  defp account_item(account, %{account_id: id, preview: preview}, connect_error)
+       when id == account.id,
+       do: %{
+         id: account.id,
+         account: account,
+         removal: preview,
+         owner: owner_of(account),
+         connect_error: connect_error
+       }
+
+  defp account_item(account, _removing, connect_error),
+    do: %{
+      id: account.id,
+      account: account,
+      removal: nil,
+      owner: owner_of(account),
+      connect_error: connect_error
+    }
+
+  # Connect (or the connect step of Add account) failed: the reason goes on
+  # the row that was clicked AND in the pane's notice line, because the
+  # notice sits at the top of Connections and is off-screen under a long
+  # list or on a phone (2026-10-21: "nothing happens"). The rows are re-read
+  # so an account that Add just created shows with Connect.
+  defp connect_failed(socket, %Account{} = account, error) do
+    text = connect_error_copy(account, error)
+
+    socket
+    |> restream_accounts(%{account.id => text})
+    |> notice(text, :warning)
+  end
+
+  @platform_labels %{
+    "x" => "X",
+    "linkedin" => "LinkedIn",
+    "tiktok" => "TikTok",
+    "instagram" => "Instagram",
+    "youtube" => "YouTube"
+  }
+
+  defp connect_error_copy(%Account{platform: platform}, error) do
+    "Couldn't connect #{Map.get(@platform_labels, platform, platform)}. " <>
+      connect_reason(error)
+  end
+
+  # Strings come from the publisher's response handling (status code plus
+  # the vendor's own message, never the URL or the key).
+  defp connect_reason({:error, reason}) when is_binary(reason), do: reason
+
+  defp connect_reason({:error, :publisher_not_configured}),
+    do: "Publishing isn't configured on this install."
+
+  defp connect_reason({:error, :credentials_unavailable}),
+    do: "Add the Zernio API key in Settings first."
+
+  defp connect_reason({:error, :credentials_rejected}),
+    do: "Zernio rejected the API key (HTTP 401). Check the key in Settings."
+
+  defp connect_reason({:error, :rate_limited}),
+    do: "Zernio is rate limiting requests (HTTP 429). Try again in a minute."
+
+  defp connect_reason({:error, :not_found}),
+    do: "Zernio couldn't find this profile (HTTP 404). Try again."
+
+  defp connect_reason({:error, :unexpected_response}),
+    do: "Zernio answered without a sign-in link. Try again."
+
+  defp connect_reason({:error, :profile_not_linked}),
+    do: "This profile isn't linked to Zernio yet. Try again."
+
+  defp connect_reason({:error, {:unsupported_platform, _}}),
+    do: "That platform can't be connected on this install."
+
+  defp connect_reason({:error, {:profile_name_taken, _} = reason}), do: add_error_copy(reason)
+  defp connect_reason(_), do: "Try again."
+
+  # The owner line (task 01a14ce1, stage 4): only an owned account carries
+  # one. Display fields only.
+  defp owner_of(%Account{owner_user_id: id}) when is_binary(id) do
+    case Platform.Accounts.get_user(id) do
+      %User{} = user -> %{name: user_name(user), avatar_url: user.avatar_url}
+      nil -> nil
+    end
+  end
+
+  defp owner_of(_account), do: nil
+
+  defp user_name(%User{name: name}) when is_binary(name) and name != "", do: name
+  defp user_name(%User{email: email}) when is_binary(email), do: email
+  defp user_name(_user), do: "someone"
+
+  defp initial(name) when is_binary(name) and name != "",
+    do: name |> String.first() |> String.upcase()
+
+  defp initial(_name), do: "?"
+
+  # "Oct 24"
+  defp short_date(%DateTime{} = at), do: Calendar.strftime(at, "%b %-d")
 
   # Closes the open confirm panel (if any) by re-streaming its row as read
   # now; a row that is no longer live is dropped from the stream.
@@ -580,7 +925,7 @@ defmodule PlatformWeb.SocialLive do
 
     socket
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign_reconcile_flags(accounts)
   end
 
   defp assign_account_flags(socket), do: socket
@@ -604,15 +949,21 @@ defmodule PlatformWeb.SocialLive do
     |> Enum.join(" ")
   end
 
-  defp restream_accounts(%{assigns: %{profile: nil}} = socket), do: socket
+  # `errors` maps an account id to the connect failure shown on its row.
+  defp restream_accounts(socket, errors \\ %{})
 
-  defp restream_accounts(%{assigns: %{profile: profile}} = socket) do
+  defp restream_accounts(%{assigns: %{profile: nil}} = socket, _errors), do: socket
+
+  defp restream_accounts(%{assigns: %{profile: profile}} = socket, errors) do
     accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
+    removing = socket.assigns.removing
 
     socket
     |> assign(:accounts_empty?, accounts == [])
-    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
-    |> stream(:accounts, Enum.map(accounts, &account_item(&1, socket.assigns.removing)),
+    |> assign_reconcile_flags(accounts)
+    |> stream(
+      :accounts,
+      Enum.map(accounts, &account_item(&1, removing, Map.get(errors, &1.id))),
       reset: true
     )
   end
@@ -624,28 +975,64 @@ defmodule PlatformWeb.SocialLive do
 
   defp never_connected?(_account), do: false
 
+  # Connected rows whose vendor account type we have never learned (task
+  # 01a1653a): `reconcile_accounts/3` backfills them. Mirrors the context's
+  # own predicate.
+  defp untyped_connected?(%Account{
+         status: "connected",
+         provider_account_ref: ref,
+         archived_at: nil,
+         platform_account_type: nil
+       })
+       when is_binary(ref),
+       do: true
+
+  defp untyped_connected?(_account), do: false
+
+  defp assign_reconcile_flags(socket, accounts) do
+    socket
+    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+    |> assign(:untyped_accounts?, Enum.any?(accounts, &untyped_connected?/1))
+  end
+
   # ── Reconcile on opening Connections (task 01a14807) ────────────────
 
-  @approver_refusals [:not_an_approver, :not_a_human, :approver_archived, :approver_no_access]
-
-  # Picks up accounts connected at the vendor whose return never reached us.
+  # Picks up accounts connected at the vendor whose return never reached us,
+  # and backfills the account type on connected rows that have none.
   # Runs only on the Connections tab, on a connected socket, for a viewer who
   # passes `authorize/1`, on a profile with a vendor ref, while a
-  # never-connected row is listed. `reconcile_accounts/3` re-checks the
-  # approver and the ref and sends nothing when no row is pending, so once
-  # every row is connected this costs zero requests. Synchronous: the
+  # never-connected row is listed, or while a connected row has a nil
+  # `platform_account_type` and this LiveView has not yet asked for THIS
+  # profile (an Instagram row Zernio can never type costs one list call per
+  # profile per page session, not one per tab click; switching to another
+  # profile asks once for that profile too). `reconcile_accounts/3` re-checks the approver and the ref
+  # and sends nothing when there is nothing to do, so once every row is
+  # connected and typed this costs zero requests. Synchronous: the
   # publisher's 5s receive_timeout bounds how long the click can block.
-  defp maybe_reconcile(%{assigns: %{tab: "connections", pending_accounts?: true}} = socket) do
+  defp maybe_reconcile(%{assigns: %{tab: "connections"} = assigns} = socket) do
+    if reconcile_due?(assigns), do: reconcile(socket), else: socket
+  end
+
+  defp maybe_reconcile(socket), do: socket
+
+  defp reconcile_due?(%{pending_accounts?: true}), do: true
+
+  defp reconcile_due?(%{untyped_accounts?: true, profile: %{id: id}} = assigns),
+    do: not MapSet.member?(assigns.type_checked_profile_ids, id)
+
+  defp reconcile_due?(_assigns), do: false
+
+  defp reconcile(socket) do
     with true <- connected?(socket),
          {:ok, fresh, user_id} <- authorize(socket),
          ref when is_binary(ref) and ref != "" <- fresh.provider_profile_ref do
-      reconciled(socket, Social.reconcile_accounts(fresh.org_id, fresh, user_id))
+      socket
+      |> update(:type_checked_profile_ids, &MapSet.put(&1, fresh.id))
+      |> reconciled(Social.reconcile_accounts(fresh.org_id, fresh, user_id))
     else
       _ -> socket
     end
   end
-
-  defp maybe_reconcile(socket), do: socket
 
   defp reconciled(socket, {:ok, %{connected: [_ | _] = accounts}}) do
     n = length(accounts)
@@ -656,6 +1043,9 @@ defmodule PlatformWeb.SocialLive do
     |> restream_accounts()
     |> notice("Picked up #{n} connected #{noun} from Zernio: #{names}.")
   end
+
+  # A backfilled type changes no copy; restream so the flags are current.
+  defp reconciled(socket, {:ok, %{typed: [_ | _]}}), do: restream_accounts(socket)
 
   defp reconciled(socket, {:ok, _nothing_new}), do: socket
 
@@ -674,6 +1064,25 @@ defmodule PlatformWeb.SocialLive do
        do: "#{platform_label(platform)} #{handle}"
 
   defp account_label(%Account{platform: platform}), do: platform_label(platform)
+
+  # ── Invite dialog ───────────────────────────────────────────────────
+
+  defp invite_form(platforms),
+    do: to_form(%{"platform" => List.first(platforms), "ttl_days" => "7"}, as: :invite)
+
+  defp invite_days(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {days, ""} when days in @invite_ttl_days -> {:ok, days}
+      _ -> {:error, :invalid_ttl}
+    end
+  end
+
+  defp invite_days(_value), do: {:error, :invalid_ttl}
+
+  defp ttl_options, do: Enum.map(@invite_ttl_days, &{ttl_label(&1), Integer.to_string(&1)})
+
+  defp ttl_label(1), do: "1 day"
+  defp ttl_label(days), do: "#{days} days"
 
   # ── Add account ─────────────────────────────────────────────────────
 
@@ -739,12 +1148,26 @@ defmodule PlatformWeb.SocialLive do
 
   @vendor_id ~r/\A[A-Za-z0-9_-]{1,64}\z/
   @error_code ~r/\A[a-z0-9_]{1,64}\z/
+  @nonce ~r/\A[A-Za-z0-9_-]{16,128}\z/
 
   # The ONE parser for the host's forwarded query (untrusted strings).
   # Only profileId, accountId and error are read; username, error_message
   # and every other key are ignored (the handle comes from the vendor list).
   defp return_params(%{"error" => error} = query) when is_binary(error) do
     {:return_error, %{code: shaped(error, @error_code), profile_ref: shaped(query["profileId"])}}
+  end
+
+  # An invite return (task 01a14ce1): the per-connect nonce plus the
+  # vendor's ids. Authorized by the invite, not by authorize/1.
+  defp return_params(%{"invite_connect" => nonce} = query) do
+    case {shaped(nonce, @nonce), shaped(query["profileId"]), shaped(query["accountId"])} do
+      {nonce, profile_ref, account_ref}
+      when is_binary(nonce) and is_binary(profile_ref) and is_binary(account_ref) ->
+        {:return_invite, %{nonce: nonce, profile_ref: profile_ref, account_ref: account_ref}}
+
+      _ ->
+        :return_malformed
+    end
   end
 
   defp return_params(%{} = query)
@@ -806,7 +1229,7 @@ defmodule PlatformWeb.SocialLive do
 
         result =
           with {:ok, fresh, user_id} <- authorize(socket) do
-            Social.complete_connect(fresh.org_id, fresh, user_id, %{
+            Social.complete_connect(fresh.org_id, fresh, {:approver, user_id}, %{
               account_ref: params.account_ref
             })
           end
@@ -814,6 +1237,179 @@ defmodule PlatformWeb.SocialLive do
         socket |> restream_accounts() |> notice(return_copy(result, profile))
     end
   end
+
+  # The invite return goes through the SAME Social.complete_connect/4, with
+  # the invite as the authorization: the invitee need not be an approver.
+  # It lands on the invitee landing page (task 01a14ce1, stage 4): success,
+  # a refused invite, or a vendor-side failure with Try again.
+  defp handle_return(socket, profiles, {:return_invite, params}) do
+    case return_profile(profiles, params.profile_ref) do
+      nil ->
+        assign(socket, :landing, %{state: :invalid, message: @invite_unusable})
+
+      profile ->
+        user = socket.assigns.user
+
+        result =
+          Social.complete_connect(
+            profile.org_id,
+            profile,
+            {:invite, params.nonce, user.id},
+            %{account_ref: params.account_ref}
+          )
+
+        case result do
+          {:ok, account, _outcome} ->
+            assign(socket, :landing, %{
+              state: :success,
+              brand: profile.name,
+              platform: platform_label(account.platform),
+              dm_path: owner_dm_path(profile, user)
+            })
+
+          {:error, reason}
+          when reason in [:not_found, :expired, :used, :cancelled, :not_the_inviter] or
+                 reason in @approver_refusals ->
+            assign(socket, :landing, %{state: :invalid, message: @invite_unusable})
+
+          {:error, _vendor_or_listing} ->
+            assign_failed_landing(socket, params.nonce, user)
+        end
+    end
+  end
+
+  # ── Invitee landing page (task 01a14ce1, stage 4) ────────────────────
+
+  # ?invite=<token> is the shared link; ?invite_connect=<nonce>&error=... is
+  # a cancelled or failed vendor leg. Everything else is the normal page.
+  defp landing_params(%{"invite" => token}) when is_binary(token), do: {:invite, token}
+
+  defp landing_params(%{"invite_connect" => nonce, "error" => _}) when is_binary(nonce),
+    do: {:invite_failed, nonce}
+
+  defp landing_params(_query), do: :none
+
+  # Resolves the shared token for the viewer, re-read now. The token is
+  # kept in assigns ONLY while the invite is usable (Continue needs it as a
+  # lookup key); every other state drops it.
+  defp assign_invite_landing(socket, token, user) do
+    shaped_token = shaped(token, @nonce)
+
+    result =
+      cond do
+        not human?(user) -> :signed_out
+        is_nil(shaped_token) -> {:error, :not_found}
+        true -> Social.invite_landing_for(shaped_token, user.id)
+      end
+
+    case result do
+      :signed_out ->
+        socket |> assign(:invite_token, nil) |> assign(:landing, %{state: :signed_out})
+
+      {:ok, invite, profile} ->
+        socket
+        |> assign(:invite_token, shaped_token)
+        |> assign(:landing, landing(:ready, invite, profile, user))
+
+      {:error, state, invite, profile} ->
+        socket
+        |> assign(:invite_token, nil)
+        |> assign(:landing, landing(state, invite, profile, user))
+
+      {:error, _reason} ->
+        socket
+        |> assign(:invite_token, nil)
+        |> assign(:landing, %{state: :invalid, message: "This invite link isn't valid."})
+    end
+  end
+
+  # The vendor leg was cancelled or failed. The nonce stays in assigns only
+  # while Try again can use it.
+  defp assign_failed_landing(socket, nonce, user) do
+    shaped_nonce = shaped(nonce, @nonce)
+
+    result =
+      cond do
+        not human?(user) -> :signed_out
+        is_nil(shaped_nonce) -> {:error, :not_found}
+        true -> Social.invite_return_for(shaped_nonce, user.id)
+      end
+
+    case result do
+      :signed_out ->
+        socket |> assign(:invite_nonce, nil) |> assign(:landing, %{state: :signed_out})
+
+      {:ok, invite, profile} ->
+        socket
+        |> assign(:invite_nonce, shaped_nonce)
+        |> assign(:landing, landing(:failed, invite, profile, user))
+
+      {:error, state, invite, profile} ->
+        socket
+        |> assign(:invite_nonce, nil)
+        |> assign(:landing, landing(state, invite, profile, user))
+
+      {:error, _reason} ->
+        socket
+        |> assign(:invite_nonce, nil)
+        |> assign(:landing, %{state: :invalid, message: @invite_unusable})
+    end
+  end
+
+  defp landing(state, invite, profile, user) do
+    %{
+      state: state,
+      brand: profile.name,
+      platform: platform_label(invite.platform),
+      inviter: inviter_name(invite.created_by_user_id),
+      expires_on: short_date(invite.expires_at),
+      viewer_used?: state == :used and invite.used_by_user_id == user.id,
+      profile_id: profile.id,
+      error: nil
+    }
+  end
+
+  defp landing_error(%{assigns: %{landing: %{state: state} = landing}} = socket, text)
+       when state in [:ready, :failed],
+       do: assign(socket, :landing, Map.put(landing, :error, text))
+
+  defp landing_error(socket, _text), do: socket
+
+  defp inviter_name(user_id) when is_binary(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %User{} = user -> user_name(user)
+      nil -> "the person who invited you"
+    end
+  end
+
+  defp inviter_name(_user_id), do: "the person who invited you"
+
+  # The owner's ONE Social DM, where drafts for their own account arrive
+  # (Approvals.owner_dm/2, find-or-create). No link when it can't be had.
+  defp owner_dm_path(profile, %User{id: user_id}) do
+    case Approvals.owner_dm(profile.org_id, user_id) do
+      {:ok, space} -> "/chat/" <> Platform.Chat.space_path_segment(space)
+      _ -> nil
+    end
+  end
+
+  # ?tab=connections&profile=<id> (the landing page's link back to a used
+  # invite's account): a tab in @tabs and a profile among the VISIBLE ones,
+  # else ignored.
+  defp select_from_query(socket, profiles, %{} = query) do
+    socket =
+      case Enum.find(profiles, &(&1.id == query["profile"])) do
+        nil -> socket
+        profile -> load_profile(socket, profile)
+      end
+
+    case query["tab"] do
+      tab when tab in @tabs -> socket |> assign(:tab, tab) |> maybe_reconcile()
+      _ -> socket
+    end
+  end
+
+  defp select_from_query(socket, _profiles, _query), do: socket
 
   defp return_copy({:ok, account, :connected}, _profile) do
     case account.handle do
@@ -951,7 +1547,7 @@ defmodule PlatformWeb.SocialLive do
          true <- post.status in Cal.statuses() do
       show_body? =
         post.status == "published" or
-          Social.approver_check(profile.org_id, profile, user_id) == :ok
+          Social.post_approver_check(profile.org_id, profile, account, user_id) == :ok
 
       %{
         post: post,
@@ -971,14 +1567,25 @@ defmodule PlatformWeb.SocialLive do
   # state of their own: the embedded component asks `card_view/2`.
   defp queue_rows(nil), do: []
 
+  #
+  # Task 01a165f1: then its approved posts whose publish was refused before
+  # the vendor (`refused: true`), each with its newest (decided) card.
   defp queue_rows(profile) do
-    profile.org_id
-    |> Social.list_posts(profile_id: profile.id, status: "needs_approval")
-    |> Enum.map(fn post ->
-      card = Approvals.live_card(post.id)
-      %{id: post.id, post: post, card: card, rev: card && card_rev(card)}
-    end)
+    pending =
+      profile.org_id
+      |> Social.list_posts(profile_id: profile.id, status: "needs_approval")
+      |> Enum.map(&queue_row(&1, Approvals.live_card(&1.id), false))
+
+    refused =
+      profile.org_id
+      |> Social.list_posts(profile_id: profile.id, refused: true)
+      |> Enum.map(&queue_row(&1, Approvals.latest_card(&1.id), true))
+
+    pending ++ refused
   end
+
+  defp queue_row(post, card, refused?),
+    do: %{id: post.id, post: post, card: card, rev: card && card_rev(card), refused?: refused?}
 
   defp card_rev(card) do
     case Platform.Chat.get_canvas(card.canvas_id) do
@@ -1136,261 +1743,345 @@ defmodule PlatformWeb.SocialLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-full min-h-0 flex-col" data-role="social-tab">
-      <%= if @profile do %>
-        <header class="border-b border-base-300 px-4 pt-4 sm:px-6">
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <form id="social-profile-switcher" phx-change="switch_profile" class="min-w-0">
-              <label for="social-profile-select" class="sr-only">Profile</label>
-              <select
-                id="social-profile-select"
-                name="profile_id"
-                class="select select-ghost w-auto max-w-full bg-base-100 text-xl font-bold"
-                data-role="social-profile-select"
-              >
-                <option
-                  :for={profile <- @profiles}
-                  value={profile.id}
-                  selected={profile.id == @profile.id}
-                  data-role="social-profile-option"
-                  data-count={count(@counts, profile)}
+      <%= cond do %>
+        <% @landing -> %>
+          <.invite_landing landing={@landing} />
+        <% @profile -> %>
+          <header class="border-b border-base-300 px-4 pt-4 sm:px-6">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <form id="social-profile-switcher" phx-change="switch_profile" class="min-w-0">
+                <label for="social-profile-select" class="sr-only">Profile</label>
+                <select
+                  id="social-profile-select"
+                  name="profile_id"
+                  class="select select-ghost w-auto max-w-full bg-base-100 text-xl font-bold"
+                  data-role="social-profile-select"
                 >
-                  {profile.name} {count(@counts, profile)}
-                </option>
-              </select>
-            </form>
-            <span
-              :if={count(@counts, @profile) > 0}
-              class="badge badge-warning whitespace-nowrap"
-              data-role="social-needs-approval"
-            >
-              {count(@counts, @profile)} need approval
-            </span>
-            <span
-              :if={count(@counts, @profile) == 0}
-              class="whitespace-nowrap text-sm text-base-content"
-              data-role="social-needs-approval"
-            >
-              0 need approval
-            </span>
-            <button
-              :if={@can_create?}
-              type="button"
-              class="btn btn-ghost btn-sm whitespace-nowrap"
-              phx-click={if @create_open?, do: "close_create", else: "open_create"}
-              aria-expanded={to_string(@create_open?)}
-              aria-controls="social-create-panel"
-              data-role="social-new-profile"
-            >
-              + New profile
-            </button>
-          </div>
-
-          <%!-- + New profile: inline under the header from sm up, a bottom
-               sheet below sm. --%>
-          <div :if={@can_create? and @create_open?} phx-window-keydown="close_create" phx-key="escape">
-            <button
-              type="button"
-              class="fixed inset-0 z-30 bg-base-content/40 sm:hidden"
-              phx-click="close_create"
-              aria-label="Close"
-            >
-            </button>
-            <div
-              id="social-create-panel"
-              class="fixed inset-x-0 bottom-0 z-40 max-h-[85vh] overflow-y-auto rounded-t-2xl border border-base-300 bg-base-100 p-4 sm:static sm:z-auto sm:mt-3 sm:max-w-xl sm:rounded-xl"
-              data-role="social-create-panel"
-            >
-              <div class="mb-3 flex items-center justify-between gap-2">
-                <h2 class="text-lg font-semibold">New profile</h2>
-                <button
-                  type="button"
-                  class="btn btn-ghost btn-sm btn-square"
-                  phx-click="close_create"
-                  aria-label="Close"
-                >
-                  <.icon name="hero-x-mark" class="size-5" />
-                </button>
-              </div>
-              <.create_form form={@create_form} orgs={@creatable_orgs} focus?={true} />
-            </div>
-          </div>
-
-          <nav
-            class="tabs tabs-border -mb-px mt-3 flex-nowrap overflow-x-auto whitespace-nowrap"
-            role="tablist"
-            aria-label="Social sections"
-            data-role="social-tabs"
-          >
-            <button
-              :for={{key, label} <- tab_labels(@counts, @profile)}
-              type="button"
-              role="tab"
-              class={[
-                "tab shrink-0",
-                @tab == key && "tab-active"
-              ]}
-              aria-selected={to_string(@tab == key)}
-              phx-click="select_tab"
-              phx-value-tab={key}
-              data-role="social-tab-button"
-              data-tab={key}
-            >
-              {label}
-            </button>
-          </nav>
-        </header>
-
-        <section
-          class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
-          data-role="social-tab-body"
-          data-tab={@tab}
-        >
-          <%!-- Every pane stays in the DOM (hidden when inactive) so its
-               stream survives a tab change. --%>
-          <div class={[@tab != "queue" && "hidden"]} data-pane="queue">
-            <div :if={@queue_empty?} class="space-y-3">
-              <p class="text-base-content" data-role="social-empty">
-                {empty_queue_copy(@profile, @accounts_empty?)}
-              </p>
-              <button
-                :if={@accounts_empty?}
-                type="button"
-                class="btn btn-outline btn-sm"
-                phx-click="select_tab"
-                phx-value-tab="connections"
-                data-role="social-go-connections"
-              >
-                Go to Connections
-              </button>
-            </div>
-            <ul id="social-queue" phx-update="stream" class="space-y-3" data-role="social-queue">
-              <li :for={{dom_id, row} <- @streams.queue} id={dom_id} data-role="social-queue-row">
-                <%= if row.card do %>
-                  <.live_component
-                    module={PlatformWeb.SocialCardComponent}
-                    id={"queue-card-" <> row.card.id}
-                    card_id={row.card.id}
-                    rev={row.rev}
-                    canvas_id={row.card.canvas_id}
-                    viewer={{:user, @user.id}}
-                  />
-                <% else %>
-                  <p
-                    class="rounded-xl border border-base-300 bg-base-100 p-3 text-sm text-base-content"
-                    data-role="social-queue-waiting"
+                  <option
+                    :for={profile <- @profiles}
+                    value={profile.id}
+                    selected={profile.id == @profile.id}
+                    data-role="social-profile-option"
+                    data-count={count(@counts, profile)}
                   >
-                    Waiting for its approval card.
-                  </p>
-                <% end %>
-              </li>
-            </ul>
-          </div>
-          <div class={[@tab != "calendar" && "hidden"]} data-pane="calendar">
-            <.calendar
-              profile={@profile}
-              week_start={@week_start}
-              empty?={@calendar_empty?}
-              rows={@streams.calendar_rows}
-              agenda={@streams.agenda_days}
-            />
-          </div>
-          <div class={[@tab != "connections" && "hidden"]} data-pane="connections">
-            <.notice_line notice={@notice} tone={@notice_tone} />
-            <div
-              :if={@zernio_blocks_connect?}
-              role="status"
-              class="alert alert-warning mb-3 flex flex-wrap items-center justify-between gap-2 text-sm"
-              data-role="social-zernio-required"
-            >
-              <span class="inline-flex items-start gap-2">
-                <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
-                Add the Zernio API key in Settings before connecting accounts.
+                    {profile.name} {count(@counts, profile)}
+                  </option>
+                </select>
+              </form>
+              <span
+                :if={count(@counts, @profile) > 0}
+                class="badge badge-warning whitespace-nowrap"
+                data-role="social-needs-approval"
+              >
+                {count(@counts, @profile)} need approval
+              </span>
+              <span
+                :if={count(@counts, @profile) == 0}
+                class="whitespace-nowrap text-sm text-base-content"
+                data-role="social-needs-approval"
+              >
+                0 need approval
               </span>
               <button
+                :if={@can_create?}
                 type="button"
-                class="btn btn-sm"
-                phx-click="select_tab"
-                phx-value-tab="settings"
-                data-role="social-zernio-go-settings"
+                class="btn btn-ghost btn-sm whitespace-nowrap"
+                phx-click={if @create_open?, do: "close_create", else: "open_create"}
+                aria-expanded={to_string(@create_open?)}
+                aria-controls="social-create-panel"
+                data-role="social-new-profile"
               >
-                Go to Settings
+                + New profile
               </button>
             </div>
-            <p :if={@accounts_empty?} class="mb-3 text-base-content" data-role="social-empty">
-              No accounts connected for {@profile.name} yet
-            </p>
-            <.add_account
-              :if={@can_edit? and not @zernio_blocks_connect? and @connectable_platforms != []}
-              open?={@add_open?}
-              form={@add_form}
-              options={platform_options(@connectable_platforms)}
-            />
-            <ul
-              id="social-accounts"
-              phx-update="stream"
-              class="divide-y divide-base-300 rounded-lg border border-base-300 bg-base-100"
-              data-role="social-accounts"
+
+            <%!-- + New profile: inline under the header from sm up, a bottom
+               sheet below sm. --%>
+            <div
+              :if={@can_create? and @create_open?}
+              phx-window-keydown="close_create"
+              phx-key="escape"
             >
-              <li
-                :for={{dom_id, row} <- @streams.accounts}
-                id={dom_id}
-                class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2"
-                data-role="social-account-row"
+              <button
+                type="button"
+                class="fixed inset-0 z-30 bg-base-content/40 sm:hidden"
+                phx-click="close_create"
+                aria-label="Close"
               >
-                <.account_row
-                  account={row.account}
-                  can_edit?={@can_edit?}
-                  can_connect?={@can_edit? and not @zernio_blocks_connect?}
-                />
-                <.remove_panel
-                  :if={@can_edit? and row.removal}
-                  account={row.account}
-                  preview={row.removal}
-                />
-              </li>
-            </ul>
-          </div>
-          <div class={[@tab != "settings" && "hidden"]} data-pane="settings">
-            <.notice_line notice={@notice} tone={@notice_tone} />
-            <.zernio_key
-              :if={@zernio_human?}
-              status={@zernio_status}
-              mode={@zernio_mode}
-              form={@zernio_form}
-              nonce={@zernio_nonce}
-            />
-            <.settings
-              profile={@profile}
-              form={@settings_form}
-              can_edit?={@can_edit?}
-              options={@settings_options}
-            />
-          </div>
-        </section>
-        <.post_detail :if={@detail} detail={@detail} />
-      <% else %>
-        <%= if @can_create? do %>
-          <div class="px-4 py-8 sm:px-6 sm:py-12">
-            <section
-              class="mx-auto max-w-xl rounded-xl border border-base-300 bg-base-100 p-4 sm:p-6"
-              data-role="social-create"
+              </button>
+              <div
+                id="social-create-panel"
+                class="fixed inset-x-0 bottom-0 z-40 max-h-[85vh] overflow-y-auto rounded-t-2xl border border-base-300 bg-base-100 p-4 sm:static sm:z-auto sm:mt-3 sm:max-w-xl sm:rounded-xl"
+                data-role="social-create-panel"
+              >
+                <div class="mb-3 flex items-center justify-between gap-2">
+                  <h2 class="text-lg font-semibold">New profile</h2>
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-sm btn-square"
+                    phx-click="close_create"
+                    aria-label="Close"
+                  >
+                    <.icon name="hero-x-mark" class="size-5" />
+                  </button>
+                </div>
+                <.create_form form={@create_form} orgs={@creatable_orgs} focus?={true} />
+              </div>
+            </div>
+
+            <nav
+              class="tabs tabs-border -mb-px mt-3 flex-nowrap overflow-x-auto whitespace-nowrap"
+              role="tablist"
+              aria-label="Social sections"
+              data-role="social-tabs"
             >
-              <h2 class="text-lg font-semibold" data-role="social-create-heading">
-                Set up your first social profile
-              </h2>
-              <p class="mt-1 mb-4 text-base-content" data-role="social-create-explanation">
-                A profile is a brand or person you post for. You'll be its first approver.
+              <button
+                :for={{key, label} <- tab_labels(@counts, @profile)}
+                type="button"
+                role="tab"
+                class={[
+                  "tab shrink-0",
+                  @tab == key && "tab-active"
+                ]}
+                aria-selected={to_string(@tab == key)}
+                phx-click="select_tab"
+                phx-value-tab={key}
+                data-role="social-tab-button"
+                data-tab={key}
+              >
+                {label}
+              </button>
+            </nav>
+          </header>
+
+          <section
+            class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
+            data-role="social-tab-body"
+            data-tab={@tab}
+          >
+            <%!-- Every pane stays in the DOM (hidden when inactive) so its
+               stream survives a tab change. --%>
+            <div class={[@tab != "queue" && "hidden"]} data-pane="queue">
+              <div
+                :if={@queue_refused? or @queue_filter}
+                role="group"
+                aria-label="Filter the queue"
+                class="mb-3 flex flex-wrap gap-2"
+                data-role="social-queue-filter"
+              >
+                <button
+                  :for={{key, label} <- queue_filter_labels()}
+                  type="button"
+                  phx-click="queue_filter"
+                  phx-value-filter={key}
+                  aria-pressed={to_string(@queue_filter == key)}
+                  data-role="social-queue-chip"
+                  data-filter={key}
+                  class={[
+                    "btn btn-sm rounded-full text-base-content",
+                    if(@queue_filter == key,
+                      do: "btn-active border-base-content",
+                      else: "btn-outline border-edge"
+                    )
+                  ]}
+                >
+                  {label}
+                </button>
+              </div>
+              <div :if={@queue_empty?} class="space-y-3">
+                <p class="text-base-content" data-role="social-empty">
+                  {empty_queue_copy(@profile, @accounts_empty?, @queue_filter)}
+                </p>
+                <button
+                  :if={@accounts_empty? and @queue_filter != "not_published"}
+                  type="button"
+                  class="btn btn-outline btn-sm"
+                  phx-click="select_tab"
+                  phx-value-tab="connections"
+                  data-role="social-go-connections"
+                >
+                  Go to Connections
+                </button>
+              </div>
+              <ul id="social-queue" phx-update="stream" class="space-y-3" data-role="social-queue">
+                <li :for={{dom_id, row} <- @streams.queue} id={dom_id} data-role="social-queue-row">
+                  <%= if row.card do %>
+                    <.live_component
+                      module={PlatformWeb.SocialCardComponent}
+                      id={"queue-card-" <> row.card.id}
+                      card_id={row.card.id}
+                      rev={row.rev}
+                      canvas_id={row.card.canvas_id}
+                      viewer={{:user, @user.id}}
+                    />
+                  <% else %>
+                    <p
+                      class="rounded-xl border border-base-300 bg-base-100 p-3 text-sm text-base-content"
+                      data-role="social-queue-waiting"
+                    >
+                      Waiting for its approval card.
+                    </p>
+                  <% end %>
+                </li>
+              </ul>
+            </div>
+            <div class={[@tab != "calendar" && "hidden"]} data-pane="calendar">
+              <.calendar
+                profile={@profile}
+                week_start={@week_start}
+                empty?={@calendar_empty?}
+                rows={@streams.calendar_rows}
+                agenda={@streams.agenda_days}
+              />
+            </div>
+            <div class={[@tab != "connections" && "hidden"]} data-pane="connections">
+              <.notice_line notice={@notice} tone={@notice_tone} />
+              <div
+                :if={@zernio_blocks_connect?}
+                role="status"
+                class="alert alert-warning mb-3 flex flex-wrap items-center justify-between gap-2 text-sm"
+                data-role="social-zernio-required"
+              >
+                <span class="inline-flex items-start gap-2">
+                  <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
+                  Add the Zernio API key in Settings before connecting accounts.
+                </span>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  phx-click="select_tab"
+                  phx-value-tab="settings"
+                  data-role="social-zernio-go-settings"
+                >
+                  Go to Settings
+                </button>
+              </div>
+              <p :if={@accounts_empty?} class="mb-3 text-base-content" data-role="social-empty">
+                No accounts connected for {@profile.name} yet
               </p>
-              <.create_form form={@create_form} orgs={@creatable_orgs} focus?={true} />
-            </section>
-          </div>
-        <% else %>
-          <div class="px-4 py-12 text-center sm:px-6">
-            <p class="text-base-content" data-role="social-no-profiles">
-              No social profiles yet. Ask an org member to set one up.
-            </p>
-          </div>
-        <% end %>
+              <div
+                :if={@can_edit? and not @zernio_blocks_connect? and @connectable_platforms != []}
+                class="mb-3 flex flex-wrap items-start gap-2"
+              >
+                <.add_account
+                  open?={@add_open?}
+                  form={@add_form}
+                  options={platform_options(@connectable_platforms)}
+                />
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  phx-click="open_invite"
+                  data-role="social-invite-open"
+                >
+                  Invite someone to connect
+                </button>
+              </div>
+              <ul
+                id="social-accounts"
+                phx-update="stream"
+                class="divide-y divide-base-300 rounded-lg border border-base-300 bg-base-100"
+                data-role="social-accounts"
+              >
+                <li
+                  :for={{dom_id, row} <- @streams.accounts}
+                  id={dom_id}
+                  class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2"
+                  data-role="social-account-row"
+                >
+                  <.account_row
+                    account={row.account}
+                    owner={row.owner}
+                    can_edit?={@can_edit?}
+                    can_connect?={@can_edit? and not @zernio_blocks_connect?}
+                  />
+                  <p
+                    :if={row.connect_error}
+                    role="alert"
+                    class="flex w-full basis-full items-start gap-2 text-sm text-error"
+                    data-role="social-account-connect-error"
+                  >
+                    <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
+                    <span>{row.connect_error}</span>
+                  </p>
+                  <.remove_panel
+                    :if={@can_edit? and row.removal}
+                    account={row.account}
+                    preview={row.removal}
+                  />
+                </li>
+              </ul>
+              <section
+                :if={@can_edit? and not @invites_empty?}
+                class="mt-4"
+                aria-labelledby="social-invites-heading"
+                data-role="social-invites"
+              >
+                <h3 id="social-invites-heading" class="mb-2 text-sm font-semibold">
+                  Pending invites
+                </h3>
+                <ul
+                  id="social-invite-rows"
+                  phx-update="stream"
+                  class="divide-y divide-base-300 rounded-lg border border-base-300 bg-base-100"
+                >
+                  <li
+                    :for={{dom_id, invite} <- @streams.invites}
+                    id={dom_id}
+                    class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2"
+                    data-role="social-invite-row"
+                  >
+                    <.invite_row invite={invite} />
+                  </li>
+                </ul>
+              </section>
+              <.invite_dialog
+                :if={@can_edit? and @invite_dialog}
+                dialog={@invite_dialog}
+                options={platform_options(@connectable_platforms)}
+              />
+            </div>
+            <div class={[@tab != "settings" && "hidden"]} data-pane="settings">
+              <.notice_line notice={@notice} tone={@notice_tone} />
+              <.zernio_key
+                :if={@zernio_human?}
+                status={@zernio_status}
+                mode={@zernio_mode}
+                form={@zernio_form}
+                nonce={@zernio_nonce}
+              />
+              <.settings
+                profile={@profile}
+                form={@settings_form}
+                can_edit?={@can_edit?}
+                options={@settings_options}
+              />
+            </div>
+          </section>
+          <.post_detail :if={@detail} detail={@detail} />
+        <% true -> %>
+          <%= if @can_create? do %>
+            <div class="px-4 py-8 sm:px-6 sm:py-12">
+              <section
+                class="mx-auto max-w-xl rounded-xl border border-base-300 bg-base-100 p-4 sm:p-6"
+                data-role="social-create"
+              >
+                <h2 class="text-lg font-semibold" data-role="social-create-heading">
+                  Set up your first social profile
+                </h2>
+                <p class="mt-1 mb-4 text-base-content" data-role="social-create-explanation">
+                  A profile is a brand or person you post for. You'll be its first approver.
+                </p>
+                <.create_form form={@create_form} orgs={@creatable_orgs} focus?={true} />
+              </section>
+            </div>
+          <% else %>
+            <div class="px-4 py-12 text-center sm:px-6">
+              <p class="text-base-content" data-role="social-no-profiles">
+                No social profiles yet. Ask an org member to set one up.
+              </p>
+            </div>
+          <% end %>
       <% end %>
     </div>
     """
@@ -1506,10 +2197,17 @@ defmodule PlatformWeb.SocialLive do
 
   # A profile with no accounts can do nothing, so its empty queue points at
   # Connections.
-  defp empty_queue_copy(profile, true),
+  defp empty_queue_copy(profile, _accounts_empty?, "not_published"),
+    do: "Every approved post on #{profile.name} went out."
+
+  defp empty_queue_copy(profile, true, _filter),
     do: "Nothing waiting for approval on #{profile.name}. Connect an account to start."
 
-  defp empty_queue_copy(profile, _), do: "Nothing waiting for approval on #{profile.name}."
+  defp empty_queue_copy(profile, _accounts_empty?, _filter),
+    do: "Nothing waiting for approval on #{profile.name}."
+
+  defp queue_filter_labels,
+    do: [{"needs_approval", "Needs approval"}, {"not_published", "Not published"}]
 
   defp tab_labels(counts, profile) do
     [
@@ -1548,7 +2246,7 @@ defmodule PlatformWeb.SocialLive do
 
   defp add_account(assigns) do
     ~H"""
-    <div class="mb-3" data-role="social-add-account-control">
+    <div data-role="social-add-account-control">
       <button
         :if={!@open?}
         type="button"
@@ -1597,6 +2295,7 @@ defmodule PlatformWeb.SocialLive do
   @mode_labels %{"approve_first" => "Approve first", "draft_only" => "Draft-only"}
 
   attr :account, :map, required: true
+  attr :owner, :map, default: nil
   attr :can_edit?, :boolean, required: true
   attr :can_connect?, :boolean, required: true
 
@@ -1604,12 +2303,34 @@ defmodule PlatformWeb.SocialLive do
     assigns = assign(assigns, :mode_labels, @mode_labels)
 
     ~H"""
-    <span class="flex min-w-0 basis-full items-center gap-3 sm:flex-1 sm:basis-auto">
+    <span class="flex min-w-0 basis-full flex-wrap items-center gap-x-3 gap-y-1 sm:flex-1 sm:basis-auto sm:flex-nowrap">
       <span class="w-20 shrink-0 whitespace-nowrap font-mono text-xs uppercase">
         {@account.platform}
       </span>
-      <span class="min-w-0 flex-1 truncate text-sm" data-role="social-account-handle">
+      <span
+        class={[
+          "text-sm",
+          if(@owner,
+            do: "min-w-0 flex-1 truncate sm:max-w-[60%] sm:flex-none sm:shrink-0",
+            else: "min-w-0 flex-1 truncate"
+          )
+        ]}
+        data-role="social-account-handle"
+      >
         {@account.handle}
+      </span>
+      <%!-- The owner line (pill-on-exception): only owned accounts carry
+           it. The account name keeps its width; the owner gives up space. --%>
+      <span
+        :if={@owner}
+        class="flex min-w-0 basis-full items-center gap-1.5 pl-[5.75rem] text-sm text-base-content sm:flex-1 sm:basis-auto sm:pl-0"
+        data-role="social-account-owner"
+      >
+        <span class="grid size-5 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral text-[10px] text-neutral-content">
+          <img :if={@owner.avatar_url} src={@owner.avatar_url} alt="" class="size-5 object-cover" />
+          <span :if={!@owner.avatar_url}>{initial(@owner.name)}</span>
+        </span>
+        <span class="min-w-0 truncate">Owner: {@owner.name}</span>
       </span>
     </span>
     <%= if @can_edit? do %>
@@ -1687,6 +2408,328 @@ defmodule PlatformWeb.SocialLive do
     >
       Remove
     </button>
+    """
+  end
+
+  attr :platform, :string, required: true
+  attr :class, :string, default: "size-4"
+
+  # LinkedIn's mark in currentColor (base-content, never brand blue); other
+  # platforms get a generic globe.
+  defp platform_icon(%{platform: "linkedin"} = assigns) do
+    ~H"""
+    <svg viewBox="0 0 24 24" class={["shrink-0 fill-current", @class]} aria-hidden="true">
+      <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z" />
+    </svg>
+    """
+  end
+
+  defp platform_icon(assigns) do
+    ~H"""
+    <.icon name="hero-globe-alt" class={"shrink-0 " <> @class} />
+    """
+  end
+
+  attr :invite, :map, required: true
+
+  # A pending invite row. There is no Copy link here: only the token's
+  # sha256 is stored, so the link exists once, in the dialog that made it.
+  defp invite_row(assigns) do
+    ~H"""
+    <span class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+      <.platform_icon platform={@invite.platform} />
+      <span class="shrink-0 text-sm">Invite for {platform_label(@invite.platform)}</span>
+      <span
+        class={[
+          "whitespace-nowrap text-sm",
+          if(@invite.expiring?, do: "text-warning", else: "text-base-content")
+        ]}
+        data-role="social-invite-expiry"
+        data-expiring={to_string(@invite.expiring?)}
+      >
+        Expires {@invite.expires_on}
+      </span>
+    </span>
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm shrink-0"
+      phx-click="cancel_invite"
+      phx-value-id={@invite.id}
+      data-confirm="Cancel this invite? The link stops working."
+      data-role="social-invite-cancel"
+    >
+      Cancel
+    </button>
+    """
+  end
+
+  attr :dialog, :map, required: true
+  attr :options, :list, required: true
+
+  # A dialog from sm up, a bottom sheet below (daisy modal-bottom).
+  defp invite_dialog(assigns) do
+    ~H"""
+    <div
+      class="modal modal-open modal-bottom sm:modal-middle"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="social-invite-title"
+      phx-window-keydown="close_invite"
+      phx-key="escape"
+      data-role="social-invite-dialog"
+      data-step={@dialog.step}
+    >
+      <div class="modal-box border border-base-300 bg-base-100">
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <h2 id="social-invite-title" class="text-lg font-semibold">
+            Invite someone to connect
+          </h2>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm btn-square"
+            phx-click="close_invite"
+            aria-label="Close"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+        <%= if @dialog.step == :form do %>
+          <p class="mb-3 text-sm text-base-content">
+            They connect their own account and approve every post under their name.
+          </p>
+          <.form
+            for={@dialog.form}
+            id="social-invite-form"
+            phx-submit="create_invite"
+            class="space-y-1"
+            data-role="social-invite-form"
+          >
+            <.input
+              field={@dialog.form[:platform]}
+              type="select"
+              label="Platform"
+              options={@options}
+              data-role="social-invite-platform"
+            />
+            <.input
+              field={@dialog.form[:ttl_days]}
+              type="select"
+              label="Link expires after"
+              options={ttl_options()}
+              data-role="social-invite-ttl"
+            />
+            <div class="modal-action mt-3">
+              <button type="button" class="btn btn-ghost" phx-click="close_invite">Cancel</button>
+              <button
+                type="submit"
+                class="btn btn-secondary"
+                phx-disable-with="Creating..."
+                data-role="social-invite-create"
+              >
+                Create link
+              </button>
+            </div>
+          </.form>
+        <% else %>
+          <label for="social-invite-url" class="label mb-1 text-sm font-medium">Invite link</label>
+          <div class="flex gap-2">
+            <input
+              id="social-invite-url"
+              type="text"
+              readonly
+              value={@dialog.url}
+              class="input min-w-0 flex-1 font-mono text-sm"
+              data-role="social-invite-url"
+            />
+            <button
+              id="social-invite-copy"
+              type="button"
+              class="btn btn-secondary"
+              phx-hook="CopyToClipboard"
+              data-clipboard-text={@dialog.url}
+              data-role="social-invite-copy"
+            >
+              Copy
+            </button>
+          </div>
+          <p class="mt-2 text-sm text-base-content" data-role="social-invite-terms">
+            Single use. Works for a signed-in Burrow user. Expires {@dialog.expires_on}.
+          </p>
+          <div class="modal-action mt-3">
+            <button type="button" class="btn btn-ghost" phx-click="close_invite">Done</button>
+          </div>
+        <% end %>
+      </div>
+      <button type="button" class="modal-backdrop" phx-click="close_invite" aria-label="Close">
+      </button>
+    </div>
+    """
+  end
+
+  attr :landing, :map, required: true
+
+  # The invitee landing page: ONE base-100 card on base-200, rendered
+  # instead of the profile UI. Continue / Try again are the only actions,
+  # and they exist only in the :ready / :failed states.
+  defp invite_landing(assigns) do
+    ~H"""
+    <div class="flex min-h-full flex-1 items-start justify-center bg-base-200 px-4 py-8 sm:items-center sm:py-12">
+      <section
+        class="w-full max-w-md rounded-2xl border border-base-300 bg-base-100 p-6 sm:p-8"
+        data-role="social-invite-landing"
+        data-state={@landing.state}
+      >
+        <%= case @landing.state do %>
+          <% :checking -> %>
+            <p class="text-base-content">Checking your connection...</p>
+          <% :signed_out -> %>
+            <h1 class="text-2xl font-semibold">You've been invited to connect an account</h1>
+            <p class="mt-2 text-base-content">Sign in to Burrow to see who invited you.</p>
+            <a
+              href="/auth/login"
+              class="btn btn-primary mt-6 w-full"
+              data-role="social-invite-sign-in"
+            >
+              Sign in to continue
+            </a>
+          <% :invalid -> %>
+            <p class="text-base-content" data-role="social-invite-message">{@landing.message}</p>
+          <% state -> %>
+            <.landing_brand brand={@landing.brand} />
+            <.landing_body landing={@landing} state={state} />
+        <% end %>
+      </section>
+    </div>
+    """
+  end
+
+  attr :brand, :string, required: true
+
+  defp landing_brand(assigns) do
+    ~H"""
+    <div class="avatar avatar-placeholder mb-4">
+      <div class="size-12 rounded-xl bg-neutral text-neutral-content">
+        <span class="text-lg font-semibold">{initial(@brand)}</span>
+      </div>
+    </div>
+    """
+  end
+
+  attr :landing, :map, required: true
+  attr :state, :atom, required: true
+
+  defp landing_body(%{state: :ready} = assigns) do
+    ~H"""
+    <h1 class="text-2xl font-semibold" data-role="social-invite-headline">
+      Connect your {@landing.platform} to {@landing.brand}
+    </h1>
+    <p class="mt-1 text-sm text-base-content" data-role="social-invite-meta">
+      {@landing.inviter} invited you. Link expires {@landing.expires_on}.
+    </p>
+    <ul class="mt-5 list-disc space-y-2 pl-5">
+      <li>Agents can draft posts for your {@landing.platform} account.</li>
+      <li class="font-semibold">Nothing posts until you approve it. Drafts arrive in your DM.</li>
+      <li>You can disconnect any time from Connections.</li>
+    </ul>
+    <.landing_error error={@landing.error} />
+    <div class="mt-6 flex flex-col gap-2">
+      <button
+        type="button"
+        class="btn btn-primary w-full"
+        phx-click="invite_continue"
+        phx-disable-with="Opening LinkedIn..."
+        data-role="social-invite-continue"
+      >
+        <.platform_icon platform="linkedin" class="size-4 text-base-content" />
+        Continue to {@landing.platform}
+      </button>
+      <a href="/" class="btn btn-ghost w-full" data-role="social-invite-not-now">Not now</a>
+    </div>
+    """
+  end
+
+  defp landing_body(%{state: :expired} = assigns) do
+    ~H"""
+    <div role="status" class="alert alert-warning" data-role="social-invite-message">
+      <.icon name="hero-clock" class="size-5 shrink-0" />
+      <span>
+        This invite expired on {@landing.expires_on}. Ask {@landing.inviter} for a new one.
+      </span>
+    </div>
+    """
+  end
+
+  defp landing_body(%{state: :cancelled} = assigns) do
+    ~H"""
+    <p class="text-base-content" data-role="social-invite-message">
+      This invite was cancelled. Ask {@landing.inviter} for a new one.
+    </p>
+    """
+  end
+
+  defp landing_body(%{state: :used} = assigns) do
+    ~H"""
+    <p class="text-base-content" data-role="social-invite-message">
+      This invite was already used.
+    </p>
+    <a
+      :if={@landing.viewer_used?}
+      href={"/m/social?" <> URI.encode_query(%{"tab" => "connections", "profile" => @landing.profile_id})}
+      class="link mt-3 inline-block"
+      data-role="social-invite-account-link"
+    >
+      See your connected account
+    </a>
+    """
+  end
+
+  defp landing_body(%{state: :success} = assigns) do
+    ~H"""
+    <p class="text-base-content" data-role="social-invite-message">
+      Your {@landing.platform} is connected to {@landing.brand}. Drafts will come to your DM.
+    </p>
+    <a
+      :if={@landing.dm_path}
+      href={@landing.dm_path}
+      class="btn btn-primary mt-6 w-full"
+      data-role="social-invite-dm-link"
+    >
+      Open your DM
+    </a>
+    """
+  end
+
+  defp landing_body(%{state: :failed} = assigns) do
+    ~H"""
+    <p class="text-base-content" data-role="social-invite-message">
+      {@landing.platform} didn't finish connecting, so nothing changed. Your invite still works until {@landing.expires_on}.
+    </p>
+    <.landing_error error={@landing.error} />
+    <button
+      type="button"
+      class="btn btn-primary mt-6 w-full"
+      phx-click="invite_retry"
+      phx-disable-with="Opening LinkedIn..."
+      data-role="social-invite-retry"
+    >
+      Try again
+    </button>
+    """
+  end
+
+  attr :error, :string, default: nil
+
+  defp landing_error(assigns) do
+    ~H"""
+    <p
+      :if={@error}
+      role="alert"
+      class="mt-4 flex items-center gap-1.5 text-sm text-base-content"
+      data-role="social-invite-error"
+    >
+      <.icon name="hero-exclamation-circle" class="size-4 shrink-0 text-error" />
+      {@error}
+    </p>
     """
   end
 

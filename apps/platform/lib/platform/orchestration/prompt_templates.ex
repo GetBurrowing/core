@@ -1081,7 +1081,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   Block grammar:
 
   ```
-  <synthesis-insight action="page_edit|briefing|question|task" confidence="high|medium|low" evidence="<short pointer(s) to the material you read>" source="<one grounding ref>" addressee="<who should see it, optional>" target="<page path, for page_edit>">
+  <synthesis-insight action="page_edit|briefing|question|task" confidence="high|medium|low" evidence="<short pointer(s) to the material you read>" source="<one grounding ref>" addressee="<who should see it, optional>" target="<page path, for page_edit; project uuid, for task>">
   <body — what should happen and why, standing on its own>
   </synthesis-insight>
   ```
@@ -1091,7 +1091,9 @@ defmodule Platform.Orchestration.PromptTemplates do
   - `page_edit` — a page is wrong or out of date and you know the correction. Set `target` to the page path, and put at least one hunk in the body: `<old>exact text now on the page</old><new>replacement text</new>`. A `page_edit` with no hunk is dropped. Say what changed and where you saw it.
   - `briefing` — something a person should know today: a recurring theme, a pattern converging across projects, a risk that is compounding, a decision that shifts direction. One or two sentences, no action asked of the reader.
   - `question` — a genuine open loop that no journal entry or page answers. Ask it so a single person can answer it; name the addressee when you can tell who holds the answer.
-  - `task` — concrete work someone should pick up. State the outcome, not the steps.
+  - `task` — concrete work someone should pick up. State the outcome, not the steps. Set `target` to the uuid of the project the work belongs to, taken from where it was discussed (a `project/<uuid>/journal` path, the cited task's project, the space's project). Omit it only when no project is named or implied.
+
+  To propose a message to someone outside the org, set `addressee` to their email address and write the body as the message itself; Burrow saves it as an email draft and never sends it.
 
   `confidence` is required. Use `high` only when the material states the fact outright; `medium` when you are joining two sources; `low` when it is a hunch worth raising.
 

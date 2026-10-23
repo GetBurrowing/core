@@ -5,8 +5,13 @@ defmodule Platform.Social.Account do
   **There is no secret field**, following `Platform.Mail.Account`: the
   platform credential lives in the Vault at scope `{:integration,
   account.id}`, and `secret_slug` only names it (`"social:<account_id>"`).
-  `Platform.Social` sets the slug, `profile_id` and `archived_at`; none of
-  them is ever cast from attrs.
+  `Platform.Social` sets the slug, `profile_id`, `archived_at` and
+  `owner_user_id`; none of them is ever cast from attrs.
+
+  `owner_user_id` (task 01a14ce1) is the person the account posts as. When
+  it is set, only that user may approve, edit or reject the account's posts
+  (`Platform.Social.post_approver_check/4`); when nil, the profile's
+  approvers may, as before.
 
   `approval_mode` defaults to `approve_first` (the column default too), so an
   account created without one never publishes unreviewed.
@@ -38,6 +43,8 @@ defmodule Platform.Social.Account do
     field(:archived_at, :utc_datetime_usec)
     # Social 2/7: Instagram Reels need business or creator.
     field(:platform_account_type, :string)
+    # Task 01a14ce1: set by `Platform.Social.set_account_owner/3`, never cast.
+    belongs_to(:owner_user, Platform.Accounts.User)
 
     has_many(:posts, Platform.Social.Post)
 
@@ -65,8 +72,9 @@ defmodule Platform.Social.Account do
   def statuses, do: @statuses
 
   @doc """
-  Changeset for the editable fields. `profile_id`, `secret_slug` and
-  `archived_at` are set by `Platform.Social`, never cast from attrs.
+  Changeset for the editable fields. `profile_id`, `secret_slug`,
+  `archived_at` and `owner_user_id` are set by `Platform.Social`, never cast
+  from attrs.
   """
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(%__MODULE__{} = account, attrs) do
@@ -85,5 +93,16 @@ defmodule Platform.Social.Account do
     |> check_constraint(:approval_mode, name: :social_accounts_approval_mode_check)
     |> check_constraint(:status, name: :social_accounts_status_check)
     |> foreign_key_constraint(:profile_id)
+  end
+
+  @doc """
+  Sets (or clears, with nil) `owner_user_id`. Only `Platform.Social` calls
+  this; the field is never in `changeset/2`'s cast list.
+  """
+  @spec owner_changeset(t(), Ecto.UUID.t() | nil) :: Ecto.Changeset.t()
+  def owner_changeset(%__MODULE__{} = account, owner_user_id) do
+    account
+    |> change(owner_user_id: owner_user_id)
+    |> foreign_key_constraint(:owner_user_id)
   end
 end

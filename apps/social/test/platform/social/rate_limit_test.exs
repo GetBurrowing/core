@@ -45,4 +45,21 @@ defmodule Platform.Social.RateLimitTest do
     assert {:error, :rate_limited} = RateLimit.check("acct-d", now + 3_599_999)
     assert :ok = RateLimit.check("acct-d", now + 3_600_000)
   end
+
+  test "window_ends_at is the start of the next window, from the same settings" do
+    limit(3, 60_000)
+    start = 1_000_020_000 - rem(1_000_020_000, 60_000)
+
+    assert RateLimit.window_ends_at(start) == start + 60_000
+    assert RateLimit.window_ends_at(start + 59_999) == start + 60_000
+    assert RateLimit.window_ends_at(start + 60_000) == start + 120_000
+
+    # The window check/2 refuses in ends exactly there: the next call passes.
+    for _ <- 1..3, do: assert(:ok = RateLimit.check("acct-e", start + 10))
+    assert {:error, :rate_limited} = RateLimit.check("acct-e", start + 59_999)
+    assert :ok = RateLimit.check("acct-e", RateLimit.window_ends_at(start + 10))
+
+    Application.delete_env(:social, :rate_limit)
+    assert RateLimit.window_ends_at(3_600_000 * 7 + 5) == 3_600_000 * 8
+  end
 end

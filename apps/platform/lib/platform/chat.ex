@@ -2313,6 +2313,191 @@ defmodule Platform.Chat do
     end
   end
 
+  @max_existing_attachment_ids 10
+
+  @doc """
+  Post a message carrying attachments that ALREADY exist, by id (task
+  01a1655c stage 1). The plural, id-based sibling of
+  `post_message_with_existing_attachment/3`: same guards
+  (`ensure_space_writable`, `ensure_dm_send_allowed`,
+  `ensure_external_upload_allowed`), same post-commit path, one transaction.
+  One bad id posts nothing.
+
+  Each id must be a valid UUID, exist, live in the message's own space, pass
+  `attachment_access_check/2` for the poster's access scope (`opts[:access_scope]`,
+  else the scope of `opts[:poster_user_id]`, else none), and be `ready`. A
+  missing row, a row in another space and a denied row all answer
+  `{:error, {:attachment_not_found, id}}`, the same shape, so the answer
+  confirms nothing about ids the poster cannot see. Only a `pending` row in
+  the same space (and readable) answers `{:error, {:attachment_not_ready, id}}`.
+
+  The uploader is deliberately NOT required to be the poster. Upload dedup
+  (`ToolHandlers.finalize_or_dedup`) can hand back a canonical id that
+  someone else uploaded in the same space, and every member of that space
+  can already read the row, so tying it to the uploader would refuse the id
+  the upload itself just returned while protecting nothing.
+
+  Linking: a row with no message and no canvas is linked in place, by the
+  same conditional `update_all` the single-row function uses. A row that is
+  already on another message, or bound to a canvas, is left alone and a NEW
+  reference row (same storage key, content hash, filename, type, size,
+  metadata and uploader) is inserted for this message, so no row is ever on
+  two messages and a canvas keeps its own row. Duplicate ids collapse to
+  one; more than #{@max_existing_attachment_ids} distinct ids is
+  `{:error, :too_many_attachments}`. The message is stamped
+  `metadata["attachments_linked_by_id"] => true`.
+  """
+  @spec post_message_with_existing_attachments(map(), [binary()], keyword()) ::
+          {:ok, Message.t(), [Attachment.t()]}
+          | {:error,
+             :space_archived
+             | :dm_not_allowed
+             | :out_of_external_scope
+             | :no_attachments
+             | :too_many_attachments
+             | {:attachment_not_found, term()}
+             | {:attachment_not_ready, binary()}
+             | term()}
+  def post_message_with_existing_attachments(attrs, attachment_ids, opts \\ [])
+
+  def post_message_with_existing_attachments(attrs, attachment_ids, opts)
+      when is_list(attachment_ids) do
+    ids = Enum.uniq(attachment_ids)
+    space_id = attrs[:space_id]
+    participant_id = attrs[:participant_id]
+    poster_user_id = Keyword.get(opts, :poster_user_id)
+
+    with :ok <- check_existing_attachment_count(ids),
+         :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
+      scope = existing_attachment_scope(opts, poster_user_id)
+
+      attrs =
+        attrs
+        |> put_author_snapshot(:participant_id, :author)
+        |> Map.update(
+          :metadata,
+          %{"attachments_linked_by_id" => true},
+          &Map.put(&1 || %{}, "attachments_linked_by_id", true)
+        )
+
+      Multi.new()
+      |> Multi.run(:rows, fn repo, _ ->
+        resolve_existing_attachments(repo, ids, space_id, scope)
+      end)
+      |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:v1_version, fn _repo, %{message: message} ->
+        {:ok, MessageVersions.record_v1!(message)}
+      end)
+      |> Multi.run(:attachments, fn repo, %{message: message, rows: rows} ->
+        link_existing_attachments(repo, rows, message)
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{message: message, attachments: linked}} ->
+          message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
+          emit_inbox_for_mentions(message)
+          publish_message_posted(message, opts)
+          {:ok, message, linked}
+
+        {:error, _operation, reason, _changes_so_far} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def post_message_with_existing_attachments(_attrs, _attachment_ids, _opts),
+    do: {:error, :no_attachments}
+
+  defp check_existing_attachment_count([]), do: {:error, :no_attachments}
+
+  defp check_existing_attachment_count(ids) when length(ids) > @max_existing_attachment_ids,
+    do: {:error, :too_many_attachments}
+
+  defp check_existing_attachment_count(_ids), do: :ok
+
+  defp existing_attachment_scope(opts, poster_user_id) do
+    case Keyword.get(opts, :access_scope) do
+      %Platform.Access.Scope{} = scope -> scope
+      _ when is_binary(poster_user_id) -> Platform.Access.Scope.for_user(%{id: poster_user_id})
+      _ -> nil
+    end
+  end
+
+  # Locks each row for the transaction so a concurrent link cannot slip in
+  # between the check and the link.
+  defp resolve_existing_attachments(repo, ids, space_id, scope) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case resolve_existing_attachment(repo, id, space_id, scope) do
+        {:ok, row} -> {:cont, {:ok, [row | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      error -> error
+    end
+  end
+
+  defp resolve_existing_attachment(repo, id, space_id, scope) do
+    row =
+      if is_binary(id) and Platform.UUID.valid?(id),
+        do: repo.one(from(a in Attachment, where: a.id == ^id, lock: "FOR UPDATE"))
+
+    cond do
+      is_nil(row) -> {:error, {:attachment_not_found, id}}
+      is_nil(space_id) or row.space_id != space_id -> {:error, {:attachment_not_found, id}}
+      attachment_access_check(row, scope) != :ok -> {:error, {:attachment_not_found, id}}
+      row.state != "ready" -> {:error, {:attachment_not_ready, id}}
+      true -> {:ok, row}
+    end
+  end
+
+  defp link_existing_attachments(repo, rows, message) do
+    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
+      case link_existing_attachment(repo, row, message) do
+        {:ok, linked} -> {:cont, {:ok, [linked | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, linked} -> {:ok, Enum.reverse(linked)}
+      error -> error
+    end
+  end
+
+  defp link_existing_attachment(repo, %Attachment{message_id: nil, canvas_id: nil} = row, message) do
+    from(a in Attachment,
+      where:
+        a.id == ^row.id and is_nil(a.message_id) and is_nil(a.canvas_id) and a.state == "ready",
+      select: a
+    )
+    |> repo.update_all(set: [message_id: message.id])
+    |> case do
+      {1, [linked]} -> {:ok, linked}
+      _ -> {:error, :attachment_not_linkable}
+    end
+  end
+
+  defp link_existing_attachment(repo, %Attachment{} = row, message) do
+    %Attachment{}
+    |> Attachment.changeset(%{
+      space_id: row.space_id,
+      message_id: message.id,
+      filename: row.filename,
+      content_type: row.content_type,
+      byte_size: row.byte_size,
+      storage_key: row.storage_key,
+      content_hash: row.content_hash,
+      metadata: row.metadata,
+      uploaded_by_user_id: row.uploaded_by_user_id,
+      uploaded_by_agent_id: row.uploaded_by_agent_id,
+      state: "ready"
+    })
+    |> repo.insert()
+  end
+
   @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 

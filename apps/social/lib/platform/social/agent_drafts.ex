@@ -85,8 +85,8 @@ defmodule Platform.Social.AgentDrafts do
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
          :ok <- check_task_profile(attrs, profile),
-         :ok <- Social.require_channel(status, profile),
-         {:ok, accounts} <- fetch_accounts(scope, profile, account_ids) do
+         {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
+         :ok <- require_channels(status, profile, accounts) do
       attrs = Map.put(attrs, "status", status)
 
       Repo.transaction(fn ->
@@ -124,6 +124,17 @@ defmodule Platform.Social.AgentDrafts do
   end
 
   defp after_commit(other), do: other
+
+  # Task 01a14ce1 stage 3: each account's card has somewhere to go (an owned
+  # account's owner DM, or the profile's channel).
+  defp require_channels(status, profile, accounts) do
+    Enum.find_value(accounts, :ok, fn account ->
+      case Social.require_channel(status, profile, account) do
+        :ok -> nil
+        error -> error
+      end
+    end)
+  end
 
   defp task_hook(%Post{id: id}), do: Platform.Social.TaskBridge.post_changed(id)
 
@@ -205,7 +216,8 @@ defmodule Platform.Social.AgentDrafts do
              profile = profile_of(locked),
              :ok <- check_task_profile(attrs, profile),
              changeset = agent_changeset(locked, attrs, profile),
-             :ok <- Social.require_channel(changeset, profile),
+             :ok <-
+               Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
              {:ok, updated} <- Repo.update(changeset) do
           updated
         else

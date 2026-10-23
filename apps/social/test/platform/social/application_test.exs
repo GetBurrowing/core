@@ -21,6 +21,7 @@ defmodule Platform.Social.ApplicationTest do
     assert ids == [Platform.Social.Publisher.Fake, Platform.Social.RateLimit]
     refute Platform.Social.RenderQueue in ids
     refute Platform.Social.RenderTaskSupervisor in ids
+    refute Platform.Social.PublishRetry in ids
   end
 
   test ":full keeps today's children in today's order" do
@@ -28,7 +29,8 @@ defmodule Platform.Social.ApplicationTest do
              Platform.Social.Publisher.Fake,
              Platform.Social.RateLimit,
              Platform.Social.RenderTaskSupervisor,
-             Platform.Social.RenderQueue
+             Platform.Social.RenderQueue,
+             Platform.Social.PublishRetry
            ]
   end
 end

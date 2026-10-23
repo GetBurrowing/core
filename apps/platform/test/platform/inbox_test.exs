@@ -1036,8 +1036,208 @@ defmodule Platform.InboxTest do
                "lifecycle_step_failed"
              ]
 
-      assert Inbox.action_kinds() == ["task_plan_review", "review_request_pending"]
-      assert Inbox.action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
+      assert Inbox.action_kinds() == ["task_plan_review", "review_request_pending", "briefing"]
+      assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
+    end
+
+    # Task 01a15ee1 stage 1: a briefing stays listed when opened, but it is
+    # not an approval, so Mobile (core_action_kinds) never sees it.
+    test "briefing is listed on open but is not a core (Mobile approval) action kind" do
+      assert "briefing" in Inbox.action_kinds()
+      refute "briefing" in Inbox.core_action_kinds()
+      refute "briefing" in Platform.Mobile.AppEntities.approval_kinds()
+    end
+  end
+
+  # ── Task 01a15ee1 stage 1: the daily briefing row ──────────────────────
+
+  describe "upsert_briefing_item/2 and the briefing kind" do
+    alias Platform.Memory.Briefing
+
+    defp briefing!(user, date \\ ~D[2026-10-21], items \\ %{"k1" => Ecto.UUID.generate()}) do
+      %Briefing{}
+      |> Briefing.changeset(%{user_id: user.id, digest_date: date, items: items})
+      |> Repo.insert!()
+    end
+
+    defp briefing_rows(user),
+      do: Repo.all(from(i in Item, where: i.user_id == ^user.id and i.kind == "briefing"))
+
+    test "inserts the day's row once, then updates the SAME row" do
+      user = insert_user()
+      user_id = user.id
+      briefing = briefing!(user)
+      :ok = Inbox.subscribe(user.id)
+
+      assert {:ok, %Item{} = item, :created} =
+               Inbox.upsert_briefing_item(briefing, %{total: 1, calls: 1})
+
+      assert item.kind == "briefing"
+      assert item.source_type == "briefing"
+      assert item.source_id == briefing.id
+      assert item.title == "Today's briefing"
+      assert item.body == "1 item · 1 needs your call"
+      assert item.url == "/inbox/briefing/2026-10-21"
+      assert_receive {:inbox_changed, ^user_id}
+
+      {:ok, _} = Inbox.open_item(item.id, user.id)
+
+      assert {:ok, %Item{id: id, read_at: nil, body: "3 items · 2 need your call"}, :updated} =
+               Inbox.upsert_briefing_item(briefing, %{total: 3, calls: 2})
+
+      assert id == item.id
+      assert [_one] = briefing_rows(user)
+
+      # No new items: the text refreshes, the read stays.
+      {:ok, _} = Inbox.open_item(item.id, user.id)
+
+      assert {:ok, %Item{read_at: %DateTime{}}, :updated} =
+               Inbox.upsert_briefing_item(briefing, %{total: 3, calls: 0, new_items?: false})
+
+      assert [%Item{body: "3 items · FYI only"}] = briefing_rows(user)
+    end
+
+    test "open_item/2 on a briefing row stamps read_at and leaves it listed" do
+      user = insert_user()
+      {:ok, item, :created} = Inbox.upsert_briefing_item(briefing!(user), %{})
+
+      assert {:ok, %Item{read_at: %DateTime{}, dismissed_at: nil}} =
+               Inbox.open_item(item.id, user.id)
+
+      assert [%Item{id: id}] = user.id |> Inbox.unread_scope() |> Repo.all()
+      assert id == item.id
+      assert Inbox.unread_count(user.id) == 0
+    end
+
+    test "another user's briefing row is never listed for you" do
+      owner = insert_user()
+      other = insert_user()
+      {:ok, item, :created} = Inbox.upsert_briefing_item(briefing!(owner), %{})
+
+      assert other.id |> Inbox.unread_scope() |> Repo.all() == []
+      assert {:error, :not_found} = Inbox.open_item(item.id, other.id)
+    end
+  end
+
+  describe "reconcile_for_user/1 — briefing (ADR 0049)" do
+    alias Platform.Memory.Briefing
+    alias Platform.Memory.Insight
+    alias Platform.Memory.Insights.Disseminator
+
+    defp today, do: Disseminator.local_date(DateTime.utc_now())
+
+    defp insight_row!(state) do
+      n = System.unique_integer([:positive])
+
+      %Insight{}
+      |> Insight.changeset(%{
+        journal_path: "org/journal/2026-10-21.md",
+        block_hash: "hash-#{n}",
+        run_id: Ecto.UUID.generate(),
+        action_type: "briefing",
+        confidence: "high",
+        body: "Line #{n}.",
+        state: state
+      })
+      |> Repo.insert!()
+    end
+
+    defp briefing_with!(user, date, insights, receipts \\ %{}) do
+      items = Map.new(insights, &{"k-" <> &1.id, &1.id})
+
+      briefing =
+        %Briefing{}
+        |> Briefing.changeset(%{
+          user_id: user.id,
+          digest_date: date,
+          items: items,
+          receipts: receipts
+        })
+        |> Repo.insert!()
+
+      {:ok, item, :created} = Inbox.upsert_briefing_item(briefing, %{})
+      {briefing, item}
+    end
+
+    defp listed?(user, item),
+      do: Enum.any?(Inbox.unread_scope(user.id) |> Repo.all(), &(&1.id == item.id))
+
+    test "today's briefing with an unhandled item is NOT stale (control)" do
+      user = insert_user()
+      handled = insight_row!("done")
+      open = insight_row!("open")
+      {_briefing, item} = briefing_with!(user, today(), [handled, open])
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      assert listed?(user, item)
+    end
+
+    # Stage 6 reversed stage 1 here: stage 1 cleared the row once every item
+    # was handled; the prototype inventory keeps it listed for the day as
+    # "All done · nothing waiting", so all-handled is NOT stale.
+    test "NOT stale once every item is handled: the row stays listed for the day" do
+      user = insert_user()
+      done = insight_row!("done")
+      dismissed = insight_row!("dismissed")
+      receipted = insight_row!("open")
+      receipts = %{("k-" <> receipted.id) => %{"verb" => "answer"}}
+
+      {briefing, item} =
+        briefing_with!(user, today(), [done, dismissed, receipted], receipts)
+
+      refute Platform.Memory.Insights.Briefings.inbox_row_stale?(briefing.id)
+      refute Platform.Memory.Insights.Briefings.open_item?(briefing)
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      assert listed?(user, item)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+    end
+
+    test "an all-handled briefing past the TTL is still stale (the age rule is kept)" do
+      user = insert_user()
+      ttl = Insight.default_ttl_days()
+      done = insight_row!("done")
+      {briefing, item} = briefing_with!(user, Date.add(today(), -(ttl + 1)), [done])
+
+      assert Platform.Memory.Insights.Briefings.inbox_row_stale?(briefing.id)
+      :ok = Inbox.reconcile_for_user(user.id)
+      refute listed?(user, item)
+    end
+
+    test "relist_briefing_item/1 clears dismissed_at on that briefing's row only" do
+      user = insert_user()
+      {briefing, item} = briefing_with!(user, today(), [insight_row!("open")])
+      {_other, other} = briefing_with!(user, Date.add(today(), -1), [insight_row!("open")])
+      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+      {:ok, _} = Inbox.mark_dismissed(other.id, user.id)
+
+      assert :ok = Inbox.relist_briefing_item(briefing)
+      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, other.id)
+    end
+
+    test "stale once digest_date is older than the insight TTL, whatever its items" do
+      user = insert_user()
+      ttl = Insight.default_ttl_days()
+      open = insight_row!("open")
+
+      {_b, old} = briefing_with!(user, Date.add(today(), -(ttl + 1)), [open])
+      {_b, edge} = briefing_with!(user, Date.add(today(), -ttl), [insight_row!("open")])
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      refute listed?(user, old)
+      # Exactly TTL days old is not yet past it.
+      assert listed?(user, edge)
+    end
+
+    test "a purged item with no receipt is NOT confirmation" do
+      user = insert_user()
+      gone = insight_row!("done")
+      {_briefing, item} = briefing_with!(user, today(), [gone])
+      Repo.delete!(gone)
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      assert listed?(user, item)
     end
   end
 

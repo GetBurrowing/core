@@ -34,13 +34,17 @@ defmodule Platform.Inbox.Item do
   # fails the task has moved on and that result is history — so without a
   # durable row of its own the failure would be a log line nobody reads. See
   # `Platform.Lifecycle.Executor.settle_detached/2`.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed)
+  # `briefing` (task 01a15ee1-48c8-7000-a8f1-33a5586cb458 stage 1) is the
+  # day's insight briefing: ONE row per person per `digest_date`, written and
+  # refreshed only by `Platform.Inbox.upsert_briefing_item/2`, with
+  # `source_type: "briefing"` and `source_id` = the `memory_briefings` id.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
   # the plain `task` source so a rollup dismissal never touches a
   # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
-  @source_types ~w(chat_message task review_request meeting task_review)
+  @source_types ~w(chat_message task review_request meeting task_review briefing)
 
   @type t :: %__MODULE__{}
 

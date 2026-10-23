@@ -93,7 +93,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, caption, speaker, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at}"
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, inserted_at, updated_at}"
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -170,7 +170,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_post_list",
         description:
-          "List a profile's posts, optionally by status, with each post's status, publisher error and the reason a human rejected it. " <>
+          "List a profile's posts, optionally by status, with each post's status, publisher error, the reason a human rejected it, and why an approved post's publish was refused before the vendor (refused_reason: media_rejected, rate_limited, account_archived or publisher_not_configured; refused_at; retry_after, when a rate_limited post goes out automatically). " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -179,12 +179,19 @@ defmodule Platform.Social.ToolDefinitions do
             required: false,
             description: "One of draft, needs_approval, approved, scheduled, published, failed."
           },
+          refused: %{
+            type: "boolean",
+            required: false,
+            description:
+              "true: only approved posts whose publish was refused (refused_reason set). Default false."
+          },
           limit: %{type: "integer", required: false, description: "Page size (default 50)."},
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
         returns: "%{posts: [#{@post_row}], total, has_more, limit, offset}",
         limitations: "not_found for a profile outside your org. Oldest first.",
-        when_to_use: "To see what is waiting, what shipped, and what was rejected and why."
+        when_to_use:
+          "To see what is waiting, what shipped, what was rejected and why, and (refused: true) what is stuck before the vendor. Only a human retries a refused post; a rate_limited one goes out by itself at retry_after."
       },
       %{
         name: "social_clip_propose",

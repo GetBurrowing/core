@@ -12,7 +12,8 @@ defmodule Platform.Memory.Insights.AnswerTest do
 
   alias Platform.Access.Scope
   alias Platform.Chat.Canvas
-  alias Platform.Chat.CanvasDocument
+  alias Platform.Inbox
+  alias Platform.Inbox.Item
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
@@ -25,6 +26,11 @@ defmodule Platform.Memory.Insights.AnswerTest do
     @moduledoc false
     def fan_out_to_humans(participant_ids, payload, _opts) do
       send(self(), {:push, participant_ids, payload})
+      :ok
+    end
+
+    def fan_out_to_user(user_id, payload) do
+      send(self(), {:push, user_id, payload})
       :ok
     end
   end
@@ -134,28 +140,33 @@ defmodule Platform.Memory.Insights.AnswerTest do
       assert briefing.user_id == addressee.id
       assert briefing.items == %{key => question.id}
 
-      %Canvas{document: document} = Repo.get!(Canvas, briefing.canvas_id)
-      assert CanvasDocument.get_node(document, "insight_answer:" <> key)
+      # Task 01a15ee1 stage 1: delivered to the Inbox, not a DM canvas.
+      assert briefing.canvas_id == nil
+      assert Repo.aggregate(Canvas, :count) == 0
 
-      assert %{"props" => %{"value" => "Is the vendor contract renewed?"}} =
-               CanvasDocument.get_node(document, "question-" <> key)
+      assert [%Item{kind: "briefing", source_id: source_id, body: body}] =
+               Inbox.list_unread_for_user(addressee.id, kind: "briefing")
 
-      # Add to briefing lands on the SAME day's canvas.
+      assert source_id == briefing.id
+      assert body == "1 item · 1 needs your call"
+
+      # Add to briefing lands in the SAME day's briefing and Inbox row.
       line = insight!(addressee: addressee, body: "Deploys moved to host-b.")
       assert {:ok, _} = Insights.act(line.id, Scope.for_user(actor))
       assert [%Briefing{items: items}] = Repo.all(Briefing)
       assert map_size(items) == 2
+      assert items[BriefingCard.node_key(line)] == line.id
 
-      %Canvas{document: document} = Repo.get!(Canvas, briefing.canvas_id)
-      assert CanvasDocument.get_node(document, "done-actions-" <> BriefingCard.node_key(line))
+      assert [%Item{body: "2 items · 1 needs your call"}] =
+               Inbox.list_unread_for_user(addressee.id, kind: "briefing")
     end
 
     test "a needs_call question is refused unless a root admin acts" do
       dreaming_agent!()
       member = person!()
-      addressee = person!()
+      addressee = person!("member", external: true)
 
-      # A raw email addressee makes it needs_call even for a member (stage 2).
+      # A guest addressee makes it needs_call (Tier rule 3), however it is named.
       question =
         question!(addressee, tier: "needs_call", action: %{"addressee" => addressee.email})
 
@@ -164,9 +175,15 @@ defmodule Platform.Memory.Insights.AnswerTest do
       assert {:error, :unauthorized} = Insights.act(question.id, Scope.for_user(member))
       assert Repo.aggregate(Briefing, :count) == 0
 
-      assert {:ok, _} = Insights.act(question.id, Scope.for_user(root_admin!()))
-      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
-      assert user_id == addressee.id
+      # Control: a root admin passes the gate (never :unauthorized), and the
+      # delivery then refuses the guest: the Inbox shows an external viewer
+      # no briefing row, so nothing is written and it is not delivered.
+      assert {:error, :guest_addressee} =
+               Insights.act(question.id, Scope.for_user(root_admin!()))
+
+      assert Repo.aggregate(Briefing, :count) == 0
+      assert Repo.aggregate(Item, :count) == 0
+      assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, question.id)
     end
 
     test "an unrouted question has nowhere to go" do

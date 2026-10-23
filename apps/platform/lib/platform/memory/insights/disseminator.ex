@@ -1,7 +1,9 @@
 defmodule Platform.Memory.Insights.Disseminator do
   @moduledoc """
-  Daily delivery of dreaming insights as a briefing canvas. Task
-  `01a13867-3213-7001-a128-6b4c6b34283f`, stage 3.
+  Daily delivery of dreaming insights as ONE Inbox row per person per day.
+  Task `01a13867-3213-7001-a128-6b4c6b34283f`, stage 3; delivery moved from
+  a DM canvas to the Inbox by task `01a15ee1-48c8-7000-a8f1-33a5586cb458`,
+  stage 1.
 
   A GenServer that fires at 07:00 America/Chicago (two hours after the 05:00
   dreaming run, `Platform.Responsibilities.Handlers.Dreaming`), plus a
@@ -13,24 +15,37 @@ defmodule Platform.Memory.Insights.Disseminator do
   1. `Platform.Memory.Insights.Digest.select/2` decides who gets what. While
      `dissemination_enabled` is off it selects nothing, so a run delivers
      nothing and writes nothing.
-  2. The sender is the agent holding the `memory.dreaming` responsibility
-     (`Platform.Roles.assignee_for/1`). With no such agent the run logs and
-     delivers nothing.
-  3. Per person, in the DM `Platform.Chat.find_or_create_dm(user_id, "agent",
-     agent_id)` returns:
-     * the day's canvas is created (`Chat.create_canvas_with_message/3`,
-       posted by the agent) together with its `memory_briefings` row, or,
-       when a row already exists for `(user_id, digest_date)`, that canvas
-       is re-rendered with the new items appended (`replace_document`);
-     * an item already on the day's canvas (same node key) is not added
-       twice;
-     * each newly rendered insight gets `delivered_at` and a `delivered`
-       signal (`Platform.Memory.Insights.mark_delivered/2`);
-     * one push goes to the person's DM participant
-       (`Platform.Notifications.fan_out_to_humans/3`).
+  2. The agent holding the `memory.dreaming` responsibility
+     (`Platform.Roles.assignee_for/1`) is still required: it is the
+     unattended actor that applies page edits and files tasks. With no such
+     agent the run logs and delivers nothing.
+  3. Per person, in one transaction:
+     * the `memory_briefings` row for `(user_id, digest_date)` is created,
+       or the new items are merged into it; an item already in the day's
+       row (same `BriefingCard.node_key/1`) is not added twice. The row has
+       no canvas (`canvas_id` and `space_id` nil);
+     * `Platform.Inbox.upsert_briefing_item/2` writes the day's ONE Inbox
+       row (kind `briefing`), or refreshes its subtitle and re-marks it
+       unread when new items arrived;
+     * each new insight gets `delivered_at` and a `delivered` signal
+       (`Platform.Memory.Insights.mark_delivered/2`).
+  4. ONE push per person per day, when the day's Inbox row is first created
+     (kind `insight_briefing`, url `/inbox/briefing/<digest_date>`,
+     `Platform.Notifications.fan_out_to_user/2`, the transport
+     `Platform.Inbox` uses). A same-day re-run that adds items does not
+     push again; the row going unread is the signal.
+
+  No DM space and no canvas is created on any path. A guest (an external
+  member) is refused with `{:error, :guest_addressee}` and nothing is
+  written, because the Inbox shows an external viewer no briefing row.
+  Briefings only ever go to
+  internal people (`Digest.route/5` targets internal addressees and internal
+  root admins), and the Inbox reaches every internal member, so there is no
+  case left for the DM. `BriefingCard` and the canvas hooks stay so that
+  briefings delivered as canvases before this change still render and act.
 
   `digest_date` is the America/Chicago calendar date of the run, so the
-  07:00 run and any manual run later that day share one canvas.
+  07:00 run and any manual run later that day share one row.
 
   ## Page edits and tasks are applied before they are rendered
 
@@ -46,8 +61,14 @@ defmodule Platform.Memory.Insights.Disseminator do
       nothing was written; the question is rendered under "Questions" only
       when `deliver_questions` is on and it still routes `reversible` to this
       person, else it waits, open and undelivered, for a later run.
-    * `{:error, reason}` — nothing written, NOT rendered, the insight stays
-      open and undelivered; a warning names the insight and the reason.
+    * `{:error, :no_project}` for a `task` (task 01a15ee1 stage 2: no
+      project was inferred, `Platform.Memory.Insights.ProjectInference`) —
+      nothing filed, but the insight IS rendered and delivered, marked
+      `needs_project: true` in memory, so the briefing asks the person to
+      pick a project. It stays `open`.
+    * any other `{:error, reason}` — nothing written, NOT rendered, the
+      insight stays open and undelivered; a warning names the insight and
+      the reason.
 
   One apply that raises or exits is logged and treated as an error, so the
   rest of the person's briefing is still delivered. A same-day re-run never
@@ -55,6 +76,26 @@ defmodule Platform.Memory.Insights.Disseminator do
   digest does not select and `apply_unattended/2` refuses (`:not_open`).
   Applying happens only on the `run/1` path; `deliver_now/3` (a person
   asked) is unchanged and never applies anything.
+
+  ## Outside messages are drafted, never sent (task 01a15ee1 stage 3)
+
+  An insight whose addressee is an email outside the org
+  (`Platform.Memory.Insights.Outside.outside?/1`) is tiered `needs_call` and
+  routed to root admins as before. Before delivery, each such selected
+  insight is saved as ONE email draft (`Outside.draft/3`, which stores
+  `action["mail_draft_id"]`, so a re-run drafts nothing). With the Email
+  module off or no mail account, nothing is drafted and the insight still
+  renders. An outside `page_edit` or `task` is passed through to the
+  briefing as it is, never applied unattended. `Platform.Mail.Dispatch` is
+  never called.
+
+  ## Only `reversible` page edits and tasks are applied (task 01a15ee1 stage 5)
+
+  A `needs_call` page_edit or task (Digest routes it to the root admins) is
+  NEVER run through `apply_unattended/2`: it is passed through to the
+  briefing as it is, open, and the Inbox lists it under "Needs your call".
+  Before this, the apply was tried, refused as unauthorized, and the
+  insight dropped, so the items that most needed a call never reached one.
   """
 
   use GenServer
@@ -63,17 +104,14 @@ defmodule Platform.Memory.Insights.Disseminator do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Platform.Chat
-  alias Platform.Chat.Canvas
-  alias Platform.Chat.CanvasDocument
-  alias Platform.Chat.Participant
+  alias Platform.Inbox
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
   alias Platform.Memory.Insights.Actions
   alias Platform.Memory.Insights.BriefingCard
-  alias Platform.Memory.Insights.Briefings
   alias Platform.Memory.Insights.Digest
+  alias Platform.Memory.Insights.Outside
   alias Platform.Memory.Insights.Settings
   alias Platform.Push.Notification
   alias Platform.Repo
@@ -95,7 +133,7 @@ defmodule Platform.Memory.Insights.Disseminator do
 
   Options:
     * `:now` — a `DateTime` (default now).
-    * `:notifications_module` — the module whose `fan_out_to_humans/3` sends
+    * `:notifications_module` — the module whose `fan_out_to_user/2` sends
       the push (default `Platform.Notifications`).
   """
   @spec run(keyword()) :: {:ok, map()}
@@ -128,6 +166,7 @@ defmodule Platform.Memory.Insights.Disseminator do
     notifications = Keyword.get(opts, :notifications_module, Platform.Notifications)
 
     settings = Settings.get()
+    draft_outside(digest, agent)
 
     digest
     |> Enum.map(fn {user_id, insights} ->
@@ -154,30 +193,74 @@ defmodule Platform.Memory.Insights.Disseminator do
 
   # Apply each selected page_edit / task (see the moduledoc) and keep what
   # is to be rendered, in order. Every other insight passes through.
+  #
+  # Only a `reversible` one is applied (task 01a15ee1 stage 5). Digest routes
+  # a `needs_call` page_edit / task to the root admins; applying it as the
+  # acting agent is refused, and dropping the refusal kept exactly the items
+  # that need a call off the briefing. It passes straight through, so the
+  # admin sees it under "Needs your call" and decides. `tier` is Digest's
+  # re-check of now, not the ingest-time label.
   defp apply_unattended(user_id, insights, settings, now) do
     Enum.flat_map(insights, fn
-      %Insight{action_type: type} = insight when type in @unattended_types ->
-        case safe_apply(insight, now) do
-          {:ok, %Insight{} = acted} ->
-            [%{acted | tier: "reversible"}]
-
-          {:ok, :downgraded, %Insight{} = question} ->
-            if settings.deliver_questions and question.tier == "reversible" and
-                 question.addressee_user_id == user_id,
-               do: [question],
-               else: []
-
-          {:error, reason} ->
-            Logger.warning(
-              "[insight_disseminator] insight #{insight.id} (#{type}) not applied: " <>
-                inspect(reason)
-            )
-
-            []
-        end
+      %Insight{action_type: type, tier: "reversible"} = insight when type in @unattended_types ->
+        if Outside.outside?(insight),
+          do: [insight],
+          else: apply_one(insight, type, user_id, settings, now)
 
       insight ->
         [insight]
+    end)
+  end
+
+  defp apply_one(insight, type, user_id, settings, now) do
+    case safe_apply(insight, now) do
+      {:ok, %Insight{} = acted} ->
+        [%{acted | tier: "reversible"}]
+
+      {:ok, :downgraded, %Insight{} = question} ->
+        if settings.deliver_questions and question.tier == "reversible" and
+             question.addressee_user_id == user_id,
+           do: [question],
+           else: []
+
+      # Task 01a15ee1 stage 2: no project could be inferred. Nothing was
+      # filed; the person is asked to pick one, so the insight is KEPT
+      # for rendering, marked in memory.
+      {:error, :no_project} when type == "task" ->
+        [%{insight | needs_project: true}]
+
+      {:error, reason} ->
+        Logger.warning(
+          "[insight_disseminator] insight #{insight.id} (#{type}) not applied: " <>
+            inspect(reason)
+        )
+
+        []
+    end
+  end
+
+  # ── Outside messages (task 01a15ee1 stage 3) ─────────────────────────
+
+  # Every selected insight that proposes a message to someone outside the
+  # org is saved as ONE email draft (`Platform.Memory.Insights.Outside`),
+  # once per insight however many root admins it is routed to; a re-run
+  # finds the stored `mail_draft_id` and drafts nothing. Never sent.
+  defp draft_outside(digest, agent) do
+    digest
+    |> Map.values()
+    |> List.flatten()
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.filter(&Outside.outside?/1)
+    |> Enum.each(fn insight ->
+      try do
+        Outside.draft(insight, agent)
+      rescue
+        error ->
+          Logger.warning(
+            "[insight_disseminator] outside draft for #{insight.id} raised: " <>
+              Exception.message(error)
+          )
+      end
     end)
   end
 
@@ -200,145 +283,118 @@ defmodule Platform.Memory.Insights.Disseminator do
 
   # ── Per person ───────────────────────────────────────────────────────
 
+  # Task 01a15ee1 stage 1: the briefing is ONE Inbox row per person per day.
+  # No DM, no canvas. The `memory_briefings` row for `(user_id, date)` is
+  # written or merged first (node-key dedupe), then the Inbox row, then each
+  # new insight is marked delivered, all in one transaction so a failed
+  # Inbox write leaves the insights undelivered for the next run.
+  #
+  # A guest (an external member, `Platform.Tenancy.external_user?/1`) is
+  # refused with `{:error, :guest_addressee}` before anything is written: the
+  # Inbox lists only `chat_mention` rows to an external viewer, so a briefing
+  # written for a guest would read as delivered while nobody could see it.
+  # No briefing, no Inbox row, and `delivered_at` stays nil.
   defp deliver(user_id, insights, agent, date, now, notifications) do
-    with {:ok, dm} <- Chat.find_or_create_dm(user_id, "agent", agent.id),
-         %Participant{} = agent_p <- participant(dm.id, "agent", agent.id),
-         %Participant{} = user_p <- participant(dm.id, "user", user_id) do
-      existing = Repo.get_by(Briefing, user_id: user_id, digest_date: date)
-      existing_items = (existing && existing.items) || %{}
+    if Platform.Tenancy.external_user?(%{id: user_id}) do
+      Logger.warning(
+        "[insight_disseminator] briefing for user #{user_id} not delivered: :guest_addressee"
+      )
 
-      new =
-        insights
-        |> Enum.map(&{BriefingCard.node_key(&1), &1})
-        |> Enum.uniq_by(&elem(&1, 0))
-        |> Enum.reject(fn {key, _insight} -> Map.has_key?(existing_items, key) end)
+      {:error, :guest_addressee}
+    else
+      deliver_to_member(user_id, insights, agent, date, now, notifications)
+    end
+  end
 
-      if new == [] do
-        {:ok, 0}
-      else
-        items = Map.merge(existing_items, Map.new(new, fn {key, i} -> {key, i.id} end))
-        stored = stored_document(existing)
-        entries = previous_entries(existing, stored) ++ new
+  defp deliver_to_member(user_id, insights, agent, date, now, notifications) do
+    existing = Repo.get_by(Briefing, user_id: user_id, digest_date: date)
+    existing_items = (existing && existing.items) || %{}
 
-        document =
-          BriefingCard.document(date, entries,
-            admin?: Platform.Tenancy.root_admin?(%{id: user_id}),
-            settled: settled(existing, stored)
+    new =
+      insights
+      |> Enum.map(&{BriefingCard.node_key(&1), &1})
+      |> Enum.uniq_by(&elem(&1, 0))
+      |> Enum.reject(fn {key, _insight} -> Map.has_key?(existing_items, key) end)
+
+    if new == [] do
+      {:ok, 0}
+    else
+      items = Map.merge(existing_items, Map.new(new, fn {key, i} -> {key, i.id} end))
+
+      result =
+        Repo.transaction(fn ->
+          with {:ok, briefing} <- write_briefing(existing, user_id, date, items),
+               {:ok, item, outcome} <-
+                 Inbox.upsert_briefing_item(briefing, %{
+                   total: map_size(items),
+                   calls: calls(items),
+                   new_items?: true
+                 }) do
+            Enum.each(new, fn {_key, insight} -> Insights.mark_delivered(insight, now: now) end)
+            {item, outcome}
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+      case result do
+        {:ok, {_item, outcome}} ->
+          if outcome == :created, do: push(notifications, user_id, agent, date, length(new))
+          {:ok, length(new)}
+
+        {:error, reason} = error ->
+          Logger.warning(
+            "[insight_disseminator] briefing for user #{user_id} not delivered: " <>
+              inspect(reason)
           )
 
-        result =
-          case existing do
-            nil -> create(dm, agent_p, user_id, date, document, items)
-            %Briefing{} -> update(existing, document, items)
-          end
-
-        case result do
-          {:ok, _briefing} ->
-            Enum.each(new, fn {_key, insight} -> Insights.mark_delivered(insight, now: now) end)
-            push(notifications, dm, user_p, agent, length(new))
-            {:ok, length(new)}
-
-          {:error, reason} = error ->
-            Logger.warning(
-              "[insight_disseminator] briefing for user #{user_id} not delivered: " <>
-                inspect(reason)
-            )
-
-            error
-        end
+          error
       end
-    else
-      other ->
-        Logger.warning(
-          "[insight_disseminator] no DM for user #{user_id} with agent #{agent.id}: " <>
-            inspect(other)
-        )
-
-        {:error, :no_dm}
     end
   end
 
-  defp participant(space_id, type, id) do
-    Repo.one(
-      from(p in Participant,
-        where:
-          p.space_id == ^space_id and p.participant_type == ^type and p.participant_id == ^id,
-        limit: 1
-      )
-    )
+  defp write_briefing(nil, user_id, date, items) do
+    %Briefing{}
+    |> Briefing.changeset(%{user_id: user_id, digest_date: date, items: items})
+    |> Repo.insert()
   end
 
-  # The items already on the day's canvas, in display order, each keeping
-  # the section it was rendered in (a "Needs your call" line stays one even
-  # if its tier has changed since). A purged insight is dropped from the
-  # render; its key stays in `items`.
-  defp previous_entries(nil, _document), do: []
+  defp write_briefing(%Briefing{} = briefing, _user_id, _date, items),
+    do: briefing |> Briefing.changeset(%{items: items}) |> Repo.update()
 
-  defp previous_entries(%Briefing{items: items}, document) when map_size(items) > 0 do
+  # How many of the day's items still ask for the person's call: open
+  # questions, open needs_call items, and open page edits / tasks (applied
+  # ones are `done`). The Inbox view recomputes this live (stage 4); this is
+  # the row's subtitle at delivery time. A purged insight counts as handled.
+  defp calls(items) do
     ids = Map.values(items)
-    key_by_id = Map.new(items, fn {key, id} -> {id, key} end)
 
-    from(i in Insight, where: i.id in ^ids, order_by: [asc: i.inserted_at, asc: i.id])
-    |> Repo.all()
-    |> Enum.map(fn insight ->
-      key = Map.fetch!(key_by_id, insight.id)
-
-      tier =
-        if CanvasDocument.get_node(document, "call-" <> key), do: "needs_call", else: "reversible"
-
-      {key, %{insight | tier: tier}}
-    end)
-  end
-
-  defp previous_entries(_briefing, _document), do: []
-
-  # The day's canvas as it stands: the canvas server's live document when it
-  # answers (a click may have patched it moments ago and the persist is
-  # async), else the persisted row.
-  defp stored_document(nil), do: %{}
-
-  defp stored_document(%Briefing{canvas_id: canvas_id}) do
-    case Platform.Chat.Canvas.Server.describe(canvas_id) do
-      {:ok, %{document: %{} = document}} ->
-        document
-
-      _ ->
-        case Repo.get(Canvas, canvas_id) do
-          %Canvas{document: %{} = document} -> document
-          _ -> %{}
-        end
-    end
-  rescue
-    _ -> %{}
-  end
-
-  # Items already settled on the day's canvas (stage 4: Looks right, Flag,
-  # Answer) keep the nodes they were settled with.
-  defp settled(nil, _document), do: %{}
-
-  defp settled(%Briefing{items: items}, document) do
-    Enum.reduce(items, %{}, fn {key, _id}, acc ->
-      case Briefings.settled_nodes(document, key) do
-        [_ | _] = nodes -> Map.put(acc, key, nodes)
-        _ -> acc
-      end
-    end)
+    from(i in Insight,
+      where:
+        i.id in ^ids and i.state == "open" and
+          (i.tier == "needs_call" or i.action_type in ["question", "page_edit", "task"]),
+      select: count(i.id)
+    )
+    |> Repo.one()
   end
 
   # ── Manual delivery (stage 4) ────────────────────────────────────────
 
   @doc """
   Deliver `insights` into `user_id`'s briefing for today NOW, creating the
-  day's canvas or adding to it, whatever `dissemination_enabled` says: a
+  day's briefing and Inbox row or adding to them, whatever
+  `dissemination_enabled` says: a
   person asked for it (`Platform.Memory.Insights.act/3` on a `question` or a
   `briefing`). The caller has already decided the actor may; the items are
   rendered as executable (`tier: "reversible"`), because the person who
   acted made the call.
 
   Returns `{:ok, n}` with the number of items added (0 when every item is
-  already on today's canvas), `{:error, :no_agent}` when nobody holds
+  already in today's briefing), `{:error, :no_agent}` when nobody holds
   `memory.dreaming`, `{:error, :opted_out}` when the person opted out of
-  insight delivery, or the delivery error.
+  insight delivery, `{:error, :guest_addressee}` when the person is a guest
+  (an external member, who has no Inbox briefing to read), or the delivery
+  error.
 
   Options: `:now`, `:notifications_module` (as `run/1`).
   """
@@ -364,52 +420,18 @@ defmodule Platform.Memory.Insights.Disseminator do
     end
   end
 
-  defp create(dm, agent_p, user_id, date, document, items) do
-    Repo.transaction(fn ->
-      with {:ok, canvas, _message} <-
-             Chat.create_canvas_with_message(dm.id, agent_p.id, %{
-               "title" => "Briefing " <> Date.to_iso8601(date),
-               "document" => document,
-               "message_content" => "Your briefing for " <> Date.to_iso8601(date)
-             }),
-           {:ok, briefing} <-
-             %Briefing{}
-             |> Briefing.changeset(%{
-               user_id: user_id,
-               space_id: dm.id,
-               canvas_id: canvas.id,
-               digest_date: date,
-               items: items
-             })
-             |> Repo.insert() do
-        briefing
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
-  end
-
-  defp update(%Briefing{} = briefing, document, items) do
-    with %Canvas{} = canvas <- Chat.get_canvas(briefing.canvas_id) || {:error, :canvas_not_found},
-         {:ok, _canvas} <- Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
-      briefing |> Briefing.changeset(%{items: items}) |> Repo.update()
-    else
-      {:conflict, payload} -> {:error, {:conflict, payload}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp push(notifications, dm, user_p, agent, count) do
+  # ONE push per person per day, sent when the day's Inbox row is first
+  # created; the same transport `Platform.Inbox` uses for its pushed kinds.
+  defp push(notifications, user_id, agent, date, count) do
     notification =
       Notification.new(%{
         kind: "insight_briefing",
         title: "Your briefing",
         body: "#{count} new #{if count == 1, do: "item", else: "items"} from #{agent.name}",
-        url: "/chat/#{Chat.space_path_segment(dm)}",
-        space_id: dm.id
+        url: Inbox.briefing_url(date)
       })
 
-    notifications.fan_out_to_humans([user_p.id], notification, [])
+    notifications.fan_out_to_user(user_id, notification)
   rescue
     error ->
       Logger.warning("[insight_disseminator] push failed: " <> Exception.message(error))

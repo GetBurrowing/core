@@ -44,6 +44,17 @@ defmodule Platform.Social.RateLimit do
     end
   end
 
+  @doc """
+  When the window containing `now_ms` ends, in Unix milliseconds: the start
+  of the next window, so the first moment `check/2` counts afresh. Reads the
+  same settings as `check/2`.
+  """
+  @spec window_ends_at(integer()) :: integer()
+  def window_ends_at(now_ms \\ System.system_time(:millisecond)) do
+    {_limit, window_ms} = settings()
+    (div(now_ms, window_ms) + 1) * window_ms
+  end
+
   @doc false
   def reset, do: :ets.delete_all_objects(@table)
 

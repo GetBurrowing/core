@@ -356,7 +356,9 @@ defmodule Platform.ExtensionsTest do
       assert Keyword.has_key?(changeset.errors, :source_type)
       assert Extensions.inbox_kinds() == []
       assert Platform.Inbox.Item.kinds() == Platform.Inbox.Item.core_kinds()
-      assert Platform.Inbox.action_kinds() == Platform.Inbox.core_action_kinds()
+      # Core's non-approval `briefing` stays listed on open but is never a
+      # core (Mobile approval) action kind (task 01a15ee1 stage 1).
+      assert Platform.Inbox.action_kinds() == Platform.Inbox.core_action_kinds() ++ ["briefing"]
       assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
       assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
     end
@@ -904,7 +906,12 @@ defmodule Platform.ExtensionsTest do
     # `stack_detach_canvas` in the `task` bundle, after `stack_assign_agents`
     # (the name list above carries them). Summaries and schemas are unchanged.
     # Measured on the test rig at the stage's branch (d8f4696c).
-    @main_tool_digest_off "3b16396c380b1ca9212ba79256dceda3f5cf507308773d23947019b094fae793"
+    #
+    # Re-pinned by task 01a1655c stage 2: `send_media` gains the optional
+    # `attachment_ids` property (attach already-uploaded files) and the prose
+    # that describes it. Names and bundles are unchanged. Measured by CI on the
+    # task branch (31dffde47), PR #1320.
+    @main_tool_digest_off "443265c57c1616d5b40c9aafaefc9ab9ca80cf37b0f95575e1a0363b5aa3efba"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

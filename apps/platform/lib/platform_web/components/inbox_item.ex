@@ -210,7 +210,10 @@ defmodule PlatformWeb.Components.InboxItem do
     "meeting_starting" => %{long: "Meeting starting", short: "Starting now"},
     "meeting_invited" => %{long: "Meeting invite", short: "Meeting invite"},
     "task_sponsor_assigned" => %{long: "Task sponsor assigned", short: "Sponsor"},
-    "lifecycle_step_failed" => %{long: "Lifecycle step failed", short: "Step failed"}
+    "lifecycle_step_failed" => %{long: "Lifecycle step failed", short: "Step failed"},
+    # Main's daily briefing kind (task 01a15ee1). Main had no explicit label,
+    # so its desktop form is the humanized key, kept as-is.
+    "briefing" => %{long: "Briefing", short: "Briefing"}
   }
 
   @doc "The core kinds `kind_label/2` has an explicit entry for."
@@ -263,6 +266,9 @@ defmodule PlatformWeb.Components.InboxItem do
   defp unread?(%Item{}), do: false
 
   defp needs_action?(%Item{read_at: nil}), do: false
+  # A read `briefing` row stays listed (it is in `action_kinds/0`) but asks for
+  # no review; the briefing has its own row renderer (task 01a15ee1 stage 4).
+  defp needs_action?(%Item{kind: "briefing"}), do: false
   defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

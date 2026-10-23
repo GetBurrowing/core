@@ -10,6 +10,16 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
   apply leaves the insight open and off the briefing" red; probe (b),
   dropping the `open/1` re-read in `Actions.apply_unattended/2`, is aimed at
   "running twice applies once".
+
+  Task 01a15ee1 stage 1 (the briefing is ONE Inbox row per person per day;
+  no DM, no canvas): probe, putting `Chat.find_or_create_dm(user_id,
+  "agent", agent.id)` back into `deliver/6`, turns "no DM space or canvas is
+  created" red.
+
+  Task 01a15ee1 stage 5: probe, dropping the `tier: "reversible"` guard in
+  `apply_unattended/4` (apply every selected page_edit / task), turns "a
+  needs_call page_edit routed to a root admin is listed as a call, not
+  applied" red.
   """
 
   use Platform.DataCase, async: false
@@ -20,14 +30,17 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
   import Platform.RuntimeProfileFixtures
   import Platform.TenancyFixtures
 
-  alias Platform.Chat.Canvas
-  alias Platform.Chat.CanvasDocument
   alias Platform.Agents.Agent
+  alias Platform.Chat.Canvas
   alias Platform.Chat.Participant
+  alias Platform.Chat.Space
+  alias Platform.Inbox
+  alias Platform.Inbox.Item
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
   alias Platform.Memory.Insights.BriefingCard
+  alias Platform.Memory.Insights.Briefings
   alias Platform.Memory.Insights.Disseminator
   alias Platform.Org.Wiki
   alias Platform.Repo
@@ -35,8 +48,8 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
 
   defmodule PushRecorder do
     @moduledoc false
-    def fan_out_to_humans(participant_ids, payload, _opts) do
-      send(self(), {:push, participant_ids, payload})
+    def fan_out_to_user(user_id, payload) do
+      send(self(), {:push, user_id, payload})
       :ok
     end
   end
@@ -48,8 +61,15 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
     Disseminator.run(Keyword.merge([now: @now, notifications_module: PushRecorder], opts))
   end
 
-  defp canvases_in(space_id),
-    do: Repo.all(from(c in Canvas, where: c.space_id == ^space_id and is_nil(c.deleted_at)))
+  # Every chat space `user_id` participates in, and every canvas in one.
+  defp dm_spaces(user_id) do
+    Repo.all(
+      from(p in Participant,
+        where: p.participant_type == "user" and p.participant_id == ^user_id,
+        select: p.space_id
+      )
+    )
+  end
 
   defp dm_canvases(user_id) do
     Repo.all(
@@ -62,14 +82,12 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
     )
   end
 
-  defp text_values(document) do
-    walk = fn
-      %{"children" => children} = node, walk -> [node | Enum.flat_map(children, &walk.(&1, walk))]
-      node, _walk -> [node]
-    end
+  defp briefing_rows(user_id), do: Inbox.list_unread_for_user(user_id, kind: "briefing")
 
-    for %{"type" => "text", "props" => %{"value" => v}} <- walk.(document["root"], walk), do: v
-  end
+  defp all_briefing_rows(user_id),
+    do: Repo.all(from(i in Item, where: i.user_id == ^user_id and i.kind == "briefing"))
+
+  defp briefing_of(user_id), do: Repo.one!(from(b in Briefing, where: b.user_id == ^user_id))
 
   test "run/1 delivers nothing while dissemination is off" do
     dreaming_agent!()
@@ -78,20 +96,20 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
 
     assert {:ok, %{users: 0, items: 0}} = run!()
 
-    assert dm_canvases(person.id) == []
     assert Repo.aggregate(Briefing, :count) == 0
+    assert briefing_rows(person.id) == []
     assert %Insight{delivered_at: nil, state: "open"} = Repo.get!(Insight, insight.id)
     refute_received {:push, _, _}
 
     # Positive control: the same fixture with dissemination on delivers.
     enable_dissemination!()
     assert {:ok, %{users: 1, items: 1}} = run!()
-    assert [_canvas] = dm_canvases(person.id)
+    assert [_row] = briefing_rows(person.id)
   end
 
-  test "one digest per person per day" do
+  test "one run writes one briefing row with no canvas and one Inbox briefing row" do
     enable_dissemination!()
-    agent = dreaming_agent!()
+    dreaming_agent!()
     person = person!()
     first = insight!(addressee: person, body: "First line.")
 
@@ -101,60 +119,147 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
     assert briefing.user_id == person.id
     assert briefing.digest_date == ~D[2026-10-18]
     assert briefing.items == %{BriefingCard.node_key(first) => first.id}
+    assert briefing.canvas_id == nil
+    assert briefing.space_id == nil
+    assert briefing.receipts == %{}
 
-    assert [canvas] = canvases_in(briefing.space_id)
-    assert canvas.id == briefing.canvas_id
-    assert text_values(canvas.document) |> Enum.count(&(&1 == "First line.")) == 1
-
-    # The canvas is posted by the dreaming agent into the person's DM.
-    assert Repo.exists?(
-             from(p in Participant,
-               where:
-                 p.space_id == ^briefing.space_id and p.participant_type == "agent" and
-                   p.participant_id == ^agent.id
-             )
-           )
+    assert [%Item{} = row] = briefing_rows(person.id)
+    assert row.kind == "briefing"
+    assert row.source_type == "briefing"
+    assert row.source_id == briefing.id
+    assert row.title == "Today's briefing"
+    assert row.body == "1 item · FYI only"
+    assert row.url == "/inbox/briefing/2026-10-18"
+    assert row.read_at == nil
 
     assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, first.id)
 
-    user_p =
-      Repo.get_by!(Participant,
-        space_id: briefing.space_id,
-        participant_type: "user",
-        participant_id: person.id
-      )
+    # ONE push, to the person, pointing at the Inbox route.
+    assert_received {:push, user_id, %{kind: "insight_briefing", title: "Your briefing"} = push}
+    assert user_id == person.id
+    assert push.url == "/inbox/briefing/2026-10-18"
+    refute_received {:push, _, _}
+  end
 
-    assert_received {:push, [participant_id], %{title: "Your briefing"}}
-    assert participant_id == user_p.id
+  test "no DM space or canvas is created" do
+    enable_dissemination!()
+    agent = dreaming_agent!()
+    person = person!()
+    insight!(addressee: person, body: "First line.")
+    spaces_before = Repo.aggregate(Space, :count)
+    canvases_before = Repo.aggregate(Canvas, :count)
 
-    # Same day, nothing new: no canvas, no row, no push.
+    assert {:ok, %{users: 1, items: 1}} = run!()
+    assert [_row] = briefing_rows(person.id)
+
+    # Neither the person nor the dreaming agent joined any space, and no
+    # space or canvas row exists that did not exist before the run.
+    assert dm_spaces(person.id) == []
+    assert dm_canvases(person.id) == []
+
+    refute Repo.exists?(
+             from(p in Participant,
+               where: p.participant_type == "agent" and p.participant_id == ^agent.id
+             )
+           )
+
+    assert Repo.aggregate(Space, :count) == spaces_before
+    assert Repo.aggregate(Canvas, :count) == canvases_before
+
+    # deliver_now/3 (a person asked) takes the same path.
+    extra = insight!(addressee: person, action_type: "question", body: "Who owns it?")
+    assert {:ok, 1} = Disseminator.deliver_now(person.id, [extra], now: @now)
+    assert dm_spaces(person.id) == []
+    assert Repo.aggregate(Canvas, :count) == canvases_before
+  end
+
+  test "a second same-day run updates the SAME Inbox row, re-marks it unread, and does not push" do
+    enable_dissemination!()
+    dreaming_agent!()
+    person = person!()
+    insight!(addressee: person, body: "First line.")
+
+    assert {:ok, %{users: 1, items: 1}} = run!()
+    assert [%Item{} = row] = briefing_rows(person.id)
+    assert_received {:push, _, _}
+
+    # The person opens it: read, still listed.
+    assert {:ok, %Item{read_at: %DateTime{}}} = Inbox.open_item(row.id, person.id)
+
+    # Same day, nothing new: nothing written, no push, the row stays read.
     assert {:ok, %{users: 0, items: 0}} = run!(now: DateTime.add(@now, 3600))
-    assert Repo.aggregate(Briefing, :count) == 1
-    assert length(canvases_in(briefing.space_id)) == 1
+    assert [%Item{read_at: %DateTime{}}] = briefing_rows(person.id)
     refute_received {:push, _, _}
 
-    # Same day, a new insight: appended to the SAME canvas, no duplicate line.
+    # Same day, new insights (one of them a question): the SAME row, unread
+    # again, with a fresh subtitle; one briefing row; no second push.
     second = insight!(addressee: person, body: "Second line.")
-    assert {:ok, %{users: 1, items: 1}} = run!(now: DateTime.add(@now, 7200))
+    question = insight!(addressee: person, action_type: "question", body: "Who owns it?")
+    assert {:ok, %{users: 1, items: 2}} = run!(now: DateTime.add(@now, 7200))
 
-    assert [%Briefing{} = again] = Repo.all(Briefing)
-    assert again.id == briefing.id
-    assert again.canvas_id == briefing.canvas_id
-    assert map_size(again.items) == 2
-    assert again.items[BriefingCard.node_key(second)] == second.id
+    assert [%Item{} = again] = all_briefing_rows(person.id)
+    assert again.id == row.id
+    assert again.read_at == nil
+    assert again.dismissed_at == nil
+    assert again.body == "3 items · 1 needs your call"
+    refute_received {:push, _, _}
 
-    assert [updated] = canvases_in(briefing.space_id)
-    values = text_values(updated.document)
-    assert Enum.count(values, &(&1 == "First line.")) == 1
-    assert Enum.count(values, &(&1 == "Second line.")) == 1
-    assert {:ok, _} = CanvasDocument.validate(updated.document)
-    assert_received {:push, [_], _}
+    assert [%Briefing{} = briefing] = Repo.all(Briefing)
+    assert map_size(briefing.items) == 3
+    assert briefing.items[BriefingCard.node_key(second)] == second.id
+    assert briefing.items[BriefingCard.node_key(question)] == question.id
 
-    # The next day gets its own canvas.
+    # A dismissed row comes back (the same row) when new items arrive.
+    assert {:ok, _} = Inbox.mark_dismissed(row.id, person.id)
+    insight!(addressee: person, body: "Third line.")
+    assert {:ok, %{items: 1}} = run!(now: DateTime.add(@now, 9000))
+    assert [%Item{id: id, dismissed_at: nil, read_at: nil}] = all_briefing_rows(person.id)
+    assert id == row.id
+    refute_received {:push, _, _}
+
+    # The next day gets its own briefing, its own row and its own push.
     insight!(addressee: person, body: "Tomorrow's line.")
     assert {:ok, %{users: 1}} = run!(now: DateTime.add(@now, 86_400))
     assert Repo.aggregate(Briefing, :count) == 2
-    assert length(canvases_in(briefing.space_id)) == 2
+    assert length(all_briefing_rows(person.id)) == 2
+    assert_received {:push, _, %{url: "/inbox/briefing/2026-10-19"}}
+  end
+
+  test "deliver_now/3 appends to today's briefing and Inbox row" do
+    enable_dissemination!()
+    dreaming_agent!()
+    person = person!()
+    first = insight!(addressee: person, body: "First line.")
+    assert {:ok, %{users: 1, items: 1}} = run!()
+    assert [%Item{} = row] = briefing_rows(person.id)
+    assert_received {:push, _, _}
+
+    asked = insight!(addressee: person, action_type: "question", body: "Who owns it?")
+
+    assert {:ok, 1} =
+             Disseminator.deliver_now(person.id, [asked],
+               now: DateTime.add(@now, 600),
+               notifications_module: PushRecorder
+             )
+
+    briefing = briefing_of(person.id)
+
+    assert briefing.items == %{
+             BriefingCard.node_key(first) => first.id,
+             BriefingCard.node_key(asked) => asked.id
+           }
+
+    assert [%Item{id: id, body: "2 items · 1 needs your call"}] = all_briefing_rows(person.id)
+    assert id == row.id
+    assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, asked.id)
+    refute_received {:push, _, _}
+
+    # Already in today's briefing: nothing added.
+    assert {:ok, 0} = Disseminator.deliver_now(person.id, [asked], now: DateTime.add(@now, 900))
+
+    # The contract is kept: opt-out and :no_agent.
+    Platform.Roles.clear_override("memory.dreaming")
+    assert {:error, :no_agent} = Disseminator.deliver_now(person.id, [asked], now: @now)
   end
 
   test "with no agent holding memory.dreaming nothing is delivered" do
@@ -163,25 +268,55 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
     insight = insight!(addressee: person)
 
     assert {:ok, %{users: 0, items: 0, reason: :no_agent}} = run!()
-    assert dm_canvases(person.id) == []
+    assert Repo.aggregate(Briefing, :count) == 0
+    assert briefing_rows(person.id) == []
     assert %Insight{delivered_at: nil} = Repo.get!(Insight, insight.id)
   end
 
-  test "a needs_call insight reaches the admin's briefing as a link only" do
+  test "a needs_call insight reaches the admin's briefing, not the guest's" do
     enable_dissemination!()
     dreaming_agent!()
     admin = person!("admin")
     guest = person!("member", external: true)
-    insight!(addressee: guest, action_type: "question", body: "Can you renew the cert?")
+
+    call =
+      insight!(addressee: guest, action_type: "question", body: "Can you renew the cert?")
 
     assert {:ok, %{items: items}} = run!()
     assert items >= 1
 
-    assert dm_canvases(guest.id) == []
-    assert [canvas] = dm_canvases(admin.id)
-    assert CanvasDocument.get_node(canvas.document, "section-call")
-    refute CanvasDocument.get_node(canvas.document, "section-questions")
-    assert "Can you renew the cert?" in text_values(canvas.document)
+    assert briefing_rows(guest.id) == []
+    refute Repo.exists?(from(b in Briefing, where: b.user_id == ^guest.id))
+
+    assert BriefingCard.node_key(call) in Map.keys(briefing_of(admin.id).items)
+    assert [%Item{body: body}] = briefing_rows(admin.id)
+    assert body =~ "need"
+  end
+
+  test "deliver_now/3 refuses a guest: no briefing, no Inbox row, not delivered" do
+    dreaming_agent!()
+    guest = person!("member", external: true)
+    asked = insight!(addressee: guest, action_type: "question", body: "Can you renew the cert?")
+
+    assert {:error, :guest_addressee} =
+             Disseminator.deliver_now(guest.id, [asked],
+               now: @now,
+               notifications_module: PushRecorder
+             )
+
+    # Read the tables directly: the Inbox's own listing hides a briefing row
+    # from an external viewer, so asking it would pass whether or not a row
+    # was written.
+    refute Repo.exists?(from(b in Briefing, where: b.user_id == ^guest.id))
+    refute Repo.exists?(from(i in Item, where: i.user_id == ^guest.id))
+    assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, asked.id)
+    refute_received {:push, _, _}
+
+    # Control: the same call for an internal member delivers.
+    member = person!()
+    line = insight!(addressee: member, action_type: "question", body: "Who owns it?")
+    assert {:ok, 1} = Disseminator.deliver_now(member.id, [line], now: @now)
+    assert Repo.exists?(from(b in Briefing, where: b.user_id == ^member.id))
   end
 
   describe "unattended page edits and tasks (task 01a15587 stage 3)" do
@@ -253,15 +388,9 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
       {project, insight}
     end
 
-    defp briefing_document(person) do
-      [%Briefing{canvas_id: canvas_id}] =
-        Repo.all(from(b in Briefing, where: b.user_id == ^person.id))
-
-      Repo.get!(Canvas, canvas_id).document
-    end
-
-    defp done_values(document) do
-      document |> CanvasDocument.get_node("section-done") |> then(&text_values(%{"root" => &1}))
+    defp delivered?(person, insight) do
+      %Briefing{canvas_id: nil, items: items} = briefing_of(person.id)
+      Map.get(items, BriefingCard.node_key(insight)) == insight.id
     end
 
     defp project_tasks(project),
@@ -290,10 +419,8 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
       assert acted.pre_image["acting_agent_id"] == historian.id
       assert acted.pre_image["content"] == "Deploys go to host-a."
 
-      document = briefing_document(person)
-      assert insight.body in done_values(document)
-      assert CanvasDocument.get_node(document, "applied-" <> BriefingCard.node_key(insight))
-      assert {:ok, _} = CanvasDocument.validate(document)
+      assert delivered?(person, insight)
+      assert [%Item{body: "1 item · FYI only"}] = briefing_rows(person.id)
     end
 
     test "run/1 files a backlog task and lists it under Already done" do
@@ -315,7 +442,82 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
       assert acted.artefact_ref == "task:" <> task.id
       assert acted.acted_by == dreamer.id
 
-      assert insight.body in done_values(briefing_document(person))
+      assert delivered?(person, insight)
+    end
+
+    # Task 01a15ee1 stage 2: file_tasks is on by default, and the project is
+    # inferred (here from the cited task, rung 3), not only named.
+    test "with file_tasks at its default, run/1 files the task into the inferred project" do
+      assert Platform.Memory.Insights.Settings.get().file_tasks
+      enable_dissemination!(%{dissemination_enabled: true})
+      dreamer = dreamer!()
+      person = person!()
+
+      {:ok, cited_project} =
+        Platform.Tasks.create_project(%{name: "cited-#{n()}", org_id: acme_org_id()})
+
+      {:ok, _other} =
+        Platform.Tasks.create_project(%{name: "other-#{n()}", org_id: acme_org_id()})
+
+      {:ok, cited} =
+        Platform.Tasks.create_task(%{project_id: cited_project.id, title: "cited #{n()}"})
+
+      insight =
+        ingest!(
+          ~s(<synthesis-insight action="task" confidence="high" source="task:#{cited.id}" addressee="#{person.id}">
+          Follow up on the cited work, ref #{n()}.
+          </synthesis-insight>),
+          dreamer
+        )
+
+      assert insight.action["project_id"] == cited_project.id
+      assert insight.action["project_reason"] == "cited task's project"
+
+      assert {:ok, %{users: 1, items: 1}} = run!()
+
+      assert [filed] = Enum.reject(project_tasks(cited_project), &(&1.id == cited.id))
+      assert filed.status == "backlog"
+      assert filed.metadata["insight_id"] == insight.id
+
+      acted = Repo.get!(Insight, insight.id)
+      assert acted.state == "done"
+      assert acted.artefact_ref == "task:" <> filed.id
+      assert delivered?(person, insight)
+      assert [%Item{body: "1 item · FYI only"}] = briefing_rows(person.id)
+    end
+
+    test "a task with no inferable project is delivered as needing a call and nothing is filed" do
+      enable_dissemination!(%{dissemination_enabled: true})
+      dreamer = dreamer!()
+      person = person!()
+      {:ok, a} = Platform.Tasks.create_project(%{name: "np-a-#{n()}", org_id: acme_org_id()})
+      {:ok, b} = Platform.Tasks.create_project(%{name: "np-b-#{n()}", org_id: acme_org_id()})
+      tasks_before = Repo.aggregate(Task, :count)
+
+      insight =
+        ingest!(
+          ~s(<synthesis-insight action="task" confidence="high" addressee="#{person.id}">
+          Someone should own the release notes, ref #{n()}.
+          </synthesis-insight>),
+          dreamer
+        )
+
+      refute Map.has_key?(insight.action, "project_id")
+
+      log = capture_log(fn -> assert {:ok, %{users: 1, items: 1}} = run!() end)
+
+      # Kept, not dropped as a refused apply: no warning, delivered, open.
+      refute log =~ insight.id
+      assert Repo.aggregate(Task, :count) == tasks_before
+      assert project_tasks(a) == [] and project_tasks(b) == []
+      assert %Insight{state: "open", acted_by: nil} = acted = Repo.get!(Insight, insight.id)
+      assert %DateTime{} = acted.delivered_at
+      assert delivered?(person, insight)
+      assert [%Item{body: "1 item · 1 needs your call"}] = briefing_rows(person.id)
+
+      # A re-run does not file it either: it waits for the person's pick.
+      assert {:ok, %{users: 0, items: 0}} = run!(now: DateTime.add(@now, 3600))
+      assert Repo.aggregate(Task, :count) == tasks_before
     end
 
     test "a refused apply leaves the insight open and off the briefing" do
@@ -339,17 +541,58 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
                Repo.get!(Insight, insight.id)
 
       # The rest of the person's briefing still went out.
-      document = briefing_document(person)
-      values = text_values(document)
-      assert other.body in values
-      refute insight.body in values
-      refute CanvasDocument.get_node(document, "applied-" <> BriefingCard.node_key(insight))
+      assert delivered?(person, other)
+      refute delivered?(person, insight)
 
       # Control: once a Historian exists, the next run applies and lists it.
       historian!()
       assert {:ok, %{items: 1}} = run!(now: DateTime.add(@now, 3600))
       assert Wiki.get_page(key).content == "Deploys go to host-b."
-      assert insight.body in done_values(briefing_document(person))
+      assert delivered?(person, insight)
+    end
+
+    # Task 01a15ee1 stage 5 (carry-forward from stage 3): a needs_call
+    # page_edit is routed to the root admins and must reach their "Needs
+    # your call" open, never be tried unattended (which was refused and
+    # dropped). Probe: restoring the apply-everything clause turns this red.
+    test "a needs_call page_edit routed to a root admin is listed as a call, not applied" do
+      enable_dissemination!(%{dissemination_enabled: true, apply_page_edits: true})
+      dreamer = dreamer!()
+      historian!()
+      admin = person!("admin")
+      guest = person!("member", external: true)
+      key = "org/page/disseminate-call-#{n()}.md"
+      {:ok, _} = Wiki.upsert_page(key, %{content: "Deploys go to host-a.", updated_by: guest.id})
+      version = Wiki.get_page(key).version
+
+      insight =
+        ingest!(
+          ~s(<synthesis-insight action="page_edit" confidence="high" target="#{key}" source="page:#{key}">
+          The deploy host moved, ref #{n()}.
+          <old>go to host-a</old><new>go to host-b</new>
+          </synthesis-insight>),
+          dreamer
+        )
+
+      assert insight.tier == "needs_call"
+
+      {result, log} = with_log(fn -> run!() end)
+      assert {:ok, %{users: users}} = result
+      assert users >= 1
+      refute log =~ insight.id
+
+      # Not applied: the page and the insight are as they were.
+      page = Wiki.get_page(key)
+      assert {page.content, page.version} == {"Deploys go to host-a.", version}
+      assert %Insight{state: "open", acted_by: nil} = Repo.get!(Insight, insight.id)
+
+      # Listed for the admin, under Needs your call.
+      assert delivered?(admin, insight)
+      briefing = briefing_of(admin.id)
+      view = Briefings.view(briefing, Platform.Access.Scope.for_user(admin))
+      assert BriefingCard.node_key(insight) in Enum.map(view.needs_call, & &1.key)
+      assert [%{kind: :page_edit, insight: %Insight{id: id}}] = view.needs_call
+      assert id == insight.id
     end
 
     test "running twice applies once" do
@@ -372,9 +615,10 @@ defmodule Platform.Memory.Insights.DisseminatorTest do
       assert Wiki.get_page(key).version == version + 1
       assert length(project_tasks(project)) == 1
 
-      values = text_values(briefing_document(person))
-      assert Enum.count(values, &(&1 == edit.body)) == 1
-      assert Enum.count(values, &(&1 == task.body)) == 1
+      assert delivered?(person, edit)
+      assert delivered?(person, task)
+      assert map_size(briefing_of(person.id).items) == 2
+      assert [_one_row] = all_briefing_rows(person.id)
     end
   end
 

@@ -418,4 +418,95 @@ defmodule Platform.Social.ApprovalsTest do
       end
     end
   end
+
+  describe "a refused publish on the card (task 01a165f1, stage 3)" do
+    defp refused_card!(ctx, kind, attrs \\ []) do
+      {post, card} = pending_post!(ctx, ctx.a)
+
+      set =
+        Keyword.merge(
+          [
+            status: "approved",
+            approved_by_user_id: ctx.h1.id,
+            approved_at: DateTime.utc_now(),
+            refused_reason: kind,
+            refused_at: DateTime.utc_now(),
+            error: "The media sentence."
+          ],
+          attrs
+        )
+
+      Repo.update_all(from(p in Post, where: p.id == ^post.id), set: set)
+      card
+    end
+
+    test "status_line names the refusal before the approved clause", ctx do
+      card = refused_card!(ctx, "media_rejected")
+      view = Approvals.card_view(card.id, {:user, ctx.h1.id})
+      assert view.status == %{tone: :error, dot: :error, text: "Not published"}
+
+      card = refused_card!(ctx, "rate_limited", retry_after: DateTime.add(DateTime.utc_now(), 60))
+      view = Approvals.card_view(card.id, {:user, ctx.h1.id})
+      assert view.status == %{tone: :warning, dot: :warning, text: "Waiting to retry"}
+    end
+
+    test "card_view carries the refusal for everyone and the action for the approver only",
+         ctx do
+      card = refused_card!(ctx, "media_rejected")
+
+      approver = Approvals.card_view(card.id, {:user, ctx.h1.id})
+
+      assert %{kind: :media_rejected, label: "Not published", reason: "The media sentence."} =
+               approver.refusal
+
+      assert approver.refusal.action.kind == :retry_publish
+
+      for viewer <- [{:user, ctx.n.id}, {:agent, ctx.g.id}, nil] do
+        view = Approvals.card_view(card.id, viewer)
+        assert view.role == :viewer
+        assert view.refusal.reason == "The media sentence."
+        assert view.refusal.action == nil
+      end
+    end
+
+    test "Open settings is for an org admin approver only", ctx do
+      card = refused_card!(ctx, "publisher_not_configured")
+      assert Approvals.card_view(card.id, {:user, ctx.h1.id}).refusal.action == nil
+
+      Repo.update_all(
+        from(m in Platform.Tenancy.OrgMembership,
+          where: m.user_id == ^ctx.h1.id and m.org_id == ^ctx.org_id
+        ),
+        set: [role: "admin"]
+      )
+
+      assert %{kind: :open_settings, label: "Open settings"} =
+               Approvals.card_view(card.id, {:user, ctx.h1.id}).refusal.action
+    end
+
+    test "rate_limited: Publish now disabled before retry_after, enabled after", ctx do
+      card =
+        refused_card!(ctx, "rate_limited", retry_after: DateTime.add(DateTime.utc_now(), 600))
+
+      action = Approvals.card_view(card.id, {:user, ctx.h1.id}).refusal.action
+      assert {action.kind, action.disabled?} == {:publish_now, true}
+
+      card = refused_card!(ctx, "rate_limited", retry_after: DateTime.add(DateTime.utc_now(), -5))
+      action = Approvals.card_view(card.id, {:user, ctx.h1.id}).refusal.action
+      assert {action.kind, action.disabled?} == {:publish_now, false}
+    end
+
+    test "refusal_copy never shows a raw atom" do
+      ctx = %{platform_label: "Instagram", error: nil, retry_after: ~U[2026-10-22 14:05:00Z]}
+
+      assert Approvals.refusal_copy(:rate_limited, ctx) ==
+               "Instagram's posting limit is reached. This post goes out at 14:05."
+
+      assert Approvals.refusal_copy(:account_archived, ctx) ==
+               "The Instagram account is disconnected."
+
+      assert Approvals.refusal_copy(:media_rejected, ctx) ==
+               "Instagram won't accept this post's media."
+    end
+  end
 end

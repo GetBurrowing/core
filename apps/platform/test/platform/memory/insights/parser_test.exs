@@ -26,6 +26,27 @@ defmodule Platform.Memory.Insights.ParserTest do
     assert parsed.action == %{"target" => "org/page/a.md", "addressee" => "ops"}
   end
 
+  test "a task with a uuid target also carries it as project_id (task 01a15ee1 stage 2)" do
+    uuid = "019D1357-CB08-7023-B165-FD19E9462316"
+
+    assert [task] =
+             Parser.parse(block(~s(action="task" confidence="high" target="#{uuid}"), "Do it."))
+
+    assert task.action == %{"target" => uuid, "project_id" => String.downcase(uuid)}
+
+    # A slug target is not a project id; only ProjectInference resolves it.
+    assert [slugged] =
+             Parser.parse(block(~s(action="task" confidence="high" target="core"), "Do it."))
+
+    assert slugged.action == %{"target" => "core"}
+
+    # A uuid target on any other action type is not a project.
+    assert [briefing] =
+             Parser.parse(block(~s(action="briefing" confidence="high" target="#{uuid}"), "FYI."))
+
+    refute Map.has_key?(briefing.action, "project_id")
+  end
+
   test "a page_edit lifts its hunks, in order, into the action map" do
     body = """
     The rate limit doubled.

@@ -66,18 +66,26 @@ defmodule Platform.Social.MediaRulesTest do
   end
 
   describe "instagram" do
-    test "a Reel needs a Business or Creator account" do
-      for type <- ["personal", nil] do
-        assert {:error, ["Instagram Reels need a Business or Creator account"]} =
-                 MediaRules.check("instagram", %{platform_account_type: type}, [video(30)])
-      end
+    test "a personal account is refused a Reel" do
+      assert {:error, ["Instagram Reels need a Business or Creator account"]} =
+               MediaRules.check("instagram", %{platform_account_type: "personal"}, [video(30)])
+    end
 
+    test "an unknown account type (nil) allows a Reel; the platform decides" do
+      assert :ok = MediaRules.check("instagram", %{platform_account_type: nil}, [video(30)])
+      assert :ok = MediaRules.check("instagram", nil, [video(30)])
+      assert :ok = MediaRules.check("instagram", %{}, [video(30)])
+    end
+
+    test "a Business or Creator account is allowed a Reel" do
       for type <- ["business", "creator"],
           do:
             assert(
               :ok = MediaRules.check("instagram", %{platform_account_type: type}, [video(30)])
             )
+    end
 
+    test "a personal account may still post an image" do
       assert :ok = MediaRules.check("instagram", %{platform_account_type: "personal"}, [image()])
     end
   end
@@ -169,6 +177,9 @@ defmodule Platform.Social.MediaRulesTest do
       assert msg =~ "Instagram Reels must be at most 1 GB"
 
       assert {:error, ["Instagram Reels need a Business or Creator account", _]} =
+               MediaRules.check("instagram", %{platform_account_type: "personal"}, [video(901)])
+
+      assert {:error, ["Instagram Reels must be at most 900 seconds" <> _]} =
                MediaRules.check("instagram", nil, [video(901)])
     end
   end

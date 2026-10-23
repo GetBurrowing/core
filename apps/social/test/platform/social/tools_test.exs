@@ -275,6 +275,45 @@ defmodule Platform.Social.ToolsTest do
       assert {:error, %{code: :not_found}} =
                call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.b)
     end
+
+    test "carries the refusal fields and honours refused: true (task 01a165f1)", ctx do
+      approver = user!()
+      refused = approved_post!(ctx.org_a, ctx.acc2, %{body: "refused"}, approver)
+      _approved = approved_post!(ctx.org_a, ctx.acc2, %{body: "fine"}, approver)
+      at = DateTime.utc_now()
+      retry_after = DateTime.add(at, 600, :second)
+
+      Repo.update_all(from(p in Post, where: p.id == ^refused.id),
+        set: [refused_reason: "rate_limited", refused_at: at, retry_after: retry_after]
+      )
+
+      assert {:ok, %{posts: all, total: 3}} =
+               call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert Enum.all?(
+               all,
+               &Enum.all?([:refused_reason, :refused_at, :retry_after], fn k ->
+                 Map.has_key?(&1, k)
+               end)
+             )
+
+      assert {:ok, %{posts: [p], total: 1}} =
+               call(
+                 "social_post_list",
+                 %{"profile_id" => ctx.profile.id, "refused" => true},
+                 ctx.a
+               )
+
+      assert {p.id, p.refused_reason, p.refused_at, p.retry_after} ==
+               {refused.id, "rate_limited", at, retry_after}
+
+      assert {:ok, %{total: 3}} =
+               call(
+                 "social_post_list",
+                 %{"profile_id" => ctx.profile.id, "refused" => false},
+                 ctx.a
+               )
+    end
   end
 
   describe "social_clip_propose" do

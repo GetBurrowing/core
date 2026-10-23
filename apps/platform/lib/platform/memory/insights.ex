@@ -66,6 +66,7 @@ defmodule Platform.Memory.Insights do
   alias Platform.Memory.Insights.Actions
   alias Platform.Memory.Insights.Grounding
   alias Platform.Memory.Insights.Parser
+  alias Platform.Memory.Insights.ProjectInference
   alias Platform.Memory.Insights.Routing
   alias Platform.Memory.Insights.Tier
   alias Platform.Memory.InsightVerdict
@@ -75,6 +76,7 @@ defmodule Platform.Memory.Insights do
   @default_open_limit 50
   @default_exemplars_limit 3
   @signal_source_type "memory_insight"
+  @deferred_key {__MODULE__, :deferred_broadcasts}
 
   @journal_path_regex ~r/^(org|project\/[^\/]+|space\/[^\/]+)\/journal\/(\d{4}-\d{2}-\d{2})\.md$/
 
@@ -166,6 +168,7 @@ defmodule Platform.Memory.Insights do
         })
         |> Grounding.ground()
         |> put_disseminable(thresholds)
+        |> put_project()
         |> route_and_tier()
 
       %Insight{}
@@ -182,6 +185,29 @@ defmodule Platform.Memory.Insights do
       end
     end
   end
+
+  # Task 01a15ee1 stage 2: a task insight carries the project it presumably
+  # belongs to (`ProjectInference.infer/1`) as `action["project_id"]`, with
+  # the rung that named it as `action["project_reason"]`. Nothing inferred
+  # drops a parser-lifted `project_id` that names no live project in the
+  # org, so the stored action never points at one. `apply_unattended/2`
+  # infers again before filing.
+  defp put_project(%{action_type: "task"} = attrs) do
+    action = Map.get(attrs, :action) || %{}
+
+    action =
+      case ProjectInference.infer(attrs) do
+        {project_id, reason} ->
+          Map.merge(action, %{"project_id" => project_id, "project_reason" => reason})
+
+        nil ->
+          Map.drop(action, ["project_id", "project_reason"])
+      end
+
+    Map.put(attrs, :action, action)
+  end
+
+  defp put_project(attrs), do: attrs
 
   # Stage 2: route (unless grounding already addressed a downgraded
   # question to the fact's owner), then classify on the routed insight.
@@ -706,6 +732,16 @@ defmodule Platform.Memory.Insights do
           {:ok, Insight.t()} | {:error, atom() | Ecto.Changeset.t()}
   def edit(insight_or_id, scope, attrs), do: Actions.edit(insight_or_id, scope, attrs)
 
+  @doc """
+  Reopen an insight closed from the briefing with Got it, Dismiss or Not
+  useful (task 01a15ee1 stage 3). `verdict_id:` also deletes the `rejected`
+  verdict that Not useful wrote, by id; the experiment signal it recorded
+  stays, because signals are append-only. See `Actions.restore/3`.
+  """
+  @spec restore(Insight.t() | binary(), Platform.Access.Scope.t(), keyword()) ::
+          {:ok, Insight.t()} | {:error, atom() | Ecto.Changeset.t()}
+  def restore(insight_or_id, scope, opts \\ []), do: Actions.restore(insight_or_id, scope, opts)
+
   # ── Exemplars ────────────────────────────────────────────────────────
 
   @doc """
@@ -816,6 +852,48 @@ defmodule Platform.Memory.Insights do
   # change they will re-read is committed; the stage-6 tests assert
   # `in_transaction?: false`.
   def broadcast(event, payload) do
+    case Process.get(@deferred_key) do
+      list when is_list(list) ->
+        Process.put(@deferred_key, [{event, payload} | list])
+        :ok
+
+      _ ->
+        broadcast_now(event, payload)
+    end
+  end
+
+  @doc """
+  Run `fun` with every insight broadcast it causes HELD, then send them in
+  order once `fun` returns `{:ok, _}`; any other result drops them (task
+  01a15ee1 stage 3). For a caller that wraps several insight writes in ONE
+  outer transaction (`Platform.Memory.Insights.Briefings.handle/5`): the
+  inner functions broadcast after their own commit, which inside an outer
+  transaction is still before the real one, so a subscriber would re-read
+  uncommitted state. `fun` must return after its transaction has finished.
+  """
+  @spec with_deferred_broadcasts((-> term())) :: term()
+  def with_deferred_broadcasts(fun) when is_function(fun, 0) do
+    outer = Process.get(@deferred_key)
+    Process.put(@deferred_key, [])
+
+    try do
+      result = fun.()
+      held = Process.get(@deferred_key) || []
+
+      case result do
+        {:ok, _} -> held |> Enum.reverse() |> Enum.each(fn {e, p} -> broadcast_now(e, p) end)
+        _ -> :ok
+      end
+
+      result
+    after
+      if is_list(outer),
+        do: Process.put(@deferred_key, outer),
+        else: Process.delete(@deferred_key)
+    end
+  end
+
+  defp broadcast_now(event, payload) do
     :telemetry.execute(
       [:platform, :memory_insights, :broadcast],
       %{count: 1},

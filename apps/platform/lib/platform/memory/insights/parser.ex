@@ -13,7 +13,9 @@ defmodule Platform.Memory.Insights.Parser do
 
   Attributes may appear in any order. `action` and `confidence` are
   required and enum-validated. `evidence`, `source`, `addressee` and
-  `target` are optional and kept verbatim.
+  `target` are optional and kept verbatim. For a `task` whose `target` is a
+  uuid (the project the work belongs to, task 01a15ee1 stage 2), the uuid
+  is also set as `action["project_id"]`.
 
   A `page_edit` body must carry at least one hunk,
   `<old>…</old><new>…</new>` (whitespace between the two tags allowed). The
@@ -84,7 +86,7 @@ defmodule Platform.Memory.Insights.Parser do
          source_ref: blank_to_nil(attrs["source"]),
          body: trimmed,
          block_hash: hash(trimmed),
-         action: action_map(attrs, hunks)
+         action: action_map(action_type, attrs, hunks)
        }}
     end
   end
@@ -98,11 +100,24 @@ defmodule Platform.Memory.Insights.Parser do
 
   defp hunks(_action_type, _body), do: {:ok, nil}
 
-  defp action_map(attrs, hunks) do
-    %{"target" => blank_to_nil(attrs["target"]), "addressee" => blank_to_nil(attrs["addressee"])}
+  defp action_map(action_type, attrs, hunks) do
+    target = blank_to_nil(attrs["target"])
+
+    %{"target" => target, "addressee" => blank_to_nil(attrs["addressee"])}
     |> then(fn map -> if hunks, do: Map.put(map, "hunks", hunks), else: map end)
+    |> Map.put("project_id", task_project_id(action_type, target))
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
   end
+
+  # Task 01a15ee1 stage 2: a task's `target` is the uuid of the project the
+  # work belongs to. A uuid target is lifted into `project_id` as well; any
+  # other target (a slug, prose) stays in `target` only, for
+  # `Platform.Memory.Insights.ProjectInference` to resolve or drop.
+  defp task_project_id("task", target) when is_binary(target) do
+    if Platform.UUID.valid?(target), do: String.downcase(target), else: nil
+  end
+
+  defp task_project_id(_action_type, _target), do: nil
 
   defp extract_attrs(attr_string) do
     @attr_regex
