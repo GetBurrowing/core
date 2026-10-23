@@ -82,6 +82,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   alias Platform.Tasks.{Plan, Task}
   alias PlatformWeb.Tasks.ExternalFeedbackComponents
   alias PlatformWeb.Tasks.Selection
+  alias PlatformWeb.Tasks.TaskDisplay
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1, phase_label: 1]
 
@@ -113,7 +114,13 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
     epoch = assigns[:detail_epoch]
     changed_epoch? = Map.get(socket.assigns, :detail_epoch) != epoch
 
-    socket = assign(socket, assigns)
+    # Screen-share masking (task 01a169e5 stage 2). Defaulted so a caller
+    # that passes no mask assigns renders real names, as before.
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign_new(:mask_labels, fn -> %{} end)
+      |> assign_new(:mask_names?, fn -> false end)
 
     socket =
       if changed_epoch? do
@@ -1301,10 +1308,17 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               {String.capitalize(@selected_task.priority)}
             </span>
             <span :if={@selected_task.project} class="text-xs text-subtle">
-              {@selected_task.project.name || "—"}
+              {TaskDisplay.label_for(
+                @mask_labels,
+                @mask_names?,
+                {:project, @selected_task.project.id},
+                real: @selected_task.project.name || "—"
+              )}
             </span>
             <span :if={@selected_task.epic} class="text-xs text-subtle">
-              / {@selected_task.epic.name || "—"}
+              / {TaskDisplay.label_for(@mask_labels, @mask_names?, {:epic, @selected_task.epic.id},
+                real: @selected_task.epic.name || "—"
+              )}
             </span>
           </div>
 
@@ -1601,7 +1615,12 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                 <span class="text-xs font-semibold uppercase tracking-wider text-base-content">
                   Deploy target
                 </span>
-                <.deploy_target_display task={@selected_task} target={@myself} />
+                <.deploy_target_display
+                  task={@selected_task}
+                  target={@myself}
+                  mask_labels={@mask_labels}
+                  mask_names?={@mask_names?}
+                />
               </div>
             <% end %>
           </div>
@@ -2112,11 +2131,15 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
   attr(:task, :any, required: true)
   attr(:target, :any, required: true)
+  attr(:mask_labels, :map, default: %{})
+  attr(:mask_names?, :boolean, default: false)
 
   defp deploy_target_display(assigns) do
+    mask = {assigns.mask_labels, assigns.mask_names?}
+
     {config_label, strategy_name} =
       case assigns.task.deploy_target_config do
-        %{"strategy" => strat} = cfg -> {deploy_target_config_label(cfg), strat}
+        %{"strategy" => strat} = cfg -> {deploy_target_config_label(cfg, mask), strat}
         _ -> {nil, nil}
       end
 
@@ -2184,9 +2207,24 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # label can render `"Project Files: <project>/<folder>"` instead of a bare
   # UUID. The lookup is best-effort — if the target project is missing (soft-
   # deleted, cross-tenant, etc.) the label degrades to just the folder.
-  defp deploy_target_config_label(%{"strategy" => "project_files"} = cfg) do
+  #
+  # The project name is resolved through `TaskDisplay.label_for/4` so Names
+  # masked covers it (task 01a169e5 stage 2).
+  defp deploy_target_config_label(
+         %{"strategy" => "project_files"} = cfg,
+         {mask_labels, mask_names?}
+       ) do
     folder = string_or_nil(Map.get(cfg, "folder"))
-    project_name = lookup_project_name(Map.get(cfg, "project_id"))
+    project_id = Map.get(cfg, "project_id")
+
+    project_name =
+      case lookup_project_name(project_id) do
+        nil ->
+          nil
+
+        name ->
+          TaskDisplay.label_for(mask_labels, mask_names?, {:project, project_id}, real: name)
+      end
 
     case {project_name, folder} do
       {nil, nil} -> "Project Files"
@@ -2195,6 +2233,8 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
       {name, folder} -> "Project Files: #{name}/#{folder}"
     end
   end
+
+  defp deploy_target_config_label(cfg, _mask), do: deploy_target_config_label(cfg)
 
   defp deploy_target_config_label(%{"strategy" => "docker_deploy"} = cfg) do
     case string_or_nil(Map.get(cfg, "target")) do

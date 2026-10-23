@@ -770,6 +770,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
               member_review_counts={member_review_counts(@stack_board_data, item, @review_counts)}
               expanded?={MapSet.member?(@expanded_stacks, item.id)}
               myself={@myself}
+              mask_labels={@mask_labels}
+              mask_names?={@mask_names?}
             />
             <.done_more_button
               :if={col_key == "done" and done_open?(@done_expanded?, @task_search_query)}
@@ -963,6 +965,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   attr :member_review_counts, :map, default: %{}
   attr :expanded?, :boolean, default: false
   attr :myself, :any, required: true
+  attr :mask_labels, :map, default: %{}
+  attr :mask_names?, :boolean, default: false
 
   defp desktop_board_item(%{item: %Stack{}} = assigns) do
     ~H"""
@@ -985,6 +989,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       assignee_name={@assignee_name}
       sponsor={@sponsor}
       myself={@myself}
+      mask_labels={@mask_labels}
+      mask_names?={@mask_names?}
     />
     """
   end
@@ -1693,6 +1699,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   attr :assignee_name, :string, default: nil
   attr :sponsor, :any, default: nil
   attr :myself, :any, required: true
+  attr :mask_labels, :map, default: %{}
+  attr :mask_names?, :boolean, default: false
 
   defp desktop_task_card(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)
@@ -1742,7 +1750,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             :if={@task.project}
             class="text-[10px] font-medium uppercase tracking-wider text-subtle"
           >
-            {@task.project.name}
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, @task.project.id},
+              real: @task.project.name
+            )}
           </p>
 
           <%!-- Title row --%>
