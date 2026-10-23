@@ -168,7 +168,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:user, user)
       |> assign(:tab, "queue")
       |> assign(:queue_canvas_ids, [])
-      |> assign(:type_checked?, false)
+      |> assign(:type_checked_profile_ids, MapSet.new())
       |> assign(:week_start, Cal.week_start(Date.utc_today()))
       |> assign(:detail, nil)
       |> assign(:notice, nil)
@@ -975,9 +975,10 @@ defmodule PlatformWeb.SocialLive do
   # Runs only on the Connections tab, on a connected socket, for a viewer who
   # passes `authorize/1`, on a profile with a vendor ref, while a
   # never-connected row is listed, or while a connected row has a nil
-  # `platform_account_type` and this LiveView has not yet asked (an Instagram
-  # row Zernio can never type costs one list call per page session, not one
-  # per tab click). `reconcile_accounts/3` re-checks the approver and the ref
+  # `platform_account_type` and this LiveView has not yet asked for THIS
+  # profile (an Instagram row Zernio can never type costs one list call per
+  # profile per page session, not one per tab click; switching to another
+  # profile asks once for that profile too). `reconcile_accounts/3` re-checks the approver and the ref
   # and sends nothing when there is nothing to do, so once every row is
   # connected and typed this costs zero requests. Synchronous: the
   # publisher's 5s receive_timeout bounds how long the click can block.
@@ -988,7 +989,10 @@ defmodule PlatformWeb.SocialLive do
   defp maybe_reconcile(socket), do: socket
 
   defp reconcile_due?(%{pending_accounts?: true}), do: true
-  defp reconcile_due?(%{untyped_accounts?: true, type_checked?: false}), do: true
+
+  defp reconcile_due?(%{untyped_accounts?: true, profile: %{id: id}} = assigns),
+    do: not MapSet.member?(assigns.type_checked_profile_ids, id)
+
   defp reconcile_due?(_assigns), do: false
 
   defp reconcile(socket) do
@@ -996,7 +1000,7 @@ defmodule PlatformWeb.SocialLive do
          {:ok, fresh, user_id} <- authorize(socket),
          ref when is_binary(ref) and ref != "" <- fresh.provider_profile_ref do
       socket
-      |> assign(:type_checked?, true)
+      |> update(:type_checked_profile_ids, &MapSet.put(&1, fresh.id))
       |> reconciled(Social.reconcile_accounts(fresh.org_id, fresh, user_id))
     else
       _ -> socket

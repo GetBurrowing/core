@@ -899,19 +899,21 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     end
 
     # The profile's ONLY row: connected, with no account type.
-    defp untyped_row!(ctx, platform, ref) do
-      {:ok, account} = Social.create_account(ctx.org_id, ctx.typed_profile, %{platform: platform})
+    defp untyped_row!(ctx, platform, ref), do: untyped_row!(ctx, ctx.typed_profile, platform, ref)
+
+    defp untyped_row!(ctx, profile, platform, ref) do
+      {:ok, account} = Social.create_account(ctx.org_id, profile, %{platform: platform})
 
       account
       |> Ecto.Changeset.change(status: "connected", provider_account_ref: ref)
       |> Repo.update!()
     end
 
-    defp listed(ref, platform, account_type) do
+    defp listed(ref, platform, account_type, profile_ref \\ "zprof_typed") do
       %{
         ref: ref,
         platform: platform,
-        profile_ref: "zprof_typed",
+        profile_ref: profile_ref,
         username: "user-#{ref}",
         active?: true,
         account_type: account_type
@@ -948,6 +950,47 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       reopen(child)
       assert length(Fake.calls(:list_accounts)) == 1
       assert Repo.get!(Account, ig.id).platform_account_type == nil
+    end
+
+    # Task 01a16588: the "asked already" mark is per profile, so switching to
+    # a second profile in the SAME LiveView still types that profile's rows.
+    # A stored type surviving a nil report is covered at the context level by
+    # social_connect_return_test.exs "a nil report keeps a stored creator on
+    # a connected row".
+    test "switching profile in one LiveView types the second profile's row; one call per profile",
+         %{conn: conn} = ctx do
+      profile_b = linked_profile!(ctx, "Typed B", "zprof_typed_b")
+      ig = untyped_row!(ctx, "instagram", "zacct_ig")
+      tiktok = untyped_row!(ctx, profile_b, "tiktok", "zacct_tt_b")
+
+      Fake.put_next(:list_accounts, {:ok, [listed("zacct_ig", "instagram", nil)]})
+      child = open_profile(conn, ctx.h1, ctx.typed_profile)
+      assert length(Fake.calls(:list_accounts)) == 1
+
+      Fake.put_next(
+        :list_accounts,
+        {:ok, [listed("zacct_tt_b", "tiktok", "business", "zprof_typed_b")]}
+      )
+
+      child |> form("#social-profile-switcher", %{profile_id: profile_b.id}) |> render_change()
+      reopen(child)
+
+      assert [
+               {:list_accounts, [%Profile{id: first}], _},
+               {:list_accounts, [%Profile{id: second}], _}
+             ] = Fake.calls(:list_accounts)
+
+      assert first == ctx.typed_profile.id
+      assert second == profile_b.id
+      assert Repo.get!(Account, tiktok.id).platform_account_type == "business"
+      assert Repo.get!(Account, ig.id).platform_account_type == nil
+
+      child
+      |> form("#social-profile-switcher", %{profile_id: ctx.typed_profile.id})
+      |> render_change()
+
+      reopen(child)
+      assert length(Fake.calls(:list_accounts)) == 2
     end
   end
 
