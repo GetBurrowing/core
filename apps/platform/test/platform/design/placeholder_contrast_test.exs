@@ -68,6 +68,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/partials/external_rail.ex",
     "platform_web/live/chat/partials/chat_list.ex",
     "platform_web/live/chat/partials/rail.ex",
+    # The briefing detail's fields (task 01a15ee1 stage 6), from main.
+    "platform_web/live/inbox_live/briefing_component.ex",
     "platform_web/live/meeting_live.html.heex"
   ]
 
