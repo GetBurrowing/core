@@ -133,7 +133,7 @@ jobs:
         working-directory: /
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
           update-ca-certificates
 
       # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
@@ -200,8 +200,14 @@ jobs:
           key: deps-${{ hashFiles('apps/platform/mix.lock') }}
           restore-keys: deps-
 
+      # The precompiled NIFs (wasmex, vix, lazy_html) come from GitHub
+      # release URLs, which OTP 28's httpc can no longer download
+      # (header_too_long); the script fetches them with curl into the cache
+      # the deps compile reads first. See the script's header.
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
 
       # The JS suites had NO CI gate at all until this.
       #
@@ -676,7 +682,7 @@ jobs:
       - name: Install system packages (with Play)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
           update-ca-certificates
 
       # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
@@ -718,6 +724,7 @@ jobs:
         run: |
           MIX_ENV=dev mix deps.get
           MIX_ENV=test mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
 
       - name: Compile the module with warnings as errors (dev + test)
         run: |
@@ -784,12 +791,14 @@ jobs:
           MIX_ENV: dev
         run: |
           mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
           if ! mix compile --warnings-as-errors; then
             echo "::error::apps/burrow_release: mix compile --warnings-as-errors failed in MIX_ENV=dev."
             exit 1
           fi
           mix format --check-formatted
           mix platform.extensions.assets --out assets/generated
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind . ../platform/config/config.exs
           mix tailwind.install --if-missing
           mix tailwind platform --minify
 
@@ -797,7 +806,9 @@ jobs:
       # (phoenix's JS), so core's deps are fetched too.
       - name: Install core dependencies (bundle guard)
         working-directory: apps/platform
-        run: mix deps.get
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
 
       # A with-modules stylesheet may add rules, never lose one of core's. The
       # first with-Play image lost every vendored `hero-*` icon this way
@@ -805,6 +816,7 @@ jobs:
       - name: Compare the with-Play stylesheet against core's
         working-directory: apps/platform
         run: |
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
           mix tailwind.install --if-missing
           mix tailwind platform --minify
           sh "$GITHUB_WORKSPACE/scripts/check-flavour-css.sh" \
@@ -915,7 +927,7 @@ jobs:
       - name: Install system packages (with Social)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates git postgresql-client
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
           update-ca-certificates
 
       # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
@@ -949,6 +961,7 @@ jobs:
         run: |
           MIX_ENV=dev mix deps.get
           MIX_ENV=test mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
 
       - name: Compile the module with warnings as errors (dev + test)
         run: |
