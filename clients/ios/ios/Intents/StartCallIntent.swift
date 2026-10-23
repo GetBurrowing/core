@@ -166,51 +166,51 @@ enum CallDestination {
 // BurrowWidgets and NotificationService too, so every schema intent and
 // everything that names one is App-only (task 01a111bb).
 #if BURROW_APP
-@available(iOS 27, *)
-@AppIntent(schema: .phone.startCall)
-struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
-    var destination: CallDestination
-    var audioVisualMode: CallAudioVisualMode
+    @available(iOS 27, *)
+    @AppIntent(schema: .phone.startCall)
+    struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
+        var destination: CallDestination
+        var audioVisualMode: CallAudioVisualMode
 
-    /// Burrow's own extra (Shortcuts only): a group call to everyone in a
-    /// conversation, confirmed first. Overrides `destination` when set.
-    @Parameter(title: "Conversation")
-    var conversation: ConversationEntity?
+        /// Burrow's own extra (Shortcuts only): a group call to everyone in a
+        /// conversation, confirmed first. Overrides `destination` when set.
+        @Parameter(title: "Conversation")
+        var conversation: ConversationEntity?
 
-    @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let target: CallTarget
-        if let conversation {
-            IntentLog.step("call", "destination=conversation")
-            target = .conversation(id: conversation.id, name: conversation.displayName)
-        } else {
-            let person: CallPersonEntity
-            switch destination {
-            case .person(let one):
-                IntentLog.step("call", "destination=person")
-                person = one
-            case .people(let people):
-                IntentLog.step("call", "destination=people(\(people.count))")
-                guard people.count == 1, let one = people.first else {
-                    IntentLog.step("call", "refused=several_recipients")
-                    throw IntentFailure.onePersonAtATime
+        @MainActor
+        func perform() async throws -> some IntentResult & ProvidesDialog {
+            let target: CallTarget
+            if let conversation {
+                IntentLog.step("call", "destination=conversation")
+                target = .conversation(id: conversation.id, name: conversation.displayName)
+            } else {
+                let person: CallPersonEntity
+                switch destination {
+                case .person(let one):
+                    IntentLog.step("call", "destination=person")
+                    person = one
+                case .people(let people):
+                    IntentLog.step("call", "destination=people(\(people.count))")
+                    guard people.count == 1, let one = people.first else {
+                        IntentLog.step("call", "refused=several_recipients")
+                        throw IntentFailure.onePersonAtATime
+                    }
+                    person = one
                 }
-                person = one
+                // A person whose id is not one of Burrow's (task 01a111bb stage
+                // 7) is matched by its IntentPerson, as a message recipient is.
+                let found = try await CallPersonResolution.resolve(person) { name, people in
+                    try await choosePerson(self, name: name, people: people)
+                }
+                target = .person(id: found.id, name: found.name, isAgent: found.isAgent)
             }
-            // A person whose id is not one of Burrow's (task 01a111bb stage
-            // 7) is matched by its IntentPerson, as a message recipient is.
-            let found = try await CallPersonResolution.resolve(person) { name, people in
-                try await choosePerson(self, name: name, people: people)
+            let text = try await CallActions().start(target, video: audioVisualMode == .video) { prompt in
+                try await requestConfirmation(
+                    result: .result(dialog: IntentDialog("\(prompt)")),
+                    confirmationActionName: .custom(
+                        acceptLabel: "Call", acceptAlternatives: ["Yes"], denyLabel: "Cancel", denyAlternatives: ["No"], destructive: false))
             }
-            target = .person(id: found.id, name: found.name, isAgent: found.isAgent)
+            return .result(dialog: IntentDialog("\(text)"))
         }
-        let text = try await CallActions().start(target, video: audioVisualMode == .video) { prompt in
-            try await requestConfirmation(
-                result: .result(dialog: IntentDialog("\(prompt)")),
-                confirmationActionName: .custom(
-                    acceptLabel: "Call", acceptAlternatives: ["Yes"], denyLabel: "Cancel", denyAlternatives: ["No"], destructive: false))
-        }
-        return .result(dialog: IntentDialog("\(text)"))
     }
-}
 #endif
