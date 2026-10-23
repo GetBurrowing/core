@@ -6,6 +6,7 @@ defmodule PlatformWeb.SocialCardLiveTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
   import Platform.SocialFixtures
   import Platform.SocialApprovalFixtures
@@ -237,5 +238,49 @@ defmodule PlatformWeb.SocialCardLiveTest do
     assert render(view) =~ "This card changed since it was posted; reload."
     assert Fake.calls(:publish) == []
     assert Repo.get!(Post, ctx.post.id).status == "needs_approval"
+  end
+
+  test "a refused publish in chat: the approver gets Retry publish, a viewer the reason only (task 01a165f1)",
+       ctx do
+    h1 = Platform.Accounts.get_user(ctx.h1.id)
+    fp = Approvals.card_view(ctx.card.id, {:user, ctx.h1.id}).fingerprint
+    {:ok, _} = Approvals.decide_approve(ctx.card.canvas_id, h1, fp)
+    Fake.reset()
+
+    Repo.update_all(
+      from(p in Post, where: p.id == ^ctx.post.id),
+      set: [
+        status: "approved",
+        refused_reason: "media_rejected",
+        refused_at: DateTime.utc_now(),
+        error: "Instagram Reels need a Business or Creator account."
+      ]
+    )
+
+    view = open(ctx.h1, ctx)
+
+    assert has_element?(
+             view,
+             in_card(ctx.card, "[data-role='social-card-status']"),
+             "Not published"
+           )
+
+    action = in_card(ctx.card, "[data-role='social-card-refusal-action']")
+    assert has_element?(view, action, "Retry publish")
+
+    viewer = open(ctx.n, ctx)
+
+    assert has_element?(
+             viewer,
+             in_card(ctx.card, "[data-role='social-card-refusal-reason']"),
+             "Instagram Reels need a Business or Creator account."
+           )
+
+    refute has_element?(viewer, action)
+
+    view |> element(action) |> render_click()
+    assert [{:publish, _, _}] = Fake.calls(:publish)
+    assert Repo.get!(Post, ctx.post.id).refused_reason == nil
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-refusal']"))
   end
 end

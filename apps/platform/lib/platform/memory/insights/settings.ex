@@ -18,13 +18,21 @@ defmodule Platform.Memory.Insights.Settings do
     * `apply_page_edits` — default `false`. When on, a grounded `page_edit`
       insight at or above the run's `auto_apply_min_confidence` is applied
       unattended and can be reverted from the briefing.
-    * `file_tasks` — default `false`. When on, a `task` insight at or above
-      the same threshold is filed to the backlog unattended and can be
-      deleted from the briefing.
+    * `file_tasks` — default `true` (task
+      `01a15ee1-48c8-7000-a8f1-33a5586cb458`, stage 2). When on, a `task`
+      insight at or above the same threshold is filed to the backlog
+      unattended, into the project
+      `Platform.Memory.Insights.ProjectInference` presumes, and can be
+      deleted or moved from the briefing.
 
-  Both ship off and only a root admin can turn them on (task
+  `apply_page_edits` ships off and only a root admin can turn it on (task
   `01a15587-afc8-7000-b76d-4e1c48eee5ed` lifted the earlier deferral and its
-  DB CHECK).
+  DB CHECK). `file_tasks` shipped off too until the sponsor, 2026-10-21:
+  "the tasks should already have been filed to the presumed appropriate
+  project. those should be in the easily reversible column". Migration
+  `20261021160100_insight_settings_file_tasks_default_on` makes the column
+  default true and flips only a row that was never edited, so an admin's
+  saved choice stands.
 
   ## Authorization
 
@@ -51,7 +59,7 @@ defmodule Platform.Memory.Insights.Settings do
     field(:deliver_briefings, :boolean, default: true)
     field(:deliver_questions, :boolean, default: true)
     field(:apply_page_edits, :boolean, default: false)
-    field(:file_tasks, :boolean, default: false)
+    field(:file_tasks, :boolean, default: true)
 
     timestamps(type: :utc_datetime_usec)
   end

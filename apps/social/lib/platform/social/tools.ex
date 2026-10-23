@@ -291,7 +291,13 @@ defmodule Platform.Social.Tools do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
         {limit, offset} = ResultBound.page(args)
-        filters = [profile_id: profile.id, status: blank_to_nil(args["status"])]
+
+        filters = [
+          profile_id: profile.id,
+          status: blank_to_nil(args["status"]),
+          refused: args["refused"] == true
+        ]
+
         posts = Social.list_posts(scope, filters)
         page = posts |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&post_json/1)
 
@@ -567,6 +573,9 @@ defmodule Platform.Social.Tools do
       :error,
       :rejection_reason,
       :rejected_at,
+      :refused_reason,
+      :refused_at,
+      :retry_after,
       :approved_at,
       :task_id,
       :meeting_id,

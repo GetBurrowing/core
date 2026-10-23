@@ -51,8 +51,27 @@ defmodule Platform.Repo.Migrations.AlignDreamingPromptQueryGrammarTest do
 
   defp row(slug), do: PromptTemplates.get_template_by_slug(slug).content
 
+  # Task 01a15ee1 stage 2 edited the descriptor again; its migration undoes
+  # those edits first, so the rebuild still starts from this migration's
+  # post-change text.
+  @task_target_module Platform.Repo.Migrations.ForceUpdateDreamingPromptTaskTarget
+
+  @task_target_path Path.join([
+                      __ENV__.file
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname()
+                      |> Path.dirname(),
+                      "priv/repo/migrations/20261021160000_force_update_dreaming_prompt_task_target.exs"
+                    ])
+
   defp stage_one(slug) do
-    descriptor = PromptTemplates.default_content_for_slug(slug)
+    unless Code.ensure_loaded?(@task_target_module), do: Code.require_file(@task_target_path)
+
+    descriptor =
+      apply(@task_target_module, :undo_edits, [PromptTemplates.default_content_for_slug(slug)])
+
     assert length(String.split(descriptor, m(:new_span))) == 2
     String.replace(descriptor, m(:new_span), m(:old_span))
   end
@@ -82,6 +101,18 @@ defmodule Platform.Repo.Migrations.AlignDreamingPromptQueryGrammarTest do
     others_before = Enum.reject(snapshot(), fn {slug, _, _} -> slug in m(:slugs) end)
 
     assert :ok = m(:up)
+
+    # This migration writes the body as it stood before task 01a15ee1 stage 2;
+    # that task's force-update (which runs after it) then writes the
+    # descriptor.
+    for slug <- m(:slugs) do
+      assert row(slug) ==
+               apply(@task_target_module, :undo_edits, [
+                 PromptTemplates.default_content_for_slug(slug)
+               ])
+    end
+
+    assert :ok = apply(@task_target_module, :up, [])
 
     for slug <- m(:slugs) do
       assert row(slug) == PromptTemplates.default_content_for_slug(slug)

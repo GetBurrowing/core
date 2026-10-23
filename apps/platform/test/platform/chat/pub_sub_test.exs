@@ -40,21 +40,25 @@ defmodule Platform.Chat.PubSubTest do
 
     test "subscribed process receives space-lifecycle broadcasts" do
       ChatPubSub.subscribe_spaces()
-      space = %{id: "abc", kind: "channel", slug: "x", name: "X"}
+      # "chat:spaces" is a global topic and this module is async: every ChatLive
+      # running in another test receives these broadcasts and casts the id as a
+      # UUID. A non-UUID id crashed a concurrent ChatLive test (Ecto.Query.CastError
+      # in presence_subscribe_space_ids/3), so every id here is a real UUID.
+      space = %{id: Ecto.UUID.generate(), kind: "channel", slug: "x", name: "X"}
       ChatPubSub.broadcast_space_event({:space_created, space})
       assert_receive {:space_created, ^space}, 500
     end
 
     test "non-subscribed process does not receive space-lifecycle events" do
       # Intentionally not subscribing
-      ChatPubSub.broadcast_space_event({:space_created, %{id: "ignored"}})
+      ChatPubSub.broadcast_space_event({:space_created, %{id: Ecto.UUID.generate()}})
       refute_receive {:space_created, _}, 200
     end
 
     test "unsubscribed process no longer receives space-lifecycle events" do
       ChatPubSub.subscribe_spaces()
       ChatPubSub.unsubscribe_spaces()
-      ChatPubSub.broadcast_space_event({:space_created, %{id: "after_unsub"}})
+      ChatPubSub.broadcast_space_event({:space_created, %{id: Ecto.UUID.generate()}})
       refute_receive {:space_created, _}, 200
     end
   end

@@ -7,12 +7,18 @@ defmodule Platform.InsightFixtures do
   switch.
   """
 
+  import Ecto.Query, only: [from: 2]
   import Platform.TenancyFixtures
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Chat.Participant
+  alias Platform.Memory.Briefing
   alias Platform.Memory.Insight
   alias Platform.Memory.Insights
+  alias Platform.Memory.Insights.BriefingCard
+  alias Platform.Memory.Insights.Disseminator
   alias Platform.Memory.Insights.Settings
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
@@ -86,5 +92,83 @@ defmodule Platform.InsightFixtures do
     %Insight{}
     |> Insight.changeset(Map.merge(base, Map.delete(attrs, :addressee)))
     |> Repo.insert!()
+  end
+
+  @doc """
+  A HISTORICAL briefing canvas: what `Platform.Memory.Insights.Disseminator`
+  delivered before task 01a15ee1 stage 1 moved briefings to the Inbox. The
+  canvas hooks still act on such canvases, so their tests build one here.
+
+  Renders `insights` plus every item already in `user`'s `memory_briefings`
+  row for the day (`:now`, default now, in America/Chicago) into a canvas
+  posted by the `memory.dreaming` agent in the person's DM. Creates the
+  canvas (and the row, if none) the first time; on a later call re-renders
+  the same canvas with every item the row holds (`replace_document`), the
+  shape a same-day re-delivery had. Marks `insights` delivered. Returns the
+  briefing row.
+  """
+  def legacy_briefing_canvas!(user, insights \\ [], opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    date = Disseminator.local_date(now)
+    agent = Platform.Roles.assignee_for(Platform.Responsibilities.Handlers.Dreaming.key())
+    {:ok, dm} = Chat.find_or_create_dm(user.id, "agent", agent.id)
+
+    existing = Repo.get_by(Briefing, user_id: user.id, digest_date: date)
+
+    items =
+      Map.merge(
+        (existing && existing.items) || %{},
+        Map.new(insights, &{BriefingCard.node_key(&1), &1.id})
+      )
+
+    ids = Map.values(items)
+    key_by_id = Map.new(items, fn {key, id} -> {id, key} end)
+
+    entries =
+      from(i in Insight, where: i.id in ^ids, order_by: [asc: i.inserted_at, asc: i.id])
+      |> Repo.all()
+      |> Enum.map(&{Map.fetch!(key_by_id, &1.id), &1})
+
+    document =
+      BriefingCard.document(date, entries, admin?: Platform.Tenancy.root_admin?(%{id: user.id}))
+
+    briefing =
+      case existing do
+        %Briefing{canvas_id: canvas_id} when is_binary(canvas_id) ->
+          canvas = Chat.get_canvas(canvas_id)
+          {:ok, _} = Chat.patch_canvas(:system, canvas, [{:replace_document, document}])
+          existing |> Briefing.changeset(%{items: items}) |> Repo.update!()
+
+        _ ->
+          agent_p =
+            Repo.one!(
+              from(p in Participant,
+                where:
+                  p.space_id == ^dm.id and p.participant_type == "agent" and
+                    p.participant_id == ^agent.id,
+                limit: 1
+              )
+            )
+
+          {:ok, canvas, _message} =
+            Chat.create_canvas_with_message(dm.id, agent_p.id, %{
+              "title" => "Briefing " <> Date.to_iso8601(date),
+              "document" => document,
+              "message_content" => "Your briefing for " <> Date.to_iso8601(date)
+            })
+
+          attrs = %{
+            user_id: user.id,
+            space_id: dm.id,
+            canvas_id: canvas.id,
+            digest_date: date,
+            items: items
+          }
+
+          (existing || %Briefing{}) |> Briefing.changeset(attrs) |> Repo.insert_or_update!()
+      end
+
+    Enum.each(insights, &Insights.mark_delivered(&1, now: now))
+    briefing
   end
 end

@@ -36,6 +36,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
   defmodule PushRecorder do
     @moduledoc false
     def fan_out_to_humans(_participant_ids, _payload, _opts), do: :ok
+    def fan_out_to_user(_user_id, _payload), do: :ok
   end
 
   setup do
@@ -96,8 +97,9 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
     |> then(&{&1, key})
   end
 
-  # A briefing whose `addressee` attribute is a raw email address is
-  # `needs_call` (Tier rule 3), even though it routed to an internal member.
+  # A briefing addressed to a guest (an `external` membership) is `needs_call`
+  # (Tier rule 3). Pass a guest: an internal member named by email is
+  # reversible since 2026-10-21.
   defp needs_call_briefing!(addressee) do
     insight!(
       addressee: addressee,
@@ -202,7 +204,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
     test "a forged insight_act on a needs_call insight by a non-admin is refused", %{conn: conn} do
       dreaming_agent!()
       member = person!()
-      addressee = person!()
+      addressee = person!("member", external: true)
       insight = needs_call_briefing!(addressee)
 
       view = tab!(conn, member)
@@ -237,11 +239,18 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
                ~s(#insight-row-#{insight.id} [data-role="insight-primary"])
              )
 
-      render_click(admin_view, "insight_act", %{"id" => insight.id})
+      admin_html = render_click(admin_view, "insight_act", %{"id" => insight.id})
 
-      assert %Insight{delivered_at: %DateTime{}} = Repo.get!(Insight, insight.id)
-      assert [%Briefing{user_id: user_id}] = Repo.all(Briefing)
-      assert user_id == addressee.id
+      # The admin passes the gate (no refusal), and delivery then refuses the
+      # guest: a guest's Inbox shows no briefing, so nothing is delivered.
+      refute admin_html =~ "You cannot act on this insight. An install admin decides it."
+
+      assert admin_html =~
+               "This is addressed to a guest. Guests can&#39;t receive briefings, so it wasn&#39;t delivered."
+
+      assert %Insight{state: "open", delivered_at: nil} = Repo.get!(Insight, insight.id)
+      refute Repo.exists?(from(b in Briefing, where: b.user_id == ^addressee.id))
+      assert Repo.aggregate(Briefing, :count) == 0
     end
   end
 
@@ -378,7 +387,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
 
       briefing = insight!(addressee: addressee, body: "Deploys moved to host-b.")
       task = insight!(action_type: "task", addressee: addressee, body: "Rotate the deploy key.")
-      call = needs_call_briefing!(addressee)
+      call = needs_call_briefing!(person!("member", external: true))
 
       view = tab!(conn, admin)
 
@@ -526,7 +535,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
       dreaming_agent!()
       admin = root_admin!()
       member = person!()
-      call = needs_call_briefing!(person!())
+      call = needs_call_briefing!(person!("member", external: true))
 
       assert {:ok, %{items: items}} = Disseminator.run(notifications_module: PushRecorder)
       assert items >= 1

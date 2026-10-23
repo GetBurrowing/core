@@ -10,9 +10,11 @@ defmodule Platform.Memory.Insights.Tier do
     1. `action_type` is one of `page_edit`, `briefing`, `question`, `task`.
     2. The `action` is a map.
     3. The addressee, when there is one, is a NON-EXTERNAL member of the
-       insight's org (`org_id/1`). A raw email address in the `addressee`
-       attribute, an `addressee` that resolved to nobody, an external user
-       and a guest (an `external` membership) are all `:needs_call`.
+       insight's org (`org_id/1`). It is judged by the user it RESOLVED to
+       (`addressee_user_id`), however it was written: an internal member
+       named by email routes like one named by id. An `addressee` that
+       resolved to nobody (an outside email address included), an external
+       user and a guest (an `external` membership) are all `:needs_call`.
     4. For a `page_edit`: the target page exists, no hunk is delete-shaped
        (`Platform.Memory.Insights.Hunks.delete_shaped?/1`), and, when the
        hunks apply to the page as it is now, the resulting content is not
@@ -78,16 +80,12 @@ defmodule Platform.Memory.Insights.Tier do
     user_id = Map.get(insight, :addressee_user_id)
 
     cond do
-      email?(raw) -> false
       is_binary(user_id) -> internal_member?(user_id, org_id(insight))
       # Named, but nobody it resolved to: not established as a member.
       is_binary(raw) -> false
       true -> true
     end
   end
-
-  defp email?(raw) when is_binary(raw), do: String.contains?(raw, "@")
-  defp email?(_raw), do: false
 
   defp internal_member?(user_id, org_id) when is_binary(org_id) do
     Platform.UUID.valid?(user_id) and

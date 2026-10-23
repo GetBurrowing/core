@@ -67,7 +67,7 @@ defmodule Platform.Memory.Insights.TierTest do
     %{org: acme_org_id()}
   end
 
-  test "an external or email addressee is needs_call", %{org: org} do
+  test "an external, guest or unresolved addressee is needs_call", %{org: org} do
     member = user!(org)
     assert Tier.classify(insight(%{addressee_user_id: member.id})) == :reversible
     assert Tier.classify(insight(%{})) == :reversible
@@ -79,12 +79,19 @@ defmodule Platform.Memory.Insights.TierTest do
     outsider = user!(tenant_org_id("tier_other_#{n()}"))
     assert Tier.classify(insight(%{addressee_user_id: outsider.id})) == :needs_call
 
-    # A raw email address in the addressee attribute, even a member's own.
+    # An email address that resolved to nobody (an outside party) stays needs_call.
     assert Tier.classify(insight(%{action: %{"addressee" => "someone@example.com"}})) ==
              :needs_call
 
+    # An internal member named by email routes like one named by id: the
+    # addressee is judged by who it resolves to, not by how it was written.
     assert Tier.classify(
              insight(%{addressee_user_id: member.id, action: %{"addressee" => member.email}})
+           ) == :reversible
+
+    # A guest named by email is still judged by the membership it resolved to.
+    assert Tier.classify(
+             insight(%{addressee_user_id: guest.id, action: %{"addressee" => guest.email}})
            ) == :needs_call
 
     # A named addressee that resolved to nobody is not established as a member.

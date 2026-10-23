@@ -307,10 +307,18 @@ defmodule Platform.Social.ConnectReturnTest do
       assert {only.id, only.provider_account_ref} == {ctx.pending.id, "zacct_li_ok"}
     end
 
-    test "with no never-connected row it answers empty and makes ZERO requests", ctx do
+    test "with no never-connected row and no untyped connected row it answers empty and makes ZERO requests",
+         ctx do
       stub_accounts([entry("zacct_li", "linkedin")])
       assert {:ok, _, :connected} = connect(ctx, "zacct_li")
       assert [_] = requests()
+
+      # Typed, so the type backfill (task 01a1653a) has nothing to ask about.
+      {:ok, _} =
+        ctx.pending
+        |> reload()
+        |> Ecto.Changeset.change(platform_account_type: "business")
+        |> Repo.update()
 
       stub_accounts([entry("zacct_li", "linkedin"), entry("zacct_li2", "linkedin")])
 
@@ -339,6 +347,184 @@ defmodule Platform.Social.ConnectReturnTest do
 
       assert length(Fake.calls(:list_accounts)) == 2
       assert reload(ctx.pending) == ctx.pending
+    end
+
+    defp fake_entry(ref, platform, account_type) do
+      %{
+        ref: ref,
+        platform: platform,
+        profile_ref: @profile_ref,
+        username: "user-#{ref}",
+        active?: true,
+        account_type: account_type
+      }
+    end
+
+    test "complete_connect stores a reported account type (creator) on the connected row",
+         ctx do
+      {:ok, ig} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram"})
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", "creator")]})
+
+      assert {:ok, %Account{id: id}, :connected} = connect(ctx, "zacct_ig", "instagram")
+      assert id == ig.id
+
+      assert %{
+               status: "connected",
+               provider_account_ref: "zacct_ig",
+               platform_account_type: "creator"
+             } =
+               reload(ig)
+    end
+
+    test "complete_connect with no reported type connects and leaves the type nil", ctx do
+      {:ok, ig} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram"})
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", nil)]})
+
+      assert {:ok, _, :connected} = connect(ctx, "zacct_ig", "instagram")
+      assert %{status: "connected", platform_account_type: nil} = reload(ig)
+    end
+
+    test "a nil report never overwrites a stored type", ctx do
+      {:ok, ig} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram"})
+      {:ok, ig} = ig |> Ecto.Changeset.change(platform_account_type: "creator") |> Repo.update()
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", nil)]})
+
+      assert {:ok, _, :connected} = connect(ctx, "zacct_ig", "instagram")
+      assert %{status: "connected", platform_account_type: "creator"} = reload(ig)
+    end
+
+    test "reconcile_accounts fills a pending row with the reported type (business)", ctx do
+      {:ok, tiktok} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "tiktok"})
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_tt", "tiktok", "business")]})
+
+      assert {:ok, %{connected: [%Account{id: id}], unmatched: 0}} =
+               Social.reconcile_accounts(ctx.org_id, ctx.profile, ctx.approver.id)
+
+      assert id == tiktok.id
+
+      assert %{
+               status: "connected",
+               provider_account_ref: "zacct_tt",
+               platform_account_type: "business"
+             } =
+               reload(tiktok)
+    end
+
+    # ── Type backfill on already-connected rows (task 01a1653a) ──────
+
+    # A live connected row on this profile, as an earlier connect left it.
+    defp connected_row(ctx, platform, ref, type) do
+      {:ok, account} = Social.create_account(ctx.org_id, ctx.profile, %{platform: platform})
+
+      {:ok, account} =
+        account
+        |> Ecto.Changeset.change(
+          status: "connected",
+          provider_account_ref: ref,
+          platform_account_type: type
+        )
+        |> Repo.update()
+
+      account
+    end
+
+    # The setup's pending linkedin row, connected and typed: neither pending
+    # nor untyped, so only the row under test can make reconcile ask.
+    defp settle_setup_row(ctx) do
+      {:ok, _} =
+        ctx.pending
+        |> Ecto.Changeset.change(
+          status: "connected",
+          provider_account_ref: "zacct_li_settled",
+          platform_account_type: "business"
+        )
+        |> Repo.update()
+
+      :ok
+    end
+
+    test "reconcile backfills business on an already-connected row", ctx do
+      settle_setup_row(ctx)
+      tiktok = connected_row(ctx, "tiktok", "zacct_tt", nil)
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_tt", "tiktok", "business")]})
+
+      assert {:ok, %{connected: [], unmatched: 0, typed: [%Account{id: id}]}} =
+               Social.reconcile_accounts(ctx.org_id, ctx.profile, ctx.approver.id)
+
+      assert id == tiktok.id
+      assert length(Fake.calls(:list_accounts)) == 1
+
+      assert %{
+               status: "connected",
+               provider_account_ref: "zacct_tt",
+               platform_account_type: "business"
+             } =
+               reload(tiktok)
+    end
+
+    test "a nil report keeps a stored creator on a connected row", ctx do
+      settle_setup_row(ctx)
+      ig = connected_row(ctx, "instagram", "zacct_ig", "creator")
+      # An untyped row so reconcile asks at all.
+      _tt = connected_row(ctx, "tiktok", "zacct_tt", nil)
+
+      Fake.put_next(
+        :list_accounts,
+        {:ok, [fake_entry("zacct_ig", "instagram", nil), fake_entry("zacct_tt", "tiktok", nil)]}
+      )
+
+      assert {:ok, %{connected: [], unmatched: 0, typed: []}} =
+               Social.reconcile_accounts(ctx.org_id, ctx.profile, ctx.approver.id)
+
+      assert length(Fake.calls(:list_accounts)) == 1
+      assert reload(ig) == ig
+    end
+
+    test "no pending row and no untyped connected row: ZERO list_accounts calls", ctx do
+      settle_setup_row(ctx)
+      _ig = connected_row(ctx, "instagram", "zacct_ig", "creator")
+
+      assert {:ok, %{connected: [], unmatched: 0, typed: []}} =
+               Social.reconcile_accounts(ctx.org_id, ctx.profile, ctx.approver.id)
+
+      assert Fake.calls(:list_accounts) == []
+    end
+
+    test "an Instagram row Zernio cannot type stays nil and still allows a Reel", ctx do
+      settle_setup_row(ctx)
+      ig = connected_row(ctx, "instagram", "zacct_ig", nil)
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", nil)]})
+
+      assert {:ok, %{connected: [], unmatched: 0, typed: []}} =
+               Social.reconcile_accounts(ctx.org_id, ctx.profile, ctx.approver.id)
+
+      assert length(Fake.calls(:list_accounts)) == 1
+      ig = reload(ig)
+      assert %{status: "connected", platform_account_type: nil} = ig
+
+      assert :ok =
+               Platform.Social.MediaRules.check("instagram", ig, [
+                 %{content_type: "video/mp4", duration_s: 30, byte_size: 10_000_000}
+               ])
+    end
+
+    test "complete_connect's already-connected answer backfills the reported type", ctx do
+      ig = connected_row(ctx, "instagram", "zacct_ig", nil)
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", "creator")]})
+
+      assert {:ok, %Account{id: id, platform_account_type: "creator"}, :already_connected} =
+               connect(ctx, "zacct_ig", "instagram")
+
+      assert id == ig.id
+      assert %{platform_account_type: "creator", status: "connected"} = reload(ig)
+    end
+
+    test "complete_connect's already-connected answer never writes nil over a type", ctx do
+      ig = connected_row(ctx, "instagram", "zacct_ig", "business")
+      Fake.put_next(:list_accounts, {:ok, [fake_entry("zacct_ig", "instagram", nil)]})
+
+      assert {:ok, _, :already_connected} = connect(ctx, "zacct_ig", "instagram")
+      assert reload(ig) == ig
     end
   end
 end

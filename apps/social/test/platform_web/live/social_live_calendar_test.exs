@@ -205,6 +205,22 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
            )
   end
 
+  test "on an owned account the owner sees a scheduled post's body; a profile approver does not",
+       %{conn: conn} = ctx do
+    owner = named_user!("Omar Owner")
+    member!(owner, ctx.org_id)
+    {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.a, owner.id)
+
+    child = open(conn, owner)
+    child |> element("#social-calendar-rows " <> item(ctx.scheduled)) |> render_click()
+    assert has_element?(child, "[data-role='social-post-detail-body']", "HTC-S1 SCHEDULED-BODY")
+
+    child = open(Phoenix.ConnTest.build_conn(), ctx.h1)
+    child |> element("#social-calendar-rows " <> item(ctx.scheduled)) |> render_click()
+    assert has_element?(child, "[data-role='social-post-detail']", "scheduled")
+    refute has_element?(child, "[data-role='social-post-detail-body']")
+  end
+
   test "an approver sees a scheduled post's body; a forged id from elsewhere opens nothing",
        %{conn: conn} = ctx do
     child = open(conn, ctx.h1)

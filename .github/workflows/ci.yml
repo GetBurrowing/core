@@ -310,6 +310,15 @@ jobs:
           mix ecto.create
           mix ecto.migrate
 
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (before mix test)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "before mix test" || true
+
       - name: Run tests
         id: run-tests
         run: |
@@ -499,6 +508,16 @@ jobs:
         run: |
           pair="test/platform/audit/historian_latency_test.exs test/platform/accounts/external_admission_notifier_test.exs"
           mix test $pair --seed 0 || (echo "::warning::boot-telemetry pair failed; re-running the SAME two-file command" && mix test $pair --seed 0)
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (after mix test)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "after mix test" || true
 
       # Runs even when the suite fails: an aborted job leaves the same
       # root-owned files as a passing one, and the next job is equally unable
@@ -714,6 +733,15 @@ jobs:
       - name: Check module formatting
         run: mix format --check-formatted
 
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (before mix test) (with Play)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "before mix test" || true
+
       # Same crash-detector shape as `Run tests` in `test`: the step fails if
       # the pass prints no ExUnit summary or runs fewer than
       # MIN_PLAY_TEST_COUNT tests. No retry: the module's suite is small, and
@@ -737,6 +765,16 @@ jobs:
             exit 1
           fi
           echo "apps/game_stream mix test ran $count tests (floor MIN_PLAY_TEST_COUNT=$MIN_PLAY_TEST_COUNT)"
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (after mix test) (with Play)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "after mix test" || true
 
       # The release host is the with-modules image's Mix project. Generating
       # the asset inputs here is also what the bundle guard below builds from.
@@ -926,6 +964,15 @@ jobs:
       - name: Check module formatting (with Social)
         run: mix format --check-formatted
 
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (before mix test) (with Social)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "before mix test" || true
+
       # Same crash-detector shape as `Run module tests` in `Test (with Play)`.
       - name: Run module tests (with Social)
         run: |
@@ -945,6 +992,16 @@ jobs:
             exit 1
           fi
           echo "apps/social mix test ran $count tests (floor MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT)"
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (after mix test) (with Social)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "after mix test" || true
 
       # This job has no serial retry, so a lock-wait timeout here fails it.
       # pg_read_file is the only way to the log from here (see the

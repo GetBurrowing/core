@@ -144,7 +144,7 @@ defmodule PlatformWeb.SocialZernioConnectAcceptanceTest do
     assert has_element?(
              child,
              "[data-role='social-notice']",
-             "That account could not be connected. Try again."
+             "Add the Zernio API key in Settings first."
            )
 
     # Positive control: the same page, once the key is saved, does send.

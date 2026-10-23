@@ -59,6 +59,11 @@ defmodule Platform.Memory.Insight do
     # holder (`Platform.Memory.Insights.Unattended.eligible?/1`), never
     # joined on.
     field(:authored_by, :binary_id)
+    # In memory only (task 01a15ee1 stage 2): set by the Disseminator on a
+    # `task` insight `apply_unattended/2` could not file because no project
+    # was inferred (`{:error, :no_project}`). The briefing renders it with a
+    # project picker. Never written.
+    field(:needs_project, :boolean, virtual: true, default: false)
 
     timestamps(type: :utc_datetime_usec)
   end

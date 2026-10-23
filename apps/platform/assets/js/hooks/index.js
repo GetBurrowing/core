@@ -14,6 +14,7 @@ import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
 import ChatDock from "./chat_dock"
+import ChatClip from "./chat_clip"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
@@ -70,6 +71,7 @@ import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
+import ToastPause from "./toast_pause"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
 export default {
@@ -81,6 +83,7 @@ export default {
   ButtonLoading,
   CandidateClock,
   CanvasRoomBridge,
+  ChatClip,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,
@@ -144,5 +147,6 @@ export default {
   SidebarCollapse,
   TasksStatusFilter,
   ThemePicker,
+  ToastPause,
   ViewportBreakpoint,
 }

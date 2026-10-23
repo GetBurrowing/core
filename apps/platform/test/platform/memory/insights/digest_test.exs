@@ -181,7 +181,11 @@ defmodule Platform.Memory.Insights.DigestTest do
       briefing = insight!(addressee: person)
       {edit, task} = unattended_pair!(person, dreamer)
 
-      # Both toggles off (the shipped default): only the briefing.
+      # The shipped default (task 01a15ee1 stage 2): tasks on, page edits off.
+      assert Enum.sort(ids(Digest.select(), person)) == Enum.sort([briefing.id, task.id])
+
+      # Both toggles off: only the briefing.
+      enable_dissemination!(%{apply_page_edits: false, file_tasks: false})
       assert ids(Digest.select(), person) == [briefing.id]
 
       enable_dissemination!(%{apply_page_edits: true})

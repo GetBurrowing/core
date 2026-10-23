@@ -104,6 +104,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     ]
 
   alias Platform.Chat
+  alias Platform.Chat.AttachmentLinks
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.ClosedDms
   alias PlatformWeb.ChatLive
@@ -342,7 +343,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         id -> Chat.has_more_messages_before?(space.id, before_id: id, top_level_only: true)
       end
 
-    attachments_map = build_attachments_map(messages)
+    attachments_map = build_attachments_map(messages, socket)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
     socket
@@ -455,7 +456,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
               top_level_only: true
             )
 
-          attachments_delta = build_attachments_map(older)
+          attachments_delta = build_attachments_map(older, socket)
 
           thread_previews_delta =
             Chat.thread_previews_for_messages(new_ids)
@@ -570,7 +571,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           # `:on_broadcast` would produce. The helper appends at the
           # default `at: -1` (end of stream) and updates the rendered
           # set + day labels in lockstep.
-          attachments_delta = build_attachments_map(newer)
+          attachments_delta = build_attachments_map(newer, socket)
           new_ids = Enum.map(enriched, & &1.id)
 
           thread_previews_delta = Chat.thread_previews_for_messages(new_ids)
@@ -703,9 +704,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   Enriches the message with its current reaction groups so the stream
   item carries everything the template needs — no :reactions_map lookup.
   """
-  @spec stream_insert_message(Phoenix.LiveView.Socket.t(), map(), [map()]) ::
+  @spec stream_insert_message(Phoenix.LiveView.Socket.t(), map(), [map()] | nil) ::
           Phoenix.LiveView.Socket.t()
-  def stream_insert_message(socket, message, attachments \\ []) do
+  def stream_insert_message(socket, message, attachments \\ nil) do
+    # Task 01a1655c stage 5: the sender's own LiveView never sees its own
+    # broadcast (`from_pid: self()`), so resolve linked attachments here the
+    # same way the PubSub path does. `nil` (edits, canvases) loads the
+    # message's stored attachments instead of blanking the entry.
+    attachments =
+      case attachments do
+        nil -> attachments_with_links(message, socket)
+        uploads -> attachments_with_links(message, socket, uploads)
+      end
+
     enriched =
       message
       |> enrich_versions_count()
@@ -831,7 +842,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           {:halt,
            socket
            |> stream_insert_with_day_label(enriched)
-           |> put_attachment_map_entry(msg.id, attachments)
+           |> put_attachment_map_entry(msg.id, attachments_with_links(msg, socket, attachments))
            |> clear_compose()}
 
         {:noop, socket} ->
@@ -940,7 +951,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           {:halt,
            socket
            |> update(:thread_messages, &(&1 ++ [msg]))
-           |> put_thread_attachment_map_entry(msg.id, attachments)
+           |> put_thread_attachment_map_entry(
+             msg.id,
+             attachments_with_links(msg, socket, attachments)
+           )
            |> assign_thread_compose("")}
 
         {:noop, socket} ->
@@ -1130,7 +1144,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       socket = assign(socket, :streaming_replies, streaming)
 
-      attachments = Chat.list_attachments(msg.id)
+      attachments = attachments_with_links(msg, socket)
 
       if is_nil(msg.thread_id) && current_participant do
         Chat.mark_space_read(current_participant.id, msg.id)
@@ -1177,7 +1191,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:message_updated, msg}, socket) do
     if same_active_space?(socket, msg) do
-      attachments = Chat.list_attachments(msg.id)
+      attachments = attachments_with_links(msg, socket)
       enriched = enrich_with_reactions(msg, socket)
 
       {:halt,
@@ -1201,7 +1215,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_info({:message_edited, %{message: msg}}, socket) do
     if same_active_space?(socket, msg) do
       enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
-      {:halt, stream_reinsert_with_day_label(socket, enriched)}
+
+      # Task 01a1655c stage 5: an edit can add or drop a linked clip.
+      {:halt,
+       socket
+       |> stream_reinsert_with_day_label(enriched)
+       |> put_attachment_map_entry(msg.id, attachments_with_links(msg, socket))}
     else
       {:halt, socket}
     end
@@ -1956,10 +1975,40 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
-  defp build_attachments_map(messages) do
+  # Real attachments plus the video/image attachments the message text links
+  # to (task 01a1655c stage 3), authorized for THIS viewer by
+  # `AttachmentLinks.resolve_for_viewer/2`. Real attachments come first; a
+  # link to a file that is also a real attachment gives one entry.
+  defp build_attachments_map(messages, socket) do
     messages
     |> Enum.map(& &1.id)
     |> Chat.list_attachments_for_messages()
+    |> AttachmentLinks.merge(
+      AttachmentLinks.resolve_for_viewer(messages, viewer_principal(socket))
+    )
+  end
+
+  defp attachments_with_links(msg, socket) do
+    attachments_with_links(msg, socket, Chat.list_attachments(msg.id))
+  end
+
+  # `real` (stored or just-uploaded rows) first, then the clips the text
+  # links that this viewer may read, unique by id.
+  defp attachments_with_links(msg, socket, real) do
+    linked = AttachmentLinks.resolve_for_viewer([msg], viewer_principal(socket))
+
+    %{msg.id => real}
+    |> AttachmentLinks.merge(linked)
+    |> Map.fetch!(msg.id)
+  end
+
+  defp viewer_principal(socket) do
+    case socket.assigns do
+      %{current_user_record: %{id: id}} when is_binary(id) -> {:user, id}
+      %{current_user: %{id: id}} when is_binary(id) -> {:user, id}
+      %{user_id: id} when is_binary(id) -> {:user, id}
+      _ -> nil
+    end
   end
 
   defp put_attachment_map_entry(socket, message_id, attachments) do

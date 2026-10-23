@@ -38,6 +38,15 @@ defmodule Platform.Social.Publisher.Zernio do
       `profileId`, `username`, `displayName`, `profileUrl`, `isActive`. The
       multi-tenant guide says to identify accounts by `accountId` (`_id`), never
       by profile + platform. 401 and 503 are listed.
+      Account type (OpenAPI v1.333.2 `SocialAccount` schema,
+      https://docs.zernio.com/api/openapi, fetched 2026-10-22): the ONLY
+      documented account-type field is `tiktokAccountType` (TikTok:
+      `business`, `personal`, `unknown`). Instagram entries carry `metadata`
+      with only `loginMethod` and `instagramScopedId`, no account type
+      (https://docs.zernio.com/platforms/instagram says Instagram requires a
+      Business or Creator account). So `account_type` is set for TikTok from
+      `tiktokAccountType` (`unknown`, missing or anything else is nil) and is
+      nil for Instagram and every other platform. No other field is guessed.
     * `DELETE /v1/accounts/{accountId}` (https://docs.zernio.com/accounts/delete-account,
       fetched 2026-10-17): 200 answers `{message: "Account disconnected successfully"}`,
       401 unauthorized, 404 means the account is already disconnected (it sits in a
@@ -132,11 +141,25 @@ defmodule Platform.Social.Publisher.Zernio do
         url: "/v1/connect/#{platform}",
         params: [profileId: profile_ref, redirect_url: redirect_url]
       )
-      |> handle(fn
-        %{"authUrl" => url} when is_binary(url) -> {:ok, url}
-        _ -> {:error, :unexpected_response}
-      end)
+      |> connect_result()
     end
+  end
+
+  # The connect URL's own answers. A 403 here is not only a bad key: the
+  # docs list "no access to profile" and the legacy-plan
+  # `platform_account_limit`, so Zernio's own message is kept (a bad key is
+  # a 401). A 402 (`PAYMENT_REQUIRED`, e.g. `free_tier_exceeded` once the
+  # team has more than 2 connected accounts) falls through to handle/2's
+  # 4xx clause, which also keeps the message. Every string here is shown to
+  # the approver who clicked, so it never carries the authUrl or the key.
+  defp connect_result({:ok, %Req.Response{status: 403, body: body}}),
+    do: {:error, "Zernio refused the request (HTTP 403): #{message(body)}"}
+
+  defp connect_result(result) do
+    handle(result, fn
+      %{"authUrl" => url} when is_binary(url) -> {:ok, url}
+      _ -> {:error, :unexpected_response}
+    end)
   end
 
   # Profile ref first, then the key, then the ONE request: no ref or no key
@@ -385,6 +408,7 @@ defmodule Platform.Social.Publisher.Zernio do
   defp handle({:error, exception}, _),
     do: {:error, "Zernio could not be reached: #{Exception.message(exception)}"}
 
+  defp message(%{"error" => %{"message" => m}}) when is_binary(m), do: m
   defp message(%{"error" => e}) when is_binary(e), do: e
   defp message(%{"message" => m}) when is_binary(m), do: m
   defp message(_), do: "no detail"
@@ -481,7 +505,8 @@ defmodule Platform.Social.Publisher.Zernio do
           platform: ours,
           profile_ref: entry_profile_ref(entry["profileId"]),
           username: if(is_binary(entry["username"]), do: entry["username"]),
-          active?: active?(entry)
+          active?: active?(entry),
+          account_type: account_type(ours, entry)
         }
 
       :error ->
@@ -490,6 +515,13 @@ defmodule Platform.Social.Publisher.Zernio do
   end
 
   defp connected_account(_entry), do: nil
+
+  # Documented: only `tiktokAccountType` (OpenAPI v1.333.2). See the moduledoc.
+  defp account_type("tiktok", %{"tiktokAccountType" => type})
+       when type in ["business", "personal"],
+       do: type
+
+  defp account_type(_platform, _entry), do: nil
 
   # Documented: the sample shows `profileId` as an object `{_id, name, slug}`.
   # ASSUMPTION: it may also arrive as a plain id string; accept both.

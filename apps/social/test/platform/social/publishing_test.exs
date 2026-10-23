@@ -238,6 +238,28 @@ defmodule Platform.Social.PublishingTest do
                Fake.calls(:publish)
     end
 
+    test "an Instagram account with an unknown type (nil) reaches the publisher; its error lands on the row",
+         ctx do
+      {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: nil})
+      assert insta.platform_account_type == nil
+      reel = fn -> [{media_file!(ctx.org_id, "video/mp4"), %{"duration_s" => 30}}] end
+
+      allowed = post_with_media(ctx, insta, reel.())
+      assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, allowed.id)
+      assert [{:publish, _, _}] = Fake.calls(:publish)
+
+      refused = post_with_media(ctx, insta, reel.())
+      Fake.fail_next(:publish, "Instagram rejected the media")
+
+      assert {:error, {:publish_failed, "Instagram rejected the media"}} =
+               Publishing.publish_post(ctx.org_id, refused.id)
+
+      assert length(Fake.calls(:publish)) == 2
+      row = Repo.get!(Post, refused.id)
+      assert row.status == "failed"
+      assert row.error == "Instagram rejected the media"
+    end
+
     test "a media file from another org is refused", ctx do
       foreign = media_file!(org_id!(), "image/png")
       post = approved_post!(ctx.org_id, ctx.account, %{media_file_ids: [foreign.id]})
@@ -246,6 +268,52 @@ defmodule Platform.Social.PublishingTest do
                Publishing.publish_post(ctx.org_id, post.id)
 
       assert Fake.calls() == []
+    end
+  end
+
+  describe "vendor-fetchable media URL (task 01a165ec stage 1)" do
+    test "an approved video post reaches the publisher with a URL that serves the file's bytes, no session",
+         ctx do
+      {_, tiktok} = social_account!(ctx.org_id, "tiktok")
+      body = :crypto.strong_rand_bytes(2048)
+      video = media_file!(ctx.org_id, "video/mp4", byte_size(body))
+      path = Platform.Chat.AttachmentStorage.path_for(video.storage_key)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, body)
+      on_exit(fn -> File.rm(path) end)
+
+      post =
+        approved_post!(ctx.org_id, tiktok, %{
+          media_file_ids: [video.id],
+          media_meta: %{video.id => %{"duration_s" => 30}}
+        })
+
+      assert {:ok, %Post{}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert [{:publish, [_, %{media: [%{url: url}]}], _}] = Fake.calls(:publish)
+      assert is_binary(url)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.dispatch(PlatformWeb.Endpoint, :get, URI.parse(url).path)
+
+      assert conn.status == 200
+      assert conn.resp_body == body
+    end
+
+    test "vendor_url/2 for a scheduled post outlives its scheduled time by an hour", ctx do
+      video = media_file!(ctx.org_id, "video/mp4")
+      at = DateTime.add(DateTime.utc_now(), 2 * 24 * 3600, :second)
+      url = Publishing.vendor_url(video, %Post{scheduled_at: at})
+      "/files/signed/" <> token = URI.parse(url).path
+
+      {:ok, %{expires_at: expires_at}} =
+        Plug.Crypto.verify(
+          Application.fetch_env!(:platform, :attachment_signing_key),
+          "file_get",
+          token
+        )
+
+      assert expires_at == DateTime.to_unix(DateTime.add(at, 3600, :second))
     end
   end
 
@@ -272,6 +340,301 @@ defmodule Platform.Social.PublishingTest do
 
       b = approved_post!(ctx.org_id, other)
       assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, b.id)
+    end
+  end
+
+  describe "a refusal before the vendor is recorded on the row (task 01a165f1)" do
+    setup do
+      previous = Application.get_env(:social, :rate_limit)
+      Application.put_env(:social, :rate_limit, per_window: 1, window_ms: 3_600_000)
+      on_exit(fn -> Application.put_env(:social, :rate_limit, previous) end)
+      :ok
+    end
+
+    # Instagram "personal" + a video is refused both before and after
+    # PR #1319 (an untyped account is allowed; only "personal" is refused).
+    defp refused_reel!(ctx) do
+      {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: "personal"})
+      video = media_file!(ctx.org_id, "video/mp4")
+
+      approved_post!(ctx.org_id, insta, %{
+        media_file_ids: [video.id],
+        media_meta: %{video.id => %{"duration_s" => 30}}
+      })
+    end
+
+    # Fills the account's current window through check/2's injected now.
+    defp exhaust_rate_limit!(account) do
+      assert :ok = RateLimit.check(account.id, System.system_time(:millisecond))
+    end
+
+    defp no_publisher! do
+      previous = Application.get_env(:social, :publisher)
+      Application.delete_env(:social, :publisher)
+      on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+      previous
+    end
+
+    defp assert_refused(post, reason, error) do
+      row = Repo.get!(Post, post.id)
+      assert row.status == "approved"
+      assert row.approved_by_user_id == post.approved_by_user_id
+      assert row.approved_at == post.approved_at
+      assert row.refused_reason == reason
+      assert row.error == error
+      assert %DateTime{} = row.refused_at
+      assert DateTime.diff(DateTime.utc_now(), row.refused_at, :second) < 60
+      row
+    end
+
+    test "media_rejected: the MediaRules messages as one sentence", ctx do
+      post = refused_reel!(ctx)
+
+      assert {:error, {:media_rejected, ["Instagram Reels need a Business or Creator account"]}} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      row =
+        assert_refused(
+          post,
+          "media_rejected",
+          "Instagram Reels need a Business or Creator account."
+        )
+
+      assert row.retry_after == nil
+      assert Fake.calls() == []
+    end
+
+    test "rate_limited: retry_after is the end of the window and the error names it", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      exhaust_rate_limit!(ctx.account)
+
+      before_ms = RateLimit.window_ends_at()
+      assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, post.id)
+      after_ms = RateLimit.window_ends_at()
+
+      row = Repo.get!(Post, post.id)
+      retry_ms = DateTime.to_unix(row.retry_after, :millisecond)
+      assert retry_ms in [before_ms, after_ms]
+      assert retry_ms == RateLimit.window_ends_at(retry_ms - 1)
+
+      hhmm = Calendar.strftime(row.retry_after, "%H:%M")
+
+      assert_refused(
+        post,
+        "rate_limited",
+        "LinkedIn's posting limit is reached. This post goes out at #{hhmm} UTC."
+      )
+
+      assert Fake.calls(:publish) == []
+    end
+
+    test "account_archived: the account is disconnected", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      {:ok, _} = Social.archive_account(ctx.org_id, ctx.account)
+
+      assert {:error, :account_archived} = Publishing.publish_post(ctx.org_id, post.id)
+
+      row = assert_refused(post, "account_archived", "The LinkedIn account is disconnected.")
+      assert row.retry_after == nil
+    end
+
+    test "publisher_not_configured: publishing isn't set up", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      no_publisher!()
+
+      assert {:error, :publisher_not_configured} = Publishing.publish_post(ctx.org_id, post.id)
+
+      row =
+        assert_refused(
+          post,
+          "publisher_not_configured",
+          "Publishing isn't set up for this profile."
+        )
+
+      assert row.retry_after == nil
+    end
+
+    test "not_approved and not_found write nothing", ctx do
+      {:ok, draft} = Social.create_post(ctx.org_id, ctx.account, %{body: "draft"})
+      draft = Repo.get!(Post, draft.id)
+      no_publisher!()
+
+      assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, draft.id)
+      assert Repo.get!(Post, draft.id) == draft
+
+      post = approved_post!(ctx.org_id, ctx.account)
+      post = Repo.get!(Post, post.id)
+      assert {:error, :not_found} = Publishing.publish_post(org_id!(), post.id)
+      assert Repo.get!(Post, post.id) == post
+    end
+
+    test "a later successful publish clears all three fields (scheduled and published)", ctx do
+      scheduled = approved_post!(ctx.org_id, ctx.account)
+      published = approved_post!(ctx.org_id, ctx.account)
+      exhaust_rate_limit!(ctx.account)
+
+      for p <- [scheduled, published] do
+        assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, p.id)
+        row = Repo.get!(Post, p.id)
+        assert {row.refused_reason, is_nil(row.retry_after)} == {"rate_limited", false}
+      end
+
+      RateLimit.reset()
+      Application.put_env(:social, :rate_limit, per_window: 10, window_ms: 3_600_000)
+
+      assert {:ok, %Post{status: "scheduled"}} =
+               Publishing.publish_post(ctx.org_id, scheduled.id)
+
+      Fake.put_next(
+        :publish,
+        {:ok, %{external_id: "fake_now", status: :published, external_url: "https://x.test/1"}}
+      )
+
+      assert {:ok, %Post{status: "published"}} =
+               Publishing.publish_post(ctx.org_id, published.id)
+
+      for p <- [scheduled, published] do
+        row = Repo.get!(Post, p.id)
+
+        assert {row.refused_reason, row.refused_at, row.retry_after, row.error} ==
+                 {nil, nil, nil, nil}
+      end
+    end
+
+    test "apply_outcome on a refused approved post still publishes, and clears", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      failed = approved_post!(ctx.org_id, ctx.account)
+      # Each refused attempt still spends a rate-limit slot (check runs first).
+      Application.put_env(:social, :rate_limit, per_window: 10, window_ms: 3_600_000)
+      no_publisher!()
+
+      for p <- [post, failed] do
+        assert {:error, :publisher_not_configured} = Publishing.publish_post(ctx.org_id, p.id)
+      end
+
+      assert {:ok, %Post{status: "published"} = row} =
+               Publishing.apply_outcome(Repo.get!(Post, post.id), %{
+                 kind: :published,
+                 external_url: "https://example.test/p/r",
+                 error: nil
+               })
+
+      assert {row.refused_reason, row.refused_at, row.retry_after} == {nil, nil, nil}
+
+      assert {:ok, %Post{status: "failed"} = row} =
+               Publishing.apply_outcome(failed, %{kind: :failed, error: "vendor said no"})
+
+      assert {row.refused_reason, row.refused_at, row.retry_after} == {nil, nil, nil}
+    end
+
+    test "agents cannot write the refusal fields through the general changeset", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+
+      cs =
+        Post.changeset(post, %{
+          refused_reason: "rate_limited",
+          refused_at: DateTime.utc_now(),
+          retry_after: DateTime.utc_now()
+        })
+
+      refute Map.has_key?(cs.changes, :refused_reason)
+      refute Map.has_key?(cs.changes, :refused_at)
+      refute Map.has_key?(cs.changes, :retry_after)
+    end
+  end
+
+  describe "retry_publish/3 (task 01a165f1, stage 2)" do
+    # An Instagram "personal" account refuses a Reel at MediaRules.
+    defp refused_reel(ctx) do
+      {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: "personal"})
+      video = media_file!(ctx.org_id, "video/mp4")
+
+      post =
+        approved_post!(ctx.org_id, insta, %{
+          media_file_ids: [video.id],
+          media_meta: %{video.id => %{"duration_s" => 30}}
+        })
+
+      assert {:error, {:media_rejected, _}} = Publishing.publish_post(ctx.org_id, post.id)
+      {insta, Repo.get!(Post, post.id)}
+    end
+
+    test "an approver's retry after fixing the cause publishes via the Fake and clears", ctx do
+      {insta, post} = refused_reel(ctx)
+      insta |> Ecto.Changeset.change(platform_account_type: "business") |> Repo.update!()
+
+      assert {:ok, %Post{status: "scheduled"}} =
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+
+      assert [{:publish, [_, %{idempotency_key: key}], _}] = Fake.calls(:publish)
+      assert key == post.id
+
+      row = Repo.get!(Post, post.id)
+
+      assert {row.status, row.refused_reason, row.refused_at, row.retry_after, row.error} ==
+               {"scheduled", nil, nil, nil, nil}
+    end
+
+    test "a retry with the cause unfixed re-refuses through the guard and updates refused_at",
+         ctx do
+      {_insta, post} = refused_reel(ctx)
+      earlier = DateTime.add(post.refused_at, -3_600, :second)
+      post = post |> Ecto.Changeset.change(refused_at: earlier) |> Repo.update!()
+
+      assert {:error, {:media_rejected, _}} =
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+
+      row = Repo.get!(Post, post.id)
+      assert {row.status, row.refused_reason} == {"approved", "media_rejected"}
+      assert DateTime.compare(row.refused_at, earlier) == :gt
+      assert Fake.calls(:publish) == []
+    end
+
+    test "a non-approver user and an agent id are refused, the row unchanged", ctx do
+      {_insta, post} = refused_reel(ctx)
+      agent = agent!()
+
+      assert {:error, :not_an_approver} =
+               Publishing.retry_publish(ctx.org_id, post.id, user!().id)
+
+      assert {:error, :not_a_human} = Publishing.retry_publish(ctx.org_id, post.id, agent.id)
+      assert Repo.get!(Post, post.id) == post
+      assert Fake.calls(:publish) == []
+    end
+
+    test "a post that was not refused is refused with :not_refused", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      post = Repo.get!(Post, post.id)
+
+      assert {:error, :not_refused} =
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+
+      assert Repo.get!(Post, post.id) == post
+      assert Fake.calls(:publish) == []
+    end
+
+    test "a rate_limited post before retry_after is refused with :wait_until", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      previous = Application.get_env(:social, :rate_limit)
+      Application.put_env(:social, :rate_limit, per_window: 0, window_ms: 3_600_000)
+      on_exit(fn -> Application.put_env(:social, :rate_limit, previous) end)
+      assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, post.id)
+      Application.put_env(:social, :rate_limit, previous)
+      row = Repo.get!(Post, post.id)
+
+      assert {:error, {:wait_until, at}} =
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+
+      assert at == row.retry_after
+      assert Repo.get!(Post, post.id) == row
+      assert Fake.calls(:publish) == []
+    end
+
+    test "a post in another org is not found", ctx do
+      {_insta, post} = refused_reel(ctx)
+
+      assert {:error, :not_found} =
+               Publishing.retry_publish(org_id!(), post.id, post.approved_by_user_id)
     end
   end
 
