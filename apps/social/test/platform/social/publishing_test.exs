@@ -271,6 +271,52 @@ defmodule Platform.Social.PublishingTest do
     end
   end
 
+  describe "vendor-fetchable media URL (task 01a165ec stage 1)" do
+    test "an approved video post reaches the publisher with a URL that serves the file's bytes, no session",
+         ctx do
+      {_, tiktok} = social_account!(ctx.org_id, "tiktok")
+      body = :crypto.strong_rand_bytes(2048)
+      video = media_file!(ctx.org_id, "video/mp4", byte_size(body))
+      path = Platform.Chat.AttachmentStorage.path_for(video.storage_key)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, body)
+      on_exit(fn -> File.rm(path) end)
+
+      post =
+        approved_post!(ctx.org_id, tiktok, %{
+          media_file_ids: [video.id],
+          media_meta: %{video.id => %{"duration_s" => 30}}
+        })
+
+      assert {:ok, %Post{}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert [{:publish, [_, %{media: [%{url: url}]}], _}] = Fake.calls(:publish)
+      assert is_binary(url)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.dispatch(PlatformWeb.Endpoint, :get, URI.parse(url).path)
+
+      assert conn.status == 200
+      assert conn.resp_body == body
+    end
+
+    test "vendor_url/2 for a scheduled post outlives its scheduled time by an hour", ctx do
+      video = media_file!(ctx.org_id, "video/mp4")
+      at = DateTime.add(DateTime.utc_now(), 2 * 24 * 3600, :second)
+      url = Publishing.vendor_url(video, %Post{scheduled_at: at})
+      "/files/signed/" <> token = URI.parse(url).path
+
+      {:ok, %{expires_at: expires_at}} =
+        Plug.Crypto.verify(
+          Application.fetch_env!(:platform, :attachment_signing_key),
+          "file_get",
+          token
+        )
+
+      assert expires_at == DateTime.to_unix(DateTime.add(at, 3600, :second))
+    end
+  end
+
   describe "rate limit" do
     setup do
       previous = Application.get_env(:social, :rate_limit)

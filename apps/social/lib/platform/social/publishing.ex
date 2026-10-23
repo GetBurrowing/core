@@ -235,7 +235,7 @@ defmodule Platform.Social.Publishing do
   # Files through core's context (never a Repo query on core's schema), and
   # only files in the post's org; per-file facts core lacks come from
   # `media_meta`.
-  defp load_media(org_id, %Post{media_file_ids: ids, media_meta: meta}) do
+  defp load_media(org_id, %Post{media_file_ids: ids, media_meta: meta} = post) do
     meta = meta || %{}
 
     Enum.reduce_while(ids || [], {:ok, []}, fn id, {:ok, acc} ->
@@ -245,7 +245,7 @@ defmodule Platform.Social.Publishing do
 
         item = %{
           file_id: id,
-          url: media_url(file),
+          url: vendor_url(file, post),
           content_type: file.content_type,
           byte_size: file.byte_size,
           duration_s: number(facts["duration_s"]),
@@ -270,10 +270,36 @@ defmodule Platform.Social.Publishing do
     match?(%{org_id: ^org_id}, Platform.Tasks.get_project(project_id))
   end
 
-  # ASSUMPTION / gap: core exposes no public, vendor-fetchable URL for a
-  # platform file (Files.Storage presigns uploads only). Until one exists the
-  # request carries nil and the adapter must refuse media it cannot fetch.
-  defp media_url(_file), do: nil
+  @vendor_url_grace_seconds 3600
+
+  @doc """
+  A vendor-fetchable URL for `file` on behalf of `post`: a signed,
+  session-free GET (`Platform.Files.SignedUrl`) that expires one hour after
+  `max(now, post.scheduled_at)`, so a scheduled post's media is still live
+  when the vendor fetches it at publish time. `nil` when one cannot be minted
+  (the adapter then refuses the media as unfetchable).
+
+  Possession of the URL is possession of the bytes until it expires, so this
+  is called only inside `publish_post/2`, after the publish guard, never to
+  display or preview. The cover image (stage 3) goes out the same way.
+  """
+  @spec vendor_url(Platform.Files.File.t(), Post.t()) :: String.t() | nil
+  def vendor_url(file, %Post{scheduled_at: scheduled_at}) do
+    now = DateTime.utc_now()
+
+    base =
+      case scheduled_at do
+        %DateTime{} = at -> if DateTime.compare(at, now) == :gt, do: at, else: now
+        _ -> now
+      end
+
+    expires_at = DateTime.add(base, @vendor_url_grace_seconds, :second)
+
+    case Platform.Files.SignedUrl.url(file, expires_at: expires_at) do
+      {:ok, url} -> url
+      {:error, _} -> nil
+    end
+  end
 
   defp number(n) when is_number(n), do: n
   defp number(_), do: nil

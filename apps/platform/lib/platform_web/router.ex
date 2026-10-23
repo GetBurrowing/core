@@ -19,7 +19,8 @@ defmodule PlatformWeb.Router do
        sign-in begins on the chat host and the IdP's registered redirect URI
        is a fixed absolute URL), the `/org-context[/*file_key]` 301s, the
        HMAC-token attachment routes, the subscribed `invite.ics` calendar
-       feed, the `/api/*` + `/mcp` machine callers, and the
+       feed, the `/api/*` + `/mcp` machine callers, the
+       `/files/signed/:token` signed file GET, and the
        `/.well-known/suite-federation` (and `/.well-known/burrow-federation`)
        peer descriptor.
 
@@ -385,6 +386,25 @@ defmodule PlatformWeb.Router do
     # endpoint's request line is suppressed for this path too
     # (`PlatformWeb.Endpoint.request_log_level/1`).
     get("/vault/fetch/:token", VaultFetchController, :show, log: false)
+  end
+
+  # Signed platform-file GET (task 01a165ec stage 1). Same posture as the
+  # vault fetch above: the `Platform.Files.SignedUrl` token in the URL is the
+  # only auth. An outside service (a publishing vendor fetching a video)
+  # carries no session, so NO `fetch_session`, NO `:require_auth`, and the
+  # response never sets a cookie. No `plug(:accepts, ...)`: vendor fetchers
+  # send whatever Accept they like and the controller sends raw bytes.
+  # HOST-AGNOSTIC: the URL is minted absolute from `PlatformWeb.Endpoint.url/0`
+  # and fetched by a third-party server. Declared ABOVE the authenticated
+  # scopes so no `/files/...` route there can shadow it.
+  pipeline :signed_file do
+    plug(:put_secure_browser_headers)
+  end
+
+  scope "/", PlatformWeb do
+    pipe_through(:signed_file)
+
+    get("/files/signed/:token", FileSignedController, :show)
   end
 
   # Calendar feed pipeline (task 019fb955-b702 stage 3) — same posture as
