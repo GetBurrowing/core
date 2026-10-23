@@ -46,6 +46,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   | `meeting_invited`        | Meeting invite |
   | `task_sponsor_assigned`  | Sponsor        |
   | `lifecycle_step_failed`  | Step failed    |
+  | `briefing`               | Briefing       |
   | an extension's kind      | its declared `label` (`Platform.Extension` `inbox_kinds/0`) |
   | anything else            | the humanized key |
 
