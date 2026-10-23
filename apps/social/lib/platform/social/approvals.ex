@@ -450,13 +450,14 @@ defmodule Platform.Social.Approvals do
 
   @doc """
   The content fingerprint of what an approver is shown: body, link, media,
-  schedule and account. Rendered into the card at view time and compared
+  schedule, account and cover (task 01a165ec stage 2). Rendered into the card at view time and compared
   with the locked row at click time (`:post_changed` on mismatch).
   """
   @spec fingerprint(Post.t()) :: String.t()
   def fingerprint(%Post{} = post) do
     {post.account_id, post.body, post.link_url, post.media_file_ids || [],
-     post.scheduled_at && DateTime.to_iso8601(post.scheduled_at)}
+     post.scheduled_at && DateTime.to_iso8601(post.scheduled_at), post.cover_file_id,
+     post.cover_offset_ms}
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
@@ -997,7 +998,12 @@ defmodule Platform.Social.Approvals do
   # preview, and Reject as the only action.
   defp rejecter_view(card, post, account, profile) do
     view = approver_view(card, post, account, profile)
-    %{view | actions: Enum.filter(view.actions, &(&1 == :reject))}
+
+    %{
+      view
+      | actions: Enum.filter(view.actions, &(&1 == :reject)),
+        cover: view.cover && %{view.cover | editable?: false}
+    }
   end
 
   defp approver_view(card, post, account, profile) do
@@ -1016,6 +1022,7 @@ defmodule Platform.Social.Approvals do
       link_url: post.link_url,
       hashtags: profile.default_hashtags || [],
       media: media(post),
+      cover: cover(post),
       char_count: count,
       char_limit: limit,
       over_limit?: is_integer(limit) and count > limit,
@@ -1027,16 +1034,63 @@ defmodule Platform.Social.Approvals do
     }
   end
 
-  defp media(%Post{media_file_ids: ids, media_meta: meta}) do
+  defp media(%Post{media_file_ids: ids, media_meta: meta} = post) do
     for id <- ids || [], file = Platform.Files.get_file(id), file != nil do
       facts = Map.get(meta || %{}, id) || %{}
+      video? = String.starts_with?(file.content_type || "", "video/")
 
       %{
         id: id,
         src: "/files/blob/#{id}",
         content_type: file.content_type,
         width: facts["width"],
-        height: facts["height"]
+        height: facts["height"],
+        # The chosen cover as the card's thumbnail (task 01a165ec stage 4):
+        # an uploaded cover is the <video>'s poster, a frame is a media
+        # fragment on its src (`#t=<seconds>`, preload=metadata paints it).
+        poster: video? && post.cover_file_id && "/files/blob/#{post.cover_file_id}",
+        fragment: video? && is_integer(post.cover_offset_ms) && fragment(post.cover_offset_ms)
+      }
+    end
+  end
+
+  # `#t=7.4` for 7400 ms, `#t=7` for 7000 ms.
+  defp fragment(ms) when rem(ms, 1000) == 0, do: "#t=#{div(ms, 1000)}"
+  defp fragment(ms), do: "#t=#{:erlang.float_to_binary(ms / 1000, [:short])}"
+
+  # A video post's cover, for the card's Cover control (task 01a165ec
+  # stage 4): nil on a post with no video. `kind` is :first_frame (nothing
+  # chosen), :frame or :uploaded; `editable?` only while the post is a draft
+  # or awaiting approval (the rejecter and waiting views turn it off).
+  defp cover(%Post{} = post) do
+    video =
+      Enum.find_value(post.media_file_ids || [], fn id ->
+        case Platform.Files.get_file(id) do
+          %{content_type: "video/" <> _} = file -> file
+          _ -> nil
+        end
+      end)
+
+    if video do
+      duration_s =
+        case Map.get(post.media_meta || %{}, video.id) do
+          %{"duration_s" => d} when is_number(d) and d > 0 -> d
+          _ -> nil
+        end
+
+      %{
+        post_id: post.id,
+        video_src: "/files/blob/#{video.id}",
+        duration_ms: duration_s && round(duration_s * 1000),
+        kind:
+          cond do
+            is_binary(post.cover_file_id) -> :uploaded
+            is_integer(post.cover_offset_ms) -> :frame
+            true -> :first_frame
+          end,
+        offset_ms: post.cover_offset_ms,
+        file_id: post.cover_file_id,
+        editable?: post.status in ~w(draft needs_approval)
       }
     end
   end

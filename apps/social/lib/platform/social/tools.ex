@@ -783,6 +783,9 @@ defmodule Platform.Social.Tools do
       :episode_url,
       :start_s,
       :end_s,
+      :cover_file_id,
+      :cover_offset_ms,
+      :cover_error,
       :inserted_at,
       :updated_at
     ])

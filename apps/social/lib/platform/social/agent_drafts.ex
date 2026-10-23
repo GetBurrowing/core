@@ -41,12 +41,24 @@ defmodule Platform.Social.AgentDrafts do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Clip, ClipLook, ClipMedia, ClipRender, Links, Post, Profile}
+
+  alias Platform.Social.{
+    Account,
+    Clip,
+    ClipLook,
+    ClipMedia,
+    ClipRender,
+    Cover,
+    Links,
+    OrgFiles,
+    Post,
+    Profile
+  }
 
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
-               segment_ids episode_url start_s end_s)a
+               segment_ids episode_url start_s end_s cover_file_id cover_offset_ms)a
   @forbidden ~w(approved_by_user_id approved_at external_url external_id error
-                rejection_reason rejected_at)
+                rejection_reason rejected_at cover_error)
   @agent_statuses ~w(draft needs_approval)
   @default_status "needs_approval"
   @editable_statuses ~w(draft needs_approval)
@@ -632,6 +644,8 @@ defmodule Platform.Social.AgentDrafts do
     |> validate_media(org_id)
     # Social 5/7: a rendered clip's length and size, for MediaRules at publish.
     |> ClipMedia.put_media_meta(profile.id)
+    # Task 01a165ec stage 2: the one cover rule, shared with Post.changeset.
+    |> Cover.validate(attrs, %{org_id: org_id, profile_id: profile.id})
     |> Changeset.check_constraint(:status, name: :social_posts_status_check)
     |> Changeset.check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check
@@ -668,7 +682,7 @@ defmodule Platform.Social.AgentDrafts do
   defp validate_media(changeset, org_id) do
     ids = Changeset.get_change(changeset, :media_file_ids) || []
 
-    if Enum.all?(ids, &(file_org(&1) == org_id)),
+    if Enum.all?(ids, &OrgFiles.in_org?(&1, org_id)),
       do: changeset,
       else: Changeset.add_error(changeset, :media_file_ids, "must exist in the profile's org")
   end
@@ -682,14 +696,6 @@ defmodule Platform.Social.AgentDrafts do
 
   defp meeting_org(id) do
     case Platform.Meetings.get_meeting(id) do
-      %{project_id: project_id} -> project_org(project_id)
-      _ -> nil
-    end
-  end
-
-  defp file_org(id) do
-    case Platform.Files.get_file(id) do
-      %{org_id: org_id} when is_binary(org_id) -> org_id
       %{project_id: project_id} -> project_org(project_id)
       _ -> nil
     end

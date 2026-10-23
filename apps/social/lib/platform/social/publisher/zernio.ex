@@ -62,6 +62,15 @@ defmodule Platform.Social.Publisher.Zernio do
     * AI disclosure: TikTok `tiktokSettings.video_made_with_ai`, X
       `platformSpecificData.madeWithAi`, Instagram `isAiGenerated`, YouTube
       `containsSyntheticMedia`.
+    * Covers (OpenAPI v1.336.0, task 01a165ec stage 3):
+      `InstagramPlatformData.instagramThumbnail` (public JPG/PNG URL; overrides
+      `thumbOffset`), `thumbOffset` (integer ms, min 0). We send exactly one of
+      them, for an Instagram video only, and never the `reelCover` alias, the
+      MediaItem-level thumbnail or TikTok's cover fields. YouTube takes no
+      thumbnail at create time: `POST /v1/posts/{postId}/update-metadata` with
+      `{platform: "youtube", accountId, thumbnailUrl}` sets it after publish
+      (JPEG/PNG/GIF, 50MB, phone-verified channel; 400 refused with a reason,
+      429 `uploadRateLimitExceeded`). There is no YouTube frame offset.
     * TikTok requires `privacy_level`, `allow_comment`, `content_preview_confirmed: true`,
       `express_consent_given: true`.
     * Rate limits: 60 to 1,200 requests/minute by plan, plus per-account caps
@@ -214,6 +223,21 @@ defmodule Platform.Social.Publisher.Zernio do
     end
   end
 
+  # YouTube's cover, after publish (see the moduledoc). Never retried: one
+  # call, and a 429 means "later", not "again now".
+  @impl true
+  def set_cover(account, external_id, url) do
+    with {:ok, key} <- api_key(account) do
+      request(key)
+      |> Req.post(
+        url: "/v1/posts/#{URI.encode(external_id)}/update-metadata",
+        json: %{platform: "youtube", accountId: account.provider_account_ref, thumbnailUrl: url},
+        retry: false
+      )
+      |> handle(fn _ -> :ok end)
+    end
+  end
+
   @impl true
   def status(account, external_id) do
     with {:ok, key} <- api_key(account) do
@@ -345,7 +369,10 @@ defmodule Platform.Social.Publisher.Zernio do
         %{
           platform: platform,
           accountId: account.provider_account_ref,
-          platformSpecificData: platform_specific(request.platform, request.is_aigc)
+          platformSpecificData:
+            request.platform
+            |> platform_specific(request.is_aigc)
+            |> cover(request.platform, media, Map.get(request, :cover))
         }
       ],
       timezone: "UTC"
@@ -368,6 +395,25 @@ defmodule Platform.Social.Publisher.Zernio do
   defp platform_specific("instagram", aigc), do: %{isAiGenerated: aigc == true}
   defp platform_specific("youtube", aigc), do: %{containsSyntheticMedia: aigc == true}
   defp platform_specific(_, _), do: %{}
+
+  # Instagram is the only platform that takes a cover at create time here.
+  # An image wins over a frame by construction: exactly one key is sent.
+  defp cover(data, "instagram", media, cover) do
+    video? = Enum.any?(media, &(&1.type == "video"))
+
+    case cover do
+      %{kind: :image, url: url} when video? and is_binary(url) ->
+        Map.put(data, :instagramThumbnail, url)
+
+      %{kind: :frame, offset_ms: offset} when video? and is_integer(offset) and offset >= 0 ->
+        Map.put(data, :thumbOffset, offset)
+
+      _ ->
+        data
+    end
+  end
+
+  defp cover(data, _platform, _media, _cover), do: data
 
   defp tiktok(body, %{platform: "tiktok", is_aigc: aigc}) do
     Map.put(body, :tiktokSettings, %{

@@ -525,4 +525,110 @@ defmodule Platform.Social.AgentDraftsTest do
       refute Social.org_visible?(:root, "nope")
     end
   end
+
+  # Task 01a165ec stage 2: the agent path runs the same cover rule as the
+  # human path (Platform.Social.Cover).
+  describe "cover" do
+    setup ctx do
+      video = media_file!(ctx.org_a, "video/mp4")
+
+      %{
+        video: video,
+        png: media_file!(ctx.org_a, "image/png"),
+        video_attrs: %{
+          "media_file_ids" => [video.id],
+          "media_meta" => %{video.id => %{"duration_s" => 42.5}}
+        }
+      }
+    end
+
+    defp cover_draft!(ctx, attrs) do
+      # media_meta is not agent-castable: seed it through the general path.
+      post = draft!(ctx, %{"media_file_ids" => [ctx.video.id], "status" => "draft"})
+
+      {:ok, post} =
+        Social.update_post(ctx.org_a, post, %{media_meta: ctx.video_attrs["media_meta"]})
+
+      if attrs == %{},
+        do: post,
+        else: elem(AgentDrafts.update_agent_draft(ctx.scope, post.id, attrs), 1)
+    end
+
+    defp cover_errors({:error, %Ecto.Changeset{} = cs}), do: errors_on(cs)
+
+    test "create and update round-trip both fields, one at a time", ctx do
+      assert {:ok, [post]} =
+               AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
+                 "account_ids" => [ctx.acc1.id],
+                 "body" => "clip",
+                 "media_file_ids" => [ctx.video.id],
+                 "cover_file_id" => ctx.png.id
+               })
+
+      assert post.cover_file_id == ctx.png.id
+
+      post = cover_draft!(ctx, %{})
+
+      assert {:ok, %Post{cover_offset_ms: 2_000, cover_file_id: nil}} =
+               AgentDrafts.update_agent_draft(ctx.scope, post.id, %{"cover_offset_ms" => 2_000})
+
+      assert {:ok, %Post{cover_file_id: png_id, cover_offset_ms: nil}} =
+               AgentDrafts.update_agent_draft(ctx.scope, post.id, %{"cover_file_id" => ctx.png.id})
+
+      assert png_id == ctx.png.id
+
+      assert {:ok, %Post{cover_file_id: nil, cover_offset_ms: nil}} =
+               AgentDrafts.update_agent_draft(ctx.scope, post.id, %{
+                 "cover_file_id" => nil,
+                 "cover_offset_ms" => nil
+               })
+    end
+
+    test "surfaces the same refusals as the human path", ctx do
+      post = cover_draft!(ctx, %{})
+      pdf = media_file!(ctx.org_a, "application/pdf")
+      foreign = media_file!(ctx.org_b, "image/png")
+      update = &AgentDrafts.update_agent_draft(ctx.scope, post.id, &1)
+
+      assert %{cover_file_id: ["cover must be a JPG or PNG image"]} =
+               cover_errors(update.(%{"cover_file_id" => pdf.id}))
+
+      assert %{cover_file_id: ["cover must exist in the profile's org"]} =
+               cover_errors(update.(%{"cover_file_id" => foreign.id}))
+
+      assert %{cover_offset_ms: ["cover frame is past the end of the video (0:42)"]} =
+               cover_errors(update.(%{"cover_offset_ms" => 50_000}))
+
+      assert %{cover_file_id: ["choose either an uploaded cover or a frame, not both"]} =
+               cover_errors(update.(%{"cover_file_id" => ctx.png.id, "cover_offset_ms" => 1}))
+
+      # No duration known: a fresh video draft without media_meta.
+      assert %{cover_offset_ms: ["the video's duration is unknown, so a frame cannot be checked"]} =
+               cover_errors(
+                 AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
+                   "account_ids" => [ctx.acc1.id],
+                   "media_file_ids" => [ctx.video.id],
+                   "cover_offset_ms" => 1_000
+                 })
+               )
+
+      assert %{cover_file_id: ["a cover applies only to a video post"]} =
+               cover_errors(
+                 AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
+                   "account_ids" => [ctx.acc1.id],
+                   "media_file_ids" => [ctx.png.id],
+                   "cover_file_id" => ctx.png.id
+                 })
+               )
+
+      assert %Post{cover_file_id: nil, cover_offset_ms: nil} = Repo.get!(Post, post.id)
+    end
+
+    test "cover_error is the publisher's: refused by name", ctx do
+      post = cover_draft!(ctx, %{})
+
+      assert {:error, :field_not_allowed, ["cover_error"]} =
+               AgentDrafts.update_agent_draft(ctx.scope, post.id, %{"cover_error" => "x"})
+    end
+  end
 end

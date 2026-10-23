@@ -132,6 +132,13 @@ defmodule Platform.Social.Publisher.Fake do
   @impl Platform.Social.Publisher
   def delete(account, external_id), do: record(:delete, [account, external_id], fn -> :ok end)
 
+  # Records the call (`calls(:set_cover)`); `fail_next(:set_cover, reason)`
+  # makes the next one fail. The request's `cover` is recorded by publish/2
+  # as given.
+  @impl Platform.Social.Publisher
+  def set_cover(account, external_id, url),
+    do: record(:set_cover, [account, external_id, url], fn -> :ok end)
+
   @impl Platform.Social.Publisher
   def disconnect_account(account), do: record(:disconnect_account, [account], fn -> :ok end)
 

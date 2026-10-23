@@ -93,12 +93,19 @@ defmodule Platform.Social.Extension do
   def migrations_path, do: Application.app_dir(:social, "priv/repo/migrations")
 
   # Build time only (a release host's `mix platform.extensions.assets`): the
-  # approval card's templates, for Tailwind to scan. No JS (Copy uses core's
-  # CopyToClipboard hook) and no stylesheet.
+  # cover picker's `CoverPicker` hook (task 01a165ec stage 4, Play's
+  # pattern), and the templates and hook for Tailwind to scan. No
+  # stylesheet.
+  @assets_root Path.expand("../../../assets", __DIR__)
   @lib_root Path.expand("../..", __DIR__)
 
   @impl true
-  def assets, do: %{tailwind_sources: [@lib_root]}
+  def assets do
+    %{
+      js_hooks: Path.join(@assets_root, "js/extension.js"),
+      tailwind_sources: [@lib_root, Path.join(@assets_root, "js")]
+    }
+  end
 
   # Social 7/7: the Social screen's rail destination
   # (`0055-extension-contract-and-build-time-modules.md § 5. Rail items: which are core and which are module`).

@@ -317,6 +317,159 @@ defmodule Platform.Social.PublishingTest do
     end
   end
 
+  describe "cover (task 01a165ec stage 3)" do
+    # A file whose bytes are on disk, so a signed URL can be fetched.
+    defp stored_media!(org_id, content_type) do
+      body = :crypto.strong_rand_bytes(1536)
+      file = media_file!(org_id, content_type, byte_size(body))
+      path = Platform.Chat.AttachmentStorage.path_for(file.storage_key)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, body)
+      on_exit(fn -> File.rm(path) end)
+      {file, body}
+    end
+
+    defp video_post!(ctx, platform, cover_attrs) do
+      {_, account} = social_account!(ctx.org_id, platform)
+      video = media_file!(ctx.org_id, "video/mp4")
+
+      approved_post!(
+        ctx.org_id,
+        account,
+        Map.merge(
+          %{media_file_ids: [video.id], media_meta: %{video.id => %{"duration_s" => 30}}},
+          cover_attrs
+        )
+      )
+    end
+
+    defp fetch(url) do
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.dispatch(PlatformWeb.Endpoint, :get, URI.parse(url).path)
+
+      {conn.status, conn.resp_body}
+    end
+
+    defp published_request do
+      assert [{:publish, [_account, request], _}] = Fake.calls(:publish)
+      request
+    end
+
+    test "an uploaded cover reaches the publisher as an image whose URL serves the cover's bytes",
+         ctx do
+      {cover, bytes} = stored_media!(ctx.org_id, "image/jpeg")
+      # A second stored JPG in the org: the URL must be for the cover, not it.
+      {_other, other_bytes} = stored_media!(ctx.org_id, "image/jpeg")
+      post = video_post!(ctx, "instagram", %{cover_file_id: cover.id})
+      assert post.cover_file_id == cover.id
+
+      assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert %{cover: %{kind: :image, url: url, content_type: "image/jpeg"}} = published_request()
+      assert {200, ^bytes} = fetch(url)
+      refute bytes == other_bytes
+    end
+
+    test "a frame reaches the publisher as its offset", ctx do
+      post = video_post!(ctx, "instagram", %{cover_offset_ms: 7400})
+      assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
+      assert published_request().cover == %{kind: :frame, offset_ms: 7400}
+    end
+
+    test "a cleared cover is nil", ctx do
+      post = video_post!(ctx, "instagram", %{cover_offset_ms: 7400})
+
+      {:ok, post} =
+        post |> Ecto.Changeset.change(cover_offset_ms: nil) |> Repo.update()
+
+      assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
+      assert published_request().cover == nil
+    end
+
+    test "a cover file deleted after approval refuses the publish before the adapter", ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "instagram", %{cover_file_id: cover.id})
+      cover |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+      assert {:error, {:media_rejected, ["The cover image is missing or not in this org"]}} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      assert Repo.get!(Post, post.id).status == "approved"
+      assert Fake.calls() == []
+    end
+
+    test "a YouTube post's uploaded cover is set once, after it is published", ctx do
+      {cover, bytes} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+
+      assert {:ok, %Post{status: "scheduled"} = scheduled} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      assert Fake.calls(:set_cover) == []
+
+      assert {:ok, %Post{status: "published", cover_error: nil}} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert [{:set_cover, [account, external_id, url], _}] = Fake.calls(:set_cover)
+      assert account.platform == "youtube"
+      assert external_id == scheduled.external_id
+      assert {200, ^bytes} = fetch(url)
+
+      # A replayed outcome is a :noop and sends nothing more.
+      assert {:ok, :noop} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert length(Fake.calls(:set_cover)) == 1
+    end
+
+    test "a synchronous YouTube publish sets the cover after the publish commits", ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+
+      Fake.put_next(
+        :publish,
+        {:ok, %{external_id: "yt_1", status: :published, external_url: nil}}
+      )
+
+      assert {:ok, %Post{status: "published"}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert [{:set_cover, [_, "yt_1", _url], _}] = Fake.calls(:set_cover)
+    end
+
+    test "a failed set_cover leaves the post published with cover_error set; a frame sends nothing",
+         ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
+      Fake.fail_next(:set_cover, :rate_limited)
+
+      assert {:ok, %Post{status: "published", cover_error: error}} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert error == "YouTube cover not set: the upload limit was reached; set it again later"
+      assert %Post{status: "published", cover_error: ^error} = Repo.get!(Post, post.id)
+
+      frame = video_post!(ctx, "youtube", %{cover_offset_ms: 1000})
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, frame.id)
+
+      {:ok, _} =
+        Publishing.apply_outcome(scheduled, %{kind: :published, external_url: nil, error: nil})
+
+      assert length(Fake.calls(:set_cover)) == 1
+    end
+  end
+
   describe "rate limit" do
     setup do
       previous = Application.get_env(:social, :rate_limit)

@@ -65,6 +65,17 @@ defmodule Platform.Social.Publisher do
         }
 
   @typedoc """
+  A video post's cover (task 01a165ec, stage 3): an uploaded image, by a
+  vendor-fetchable signed URL, or a frame of the video, by offset. `nil`
+  when the post has none. An adapter maps it where its platform takes a
+  cover at create time and ignores it elsewhere.
+  """
+  @type cover ::
+          nil
+          | %{kind: :image, url: String.t(), content_type: String.t()}
+          | %{kind: :frame, offset_ms: non_neg_integer()}
+
+  @typedoc """
   The vendor-neutral publish request. `idempotency_key` is the post id, so a
   retried publish is a replay at the vendor, not a second post.
   """
@@ -76,7 +87,8 @@ defmodule Platform.Social.Publisher do
           is_aigc: boolean(),
           ai_disclosure: String.t() | nil,
           platform: String.t(),
-          idempotency_key: String.t()
+          idempotency_key: String.t(),
+          cover: cover()
         }
 
   @type publish_result :: %{
@@ -159,6 +171,17 @@ defmodule Platform.Social.Publisher do
   one the vendor already disconnected is `:ok`.
   """
   @callback disconnect_account(account()) :: :ok | {:error, term()}
+
+  @doc """
+  OPTIONAL. Sets an uploaded cover image on a post AFTER it is published,
+  for platforms whose create call takes none (YouTube). `url` is a
+  vendor-fetchable signed URL. Called once, never retried; a failure is
+  recorded on the post's `cover_error` and never changes its status.
+  """
+  @callback set_cover(account(), external_id :: String.t(), url :: String.t()) ::
+              :ok | {:error, term()}
+
+  @optional_callbacks set_cover: 3
 
   @doc """
   Verifies a webhook delivery's signature over the RAW body with `secret`

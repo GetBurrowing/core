@@ -158,6 +158,9 @@ defmodule PlatformWeb.SocialLive do
 
   @invite_unusable "That invite link can't finish this connection. Nothing changed. Ask for a new link."
 
+  # An uploaded cover's size cap (task 01a165ec stage 4).
+  @cover_max_bytes 15_000_000
+
   # The invite dialog's expiry choices, in days; 7 is the default.
   @invite_ttl_days [1, 3, 7, 14]
 
@@ -189,6 +192,14 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:landing, nil)
       |> assign(:invite_token, nil)
       |> assign(:invite_nonce, nil)
+      |> assign(:cover_picker, nil)
+      |> allow_upload(:cover,
+        accept: ~w(.jpg .jpeg .png),
+        max_entries: 1,
+        max_file_size: @cover_max_bytes,
+        auto_upload: true,
+        progress: &handle_cover_progress/3
+      )
 
     socket = load_profile(socket, List.first(profiles))
     query = session["query"]
@@ -665,6 +676,60 @@ defmodule PlatformWeb.SocialLive do
        do: socket |> assign(:zernio_mode, mode) |> assign_zernio(),
        else: socket
      )}
+  end
+
+  # ── Cover picker (task 01a165ec stage 4) ─────────────────────────────
+  #
+  # A video post's cover, from the queue card's Cover control. Every write
+  # goes through `Social.set_cover/4` (the approver and the one cover rule
+  # are checked there, on a fresh read); the picker only stages. The frame
+  # tab's `cover_frame` comes from the CoverPicker hook (integer ms); the
+  # upload tab stores the image as a file of the profile's project as soon
+  # as it arrives, and "Use this cover" applies it.
+
+  def handle_event("cover_open", %{"post-id" => post_id}, socket) when is_binary(post_id),
+    do: {:noreply, open_cover_picker(socket, post_id)}
+
+  def handle_event("cover_open", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cover_close", _params, socket), do: {:noreply, close_cover_picker(socket)}
+
+  def handle_event("cover_tab", %{"tab" => tab}, socket) when tab in ~w(frame upload),
+    do: {:noreply, update_cover_picker(socket, &%{&1 | tab: tab, error: nil})}
+
+  def handle_event("cover_tab", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cover_frame", %{"post_id" => post_id, "offset_ms" => ms} = params, socket)
+      when is_binary(post_id) and is_integer(ms) do
+    attrs =
+      case params["duration_ms"] do
+        d when is_integer(d) and d > 0 -> %{cover_offset_ms: ms, duration_ms: d}
+        _ -> %{cover_offset_ms: ms}
+      end
+
+    {:noreply, apply_cover(socket, post_id, attrs)}
+  end
+
+  def handle_event("cover_frame", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cover_reset", _params, socket) do
+    case socket.assigns.cover_picker do
+      %{post_id: post_id} -> {:noreply, apply_cover(socket, post_id, :clear)}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("cover_upload_validate", _params, socket),
+    do: {:noreply, update_cover_picker(socket, &%{&1 | error: nil})}
+
+  def handle_event("cover_upload_save", _params, socket) do
+    case socket.assigns.cover_picker do
+      %{post_id: post_id, staged: %{file_id: file_id}} ->
+        {:noreply, apply_cover(socket, post_id, %{cover_file_id: file_id})}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   # A queued card's canvas changed (a decision here, in chat, or anywhere):
@@ -1597,6 +1662,157 @@ defmodule PlatformWeb.SocialLive do
   defp rev_of(%{"root" => %{"props" => %{"rev" => rev}}}) when is_integer(rev), do: rev
   defp rev_of(_), do: nil
 
+  # ── Cover picker helpers (task 01a165ec stage 4) ─────────────────────
+
+  # The picker opens only on a video post of the CURRENT profile that this
+  # viewer may change; anything else is a no-op (the card shows no button).
+  defp open_cover_picker(socket, post_id) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         %Social.Post{} = post <- Social.get_post(profile.org_id, post_id),
+         %Account{} = account <- profile_account(profile, post.account_id),
+         %{} = card <- Approvals.live_card(post.id),
+         %{cover: %{editable?: true} = cover, role: :approver} <-
+           Approvals.card_view(card.id, {:user, user_id}) do
+      socket
+      |> cancel_cover_uploads()
+      |> assign(:cover_picker, %{
+        post_id: post.id,
+        card_id: card.id,
+        platform: account.platform,
+        platform_label: Approvals.platform_label(account.platform),
+        cover: cover,
+        tab: if(cover.kind == :uploaded, do: "upload", else: "frame"),
+        staged: nil,
+        error: nil
+      })
+    else
+      _ -> socket
+    end
+  end
+
+  defp close_cover_picker(socket),
+    do: socket |> cancel_cover_uploads() |> assign(:cover_picker, nil)
+
+  defp update_cover_picker(%{assigns: %{cover_picker: %{} = picker}} = socket, fun),
+    do: assign(socket, :cover_picker, fun.(picker))
+
+  defp update_cover_picker(socket, _fun), do: socket
+
+  defp cancel_cover_uploads(socket) do
+    Enum.reduce(socket.assigns.uploads.cover.entries, socket, fn entry, acc ->
+      cancel_upload(acc, :cover, entry.ref)
+    end)
+  end
+
+  # A refusal keeps the picker open with the reason under the control.
+  defp apply_cover(socket, post_id, attrs) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, post} <- Social.set_cover(profile.org_id, user_id, post_id, attrs) do
+      case Approvals.live_card(post.id) do
+        %{id: card_id} ->
+          send_update(PlatformWeb.SocialCardComponent, id: "queue-card-" <> card_id)
+
+        nil ->
+          :ok
+      end
+
+      close_cover_picker(socket)
+    else
+      {:error, reason} -> update_cover_picker(socket, &%{&1 | error: cover_error_copy(reason)})
+    end
+  end
+
+  defp cover_error_copy(%Ecto.Changeset{} = changeset) do
+    Enum.find_value([:cover_file_id, :cover_offset_ms], "That cover can't be used.", fn field ->
+      case Keyword.get_values(changeset.errors, field) do
+        [{message, opts} | _] -> PlatformWeb.CoreComponents.translate_error({message, opts})
+        [] -> nil
+      end
+    end)
+  end
+
+  defp cover_error_copy(:post_locked), do: "This post is past approval, so its cover is fixed."
+  defp cover_error_copy(reason), do: PlatformWeb.SocialCardComponent.refusal_copy(reason)
+
+  # An uploaded image is stored as soon as it arrives (a file of the
+  # profile's project, through core's Files), then staged in the picker for
+  # "Use this cover". Its pixel size says whether Instagram will crop it.
+  defp handle_cover_progress(:cover, entry, socket) do
+    if entry.done? do
+      result =
+        consume_uploaded_entry(socket, entry, fn %{path: path} ->
+          {:ok, store_cover_image(socket, path, entry)}
+        end)
+
+      case result do
+        {:ok, staged} ->
+          {:noreply, update_cover_picker(socket, &%{&1 | staged: staged, error: nil})}
+
+        {:error, message} ->
+          {:noreply, update_cover_picker(socket, &%{&1 | staged: nil, error: message})}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  defp store_cover_image(socket, path, entry) do
+    bytes = File.read!(path)
+    content_type = cover_content_type(entry)
+
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, project} <- Social.render_project(profile),
+         {:ok, file} <- store_or_reuse(project, bytes, entry.client_name, content_type, user_id) do
+      {:ok,
+       %{
+         file_id: file.id,
+         name: entry.client_name,
+         size: byte_size(bytes),
+         nine_sixteen?: Platform.Social.CoverImage.nine_sixteen?(bytes)
+       }}
+    else
+      {:error, message} when is_binary(message) -> {:error, message}
+      _ -> {:error, "That image could not be stored. Try again."}
+    end
+  end
+
+  # The same image uploaded again is the project's existing file: core's
+  # Files keeps one row per content hash in a project, and only dedupes an
+  # INGESTED sibling itself (a cover is stored without ingestion).
+  defp store_or_reuse(project, bytes, name, content_type, user_id) do
+    case Platform.Files.add_bytes(project, bytes, name, content_type,
+           uploaded_by_user_id: user_id,
+           ingest: false
+         ) do
+      {:ok, file, _deduplicated?} ->
+        {:ok, file}
+
+      {:error, %Ecto.Changeset{}} = error ->
+        hash = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+        project.id
+        |> Platform.Files.list_files_for_project(content_type: content_type, limit: nil)
+        |> Enum.find(&(&1.content_hash == hash))
+        |> case do
+          nil -> error
+          file -> {:ok, file}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp cover_content_type(%{client_name: name}) do
+    if name |> Path.extname() |> String.downcase() == ".png", do: "image/png", else: "image/jpeg"
+  end
+
+  # The upload's refusal, in the cover rule's own words where it has one.
+  defp cover_upload_error(:not_accepted), do: Platform.Social.Cover.not_image_message()
+  defp cover_upload_error(:too_large), do: "cover image must be under 15 MB"
+  defp cover_upload_error(:too_many_files), do: "choose one image"
+  defp cover_upload_error(_), do: "That image could not be uploaded."
+
   # ── Create ──────────────────────────────────────────────────────────
 
   defp fresh_user(%{assigns: %{user: %{id: id}}}), do: Platform.Accounts.get_user(id)
@@ -1913,6 +2129,7 @@ defmodule PlatformWeb.SocialLive do
                       rev={row.rev}
                       canvas_id={row.card.canvas_id}
                       viewer={{:user, @user.id}}
+                      cover_controls={true}
                     />
                   <% else %>
                     <p
@@ -1924,6 +2141,7 @@ defmodule PlatformWeb.SocialLive do
                   <% end %>
                 </li>
               </ul>
+              <.cover_picker :if={@cover_picker} picker={@cover_picker} upload={@uploads.cover} />
             </div>
             <div class={[@tab != "calendar" && "hidden"]} data-pane="calendar">
               <.calendar
@@ -2462,6 +2680,303 @@ defmodule PlatformWeb.SocialLive do
     </button>
     """
   end
+
+  attr :picker, :map, required: true
+  attr :upload, :any, required: true
+
+  # The cover picker (task 01a165ec stage 4, design canvas 01a165ec-76e8):
+  # a dialog from sm up, a bottom sheet below. Two neutral segmented tabs;
+  # each tab has its own "Use this cover", the only primary on the surface.
+  # The frame tab's scrubber is the CoverPicker hook's (phx-update=ignore):
+  # it draws the filmstrip in the browser and pushes `cover_frame`.
+  defp cover_picker(assigns) do
+    ~H"""
+    <div
+      class="modal modal-open modal-bottom sm:modal-middle"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="social-cover-title"
+      phx-window-keydown="cover_close"
+      phx-key="escape"
+      data-role="social-cover-picker"
+      data-tab={@picker.tab}
+    >
+      <div class="modal-box max-h-[95vh] border border-base-300 bg-base-100 p-4 sm:max-w-md sm:p-5">
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <h2 id="social-cover-title" class="text-lg font-semibold">Cover</h2>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm btn-square"
+            phx-click="cover_close"
+            aria-label="Close"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+
+        <div
+          role="tablist"
+          aria-label="Cover source"
+          class="mb-3 grid grid-cols-2 gap-1 rounded-lg border border-base-300 bg-base-200 p-1"
+          data-role="social-cover-tabs"
+        >
+          <button
+            :for={{key, label} <- [{"frame", "Pick a frame"}, {"upload", "Upload image"}]}
+            type="button"
+            role="tab"
+            aria-selected={to_string(@picker.tab == key)}
+            phx-click="cover_tab"
+            phx-value-tab={key}
+            data-role="social-cover-tab"
+            data-tab={key}
+            class={[
+              "min-h-10 rounded-md px-3 text-[15px]",
+              if(@picker.tab == key,
+                do: "bg-base-100 font-medium text-base-content shadow-sm",
+                else: "text-subtle"
+              )
+            ]}
+          >
+            {label}
+          </button>
+        </div>
+
+        <%= if @picker.tab == "frame" do %>
+          <div
+            id={"social-cover-scrubber-#{@picker.post_id}"}
+            phx-hook="CoverPicker"
+            phx-update="ignore"
+            data-role="social-cover-scrubber"
+            data-post-id={@picker.post_id}
+            data-src={@picker.cover.video_src}
+            data-offset-ms={@picker.cover.offset_ms || 0}
+            data-duration-ms={@picker.cover.duration_ms}
+          >
+            <.cover_well>
+              <video
+                data-cover-preview
+                src={@picker.cover.video_src <> "#t=" <> seconds(@picker.cover.offset_ms || 0)}
+                muted
+                playsinline
+                preload="metadata"
+                class="absolute inset-0 h-full w-full object-contain"
+              >
+              </video>
+            </.cover_well>
+            <div
+              data-cover-strip
+              role="slider"
+              tabindex="0"
+              aria-label="Cover frame"
+              aria-valuemin="0"
+              aria-valuemax={(@picker.cover.duration_ms || 0) / 1000}
+              aria-valuenow={(@picker.cover.offset_ms || 0) / 1000}
+              aria-valuetext={timecode(@picker.cover.offset_ms || 0, @picker.cover.duration_ms)}
+              class="relative mt-3 h-14 cursor-pointer touch-none select-none overflow-hidden rounded-md border border-base-300 bg-base-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-base-content"
+            >
+              <div data-cover-frames class="flex h-full w-full"></div>
+              <div
+                data-cover-playhead
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-y-0 left-0 w-10 -translate-x-1/2 rounded border-2 border-base-content"
+              >
+                <div class="absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-base-content"></div>
+              </div>
+            </div>
+            <p
+              data-cover-timecode
+              data-role="social-cover-timecode"
+              class="mt-2 text-center font-mono text-sm tabular-nums"
+            >
+              {timecode(@picker.cover.offset_ms || 0, @picker.cover.duration_ms)}
+            </p>
+          </div>
+          <.cover_notes picker={@picker} />
+          <div class="modal-action mt-3 items-center">
+            <button
+              type="button"
+              class="btn btn-ghost"
+              phx-click="cover_reset"
+              data-role="social-cover-reset"
+            >
+              Reset to first frame
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary ml-auto"
+              phx-click={
+                JS.dispatch("cover:confirm", to: "#social-cover-scrubber-#{@picker.post_id}")
+              }
+              data-role="social-cover-use"
+            >
+              Use this cover
+            </button>
+          </div>
+        <% else %>
+          <form
+            id="social-cover-upload"
+            phx-change="cover_upload_validate"
+            phx-submit="cover_upload_save"
+            data-role="social-cover-upload"
+          >
+            <.cover_well>
+              <img
+                :if={@picker.staged}
+                src={"/files/blob/#{@picker.staged.file_id}"}
+                alt="Uploaded cover"
+                class="absolute inset-0 h-full w-full object-contain"
+                data-role="social-cover-staged"
+              />
+              <img
+                :if={!@picker.staged and @picker.cover.kind == :uploaded}
+                src={"/files/blob/#{@picker.cover.file_id}"}
+                alt="Current cover"
+                class="absolute inset-0 h-full w-full object-contain"
+              />
+              <label
+                :if={!@picker.staged and @picker.cover.kind != :uploaded}
+                for={@upload.ref}
+                class="absolute inset-0 flex cursor-pointer flex-col items-center justify-center gap-2 text-[15px] text-subtle"
+              >
+                <.icon name="hero-photo" class="size-8" /> Choose a JPG or PNG
+              </label>
+            </.cover_well>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <.live_file_input
+                upload={@upload}
+                class="file-input file-input-sm w-full max-w-full"
+              />
+            </div>
+            <p
+              :if={@picker.staged}
+              data-role="social-cover-file"
+              class="mt-2 truncate text-[13px] text-subtle"
+            >
+              {@picker.staged.name} · {file_size(@picker.staged.size)}
+            </p>
+            <p
+              :if={@picker.staged && !@picker.staged.nine_sixteen?}
+              data-role="social-cover-crop-note"
+              class="mt-1 text-[13px] text-subtle"
+            >
+              Instagram will crop this to 9:16
+            </p>
+            <p
+              :for={
+                err <-
+                  upload_errors(@upload) ++
+                    Enum.flat_map(@upload.entries, &upload_errors(@upload, &1))
+              }
+              data-role="social-cover-error"
+              class="mt-2 text-sm text-error"
+            >
+              {cover_upload_error(err)}
+            </p>
+            <.cover_notes picker={@picker} />
+            <div class="modal-action mt-3 items-center">
+              <button
+                type="button"
+                class="btn btn-ghost"
+                phx-click="cover_reset"
+                data-role="social-cover-reset"
+              >
+                Reset to first frame
+              </button>
+              <button
+                type="submit"
+                class="btn btn-primary ml-auto"
+                disabled={is_nil(@picker.staged)}
+                data-role="social-cover-use"
+              >
+                Use this cover
+              </button>
+            </div>
+          </form>
+        <% end %>
+      </div>
+      <button type="button" class="modal-backdrop" phx-click="cover_close" aria-label="Close">
+      </button>
+    </div>
+    """
+  end
+
+  slot :inner_block, required: true
+
+  # The 9:16 preview well: the full frame, with the profile-grid crop (3:4,
+  # so 12.5% top and bottom) drawn as a dimmed band. At most 60vh tall, and
+  # shorter on a short screen so "Use this cover" stays in view.
+  defp cover_well(assigns) do
+    ~H"""
+    <div
+      data-role="social-cover-well"
+      class="relative mx-auto aspect-[9/16] max-h-[min(60vh,100dvh_-_25rem)] w-full max-w-[min(100%,calc(min(60vh,100dvh_-_25rem)*9/16))] overflow-hidden rounded-lg bg-base-200"
+    >
+      {render_slot(@inner_block)}
+      <div
+        aria-hidden="true"
+        data-role="social-cover-crop-guide"
+        class="pointer-events-none absolute inset-x-0 top-0 h-[12.5%] bg-base-content/40"
+      >
+      </div>
+      <div
+        aria-hidden="true"
+        class="pointer-events-none absolute inset-x-0 bottom-0 h-[12.5%] bg-base-content/40"
+      >
+      </div>
+    </div>
+    """
+  end
+
+  attr :picker, :map, required: true
+
+  # The platform line, then a refusal under the control.
+  defp cover_notes(assigns) do
+    ~H"""
+    <p data-role="social-cover-platform" class="mt-2 text-[13px] text-subtle">
+      {cover_platform_line(@picker.platform, @picker.platform_label, @picker.tab)}
+    </p>
+    <p
+      :if={@picker.error}
+      role="alert"
+      data-role="social-cover-error"
+      class="mt-2 text-sm text-error"
+    >
+      {@picker.error}
+    </p>
+    """
+  end
+
+  defp cover_platform_line("instagram", _label, _tab), do: "Instagram uses this cover"
+  defp cover_platform_line("youtube", _label, "frame"), do: "YouTube uses only an uploaded cover"
+  defp cover_platform_line("youtube", _label, _tab), do: "YouTube uses this cover"
+  defp cover_platform_line(_platform, label, _tab), do: "#{label} picks its own cover"
+
+  # 7400 -> "7.4", 7000 -> "7": a media fragment's seconds.
+  defp seconds(ms) when rem(ms, 1000) == 0, do: Integer.to_string(div(ms, 1000))
+  defp seconds(ms), do: :erlang.float_to_binary(ms / 1000, [:short])
+
+  # "0:07.40 / 0:42" (the hook keeps it current while scrubbing).
+  defp timecode(ms, duration_ms) do
+    cs = div(ms, 10)
+    s = div(cs, 100)
+
+    head =
+      "#{div(s, 60)}:#{pad2(rem(s, 60))}.#{pad2(rem(cs, 100))}"
+
+    case duration_ms do
+      d when is_integer(d) and d > 0 ->
+        head <> " / " <> PlatformWeb.SocialCardComponent.clock_ms(d)
+
+      _ ->
+        head
+    end
+  end
+
+  defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  defp file_size(bytes) when bytes >= 1_000_000, do: "#{Float.round(bytes / 1_000_000, 1)} MB"
+  defp file_size(bytes) when bytes >= 1_000, do: "#{round(bytes / 1_000)} KB"
+  defp file_size(bytes), do: "#{bytes} B"
 
   attr :dialog, :map, required: true
   attr :options, :list, required: true

@@ -94,7 +94,19 @@ defmodule Platform.Social.ToolDefinitions do
       required: false,
       description: "Source start, in seconds into the episode."
     },
-    end_s: %{type: "number", required: false, description: "Source end, in seconds."}
+    end_s: %{type: "number", required: false, description: "Source end, in seconds."},
+    cover_file_id: %{
+      type: "string",
+      required: false,
+      description:
+        "Video posts only: id of a JPG or PNG (Burrow Files, in the profile's org) to use as the cover. Setting it clears cover_offset_ms; send null to clear."
+    },
+    cover_offset_ms: %{
+      type: "integer",
+      required: false,
+      description:
+        "Video posts only: use the frame at this many milliseconds into the video as the cover (0 to the video's length; refused when the length is unknown). Setting it clears cover_file_id; send null to clear. Never send both."
+    }
   }
 
   @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, title, caption, speaker, episode_code, origin, source_label, review_status, review_note, reviewed_at, rev, look, trim_in_s, trim_out_s, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at}"
@@ -109,7 +121,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   @privacy_null "title, caption, speaker and episode_code may be null (the clip tool's [privacy] mode = \"local\" sends nothing transcript-derived)."
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, inserted_at, updated_at}"
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]

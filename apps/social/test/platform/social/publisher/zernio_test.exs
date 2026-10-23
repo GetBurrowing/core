@@ -251,6 +251,105 @@ defmodule Platform.Social.Publisher.ZernioTest do
     end
   end
 
+  describe "covers (task 01a165ec stage 3)" do
+    @video [
+      %{
+        url: "https://cdn.example.test/v.mp4",
+        content_type: "video/mp4",
+        byte_size: 9,
+        duration_s: 30
+      }
+    ]
+    @image_cover %{
+      kind: :image,
+      url: "https://suite.example.test/files/signed/tok",
+      content_type: "image/jpeg"
+    }
+    @frame_cover %{kind: :frame, offset_ms: 7400}
+
+    defp publish_body(ctx, platform, cover) do
+      {_, account} = account!(ctx.org_id, platform, %{provider_account_ref: "zacct_#{platform}"})
+      put_key!(account)
+      capture_post()
+
+      assert {:ok, _} =
+               Zernio.publish(account, request(platform, %{media: @video, cover: cover}))
+
+      assert_received {:zernio, "POST", "/api/v1/posts", _, body}
+      assert [%{"platformSpecificData" => data}] = body["platforms"]
+      {body, data}
+    end
+
+    test "instagram + video + uploaded cover sends instagramThumbnail, no thumbOffset", ctx do
+      {_body, data} = publish_body(ctx, "instagram", @image_cover)
+      assert data["instagramThumbnail"] == @image_cover.url
+      refute Map.has_key?(data, "thumbOffset")
+      refute Map.has_key?(data, "reelCover")
+    end
+
+    test "instagram + video + frame sends thumbOffset as integer ms, no instagramThumbnail",
+         ctx do
+      {_body, data} = publish_body(ctx, "instagram", @frame_cover)
+      assert data["thumbOffset"] == 7400
+      refute Map.has_key?(data, "instagramThumbnail")
+      refute Map.has_key?(data, "reelCover")
+    end
+
+    test "no cover sends neither key", ctx do
+      {body, data} = publish_body(ctx, "instagram", nil)
+      assert data == %{"isAiGenerated" => false}
+      refute body |> Jason.encode!() |> String.contains?("Thumb")
+    end
+
+    test "linkedin and tiktok carry no cover keys even with a cover", ctx do
+      for {platform, cover} <- [{"linkedin", @image_cover}, {"tiktok", @frame_cover}] do
+        {body, data} = publish_body(ctx, platform, cover)
+        assert data == %{}
+        encoded = Jason.encode!(body)
+
+        for key <- ~w(instagramThumbnail thumbOffset reelCover cover thumbnail),
+            do: refute(String.contains?(encoded, key), "#{platform} body carried #{key}")
+      end
+    end
+
+    test "a YouTube publish body carries no thumbnail key", ctx do
+      {body, data} = publish_body(ctx, "youtube", @image_cover)
+      assert data == %{"containsSyntheticMedia" => false}
+      refute body |> Jason.encode!() |> String.downcase() |> String.contains?("thumb")
+    end
+
+    test "set_cover POSTs /v1/posts/<id>/update-metadata with platform youtube and thumbnailUrl",
+         ctx do
+      {_, account} = account!(ctx.org_id, "youtube", %{provider_account_ref: "zacct_yt"})
+      put_key!(account)
+      capture_post(200, %{"success" => true})
+
+      assert :ok = Zernio.set_cover(account, "zp_yt", @image_cover.url)
+
+      assert_received {:zernio, "POST", "/api/v1/posts/zp_yt/update-metadata", headers, body}
+      assert {"authorization", "Bearer " <> @key} in headers
+
+      assert body == %{
+               "platform" => "youtube",
+               "accountId" => "zacct_yt",
+               "thumbnailUrl" => @image_cover.url
+             }
+    end
+
+    test "set_cover maps 400 and 429 to errors", ctx do
+      {_, account} = account!(ctx.org_id, "youtube", %{provider_account_ref: "zacct_yt"})
+      put_key!(account)
+
+      capture_post(400, %{"error" => "channel is not phone-verified"})
+
+      assert {:error, "Zernio refused the request (HTTP 400): channel is not phone-verified"} =
+               Zernio.set_cover(account, "zp_yt", @image_cover.url)
+
+      capture_post(429, %{"error" => "uploadRateLimitExceeded"})
+      assert {:error, :rate_limited} = Zernio.set_cover(account, "zp_yt", @image_cover.url)
+    end
+  end
+
   describe "connect_url/2, status/2, delete/2" do
     test "connect_url returns the authUrl; x is twitter", ctx do
       {profile, account} = account!(ctx.org_id, "x")

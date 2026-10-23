@@ -217,6 +217,42 @@ defmodule Platform.Social.SchemaTest do
       assert errors_on(changeset)[:status]
       assert errors_on(Post.changeset(%Post{}, %{status: "live"}))[:status]
     end
+
+    # Task 01a165ec stage 2: the cover columns.
+    test "the cover columns are nullable and cover_file_id has no FK into core", %{
+      account_id: aid
+    } do
+      assert {1, _} = raw_post(aid, %{})
+
+      assert {1, _} =
+               raw_post(aid, %{
+                 cover_file_id: dump(uuid()),
+                 cover_offset_ms: 1_500,
+                 cover_error: "YouTube refused the thumbnail"
+               })
+    end
+
+    test "the general changeset casts the cover fields, one at a time" do
+      file_id = Ecto.UUID.generate()
+
+      changeset = Post.changeset(%Post{cover_offset_ms: 5}, %{cover_file_id: file_id})
+      assert Ecto.Changeset.get_change(changeset, :cover_file_id) == file_id
+      assert Ecto.Changeset.fetch_change(changeset, :cover_offset_ms) == {:ok, nil}
+
+      changeset = Post.changeset(%Post{cover_file_id: file_id}, %{"cover_offset_ms" => 5})
+      assert Ecto.Changeset.fetch_change(changeset, :cover_file_id) == {:ok, nil}
+
+      both = Post.changeset(%Post{}, %{cover_file_id: file_id, cover_offset_ms: 5})
+
+      assert errors_on(both)[:cover_file_id] == [
+               "choose either an uploaded cover or a frame, not both"
+             ]
+
+      assert Ecto.Changeset.get_change(
+               Post.changeset(%Post{}, %{cover_error: "x"}),
+               :cover_error
+             ) == "x"
+    end
   end
 
   describe "social_clips" do

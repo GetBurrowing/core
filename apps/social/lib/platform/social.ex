@@ -1553,6 +1553,71 @@ defmodule Platform.Social do
     end
   end
 
+  @doc """
+  A human sets or clears a video post's cover (task 01a165ec stage 2).
+  `attrs` is one of:
+
+    * `%{cover_file_id: id}`: an uploaded JPG/PNG in the post's org;
+    * `%{cover_offset_ms: ms}`, optionally with `duration_ms` (the
+      browser's `<video>.duration`, stored only when no duration is known);
+    * `:clear` (or `%{clear: true}`): no cover.
+
+  The actor is checked exactly as for the approval card's edit
+  (`post_approver_check/4`, the rule `Approvals.decide_edit/4` applies),
+  on the row locked `FOR UPDATE`; a post past `needs_approval` is
+  `{:error, :post_locked}`. The cover goes through the one cover rule
+  (`Platform.Social.Cover`), so a refusal is `{:error, changeset}`. A
+  cover change changes `Approvals.fingerprint/1`, so a card shown before
+  it is refused at approve with `:post_changed`.
+  """
+  @spec set_cover(Ecto.UUID.t(), term(), Ecto.UUID.t(), map() | :clear) ::
+          {:ok, Post.t()} | {:error, term()}
+  def set_cover(org_id, actor_user_id, post_id, attrs) do
+    attrs = cover_attrs(attrs)
+
+    with {:ok, post} <- fetch(Post, org_id, post_id) do
+      Repo.transaction(fn ->
+        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
+
+        with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_cover_locked(locked),
+             {:ok, profile} <- profile_of_post(locked),
+             account = Repo.get!(Account, locked.account_id),
+             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+             ctx = %{org_id: profile.org_id, profile_id: profile.id},
+             {:ok, updated} <- locked |> Post.cover_changeset(attrs, ctx) |> Repo.update() do
+          updated
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, updated} -> {:ok, needs_approval_written(updated)}
+        error -> error
+      end
+    end
+  end
+
+  defp cover_attrs(:clear), do: %{cover_file_id: nil, cover_offset_ms: nil}
+
+  defp cover_attrs(%{} = attrs) do
+    if Map.get(attrs, :clear) == true or Map.get(attrs, "clear") == true,
+      do: cover_attrs(:clear),
+      else:
+        Map.take(
+          attrs,
+          [:cover_file_id, :cover_offset_ms, :duration_ms] ++
+            ~w(cover_file_id cover_offset_ms duration_ms)
+        )
+  end
+
+  defp cover_attrs(_), do: %{}
+
+  defp refuse_cover_locked(%Post{status: status}) when status in ~w(draft needs_approval),
+    do: :ok
+
+  defp refuse_cover_locked(%Post{}), do: {:error, :post_locked}
+
   # ── needs_approval (Social 3/7) ──────────────────────────────────────
 
   @doc """

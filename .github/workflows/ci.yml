@@ -1003,6 +1003,24 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: .github/scripts/host-pressure.sh "after mix test" || true
 
+      # Task 01a165ec stage 4: Social's CoverPicker hook, tested as Play's
+      # hooks are in `Test (with Play)`.
+      - name: Set up Node (with Social)
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/social/assets/package-lock.json
+
+      - name: Run the module's JS tests (with Social)
+        working-directory: apps/social/assets
+        run: |
+          npm ci
+          if ! npx vitest run; then
+            echo "::error::vitest failed in apps/social/assets."
+            exit 1
+          fi
+
       # This job has no serial retry, so a lock-wait timeout here fails it.
       # pg_read_file is the only way to the log from here (see the
       # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,

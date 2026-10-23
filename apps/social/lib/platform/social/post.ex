@@ -58,6 +58,13 @@ defmodule Platform.Social.Post do
     belongs_to(:generated_by_agent, Platform.Agents.Agent)
     field(:media_meta, :map, default: %{})
 
+    # A video post's cover (task 01a165ec stage 2): an uploaded image OR a
+    # frame, one at a time (`Platform.Social.Cover`). No FK into core's
+    # tables, as for media_file_ids. `cover_error` is the publisher's.
+    field(:cover_file_id, :binary_id)
+    field(:cover_offset_ms, :integer)
+    field(:cover_error, :string)
+
     # Why an approved post did not go out (task 01a165f1). In NO cast list:
     # only `refusal_changeset/4`, called by `Platform.Social.Publishing`,
     # sets them, and every success or terminal write clears them.
@@ -69,7 +76,8 @@ defmodule Platform.Social.Post do
   end
 
   @editable ~w(body media_file_ids link_url scheduled_at status external_url external_id error
-               task_id meeting_id segment_ids episode_url start_s end_s)a
+               task_id meeting_id segment_ids episode_url start_s end_s
+               cover_file_id cover_offset_ms cover_error)a
 
   # Social 2/7: the AI-disclosure flags and per-file media facts.
   @publisher_fields ~w(is_aigc ai_disclosure generated_by_agent_id media_meta)a
@@ -102,6 +110,24 @@ defmodule Platform.Social.Post do
     |> validate_required([:status])
     |> validate_inclusion(:status, @statuses)
     |> validate_approved_has_approver()
+    |> Platform.Social.Cover.validate(attrs)
+    |> db_constraints()
+  end
+
+  @doc """
+  The human path's cover edit (`Platform.Social.set_cover/4`): casts ONLY
+  the cover fields, optionally backfills the video's duration from the
+  browser (`duration_ms`, only when none is known), then runs the one cover
+  rule, `Platform.Social.Cover.validate/3`.
+  """
+  @spec cover_changeset(t(), map(), Platform.Social.Cover.ctx()) :: Ecto.Changeset.t()
+  def cover_changeset(%__MODULE__{} = post, attrs, ctx \\ nil) do
+    duration_ms = Map.get(attrs, :duration_ms, Map.get(attrs, "duration_ms"))
+
+    post
+    |> cast(attrs, Platform.Social.Cover.fields())
+    |> Platform.Social.Cover.backfill_duration(duration_ms, ctx)
+    |> Platform.Social.Cover.validate(attrs, ctx)
     |> db_constraints()
   end
 

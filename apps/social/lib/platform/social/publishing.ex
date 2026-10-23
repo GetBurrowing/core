@@ -46,7 +46,17 @@ defmodule Platform.Social.Publishing do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, MediaRules, Post, Publisher, RateLimit}
+
+  alias Platform.Social.{
+    Account,
+    Cover,
+    MediaRules,
+    OrgFiles,
+    Post,
+    Profile,
+    Publisher,
+    RateLimit
+  }
 
   @default_ai_disclosure "Made with AI"
   @max_error_length 1_000
@@ -83,6 +93,7 @@ defmodule Platform.Social.Publishing do
       end)
 
     terminal_written(result, post_id)
+    |> set_cover_after_publish()
   end
 
   # ── Retry (task 01a165f1, stage 2) ───────────────────────────────────
@@ -138,10 +149,11 @@ defmodule Platform.Social.Publishing do
   defp attempt(post, org_id, now_ms) do
     with {:ok, account} <- active_account(org_id, post),
          {:ok, media} <- load_media(org_id, post),
+         {:ok, cover} <- load_cover(org_id, post),
          :ok <- check_media(account, media),
          :ok <- RateLimit.check(account.id, now_ms),
          adapter when is_atom(adapter) <- Publisher.impl() do
-      request = build_request(post, account, media)
+      request = build_request(post, account, media, cover)
       apply_publish(post, adapter.publish(account, request))
     end
   end
@@ -264,11 +276,8 @@ defmodule Platform.Social.Publishing do
     end
   end
 
-  defp file_in_org?(%{project_id: nil}, _org_id), do: false
-
-  defp file_in_org?(%{project_id: project_id}, org_id) do
-    match?(%{org_id: ^org_id}, Platform.Tasks.get_project(project_id))
-  end
+  # The one org rule for a core file, shared with AgentDrafts and Cover.
+  defp file_in_org?(file, org_id), do: Platform.Social.OrgFiles.in_org?(file, org_id)
 
   @vendor_url_grace_seconds 3600
 
@@ -304,7 +313,7 @@ defmodule Platform.Social.Publishing do
   defp number(n) when is_number(n), do: n
   defp number(_), do: nil
 
-  defp build_request(post, account, media) do
+  defp build_request(post, account, media, cover) do
     %{
       body: post.body,
       link_url: post.link_url,
@@ -313,8 +322,106 @@ defmodule Platform.Social.Publishing do
       is_aigc: post.is_aigc == true,
       ai_disclosure: disclosure(post),
       platform: account.platform,
-      idempotency_key: post.id
+      idempotency_key: post.id,
+      cover: cover
     }
+  end
+
+  # ── Cover (task 01a165ec, stage 3) ───────────────────────────────────
+
+  # The request's cover: an uploaded image goes out as a signed URL minted
+  # by `vendor_url/2`, exactly like media; a frame as its offset. The file
+  # is re-checked here (still there, still in the org, still JPG/PNG), and a
+  # failure refuses the publish before any HTTP, like a bad media file.
+  defp load_cover(org_id, %Post{cover_file_id: file_id} = post) when is_binary(file_id) do
+    with {:ok, file} <- cover_file(org_id, file_id),
+         url when is_binary(url) <- vendor_url(file, post) do
+      {:ok, %{kind: :image, url: url, content_type: file.content_type}}
+    else
+      {:error, message} -> {:error, {:media_rejected, [message]}}
+      nil -> {:error, {:media_rejected, ["The cover image could not be shared with the vendor"]}}
+    end
+  end
+
+  defp load_cover(_org_id, %Post{cover_offset_ms: offset}) when is_integer(offset),
+    do: {:ok, %{kind: :frame, offset_ms: offset}}
+
+  defp load_cover(_org_id, %Post{}), do: {:ok, nil}
+
+  defp cover_file(org_id, file_id) do
+    file = Platform.Files.get_file(file_id)
+
+    cond do
+      is_nil(file) or not OrgFiles.in_org?(file, org_id) ->
+        {:error, "The cover image is missing or not in this org"}
+
+      file.content_type not in Cover.image_types() ->
+        {:error, "The cover image must be a JPG or PNG"}
+
+      true ->
+        {:ok, file}
+    end
+  end
+
+  # YouTube takes no cover at create time, so an uploaded cover is set
+  # AFTER the post is published, once the transaction that wrote
+  # `published` has committed (publish_post/2 on a synchronous publish,
+  # apply_outcome/2 otherwise). One call with a freshly minted URL, no
+  # retry. Its outcome lands on `cover_error` only: success clears it, a
+  # failure explains it, and the post's status never changes. A frame
+  # offset sends nothing (YouTube has no API for one).
+  defp set_cover_after_publish({:ok, %Post{status: "published", cover_file_id: file_id} = post})
+       when is_binary(file_id) do
+    case youtube_account(post) do
+      {account, org_id} -> {:ok, send_cover(post, account, org_id, file_id)}
+      nil -> {:ok, post}
+    end
+  end
+
+  defp set_cover_after_publish(result), do: result
+
+  defp youtube_account(%Post{account_id: account_id}) do
+    Repo.one(
+      from(a in Account,
+        join: p in Profile,
+        on: p.id == a.profile_id,
+        where: a.id == ^account_id and a.platform == "youtube",
+        select: {a, p.org_id}
+      )
+    )
+  end
+
+  defp send_cover(post, account, org_id, file_id) do
+    with adapter when is_atom(adapter) <- Publisher.impl(),
+         true <- Code.ensure_loaded?(adapter) and function_exported?(adapter, :set_cover, 3) do
+      outcome =
+        with {:ok, file} <- cover_file(org_id, file_id),
+             url when is_binary(url) <- vendor_url(file, post) || {:error, :url_unavailable},
+             true <- is_binary(post.external_id) || {:error, :no_external_id} do
+          adapter.set_cover(account, post.external_id, url)
+        end
+
+      write_cover_error(post, cover_error(outcome))
+    else
+      _ -> post
+    end
+  end
+
+  defp cover_error(:ok), do: nil
+
+  defp cover_error({:error, :rate_limited}),
+    do: "YouTube cover not set: the upload limit was reached; set it again later"
+
+  defp cover_error({:error, reason}), do: readable("YouTube cover not set: " <> readable(reason))
+  defp cover_error(other), do: cover_error({:error, {:unexpected_result, other}})
+
+  defp write_cover_error(%Post{cover_error: same} = post, same), do: post
+
+  defp write_cover_error(post, message) do
+    case post |> Changeset.change(cover_error: message) |> Repo.update() do
+      {:ok, post} -> post
+      _ -> post
+    end
   end
 
   defp disclosure(%Post{is_aigc: true, ai_disclosure: label}) do
@@ -486,6 +593,7 @@ defmodule Platform.Social.Publishing do
       end)
 
     terminal_written(result, id)
+    |> set_cover_after_publish()
   end
 
   defp transition(nil, _outcome), do: {:error, :not_found}

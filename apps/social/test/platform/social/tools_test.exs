@@ -538,4 +538,79 @@ defmodule Platform.Social.ToolsTest do
                )
     end
   end
+
+  # Task 01a165ec stage 2.
+  describe "cover fields" do
+    setup ctx do
+      %{
+        video: media_file!(ctx.org_a, "video/mp4"),
+        png: media_file!(ctx.org_a, "image/png"),
+        pdf: media_file!(ctx.org_a, "application/pdf")
+      }
+    end
+
+    test "the draft tools document both fields and the row lists them" do
+      for name <- ~w(social_draft_create social_draft_update) do
+        tool = Enum.find(ToolDefinitions.definitions(), &(&1.name == name))
+        assert %{type: "string"} = tool.parameters.cover_file_id
+        assert %{type: "integer"} = tool.parameters.cover_offset_ms
+        assert tool.returns =~ "cover_file_id, cover_offset_ms, cover_error"
+      end
+    end
+
+    test "create and update round-trip both fields", ctx do
+      assert {:ok, %{posts: [post]}} =
+               call(
+                 "social_draft_create",
+                 %{
+                   "profile_id" => ctx.profile.id,
+                   "account_ids" => [ctx.acc1.id],
+                   "body" => "clip",
+                   "media_file_ids" => [ctx.video.id],
+                   "cover_file_id" => ctx.png.id
+                 },
+                 ctx.a
+               )
+
+      assert {post.cover_file_id, post.cover_offset_ms, post.cover_error} ==
+               {ctx.png.id, nil, nil}
+
+      {:ok, _} =
+        Social.update_post(ctx.org_a, post.id, %{
+          media_meta: %{ctx.video.id => %{"duration_s" => 10}}
+        })
+
+      assert {:ok, %{post: %{cover_file_id: nil, cover_offset_ms: 9_000}}} =
+               call(
+                 "social_draft_update",
+                 %{"post_id" => post.id, "cover_offset_ms" => 9_000},
+                 ctx.a
+               )
+    end
+
+    test "surface the cover refusals as invalid_argument with the message", ctx do
+      assert {:error, %{code: :invalid_argument, error: error}} =
+               call(
+                 "social_draft_create",
+                 %{
+                   "profile_id" => ctx.profile.id,
+                   "account_ids" => [ctx.acc1.id],
+                   "media_file_ids" => [ctx.video.id],
+                   "cover_file_id" => ctx.pdf.id
+                 },
+                 ctx.a
+               )
+
+      assert error =~ "cover_file_id cover must be a JPG or PNG image"
+
+      assert {:error, %{code: :invalid_argument, error: error}} =
+               call(
+                 "social_draft_update",
+                 %{"post_id" => ctx.post.id, "cover_offset_ms" => 0},
+                 ctx.a
+               )
+
+      assert error =~ "cover_offset_ms a cover applies only to a video post"
+    end
+  end
 end
