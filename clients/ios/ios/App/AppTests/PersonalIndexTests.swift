@@ -767,6 +767,185 @@ final class PersonalIndexTests: XCTestCase {
         XCTAssertTrue(requests(host: b, path: "/api/app/people").isEmpty, "the signed-out install was not searched")
     }
 
+    // MARK: Task 01a13c1d stage 5: an id with no host still reaches perform
+
+    // Measured on Ryan's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
+    // 28a9db851, four installs signed in): Siri drafted the send for
+    // Messages twice, then moved the draft to Burrow's MessagesSendIntent
+    // and asked person.query for the draft's recipient as a bare 36-char id
+    // (`req len=36 segments=1 parsed=false`). The query returned nothing
+    // (`result count=0`), AppIntents went to NeedsValue, and perform never
+    // ran: no `step=send`, no namesake check. These tests use the device's
+    // four hosts; burrow-exp.kobo-ai.com is a clone of prod, so the two
+    // share uuids.
+
+    private let deviceHosts = ["suite.kobo-ai.com", "burrow-exp.kobo-ai.com", "suite.milvenan.technology", "burrow.red-st.ar"]
+    /// No install has it: the measured shape.
+    private let foreignID = "c0ffee00-0000-4000-8000-000000000036"
+    /// On prod and on its clone burrow-exp.
+    private let coombsID = "c0000000-0000-4000-8000-0000000000c1"
+    private let daltonAgentID = "da000000-0000-4000-8000-0000000000d1"
+    private let jordanExpID = "10000000-0000-4000-8000-0000000000e1"
+    private let daltonRedID = "da000000-0000-4000-8000-0000000000f1"
+    /// Only burrow.red-st.ar has her.
+    private let inesRedID = "1e000000-0000-4000-8000-0000000000f2"
+
+    /// IntentEnvironment.current with the device's four installs signed in,
+    /// each answering `/api/app/people` (directory or `q=` search) with its
+    /// own people.
+    @available(iOS 27, *)
+    private func fourInstalls() {
+        let store = InstallStore(defaults: defaults)
+        let removeHook = InstallStore.didRemove
+        InstallStore.didRemove = nil
+        for host in deviceHosts { store.add(host: host) }
+        InstallStore.didRemove = removeHook
+        var tokens: [String: String] = [:]
+        for host in deviceHosts { tokens[host] = "token-for-\(host)" }
+        IntentEnvironment.current = IntentEnvironment(
+            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
+            installs: store, sleeper: VirtualClock(), now: { Date(timeIntervalSince1970: 4_000_000) },
+            lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
+        for host in deviceHosts { PeopleCache.shared.removeAll(host: host) }
+        let hosts = deviceHosts
+        StubURLProtocol.respond = { [unowned self] request in
+            guard request.url?.path == "/api/app/people" else { return (404, Data()) }
+            let host = request.url?.host ?? ""
+            let rows: [(id: String, kind: String, name: String)]
+            switch host {
+            case hosts[0], hosts[1]: rows = [(self.coombsID, "user", "Jordan Coombs"), (self.daltonAgentID, "agent", "Dalton")]
+            case hosts[2]: rows = [(self.jordanExpID, "user", "Jordan")]
+            default: rows = [(self.daltonRedID, "agent", "Dalton"), (self.inesRedID, "user", "Ines Alvarez")]
+            }
+            let query =
+                URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value?
+                .lowercased()
+            let json = rows.filter { query == nil || $0.name.lowercased().contains(query!) }.map {
+                #"{"id":"\#($0.id)","kind":"\#($0.kind)","name":"\#($0.name)","org_names":["Kobo"]}"#
+            }
+            return (200, Data(#"{"people":[\#(json.joined(separator: ","))]}"#.utf8))
+        }
+        addTeardownBlock { for host in hosts { PeopleCache.shared.removeAll(host: host) } }
+    }
+
+    /// No step line names a person, a host or an id.
+    private func assertNoPeopleHostsOrIds(_ lines: StepLines, file: StaticString = #filePath, line: UInt = #line) {
+        let steps = lines.all.filter { $0.hasPrefix("step=") }
+        XCTAssertFalse(steps.isEmpty, "positive control: steps were captured", file: file, line: line)
+        let banned =
+            ["Jordan", "Coombs", "Dalton", "Ines", "Alvarez"] + deviceHosts
+            + [foreignID, coombsID, daltonAgentID, jordanExpID, daltonRedID, inesRedID]
+        for entry in steps {
+            for word in banned {
+                XCTAssertFalse(entry.contains(word), "a step line names \(word): \(entry)", file: file, line: line)
+            }
+        }
+    }
+
+    /// Every device install's `<host>|<uuid>` parses back to that host and
+    /// resolves there, at the lengths the device logged (53 and 59 seen).
+    func testEachOfTheFourDeviceInstallsIdsRoundTripsThroughThePersonQuery() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        fourInstalls()
+        let lines = capturingSteps()
+        let people = [(deviceHosts[0], coombsID), (deviceHosts[1], coombsID), (deviceHosts[2], jordanExpID), (deviceHosts[3], inesRedID)]
+        var lengths: [Int] = []
+        for (host, uuid) in people {
+            let id = EntityRef(host: host, uuid: uuid).id
+            XCTAssertEqual(EntityRef(id)?.host, host, "\(host) parses back from its own id")
+            let found = try await MessagePersonEntityQuery().entities(for: [id])
+            XCTAssertEqual(found.map(\.id), [id], "\(host)'s person resolves on \(host)")
+            XCTAssertEqual(found.first?.isUnresolved, false)
+            lengths.append(id.count)
+        }
+        XCTAssertEqual(lengths, [54, 59, 62, 53])
+        XCTAssertEqual(
+            lines.steps("person.query").filter { $0.hasPrefix("req ") },
+            lengths.map { "req len=\($0) segments=2 parsed=true install=true uuid=true" })
+        assertNoPeopleHostsOrIds(lines)
+    }
+
+    /// The measured shape: an id with no host comes back under that same
+    /// id (AppIntents drops any other), so the send's perform runs, logs
+    /// `step=send`, searches every install for the uuid, and says out loud
+    /// that it could not tell who that is.
+    func testAnIdWithNoHostComesBackUnderThatIdAndTheSendRunsAndSaysItCouldNotTell() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        fourInstalls()
+        let lines = capturingSteps()
+        let found = try await MessagePersonEntityQuery().entities(for: [foreignID])
+        XCTAssertEqual(found.map(\.id), [foreignID], "the requested id comes back, so AppIntents keeps it")
+        XCTAssertEqual(found.first?.isUnresolved, true)
+        XCTAssertEqual(lines.steps("person.query").last, "result count=1 cacheHits=0 idsMatch=true personIdMatch=true kinds=unresolved")
+        for host in deviceHosts {
+            XCTAssertFalse(requests(host: host, path: "/api/app/people").isEmpty, "\(host) was asked for the uuid")
+        }
+
+        let intent = try siriSend(to: try XCTUnwrap(found.first))
+        do {
+            _ = try await intent.resolvedTarget(choose: noChoice)
+            XCTFail("a person no install has was resolved")
+        } catch let failure as IntentFailure {
+            XCTAssertEqual(failure, .personNotFound(name: nil))
+        }
+        let send = lines.steps("send")
+        XCTAssertEqual(Array(send.prefix(3)), ["install=set", "destination=messagePeople(1)", "identifier=app_bare_uuid"], "perform ran")
+        XCTAssertEqual(send.last, "matched=none reason=no_name")
+        XCTAssertTrue(lines.steps("person.query").contains("foreign kind=bare_uuid installs=0"))
+        assertNoPeopleHostsOrIds(lines)
+    }
+
+    /// A bare uuid on prod and on its clone: the person's name is carried,
+    /// Siri asks which install, and the one chosen is messaged.
+    func testABareUuidOnAnInstallAndItsCloneAsksWhichAndSendsToTheChosenInstall() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        fourInstalls()
+        let lines = capturingSteps()
+        let found = try await MessagePersonEntityQuery().entities(for: [coombsID])
+        XCTAssertEqual(found.map(\.id), [coombsID])
+        XCTAssertEqual(found.first?.name, "Jordan Coombs", "the name of the person the uuid names is carried to perform")
+        var asked: (String, [String])?
+        let target = try await siriSend(to: try XCTUnwrap(found.first)).resolvedTarget { name, people in
+            asked = (name, people.map(\.id))
+            return people[0]
+        }
+        let prod = EntityRef(host: deviceHosts[0], uuid: coombsID).id
+        XCTAssertEqual(asked?.0, "Jordan Coombs")
+        XCTAssertEqual(asked.map { Set($0.1) }, [prod, EntityRef(host: deviceHosts[1], uuid: coombsID).id])
+        XCTAssertEqual(target.entityID, asked?.1.first)
+        XCTAssertTrue(lines.steps("person.query").contains("foreign kind=bare_uuid installs=2"))
+        assertNoPeopleHostsOrIds(lines)
+    }
+
+    /// A bare uuid only one install has resolves there, with no question,
+    /// after the namesake check searched the other three.
+    func testABareUuidOnlyOneInstallHasIsSentThereWithoutAsking() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        fourInstalls()
+        let lines = capturingSteps()
+        let found = try await MessagePersonEntityQuery().entities(for: [inesRedID])
+        let target = try await siriSend(to: try XCTUnwrap(found.first)).resolvedTarget(choose: noChoice)
+        XCTAssertEqual(target.entityID, EntityRef(host: deviceHosts[3], uuid: inesRedID).id)
+        XCTAssertEqual(lines.steps(PersonResolver.namesakesSite).prefix(2), ["home=parsed", "hosts=4 others=3"])
+        XCTAssertEqual(lines.steps(PersonResolver.namesakesSite).last, "matched=one_install reason=no_namesake")
+        assertNoPeopleHostsOrIds(lines)
+    }
+
+    /// The call schema shares the query: a call to an id with no host is
+    /// refused out loud, not as a person named "Someone".
+    func testACallToAnIdWithNoHostIsRefusedWithoutInventingAName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        fourInstalls()
+        let found = try await CallPersonQuery().entities(for: [foreignID])
+        XCTAssertEqual(found.map(\.id), [foreignID])
+        do {
+            _ = try await CallPersonResolution.resolve(try XCTUnwrap(found.first), choose: noChoice)
+            XCTFail("a person no install has was resolved")
+        } catch let failure as IntentFailure {
+            XCTAssertEqual(failure, .personNotFound(name: nil))
+        }
+    }
+
     // MARK: Round 8, bug B: a removed install's entities leave Spotlight by id
 
     func testRemovingAnInstallDeletesItsIndexedEntitiesByIdAsWellAsByDomain() async throws {

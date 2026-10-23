@@ -79,7 +79,14 @@ struct MessagePersonEntity {
 
     /// Wraps a system person that matched no single Burrow person.
     init(unresolved person: IntentPerson) {
-        self.id = Self.unresolvedKind + EntityRef.separator.description + UUID().uuidString
+        self.init(unresolved: person, id: Self.unresolvedKind + EntityRef.separator.description + UUID().uuidString)
+    }
+
+    /// Wraps an id Siri asked for that is not a Burrow `<host>|<uuid>`,
+    /// under that SAME id: AppIntents drops a returned entity whose id was
+    /// not requested (MessagePersonEntityQuery.placeholder).
+    init(unresolved person: IntentPerson, id: String) {
+        self.id = id
         self.kind = Self.unresolvedKind
         self.subtitle = ""
         self.person = person
@@ -186,16 +193,31 @@ struct MessagePersonEntityQuery: EntityStringQuery {
     /// unknown host makes no request, and its ids are purged from Spotlight
     /// (round 8: Siri kept handing back a removed install's people, whose
     /// hydration could only fail).
+    ///
+    /// An id that is not `<host>|<uuid>` at all is never dropped (task
+    /// 01a13c1d stage 5): it comes back as an unresolved placeholder under
+    /// the same id, which `perform` resolves or refuses out loud.
     func entities(for identifiers: [String]) async throws -> [MessagePersonEntity] {
         IntentLog.step("person.query", "ids=\(identifiers.count)")
         let catalog = EntityCatalog()
         SpotlightIndex.purge(ids: identifiers, env: catalog.env)
         let cache = PeopleCache.shared
         var missing: [String] = []
+        var foreign: [String] = []
+        var cacheHits = 0
         var found: [String: MessagePersonEntity] = [:]
         for id in identifiers {
-            guard let ref = EntityRef(id), catalog.env.install(ref.host) != nil else { continue }
-            if let hit = cache.entity(for: id) { found[id] = hit } else { missing.append(id) }
+            guard let ref = EntityRef(id) else {
+                foreign.append(id)
+                continue
+            }
+            guard catalog.env.install(ref.host) != nil else { continue }
+            if let hit = cache.entity(for: id) {
+                found[id] = hit
+                cacheHits += 1
+            } else {
+                missing.append(id)
+            }
         }
         if !missing.isEmpty {
             let loaded = await catalog.resolve(missing) { host in
@@ -203,9 +225,43 @@ struct MessagePersonEntityQuery: EntityStringQuery {
             }
             for entity in loaded { found[entity.id] = entity }
         }
+        for id in foreign { found[id] = await Self.placeholder(for: id, env: catalog.env) }
         let result = identifiers.compactMap { found[$0] }
-        Self.trace(identifiers, result: result, cacheHits: identifiers.count - missing.count, env: catalog.env)
+        Self.trace(identifiers, result: result, cacheHits: cacheHits, env: catalog.env)
         return result
+    }
+
+    /// The entity for an id Siri asked for that is not `<host>|<uuid>`
+    /// (task 01a13c1d stage 5).
+    ///
+    /// Measured on Ryan's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
+    /// 28a9db851): Siri drafted the send for Messages twice, then moved the
+    /// draft to Burrow (`com.kobo-ai.burrow.MessagesSendIntent`, after
+    /// assistant_service logged "Type identifier conformance failed") and
+    /// handed over the draft's recipient as a 36-character id with no host.
+    /// This query returned nothing for it, AppIntents logged "Query returned
+    /// unrequested identifiers that have been dropped" and went to
+    /// NeedsValue instead of `perform`, so the send never ran and nothing
+    /// was logged past `person.query result count=0`.
+    ///
+    /// Now the id comes back as an unresolved person carrying it as its
+    /// identifier, so `perform` runs. A bare uuid is looked up on every
+    /// signed-in install and, when any has it, the person's name is filled
+    /// in: PersonResolver then takes the one install that has it, or asks
+    /// which when several do (an install cloned from another shares its
+    /// uuids). Any other id is refused out loud ("Burrow couldn't tell who
+    /// that is"), never turned into a silent second question.
+    static func placeholder(for raw: String, env: IntentEnvironment) async -> MessagePersonEntity {
+        let isUUID = UUID(uuidString: raw) != nil
+        var matches: [MessagePersonEntity] = []
+        if isUUID {
+            let ids = env.signedInHosts.map { EntityRef(host: $0, uuid: raw.lowercased()).id }
+            matches = (try? await MessagePersonEntityQuery(installScope: nil).entities(for: ids)) ?? []
+        }
+        IntentLog.step("person.query", "foreign kind=\(isUUID ? "bare_uuid" : "other") installs=\(matches.count)")
+        let person = IntentPerson(
+            identifier: .applicationDefined(raw), name: matches.first.map { .displayName($0.name) } ?? .unknown, handle: nil)
+        return MessagePersonEntity(unresolved: person, id: raw)
     }
 
     /// The SHAPE of a lookup, for the trace (task 01a111bb stage 7, round
@@ -226,9 +282,9 @@ struct MessagePersonEntityQuery: EntityStringQuery {
             if case .applicationDefined(let raw) = entity.person.identifier { return raw == entity.id }
             return false
         }
+        let kinds = result.map(\.kind).joined(separator: ",")
         IntentLog.step(
-            "person.query",
-            "result count=\(result.count) cacheHits=\(cacheHits) idsMatch=\(match) personIdMatch=\(personIDsMatch) kinds=\(result.map(\.kind).joined(separator: ","))")
+            "person.query", "result count=\(result.count) cacheHits=\(cacheHits) idsMatch=\(match) personIdMatch=\(personIDsMatch) kinds=\(kinds)")
     }
 
     /// Recent collaborators: the people the person actually talks to. The

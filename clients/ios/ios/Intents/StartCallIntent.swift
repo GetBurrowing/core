@@ -91,8 +91,12 @@ struct CallPersonEntity {
         self.person = MessagePersonEntity.intentPerson(id: id, name: name)
     }
 
+    /// Keeps the entity's own IntentPerson: for an unresolved placeholder
+    /// (MessagePersonEntityQuery.placeholder) that is the id Siri asked for
+    /// and no name, which `name`'s "Someone" would otherwise replace.
     init(_ entity: MessagePersonEntity) {
         self.init(id: entity.id, name: entity.name, kind: entity.kind, subtitle: entity.subtitle)
+        self.person = entity.person
     }
 }
 
