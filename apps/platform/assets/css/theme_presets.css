@@ -96,7 +96,7 @@
   --color-warning: #f0b24a;
   --color-warning-content: #000000;
   --warning-dim: #5a4320;
-  --color-error: #e5484d;
+  --color-error: #e94c50;
   --color-error-content: #000000;
   /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
      (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
@@ -252,7 +252,7 @@
   --color-warning: #e5a33d;
   --color-warning-content: #000000;
   --warning-dim: #5b4522;
-  --color-error: #e5484d;
+  --color-error: #ec4e52;
   --color-error-content: #000000;
   /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
      (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
@@ -429,7 +429,7 @@
   --color-warning: #e6b04a;
   --color-warning-content: #000000;
   --warning-dim: #54431e;
-  --color-error: #e5484d;
+  --color-error: #e94c51;
   --color-error-content: #000000;
   /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
      (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;

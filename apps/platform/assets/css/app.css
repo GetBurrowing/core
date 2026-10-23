@@ -210,13 +210,15 @@
   --color-success-content: oklch(100% 0 0);
   --color-warning: #925d0c;                   /* 5.3105:1 under its #fbfaf9 content */
   --color-warning-content: #fbfaf9;
-  --color-error: oklch(63% 0.22 25);          /* #EF4444 */
-  /* Black, not white (task 01a120c5). White on this red measures 3.8948:1,
-     under the 4.5:1 AA floor for text, and had since before the recolor;
-     the Burrow guard asserts every fill/content pair clears AA, and this was
-     the one other pair that failed it. Black measures 5.3918:1. The red
-     itself is unchanged. */
-  --color-error-content: oklch(0% 0 0);
+  /* Retuned by task 01a160c4 (the designer's ruling): same hue, lower
+     lightness, so error TEXT clears 4.5:1 on both grounds. The LIGHT and DARK
+     blocks carry different reds on purpose; never collapse them. Measured by
+     error_token_contrast_guard_test.exs: on base-100 4.8708:1, on
+     base-200 4.6254:1 (the old oklch(63% 0.22 25) was 3.7360 / 3.5478). */
+  --color-error: #da1729;
+  /* White, not black: white on #da1729 measures 5.0778:1, black only
+     4.1357:1. (Black was right for the old, lighter red.) */
+  --color-error-content: oklch(100% 0 0);
   /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
      (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
      --ag-<id>-text the name and pill text, measured on the painted tint by
@@ -344,9 +346,12 @@
   --color-success-content: oklch(0% 0 0);
   --color-warning: #e5a33d;
   --color-warning-content: oklch(0% 0 0);
-  --color-error: oklch(63% 0.22 25);
-  /* Black, not white: white on this red is 3.8948:1, under AA; black is
-     5.3918:1. Same fix, same reason, as the light block. */
+  /* Retuned by task 01a160c4: a LIGHTER red than the light block's, so
+     error text clears 4.5:1 on the dark grounds. On base-100 4.5983:1, on
+     base-200 5.0026:1 (the old oklch(63% 0.22 25) was 4.4233 / 4.8122). */
+  --color-error: #f53c41;
+  /* Black, not white: black on #f53c41 measures 5.6052:1, white only
+     3.7465:1. */
   --color-error-content: oklch(0% 0 0);
   /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
      (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
@@ -7222,9 +7227,11 @@ body, .font-suite {
        warn  --color-warning @ 70%      #975E00  5.37:1  (worst 5.14:1) */
   --cc-countdown-rest: var(--color-neutral);
   --cc-countdown-warn: color-mix(in oklch, var(--color-warning) 70%, black);
-  /* Stop is red only on hover/focus, and its label sits on --cc-btn-bg
-     (#f4f5f8), where raw --color-error is 3.57:1 — under AA for an
-     11.5px label. 5.21:1 here, still unmistakably red. */
+  /* Stop (and Undo) is red only on hover/focus. The red is the colour of
+     the 11.5px LABEL on --cc-btn-bg (#f4f5f8); the fill does not change,
+     so the floor is 4.5:1 text. Raw --color-error is 4.6578:1 there; the
+     85% mix toward black holds the label at 6.5841:1 (Burrow light), lowest
+     6.5841:1 across the light variants (error_token_contrast_guard_test.exs). */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, black);
   /* ── The correction drawer (task 01a0740e stage 2) ──
      The pencil in the countdown foot opens a panel INSIDE the armed
@@ -7300,7 +7307,7 @@ body, .font-suite {
 
        Stopped  --color-neutral @ 90%  #696364  5.39:1  (title is 14.23:1)
        Undo     --cc-btn-fg           #3D4453  8.96:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #C22B30  5.23:1  on --cc-btn-bg */
+       Undo hover --cc-stop-hover     #AF101F  6.6044:1  on --cc-btn-bg */
   --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 90%, white);
   --cc-skeleton-a: #eceef2;
   --cc-skeleton-b: #dcdfe7;
@@ -7375,8 +7382,10 @@ body, .font-suite {
        warn  --color-warning         #F49A00  7.86:1  (worst 7.78:1) */
   --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
   --cc-countdown-warn: var(--color-warning);
-  /* Raw --color-error is 4.23:1 on --cc-btn-bg (#1a1f2b), under AA.
-     5.36:1 here. */
+  /* The Stop/Undo hover LABEL colour on --cc-btn-bg (#1a1f2b): 4.5:1
+     text, since the fill does not change. Raw --color-error is 4.3969:1
+     there; 5.5338:1 here (Burrow dark), lowest 5.5338:1 across the dark
+     variants (error_token_contrast_guard_test.exs). */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
   /* ── The correction drawer (task 01a0740e stage 2) ──
      See the light block for the slot map and for the two slots left
@@ -7427,7 +7436,7 @@ body, .font-suite {
 
        Stopped  --color-neutral @ 60%  #8F8B8C  5.43:1  (title is 14.21:1)
        Undo     --cc-btn-fg           #AEB6C6  8.08:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #F8605C  5.35:1  on --cc-btn-bg
+       Undo hover --cc-stop-hover     #FB635F  5.5317:1  on --cc-btn-bg
 
      The 60% here is the same figure --cc-countdown-rest arrived at from
      the same starting token; they are kept as two tokens because they

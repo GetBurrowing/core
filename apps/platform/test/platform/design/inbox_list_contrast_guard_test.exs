@@ -35,13 +35,12 @@ defmodule Platform.Design.InboxListContrastGuardTest do
 
   ## 'Step failed' is a dot, not error text
 
-  Saru's rev 2 painted the "Step failed" WORD in error. Measured here first,
-  `--color-error` as text missed 4.5:1 on base-200 or base-100 in five
-  variants (burrow light 3.5478 / 3.7360; burrow, midnight, sand and forest
-  dark on base-100 4.2857-4.4474). Ruling (option (a)): the word is subtle
-  like every kind word, and the colour is an `aria-hidden` `bg-error` dot
-  beside it, held here at the 3:1 non-text floor. `text-error` is refuted in
-  the component's code so the failing pair cannot come back unnoticed.
+  The status-dot rule: status words in a list are body text, and the dot
+  beside them carries the colour. So "Step failed" is subtle like every kind
+  word, and the colour is an `aria-hidden` `bg-error` dot beside it, held
+  here at the 3:1 non-text floor. `text-error` is refuted in the component's
+  code because of that rule, not because of contrast: the error token clears
+  4.5:1 in all ten variants since task 01a160c4, and the refute stays.
 
   ## Not asserted: avatars and kind discs (WCAG 1.4.11)
 
@@ -314,7 +313,9 @@ defmodule Platform.Design.InboxListContrastGuardTest do
     refute Regex.match?(~r/#[0-9a-fA-F]{3,8}\b/, source)
     refute source =~ "[data-theme"
     refute source =~ "hover:"
-    # The failed kind word is never error text (5 of 10 variants miss 4.5).
+    # The status-dot rule: kind words are body text and the dot carries the
+    # colour, so the failed kind word is never error text (whatever the
+    # error token's contrast).
     refute source =~ "text-error"
 
     small =

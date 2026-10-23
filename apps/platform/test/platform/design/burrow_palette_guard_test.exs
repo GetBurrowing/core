@@ -10,9 +10,14 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
 
     * dark `--color-success-content` is black, not the mock's inherited white.
       White on #6bae75 is 2.6460:1; black is 7.9365:1.
-    * `--color-error-content` is black in both themes. The red is unchanged
-      and the mock kept white, but white on `oklch(63% 0.22 25)` is 3.8948:1
-      (it was before the recolor too); black is 5.3918:1.
+    * `--color-error` and `--color-error-content` differ per theme (retuned
+      by task 01a160c4, the designer's ruling). Light error is `#da1729` with
+      WHITE content: white measures 5.0778:1, black 4.1357:1. Dark
+      error is `#f53c41` with BLACK content: black measures 5.6052:1,
+      white 3.7465:1. (Before the retune both themes used
+      `oklch(63% 0.22 25)` with black content, 5.3918:1, because white was
+      3.8948:1.) `error_token_contrast_guard_test.exs` holds error on both
+      grounds in all ten variants.
     * light `--color-base-content` keeps main's black, not the spec's #221f1b
       (stage 4). Secondary text paints it at 55-60% (`text-subtle`, the
       `--subtle` token at 55%; `text-base-content/60`, daisyUI `.label`;
@@ -80,7 +85,7 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
       "--color-success" => "#2d7638",
       "--color-warning" => "#925d0c",
       "--color-warning-content" => "#fbfaf9",
-      "--color-error-content" => "oklch(0% 0 0)",
+      "--color-error-content" => "oklch(100% 0 0)",
       "--edge" => "#d9d3c9",
       "--focus-ring" => "var(--color-interactive)",
       "--info-dim" => "#90d5df",

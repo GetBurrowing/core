@@ -664,7 +664,7 @@ defmodule PlatformWeb.SettingsLive do
           Turn off in your phone's settings.
         </p>
         <div :if={@state == :subscribe_failed} class="flex items-center justify-between gap-3">
-          <p data-role="settings-push-line" class="text-xs text-base-content">
+          <p data-role="settings-push-line" class="text-xs text-error">
             Couldn't turn on notifications on this device.
           </p>
           <button

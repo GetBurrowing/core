@@ -46,7 +46,6 @@ defmodule Platform.Design.SettingsContrastGuardTest do
 
     * H-on-track: primary vs base-200 is the tightest switch pair, likeliest
       to fail in sand light.
-    * H-error: error on base-100 fails in at least one light variant.
     * H-subtle: --subtle on base-200 is the tightest text pair.
 
   ## Structure (anti-vacuity first)
@@ -55,15 +54,12 @@ defmodule Platform.Design.SettingsContrastGuardTest do
   contains `id="settings"`) before anything is refuted in it. Then: no
   `text-base-content/`, no hex literal, no `[data-theme` selector, no
   `hover:`, no `text-[Npx]` under 12; the row class presses to base-100 on a
-  base-200 root; no element names `text-error` (see the fallback below).
+  base-200 root; `text-error` names exactly one element, the subscribe-failed
+  line.
 
-  ## Fallback applied (measured, task 01a1557a-e538 stage 5)
-
-  The subscribe-failed line was `text-error`. Error on base-100 measured
-  3.7360 (burrow light), 4.4233 (burrow dark), 4.4474 (midnight dark),
-  4.2857 (sand dark) and 4.3921 (forest dark), all under 4.5. By the stage's
-  named fallback the line is `text-base-content`: its words carry the
-  meaning. The guard still reads the line's slot and measures it.
+  Error-token contrast is held by `error_token_contrast_guard_test.exs` for
+  all ten variants (task 01a160c4; lowest error on base-100 there is
+  4.5981, forest dark); this guard keeps only the sentence-level pair.
   """
   use ExUnit.Case, async: true
 
@@ -298,15 +294,6 @@ defmodule Platform.Design.SettingsContrastGuardTest do
     {tight_text, {tt_b, tt_r}} =
       text_labels |> Enum.map(&{&1, min_of.(&1)}) |> Enum.min_by(fn {_, {_, r}} -> r end)
 
-    # H-error is about the ERROR slot itself, whatever the failed line names
-    # now (after the fallback it names base-content).
-    error_rows = for b <- blocks, do: {b, on(b, "error", @raised)}
-
-    failed_light_failures =
-      for {b, r} <- error_rows, b.mode == "light", r < @aa_text, do: "#{b.id} #{b.mode}"
-
-    {fl_b, fl_r} = Enum.min_by(error_rows, &elem(&1, 1))
-
     IO.puts(
       "\nSettings AA table (WCAG 2.x; --subtle pairs painted on the worst pixel PaintedComposite allows):\n" <>
         "| Variant | " <>
@@ -325,10 +312,6 @@ defmodule Platform.Design.SettingsContrastGuardTest do
             String.ends_with?(tight_switch, "base-200") and ts_b.id == "burrow-sand" and
             ts_b.mode == "light"
         ) <>
-        "\nH-error: error / base-100 under 4.5 in light variants: #{inspect(failed_light_failures)}; min #{f4(fl_r)} (#{fl_b.id} #{fl_b.mode}); all variants: " <>
-        Enum.map_join(error_rows, ", ", fn {b, r} -> "#{b.id} #{b.mode} #{f4(r)}" end) <>
-        " -> " <>
-        verdict.(failed_light_failures != []) <>
         "\nH-subtle: tightest text pair is #{tight_text} #{f4(tt_r)} (#{tt_b.id} #{tt_b.mode}) -> " <>
         verdict.(tight_text == "subtle / base-200 (painted)")
     )
@@ -397,15 +380,13 @@ defmodule Platform.Design.SettingsContrastGuardTest do
     assert row <> " " <> rest =~ "active:bg-base-100"
   end
 
-  # The stage's rule was "text-error exactly once" (the subscribe-failed
-  # line). Measured here: error on base-100 is under 4.5 in five variants
-  # (burrow light 3.7360), so the named fallback applied and the line is
-  # base-content. The rule is now: no element in Settings or NotificationState
-  # names text-error, and the failed line's slot is base-content.
-  test "text-error is gone (fallback applied); the failed line is base-content",
+  # The rule: "text-error exactly once", on the subscribe-failed line. The
+  # fallback to base-content was retired when task 01a160c4 retuned the token
+  # (error_token_contrast_guard_test.exs holds it in all ten variants).
+  test "text-error appears exactly once, on the subscribe-failed line",
        %{source: source, state_source: state_source} do
     assert state_source =~ "notification_state_row"
-    assert slots(source).failed == "base-content"
+    assert slots(source).failed == "error"
 
     # Class attributes and class strings only: prose may name the slot.
     count = fn text ->
@@ -413,9 +394,11 @@ defmodule Platform.Design.SettingsContrastGuardTest do
         length(Regex.scan(~r/do: "[^"]*\btext-error\b[^"]*"/, text))
     end
 
-    # Positive control: the counter finds a class attribute when one exists.
+    # Positive control: the counter finds a class attribute when one exists,
+    # and the real count is 1, not 0, so the scan is shown to fire on source.
     assert count.(~s(<p class="text-xs text-error">)) == 1
-    assert count.(source) + count.(state_source) == 0
+    assert count.(source) == 1
+    assert count.(state_source) == 0
   end
 
   test "every row chevron is aria-hidden (decorative; no floor)", %{source: source} do

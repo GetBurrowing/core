@@ -613,7 +613,7 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert push_line(view) == headline <> " " <> detail
     end
 
-    test "granted + subscribe_failed: off, the failed line in body text and Try again" do
+    test "granted + subscribe_failed: off, the failed line in error text and Try again" do
       view = notifications(member!())
       render_hook(view, "push_permission_state", %{"state" => "granted"})
       render_hook(view, "push_subscribe_failed", %{"name" => "AbortError", "message" => "x"})
@@ -621,13 +621,14 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert switch(view) == %{checked: ["false"], disabled: [], click: ["enable_notifications"]}
       assert push_line(view) == "Couldn't turn on notifications on this device."
 
-      # Stage 5's painted guard measured error on base-100 under 4.5:1 in five
-      # variants, so the line is body text (the stage's named fallback).
+      # A failed action the person just took is error text (task 01a160c4
+      # retuned --color-error so it clears 4.5:1 in all ten variants;
+      # error_token_contrast_guard_test.exs holds that).
       [line] =
         view |> render() |> query("[data-role=settings-push-line]") |> Enum.to_list()
 
-      assert LazyHTML.attribute(line, "class") |> hd() =~ "text-base-content"
-      assert error_count(view) == 0
+      assert LazyHTML.attribute(line, "class") |> hd() =~ "text-error"
+      assert error_count(view) == 1
 
       view |> element("[data-role=settings-push-retry]") |> render_click()
       assert_push_event(view, "request_push_permission", %{})

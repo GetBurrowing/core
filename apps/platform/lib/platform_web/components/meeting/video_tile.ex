@@ -113,8 +113,8 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   scrim itself, and did not carry it down to the content sitting on that
   ground. The shipped name label already used `text-white` over
   `from-black/60`, so this follows the existing precedent.
-  `--color-error` is `oklch(63% 0.22 25)` in both themes and keeps its
-  semantic token unchanged.
+  `--color-error` keeps its semantic token. Its value differs per theme
+  (task 01a160c4 retuned it: `#da1729` light, `#f53c41` dark).
 
   ### The mic glyph draws, as of FE-19
 
