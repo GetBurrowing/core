@@ -24,6 +24,7 @@ import com.koboai.burrow.push.BurrowPush
 import com.koboai.burrow.push.NotificationPresenter
 import com.koboai.burrow.push.PushPayload
 import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.widgets.BriefingRepository
 import com.koboai.burrow.widgets.CountsRepository
 import com.koboai.burrow.widgets.WidgetRefresh
 import kotlinx.coroutines.runBlocking
@@ -359,7 +360,10 @@ class MainActivity :
         io.execute {
             signOut.run(install.host)
             // The old account's counts must not show under the next sign-in.
-            runBlocking { CountsRepository.forContext(applicationContext).forget(install.host) }
+            runBlocking {
+                CountsRepository.forContext(applicationContext).forget(install.host)
+                BriefingRepository.forContext(applicationContext).forget(install.host)
+            }
             WidgetRefresh.now(applicationContext)
             main.post {
                 if (signingOutHost != install.host) return@post

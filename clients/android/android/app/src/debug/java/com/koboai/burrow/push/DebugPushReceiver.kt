@@ -20,8 +20,9 @@ import java.util.Base64
 /**
  * DEBUG BUILDS ONLY (`src/debug`, registered in the debug manifest). Takes
  * a base64 JSON extra, [EXTRA_PAYLOAD], and hands its FCM `message.data` to
- * [NotificationPresenter.present], exactly as [BurrowMessagingService] does
- * for a real push. Accepts what `fcm_stub.py` records (`{"message": {"data":
+ * [PushDispatch.handle], the same entry point [BurrowMessagingService] calls
+ * for a real push (the notification, and the briefing widget's refresh on
+ * an `insight_briefing`). Accepts what `fcm_stub.py` records (`{"message": {"data":
  * {...}}}`), a bare `{"data": {...}}`, or the data object itself.
  * [EXTRA_REPLY_STUB] stands in for the server on Reply.
  */
@@ -36,7 +37,7 @@ class DebugPushReceiver : BroadcastReceiver() {
         intent.getStringExtra(EXTRA_UPLOAD_STUB)?.let { startStubUpload(context, it) }
         val encoded = intent.getStringExtra(EXTRA_PAYLOAD) ?: return
         val data = parse(encoded) ?: return
-        NotificationPresenter.present(context, data)
+        PushDispatch.handle(context, data)
     }
 
     companion object {

@@ -122,6 +122,34 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/my_tasks_widget_info" />
         </receiver>
+        <receiver
+            android:name=".widgets.TodaysBriefingWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_briefing_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/todays_briefing_widget_info" />
+        </receiver>
+        <!-- The same widget on the Galaxy Z Flip 5 cover screen: Samsung's
+             second meta-data puts it on the Flex Window (sub_screen). Its own
+             receiver, so the 352x339dp minimum never sizes the home widget. -->
+        <receiver
+            android:name=".widgets.TodaysBriefingCoverWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_briefing_title">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/todays_briefing_cover_widget_info" />
+            <meta-data
+                android:name="com.samsung.android.appwidget.provider"
+                android:resource="@xml/samsung_todays_briefing_cover_widget" />
+        </receiver>
 
         <!-- The notification permission explainer (Android 13+). -->
         <activity

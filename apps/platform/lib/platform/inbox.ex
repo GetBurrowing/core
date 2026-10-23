@@ -294,6 +294,16 @@ defmodule Platform.Inbox do
   def briefing_title, do: "Today's briefing"
 
   @doc """
+  The briefing's receipt line from its counts (`Briefings.view/2`'s
+  `:counts`): "All done · nothing waiting" when nothing is open, else
+  `briefing_summary/2`. The Inbox row and `GET /api/app/briefing` (task
+  01a161f9) both read it, so their copy cannot drift.
+  """
+  @spec briefing_summary(map()) :: String.t()
+  def briefing_summary(%{open: 0}), do: "All done · nothing waiting"
+  def briefing_summary(%{total: total, calls: calls}), do: briefing_summary(total, calls)
+
+  @doc """
   The briefing row's subtitle: `"N items · K need your call"`, `"1 needs your
   call"` when K is 1, `"N items · FYI only"` when K is 0.
   """

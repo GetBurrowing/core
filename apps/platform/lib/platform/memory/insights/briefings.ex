@@ -269,7 +269,7 @@ defmodule Platform.Memory.Insights.Briefings do
 
   Handling every item does NOT make the row stale (task 01a15ee1 stage 6,
   overruling stage 1): the row stays listed for the day and reads "All done
-  · nothing waiting" (`PlatformWeb.Components.BriefingRow.summary/1`), as
+  · nothing waiting" (`Platform.Inbox.briefing_summary/1`), as
   the prototype inventory specifies, and an Undo that reopens an item finds
   the row still there.
 

@@ -1445,4 +1445,21 @@ defmodule Platform.InboxPushTest do
   test "push_kinds excludes chat_mention" do
     assert Inbox.push_kinds() == ~w(task_plan_review review_request_pending)
   end
+
+  describe "briefing_summary/1 (task 01a161f9)" do
+    test "nothing open reads all done, whatever the total" do
+      assert Inbox.briefing_summary(%{total: 6, open: 0, calls: 0}) ==
+               "All done · nothing waiting"
+    end
+
+    test "otherwise it is briefing_summary/2 of total and calls" do
+      assert Inbox.briefing_summary(%{total: 12, open: 3, calls: 3}) ==
+               "12 items · 3 need your call"
+
+      assert Inbox.briefing_summary(%{total: 5, open: 4, calls: 0}) == "5 items · FYI only"
+
+      assert Inbox.briefing_summary(%{total: 2, open: 1, calls: 1}) ==
+               "2 items · 1 needs your call"
+    end
+  end
 end

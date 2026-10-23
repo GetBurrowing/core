@@ -7,11 +7,13 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Source guards for two binding rules:
+ * Source guards for three binding rules:
  * - `burrow_info` (cyan) is named only by its definitions in colors.xml and
  *   by widgets/SlabColors.kt, so nothing but the LIVE slab can turn cyan;
  * - no OkHttp logging interceptor at BODY or HEADERS level, in any build
- *   type, and no dependency on it.
+ *   type, and no dependency on it;
+ * - the Today's briefing widget never names `burrow_primary` or
+ *   `burrow_error` (canvas 01a161fa, "Never used").
  */
 class WidgetGuardTest {
     private val roots = listOf("src/main", "src/debug", "src/release").map(::File)
@@ -34,6 +36,11 @@ class WidgetGuardTest {
             if (allowed) return emptyList()
             return text.lines().filter { INFO.containsMatchIn(it) }.map { "$path: ${it.trim()}" }
         }
+
+        private val ALERT_COLOURS = Regex("""\bburrow_(primary|error)\b""")
+
+        /** The briefing widget has no buttons and nothing has failed: orange or red on a cover screen reads as an alert. */
+        fun briefingColourOffences(text: String): List<String> = text.lines().filter { ALERT_COLOURS.containsMatchIn(it) }.map { it.trim() }
 
         private val LOGGING = Regex("""HttpLoggingInterceptor|logging-interceptor|Level\.(BODY|HEADERS)""")
 
@@ -61,6 +68,18 @@ class WidgetGuardTest {
         assertTrue("burrow_info outside the slab mapping:\n" + found.joinToString("\n"), found.isEmpty())
         // Positive control: the mapping does name it.
         assertTrue(File("src/main/java/com/koboai/burrow/widgets/SlabColors.kt").readText().contains("R.color.burrow_info"))
+    }
+
+    @Test
+    fun `the briefing widget names neither burrow_primary nor burrow_error`() {
+        // Positive control: the guard goes red on what it is meant to catch.
+        assertEquals(1, briefingColourOffences("slabColor(context, R.color.burrow_primary)").size)
+        assertEquals(1, briefingColourOffences("slabColor(context, R.color.burrow_error)").size)
+        assertTrue(briefingColourOffences("R.color.burrow_primary_dark").isEmpty())
+        val file = File("src/main/java/com/koboai/burrow/widgets/TodaysBriefingWidget.kt")
+        assertTrue(file.isFile)
+        val found = briefingColourOffences(file.readText())
+        assertTrue("alert colours in the briefing widget:\n" + found.joinToString("\n"), found.isEmpty())
     }
 
     @Test
