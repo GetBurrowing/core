@@ -208,7 +208,10 @@ defmodule Platform.Design.ChatListContrastGuardTest do
         ".chat-list-sheet .sheet-handle",
         ".chat-list-search-sheet .sheet-panel",
         ".chat-list-search-sheet mark",
-        ~s(.chat-list-search-sheet input[type="search"]::-webkit-search-cancel-button)
+        ~s(.chat-list-search-sheet input[type="search"]::-webkit-search-cancel-button),
+        # The pending current bar (task 01a166be-b5b9 stage 2, nav_pending.js).
+        ".chat-list-row[data-nav-pending]",
+        ".chat-list-row[data-nav-pending]::before"
       ])
 
     # Sliced and non-empty before any body is read.

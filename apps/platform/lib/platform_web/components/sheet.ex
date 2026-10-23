@@ -101,7 +101,7 @@ defmodule PlatformWeb.Components.Sheet do
         <button
           :if={@bare_handle? and @handle_close}
           type="button"
-          class="sheet-handle-button focus-visible-ring"
+          class="sheet-handle-button press-hold focus-visible-ring"
           aria-label="Close"
           phx-click={@on_close}
           phx-target={@on_close_target}
@@ -131,7 +131,7 @@ defmodule PlatformWeb.Components.Sheet do
             aria-label="Close"
             phx-click={@on_close}
             phx-target={@on_close_target}
-            class="sheet-close-button rounded-full p-1 text-subtle active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="sheet-close-button press-hold rounded-full p-1 text-subtle active:bg-base-200 phx-click-loading:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <.icon name="hero-x-mark" class="size-5" />
           </button>

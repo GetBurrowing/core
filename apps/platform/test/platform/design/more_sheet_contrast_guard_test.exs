@@ -8,7 +8,9 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
   | pair                                          | floor |
   |-----------------------------------------------|-------|
   | row label: base-content on base-100           | 4.5   |
-  | current / hover label: base-content on base-200 | 4.5 |
+  | hover label: base-content on base-200         | 4.5   |
+  | pressed label: base-content on base-300       | 4.5   |
+  | current bar: base-content on base-100         | 3     |
   | row icon on base-100, and on base-200         | 3     |
   | check icon on base-200                        | 3     |
   | Settings subtitle: --subtle on base-100, base-200 | 4.5 |
@@ -80,15 +82,23 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
                         {[], ".more-sheet-list"},
                         {[], ".more-sheet-row"},
                         {[], ".more-sheet-settings"},
-                        {[], ".more-sheet-row:hover"},
+                        {["@media (hover: hover)"], ".more-sheet-row:hover"},
                         {[], ".more-sheet-row:active"},
-                        {[], ".more-sheet-settings:hover"},
+                        {["@media (hover: hover)"], ".more-sheet-settings:hover"},
                         {[], ".more-sheet-settings:active"},
                         {[], ".more-sheet-row--current"},
+                        {[], ".more-sheet-row--current::before"},
                         {[], ".more-sheet-icon"},
                         {[], ".more-sheet-check"},
                         {[], ".more-sheet .sheet-actions"},
-                        {[], ".more-sheet .sheet-handle"}
+                        {[], ".more-sheet .sheet-handle"},
+                        # Optimistic navigation (task 01a166be-b5b9 stage 2):
+                        # the tapped row keeps base-300 and the sheet leaves.
+                        {[], ".more-sheet-row[data-nav-pending]"},
+                        {[], ".more-sheet-settings[data-nav-pending]"},
+                        {[], ".more-sheet:has([data-nav-pending])"},
+                        {[], ".more-sheet:has([data-nav-pending]) .sheet-panel"},
+                        {[], ".more-sheet:has([data-nav-pending]) .sheet-backdrop"}
                       ])
 
   @colour_literal ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(|\blab\(|\blch\(|\bhwb\(/
@@ -143,11 +153,13 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
   defp pairs(b) do
     [
       {"row label / base-100", ratio(b, "--color-base-content", "--color-base-100"), @aa_text},
-      {"current label / base-200", ratio(b, "--color-base-content", "--color-base-200"),
+      {"hover label / base-200", ratio(b, "--color-base-content", "--color-base-200"), @aa_text},
+      {"pressed label / base-300", ratio(b, "--color-base-content", "--color-base-300"),
        @aa_text},
+      {"current bar / base-100", ratio(b, "--color-base-content", "--color-base-100"), @non_text},
       {"icon / base-100", ratio(b, "--color-base-content", "--color-base-100"), @non_text},
       {"icon / base-200", ratio(b, "--color-base-content", "--color-base-200"), @non_text},
-      {"check / base-200", ratio(b, "--color-base-content", "--color-base-200"), @non_text},
+      {"check / base-100", ratio(b, "--color-base-content", "--color-base-100"), @non_text},
       {"subtitle / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text},
       {"subtitle / base-200 (painted)", subtle_on(b, "--color-base-200"), @aa_text},
       {"chevron / base-100 (painted)", subtle_on(b, "--color-base-100"), @non_text},
@@ -268,8 +280,59 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
     assert String.to_integer(px) >= 48
     assert row.body =~ ~r/font-size:\s*15px;/
     assert row.body =~ ~r/color:\s*var\(--color-base-content\);/
+  end
 
-    [current] = Enum.filter(rules, &(&1.selector == ".more-sheet-row--current"))
-    assert current.body =~ ~r/background-color:\s*var\(--color-base-200\);/
+  # Four states, never sharing a look (task 01a166be-b5b9, press feedback
+  # canvas 01a167b0): until then hover, :active and current all painted
+  # base-200. Now hover is base-200 behind (hover: hover), pressed is base-300
+  # and current has NO fill: a 3px base-content leading bar plus weight 600.
+  test "hover, pressed and current resolve to different declarations", %{rules: rules} do
+    body = fn at, sel ->
+      case Enum.filter(rules, &(&1.selector == sel and &1.at == at)) do
+        [r] -> r.body
+        other -> flunk("expected one #{inspect(at)} `#{sel}` rule, found #{length(other)}")
+      end
+    end
+
+    fill = fn b ->
+      case Regex.run(~r/background(?:-color)?:\s*([^;]+);/, b) do
+        [_, v] -> String.trim(v)
+        nil -> nil
+      end
+    end
+
+    for {hover_sel, active_sel} <- [
+          {".more-sheet-row:hover", ".more-sheet-row:active"},
+          {".more-sheet-settings:hover", ".more-sheet-settings:active"}
+        ] do
+      hover = body.(["@media (hover: hover)"], hover_sel)
+      pressed = body.([], active_sel)
+
+      assert fill.(hover) == "var(--color-base-200)", hover_sel
+      assert fill.(pressed) == "var(--color-base-300)", active_sel
+      # Press-in is instant.
+      assert pressed =~ ~r/transition-duration:\s*0ms;/
+    end
+
+    # No unconditional :hover anywhere on a row: on touch it sticks.
+    refute Enum.any?(rules, &(&1.at == [] and &1.selector =~ ":hover"))
+
+    current = body.([], ".more-sheet-row--current")
+    assert fill.(current) == nil, "current must not be a fill: a fill always means touch"
+    assert current =~ ~r/font-weight:\s*600;/
+
+    bar = body.([], ".more-sheet-row--current::before")
+    assert bar =~ ~r/width:\s*3px;/
+    assert bar =~ ~r/left:\s*0;/
+    assert fill.(bar) == "var(--color-base-content)"
+
+    # And the three looks are pairwise distinct.
+    looks = [
+      fill.(body.(["@media (hover: hover)"], ".more-sheet-row:hover")),
+      fill.(body.([], ".more-sheet-row:active")),
+      fill.(current)
+    ]
+
+    assert looks == Enum.uniq(looks)
   end
 end

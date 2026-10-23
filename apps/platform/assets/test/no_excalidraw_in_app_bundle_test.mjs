@@ -39,7 +39,13 @@ const ASSETS = resolve(HERE, "..");
 // The structural alternative, if app.js keeps growing, is to load the
 // game_stream hook (flag-gated, GAME_STREAM_ENABLED) as an island like
 // emoji_island.js.
-const MAX_BYTES = 896 * 1024;
+//
+// Raised from 896 KB to 960 KB by task 01a166be (redesign press feedback):
+// the WITH-Play app.js measured 919,154 bytes in CI run 39929391456, 1,650
+// over 896 KB, after nav_pending.js and top_bar.js (optimistic tab swap,
+// pending pulse, rollback toast) landed as first-party code. Same reasoning
+// as above: 960 KB still catches an island leak by a factor of eight.
+const MAX_BYTES = 960 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three
@@ -124,7 +130,7 @@ async function buildAppBundle() {
 // the loader on app.js's import graph for the first time. Verified this
 // narrowing does NOT defang the guard: with a top-level
 // `import "@excalidraw/excalidraw"` in js/app.js the test still fails on
-// hundreds of surviving occurrences (and the 896 KB ceiling below fires too).
+// hundreds of surviving occurrences (and the 960 KB ceiling below fires too).
 const LOADER_TOKENS = [
   "/assets/js/excalidraw_island.js",
   "/assets/js/excalidraw_island.css",
@@ -153,7 +159,7 @@ test("js/app.js bundle does not contain excalidraw", async () => {
   );
 });
 
-test("js/app.js bundle stays under 896 KB minified", async (t) => {
+test("js/app.js bundle stays under 960 KB minified", async (t) => {
   const js = await buildAppBundle();
   const bytes = js.contents.byteLength;
   const flavour = EXTENSIONS_JS ? `with modules (${EXTENSIONS_JS})` : "without modules";
@@ -163,7 +169,7 @@ test("js/app.js bundle stays under 896 KB minified", async (t) => {
   assert.ok(
     bytes < MAX_BYTES,
     `js/app.js bundle is ${bytes} bytes (${(bytes / 1024).toFixed(1)} KB), over the ` +
-      `${MAX_BYTES} byte (896 KB) ceiling. Either something large was added to the ` +
+      `${MAX_BYTES} byte (960 KB) ceiling. Either something large was added to the ` +
       "application bundle, or a lazily-loaded island leaked into it."
   );
 });

@@ -124,14 +124,34 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {["@media (prefers-reduced-transparency: reduce)"], ".bottom-nav"},
     {["@media (min-width: 1024px)"], ".bottom-nav"},
     {[], ".bottom-nav-tab"},
-    {["@media (hover: hover)"], ".bottom-nav-tab:not(.bottom-nav-tab--active):hover"},
+    {["@media (hover: hover)"],
+     ".bottom-nav-tab:not(.bottom-nav-tab--active):not([data-nav-pending]):hover"},
     {[], ".bottom-nav-tab:focus-visible"},
     {[], ".bottom-nav-tab:active"},
+    {[], ".bottom-nav-tab:not(.bottom-nav-tab--active):active"},
+    {[], ".bottom-nav-tab:active .bottom-nav-icon"},
+    {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav-tab:active .bottom-nav-icon"},
     {[], ".bottom-nav-tab--active"},
     {[], ".bottom-nav-dot"},
     {[], ".bottom-nav-icon"},
     {[], ".bottom-nav-label"},
-    {[], ".bottom-nav-tab--active .bottom-nav-label"}
+    {[], ".bottom-nav-tab--active .bottom-nav-label"},
+    # Optimistic navigation (task 01a166be-b5b9 stage 2): the tapped tab takes
+    # the active look and the active tab yields it, both set by nav_pending.js.
+    {[], ".bottom-nav-tab[data-nav-pending]"},
+    {[], ".bottom-nav-tab[data-nav-pending] .bottom-nav-label"},
+    {[], ".bottom-nav-tab[data-nav-pending] .bottom-nav-icon"},
+    {[], ".bottom-nav-tab--active[data-nav-yielded]"},
+    {[], ".bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label"},
+    {["@media (prefers-reduced-motion: reduce)"],
+     ".bottom-nav-tab[data-nav-pending] .bottom-nav-icon"},
+    # The More tab holds its press during the sheet round trip (task
+    # 01a166be-b5b9 stage 3, canvas 01a167b0 rule 5).
+    {[], ".bottom-nav-tab.press-hold.phx-click-loading:not(.bottom-nav-tab--active)"},
+    {[], ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon"},
+    {[], ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-label"},
+    {["@media (prefers-reduced-motion: reduce)"],
+     ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon"}
   ]
 
   @colour_literal ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(|\blab\(|\blch\(|\bhwb\(/
@@ -568,7 +588,19 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
             not String.contains?(r.selector, ":not(.bottom-nav-tab--active)"),
             do: r.selector
 
-      assert Enum.sort(painters) == [".bottom-nav-tab", ".bottom-nav-tab--active"]
+      # Plus the two optimistic-navigation states (task 01a166be-b5b9 stage 2),
+      # which are JS attributes, never a sticky pointer state: pending paints
+      # the active colour itself, and yielded deliberately hands the active
+      # tab the rest ink while another tab is pending.
+      assert Enum.sort(painters) == [
+               ".bottom-nav-tab",
+               ".bottom-nav-tab--active",
+               ".bottom-nav-tab--active[data-nav-yielded]",
+               ".bottom-nav-tab[data-nav-pending]"
+             ]
+
+      assert declaration(top_level_body!(rules, ".bottom-nav-tab[data-nav-pending]"), "color") ==
+               declaration(top_level_body!(rules, ".bottom-nav-tab--active"), "color")
     end
 
     test "keyboard focus draws the focus-ring token INSIDE the cell", %{rules: rules} do

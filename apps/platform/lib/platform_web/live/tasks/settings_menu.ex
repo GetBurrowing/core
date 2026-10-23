@@ -54,7 +54,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
       <button
         type="button"
         phx-click="toggle_settings_menu"
-        class="btn btn-ghost btn-sm px-2 text-subtle hover:text-base-content focus-visible-ring"
+        class="btn btn-ghost btn-sm press-hold px-2 text-subtle hover:text-base-content phx-click-loading:bg-base-300! phx-click-loading:text-base-content focus-visible-ring"
         aria-label="Tasks settings"
         aria-haspopup="menu"
         aria-controls="tasks-settings-menu"
@@ -127,7 +127,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
       <div class="flex flex-col gap-1">
         <.link
           navigate={~p"/tasks/pipeline"}
-          class="flex flex-col gap-0.5 rounded-lg px-4 py-3 text-left hover:bg-base-200 transition-colors focus-visible-ring"
+          class="flex flex-col gap-0.5 rounded-lg px-4 py-3 text-left hover:bg-base-200 active:bg-base-300 transition-colors focus-visible-ring"
           data-role="tasks-settings-pipeline-link-mobile"
         >
           <span class="text-sm font-medium text-base-content">Pipeline</span>

@@ -18,7 +18,14 @@ defmodule PlatformWeb.Components.MoreSheet do
   leaves no gap. Every row is one component, built-in or extension:
   a whole-width link that closes the sheet and navigates in one tap.
 
-  Row links navigate; the remount closes the sheet.
+  Row links navigate, and the tap itself closes the sheet (task 01a166be-b5b9
+  stage 2): `assets/js/lib/nav_pending.js` marks the tapped row and the More
+  tab `data-nav-pending` in the click, and app.css slides the panel down
+  (180ms after 80ms) with the row still filled, while the More tab carries
+  the pending cue until the destination mounts. The server's `@more_open` is
+  untouched; the destination's mount renders the sheet closed. If the
+  navigation fails, the marks come off, the sheet is back as it was and a
+  toast says so (`data-nav-label` is the toast's name for the row).
 
     * Inbox carries its unread count (`data-role="more-sheet-inbox-badge"`,
       the `IconRail.badge_text/1` grammar).
@@ -121,6 +128,7 @@ defmodule PlatformWeb.Components.MoreSheet do
             dest.key == @current_key && "more-sheet-row--current"
           ]}
           data-destination={dest.key}
+          data-nav-label={dest.label}
           aria-current={if dest.key == @current_key, do: "page"}
           aria-label={
             if dest.key == :inbox and @inbox_badge,
@@ -157,6 +165,7 @@ defmodule PlatformWeb.Components.MoreSheet do
             @current_key == :settings && "more-sheet-row--current"
           ]}
           data-destination="settings"
+          data-nav-label="Settings"
           aria-current={if @current_key == :settings, do: "page"}
         >
           <.human_avatar name={@name} avatar_url={@avatar_url} seed={@avatar_seed} size="sm" />

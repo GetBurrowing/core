@@ -201,7 +201,7 @@ defmodule PlatformWeb.Components.IconRail do
         <button
           :if={!@sidebar_collapsed}
           type="button"
-          class="ml-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content"
+          class="press-hold ml-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content active:bg-base-100 phx-click-loading:bg-base-100! phx-click-loading:text-base-content"
           phx-click="toggle_sidebar"
           title="Collapse sidebar"
           aria-label="Collapse sidebar"
@@ -211,7 +211,7 @@ defmodule PlatformWeb.Components.IconRail do
         <button
           :if={@sidebar_collapsed}
           type="button"
-          class="mx-auto flex size-10 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content"
+          class="press-hold mx-auto flex size-10 flex-shrink-0 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-base-content active:bg-base-100 phx-click-loading:bg-base-100! phx-click-loading:text-base-content"
           phx-click="toggle_sidebar"
           title="Expand sidebar"
           aria-label="Expand sidebar"
@@ -310,6 +310,7 @@ defmodule PlatformWeb.Components.IconRail do
           class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
           data-module-id={dest.key}
+          data-nav-label={dest.label}
           aria-label={dest.label}
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
@@ -334,6 +335,7 @@ defmodule PlatformWeb.Components.IconRail do
           class={["icon-rail-tab icon-rail-tab--child", desktop_active_class(child, @active_key)]}
           data-destination={child.key}
           data-module-id={child.key}
+          data-nav-label={child.label}
           aria-label={child.label}
           aria-current={aria_current_for(child, @active_key)}
           title={child.label}
@@ -444,6 +446,7 @@ defmodule PlatformWeb.Components.IconRail do
         class={["bottom-nav-tab", mobile_active_class(dest, @active_key)]}
         data-destination={dest.key}
         data-module-id={dest.key}
+        data-nav-label={dest.label}
         aria-label={dest.label}
         aria-current={aria_current_for(dest, @active_key)}
       >
@@ -457,7 +460,7 @@ defmodule PlatformWeb.Components.IconRail do
       <button
         type="button"
         phx-click={if @more_open, do: "close_more_sheet", else: "open_more_sheet"}
-        class={["bottom-nav-tab", @more_active? && "bottom-nav-tab--active"]}
+        class={["bottom-nav-tab press-hold", @more_active? && "bottom-nav-tab--active"]}
         data-destination="more"
         aria-label={if @more_unread?, do: "More, unread in Inbox", else: "More"}
         aria-expanded={to_string(@more_open)}

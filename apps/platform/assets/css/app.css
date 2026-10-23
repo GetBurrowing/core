@@ -723,22 +723,24 @@
    buttons after a 100ms delay (avoids spinner flicker on near-instant
    round-trips). The CSS below then dims the button content and renders
    a pseudo-element spinner — no per-button markup changes required.
+   `press-hold` buttons (nav shell and menu triggers, rule 5 below) are
+   excluded: they keep their width and fill and dim only a label.
 
    The universal `prefers-reduced-motion` rule below (~line 172) auto-
    disables the spinner rotation for users who request reduced motion.
    ────────────────────────────────────────────────────── */
 @layer components {
-  .btn[aria-busy="true"] {
+  .btn[aria-busy="true"]:not(.press-hold) {
     cursor: wait;
     pointer-events: none;
     position: relative;
   }
 
-  .btn[aria-busy="true"] > * {
+  .btn[aria-busy="true"]:not(.press-hold) > * {
     opacity: 0.5;
   }
 
-  .btn[aria-busy="true"]::after {
+  .btn[aria-busy="true"]:not(.press-hold)::after {
     content: "";
     position: absolute;
     top: 50%;
@@ -754,8 +756,8 @@
   }
 
   /* Smaller spinner for btn-xs / btn-sm */
-  .btn-xs[aria-busy="true"]::after,
-  .btn-sm[aria-busy="true"]::after {
+  .btn-xs[aria-busy="true"]:not(.press-hold)::after,
+  .btn-sm[aria-busy="true"]:not(.press-hold)::after {
     width: 0.75rem;
     height: 0.75rem;
     margin-top: -0.375rem;
@@ -4873,8 +4875,9 @@ body, .font-suite {
   color: var(--tab-ink);
   position: relative;
   cursor: pointer;
-  transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-              transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* Release eases out over 120ms; press-in is instant (the :active rule
+     below zeroes the duration). Press feedback canvas 01a167b0, rule 1. */
+  transition: color 120ms ease-out;
   background: transparent;
   border: 0;
   text-decoration: none;
@@ -4889,7 +4892,7 @@ body, .font-suite {
    primary. The glass guard refuses any bar :hover rule outside
    (hover: hover) or one that can match the active tab. */
 @media (hover: hover) {
-  .bottom-nav-tab:not(.bottom-nav-tab--active):hover {
+  .bottom-nav-tab:not(.bottom-nav-tab--active):not([data-nav-pending]):hover {
     color: var(--color-base-content);
   }
 }
@@ -4906,8 +4909,22 @@ body, .font-suite {
   border-radius: calc(round(calc(var(--radius-box) * 1.57), 1px) - 1px);
 }
 
+/* Pressed (task 01a166be-b5b9, canvas 01a167b0 four-states table): the ICON
+   scales to 0.92 and an inactive tab's ink lifts to body, instantly. The cell
+   and its label never move or change size or weight. The ink rule excludes
+   the active tab so nothing but `.bottom-nav-tab--active` paints its colour.
+   Reduced motion keeps the ink and drops the scale (block further down). */
 .bottom-nav-tab:active {
-  transform: scale(0.97);
+  transition-duration: 0ms;
+}
+
+.bottom-nav-tab:not(.bottom-nav-tab--active):active {
+  color: var(--color-base-content);
+}
+
+.bottom-nav-tab:active .bottom-nav-icon {
+  transform: scale(0.92);
+  transition-duration: 0ms;
 }
 
 /* Active: the primary, measured on the painted glass like the inactive ink
@@ -4955,21 +4972,66 @@ body, .font-suite {
   text-decoration: none;
   /* Halo colour for an unread badge sitting on this tile (task 01a01b29
      stage 2). Declared on the TILE, not on the badge, and overridden below
-     for hover and active, because the halo has to be whatever the tile
-     itself is painted: base-200 at rest, base-300 once the tile lifts. A
+     for the active tile, because the halo has to be whatever the tile
+     itself is painted: base-200 at rest, hover and press (none of them
+     fill since task 01a166be-b5b9), base-300 on the current tile. A
      hardcoded base-200 ring would read as a seam on the active tile. */
   --icon-rail-badge-halo: var(--color-base-200);
 }
 
-.icon-rail-tab:hover {
-  background: var(--color-base-300);
-  --icon-rail-badge-halo: var(--color-base-300);
+/* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0).
+   Hover used to paint base-300, the same fill as the current tile, so hover
+   and current read alike. Now: rest icon ink is subtle; hover lifts it to
+   body (ink only, hover-capable pointers only); pressed scales the icon to
+   0.92 and lifts it to body, instantly, easing back over 120ms; current
+   keeps `bg-base-300 text-primary` and the leading bar. The icon is the
+   only thing that moves; the label never changes size or weight. */
+.icon-rail-icon {
+  transition: color 120ms ease-out, transform 120ms ease-out;
+}
+
+.icon-rail-tab:not(.icon-rail-tab--active) .icon-rail-icon {
+  color: var(--color-subtle);
+}
+
+@media (hover: hover) {
+  .icon-rail-tab:not(.icon-rail-tab--active):hover .icon-rail-icon {
+    color: var(--color-base-content);
+  }
+}
+
+.icon-rail-tab:not(.icon-rail-tab--active):active .icon-rail-icon {
+  color: var(--color-base-content);
+}
+
+.icon-rail-tab:active .icon-rail-icon {
+  transform: scale(0.92);
+  transition-duration: 0ms;
+}
+
+/* Child rows carry no icon, so their press is the row ruling for a base-200
+   root: base-100 fill, one step from the sidebar (canvas 01a167b0). */
+.icon-rail-tab--child:not(.icon-rail-tab--active):active {
+  background: var(--color-base-100);
+  --icon-rail-badge-halo: var(--color-base-100);
 }
 
 /* Same fill as desktop_active_class/2's `bg-base-300`, so the halo tracks it.
    Declared after the base rule because the two selectors tie on specificity. */
 .icon-rail-tab--active {
   --icon-rail-badge-halo: var(--color-base-300);
+}
+
+/* Reduced motion (canvas 01a167b0 rule 8): no scale on press. The ink change
+   stays. The universal reduce block already zeroes the durations. */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab:active .bottom-nav-icon {
+    transform: none;
+  }
+
+  .icon-rail-tab:active .icon-rail-icon {
+    transform: none;
+  }
 }
 
 /* Unread badge on a rail tile (task 01a01b29 stage 2). Shared by the Inbox
@@ -5095,8 +5157,9 @@ body, .font-suite {
    literal and no `[data-theme]`-qualified selector (held by
    more_sheet_contrast_guard_test.exs, which also measures every pair below
    in all ten variants). Saru (canvas 01a15bc3): an opaque base-100 sheet,
-   not glass; rows 15px regular in base-content; the current row on base-200
-   with a check; a 1px base-300 divider; the Inbox badge primary on
+   not glass; rows 15px regular in base-content; the current row marked by
+   a leading bar, weight 600 and a check (task 01a166be-b5b9 moved it off
+   the base-200 fill); a 1px base-300 divider; the Inbox badge primary on
    primary-content. Everything is scoped to `.more-sheet` (the root class
    more_sheet.ex passes to <.sheet>); the shared `.sheet*` rules serve the
    other sheets and are not touched here.
@@ -5119,15 +5182,43 @@ body, .font-suite {
   color: var(--color-base-content);
   text-decoration: none;
   cursor: pointer;
-  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  /* Release eases out over 120ms; press-in is instant (:active below). */
+  transition: background-color 120ms ease-out;
 }
 
-.more-sheet-row:hover,
+/* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0;
+   until then hover, pressed and current were all base-200). Inside the
+   base-100 sheet: hover base-200 on hover-capable pointers only, pressed
+   base-300 (one step darker), current NO fill but a 3px base-content bar
+   on the leading edge plus weight 600, never colour alone. A fill now
+   always means touch. */
+@media (hover: hover) {
+  .more-sheet-row:hover,
+  .more-sheet-settings:hover {
+    background-color: var(--color-base-200);
+  }
+}
+
 .more-sheet-row:active,
-.more-sheet-settings:hover,
-.more-sheet-settings:active,
+.more-sheet-settings:active {
+  background-color: var(--color-base-300);
+  transition-duration: 0ms;
+}
+
 .more-sheet-row--current {
-  background-color: var(--color-base-200);
+  font-weight: 600;
+}
+
+.more-sheet-row--current::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-base-content);
 }
 
 .more-sheet-icon,
@@ -5136,6 +5227,229 @@ body, .font-suite {
   height: 22px;
   flex-shrink: 0;
   color: var(--color-base-content);
+}
+
+/* ── Optimistic navigation (task 01a166be-b5b9 stage 2) ─────────────────
+   Canvas 01a167b0 m2 ("the optimistic tab") and rules 2, 3, 4, 7, 8. State
+   comes from assets/js/lib/nav_pending.js, set in the tap's click:
+   `data-nav-pending` on the tapped control (and on the More tab for a More
+   sheet row), `data-nav-yielded` on the control that was current in the
+   same bar or rail. The tapped control takes the current look at once and
+   the yielded one drops it in the same frame, so only one ever looks
+   current. The indicator (tab icon, rail bar, chat-row bar) breathes
+   1 -> 0.55 -> 1 over 900ms, starting only after 150ms, so a switch that
+   lands sooner shows the press and the swap and no pulse. The server's next
+   render owns the current tab; this is a client hint only. Semantic slots
+   only. A failed navigation strips both attributes (the module's rollback).
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes nav-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* Reduced motion's pending look: a steady 60%, still after the 150ms grace.
+   The universal reduce block shortens the duration, not the delay. */
+@keyframes nav-pending-steady {
+  to {
+    opacity: 0.6;
+  }
+}
+
+/* Bottom tabs: the current ink and label weight move to the tapped tab. */
+/* Swap and yield are instant (one frame), not the 120ms release ease. The
+   hover lift skips a pending tab, so a pointer resting on it cannot hide
+   the swap. */
+.bottom-nav-tab[data-nav-pending] {
+  color: var(--color-primary);
+  transition-duration: 0ms;
+}
+
+.bottom-nav-tab[data-nav-pending] .bottom-nav-label {
+  font-weight: 500;
+}
+
+.bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+.bottom-nav-tab--active[data-nav-yielded] {
+  color: var(--tab-ink);
+  transition-duration: 0ms;
+}
+
+.bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label {
+  font-weight: 400;
+}
+
+/* Desk rail: the base-300 tile and the leading bar move to the tapped tile.
+   Unlayered, so they also beat the yielded tile's `bg-base-300` utility. */
+.icon-rail-tab[data-nav-pending] {
+  background-color: var(--color-base-300);
+  --icon-rail-badge-halo: var(--color-base-300);
+}
+
+.icon-rail-tab[data-nav-pending]:not(.icon-rail-tab--active) .icon-rail-icon {
+  color: var(--color-base-content);
+}
+
+.icon-rail-tab[data-nav-pending]::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 28px;
+  background: var(--color-primary);
+  border-radius: 0 3px 3px 0;
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+/* The rail's own base-200 (what a resting tile shows through), so the badge
+   halo keeps matching the tile. */
+.icon-rail-tab--active[data-nav-yielded] {
+  background-color: var(--color-base-200);
+  --icon-rail-badge-halo: var(--color-base-200);
+}
+
+.icon-rail-tab--active[data-nav-yielded] .icon-rail-icon {
+  color: var(--color-subtle);
+}
+
+.icon-rail-tab--active[data-nav-yielded]::before {
+  content: none;
+}
+
+/* More sheet (rule 3): the tapped row keeps the base-300 pressed fill and
+   the sheet leaves on the tap, 180ms after 80ms, instead of waiting for the
+   destination's remount. The More tab carries the pending cue meanwhile
+   (the bottom-tab rules above). The shared reduced-motion rule
+   (`.sheet-panel { transition: none !important }`) makes the close instant. */
+.more-sheet-row[data-nav-pending],
+.more-sheet-settings[data-nav-pending] {
+  background-color: var(--color-base-300);
+}
+
+.more-sheet:has([data-nav-pending]) {
+  pointer-events: none;
+}
+
+.more-sheet:has([data-nav-pending]) .sheet-panel {
+  transform: translateY(100%);
+  transition: transform 180ms var(--ease-standard) 80ms;
+}
+
+.more-sheet:has([data-nav-pending]) .sheet-backdrop {
+  background: transparent;
+  transition: background 180ms var(--ease-standard) 80ms;
+}
+
+/* Chat rows (rule 4): the tapped row takes the leading 3px base-content
+   current bar, pulsing per rule 2, until the patch lands. The list has no
+   current-row state of its own, so the module keeps the bar on one row. */
+.chat-list-row[data-nav-pending] {
+  position: relative;
+}
+
+.chat-list-row[data-nav-pending]::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-base-content);
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+/* Reduced motion (rule 8): no pulse; the pending indicator holds a steady
+   60% opacity once the 150ms grace has passed. */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+
+  .icon-rail-tab[data-nav-pending]::before {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+
+  .chat-list-row[data-nav-pending]::before {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+}
+
+/* The rollback toast (rule 7) is the flash surface's own `toast` + `alert`
+   built client-side; the error slot paints its icon only. */
+.nav-rollback-toast {
+  background-color: var(--color-base-100);
+  color: var(--color-base-content);
+  border-color: var(--color-base-300);
+}
+
+/* Menu items (task 01a166be-b5b9, canvas 01a167b0 four-states table): the
+   pressed fill is one step darker than the `hover:bg-base-200` the items
+   carry inside their base-100 popover, so press never reads as hover. Covers
+   the Tasks create menu and the Tasks settings dropdown, both `role="menu"`;
+   the phone settings sheet's link carries `active:bg-base-300` itself. */
+[role="menu"] [role="menuitem"]:active {
+  background-color: var(--color-base-300);
+}
+
+/* Rule 5 (task 01a166be-b5b9 stage 3, canvas 01a167b0): a `phx-click`
+   button in the nav shell or a menu trigger HOLDS its pressed look while
+   LiveView's round trip is in flight (`.phx-click-loading`), and gets
+   `aria-busy` after 100ms (`installPressHold`, hooks/button_loading.js).
+   Buttons opt in with the `press-hold` class. Fills come from each button's
+   own `phx-click-loading:` utilities where the button is utility-painted;
+   the rules below cover what utilities cannot reach (the unlayered tab and
+   daisyUI's button variables). Nothing here changes a width: only ink,
+   fill and the label's opacity move. */
+.press-hold.phx-click-loading {
+  transition-duration: 0ms;
+}
+
+.press-hold[aria-busy="true"] {
+  cursor: progress;
+}
+
+/* The More tab: the pressed icon (0.92, body ink on an inactive tab) stays
+   while the sheet's open/close round trip runs, and the label dims to 60%. */
+.bottom-nav-tab.press-hold.phx-click-loading:not(.bottom-nav-tab--active) {
+  color: var(--color-base-content);
+}
+
+.bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon {
+  transform: scale(0.92);
+}
+
+.bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-label {
+  opacity: 0.6;
+}
+
+/* daisyUI buttons (the Tasks create-menu trigger): hold daisyUI's own
+   `:active` fill, the same mix its press paints. */
+.btn.press-hold.phx-click-loading:not(.btn-active) {
+  --btn-bg: color-mix(in oklab, var(--btn-color, var(--color-base-200)), black 5%);
+  --btn-border: color-mix(in oklab, var(--btn-color, var(--color-base-200)), black 7%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon {
+    transform: none;
+  }
+}
+
+/* Top progress bar (rule 6, ./js/lib/top_bar.js): topbar.js pins its canvas
+   to top: 0 inline; on a phone the bar sits below the status bar instead. */
+.topbar-progress {
+  top: env(safe-area-inset-top, 0px) !important;
 }
 
 /* The pinned Settings footer: the shared `.sheet-actions` top border is the
