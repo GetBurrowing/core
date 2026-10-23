@@ -43,8 +43,13 @@ const ASSETS = resolve(HERE, "..");
 // Raised from 896 KB to 960 KB by task 01a166be (redesign press feedback):
 // the WITH-Play app.js measured 919,154 bytes in CI run 39929391456, 1,650
 // over 896 KB, after nav_pending.js and top_bar.js (optimistic tab swap,
-// pending pulse, rollback toast) landed as first-party code. Same reasoning
-// as above: 960 KB still catches an island leak by a factor of eight.
+// pending pulse, rollback toast) landed as first-party code. Task 01a1557a-997a
+// (Burrow redesign 10: composer chip field and in-flow @mention list) made the
+// same raise independently: with-Play app.js measured 929,835 bytes against
+// feat/redesign f61f50e31's 914,453 (+15,382: the contenteditable
+// compose_input hook and lib/mention_field.js). Both are first-party hook code.
+// Same reasoning as above: 960 KB still catches an island leak (~8.2 MB) by a
+// factor of eight.
 const MAX_BYTES = 960 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and

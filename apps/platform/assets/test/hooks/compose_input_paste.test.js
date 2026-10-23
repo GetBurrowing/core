@@ -33,6 +33,7 @@ vi.mock("../../js/hooks/large_upload", async (importOriginal) => {
 })
 
 import ComposeInput from "../../js/hooks/compose_input.js"
+import { fakeDocument } from "../lib/fake_dom.js"
 
 const MB = 1024 * 1024
 
@@ -166,6 +167,49 @@ describe("ComposeInput paste listener", () => {
     el.fire("paste", e)
     expect(e.preventDefault).not.toHaveBeenCalled()
     expect(stage.stageFiles).not.toHaveBeenCalled()
+  })
+})
+
+// Redesign rung 10 (task 01a1557a-997a stage 2): the chat composer is now a
+// contenteditable chip field. An image paste still stages through the ONE
+// staging function; a text paste goes in as plain text (insertText), never
+// as clipboard markup.
+describe("ComposeInput paste on the chip field", () => {
+  function richField() {
+    const doc = fakeDocument()
+    const form = doc.createElement("form")
+    form.setAttribute("id", "compose-form")
+    const el = doc.createElement("div")
+    el.setAttribute("contenteditable", "true")
+    form.appendChild(el)
+    doc.getElementById = () => null
+    doc.execCommand = vi.fn()
+    vi.stubGlobal("document", doc)
+    vi.stubGlobal("window", { scrollTo: vi.fn(), matchMedia: () => ({ matches: true }), getSelection: () => null })
+    const hook = mountHook(el)
+    return { doc, el, hook }
+  }
+
+  it("stages a pasted image and inserts no text", () => {
+    const { doc, el, hook } = richField()
+    const e = pasteEvent([imageItem(new Blob(["png"], { type: "image/png" }))])
+    e.clipboardData.getData = () => ""
+    el.fire("paste", e)
+    expect(e.preventDefault).toHaveBeenCalledTimes(1)
+    expect(stage.stageFiles).toHaveBeenCalledTimes(1)
+    expect(stage.stageFiles.mock.calls[0][0]).toBe(hook)
+    expect(doc.execCommand).not.toHaveBeenCalled()
+    expect(stage.installRetry).toHaveBeenCalled()
+  })
+
+  it("inserts a text paste as plain text only", () => {
+    const { doc, el } = richField()
+    const e = pasteEvent([textItem()])
+    e.clipboardData.getData = (type) => (type === "text/plain" ? "line one\nline two" : "<b>rich</b>")
+    el.fire("paste", e)
+    expect(e.preventDefault).toHaveBeenCalledTimes(1)
+    expect(stage.stageFiles).not.toHaveBeenCalled()
+    expect(doc.execCommand).toHaveBeenCalledWith("insertText", false, "line one\nline two")
   })
 })
 

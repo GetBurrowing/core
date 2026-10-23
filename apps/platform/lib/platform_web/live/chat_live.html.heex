@@ -56,11 +56,19 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
-<.notification_banner
-  :if={!@embedded}
-  push_permission={@push_permission}
-  dismissed={@notification_banner_dismissed}
-/>
+<%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
+     and goes inside it is never a new sibling ahead of a composer field's
+     ancestors. LiveView's DOM patch re-appends every sibling AFTER an
+     inserted node, and a moved contenteditable loses focus (it is not a
+     textual input, so LiveView does not restore it). See
+     `Partials.Composer.typing_indicator/1`. --%>
+<div id="chat-notification-banner-slot" class="contents">
+  <.notification_banner
+    :if={!@embedded}
+    push_permission={@push_permission}
+    dismissed={@notification_banner_dismissed}
+  />
+</div>
 
 <%!-- Chat root must claim the full height of <main> AND set min-h-0 so its
      descendant flex columns (chat-drop-zone, #message-list) can correctly
@@ -257,32 +265,38 @@
         goal_time_zone={@goal_time_zone}
       />
 
-      <.search_drawer
-        search_query={@search_query}
-        search_results={@search_results}
-        participants_map={@participants_map}
-      />
+      <%!-- The three drawers open and close (and the pins drawer appears
+           when someone pins while it is shown) inside one always-rendered,
+           box-less slot, so they are never new siblings ahead of #chat-dock
+           (rung 10 stage 5; see the slot note at the top of this file). --%>
+      <div id="chat-drawers-slot" class="contents">
+        <.search_drawer
+          search_query={@search_query}
+          search_results={@search_results}
+          participants_map={@participants_map}
+        />
 
-      <.pins_drawer active_space={@active_space} pins={@pins} show_pins={@show_pins} />
+        <.pins_drawer active_space={@active_space} pins={@pins} show_pins={@show_pins} />
 
-      <.canvases_drawer
-        active_canvas={@active_canvas}
-        current_participant={@current_participant}
-        new_canvas_form={@new_canvas_form}
-        show_canvases={@show_canvases}
-        canvas_sort={@canvas_sort}
-        canvas_search_query={@canvas_search_query}
-        canvas_unindexed_count={@canvas_unindexed_count}
-        canvas_groups={@canvas_groups}
-        canvas_pinned_groups={@canvas_pinned_groups}
-        canvas_parent_titles={@canvas_parent_titles}
-        canvas_expanded_keys={@canvas_expanded_keys}
-        canvas_explorer_collapsed={@canvas_explorer_collapsed}
-        canvas_archive_count={@canvas_archive_count}
-        canvas_search_focus={@canvas_search_focus}
-        prototype_upload={@uploads[PrototypeUpload.upload_name()]}
-        can_publish_prototype?={@can_publish_prototype?}
-      />
+        <.canvases_drawer
+          active_canvas={@active_canvas}
+          current_participant={@current_participant}
+          new_canvas_form={@new_canvas_form}
+          show_canvases={@show_canvases}
+          canvas_sort={@canvas_sort}
+          canvas_search_query={@canvas_search_query}
+          canvas_unindexed_count={@canvas_unindexed_count}
+          canvas_groups={@canvas_groups}
+          canvas_pinned_groups={@canvas_pinned_groups}
+          canvas_parent_titles={@canvas_parent_titles}
+          canvas_expanded_keys={@canvas_expanded_keys}
+          canvas_explorer_collapsed={@canvas_explorer_collapsed}
+          canvas_archive_count={@canvas_archive_count}
+          canvas_search_focus={@canvas_search_focus}
+          prototype_upload={@uploads[PrototypeUpload.upload_name()]}
+          can_publish_prototype?={@can_publish_prototype?}
+        />
+      </div>
 
       <%!-- The phone space sheet (task 01a1557a-8a6d, rung 7), opened by the
            header's title button. `lg:hidden`; `SpaceSheetHooks` owns it. --%>
@@ -355,6 +369,7 @@
         inline_thread_messages={@inline_thread_messages}
         mention_suggestions={@mention_suggestions}
         mention_source={@mention_source}
+        mention_query={@mention_query}
         editing_message_id={@editing_message_id}
         rendered_message_ids={@rendered_message_ids}
         refused_summons={@refused_summons}
@@ -457,41 +472,51 @@
              Both strings come from `MessagesHooks` (stage 4). The cap lives
              there as a single module attribute, so the unresolved 99+ / 9+
              question resolves in one integer rather than in this template. --%>
-        <div
-          :if={
-            MessagesHooks.jump_chip_visible?(
-              @jump_deep_in_history,
-              @jump_away_from_bottom,
-              @jump_new_message_count
-            )
-          }
-          class="chat-jump-anchor"
-        >
-          <div class="chat-jump-anchor-row">
-            <button
-              type="button"
-              phx-click="jump_to_latest"
-              aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-              class="chat-jump-chip focus-visible-ring flex-shrink-0"
-            >
-              <%!-- The button is the 44px HIT AREA and paints nothing; this span
+        <%!-- The anchor still LEAVES THE DOM when hidden (above), but
+             inside `#chat-jump-slot`, an always-rendered, box-less
+             (`contents`) slot: so it is never a new sibling ahead of the
+             typing indicator and the composer area, which the DOM patch
+             would then re-append after it, blurring the focused field
+             (gate case 7007, rung 10 stage 5). Layout is unchanged: a
+             `contents` box generates nothing, so the anchor is still an
+             in-flow item of the chat column. --%>
+        <div id="chat-jump-slot" class="contents">
+          <div
+            :if={
+              MessagesHooks.jump_chip_visible?(
+                @jump_deep_in_history,
+                @jump_away_from_bottom,
+                @jump_new_message_count
+              )
+            }
+            class="chat-jump-anchor"
+          >
+            <div class="chat-jump-anchor-row">
+              <button
+                type="button"
+                phx-click="jump_to_latest"
+                aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+                class="chat-jump-chip focus-visible-ring flex-shrink-0"
+              >
+                <%!-- The button is the 44px HIT AREA and paints nothing; this span
                    is the 28px painted pill. They are two elements on purpose, so
                    both boxes have a bounding rect and the e2e measurement can
                    assert 28-painted-inside-44-tappable without reading a
                    pseudo-element. Collapsing them back into one is the defect
                    this split exists to prevent: it looks finished either way,
                    and the only symptom is people missing the button. --%>
-              <span class="chat-jump-chip-pill">
-                <span class="min-w-0 truncate">Jump to latest</span>
-                <span
-                  :if={@jump_new_message_count > 0}
-                  aria-hidden="true"
-                  class="chat-jump-chip-count shrink-0 whitespace-nowrap"
-                >
-                  {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                <span class="chat-jump-chip-pill">
+                  <span class="min-w-0 truncate">Jump to latest</span>
+                  <span
+                    :if={@jump_new_message_count > 0}
+                    aria-hidden="true"
+                    class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+                  >
+                    {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -508,6 +533,7 @@
           uploads={@uploads}
           mention_suggestions={@mention_suggestions}
           mention_source={@mention_source}
+          mention_query={@mention_query}
           mask_names?={@mask_names?}
           revealed_section_ids={@revealed_section_ids}
           sidebar_sections={@sidebar_sections}

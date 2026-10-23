@@ -34,6 +34,13 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
   | inactive / active tab icon | bar glass  | 3     |
   | More dot                   | bar glass  | 3     |
   | attach icon                | pill glass | 3     |
+  | chip text (base-content)   | chip fill (base-300, opaque) | 4.5 |
+  | mention list name / subtle | list glass (= pill glass) | 4.5 |
+  | mention list name / subtle | highlight (base-100, opaque) | 4.5 |
+
+  The rich composer field (redesign rung 10) paints its placeholder and the
+  resting Send icon with the placeholder's own ink, asserted below, so the
+  placeholder row covers both.
 
   High contrast's 7:1 for the TAB LABELS stays in the bar guard (binding).
   Its 7:1 for the placeholder, and the enabled send button's fill against the
@@ -48,6 +55,7 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
   alias Platform.Design.PaintedComposite, as: PC
   alias Platform.Design.PaintedGlass, as: G
   alias Platform.Design.ThemeBlocks, as: TB
+  alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
   @presets_path Path.expand("../../../assets/css/theme_presets.css", __DIR__)
@@ -240,6 +248,123 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
 
       assert ratio >= 4.5, "#{v}: --subtle (#{p}%) on opaque base-200 paints #{fixed4(ratio)}"
     end
+  end
+
+  # ── the rich composer field (redesign rung 10, task 01a1557a-997a stage 2) ─
+
+  test "the chip field's placeholder and resting Send paint the placeholder ink the sweep measured",
+       %{rules: rules} do
+    # The rich field's placeholder is `:empty::before`, not `::placeholder`,
+    # so it only inherits the painted "placeholder" row (4.5 over the pill
+    # glass, every underlay, both builds) if it declares the SAME ink.
+    [painted] =
+      for {sel, "color", painted} <- G.under_paint_inputs(hd(G.under_builds())),
+          sel == ".compose-pill-bar textarea::placeholder",
+          do: painted
+
+    assert declared(rules, ".compose-field:empty::before", "color") == [painted]
+
+    # Send at rest is that same ink on the same glass (no fill, no fade).
+    assert declared(rules, ".compose-pill-send:disabled", "color") == [painted <> " !important"]
+    assert declared(rules, ".compose-pill-send:disabled", "opacity") == ["1"]
+
+    assert declared(rules, ".compose-pill-send:disabled", "background") == [
+             "transparent !important"
+           ]
+  end
+
+  test "chip text (base-content) on the chip fill (base-300) clears 4.5 in every variant",
+       %{blocks: blocks, rules: rules} do
+    assert declared(rules, ".compose-chip", "background") == ["var(--color-base-300)"]
+    assert declared(rules, ".compose-chip", "color") == ["var(--color-base-content)"]
+
+    rows =
+      for v <- @variants do
+        b = Map.fetch!(blocks, v)
+
+        ratio =
+          W.contrast(
+            PC.from_bytes(PC.bytes(TB.resolve!(b, "--color-base-content"))),
+            PC.from_bytes(PC.bytes(TB.resolve!(b, "--color-base-300")))
+          )
+
+        {v, ratio}
+      end
+
+    IO.puts(Enum.map_join(rows, "\n", fn {v, r} -> "chip #{v}: #{fixed4(r)}" end))
+    failures = for {v, r} <- rows, r < 4.5, do: "#{v}: #{fixed4(r)}"
+
+    assert failures == [], "chip text under 4.5:1 on its fill:\n  " <> Enum.join(failures, "\n  ")
+  end
+
+  # ── the in-flow @mention list (redesign rung 10, task 01a1557a-997a stage 3) ─
+
+  test "the mention list sits on the painted pill glass, in the painted inks", %{rules: rules} do
+    painted = Map.new(G.under_paint_inputs(hd(G.under_builds())), fn {s, p, v} -> {{s, p}, v} end)
+
+    pill_glass =
+      Map.fetch!(painted, {":root .compose-input-area .compose-pill-bar", "background"})
+
+    subtle = Map.fetch!(painted, {".compose-pill-bar textarea::placeholder", "color"})
+
+    # Same glass as the pill, so the sweep's "typed text" and "placeholder"
+    # rows (4.5 over every underlay, both builds, every variant) are the
+    # list's name and subtle inks on its own surface.
+    assert declared(rules, ".mention-list-panel", "background") == [pill_glass]
+    assert declared(rules, ".mention-list-panel", "box-shadow") == []
+    assert declared(rules, ".mention-list-row", "color") == ["var(--color-base-content)"]
+    assert declared(rules, ".mention-list-name", "color") == ["var(--color-base-content)"]
+
+    for sel <- [".mention-list-kind", ".mention-list-note", ".mention-list-empty"] do
+      assert declared(rules, sel, "color") == [subtle], "#{sel} is not the painted subtle ink"
+    end
+
+    # The highlight (keys, press, desktop hover) is opaque base-100.
+    assert declared(rules, ~s(.mention-list-row[aria-selected="true"]), "background") ==
+             ["var(--color-base-100)"]
+
+    assert declared(rules, ".mention-list-row:hover", "background") == ["var(--color-base-100)"]
+
+    # Its reduced-transparency fallback is the pill's opaque base-200.
+    [fb] =
+      Enum.filter(
+        rules,
+        &(&1.selector == ".mention-list-panel" and
+            Enum.any?(&1.at, fn a -> a =~ "prefers-reduced-transparency" end))
+      )
+
+    assert normalise(hd(declarations(fb.body, "background"))) == "var(--color-base-200)"
+  end
+
+  test "mention list inks clear 4.5 on the base-100 highlight in every variant",
+       %{blocks: blocks} do
+    rows =
+      for v <- @variants do
+        b = Map.fetch!(blocks, v)
+        content = TB.resolve!(b, "--color-base-content")
+        base100 = TB.resolve!(b, "--color-base-100")
+
+        name =
+          W.contrast(PC.from_bytes(PC.bytes(content)), PC.from_bytes(PC.bytes(base100)))
+
+        {subtle, _} = PC.contrast_min(content, base100, subtle_strength!(b))
+        {v, name, subtle}
+      end
+
+    IO.puts(
+      Enum.map_join(rows, "\n", fn {v, n, s} ->
+        "mention highlight #{v}: name #{fixed4(n)}, subtle #{fixed4(s)}"
+      end)
+    )
+
+    failures =
+      for {v, n, s} <- rows,
+          {label, r} <- [{"name", n}, {"subtle", s}],
+          r < 4.5,
+          do: "#{v}: #{label} #{fixed4(r)}"
+
+    assert failures == [],
+           "mention list ink under 4.5:1 on base-100:\n  " <> Enum.join(failures, "\n  ")
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────

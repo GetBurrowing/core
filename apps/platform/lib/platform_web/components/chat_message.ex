@@ -12,12 +12,13 @@ defmodule PlatformWeb.Components.ChatMessage do
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
-  alias Phoenix.LiveView.JS
-
   import PlatformWeb.Components.ChatInlineCanvas, only: [inline_canvas: 1]
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1, agent_avatar: 1]
   import PlatformWeb.Components.ChatHelpers
 
+  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1]
+
+  alias PlatformWeb.ChatLive.Partials.MentionList
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.MessageContextHooks
@@ -43,6 +44,9 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr(:inline_thread_messages, :map, required: true)
   attr(:mention_suggestions, :list, default: [])
   attr(:mention_source, :any, default: nil)
+  # The typed @query (MentionsHooks), for the thread list's empty row; nil
+  # when the caller does not pass it.
+  attr(:mention_query, :string, default: nil)
   attr(:editing_message_id, :any, default: nil)
   # Task 019e95ea stage 2: true when the parent space is an archived
   # read-only snapshot. Gates every interaction affordance (quick-emoji
@@ -688,12 +692,21 @@ defmodule PlatformWeb.Components.ChatMessage do
             </a>
           </div>
 
-          <.refused_summon_notice
-            :if={Map.has_key?(@refused_summons, @msg.id)}
-            msg_id={@msg.id}
-            names={Map.get(@refused_summons, @msg.id, [])}
-            space_kind={@space_kind}
-          />
+          <%!-- The refused-summon notice and the reaction row arrive while
+               someone may be typing in this message's thread reply box
+               (a refusal from the server, a reaction from anyone). Each
+               lives in an always-rendered, box-less slot, so neither is
+               ever a new sibling ahead of the thread: the DOM patch would
+               re-append the thread after it and blur the reply field
+               (rung 10 stage 5). --%>
+          <div id={"refused-summon-slot-#{@msg.id}"} class="contents">
+            <.refused_summon_notice
+              :if={Map.has_key?(@refused_summons, @msg.id)}
+              msg_id={@msg.id}
+              names={Map.get(@refused_summons, @msg.id, [])}
+              space_kind={@space_kind}
+            />
+          </div>
 
           <%!-- Reaction pills, rendered only when there are reactions to show
                (task 01a000c0 stage 4).
@@ -715,37 +728,38 @@ defmodule PlatformWeb.Components.ChatMessage do
                also keeps an empty `role="toolbar"` out of the accessibility
                tree on every message nobody has reacted to — which is most of
                them. --%>
-          <div
-            :if={@msg.reactions != []}
-            role="toolbar"
-            aria-label="Message actions"
-            class="reaction-row flex flex-wrap gap-1 mt-0.5"
-          >
-            <%!-- Reaction pills stay visible on read-only snapshots (they
-                 are part of the frozen history) but stop toggling. --%>
-            <button
-              :for={r <- @msg.reactions}
-              id={"reaction-#{@msg.id}-#{r.emoji}"}
-              phx-hook="ReactorPopover"
-              phx-click={if @read_only, do: nil, else: "react"}
-              phx-value-message-id={@msg.id}
-              phx-value-emoji={r.emoji}
-              data-emoji={r.emoji}
-              data-reactors={Jason.encode!(r.reactors)}
-              data-extra-count={r.extra_count}
-              aria-label={reactor_aria_label(r)}
-              class={[
-                "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-                "hover:bg-base-300",
-                r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                !r.reacted_by_me && "border-edge text-subtle"
-              ]}
+          <div id={"reactions-slot-#{@msg.id}"} class="contents">
+            <div
+              :if={@msg.reactions != []}
+              role="toolbar"
+              aria-label="Message actions"
+              class="reaction-row flex flex-wrap gap-1 mt-0.5"
             >
-              <span>{r.emoji}</span>
-              <span>{r.count}</span>
-            </button>
+              <%!-- Reaction pills stay visible on read-only snapshots (they
+                 are part of the frozen history) but stop toggling. --%>
+              <button
+                :for={r <- @msg.reactions}
+                id={"reaction-#{@msg.id}-#{r.emoji}"}
+                phx-hook="ReactorPopover"
+                phx-click={if @read_only, do: nil, else: "react"}
+                phx-value-message-id={@msg.id}
+                phx-value-emoji={r.emoji}
+                data-emoji={r.emoji}
+                data-reactors={Jason.encode!(r.reactors)}
+                data-extra-count={r.extra_count}
+                aria-label={reactor_aria_label(r)}
+                class={[
+                  "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                  "hover:bg-base-300",
+                  r.reacted_by_me && "border-primary bg-primary/10 text-primary",
+                  !r.reacted_by_me && "border-edge text-subtle"
+                ]}
+              >
+                <span>{r.emoji}</span>
+                <span>{r.count}</span>
+              </button>
 
-            <%!-- The dashed add-reaction "+" that used to live here moved into the
+              <%!-- The dashed add-reaction "+" that used to live here moved into the
                  upper-right action row (task 01a000c0 stage 3). It was the
                  second hover affordance on the same object, in a different
                  corner, revealed by the same gesture — and being below the
@@ -754,6 +768,7 @@ defmodule PlatformWeb.Components.ChatMessage do
 
                  So this row is now pills and nothing else, which is why
                  stage 4 could gate it on there being pills to show. --%>
+            </div>
           </div>
 
           <%!-- Inline thread: indicator + expanded thread --%>
@@ -795,16 +810,27 @@ defmodule PlatformWeb.Components.ChatMessage do
               id={"inline-thread-#{@msg.id}"}
               phx-hook="InlineThread"
             >
-              <div
-                :for={tmsg <- Map.get(@inline_thread_messages, @msg.id, [])}
-                class={[
-                  "thread-reply",
-                  if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                    do: "agent-reply"
-                  )
-                ]}
-              >
-                <%!-- Inline thread preview. This used to be a bare `msg-avatar`
+              <%!-- The reply rows live in their own always-rendered,
+                   box-less (`contents`) container, so a reply arriving
+                   (yours after a send, or an agent's) is inserted INSIDE it
+                   and the reply box's own siblings never change. Inserted
+                   as the box's sibling, it made the DOM patch walk past the
+                   box and re-append it after the new row: a moved field
+                   blurs (measured on the dev rig, rung 10 stage 5: focus
+                   lost ~90ms after a thread send). Ids on the rows, the
+                   container and the box are their morph keys. --%>
+              <div id={"inline-thread-replies-#{@msg.id}"} class="contents">
+                <div
+                  :for={tmsg <- Map.get(@inline_thread_messages, @msg.id, [])}
+                  id={"inline-thread-reply-#{tmsg.id}"}
+                  class={[
+                    "thread-reply",
+                    if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                      do: "agent-reply"
+                    )
+                  ]}
+                >
+                  <%!-- Inline thread preview. This used to be a bare `msg-avatar`
                      div holding a single letter for BOTH kinds. `.msg-avatar`
                      had no rule of its own anywhere in the stylesheet — only
                      `.thread-reply .msg-avatar { width/height/font-size }` — so
@@ -812,153 +838,138 @@ defmodule PlatformWeb.Components.ChatMessage do
                      agent nor a human ever showed a face here. Both branches now
                      go through the shared components, which is also what gives
                      the human path its avatar back. --%>
-                <%= if MapSet.member?(@agent_participant_ids, tmsg.participant_id) do %>
-                  <.agent_avatar
-                    name={PresenceHooks.sender_name(@participants_map, tmsg)}
-                    avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
-                    size="sm"
-                  />
-                <% else %>
-                  <.human_avatar
-                    name={PresenceHooks.sender_name(@participants_map, tmsg)}
-                    avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
-                    seed={PresenceHooks.sender_avatar_seed(@participants_map, tmsg)}
-                    size="sm"
-                    class="shrink-0"
-                  />
-                <% end %>
-                <div class="msg-body">
-                  <div class="msg-header">
-                    <span class={[
-                      "msg-username",
-                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                        do: "ai-name"
-                      )
-                    ]}>
-                      {PresenceHooks.sender_name(@participants_map, tmsg)}
-                    </span>
-                    <span
-                      :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
-                      class="ai-badge"
-                    >
-                      AI
-                    </span>
-                    <.local_time
-                      id={"inline-thread-ts-#{tmsg.id}"}
-                      timestamp={tmsg.inserted_at}
-                      class="msg-time"
+                  <%= if MapSet.member?(@agent_participant_ids, tmsg.participant_id) do %>
+                    <.agent_avatar
+                      name={PresenceHooks.sender_name(@participants_map, tmsg)}
+                      avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
+                      size="sm"
+                    />
+                  <% else %>
+                    <.human_avatar
+                      name={PresenceHooks.sender_name(@participants_map, tmsg)}
+                      avatar_url={PresenceHooks.sender_avatar_url(@participants_map, tmsg)}
+                      seed={PresenceHooks.sender_avatar_seed(@participants_map, tmsg)}
+                      size="sm"
+                      class="shrink-0"
+                    />
+                  <% end %>
+                  <div class="msg-body">
+                    <div class="msg-header">
+                      <span class={[
+                        "msg-username",
+                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                          do: "ai-name"
+                        )
+                      ]}>
+                        {PresenceHooks.sender_name(@participants_map, tmsg)}
+                      </span>
+                      <span
+                        :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
+                        class="ai-badge"
+                      >
+                        AI
+                      </span>
+                      <.local_time
+                        id={"inline-thread-ts-#{tmsg.id}"}
+                        timestamp={tmsg.inserted_at}
+                        class="msg-time"
+                      />
+                    </div>
+                    <div class="msg-text">
+                      {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
+                    </div>
+                    <.refused_summon_notice
+                      :if={Map.has_key?(@refused_summons, tmsg.id)}
+                      msg_id={tmsg.id}
+                      names={Map.get(@refused_summons, tmsg.id, [])}
+                      space_kind={@space_kind}
                     />
                   </div>
-                  <div class="msg-text">
-                    {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
-                  </div>
-                  <.refused_summon_notice
-                    :if={Map.has_key?(@refused_summons, tmsg.id)}
-                    msg_id={tmsg.id}
-                    names={Map.get(@refused_summons, tmsg.id, [])}
-                    space_kind={@space_kind}
-                  />
                 </div>
               </div>
 
-              <%!-- Thread composer — absent on read-only snapshots. --%>
+              <%!-- Thread composer — absent on read-only snapshots. The
+                   reply box is the same chip field as the space composer
+                   (redesign rung 10, stage 4): contenteditable, chips,
+                   Enter sends, its own draft (`thread-draft:<id>`, apart
+                   from the space's `chat-draft:<id>`). ComposeInput clears
+                   it after a send (`data-clear-on-submit`): the reply
+                   handler pushes no `compose_reset`. --%>
               <div
                 :if={!@read_only}
+                id={"inline-thread-composer-#{@msg.id}"}
                 class="thread-composer"
-                style="flex-direction: column; align-items: stretch;"
               >
                 <.form
                   for={%{}}
                   id={"inline-thread-compose-form-#{@msg.id}"}
                   phx-submit="send_inline_thread_message"
                   class="thread-composer-form"
-                  style="position: relative;"
                 >
-                  <%!-- @mention autocomplete dropdown (inline thread) --%>
-                  <div
-                    :if={
-                      @mention_suggestions != [] &&
-                        @mention_source == "inline-thread-compose-form-#{@msg.id}"
-                    }
-                    style="position: absolute; bottom: 100%; left: 0; z-index: 50; width: 16rem; margin-bottom: 4px;"
-                  >
-                    <div class="rounded-2xl border border-base-content/10 bg-base-100 shadow-lg overflow-hidden">
-                      <div class="py-1">
-                        <button
-                          :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
-                          type="button"
-                          data-mention-suggestion={if idx == 0, do: "first"}
-                          phx-click={
-                            JS.dispatch("chat:insert-mention",
-                              to: "#inline-thread-compose-#{@msg.id}",
-                              detail: %{name: suggestion.display_name || "User"}
-                            )
-                          }
-                          class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
-                        >
-                          <%!-- The inline-thread twin of the compose dropdown in
-                               `chat_live.html.heex`. It had NO kind branch at
-                               all: agents, humans and the `here` sentinel alike
-                               got one hand-rolled letter, so nobody's face ever
-                               appeared. Now mirrors the main dropdown's three
-                               branches, over the same suggestion shape — the
-                               identity map carries `name`, `avatar_url` and
-                               `avatar_seed` for every kind. --%>
-                          <%= cond do %>
-                            <% suggestion.participant_type == "broadcast" -> %>
-                              <div class="w-6 h-6 rounded-full bg-warning/15 text-warning flex items-center justify-center flex-shrink-0">
-                                <span class="hero-megaphone size-4"></span>
-                              </div>
-                            <% suggestion.participant_type == "agent" -> %>
-                              <.agent_avatar
-                                name={suggestion.display_name || "Agent"}
-                                avatar_url={suggestion.avatar_url}
-                                size="sm"
-                                class="flex-shrink-0"
-                              />
-                            <% true -> %>
-                              <.human_avatar
-                                name={suggestion.display_name || "User"}
-                                avatar_url={suggestion.avatar_url}
-                                seed={suggestion.avatar_seed}
-                                size="sm"
-                                class="flex-shrink-0"
-                              />
-                          <% end %>
-                          <span class="flex-1 truncate font-medium">
-                            {suggestion.display_name || "User"}
-                          </span>
-                          <span class={[
-                            "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
-                            suggestion.participant_type == "agent" &&
-                              "bg-primary/10 text-primary",
-                            suggestion.participant_type != "agent" &&
-                              "bg-base-300 text-subtle"
-                          ]}>
-                            {suggestion.participant_type}
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                   <input
                     type="hidden"
                     name="inline_thread_compose[message_id]"
                     value={@msg.id}
                   />
-                  <input
-                    type="text"
-                    name="inline_thread_compose[text]"
-                    id={"inline-thread-compose-#{@msg.id}"}
-                    placeholder="Reply in thread..."
-                    autocomplete="off"
-                    class="thread-input"
-                    phx-hook="ComposeInput"
-                  />
+                  <%!-- The field's box. The @mention list (the space
+                       composer's own `MentionList`) hangs from its top edge,
+                       its width, and covers the thread above it: this
+                       composer sits inside #message-list, so a list in flow
+                       would push the box down and grow the scroller. The
+                       anchoring is CSS (`.thread-field-box .mention-list`). --%>
+                  <div class="thread-field-box">
+                    <.mention_list
+                      open={
+                        @mention_source == "inline-thread-compose-form-#{@msg.id}" and
+                          MentionList.open?(@mention_suggestions, @mention_query)
+                      }
+                      id={"inline-thread-mention-list-#{@msg.id}"}
+                      suggestions={@mention_suggestions}
+                      query={@mention_query}
+                      field_id={"inline-thread-compose-#{@msg.id}"}
+                    />
+                    <%!-- The form value, written by ComposeInput on every
+                         edit. `type="text"` with `hidden` (not
+                         `type="hidden"`) for the reason the space composer's
+                         value input gives. --%>
+                    <input
+                      type="text"
+                      name="inline_thread_compose[text]"
+                      id={"inline-thread-compose-value-#{@msg.id}"}
+                      value=""
+                      hidden
+                      autocomplete="off"
+                    />
+                    <div
+                      id={"inline-thread-compose-#{@msg.id}"}
+                      class="thread-input"
+                      contenteditable="true"
+                      phx-hook="ComposeInput"
+                      phx-update="ignore"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded="false"
+                      aria-controls={"inline-thread-mention-list-#{@msg.id}"}
+                      aria-multiline="true"
+                      aria-label="Reply in thread"
+                      enterkeyhint="send"
+                      data-draft-key={"thread-draft:#{@msg.id}"}
+                      data-placeholder="Reply in thread..."
+                      data-value-input={"inline-thread-compose-value-#{@msg.id}"}
+                      data-clear-on-submit
+                    ></div>
+                  </div>
+                  <%!-- Disabled until the field holds text other than spaces
+                       (threads have no staged tray). The server cannot see
+                       the field, so it renders Send disabled and
+                       ComposeInput lights it from what is typed. --%>
                   <button
                     type="submit"
                     class="thread-send"
-                    disabled={is_nil(@current_participant)}
+                    disabled
+                    data-send-blocked={to_string(is_nil(@current_participant))}
+                    data-staged="false"
+                    aria-label="Send reply"
                     title="Reply"
                   >
                     <span class="hero-paper-airplane size-3.5 -rotate-45"></span>

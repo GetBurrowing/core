@@ -72,21 +72,27 @@ defmodule PlatformWeb.Components.BottomNavHideMarkersTest do
              "the composer set changed; each field must carry " <>
                ~s(phx-hook="ComposeInput" or the tab bar stops hiding for it: #{inspect(found)})
 
-      # The hook must sit on the focusable field itself: the chat and task
-      # composers are <textarea>, the inline thread reply is <input
-      # type="text">. The tag is the nearest `<tag` opener before the hook.
+      # The hook must sit on the focusable field itself: the task composer is
+      # a <textarea>, the inline thread reply an <input type="text">, and the
+      # chat composer (redesign rung 10) a contenteditable <div>. The tag is
+      # the nearest `<tag` opener before the hook; a <div> counts only when
+      # that same opener makes it editable.
       for site <- @call_sites do
         src = File.read!(Path.join(@lib, site))
         # The last occurrence: steering_component's moduledoc names the hook first.
         {at, _} = src |> :binary.matches(~s(phx-hook="ComposeInput")) |> List.last()
         before = binary_part(src, 0, at)
 
-        [[tag] | _] =
+        [[{open_at, _}, {tag_at, tag_len}] | _] =
           ~r/<([a-z][a-z0-9.-]*)\b/
-          |> Regex.scan(before, capture: :all_but_first)
+          |> Regex.scan(before, return: :index)
           |> Enum.reverse()
 
-        assert tag in ["textarea", "input"],
+        tag = binary_part(before, tag_at, tag_len)
+        opener = binary_part(src, open_at, at - open_at)
+
+        assert tag in ["textarea", "input"] or
+                 (tag == "div" and opener =~ ~s(contenteditable="true")),
                "#{site}: phx-hook=\"ComposeInput\" sits on <#{tag}>, not on the field"
       end
     end

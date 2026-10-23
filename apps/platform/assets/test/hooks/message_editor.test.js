@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest"
-import { shortenedOrRemoved } from "../../js/hooks/message_editor.js"
+import { describe, it, expect, vi } from "vitest"
+import MessageEditor, { shortenedOrRemoved } from "../../js/hooks/message_editor.js"
 
 /**
  * Tests for `shortenedOrRemoved(original, next)` — the pure heuristic that
@@ -48,4 +48,70 @@ describe("shortenedOrRemoved(original, next)", () => {
       expect(shortenedOrRemoved(original, next)).toBe(expected)
     })
   }
+})
+
+// The editor's keys (redesign rung 10, stage 4, coverage row 117): Enter
+// saves, Shift+Enter is a newline, Cmd/Ctrl+Enter still saves, Esc cancels.
+describe("MessageEditor keys", () => {
+  function editor() {
+    const listeners = {}
+    const textarea = {
+      value: "the original",
+      focus: vi.fn(),
+      setSelectionRange: vi.fn(),
+      addEventListener: (type, fn) => (listeners[type] = fn),
+      removeEventListener: vi.fn(),
+    }
+    const flag = { value: "false" }
+    const form = {
+      dataset: { originalContent: "the original" },
+      requestSubmit: vi.fn(),
+      querySelector: (sel) => (sel.startsWith("textarea") ? textarea : flag),
+    }
+    const hook = Object.create(MessageEditor)
+    hook.el = form
+    hook.pushEvent = vi.fn()
+    hook.mounted()
+    const press = (key, mods = {}) => {
+      const e = { key, preventDefault: vi.fn(), ...mods }
+      listeners.keydown(e)
+      return e
+    }
+    return { form, hook, press }
+  }
+
+  it("Enter submits the edit", () => {
+    const { form, press } = editor()
+    const e = press("Enter")
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(form.requestSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it("Shift+Enter does not submit (the textarea breaks the line)", () => {
+    const { form, press } = editor()
+    const e = press("Enter", { shiftKey: true })
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it("Enter while an IME is composing does not submit", () => {
+    const { form, press } = editor()
+    press("Enter", { isComposing: true })
+    expect(form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  it("Cmd+Enter and Ctrl+Enter still submit", () => {
+    const { form, press } = editor()
+    press("Enter", { metaKey: true })
+    press("Enter", { ctrlKey: true })
+    expect(form.requestSubmit).toHaveBeenCalledTimes(2)
+  })
+
+  it("Esc pushes cancel_edit and submits nothing", () => {
+    const { form, hook, press } = editor()
+    const e = press("Escape")
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(hook.pushEvent).toHaveBeenCalledWith("cancel_edit", {})
+    expect(form.requestSubmit).not.toHaveBeenCalled()
+  })
 })

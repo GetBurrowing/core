@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import ChatDock, { DOCK_VAR, DOCK_EVENT } from "../../js/hooks/chat_dock.js"
+import ChatDock, { DOCK_VAR, DOCK_EVENT, MENTION_LIST_SELECTOR } from "../../js/hooks/chat_dock.js"
 import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js"
 
 /**
@@ -167,6 +167,68 @@ describe("ChatDock writes the dock height on <html>", () => {
     window.addEventListener(DOCK_EVENT, (e) => seen.push(e.detail))
     hook._observer.cb()
     expect(seen).toEqual([])
+  })
+})
+
+// The @mention list (redesign rung 10, stage 3) opens in flow INSIDE the
+// dock and grows it upward over the conversation. It is not clearance: the
+// field's height is. So inserting, resizing and removing the list must leave
+// --chat-dock-h alone and dispatch nothing (ScrollToBottom would otherwise
+// re-pin the reader, and #message-list's end padding would grow).
+describe("ChatDock ignores the @mention list's height", () => {
+  beforeEach(stubGlobals)
+  afterEach(restoreGlobals)
+
+  function dockWithList(height) {
+    const el = dockEl(height)
+    el._list = null
+    el.querySelector = (sel) => (sel === MENTION_LIST_SELECTOR ? el._list : null)
+    const hook = Object.create(ChatDock)
+    hook.el = el
+    hook.mounted()
+    return { el, hook }
+  }
+
+  function openList(el, h) {
+    el._list = { getBoundingClientRect: () => ({ height: h }) }
+    el._h += h
+  }
+
+  it("inserting a 200px list changes neither --chat-dock-h nor dispatches chat:dock-resized", () => {
+    const seen = []
+    window.addEventListener(DOCK_EVENT, (e) => seen.push(e.detail))
+    const { el, hook } = dockWithList(137)
+    expect(rootStyle.props[DOCK_VAR]).toBe("137px")
+    seen.length = 0
+
+    openList(el, 200)
+    expect(el.getBoundingClientRect().height).toBe(337)
+    hook._observer.cb()
+    hook.updated()
+    expect(rootStyle.props[DOCK_VAR]).toBe("137px")
+    expect(seen).toEqual([])
+
+    // Filtering resizes the list; closing removes it.
+    el._h = 137 + 120
+    el._list = { getBoundingClientRect: () => ({ height: 120 }) }
+    hook._observer.cb()
+    el._h = 137
+    el._list = null
+    hook._observer.cb()
+    expect(rootStyle.props[DOCK_VAR]).toBe("137px")
+    expect(seen).toEqual([])
+  })
+
+  it("the field growing while the list is open still reports, by the field's growth only", () => {
+    const seen = []
+    window.addEventListener(DOCK_EVENT, (e) => seen.push(e.detail))
+    const { el, hook } = dockWithList(137)
+    openList(el, 200)
+    hook._observer.cb()
+    el._h += 24
+    hook._observer.cb()
+    expect(rootStyle.props[DOCK_VAR]).toBe("161px")
+    expect(seen.at(-1)).toEqual({ height: 161, delta: 24 })
   })
 })
 

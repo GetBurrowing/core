@@ -46,6 +46,11 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
   # Every composer rule outside the phone block at origin/feat/redesign
   # bbe3a040, as CssRules reads it. Regenerate only for a deliberate desktop
   # change, and say so in that change.
+  #
+  # Deliberate change, redesign rung 10 (task 01a1557a-997a stage 2): Send is
+  # lit in primary (no cyan literal, no glow) and rests as a subtle icon on
+  # the composer's ground, really disabled, with no opacity fade; the light
+  # theme's own disabled rule went with the literals (24 -> 23 rules).
   @desktop_snapshot [
     {".compose-input-area", [], "padding: 12px 20px 16px;"},
     {".compose-pill-bar", [],
@@ -79,14 +84,11 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     {".compose-pill-send", ["@media (hover: none)"],
      "width: 44px !important;\n    height: 44px !important;\n    min-height: 44px !important;"},
     {".compose-pill-send", [],
-     "width: 36px;\n  height: 36px;\n  min-height: 36px;\n  border-radius: 50% !important;\n  background: oklch(0.75 0.15 207) !important;\n  color: oklch(0.15 0 0) !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0;\n  padding: 0 !important;\n  border: none !important;\n  box-shadow: 0 0 16px oklch(0.75 0.15 207 / 0.18);\n  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              background 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
-    {".compose-pill-send:hover:not(:disabled)", [],
-     "transform: scale(1.05);\n  box-shadow: 0 0 18px oklch(0.75 0.15 207 / 0.4);"},
+     "width: 36px;\n  height: 36px;\n  min-height: 36px;\n  border-radius: 50% !important;\n  background: var(--color-primary) !important;\n  color: var(--color-primary-content) !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0;\n  padding: 0 !important;\n  border: none !important;\n  box-shadow: none;\n  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              background 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
+    {".compose-pill-send:hover:not(:disabled)", [], "transform: scale(1.05);"},
     {".compose-pill-send:active:not(:disabled)", [], "transform: scale(0.95);"},
     {".compose-pill-send:disabled", [],
-     "background: oklch(0.30 0 0) !important;\n  color: oklch(0.55 0 0) !important;\n  box-shadow: none;\n  cursor: not-allowed;\n  opacity: 0.7;\n  transform: none;"},
-    {"[data-theme=\"light\"] .compose-pill-send:disabled", [],
-     "background: oklch(0.90 0 0) !important;\n  color: oklch(0.55 0 0) !important;"},
+     "background: transparent !important;\n  color: var(--color-subtle) !important;\n  box-shadow: none;\n  cursor: default;\n  opacity: 1;\n  transform: none;"},
     {":root:not([data-theme=\"light\"]) .compose-pill-bar",
      ["@media (prefers-color-scheme: dark)"],
      "background: oklch(0.21 0 0);\n    border-color: rgba(255, 255, 255, 0.08);"}
@@ -104,7 +106,7 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     assert phone != []
     assert Enum.any?(phone, &(&1.selector == @pill_glass and &1.at == [@phone]))
     assert Enum.any?(phone, &(&1.selector == @pill_border and &1.at == [@phone]))
-    assert length(@desktop_snapshot) == 24
+    assert length(@desktop_snapshot) == 23
   end
 
   test "desktop composer rules equal the feat/redesign snapshot", %{desktop: desktop} do

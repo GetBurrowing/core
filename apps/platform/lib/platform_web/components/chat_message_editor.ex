@@ -6,7 +6,8 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
 
   Mounted by `chat_message.ex` when `@editing_message_id == @msg.id`.
   Hooked to the `MessageEditor` JS module (assets/js/hooks/
-  message_editor.js) which handles Cmd/Ctrl+Enter to submit, Escape to
+  message_editor.js) which handles Enter (and Cmd/Ctrl+Enter) to submit,
+  Shift+Enter for a newline, Escape to
   cancel, and live detection of shortened-or-removed content so the
   LV's `save_edit` handler can decide whether to surface the removal
   warning modal before firing the PATCH.
@@ -43,7 +44,6 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
 
       <div class="flex items-center justify-between gap-2">
         <p class="text-xs text-subtle">
-          <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⌘</kbd>
           <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⏎</kbd>
           to save · <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">Esc</kbd>
           to cancel

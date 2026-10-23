@@ -347,19 +347,15 @@ defmodule PlatformWeb.ChatLiveTest do
     # changes don't auto-sync to .value after user input).
     assert_push_event(view, "compose_reset", %{})
 
-    # Server-side, the form's `[:text].value` is also cleared — the textarea
-    # body in the next render should not contain the sentinel. (The message
-    # itself appears in the message stream; we check the form region.)
+    # Server-side, the form's `[:text].value` is also cleared. Since redesign
+    # rung 10 the form value is the hidden `compose[text]` input behind the
+    # chip field (the field itself is `phx-update="ignore"` and JS-owned), so
+    # the next render's hidden input must be empty. (The message itself
+    # appears in the message stream, which may contain the sentinel.)
     html = render(view)
-    # The message body is in the stream and is allowed to contain the sentinel
-    # there; we want the textarea body specifically to not contain it.
-    # Phoenix.HTML.Form.normalize_value("text", "") renders "" inside the textarea.
-    refute html =~ ~s(<textarea\n              name="compose[text]"\n) <> ".*" <> sentinel
-    # Tighter: form must serialize text="" — easier check: no <textarea ...>SENTINEL</textarea>
-    refute Regex.match?(
-             ~r/<textarea[^>]*name="compose\[text\]"[^>]*>[^<]*#{Regex.escape(sentinel)}[^<]*<\/textarea>/s,
-             html
-           )
+    assert has_element?(view, ~s(input#compose_text_value[hidden][name="compose[text]"]))
+    refute has_element?(view, ~s(input#compose_text_value[value*="#{sentinel}"]))
+    refute html =~ ~s(value="#{sentinel}")
   end
 
   test "sending a message renders it once in the chat", %{conn: conn} do
@@ -1458,7 +1454,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert has_element?(
                view,
-               ~s{#compose_text[placeholder="Add a message (optional) — Enter to send"]}
+               ~s{#compose_text[data-placeholder="Add a message (optional) — Enter to send"]}
              )
     end
 

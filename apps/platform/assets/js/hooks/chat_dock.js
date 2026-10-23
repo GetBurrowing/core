@@ -21,6 +21,13 @@
 // jump chip. So on every height change it dispatches `chat:dock-resized` on
 // window and ScrollToBottom's listener runs its existing pin-if-at-bottom
 // path (`scrollToBottom(preDistance)`).
+//
+// The @mention list (redesign rung 10, stage 3) is NOT clearance. It opens in
+// flow inside the dock and grows it upward over the conversation, which must
+// not move: `_measure` subtracts the list's height, so opening, filtering and
+// closing the list writes no new `--chat-dock-h` (nor `--phone-chrome-bottom`,
+// which is built on it) and dispatches no `chat:dock-resized`.
+export const MENTION_LIST_SELECTOR = '[data-role="mention-list"]'
 export const DOCK_VAR = "--chat-dock-h"
 export const DOCK_EVENT = "chat:dock-resized"
 
@@ -54,13 +61,19 @@ const ChatDock = {
       this._height = null
       return
     }
-    const height = Math.round(this.el.getBoundingClientRect().height * 100) / 100
+    const height = Math.round((this.el.getBoundingClientRect().height - this._listHeight()) * 100) / 100
     if (height === this._height) return
     const previous = this._height
     this._height = height
     root.style.setProperty(DOCK_VAR, `${height}px`)
     const delta = previous === null ? 0 : height - previous
     window.dispatchEvent(new CustomEvent(DOCK_EVENT, { detail: { height, delta } }))
+  },
+
+  _listHeight() {
+    const list =
+      typeof this.el.querySelector === "function" ? this.el.querySelector(MENTION_LIST_SELECTOR) : null
+    return list ? list.getBoundingClientRect().height : 0
   },
 }
 

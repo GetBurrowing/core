@@ -703,14 +703,16 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
     test "the human and broadcast rows beside it keep their own treatments" do
       html = mention_dropdown_html(nil)
 
-      human = within(html, ~s(button [data-avatar-kind="human"]))
+      # The rows are the shared MentionList's (rung 10, stage 4): option
+      # rows, not buttons.
+      human = within(html, ~s([data-mention-suggestion] [data-avatar-kind="human"]))
       assert length(human) == 1
       assert letters(human) == "DR"
 
       # `@here` is a broadcast sentinel, not a principal — it keeps the
       # megaphone the main compose dropdown gives it rather than borrowing a
       # person's avatar treatment.
-      assert within(html, ~s(button .hero-megaphone)) != []
+      assert within(html, ~s([data-mention-suggestion] .hero-megaphone)) != []
     end
   end
 

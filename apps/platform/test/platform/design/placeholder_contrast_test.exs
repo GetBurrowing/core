@@ -18,9 +18,12 @@ defmodule Platform.Design.PlaceholderContrastTest do
       `placeholder:` utility. daisyUI's 20% placeholder applies to
       `:disabled` controls only (vendor/daisyui.js), which 1.4.3 exempts; it
       is left as it is.
-    * the two rule-painted placeholders, `.thread-input::placeholder` and
+    * the two rule-painted placeholders, `.thread-input:empty::before` and
       `.compose-pill-bar textarea::placeholder`, read `var(--color-subtle)`
-      and nothing else, with no theme-scoped override;
+      and nothing else, with no theme-scoped override. The thread reply box
+      is a contenteditable chip field since redesign rung 10 stage 4, so its
+      placeholder is `:empty::before` (`attr(data-placeholder)`), not
+      `::placeholder`;
     * the four template sites paint `placeholder:text-subtle`, and neither the
       retired `placeholder:text-faint` nor the old
       `placeholder:text-base-content/40`;
@@ -49,7 +52,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
   @subtle "var(--color-subtle)"
 
   @placeholder_rules [
-    ".thread-input::placeholder",
+    ".thread-input:empty::before",
     ".compose-pill-bar textarea::placeholder"
   ]
 
@@ -194,10 +197,13 @@ defmodule Platform.Design.PlaceholderContrastTest do
 
   test "no theme-scoped override repaints the thread placeholder", %{css: css} do
     overrides =
-      Regex.scan(~r/\[data-theme="(?:light|dark)"\][^{]*\.thread-input::placeholder\s*\{/, css)
+      Regex.scan(
+        ~r/\[data-theme="(?:light|dark)"\][^{]*\.thread-input(?:::placeholder|:empty::before)\s*\{/,
+        css
+      )
 
     assert overrides == [],
-           "a theme-scoped .thread-input::placeholder rule is back: #{inspect(overrides)}. " <>
+           "a theme-scoped .thread-input placeholder rule is back: #{inspect(overrides)}. " <>
              "--subtle resolves per theme; an override paints a second, unguarded colour."
   end
 

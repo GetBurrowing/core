@@ -96,22 +96,59 @@ defmodule PlatformWeb.ChatLiveDockTest do
       id = node |> LazyHTML.attribute("id") |> List.first() || ""
       class = node |> LazyHTML.attribute("class") |> List.first() || ""
       role = node |> LazyHTML.attribute("data-role") |> List.first() || ""
+      typing = node |> LazyHTML.attribute("data-typing") |> List.first()
       classes = String.split(class)
 
       cond do
-        String.starts_with?(id, "streaming-") -> :streaming
-        "chat-jump-anchor" in classes -> :anchor
-        role == "typing-indicator" -> :typing
-        "compose-input-area" in classes -> :composer
-        true -> {:other, id, class}
+        id == "chat-streaming-replies" and elements?(node) ->
+          :streaming
+
+        id == "chat-streaming-replies" ->
+          :streaming_idle
+
+        id == "chat-jump-slot" and anchor?(node) ->
+          :anchor
+
+        id == "chat-jump-slot" ->
+          :anchor_idle
+
+        role == "typing-indicator" and typing == "true" ->
+          :typing
+
+        role == "typing-indicator" ->
+          :typing_idle
+
+        "compose-input-area" in classes ->
+          :composer
+
+        true ->
+          {:other, id, class}
       end
     end)
   end
 
-  @order [:streaming, :anchor, :typing, :composer]
+  # The streaming container and the typing indicator's wrapper are always
+  # there (stage 5 of rung 10): `:*_idle` while empty. Each pair is one
+  # slot, so the two share a rank.
+  @order [
+    [:streaming_idle, :streaming],
+    [:anchor_idle, :anchor],
+    [:typing_idle, :typing],
+    :composer
+  ]
+
+  defp anchor?(node),
+    do: node |> LazyHTML.query("#chat-jump-slot > .chat-jump-anchor") |> Enum.count() > 0
+
+  defp elements?(node),
+    do: node |> LazyHTML.query("#chat-streaming-replies > *") |> Enum.count() > 0
 
   defp in_order?(kinds) do
-    ranks = Enum.map(kinds, &Enum.find_index(@order, fn k -> k == &1 end))
+    ranks =
+      Enum.map(kinds, fn kind ->
+        Enum.find_index(@order, &(&1 == kind or (is_list(&1) and kind in &1)))
+      end)
+
     Enum.all?(ranks, &is_integer/1) and ranks == Enum.sort(ranks)
   end
 
@@ -139,7 +176,13 @@ defmodule PlatformWeb.ChatLiveDockTest do
       render_hook(view, "jump_to_latest_distance", %{"away" => true, "deep" => true})
       kinds = dock_children(render(view))
 
-      assert kinds == [:streaming, :anchor, :composer]
+      assert kinds == [:streaming, :anchor, :typing_idle, :composer]
+      assert count(render(view), "#chat-dock > #chat-jump-slot > .chat-jump-anchor") == 1
+
+      # The bubble is inside the container, never a sibling of the composer.
+      html = render(view)
+      assert count(html, "#chat-dock > #chat-streaming-replies > #streaming-dock-chunk-1") == 1
+      assert count(html, "#chat-dock > [id^=streaming-]") == 0
       assert in_order?(kinds)
     end
 
@@ -151,7 +194,7 @@ defmodule PlatformWeb.ChatLiveDockTest do
       agent = agent_participant(space)
 
       {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}")
-      assert dock_children(html) == [:composer]
+      assert dock_children(html) == [:streaming_idle, :anchor_idle, :typing_idle, :composer]
 
       send(
         view.pid,
@@ -159,8 +202,75 @@ defmodule PlatformWeb.ChatLiveDockTest do
       )
 
       kinds = dock_children(render(view))
-      assert kinds == [:typing, :composer]
+      assert kinds == [:streaming_idle, :anchor_idle, :typing, :composer]
       assert in_order?(kinds)
+    end
+
+    # Gate case 7007 (stage 5): the indicator came and went as an `:if`
+    # sibling directly before the composer area, so "Atlas is thinking…"
+    # arriving ~60ms after an Enter send was a NEW node there; the DOM patch
+    # re-added the composer area and the field blurred. The wrapper is now
+    # one node with a DOM id (its morph key) whether or not anyone types.
+    test "the typing indicator is one stable node, hidden while idle, typing or not",
+         %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("dock-typing-stable")
+      join(space, user)
+      agent = agent_participant(space)
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}")
+
+      wrapper = "#chat-dock > #chat-typing-indicator[data-role=typing-indicator]"
+      before_composer = "#chat-typing-indicator + .compose-input-area"
+
+      assert count(html, wrapper <> "[hidden][data-typing=false]") == 1
+      assert count(html, "#chat-typing-indicator > *") == 0
+      assert count(html, before_composer) == 1
+      refute html =~ "is thinking"
+
+      send(
+        view.pid,
+        {:agent_typing, %{space_id: space.id, participant_id: agent.id, typing: true}}
+      )
+
+      typing_html = render(view)
+      assert count(typing_html, wrapper <> ":not([hidden])[data-typing=true]") == 1
+      assert count(typing_html, before_composer) == 1
+      assert typing_html =~ "is thinking"
+
+      send(
+        view.pid,
+        {:agent_typing, %{space_id: space.id, participant_id: agent.id, typing: false}}
+      )
+
+      idle_html = render(view)
+      assert count(idle_html, wrapper <> "[hidden][data-typing=false]") == 1
+      assert count(idle_html, before_composer) == 1
+      refute idle_html =~ "is thinking"
+    end
+
+    # Gate case 7007, round 2: the jump-to-latest anchor was an `:if` child of
+    # #chat-dock with no id, so the chip appearing during a post-send patch
+    # was a new node ahead of the typing indicator and the composer area; the
+    # DOM patch re-appended both after it and the field blurred. The anchor
+    # still leaves the DOM when hidden, but inside #chat-jump-slot.
+    test "the jump anchor comes and goes inside #chat-jump-slot, never as a dock child",
+         %{conn: conn} do
+      {conn, user} = login(conn)
+      space = new_space("dock-jump-slot")
+      join(space, user)
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}")
+      assert count(html, "#chat-dock > #chat-jump-slot") == 1
+      assert count(html, ".chat-jump-anchor") == 0
+
+      shown = render_hook(view, "jump_to_latest_distance", %{"away" => true, "deep" => true})
+      assert count(shown, "#chat-dock > #chat-jump-slot > .chat-jump-anchor") == 1
+      assert count(shown, "#chat-dock > .chat-jump-anchor") == 0
+
+      hidden = render_hook(view, "jump_to_latest_distance", %{"away" => false, "deep" => false})
+      assert count(hidden, ".chat-jump-anchor") == 0
+      assert count(hidden, "#chat-dock > #chat-jump-slot") == 1
     end
 
     test "the order predicate refuses a misordered or foreign child" do
@@ -209,7 +319,7 @@ defmodule PlatformWeb.ChatLiveDockTest do
 
       assert count(html, "#chat-drop-zone > #chat-dock") == 1
       assert count(html, "#chat-dock form#compose-form") == 0
-      assert dock_children(html) == [:composer]
+      assert dock_children(html) == [:streaming_idle, :anchor_idle, :typing_idle, :composer]
     end
   end
 end

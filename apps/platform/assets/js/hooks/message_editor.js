@@ -9,9 +9,10 @@
  *     this hook keeps in sync as the user types
  *   - `data-original-content` set to the message's pre-edit content
  *
- * Hook behavior:
- *   - Cmd/Ctrl + Enter on the textarea → submits the form (phx-submit
- *     "save_edit" fires on the LV).
+ * Hook behavior (keys: redesign rung 10, stage 4, coverage row 117):
+ *   - Enter on the textarea → submits the form (phx-submit "save_edit"
+ *     fires on the LV). Cmd/Ctrl + Enter still saves too.
+ *   - Shift + Enter → a newline (the textarea's own behaviour).
  *   - Escape on the textarea → pushes `cancel_edit` to the LV.
  *   - On every `input` event, compute whether the new content shortens
  *     the original OR removes a contiguous substring of the original.
@@ -81,8 +82,10 @@ const MessageEditor = {
     this.textarea.setSelectionRange(len, len)
 
     this.onKeyDown = (e) => {
-      // Cmd+Enter (mac) or Ctrl+Enter (everywhere else) → submit
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      // Enter saves; so do Cmd+Enter (mac) and Ctrl+Enter. Shift+Enter is
+      // left to the textarea (a newline), and so is Enter while an IME is
+      // composing (it commits the composition).
+      if (e.key === "Enter" && !e.isComposing && (!e.shiftKey || e.metaKey || e.ctrlKey)) {
         e.preventDefault()
         this.el.requestSubmit()
         return
