@@ -1029,9 +1029,10 @@ defmodule Platform.Accounts do
 
   @doc """
   Turn screen-share name masking on (`now + 12h`) or off (the key is deleted)
-  for this person. THE one write path for the mask state: ChatLive's and
-  TasksLive's `toggle_mask_names` handlers call it, and so does the shell's
-  `set_mask_names` writer that comes later.
+  for this person. THE one write path for the mask state. The web layer
+  reaches it only through `PlatformWeb.ShellLive.put_mask_names/2`, which
+  ChatLive's and TasksLive's `toggle_mask_names` handlers, SettingsLive's
+  `set_mask_names` and the shell's own `toggle_mask_names` clause call.
 
   Returns `{:ok, %User{}}`, or `{:error, :not_found}` when no user has that id
   (anonymous sessions use a generated id): nothing is written and the caller

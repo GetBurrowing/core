@@ -179,34 +179,26 @@ defmodule PlatformWeb.SettingsLive do
   def mask_until_label(user, zone, now \\ DateTime.utc_now()) do
     with true <- Accounts.mask_names?(user, now),
          %DateTime{} = until <- Accounts.mask_names_until(user) do
-      "On until " <> clock(until, zone)
+      "On until " <> PlatformWeb.MaskNamesLabel.clock(until, zone)
     else
       _ -> nil
-    end
-  end
-
-  defp clock(%DateTime{} = at, zone) do
-    case zone && DateTime.shift_zone(at, zone) do
-      {:ok, local} -> Calendar.strftime(local, "%-I:%M %P")
-      _ -> Calendar.strftime(at, "%-I:%M %P") <> " UTC"
     end
   end
 
   @impl true
   def handle_event("set_mask_names", params, socket) do
     masked? = params["masked"] in ["true", true]
+    # The shell's one web writer refreshes `:current_user_record` on success
+    # and leaves it alone on error, so the stored state is read back from it.
+    # If it now reads what was asked for, show it; if not, the write failed.
+    socket = PlatformWeb.ShellLive.put_mask_names(socket, masked?)
+    stored? = Accounts.mask_names?(socket.assigns[:current_user_record])
 
-    case Accounts.put_mask_names(socket.assigns[:current_user_record], masked?) do
-      {:ok, %Accounts.User{} = updated} ->
-        {:noreply,
-         socket
-         |> assign(:current_user_record, updated)
-         |> assign(:mask_names?, Accounts.mask_names?(updated))
-         |> assign(:mask_error, nil)}
-
-      {:error, _reason} ->
-        # Revert: the switch keeps showing what is stored.
-        {:noreply, assign(socket, :mask_error, "Couldn't save. Your setting hasn't changed.")}
+    if stored? == masked? do
+      {:noreply, socket |> assign(:mask_names?, stored?) |> assign(:mask_error, nil)}
+    else
+      # Revert: the switch keeps showing what is stored.
+      {:noreply, assign(socket, :mask_error, "Couldn't save. Your setting hasn't changed.")}
     end
   end
 

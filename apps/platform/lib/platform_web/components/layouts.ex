@@ -11,6 +11,7 @@ defmodule PlatformWeb.Layouts do
   import PlatformWeb.Components.IconRail
   import PlatformWeb.Components.MoreSheet
   import PlatformWeb.Components.ThemePicker
+  import PlatformWeb.Components.MaskNamesChip
 
   # Server-rendered <style> block carrying each active org's scope colour as
   # CSS custom properties — the runtime replacement for build-time per-slug

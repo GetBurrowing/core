@@ -29,8 +29,11 @@ defmodule PlatformWeb.Tasks.MaskHooks do
   `:mask_names?` is SEEDED on every mount from the person's own preference,
   `Platform.Accounts.mask_names?/1` over the `:current_user_record` ShellLive
   loaded (no extra query), and the `toggle_mask_names` clause PERSISTS the
-  requested state through `Platform.Accounts.put_mask_names/2`, the one write
-  path (task 01a1557a-e538 stage 2). On means masked for 12 hours; off
+  requested state through `PlatformWeb.ShellLive.put_mask_names/2`, the web
+  layer's one route to `Platform.Accounts.put_mask_names/3` (task 01a1557a-e538
+  stage 2; routed through the shell by task 01a1600d stage 1, which also keeps
+  `:current_user_record` current). ShellLive's own `toggle_mask_names` clause
+  runs first and yields to this one on TasksLive. On means masked for 12 hours; off
   deletes the key. The product owner approved the 12-hour cross-device scope on
   2026-10-21: "12 hour cross-device is fine". So a mask turned on in Chat
   holds on a fresh Tasks mount and the reverse, and a mask set for a call is
@@ -113,8 +116,9 @@ defmodule PlatformWeb.Tasks.MaskHooks do
   # feature failing in the exact direction it exists to prevent.
   defp handle_event("toggle_mask_names", params, socket) do
     masked? = params["masked"] in ["true", "on", true]
-    # Persist the REQUESTED state (the one write path; no-op without a user row).
-    _ = Accounts.put_mask_names(socket.assigns[:current_user_record], masked?)
+    # Persist the REQUESTED state through the shell's one web writer, which
+    # also refreshes `:current_user_record` (no-op without a user row).
+    socket = PlatformWeb.ShellLive.put_mask_names(socket, masked?)
 
     {:halt,
      socket

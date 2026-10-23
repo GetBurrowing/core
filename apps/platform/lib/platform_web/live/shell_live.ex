@@ -23,7 +23,14 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.Components.IconRail
+  alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.SpaceTopics
+
+  # The LiveViews that mask names on the page and handle `toggle_mask_names`
+  # themselves (TasksLive through `PlatformWeb.Tasks.MaskHooks`). The shell's
+  # clause yields to them. A guard test holds this list equal to the set of
+  # modules defining a `"toggle_mask_names"` handler.
+  @mask_page_views [PlatformWeb.ChatLive, PlatformWeb.TasksLive]
 
   def on_mount(:default, _params, session, socket) do
     raw_user_id = session["current_user_id"]
@@ -194,6 +201,21 @@ defmodule PlatformWeb.ShellLive do
       # The theme picker's one open flag (task 01a1557a stage 4). Its checked
       # row and chips live in the browser, owned by the ThemePicker hook.
       |> assign(:theme_picker_open, false)
+      # Screen-share name masking, seeded on EVERY shell page (task 01a1600d
+      # stage 1) so the shell's "Names masked" chip can read the same
+      # `:mask_names?` the page reads. ChatLive, `Tasks.MaskHooks` and
+      # SettingsLive seed the identical value again in their own mounts and
+      # keep it current through their own handlers; every other page masks
+      # nothing and only changes it through the `toggle_mask_names` clause in
+      # `:drawer_events` below. No render-time clock: the chip agrees with
+      # the page because both read this one mount-seeded assign.
+      |> assign(:mask_names?, Accounts.mask_names?(user_record))
+      |> assign(:mask_chip_open, false)
+      # The viewer's IANA zone for the chip's end time (the `timezone` connect
+      # param app.js sends), resolved the way SettingsLive does. nil on the
+      # dead render and for an unknown zone; `PlatformWeb.MaskNamesLabel`
+      # then prints UTC and says so.
+      |> assign(:mask_zone, mask_zone(socket))
       |> assign(:show_presence_panel, false)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
@@ -788,12 +810,46 @@ defmodule PlatformWeb.ShellLive do
         "close_theme_picker", _params, socket ->
           {:halt, assign(socket, :theme_picker_open, false)}
 
+        # The "Names masked" chip's confirm (task 01a1600d stage 2): the chip
+        # only opens it, so a stray tap during a screen share never unmasks.
+        "toggle_mask_chip", _params, socket ->
+          {:halt, assign(socket, :mask_chip_open, !socket.assigns[:mask_chip_open])}
+
+        "close_mask_chip", _params, socket ->
+          {:halt, assign(socket, :mask_chip_open, false)}
+
         # The ThemePicker hook has already applied the choice in the browser
         # (window.burrowTheme.apply); this stores it so the next load, on any
         # device, server-renders it (task 01a1557a stage 4). An anonymous
         # shell or a value outside the registry writes nothing.
         "set_theme", params, socket ->
           {:halt, put_theme(socket, params)}
+
+        # Screen-share name masking (task 01a1600d stage 1). `masked` is the
+        # DESIRED state, as the Chat and Tasks rails already send it. The
+        # chip's confirm (always closed by this event) sends it from any page.
+        #
+        # On a masking page (`@mask_page_views`) the page's own handler owns
+        # the event: it clears its per-LiveView reveal set and relabels its
+        # rail, and it writes through `put_mask_names/2` below. Yield to it,
+        # so there is one write per event. Everywhere else nothing on the page
+        # is masked, so the shell writes and halts. On /settings that also
+        # flips the switch, which renders from `@mask_names?` and
+        # `@current_user_record`.
+        #
+        # WHY a list of views and not a probe for a `:mask_names?` assign:
+        # every shell socket now carries `:mask_names?` (seeded above), and
+        # SettingsLive holds it too but handles `set_mask_names`, not this
+        # event. An assign probe would yield on every page and this event
+        # would then reach a LiveView with no clause for it.
+        "toggle_mask_names", params, socket ->
+          socket = assign(socket, :mask_chip_open, false)
+
+          if socket.view in @mask_page_views do
+            {:cont, socket}
+          else
+            {:halt, shell_toggle_mask_names(socket, params["masked"] in ["true", true])}
+          end
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
           # ADR 0027: dismissed role removed — just remove the agent from roster.
@@ -1468,6 +1524,52 @@ defmodule PlatformWeb.ShellLive do
   end
 
   def put_theme(socket, _params), do: socket
+
+  @doc false
+  # Public for the guard test that compares this list with every module that
+  # defines a `"toggle_mask_names"` handler.
+  def mask_page_views, do: @mask_page_views
+
+  @doc """
+  Persist the person's screen-share name masking (on = masked for 12 hours,
+  off = the key is deleted) and keep `:current_user_record` current.
+
+  The web layer's only route to `Platform.Accounts.put_mask_names/3`: the
+  Chat and Tasks rails' `toggle_mask_names`, SettingsLive's
+  `set_mask_names` and the shell's own `toggle_mask_names` clause all call
+  this. On `{:ok, user}` the socket's `:current_user_record` becomes the
+  updated user, so anything reading the mask's end time from it (Settings'
+  helper, the shell chip) reads the new value rather than the one loaded at
+  mount. On error (an anonymous session has no user row) the socket comes
+  back unchanged.
+
+  It does NOT assign `:mask_names?`. Each caller keeps that, so each page's
+  own semantics, including the anonymous assign-only mode, are unchanged.
+  """
+  @spec put_mask_names(Phoenix.LiveView.Socket.t(), boolean()) :: Phoenix.LiveView.Socket.t()
+  def put_mask_names(socket, masked?) when is_boolean(masked?) do
+    case Accounts.put_mask_names(socket.assigns[:current_user_record], masked?) do
+      {:ok, %Accounts.User{} = updated} -> assign(socket, :current_user_record, updated)
+      _error -> socket
+    end
+  end
+
+  # The shell's write for a page that masks nothing. `:mask_names?` follows
+  # the STORED state when the write landed and is left alone when it did not.
+  defp shell_toggle_mask_names(socket, masked?) do
+    before = socket.assigns[:current_user_record]
+    socket = put_mask_names(socket, masked?)
+
+    case socket.assigns[:current_user_record] do
+      ^before -> socket
+      updated -> assign(socket, :mask_names?, Accounts.mask_names?(updated))
+    end
+  end
+
+  defp mask_zone(socket) do
+    if connected?(socket),
+      do: CalendarWindow.resolve_time_zone((get_connect_params(socket) || %{})["timezone"])
+  end
 
   # Stage 4 (task 019ee06b): no-ChatLive fallback for bar-initiated
   # `meeting_toggle_mic` / `meeting_toggle_camera` events from the

@@ -121,10 +121,15 @@
          decoration: the dropdown anchors to the HEADER's right edge rather
          than to its trigger button, so it can never be pushed off the left
          of the viewport by a trigger that sits mid-strip. See the panel's
-         own comment for the measurement. --%>
+         own comment for the measurement.
+         `h-11` (44px, was `h-10`; task 01a1600d stage 4): the "Names masked"
+         chip's 44px tap target has to fit INSIDE the bar. At 40px it spilled
+         into the page header below, where it was painted over on /tasks and
+         would have taken taps from the controls at y=42 on /chat and
+         /meetings (measured; see MaskNamesChip's "Hit area"). --%>
     <header
       id="utility-bar"
-      class="relative flex h-10 items-center justify-between border-b border-edge bg-base-200/60 px-4"
+      class="relative flex h-11 items-center justify-between border-b border-edge bg-base-200/60 px-4"
     >
       <%!-- min-w-0 + flex-1 here and shrink-0 on the right cluster (task
            01a1261e stage 3): when the native install switcher shows at
@@ -174,6 +179,17 @@
         </span>
       </div>
       <div class="flex shrink-0 items-center gap-2">
+        <%!-- "Names masked" chip (task 01a1600d stage 2; direction canvas
+             01a1616c). Rendered once here by the shell, on every page, per
+             the architect's one-shell-component rule. It renders nothing
+             unless `@mask_names?`, the same assign the page masks from. --%>
+        <.mask_names_chip
+          masked?={assigns[:mask_names?] == true}
+          until={Platform.Accounts.mask_names_until(assigns[:current_user_record])}
+          zone={assigns[:mask_zone]}
+          connected?={shell_connected?(assigns)}
+          open={assigns[:mask_chip_open] == true}
+        />
         <%!-- Roster presence indicator. Wrapped in <.async_result> so the
              initial assign_async load shows a spinner without blocking page
              paint. After PubSub-driven refreshes (refresh_roster/2) the
@@ -580,6 +596,18 @@
     <.theme_picker_sheet
       open={assigns[:theme_picker_open] == true}
       user={assigns[:current_user_record]}
+    />
+
+    <%!-- "Names masked" confirm, below lg (task 01a1600d stage 2; direction
+         canvas 01a1616c). Outside the utility bar so its fixed positioning is
+         not trapped, per the architect's one-shell-component rule. lg:hidden
+         inside the component. --%>
+    <.mask_names_chip_sheet
+      masked?={assigns[:mask_names?] == true}
+      until={Platform.Accounts.mask_names_until(assigns[:current_user_record])}
+      zone={assigns[:mask_zone]}
+      connected?={shell_connected?(assigns)}
+      open={assigns[:mask_chip_open] == true}
     />
 
     <%!-- Persistent meeting bar (survives navigation) --%>

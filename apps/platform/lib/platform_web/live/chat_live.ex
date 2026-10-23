@@ -2286,7 +2286,7 @@ defmodule PlatformWeb.ChatLive do
   # and the assign alone carries the mode for this LiveView.
   def handle_event("toggle_mask_names", params, socket) do
     masked? = truthy?(params["masked"])
-    _ = Accounts.put_mask_names(socket.assigns[:current_user_record], masked?)
+    socket = PlatformWeb.ShellLive.put_mask_names(socket, masked?)
 
     {:noreply,
      socket
