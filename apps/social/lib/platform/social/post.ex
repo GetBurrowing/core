@@ -72,6 +72,18 @@ defmodule Platform.Social.Post do
     field(:refused_at, :utc_datetime_usec)
     field(:retry_after, :utc_datetime_usec)
 
+    # Clip Studio 2/9 (task 01a16662). In NO cast list (not @editable, not
+    # @publisher_fields, not AgentDrafts' @castable): `clip_id` and
+    # `publish_after` are written only by the human approve path, and
+    # `publish_attempts`, `platform_post_id` and `published_at` only by
+    # `Platform.Social.Publishing`. `external_id` stays the vendor's post id;
+    # `platform_post_id` is the platform's own id for it.
+    belongs_to(:clip, Platform.Social.Clip)
+    field(:platform_post_id, :string)
+    field(:publish_after, :utc_datetime_usec)
+    field(:publish_attempts, :integer, default: 0)
+    field(:published_at, :utc_datetime_usec)
+
     timestamps()
   end
 
@@ -257,5 +269,10 @@ defmodule Platform.Social.Post do
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:generated_by_agent_id)
+    |> foreign_key_constraint(:clip_id)
+    |> check_constraint(:publish_attempts,
+      name: :social_posts_publish_attempts_check,
+      message: "must not be negative"
+    )
   end
 end

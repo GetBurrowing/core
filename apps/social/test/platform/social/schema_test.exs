@@ -255,6 +255,81 @@ defmodule Platform.Social.SchemaTest do
     end
   end
 
+  describe "social_posts clip link, publish window and attempts (Clip Studio 2/9)" do
+    defp raw_post_id!(aid, overrides \\ %{}) do
+      id = uuid()
+      {1, _} = raw_post(aid, Map.put(overrides, :id, dump(id)))
+      id
+    end
+
+    test "publish_attempts defaults to 0 and the new columns to NULL", %{account_id: aid} do
+      id = raw_post_id!(aid)
+
+      assert %Post{
+               publish_attempts: 0,
+               clip_id: nil,
+               platform_post_id: nil,
+               publish_after: nil,
+               published_at: nil
+             } = Repo.get!(Post, id)
+    end
+
+    test "the DB refuses negative publish_attempts", %{account_id: aid} do
+      id = raw_post_id!(aid)
+
+      error =
+        assert_raise Postgrex.Error, fn ->
+          Repo.transaction(fn ->
+            Repo.update_all(from(p in Post, where: p.id == ^id), set: [publish_attempts: -1])
+          end)
+        end
+
+      assert error.postgres.constraint == "social_posts_publish_attempts_check"
+
+      error =
+        assert_raise Postgrex.Error, fn ->
+          Repo.transaction(fn ->
+            Repo.update_all(from(p in Post, where: p.id == ^id), set: [publish_attempts: nil])
+          end)
+        end
+
+      assert error.postgres.code == :not_null_violation
+      assert Repo.get!(Post, id).publish_attempts == 0
+    end
+
+    test "clip_id is a FK to social_clips; deleting the clip nils it and keeps the post",
+         %{account_id: aid, profile_id: pid} do
+      error =
+        assert_raise Postgrex.Error, fn -> raw_post(aid, %{clip_id: dump(uuid())}) end
+
+      assert error.postgres.code == :foreign_key_violation
+
+      clip = clip_row(pid)
+      tx_insert_all("social_clips", [clip])
+      clip_id = Ecto.UUID.load!(clip.id)
+      id = raw_post_id!(aid, %{clip_id: clip.id})
+      assert Repo.get!(Post, id).clip_id == clip_id
+
+      Repo.delete_all(from(c in Clip, where: c.id == ^clip_id))
+      assert %Post{clip_id: nil} = Repo.get!(Post, id)
+    end
+
+    test "the general changeset casts none of the new fields" do
+      changeset =
+        Post.changeset(%Post{}, %{
+          status: "draft",
+          clip_id: Ecto.UUID.generate(),
+          platform_post_id: "pp",
+          publish_after: DateTime.utc_now(),
+          publish_attempts: 5,
+          published_at: DateTime.utc_now()
+        })
+
+      for field <- ~w(clip_id platform_post_id publish_after publish_attempts published_at)a,
+          do: assert(Ecto.Changeset.get_change(changeset, field) == nil)
+    end
+  end
+
   describe "social_clips" do
     test "a bad status is refused by a CHECK", %{profile_id: pid} do
       error = assert_raise Postgrex.Error, fn -> raw_clip(pid, %{status: "done"}) end

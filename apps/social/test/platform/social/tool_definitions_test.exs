@@ -21,6 +21,33 @@ defmodule Platform.Social.ToolDefinitionsTest do
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
   end
 
+  test "social_post_list documents the read-only Clip Studio post fields" do
+    list = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_post_list"))
+
+    for field <- ~w(clip_id platform_post_id publish_attempts published_at) do
+      assert list.returns =~ field
+      assert list.limitations =~ field
+    end
+
+    assert list.limitations =~ "read-only"
+  end
+
+  test "no social tool can approve, reject, undo or retry a clip" do
+    for definition <- ToolDefinitions.definitions() do
+      for verb <- ~w(approve reject undo retry decision) do
+        refute definition.name =~ verb, "#{definition.name} names #{verb}"
+      end
+
+      refute Map.has_key?(definition.parameters, :account_ids) and
+               definition.name =~ "clip",
+             "#{definition.name} takes account_ids for a clip"
+    end
+
+    # The decisions live in Platform.Social, outside the tool surface.
+    assert function_exported?(Platform.Social, :approve_clip, 5)
+    refute Enum.any?(ToolDefinitions.names(), &(&1 =~ "decide"))
+  end
+
   test "no tool name contains publish or approve" do
     for name <- ToolDefinitions.names() do
       refute name =~ "publish"

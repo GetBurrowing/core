@@ -121,7 +121,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   @privacy_null "title, caption, speaker and episode_code may be null (the clip tool's [privacy] mode = \"local\" sends nothing transcript-derived)."
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -217,7 +217,8 @@ defmodule Platform.Social.ToolDefinitions do
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
         returns: "%{posts: [#{@post_row}], total, has_more, limit, offset}",
-        limitations: "not_found for a profile outside your org. Oldest first.",
+        limitations:
+          "not_found for a profile outside your org. Oldest first. clip_id, platform_post_id, publish_attempts and published_at are read-only and may be null (publish_attempts is 0 before any vendor call).",
         when_to_use:
           "To see what is waiting, what shipped, what was rejected and why, and (refused: true) what is stuck before the vendor. Only a human retries a refused post; a rate_limited one goes out by itself at retry_after."
       },

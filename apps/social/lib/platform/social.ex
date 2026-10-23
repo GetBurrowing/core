@@ -2116,6 +2116,22 @@ defmodule Platform.Social do
     with {:ok, clip} <- fetch(Clip, org_id, clip), do: Repo.delete(clip)
   end
 
+  # Clip decisions (Clip Studio 2/9)
+  #
+  # A human's one-step clip decision (task 01a16662): see
+  # `Platform.Social.ClipDecisions`. Each takes opts with an injectable `:now`.
+
+  defdelegate approve_clip(org_id, clip_id, user_id, attrs, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate reject_clip(org_id, clip_id, user_id, note, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate undo_clip_decision(org_id, clip_id, user_id, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate retry_post(org_id, post_id, user_id), to: Platform.Social.ClipDecisions
+
   # ── Clip rendering (Social 5/7) ──────────────────────────────────────
 
   @render_from ~w(candidate failed)

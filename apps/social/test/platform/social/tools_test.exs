@@ -316,6 +316,43 @@ defmodule Platform.Social.ToolsTest do
     end
   end
 
+  describe "social_post_list Clip Studio fields (task 01a16662)" do
+    test "carries clip_id, platform_post_id, publish_attempts and published_at, nil-tolerant",
+         ctx do
+      assert {:ok, %{posts: [bare]}} =
+               call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert {bare.clip_id, bare.platform_post_id, bare.publish_attempts, bare.published_at} ==
+               {nil, nil, 0, nil}
+
+      at = DateTime.utc_now()
+
+      Repo.update_all(from(p in Post, where: p.id == ^ctx.post.id),
+        set: [
+          clip_id: ctx.clip.id,
+          platform_post_id: "urn:li:share:1",
+          publish_attempts: 2,
+          published_at: at
+        ]
+      )
+
+      assert {:ok, %{posts: [p]}} =
+               call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert {p.clip_id, p.platform_post_id, p.publish_attempts, p.published_at} ==
+               {ctx.clip.id, "urn:li:share:1", 2, at}
+    end
+
+    test "neither draft tool takes them as a parameter", _ctx do
+      for definition <- ToolDefinitions.definitions(),
+          definition.name in ~w(social_draft_create social_draft_update),
+          field <- ~w(clip_id platform_post_id publish_after publish_attempts published_at)a do
+        refute Map.has_key?(definition.parameters, field),
+               "#{definition.name} takes #{field}"
+      end
+    end
+  end
+
   describe "social_clip_propose" do
     @clip %{"source_url" => "https://youtu.be/abc123", "start_s" => 10, "end_s" => 40}
 

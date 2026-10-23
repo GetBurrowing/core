@@ -214,7 +214,14 @@ defmodule Platform.Social.Publisher.Zernio do
           id when is_binary(id) ->
             post = resp_post(resp_body)
             {status, url} = publish_status(post, account)
-            {:ok, %{external_id: id, status: status, external_url: url}}
+
+            {:ok,
+             %{
+               external_id: id,
+               status: status,
+               external_url: url,
+               platform_post_id: platform_post_id(account_entry(post, account))
+             }}
 
           _ ->
             {:error, :unexpected_response}
@@ -267,6 +274,7 @@ defmodule Platform.Social.Publisher.Zernio do
          %{
            status: status,
            external_url: entry && (entry["platformPostUrl"] || entry["publishedUrl"]),
+           platform_post_id: platform_post_id(entry),
            error: error
          }}
       end)
@@ -537,6 +545,12 @@ defmodule Platform.Social.Publisher.Zernio do
 
   defp published_entry?(_), do: false
 
+  # The platform's own id for the post (Clip Studio 2/9): the account
+  # entry's documented `platformPostId`. `external_id` stays the Zernio
+  # post `_id`.
+  defp platform_post_id(%{} = entry), do: blank_to_nil(entry["platformPostId"])
+  defp platform_post_id(_entry), do: nil
+
   # ── Account list ─────────────────────────────────────────────────────
 
   # Zernio's enum back to our names; a platform we don't support is dropped.
@@ -598,6 +612,7 @@ defmodule Platform.Social.Publisher.Zernio do
       external_id: post["_id"] || post["id"],
       kind: kind,
       external_url: if(kind == :published, do: blank_to_nil(entry && entry["publishedUrl"])),
+      platform_post_id: platform_post_id(entry),
       error: error
     }
   end

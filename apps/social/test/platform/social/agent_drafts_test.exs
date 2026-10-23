@@ -380,6 +380,47 @@ defmodule Platform.Social.AgentDraftsTest do
       assert Repo.get!(Post, post.id) == before
     end
 
+    test "agent draft args cannot set clip_id, publish_after or publish_attempts", ctx do
+      {:ok, clip} =
+        Social.create_clip(ctx.org_a, ctx.profile, %{
+          source_url: "https://www.youtube.com/watch?v=abc",
+          start_s: 1.0,
+          end_s: 2.0
+        })
+
+      sneaky = %{
+        "clip_id" => clip.id,
+        "publish_after" => DateTime.utc_now() |> DateTime.add(60) |> DateTime.to_iso8601(),
+        "publish_attempts" => 7,
+        "platform_post_id" => "pp_agent",
+        "published_at" => DateTime.to_iso8601(DateTime.utc_now())
+      }
+
+      # On create: the post is drafted, the fields are dropped.
+      post = draft!(ctx, sneaky)
+
+      assert %Post{
+               clip_id: nil,
+               publish_after: nil,
+               publish_attempts: 0,
+               platform_post_id: nil,
+               published_at: nil
+             } = Repo.get!(Post, post.id)
+
+      # On update: likewise, and the body edit still lands.
+      assert {:ok, _} =
+               AgentDrafts.update_agent_draft(ctx.scope, post.id, Map.put(sneaky, "body", "v2"))
+
+      assert %Post{
+               body: "v2",
+               clip_id: nil,
+               publish_after: nil,
+               publish_attempts: 0,
+               platform_post_id: nil,
+               published_at: nil
+             } = Repo.get!(Post, post.id)
+    end
+
     test "rejection fields are never touched by an agent update", ctx do
       post = draft!(ctx)
       at = DateTime.utc_now()

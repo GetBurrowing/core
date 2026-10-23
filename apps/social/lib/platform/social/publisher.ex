@@ -91,25 +91,38 @@ defmodule Platform.Social.Publisher do
           cover: cover()
         }
 
+  @typedoc """
+  A publish result. `external_id` is the vendor's id for the post. The
+  optional `:platform_post_id` (Clip Studio 2/9) is the platform's own id
+  for it, when the vendor reports one; `Platform.Social.Publishing` stores it
+  on the row and treats a missing key or nil as "not known yet".
+  """
   @type publish_result :: %{
-          external_id: binary(),
-          status: :scheduled | :published,
-          external_url: binary() | nil
+          required(:external_id) => binary(),
+          required(:status) => :scheduled | :published,
+          required(:external_url) => binary() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
+  @typedoc "A status read. `:platform_post_id` is optional, as in `t:publish_result/0`."
   @type status_result :: %{
-          status: :scheduled | :published | :failed,
-          external_url: binary() | nil,
-          error: String.t() | nil
+          required(:status) => :scheduled | :published | :failed,
+          required(:external_url) => binary() | nil,
+          required(:error) => String.t() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
-  @typedoc "One status event from a verified webhook delivery."
+  @typedoc """
+  One status event from a verified webhook delivery. `:platform_post_id` is
+  optional, as in `t:publish_result/0`.
+  """
   @type event :: %{
-          event_id: String.t() | nil,
-          external_id: String.t() | nil,
-          kind: :published | :failed | :ignored,
-          external_url: String.t() | nil,
-          error: String.t() | nil
+          required(:event_id) => String.t() | nil,
+          required(:external_id) => String.t() | nil,
+          required(:kind) => :published | :failed | :ignored,
+          required(:external_url) => String.t() | nil,
+          required(:error) => String.t() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
   @type delivery :: %{raw_body: binary(), headers: map()}

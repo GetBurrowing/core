@@ -36,6 +36,16 @@ defmodule Platform.Social.Publishing do
   or `failed` answers `{:ok, :noop}` and is not written, so replayed
   deliveries are idempotent.
 
+  ## Attempts and platform ids (Clip Studio 2/9, task 01a16662)
+
+  Every adapter `publish/2` call adds one to `publish_attempts`, on success
+  and on failure, in the same write as its result. A refusal before the
+  adapter (the guard, an archived account, `MediaRules`, `RateLimit`, no
+  configured publisher) sent nothing, so it does not count. When a publish,
+  status or webhook result carries `:platform_post_id` (the platform's own
+  id, read from the vendor's per-account entry) it is stored; `external_id`
+  is unchanged. Every committed move to `published` writes `published_at`.
+
   Every committed move to `published` or `failed` (publish, cancel, outcome)
   is reported to `Platform.Social.TaskBridge.post_changed/1` (Social 6/7),
   which writes a social task's post URLs once all its drafts are terminal.
@@ -430,15 +440,19 @@ defmodule Platform.Social.Publishing do
 
   defp disclosure(%Post{ai_disclosure: label}), do: label
 
+  # Every clause is one adapter call's result, so every clause counts one
+  # attempt (`counted/2`), success or failure.
   defp apply_publish(post, {:ok, %{status: :scheduled, external_id: external_id} = result}) do
     post
     |> Changeset.change(
       status: "scheduled",
       external_id: external_id,
       external_url: Map.get(result, :external_url) || post.external_url,
+      platform_post_id: Map.get(result, :platform_post_id) || post.platform_post_id,
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
+    |> counted(post)
     |> update()
   end
 
@@ -448,9 +462,12 @@ defmodule Platform.Social.Publishing do
       status: "published",
       external_id: external_id,
       external_url: Map.get(result, :external_url),
+      platform_post_id: Map.get(result, :platform_post_id) || post.platform_post_id,
+      published_at: DateTime.utc_now(),
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
+    |> counted(post)
     |> update()
   end
 
@@ -459,6 +476,7 @@ defmodule Platform.Social.Publishing do
       post
       |> Changeset.change(status: "failed", error: readable(reason))
       |> Changeset.change(Post.refusal_cleared())
+      |> counted(post)
 
     case update(changeset) do
       {:ok, _failed} -> {:error, {:publish_failed, reason}}
@@ -467,6 +485,11 @@ defmodule Platform.Social.Publishing do
   end
 
   defp apply_publish(post, other), do: apply_publish(post, {:error, {:unexpected_result, other}})
+
+  # One adapter call happened. `post` is the locked re-read, so its count is
+  # the database's.
+  defp counted(changeset, %Post{publish_attempts: attempts}),
+    do: Changeset.put_change(changeset, :publish_attempts, (attempts || 0) + 1)
 
   # ── Cancel, refresh, connect ─────────────────────────────────────────
 
@@ -508,6 +531,7 @@ defmodule Platform.Social.Publishing do
       apply_outcome(post, %{
         kind: kind,
         external_url: Map.get(result, :external_url),
+        platform_post_id: Map.get(result, :platform_post_id),
         error: Map.get(result, :error)
       })
     else
@@ -576,10 +600,12 @@ defmodule Platform.Social.Publishing do
 
   @doc """
   The one transition from a vendor outcome. `outcome` is
-  `%{kind: :published | :failed | :ignored, external_url, error}`.
+  `%{kind: :published | :failed | :ignored, external_url, error}` and may
+  carry `:platform_post_id`, stored when present.
 
   Moves an `approved` or `scheduled` post (re-read under a row lock) to
-  `published` (with `external_url`) or `failed` (with `error`). A post
+  `published` (with `external_url` and `published_at`) or `failed` (with
+  `error`). A post
   already `published` or `failed`, or an `:ignored` outcome, answers
   `{:ok, :noop}` without writing. A `draft` or `needs_approval` post is
   refused with `{:error, :invalid_transition}`.
@@ -606,6 +632,8 @@ defmodule Platform.Social.Publishing do
     |> Changeset.change(
       status: "published",
       external_url: Map.get(outcome, :external_url) || post.external_url,
+      platform_post_id: Map.get(outcome, :platform_post_id) || post.platform_post_id,
+      published_at: DateTime.utc_now(),
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
@@ -617,6 +645,7 @@ defmodule Platform.Social.Publishing do
     post
     |> Changeset.change(
       status: "failed",
+      platform_post_id: Map.get(outcome, :platform_post_id) || post.platform_post_id,
       error: readable(Map.get(outcome, :error) || "failed at the vendor")
     )
     |> Changeset.change(Post.refusal_cleared())
@@ -648,6 +677,9 @@ defmodule Platform.Social.Publishing do
     |> Changeset.check_constraint(:status, name: :social_posts_status_check)
     |> Changeset.check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check
+    )
+    |> Changeset.check_constraint(:publish_attempts,
+      name: :social_posts_publish_attempts_check
     )
     |> Repo.update()
   end

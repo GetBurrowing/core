@@ -22,6 +22,7 @@ defmodule Platform.Social.ApplicationTest do
     refute Platform.Social.RenderQueue in ids
     refute Platform.Social.RenderTaskSupervisor in ids
     refute Platform.Social.PublishRetry in ids
+    refute Platform.Social.ClipPublish in ids
   end
 
   test ":full keeps today's children in today's order" do
@@ -30,7 +31,8 @@ defmodule Platform.Social.ApplicationTest do
              Platform.Social.RateLimit,
              Platform.Social.RenderTaskSupervisor,
              Platform.Social.RenderQueue,
-             Platform.Social.PublishRetry
+             Platform.Social.PublishRetry,
+             Platform.Social.ClipPublish
            ]
   end
 end

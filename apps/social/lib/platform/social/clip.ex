@@ -168,28 +168,33 @@ defmodule Platform.Social.Clip do
 
   The reviewer must be a user (FK to `users`); whether that user may
   approve this profile is the caller's rule.
-  """
-  @spec review_changeset(t() | Ecto.Changeset.t(), term()) :: Ecto.Changeset.t()
-  def review_changeset(clip_or_changeset, decision)
 
-  def review_changeset(clip, {:approve, user_id}) do
+  `at` is the decision time written to `reviewed_at` (default now). Clip
+  Studio 2/9's `Platform.Social.ClipDecisions` passes its own clock, so the
+  undo window (`reviewed_at` + window) and the posts' `publish_after` come
+  from one instant.
+  """
+  @spec review_changeset(t() | Ecto.Changeset.t(), term(), DateTime.t()) :: Ecto.Changeset.t()
+  def review_changeset(clip_or_changeset, decision, at \\ DateTime.utc_now())
+
+  def review_changeset(clip, {:approve, user_id}, at) do
     clip
     |> change(%{
       review_status: "approved",
       review_note: nil,
       reviewed_by_user_id: user_id,
-      reviewed_at: DateTime.utc_now()
+      reviewed_at: at
     })
     |> review_validations()
   end
 
-  def review_changeset(clip, {:reject, user_id, note}) do
+  def review_changeset(clip, {:reject, user_id, note}, at) do
     clip
     |> change(%{
       review_status: "rejected",
       review_note: if(is_binary(note), do: String.trim(note)),
       reviewed_by_user_id: user_id,
-      reviewed_at: DateTime.utc_now()
+      reviewed_at: at
     })
     |> update_change(:review_note, &blank_to_nil/1)
     |> validate_required([:review_note], message: "a rejection needs a note")
@@ -197,7 +202,7 @@ defmodule Platform.Social.Clip do
     |> review_validations()
   end
 
-  def review_changeset(clip, :reset_pending) do
+  def review_changeset(clip, :reset_pending, _at) do
     clip
     |> change(%{
       review_status: "pending",
@@ -206,6 +211,19 @@ defmodule Platform.Social.Clip do
       reviewed_at: nil
     })
     |> review_validations()
+  end
+
+  @doc """
+  Clip Studio 2/9: a human reviewer's edits at approval, casting ONLY
+  `title` and `caption`. Called by `Platform.Social.ClipDecisions` after the
+  approver check; no agent path reaches it.
+  """
+  @spec human_edit_changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
+  def human_edit_changeset(clip_or_changeset, attrs) do
+    clip_or_changeset
+    |> cast(attrs, [:title, :caption])
+    |> validate_meta()
+    |> clip_constraints()
   end
 
   defp review_validations(changeset) do
