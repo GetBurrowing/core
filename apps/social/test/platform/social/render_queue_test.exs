@@ -227,6 +227,56 @@ defmodule Platform.Social.RenderQueueTest do
     assert idle?(queue)
   end
 
+  # Clip Studio 1/9: a Burrow render goes to review.
+  describe "review state on render" do
+    test "a Burrow render success sets review_status pending", world do
+      clip = file_clip!(world, 4.0, 12.0)
+      assert Repo.get!(Clip, clip.id).review_status == nil
+
+      {:ok, _} = Social.render_clip(world.scope, clip.id)
+      rendered = await_status(clip.id, "rendered")
+
+      assert rendered.review_status == "pending"
+      assert Repo.get!(Clip, clip.id).review_status == "pending"
+    end
+
+    test "a forced re-render of an approved clip stays approved", world do
+      clip = file_clip!(world, 4.0, 12.0)
+      {:ok, _} = Social.render_clip(world.scope, clip.id)
+      rendered = await_status(clip.id, "rendered")
+
+      {:ok, approved} =
+        rendered
+        |> Clip.review_changeset({:approve, world.approver.id})
+        |> Repo.update()
+
+      {:ok, _} = Social.render_clip(world.scope, clip.id, force: true)
+      await_status(clip.id, "rendered")
+
+      reloaded = Repo.get!(Clip, clip.id)
+      assert reloaded.review_status == "approved"
+      assert reloaded.reviewed_by_user_id == world.approver.id
+      assert reloaded.reviewed_at == approved.reviewed_at
+    end
+
+    test "a re-render of a rejected clip returns it to pending with the note cleared", world do
+      clip = file_clip!(world, 4.0, 12.0)
+      {:ok, _} = Social.render_clip(world.scope, clip.id)
+      rendered = await_status(clip.id, "rendered")
+
+      {:ok, _} =
+        rendered
+        |> Clip.review_changeset({:reject, world.approver.id, "payoff is cut off"})
+        |> Repo.update()
+
+      {:ok, _} = Social.render_clip(world.scope, clip.id, force: true)
+      await_status(clip.id, "rendered")
+
+      assert %Clip{review_status: "pending", review_note: nil, reviewed_by_user_id: nil} =
+               Repo.get!(Clip, clip.id)
+    end
+  end
+
   describe "render_clip/3 refusals" do
     test "rendering, rendered without force, another org's clip", world do
       clip = file_clip!(world, 4.0, 12.0)

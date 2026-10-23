@@ -16,7 +16,12 @@ defmodule Platform.Social.Tools do
   ## No publish, no approve
 
   Writes go through `Platform.Social.AgentDrafts`, whose ceiling is
-  `needs_approval`. `social_task_request` (Social 6/7) files a task through
+  `needs_approval`. The five `social_clip_job_*` tools (Clip Studio 1/9)
+  work the job list in `Platform.Social.ClipJobs`; the claimer is always
+  the calling agent, never an argument. `social_clip_submit` lands a clip as
+  review pending; no tool writes a review field, and the submitting agent
+  comes from the context, never from arguments. `social_task_request`
+  (Social 6/7) files a task through
   `Platform.Social.TaskBridge`, assigned to the calling agent; the agent
   and space come from the context, never from arguments. Refusals are Play-style envelopes
   `%{error, code, recoverable, suggestion}`; each status or lock refusal
@@ -25,9 +30,24 @@ defmodule Platform.Social.Tools do
 
   alias Platform.Federation.ResultBound
   alias Platform.Social
-  alias Platform.Social.{Account, AgentDrafts, Clip, Post, Profile, TaskBridge, ToolDefinitions}
+
+  alias Platform.Social.{
+    Account,
+    AgentDrafts,
+    Clip,
+    ClipJob,
+    ClipJobs,
+    Post,
+    Profile,
+    TaskBridge,
+    ToolDefinitions
+  }
 
   @human ToolDefinitions.human_approves()
+
+  # Clip Studio 1/9: the clip job tools.
+  @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_progress
+                social_clip_job_complete social_clip_job_fail)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -37,6 +57,12 @@ defmodule Platform.Social.Tools do
     cond do
       tool == "social_task_request" ->
         with {:ok, scope} <- scope(context), do: task_request(args, scope, context)
+
+      tool == "social_clip_submit" ->
+        with {:ok, scope} <- scope(context), do: clip_submit(args, scope, agent(context))
+
+      tool in @job_tools ->
+        with {:ok, scope} <- scope(context), do: job_tool(tool, args, scope, agent(context))
 
       tool in ToolDefinitions.names() ->
         with {:ok, scope} <- scope(context), do: run(tool, args, scope)
@@ -208,6 +234,71 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  # ── Clip Studio 1/9: social_clip_submit ──────────────────────────────
+
+  # Only these argument keys reach AgentDrafts: never a review field, rev,
+  # origin or an agent id. The submitting agent is the CALLER (context).
+  @submit_keys ~w(file_id title caption speaker episode_code source_label platforms
+                  duration_s width height)
+
+  defp clip_submit(args, scope, agent) do
+    attrs = Map.take(args, @submit_keys)
+
+    case AgentDrafts.submit_clip(scope, args["profile_id"], attrs, agent.id) do
+      {:ok, clip} -> {:ok, %{clip: clip_json(clip)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  # ── Clip Studio 1/9: the clip job tools ──────────────────────────────
+
+  # The acting agent is ALWAYS the caller (context), never an argument; a
+  # complete reads only the submit argument keys (ClipJobs.result_keys/0).
+  defp job_tool("social_clip_job_list", args, scope, _agent) do
+    filters = [status: blank_to_nil(args["status"]), kind: blank_to_nil(args["kind"])]
+
+    case ClipJobs.list_jobs(scope, args["profile_id"], filters) do
+      {:ok, jobs} ->
+        {limit, offset} = ResultBound.page(args)
+        page = jobs |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&job_json/1)
+
+        {:ok,
+         ResultBound.paged(:jobs, page, length(jobs), offset, %{limit: limit, offset: offset})}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp job_tool("social_clip_job_claim", args, scope, agent) do
+    scope |> ClipJobs.claim(args["job_id"], agent.id) |> job_reply()
+  end
+
+  defp job_tool("social_clip_job_progress", args, scope, agent) do
+    scope
+    |> ClipJobs.progress(args["job_id"], agent.id, args["progress"], args["eta_s"])
+    |> job_reply()
+  end
+
+  defp job_tool("social_clip_job_complete", args, scope, agent) do
+    result = Map.take(args, ClipJobs.result_keys())
+
+    case ClipJobs.complete(scope, args["job_id"], agent.id, result) do
+      {:ok, %{job: job, clip: clip}} ->
+        {:ok, %{job: job_json(job), clip: clip && clip_json(clip)}}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp job_tool("social_clip_job_fail", args, scope, agent) do
+    scope |> ClipJobs.fail(args["job_id"], agent.id, args["error"], args["code"]) |> job_reply()
+  end
+
+  defp job_reply({:ok, %ClipJob{} = job}), do: {:ok, %{job: job_json(job)}}
+  defp job_reply(error), do: {:error, error_envelope(error)}
+
   # ── Scope ────────────────────────────────────────────────────────────
 
   defp scope(context) do
@@ -334,20 +425,39 @@ defmodule Platform.Social.Tools do
   end
 
   defp run("social_clip_list", args, scope) do
-    case Social.get_profile(scope, args["profile_id"]) do
-      %Profile{} = profile ->
-        {limit, offset} = ResultBound.page(args)
+    with {:ok, review_status} <- review_filter(args["review_status"]),
+         %Profile{} = profile <- Social.get_profile(scope, args["profile_id"]) do
+      {limit, offset} = ResultBound.page(args)
 
-        clips =
-          Social.list_clips(scope, profile_id: profile.id, status: blank_to_nil(args["status"]))
+      # Clip Studio 1/9: the review filter is applied here, over
+      # Social.list_clips/2's result (social.ex is not edited).
+      clips =
+        scope
+        |> Social.list_clips(profile_id: profile.id, status: blank_to_nil(args["status"]))
+        |> Enum.filter(&(review_status == nil or &1.review_status == review_status))
 
-        page = clips |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&clip_json/1)
+      page = clips |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&clip_json/1)
 
-        {:ok,
-         ResultBound.paged(:clips, page, length(clips), offset, %{limit: limit, offset: offset})}
+      {:ok,
+       ResultBound.paged(:clips, page, length(clips), offset, %{limit: limit, offset: offset})}
+    else
+      {:error, :invalid_review_status} ->
+        {:error, error_envelope({:error, :invalid_review_status})}
 
       nil ->
         {:error, not_found("profile")}
+    end
+  end
+
+  defp review_filter(value) do
+    case blank_to_nil(value) do
+      nil ->
+        {:ok, nil}
+
+      status ->
+        if status in Clip.review_statuses(),
+          do: {:ok, status},
+          else: {:error, :invalid_review_status}
     end
   end
 
@@ -395,6 +505,96 @@ defmodule Platform.Social.Tools do
       "the source video and transcript must be files in the profile's project",
       true,
       "Upload them to the profile's project in Burrow Files and pass those ids."
+    )
+  end
+
+  defp error_envelope({:error, :file_not_in_project}) do
+    err(
+      :file_not_in_project,
+      "the file must be a video in Burrow Files in the profile's project",
+      true,
+      "Upload it with file_add using project_id = the profile's project, and pass that file_id."
+    )
+  end
+
+  defp error_envelope({:error, :not_a_video}) do
+    err(
+      :not_a_video,
+      "the file is not a video (its content type must be video/*)",
+      true,
+      "Upload the rendered MP4 and pass its file_id."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_title}) do
+    err(
+      :invalid_title,
+      "title must be non-blank and at most 200 characters",
+      true,
+      "Pass a shorter title, or omit it."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_review_status}) do
+    err(
+      :invalid_review_status,
+      "review_status must be one of pending, approved, rejected",
+      true,
+      "Omit review_status, or pass one of pending, approved, rejected."
+    )
+  end
+
+  defp error_envelope({:error, :already_claimed}) do
+    err(
+      :already_claimed,
+      "already claimed: another runner (or you) claimed this job first",
+      false,
+      "Call social_clip_job_list for another queued job."
+    )
+  end
+
+  defp error_envelope({:error, :not_claimer}) do
+    err(
+      :not_claimer,
+      "not the claimer: only the agent that claimed this job may report on it",
+      false,
+      "Claim a queued job with social_clip_job_claim first."
+    )
+  end
+
+  defp error_envelope({:error, :job_closed}) do
+    err(
+      :job_closed,
+      "job closed: it is already done or failed",
+      false,
+      "Call social_clip_job_list for open jobs."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_progress}) do
+    err(
+      :invalid_progress,
+      "progress must be a number from 0 to 1, and eta_s a number >= 0",
+      true,
+      "Pass progress as a fraction, e.g. 0.5."
+    )
+  end
+
+  defp error_envelope({:error, :job_in_flight}) do
+    err(
+      :job_in_flight,
+      "this clip already has an open job",
+      true,
+      "Wait for it to finish."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_error}) do
+    err(
+      :invalid_error,
+      "error must be a non-blank string",
+      true,
+      "Say what went wrong, and pass the clip error code as code."
     )
   end
 
@@ -602,8 +802,19 @@ defmodule Platform.Social.Tools do
         :requested_end_s,
         :start_s,
         :end_s,
+        :title,
         :caption,
         :speaker,
+        :episode_code,
+        :origin,
+        :source_label,
+        :review_status,
+        :review_note,
+        :reviewed_at,
+        :rev,
+        :look,
+        :trim_in_s,
+        :trim_out_s,
         :crop_x,
         :platforms,
         :render_file_id,
@@ -613,6 +824,25 @@ defmodule Platform.Social.Tools do
         :byte_size,
         :attempts,
         :rendered_at
+      ])
+
+  defp job_json(%ClipJob{} = j),
+    do:
+      Map.take(j, [
+        :id,
+        :profile_id,
+        :clip_id,
+        :kind,
+        :status,
+        :progress,
+        :eta_s,
+        :payload,
+        :result,
+        :error,
+        :claimed_by_agent_id,
+        :claimed_at,
+        :finished_at,
+        :inserted_at
       ])
 
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)

@@ -37,6 +37,9 @@ defmodule Platform.Social.Profile do
     # Social 3/7: the channel approval cards are posted in (FK to chat_spaces,
     # nilified when the space is deleted). Must be a space in the profile's org.
     belongs_to(:space, Platform.Chat.Space)
+    # Clip Studio 1/9: the show's default clip look (`Platform.Social.ClipLook`),
+    # possibly partial. Not editable here: ClipJobs.save_show_default writes it.
+    field(:show_look, :map, default: %{})
 
     has_many(:accounts, Platform.Social.Account)
     has_many(:clips, Platform.Social.Clip)

@@ -41,7 +41,7 @@ defmodule Platform.Social.AgentDrafts do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Clip, ClipMedia, Links, Post, Profile}
+  alias Platform.Social.{Account, Clip, ClipLook, ClipMedia, ClipRender, Links, Post, Profile}
 
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
                segment_ids episode_url start_s end_s)a
@@ -57,6 +57,7 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :invalid_source | :source_not_in_project | :profile_needs_project}
           | {:error, :invalid_crop_x | {:invalid_platforms, [String.t()]}}
           | {:error, :task_profile_mismatch}
+          | {:error, :file_not_in_project | :not_a_video | :invalid_title}
           | {:error, :field_not_allowed, [String.t()]}
           | {:error, Ecto.Changeset.t()}
 
@@ -293,6 +294,95 @@ defmodule Platform.Social.AgentDrafts do
     end
   end
 
+  @doc """
+  Clip Studio 1/9: submits a clip rendered OUTSIDE Burrow (htc-clip-tool)
+  for review. `attrs` (string or atom keys): `file_id` (required: a video in
+  the profile's project, see `check_clip_file/2`), and optionally `title`
+  (non-blank, at most 200, else `{:error, :invalid_title}`), `caption`,
+  `speaker`, `episode_code`, `source_label` (default `"external"`),
+  `platforms` (each one of the profile's account platforms) and
+  `duration_s`/`width`/`height` (used only when the file cannot be probed).
+  Any other key, including every review field and `rev`, is ignored.
+
+  In one transaction it inserts the clip with `Clip.submit_changeset/2`
+  (external, rendered, review pending, rev 1; look = the profile's effective
+  show look; `submitted_by_agent_id` = `agent_id`) and its rev-1
+  `Platform.Social.ClipRender` row, then broadcasts the clip.
+
+  Title, caption, speaker and episode code may all be nil: under the clip
+  tool's `[privacy] mode = "local"` nothing transcript-derived arrives.
+  """
+  @spec submit_clip(Social.scope(), term(), map(), Ecto.UUID.t() | nil) ::
+          {:ok, Clip.t()} | error()
+  def submit_clip(scope, profile_id, attrs, agent_id) do
+    attrs = normalize(attrs)
+
+    with {:ok, profile} <- fetch_profile(scope, profile_id),
+         {:ok, _project} <- render_project(profile),
+         {:ok, file} <- check_clip_file(attrs["file_id"], profile),
+         :ok <- validate_title(attrs),
+         {:ok, platforms} <- validate_platforms(attrs["platforms"], profile) do
+      look = ClipLook.effective(profile.show_look)
+
+      fields =
+        attrs
+        |> Map.take(~w(title caption speaker episode_code))
+        |> Map.merge(clip_file_meta(file, attrs))
+        |> Map.merge(%{
+          "source_label" => blank_default(attrs["source_label"], "external"),
+          "platforms" => platforms,
+          "render_file_id" => file.id,
+          "look" => look
+        })
+
+      Repo.transaction(fn ->
+        with {:ok, clip} <-
+               %Clip{profile_id: profile.id}
+               |> Clip.submit_changeset(fields)
+               |> Changeset.put_change(:submitted_by_agent_id, agent_id)
+               |> Repo.insert(),
+             {:ok, _render} <-
+               %ClipRender{}
+               |> ClipRender.changeset(%{
+                 clip_id: clip.id,
+                 rev: 1,
+                 file_id: file.id,
+                 look: look,
+                 submitted_by_agent_id: agent_id
+               })
+               |> Repo.insert() do
+          clip
+        else
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+      |> case do
+        {:ok, clip} ->
+          Social.broadcast_clip(clip)
+          {:ok, clip}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp validate_title(attrs) do
+    case Map.fetch(attrs, "title") do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, t} when is_binary(t) -> if valid_title?(t), do: :ok, else: {:error, :invalid_title}
+      {:ok, _} -> {:error, :invalid_title}
+    end
+  end
+
+  defp valid_title?(t), do: String.trim(t) != "" and String.length(t) <= 200
+
+  defp blank_default(v, default) when is_binary(v),
+    do: if(String.trim(v) == "", do: default, else: v)
+
+  defp blank_default(_v, default), do: default
+
   defp source_kind(attrs) do
     file? = present?(attrs["source_file_id"]) or present?(attrs["transcript_file_id"])
     url? = present?(attrs["source_url"])
@@ -334,11 +424,114 @@ defmodule Platform.Social.AgentDrafts do
   # Through core's public Files API; a file in another project (or missing,
   # or soft-deleted) is refused alike.
   defp in_project(id, profile) do
-    case Platform.Files.get_file(id) do
-      %{project_id: project_id} when project_id == profile.project_id -> :ok
-      _ -> {:error, :source_not_in_project}
+    case project_file(id, profile) do
+      {:ok, _file} -> :ok
+      :error -> {:error, :source_not_in_project}
     end
   end
+
+  # Clip Studio 1/9: the one rule behind every "is this file the profile's"
+  # check. `Platform.Files.get_file/1` hides soft-deleted rows, so a deleted
+  # file is missing; a file in another project, or another org's, is
+  # refused exactly like a random id.
+  defp project_file(id, %Profile{project_id: project_id})
+       when is_binary(id) and is_binary(project_id) do
+    case Platform.Files.get_file(id) do
+      %{project_id: ^project_id, deleted_at: nil} = file -> {:ok, file}
+      _ -> :error
+    end
+  end
+
+  defp project_file(_id, _profile), do: :error
+
+  @doc """
+  Clip Studio 1/9: checks that `file_id` names a rendered clip the profile
+  may hold: a live file in the profile's project whose content type is
+  `video/*`. A missing, deleted, other-project or other-org file is
+  `{:error, :file_not_in_project}` alike; any other content type is
+  `{:error, :not_a_video}`. Shared by `submit_clip/4` and the clip job
+  list's complete (`Platform.Social.ClipJobs`).
+  """
+  @spec check_clip_file(term(), Profile.t()) ::
+          {:ok, Platform.Files.File.t()} | {:error, :file_not_in_project | :not_a_video}
+  def check_clip_file(file_id, %Profile{} = profile) do
+    case project_file(file_id, profile) do
+      {:ok, file} -> if video?(file), do: {:ok, file}, else: {:error, :not_a_video}
+      :error -> {:error, :file_not_in_project}
+    end
+  end
+
+  @doc """
+  Clip Studio 1/9: whether `file_id` is a live file in the profile's
+  project (any content type). Used for a new clip's episode source and
+  transcript (`Platform.Social.ClipJobs`).
+  """
+  @spec file_in_project?(term(), Profile.t()) :: boolean()
+  def file_in_project?(file_id, %Profile{} = profile),
+    do: match?({:ok, _}, project_file(file_id, profile))
+
+  @doc """
+  Clip Studio 1/9: `platforms` (nil = none) must each be one of the
+  profile's live account platforms. `{:ok, unique_list}` or
+  `{:error, {:invalid_platforms, bad}}`.
+  """
+  @spec check_platforms(term(), Profile.t()) ::
+          {:ok, [String.t()]} | {:error, {:invalid_platforms, [String.t()]}}
+  def check_platforms(platforms, %Profile{} = profile), do: validate_platforms(platforms, profile)
+
+  @doc """
+  Clip Studio 1/9: a clip title is optional; given, it is a non-blank
+  string of at most 200 characters, else `{:error, :invalid_title}`.
+  """
+  @spec check_title(map()) :: :ok | {:error, :invalid_title}
+  def check_title(attrs), do: attrs |> normalize() |> validate_title()
+
+  defp video?(%{content_type: type}) when is_binary(type), do: String.starts_with?(type, "video/")
+  defp video?(_), do: false
+
+  @doc """
+  Clip Studio 1/9: the rendered file's measurements. ffprobe on the stored
+  file when storage gives a local path; otherwise (or when the probe fails)
+  the caller's `duration_s`, `width` and `height`. `byte_size` always comes
+  from the file row.
+  """
+  @spec clip_file_meta(Platform.Files.File.t(), map()) :: map()
+  def clip_file_meta(file, attrs) do
+    attrs = normalize(attrs)
+
+    base = %{
+      "duration_s" => number(attrs["duration_s"]),
+      "width" => integer(attrs["width"]),
+      "height" => integer(attrs["height"]),
+      "byte_size" => file.byte_size
+    }
+
+    case probe(file) do
+      {:ok, %{duration_s: d, width: w, height: h}} ->
+        Map.merge(base, %{"duration_s" => d, "width" => w, "height" => h})
+
+      _ ->
+        base
+    end
+  end
+
+  defp probe(file) do
+    with {:ok, path} <- Platform.Files.Extractor.local_path(file),
+         true <- File.exists?(path) do
+      Platform.Social.Renderer.Ffmpeg.probe(path)
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp number(n) when is_number(n), do: n * 1.0
+  defp number(_), do: nil
+
+  defp integer(n) when is_integer(n), do: n
+  defp integer(n) when is_float(n), do: round(n)
+  defp integer(_), do: nil
 
   defp validate_crop(nil), do: :ok
   defp validate_crop(x) when is_number(x) and x >= 0 and x <= 1, do: :ok

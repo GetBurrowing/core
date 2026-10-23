@@ -19,7 +19,8 @@ defmodule Platform.Social.RenderJob do
     9. store the MP4 in Files under the profile's project
        (`ingest_intent: "human_only"`: video has no extractor);
    10. in one transaction set `render_file_id`, `duration_s`, `width`,
-       `height`, `byte_size`, `rendered_at`, status `rendered`.
+       `height`, `byte_size`, `rendered_at`, status `rendered`, and review
+       `pending` unless the clip is already approved (Clip Studio 1/9).
 
   The tmp dir is always removed. A Files row written before a later failure
   is deleted again, so a failed clip leaves no orphan.
@@ -299,6 +300,7 @@ defmodule Platform.Social.RenderJob do
           rendered_at: DateTime.utc_now(),
           error: nil
         })
+        |> to_review(clip)
         |> Repo.update()
         |> case do
           {:ok, clip} -> clip
@@ -317,6 +319,11 @@ defmodule Platform.Social.RenderJob do
         {:error, "could not record the render: #{inspect(reason)}"}
     end
   end
+
+  # Clip Studio 1/9: a new render goes to review as pending, unless the clip
+  # is already approved (a forced re-render of an approved clip stays so).
+  defp to_review(changeset, %Clip{review_status: "approved"}), do: changeset
+  defp to_review(changeset, _clip), do: Clip.review_changeset(changeset, :reset_pending)
 
   defp fmt(x), do: :erlang.float_to_binary(x * 1.0, decimals: 1)
 end
