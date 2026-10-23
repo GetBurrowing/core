@@ -4778,6 +4778,99 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The canvas listing behind the Files & Canvases browser
+  (`Platform.Files.Browser`, task 01a1557a-b5f9 stage 1): live canvases
+  across `space_ids`, most recently edited first, as plain maps WITHOUT
+  `document`: `id`, `title`, `space_id`, `created_by_display_name`,
+  `cloned_from`, `updated_at`, `inserted_at` and `game?`.
+
+  `game?` is computed in SQL: true when the document holds a node of type
+  `game_stream` anywhere in its tree (`jsonb_path_exists`), so a caller
+  learns an item's type without loading a document. `game_stream` is an
+  extension kind; core names only the string, never the extension's modules.
+
+  Like `list_recent_canvases/2` it is NOT cast-safe on `space_ids`: every
+  id must be DB-derived. `:access_scope` drops every canvas a `canvas.read`
+  deny covers (`scope_by/3`), exactly as in `list_canvases/2`.
+
+  ## Options
+
+    * `:since` — only canvases with `updated_at` at or after this instant.
+    * `:limit` — cap (default 50; `nil` disables it).
+    * `:type` — `:canvas` (not a game) or `:game`; absent means both.
+    * `:ids` — narrow to these canvas ids (DB-derived, e.g. search hits
+      being classified); absent means no narrowing.
+  """
+  @spec list_browser_canvases([binary()], keyword()) :: [map()]
+  def list_browser_canvases(space_ids, opts \\ [])
+
+  def list_browser_canvases([], _opts), do: []
+
+  def list_browser_canvases(space_ids, opts) when is_list(space_ids) do
+    # Bound as TEXT and cast in SQL: a bare `?::jsonpath` makes Postgres type
+    # the parameter as jsonpath, which Postgrex cannot encode.
+    game_path = ~s|$.** ? (@.type == "game_stream")|
+
+    query =
+      from(c in Canvas,
+        where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+        select: %{
+          id: c.id,
+          title: c.title,
+          space_id: c.space_id,
+          created_by_display_name: c.created_by_display_name,
+          cloned_from: c.cloned_from,
+          updated_at: c.updated_at,
+          inserted_at: c.inserted_at,
+          game?: fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+        }
+      )
+
+    query =
+      case Keyword.get(opts, :since) do
+        nil -> query
+        since -> where(query, [c], c.updated_at >= ^since)
+      end
+
+    query =
+      case Keyword.get(opts, :ids) do
+        nil -> query
+        ids when is_list(ids) -> where(query, [c], c.id in ^ids)
+      end
+
+    query =
+      case Keyword.get(opts, :type) do
+        :canvas ->
+          where(
+            query,
+            [c],
+            not fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+          )
+
+        :game ->
+          where(
+            query,
+            [c],
+            fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+          )
+
+        nil ->
+          query
+      end
+
+    query =
+      case Keyword.get(opts, :limit, 50) do
+        nil -> query
+        n when is_integer(n) and n > 0 -> limit(query, ^n)
+      end
+
+    query
+    |> canvas_order(:updated_desc)
+    |> maybe_scope_canvases(canvas_access_scope(opts))
+    |> Repo.all()
+  end
+
+  @doc """
   Restrict a `Space` or `Canvas` query (its root binding) by explicit grants
   (task 01a1386d-e528 stage 3,
   `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).

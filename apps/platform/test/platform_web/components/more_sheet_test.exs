@@ -98,7 +98,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{root_user: true})
 
       assert row_keys(html) ==
-               ~w(inbox email files skills context agents experiments changelog fixture)
+               ~w(inbox email files canvases skills context agents experiments changelog fixture)
 
       footer = html |> doc() |> LazyHTML.query(".sheet-actions [data-destination=settings]")
       assert Enum.count(footer) == 1
@@ -109,7 +109,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
              |> Enum.any?()
     end
 
-    test "the order list reserves Canvases and Games, which render nothing (no page yet)" do
+    test "the order list holds Canvases (now a row, after Files) and Games (still no row)" do
       assert IconRail.more_sheet_order() ==
                [
                  :inbox,
@@ -125,8 +125,24 @@ defmodule PlatformWeb.Components.MoreSheetTest do
                ]
 
       keys = row_keys(render_more_sheet(%{root_user: true}))
-      refute "canvases" in keys
+      # Rung 16 stage 3: Canvases renders, directly after Files.
+      assert Enum.take(Enum.drop_while(keys, &(&1 != "files")), 2) == ["files", "canvases"]
+      # Games still has no page (rung 21).
       refute "games" in keys
+    end
+
+    test "Canvases links the browser filtered to canvases, with no phx-click" do
+      html = render_more_sheet(%{root_user: false})
+
+      [row] =
+        html
+        |> doc()
+        |> LazyHTML.query(~s(.more-sheet-list [data-destination="canvases"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(row, "href") == ["/files?tab=browse&type=canvas"]
+      assert LazyHTML.attribute(row, "data-phx-link") == ["redirect"]
+      refute row |> LazyHTML.attribute("phx-click") |> Enum.any?(& &1)
     end
 
     test "Mail off: no Email row and no gap" do
@@ -300,6 +316,11 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       cases = [
         {"/files", "files"},
         {"/files/abc", "files"},
+        # Rung 16 stage 3: FilesLive passes the All-canvases view through in
+        # one canonical form; every other /files URL keeps Files current.
+        {"/files?tab=browse&type=canvas", "canvases"},
+        {"/files?tab=browse", "files"},
+        {"/files?tab=browse&type=doc", "files"},
         {"/control/experiments", "experiments"},
         {"/control/experiments/x", "experiments"},
         {"/control", "agents"},

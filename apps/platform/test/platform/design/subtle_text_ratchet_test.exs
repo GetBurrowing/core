@@ -218,7 +218,9 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # exact ceiling (ADR 0050). A new one fails, and a migrated one fails with
   # "lower the ceiling". Rung 11 (task 01a1557a-9de3) deleted the upload
   # dialog's large-file row, whose 11px size line was one of them: 112 -> 111.
-  @small_subtle_ceiling 111
+  # Rung 16 (task 01a1557a-b5f9 stage 2) retired the Files picker's 10px org
+  # count and the upload sheet's 10px size note (now text-xs): 111 -> 109.
+  @small_subtle_ceiling 109
   @small_size ~r/(?<![\w-])text-\[(?:\d|1[01])(?:\.\d+)?px\]|(?<![\w-])text-\[0\.(?:[0-6]\d*|7[0-4]\d*)rem\]/
   @tier_collapses [
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex", ">unassigned<"},

@@ -1676,4 +1676,108 @@ defmodule Platform.FilesTest do
       f
     end
   end
+
+  describe "list_recent_files_for_projects/2 and search_files_by_name/3 (task 01a1557a-b5f9 stage 1)" do
+    defp browser_file!(project, name, opts \\ []) do
+      {:ok, f} =
+        Files.create_file(%{
+          project_id: project.id,
+          name: name,
+          original_filename: Keyword.get(opts, :original_filename, name),
+          content_type: Keyword.get(opts, :content_type, "text/plain"),
+          byte_size: 1,
+          storage_key: "files/#{project.id}/#{System.unique_integer([:positive])}/#{name}",
+          content_hash:
+            Base.encode16(:crypto.hash(:sha256, "#{name}-#{System.unique_integer()}"),
+              case: :lower
+            )
+        })
+
+      f
+    end
+
+    defp soft_delete!(file) do
+      {:ok, deleted} =
+        file |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update()
+
+      deleted
+    end
+
+    defp set_updated_at!(file, days_ago) do
+      at = DateTime.add(DateTime.utc_now(), -days_ago * 86_400, :second)
+      {:ok, f} = file |> Ecto.Changeset.change(updated_at: at) |> Repo.update()
+      f
+    end
+
+    test "lists live files across projects, newest updated_at first, uploader preloaded" do
+      {:ok, a} = Tasks.create_project(%{name: "Recent A"})
+      {:ok, b} = Tasks.create_project(%{name: "Recent B"})
+      {:ok, other} = Tasks.create_project(%{name: "Recent Other"})
+
+      older = a |> browser_file!("older.txt") |> set_updated_at!(2)
+      newer = b |> browser_file!("newer.txt") |> set_updated_at!(1)
+      gone = a |> browser_file!("gone.txt") |> soft_delete!()
+      _elsewhere = browser_file!(other, "elsewhere.txt")
+
+      rows = Files.list_recent_files_for_projects([a.id, b.id])
+      assert Enum.map(rows, & &1.id) == [newer.id, older.id]
+      refute gone.id in Enum.map(rows, & &1.id)
+      assert Enum.all?(rows, &Ecto.assoc_loaded?(&1.uploaded_by_user))
+
+      since = DateTime.add(DateTime.utc_now(), -36 * 3600, :second)
+
+      assert Enum.map(Files.list_recent_files_for_projects([a.id, b.id], since: since), & &1.id) ==
+               [newer.id]
+
+      assert [_] = Files.list_recent_files_for_projects([a.id, b.id], limit: 1)
+    end
+
+    test ":type splits images from documents" do
+      {:ok, p} = Tasks.create_project(%{name: "Recent Types"})
+      image = browser_file!(p, "shot.png", content_type: "image/png")
+      doc = browser_file!(p, "notes.txt")
+
+      assert Enum.map(Files.list_recent_files_for_projects([p.id], type: :image), & &1.id) ==
+               [image.id]
+
+      assert Enum.map(Files.list_recent_files_for_projects([p.id], type: :doc), & &1.id) ==
+               [doc.id]
+    end
+
+    test "an empty id list returns [] for both" do
+      assert Files.list_recent_files_for_projects([]) == []
+      assert Files.search_files_by_name([], "anything") == []
+    end
+
+    test "search matches name or original_filename, case-insensitively, excluding deleted" do
+      {:ok, p} = Tasks.create_project(%{name: "Search Files"})
+      by_name = browser_file!(p, "Quarterly Plan.pdf", original_filename: "upload-1.pdf")
+      by_original = browser_file!(p, "Renamed", original_filename: "quarterly-raw.csv")
+      gone = p |> browser_file!("quarterly-old.pdf") |> soft_delete!()
+
+      got = Enum.map(Files.search_files_by_name([p.id], "QUARTERLY"), & &1.id)
+      assert Enum.sort(got) == Enum.sort([by_name.id, by_original.id])
+      refute gone.id in got
+    end
+
+    test "%, _ and backslash in the query match literally" do
+      {:ok, p} = Tasks.create_project(%{name: "Search Literal"})
+      pct = browser_file!(p, "50% off.txt")
+      _pct_decoy = browser_file!(p, "500 off.txt")
+      under = browser_file!(p, "a_b.txt")
+      _under_decoy = browser_file!(p, "axb.txt")
+      slash = browser_file!(p, "c\\d.txt")
+      _slash_decoy = browser_file!(p, "cd.txt")
+
+      assert Enum.map(Files.search_files_by_name([p.id], "50%"), & &1.id) == [pct.id]
+      assert Enum.map(Files.search_files_by_name([p.id], "a_b"), & &1.id) == [under.id]
+      assert Enum.map(Files.search_files_by_name([p.id], "c\\d"), & &1.id) == [slash.id]
+    end
+
+    test "a blank query returns []" do
+      {:ok, p} = Tasks.create_project(%{name: "Search Blank"})
+      _ = browser_file!(p, "anything.txt")
+      assert Files.search_files_by_name([p.id], "  ") == []
+    end
+  end
 end

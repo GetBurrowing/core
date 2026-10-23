@@ -116,6 +116,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/external_recovery_live.ex" => :global_default,
     "platform_web/live/external_recovery_live.html.heex" => :global_default,
     "platform_web/live/files_live.html.heex" => :global_default,
+    # The browser's search field (task 01a1557a-b5f9 stage 2).
+    "platform_web/live/files/browser_components.ex" => :global_default,
     "platform_web/live/org_memory_live/journal_pane.ex" => :global_default,
     "platform_web/live/org_memory_live/mobile_shell.ex" => :global_default,
     "platform_web/live/org_memory_live/search_pane.ex" => :global_default,

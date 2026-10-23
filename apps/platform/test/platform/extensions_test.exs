@@ -924,6 +924,9 @@ defmodule Platform.ExtensionsTest do
       :agents,
       :skills,
       :files,
+      # The More sheet's Canvases row into the Files browser
+      # (task 01a1557a-b5f9 stage 3).
+      :canvases,
       :context,
       :prompts,
       :experiments,

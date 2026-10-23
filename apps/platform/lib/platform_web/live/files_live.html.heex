@@ -1,157 +1,101 @@
-<div class="flex h-full min-h-0 w-full">
-  <%!-- LEFT: org-grouped project picker (desktop only).
-       Mirrors the Tasks sidebar — the root org first, then tenant orgs in
-       canonical priority order. Hidden on mobile; the mobile sheet
-       trigger lives in the center header below. --%>
-  <aside class="hidden md:flex w-64 shrink-0 flex-col border-r border-edge bg-base-100">
-    <div class="flex items-center justify-between border-b border-edge px-3 py-3">
-      <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content">
-        Files
-      </h2>
-      <button
-        :if={@selected_project_id}
-        phx-click="clear_selection"
-        class="btn btn-ghost btn-xs"
-        title="Clear project filter"
-        aria-label="Clear project filter"
-      >
-        <span class="hero-x-mark size-4"></span>
-      </button>
-    </div>
+<div class="flex h-full min-h-0 w-full bg-base-200" data-role="files-browser">
+  <%!-- Desktop tree (lg+): Recents, then each org expandable to its
+       projects and spaces. Labels come from the masking context built at
+       render time (BrowserView.browser_labels/3). --%>
+  <BrowserComponents.tree_sidebar
+    tree={@tree}
+    labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+    collapsed={@collapsed_orgs}
+    browser={@browser}
+  />
 
-    <div class="flex-1 overflow-y-auto" data-role="files-project-picker">
-      <details
-        :for={{org_slug, org_name, org_projects} <- @project_sections}
-        open
-        class="group"
-        data-role="files-project-group"
-        data-org-slug={org_slug}
-      >
-        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content hover:bg-base-200 cursor-pointer select-none">
-          <span
-            class="size-2 rounded-full scope-dot-current"
-            data-scope={org_slug}
-          >
-          </span>
-          <span>{org_name}</span>
-          <span class="ml-auto text-[10px] tracking-normal text-subtle">
-            {length(org_projects)}
-          </span>
-        </summary>
-        <button
-          :for={project <- org_projects}
-          phx-click="select_project"
-          phx-value-id={project.id}
-          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
-          data-role="files-project-button"
-          data-project-id={project.id}
-        >
-          {project.name}
-        </button>
-      </details>
-
-      <%!-- Every active org now renders a header, so the picker is never truly
-           empty — show the hint only when no org has a project to select. --%>
-      <div
-        :if={Enum.all?(@project_sections, fn {_slug, _name, projects} -> projects == [] end)}
-        class="px-3 py-6 text-center text-sm text-subtle"
-      >
-        No projects yet. Create one from the Tasks surface to start uploading files here.
-      </div>
-    </div>
-  </aside>
-
-  <%!-- CENTER: file list + drag-drop. --%>
+  <%!-- The browser: header, chips, breadcrumbs, toolbar and rows. --%>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-    <%!-- Header --%>
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-edge px-4 py-3">
-      <div class="flex items-center gap-3">
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
-          Files
-        </h1>
-        <span :if={@selected_project} class="badge badge-ghost badge-sm">
-          {length(@files)}
-        </span>
-        <%!-- Breadcrumb: org · project --%>
+    <BrowserComponents.browser_header browser={@browser} new_open={@new_sheet != nil}>
+      <:new_panel>
+        <%!-- Desktop New menu (lg+). The phone gets the same items in
+             #files-new-sheet below. Escape closes it; no hover utility. --%>
         <div
-          :if={@selected_project}
-          class="flex items-center gap-1 text-xs text-subtle"
-          data-role="files-breadcrumb"
+          :if={@new_sheet}
+          id="files-new-menu"
+          role="dialog"
+          aria-label="New"
+          phx-window-keydown="close_new_sheet"
+          phx-key="Escape"
+          data-role="files-new-menu"
+          class="absolute right-0 top-12 z-40 hidden w-72 rounded-box border border-edge bg-base-100 py-1 shadow-lg lg:block"
         >
-          <span class="font-medium scope-fill-text" data-scope={org_scope_for(@selected_project)}>
-            {org_label_for(@selected_project)}
-          </span>
-          <span :if={@selected_project.org} aria-hidden="true" class="text-decorative">/</span>
-          <span>{@selected_project.name}</span>
+          <BrowserComponents.new_menu
+            mode={@new_sheet}
+            browser={@browser}
+            tree={@tree}
+            labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+            desktop
+          />
         </div>
-      </div>
+      </:new_panel>
+    </BrowserComponents.browser_header>
+    <BrowserComponents.search_field :if={@browser.mode == :search} browser={@browser} />
+    <BrowserComponents.browser_chips browser={@browser} games={@games?} />
+    <BrowserComponents.breadcrumbs
+      :if={@browser.mode == :browse}
+      crumbs={
+        BrowserView.browser_crumbs(
+          @browser,
+          BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)
+        )
+      }
+    />
 
-      <div :if={@selected_project} class="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          name="filter"
-          value={@filter}
-          phx-keyup="filter"
-          phx-debounce="150"
-          placeholder="Filter files…"
-          class="input input-bordered input-sm w-44"
-          data-role="files-filter-input"
-        />
-        <form phx-change="sort" class="flex items-center gap-1">
-          <label for="files-sort" class="sr-only">Sort by</label>
-          <select
-            id="files-sort"
-            name="sort"
-            class="select select-bordered select-sm"
-            data-role="files-sort-select"
-          >
-            <option value="date_desc" selected={@sort == "date_desc"}>Newest first</option>
-            <option value="date_asc" selected={@sort == "date_asc"}>Oldest first</option>
-            <option value="name_asc" selected={@sort == "name_asc"}>Name A→Z</option>
-            <option value="name_desc" selected={@sort == "name_desc"}>Name Z→A</option>
-            <option value="size_desc" selected={@sort == "size_desc"}>Largest first</option>
-            <option value="size_asc" selected={@sort == "size_asc"}>Smallest first</option>
-            <option value="type_asc" selected={@sort == "type_asc"}>Type</option>
-          </select>
-        </form>
-        <%!-- Persistent desktop upload control. Renders whenever a project
+    <%!-- Project node tools, unchanged in behaviour: the desktop upload
+         form and the semantic search row. --%>
+    <div
+      :if={@selected_project}
+      class="hidden shrink-0 items-center gap-2 px-4 pb-2 md:flex"
+      data-role="files-project-tools"
+    >
+      <%!-- Persistent desktop upload control. Renders whenever a project
              is selected — for BOTH empty and non-empty projects — so you can
              always add files (the table state previously had no upload
-             affordance). A SIBLING of the sort form, never nested (HTML
-             forbids nested <form>). Desktop-only: mobile uploads via the
+             affordance). Never nested in another form (HTML forbids
+             nested <form>). Desktop-only: mobile uploads via the
              FAB + bottom sheet below. NOTE: this input and the sheet input
              share @uploads.files.ref — keep exactly one functionally-live
              live_file_input per viewport; never add a third. --%>
-        <form
-          id="files-upload-form"
-          phx-change="validate_upload"
-          phx-submit="validate_upload"
-          class="hidden items-center md:flex"
-          data-role="files-upload-form"
-        >
-          <.live_file_input
-            upload={@uploads.files}
-            class="file-input file-input-bordered file-input-sm"
-          />
-          <%!-- Audience choice at upload time. The hidden "false" pairs
+      <%!-- Not rendered while the phone upload sheet is open: both forms carry
+           @uploads.files, and two live_file_inputs share one DOM id, which
+           LiveView cannot patch (a pre-existing defect the + New Upload test
+           exposed, task 01a1557a-b5f9 stage 3). --%>
+      <form
+        :if={!@show_upload_sheet}
+        id="files-upload-form"
+        phx-change="validate_upload"
+        phx-submit="validate_upload"
+        class="hidden items-center md:flex"
+        data-role="files-upload-form"
+      >
+        <.live_file_input
+          upload={@uploads.files}
+          class="file-input file-input-bordered file-input-sm"
+        />
+        <%!-- Audience choice at upload time. The hidden "false" pairs
                with the checkbox so phx-change always carries a value —
                an unchecked box sends no param of its own, and an absent
                key is indistinguishable from a form that never had the
                field. --%>
-          <input type="hidden" name="include_for_agents" value="false" />
-          <label class="ml-3 flex cursor-pointer items-center gap-2 text-sm text-base-content">
-            <input
-              type="checkbox"
-              name="include_for_agents"
-              value="true"
-              checked={@upload_include_for_agents}
-              class="checkbox checkbox-sm"
-              data-role="files-upload-include-for-agents"
-            />
-            <span>Include for agents</span>
-          </label>
-        </form>
-      </div>
+        <input type="hidden" name="include_for_agents" value="false" />
+        <label class="ml-3 flex cursor-pointer items-center gap-2 text-sm text-base-content">
+          <input
+            type="checkbox"
+            name="include_for_agents"
+            value="true"
+            checked={@upload_include_for_agents}
+            class="checkbox checkbox-sm"
+            data-role="files-upload-include-for-agents"
+          />
+          <span>Include for agents</span>
+        </label>
+      </form>
     </div>
 
     <%!-- Semantic search row --%>
@@ -175,7 +119,7 @@
           class="input input-bordered input-sm flex-1"
           data-role="files-semantic-search-input"
         />
-        <button type="submit" class="btn btn-primary btn-sm">Search</button>
+        <button type="submit" class="btn btn-sm">Search</button>
         <button
           :if={@semantic_query != ""}
           type="button"
@@ -207,7 +151,7 @@
             type="button"
             phx-click="select_semantic_hit"
             phx-value-id={result_file_id(result)}
-            class="flex w-full flex-col text-left hover:opacity-80"
+            class="flex w-full flex-col text-left active:opacity-80"
             data-role="files-semantic-hit"
           >
             <div class="flex items-center justify-between gap-2 text-xs text-subtle">
@@ -226,37 +170,12 @@
       </ul>
     </div>
 
-    <%!-- Drag-drop dropzone + file list --%>
+    <%!-- Scroller + drag-drop target. --%>
     <div
       class="flex-1 overflow-y-auto clears-tab-bar"
       phx-drop-target={@uploads.files.ref}
       data-role="file-dropzone"
     >
-      <%!-- Empty / placeholder states --%>
-      <div
-        :if={!@selected_project_id}
-        class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
-      >
-        <span class="hero-document-text size-12 text-subtle"></span>
-        <h2 class="mt-4 text-lg font-semibold text-base-content">Pick a project</h2>
-        <p class="mt-2 max-w-md text-sm text-subtle">
-          Files are scoped per project (ADR 0042). Choose one from the sidebar
-          to view its documents or upload new ones.
-        </p>
-      </div>
-
-      <div
-        :if={@selected_project && @files == []}
-        class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
-        data-role="files-empty-state"
-      >
-        <span class="hero-cloud-arrow-up size-12 text-subtle"></span>
-        <h2 class="mt-4 text-lg font-semibold text-base-content">No files yet</h2>
-        <p class="mt-2 max-w-md text-sm text-subtle">
-          Drag and drop files here, or use the upload button above to add the first one.
-        </p>
-      </div>
-
       <%!-- Failed-ingest summary (task 01a0008b stage 4).
 
            Renders ONLY when the count is above zero — no zero state, no
@@ -288,7 +207,7 @@
           :if={@failed_summary.retryable > 0}
           type="button"
           phx-click="retry_failed_ingests"
-          class="link font-medium text-base-content underline-offset-2 hover:opacity-70"
+          class="link font-medium text-base-content underline-offset-2"
           data-role="files-retry-all"
           data-retryable-count={@failed_summary.retryable}
         >
@@ -299,148 +218,13 @@
         </span>
       </div>
 
-      <%!-- File table --%>
-      <table
-        :if={@selected_project && @files != []}
-        class="table table-zebra w-full text-sm"
-        data-role="files-table"
-      >
-        <thead>
-          <tr>
-            <th class="text-left">Name</th>
-            <th class="text-left">Type</th>
-            <th class="text-right">Size</th>
-            <th class="text-left">Status</th>
-            <th class="text-left">Uploaded</th>
-          </tr>
-        </thead>
-        <tbody>
-          <%!-- A comprehension block rather than `:for` on the row,
-               because a failed file renders TWO sibling rows: the row
-               itself, unchanged, and the failure reason strip beneath
-               it. A non-failed file still renders exactly one, so every
-               healthy row is byte-identical to before. --%>
-          <%= for file <- filtered_and_sorted(@files, @filter, @sort) do %>
-            <tr
-              phx-click="select_file"
-              phx-value-id={file.id}
-              class={"cursor-pointer hover:bg-base-200 #{if @selected_file && @selected_file.id == file.id, do: "bg-base-200"}"}
-              data-role="files-row"
-              data-file-id={file.id}
-              data-ingest-status={file.ingest_status}
-              data-ingest-intent={file.ingest_intent}
-            >
-              <td class="font-medium">
-                <div>{file.name || file.original_filename}</div>
-                <%!-- Ghost badge, on its own line under the name it
-                     qualifies. In the NAME cell, not the Status cell: a
-                     supersession claim is about the document's standing,
-                     not about its ingest, and the Status column stays
-                     single-axis. --%>
-                <div :if={Map.has_key?(@supersession_claims, file.id)} class="mt-0.5">
-                  <PlatformWeb.Components.SupersessionRuling.supersession_badge claim={
-                    Map.get(@supersession_claims, file.id)
-                  } />
-                </div>
-              </td>
-              <td class="text-xs text-subtle">{file.content_type}</td>
-              <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
-              <td>
-                <span
-                  class={status_badge_class(file.ingest_status)}
-                  data-role="files-status-badge"
-                >
-                  {status_label(file.ingest_status)}
-                </span>
-              </td>
-              <td class="text-xs text-subtle">
-                {Calendar.strftime(file.inserted_at, "%Y-%m-%d %H:%M")}
-              </td>
-            </tr>
-            <%!-- The failure reason strip. Renders as TEXT on the row,
-                 never as a tooltip, `title=` or any other hover
-                 affordance: a hover is invisible on touch and
-                 unreachable by keyboard, and this string is the whole
-                 point of the ticket. It renders or it does not exist.
-
-                 No button here, deliberately, and this reverses an
-                 earlier direction. The row already carries a whole-row
-                 `select_file` click, so a control inside it nests one
-                 interactive element in another — the click would have to
-                 be stopped from also selecting the file, and a keyboard
-                 user would meet two tab stops in one visual object. The
-                 unbounded manual retry is the detail pane's
-                 `files-detail-retry`, which renders for any failed file.
-
-                 The strip is a sibling `<tr>` rather than a line inside
-                 the name cell so it spans the row, and so `files-row`
-                 keeps the exact shape other surfaces key off. --%>
-            <tr
-              :if={file.ingest_status == "failed"}
-              data-role="files-row-failure-reason"
-              data-file-id={file.id}
-            >
-              <td colspan="5" class="!py-0">
-                <%!-- `text-base-content`, NOT `text-neutral`, and this
-                     is a deliberate departure from the stage brief.
-                     `--color-neutral` is a SURFACE slot: its 4.7:1
-                     audit (1B-A11Y-5, in app.css) tuned it against
-                     `--color-neutral-content` as a fill, never as a
-                     foreground on `--color-base-200`. In the dark theme
-                     the pair is oklch(40%) text on an oklch(9%) band —
-                     roughly 2.4:1, which fails AA and made the reason
-                     genuinely hard to read in a captured render.
-                     `--color-base-content` is the foreground partner of
-                     the base surfaces and clears AA in BOTH themes,
-                     which is what the brief actually asked for. --%>
-                <div class="flex max-w-[calc(100vw-0.5rem)] flex-wrap items-baseline gap-x-2 gap-y-1 border-l-[3px] border-error bg-base-200 px-3 py-1.5 md:max-w-none md:flex-nowrap">
-                  <%!-- The width cap is what makes `truncate` below
-                       actually fire on a phone. This table scrolls
-                       horizontally on a narrow viewport, so an
-                       unconstrained cell is as wide as the OVERFLOWING
-                       table, not as wide as the screen — the tail would
-                       run off the side rather than truncate, and a
-                       reader would have to scroll sideways to learn
-                       what broke. Capping to the viewport puts the
-                       ellipsis where the reader can see it.
-
-                       It wraps below `md` rather than competing for one
-                       line. Single-line + a `shrink-0` skip clause
-                       starved the MIDDLE element, so a narrow viewport
-                       showed "Embedding: · not retried automatically
-                       after 3 att…" — the reason itself truncated to
-                       nothing while the least important fragment
-                       survived. That is the truncation-order rule
-                       inverted. Wrapping keeps every fragment readable;
-                       the desktop row is unchanged. --%>
-                  <%!-- Truncation order is the design decision here. The
-                       stage prefix is the meaningful fragment and never
-                       truncates; the machine tail is expendable.
-                       "Embedding: connect timed…" still tells the reader
-                       what to do, "…out after 5000ms" does not. --%>
-                  <span class="shrink-0 whitespace-nowrap text-xs font-medium text-base-content">
-                    {failure_stage_label(file.ingest_failure_stage)}:
-                  </span>
-                  <span class="min-w-0 truncate font-mono text-xs text-base-content">
-                    {failure_detail_text(file.ingest_failure_detail)}
-                  </span>
-                  <%!-- Fourth state: the sweep declined to touch this
-                       row. Appended to the reason, not replacing it —
-                       the reader needs both halves, what broke and why
-                       nothing has happened since. --%>
-                  <span
-                    :if={sweep_skipped?(file)}
-                    class="shrink-0 whitespace-nowrap font-mono text-xs text-base-content"
-                    data-role="files-row-sweep-skipped"
-                  >
-                    · {sweep_skipped_clause()}
-                  </span>
-                </div>
-              </td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
+      <.browser_view
+        browser={@browser}
+        files={@files}
+        labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+        layout={BrowserView.browser_layout(@browser, @layout_pref)}
+        claims={@supersession_claims}
+      />
 
       <%!-- Active uploads (visible while files are flying up) --%>
       <div
@@ -705,19 +489,29 @@
     text={@selected_file_text}
   />
 
-  <%!-- Mobile FAB: open upload sheet.
-       Position mirrors the canonical Tasks "+" button so the FAB always
-       clears the safe-area inset + the bottom-nav height on every
-       device. data-role="file-upload-fab" keeps e2e selectors unique
-       from task-create-fab / epic-create-fab / project-create-fab. --%>
-  <button
-    phx-click="toggle_upload_sheet"
-    class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg md:hidden"
-    aria-label="Upload file"
-    data-role="file-upload-fab"
+  <%!-- Phone ＋ New sheet (stage 3). It replaces the old upload FAB: the
+       header ＋ is the page's one primary control. Swipe-dismiss needs
+       handle_close, placement :bottom and an empty :handle slot (Sheet
+       gate). --%>
+  <PlatformWeb.Components.Sheet.sheet
+    id="files-new-sheet"
+    open={@new_sheet != nil}
+    placement={:bottom}
+    on_close="close_new_sheet"
+    class="lg:hidden"
+    handle_close
+    swipe_dismiss
   >
-    <span class="hero-plus size-6"></span>
-  </button>
+    <:title>New</:title>
+    <%!-- handle_close hides the title visually; this line shows it. --%>
+    <p aria-hidden="true" class="px-4 pb-1 text-base font-semibold text-base-content">New</p>
+    <BrowserComponents.new_menu
+      mode={@new_sheet || :menu}
+      browser={@browser}
+      tree={@tree}
+      labels={BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?)}
+    />
+  </PlatformWeb.Components.Sheet.sheet>
 
   <%!-- Mobile bottom sheet: file picker + drag-drop. --%>
   <div
@@ -733,7 +527,11 @@
     >
       <div class="flex items-center justify-between border-b border-edge px-4 py-3">
         <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content">
-          Upload to {(@selected_project && @selected_project.name) || "—"}
+          Upload to {(@selected_project &&
+                        Map.get(
+                          BrowserView.browser_labels(@tree, @sidebar_sections, @mask_names?).projects,
+                          @selected_project.id
+                        )) || "—"}
         </h2>
         <button
           phx-click="close_upload_sheet"
@@ -772,7 +570,7 @@
               upload={@uploads.files}
               class="file-input file-input-bordered file-input-sm mt-3 w-full"
             />
-            <p class="mt-2 text-[10px] text-subtle">
+            <p class="mt-2 text-xs text-subtle">
               Up to 50&nbsp;MB per file, {@uploads.files.max_entries} files per batch.
             </p>
           </div>

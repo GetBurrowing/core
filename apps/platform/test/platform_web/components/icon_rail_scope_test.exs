@@ -351,8 +351,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       locked = surfaces(scope_of(ctx.locked))
 
       assert :files in ctx.before.destinations
-      assert locked.destinations == ctx.before.destinations -- [:files]
-      assert locked.more == ctx.before.more -- [:files]
+      # Canvases (task 01a1557a-b5f9 stage 3) opens the Files browser and is
+      # gated by the same files.read, so the files lock drops it too.
+      assert locked.destinations == ctx.before.destinations -- [:files, :canvases]
+      assert locked.more == ctx.before.more -- [:files, :canvases]
       assert locked.mobile == ctx.before.mobile
     end
   end

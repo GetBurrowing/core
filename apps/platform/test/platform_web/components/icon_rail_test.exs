@@ -96,10 +96,11 @@ defmodule PlatformWeb.Components.IconRailTest do
       # Pipeline, and back 10 → 9 when task 019fed1e removed Pipeline again
       # (it moved to an admin-only cog in the Tasks header), 10 → 9 when
       # task 01a1557a-7a71 stage 4 retired Activity, and 9 -> 10 when task
-      # 01a1557a-807f stage 2 added the More-sheet-only Changelog. Any future
-      # destination addition should bump the matching guard below.
+      # 01a1557a-807f stage 2 added the More-sheet-only Changelog, and 10 -> 11
+      # when task 01a1557a-b5f9 stage 3 added the More-sheet-only Canvases.
+      # Any future destination addition should bump the matching guard below.
       list = destinations(root_user: false)
-      assert length(list) == 10
+      assert length(list) == 11
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -109,12 +110,48 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 12 destinations for an Acme user (Admin + Prompts included)" do
+    test "returns all 13 destinations for an Acme user (Admin + Prompts included)" do
       list = destinations(root_user: true)
-      assert length(list) == 12
+      assert length(list) == 13
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
+    end
+
+    test "Canvases is a More-sheet-only destination: sheet cluster, the filtered browser" do
+      dest = destinations(root_user: false) |> Enum.find(&(&1.key == :canvases))
+
+      assert %{cluster: :sheet, path: "/files?tab=browse&type=canvas", label: "Canvases"} = dest
+      refute dest.root_only?
+      # Games still has no destination (rung 21).
+      refute Enum.any?(destinations(root_user: true), &(&1.key == :games))
+    end
+
+    test "the desktop rail did not gain a Canvases tile" do
+      assigns = %{}
+
+      html =
+        rendered_to_string(~H"""
+        <.icon_rail
+          current_path="/files?tab=browse&type=canvas"
+          root_user={true}
+          sidebar_collapsed={false}
+        />
+        """)
+
+      # Positive control: the Files tile rendered, and it is the active one.
+      assert html =~ ~s(data-destination="files")
+      refute html =~ ~s(data-destination="canvases")
+    end
+
+    test "the matcher: Canvases only on its exact URL, Files on every other /files URL" do
+      list = destinations(root_user: true)
+
+      assert active_destination_key(list, "/files?tab=browse&type=canvas") == :canvases
+      assert active_destination_key(list, "/files?tab=browse") == :files
+      assert active_destination_key(list, "/files") == :files
+      assert active_destination_key(list, "/files/abc") == :files
+      assert active_destination_key(list, "/filesystem") == nil
     end
 
     test "Experiments is a member-visible destination pointing at /control/experiments" do

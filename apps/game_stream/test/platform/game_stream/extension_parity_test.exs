@@ -404,6 +404,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
+    # Canvases joined it as the More sheet's row into the Files browser
+    # (task 01a1557a-b5f9 stage 3).
     @main_rail [
       :chat,
       :tasks,
@@ -411,6 +413,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :agents,
       :skills,
       :files,
+      :canvases,
       :context,
       :prompts,
       :experiments,

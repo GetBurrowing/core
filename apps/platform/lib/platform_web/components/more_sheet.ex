@@ -10,8 +10,10 @@ defmodule PlatformWeb.Components.MoreSheet do
   One list, no headings (Saru: it is a list), from
   `IconRail.more_sheet_rows/2`: Inbox, Email, Files, Skills, Org memory,
   Agents, Experiments, Changelog, then every extension row the actor may see.
-  Canvases and Games hold places in `IconRail.more_sheet_order/0` and render
-  nothing until a page exists for them (rungs 16 and 21). A module the actor
+  Canvases opens the Files browser filtered to canvases
+  (`/files?tab=browse&type=canvas`, rung 16). Games holds a place in
+  `IconRail.more_sheet_order/0` and renders nothing until rung 21 adds a
+  page. A module the actor
   may not open, or one switched off (Email with Mail off), is absent and
   leaves no gap. Every row is one component, built-in or extension:
   a whole-width link that closes the sheet and navigates in one tap.

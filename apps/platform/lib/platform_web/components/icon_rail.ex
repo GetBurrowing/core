@@ -505,8 +505,9 @@ defmodule PlatformWeb.Components.IconRail do
 
   # The More sheet's module rows, in order (task 01a1557a-807f stage 2;
   # coverage row 5, master-mobile.html v3 :727-736). ONE list: a key with no
-  # destination yet (Canvases and Games, until rungs 16 and 21 add a page),
-  # or one the actor may not see, is skipped and leaves no gap.
+  # destination yet (Games, until rung 21 adds a page), or one the actor may
+  # not see, is skipped and leaves no gap. Canvases opens the Files browser
+  # filtered to canvases (rung 16).
   @more_sheet_order [
     :inbox,
     :email,
@@ -743,8 +744,19 @@ defmodule PlatformWeb.Components.IconRail do
     end
   end
 
+  # A destination whose path carries a query (More > Canvases,
+  # `/files?tab=browse&type=canvas`) matches only that exact URL; FilesLive
+  # passes it through as `:current_path` in one canonical form. Every other
+  # destination is compared against the path with any query dropped, at a
+  # segment boundary, so `/files?tab=browse&type=canvas` still matches Files
+  # and the longer Canvases path wins.
   defp path_matches?(path, current_path) do
-    current_path == path or String.starts_with?(current_path, path <> "/")
+    if String.contains?(path, "?") do
+      current_path == path
+    else
+      bare = current_path |> String.split("?", parts: 2) |> hd()
+      bare == path or String.starts_with?(bare, path <> "/")
+    end
   end
 
   # Active-state classes — desktop uses the icon-rail variant (a 3px left bar
@@ -974,6 +986,18 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/files",
         hero_icon: "hero-document-text",
         cluster: :working,
+        root_only?: false
+      },
+      %{
+        # More > Canvases (rung 16, task 01a1557a-b5f9 stage 3): the Files
+        # browser at All, filtered to canvases. `:sheet` cluster, so the
+        # desktop rail does not grow; the More sheet lists it after Files.
+        # Its path carries a query, which `path_matches?/2` compares whole.
+        key: :canvases,
+        label: "Canvases",
+        path: "/files?tab=browse&type=canvas",
+        hero_icon: "hero-rectangle-group",
+        cluster: :sheet,
         root_only?: false
       },
       %{

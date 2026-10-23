@@ -316,6 +316,99 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Lists live files across `project_ids`, most recently changed first
+  (`updated_at` desc), with `:uploaded_by_user` preloaded for its display
+  name. The Recents and type views of `Platform.Files.Browser`
+  (task 01a1557a-b5f9 stage 1).
+
+  `project_ids` must be DB-derived (the viewer's readable projects); this
+  function does no viewer scoping of its own. An empty list returns `[]`
+  without a query.
+
+  ## Options
+
+    * `:since` — only files with `updated_at` at or after this instant.
+    * `:limit` — caps the result count (default 50; nil disables the cap).
+    * `:type` — `:image` (an `image/*` content type) or `:doc` (anything
+      else); absent means both.
+  """
+  @spec list_recent_files_for_projects([binary()], keyword()) :: [File.t()]
+  def list_recent_files_for_projects(project_ids, opts \\ [])
+
+  def list_recent_files_for_projects([], _opts), do: []
+
+  def list_recent_files_for_projects(project_ids, opts) when is_list(project_ids) do
+    File
+    |> not_deleted()
+    |> where([f], f.project_id in ^project_ids)
+    |> maybe_updated_since(Keyword.get(opts, :since))
+    |> maybe_filter_file_type(Keyword.get(opts, :type))
+    |> order_by([f], desc: f.updated_at, desc: f.id)
+    |> maybe_limit(Keyword.get(opts, :limit, 50))
+    |> Repo.all()
+    |> Repo.preload(:uploaded_by_user)
+  end
+
+  @doc """
+  Searches live files across `project_ids` by a case-insensitive substring
+  of `name` or `original_filename`, newest `updated_at` first, with
+  `:uploaded_by_user` preloaded. `%`, `_` and `\\` in `query` match
+  literally (they are escaped before the `ILIKE`).
+
+  `project_ids` must be DB-derived. An empty id list, or a blank query,
+  returns `[]` without a query.
+
+  ## Options
+
+    * `:limit` — caps the result count (default 25).
+  """
+  @spec search_files_by_name([binary()], String.t(), keyword()) :: [File.t()]
+  def search_files_by_name(project_ids, query, opts \\ [])
+
+  def search_files_by_name([], _query, _opts), do: []
+
+  def search_files_by_name(project_ids, query, opts)
+      when is_list(project_ids) and is_binary(query) do
+    case String.trim(query) do
+      "" ->
+        []
+
+      trimmed ->
+        pattern = "%" <> escape_like(trimmed) <> "%"
+
+        File
+        |> not_deleted()
+        |> where([f], f.project_id in ^project_ids)
+        |> where([f], ilike(f.name, ^pattern) or ilike(f.original_filename, ^pattern))
+        |> order_by([f], desc: f.updated_at, desc: f.id)
+        |> maybe_limit(Keyword.get(opts, :limit, 25))
+        |> Repo.all()
+        |> Repo.preload(:uploaded_by_user)
+    end
+  end
+
+  def search_files_by_name(_project_ids, _query, _opts), do: []
+
+  defp maybe_updated_since(query, nil), do: query
+  defp maybe_updated_since(query, since), do: where(query, [f], f.updated_at >= ^since)
+
+  defp maybe_filter_file_type(query, nil), do: query
+
+  defp maybe_filter_file_type(query, :image),
+    do: where(query, [f], ilike(f.content_type, "image/%"))
+
+  defp maybe_filter_file_type(query, :doc),
+    do: where(query, [f], is_nil(f.content_type) or not ilike(f.content_type, "image/%"))
+
+  # Backslash first, so the escapes added for `%` and `_` are not doubled.
+  defp escape_like(string) do
+    string
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
+
+  @doc """
   Counts the files `list_files_for_project/2` would return with no limit
   (task 01a04a7a stage 2), in the database.
 

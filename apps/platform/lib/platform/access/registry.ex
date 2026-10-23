@@ -290,7 +290,14 @@ defmodule Platform.Access.Registry do
       %{
         module: "files",
         permissions: ~w(files.read files.write),
-        rail: [%{key: :files, permission: "files.read"}]
+        # `:canvases` (task 01a1557a-b5f9 stage 3) is the More sheet's
+        # Canvases row, which opens the Files browser filtered to canvases
+        # (`/files?tab=browse&type=canvas`, FilesLive). Same permission as the
+        # page it opens, so the row shows exactly when /files mounts.
+        rail: [
+          %{key: :files, permission: "files.read"},
+          %{key: :canvases, permission: "files.read"}
+        ]
       },
       %{
         module: "memory",

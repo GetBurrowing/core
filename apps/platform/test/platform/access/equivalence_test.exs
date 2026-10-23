@@ -538,9 +538,12 @@ defmodule Platform.Access.EquivalenceTest do
     |> Enum.sort()
   end
 
+  # The Files browser (task 01a1557a-b5f9 stage 2) keeps the viewer's
+  # projects in its `@tree`, the source every project id is checked against.
   defp files_page_projects(user) do
     {:ok, view, _html} = live(authed(user), "/files")
-    :sys.get_state(view.pid).socket.assigns.projects |> ids()
+    tree = :sys.get_state(view.pid).socket.assigns.tree
+    (Enum.flat_map(tree.orgs, & &1.projects) ++ tree.other.projects) |> ids()
   end
 
   # ── The Scope's side ────────────────────────────────────────────────────

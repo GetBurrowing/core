@@ -5188,6 +5188,34 @@ body, .font-suite {
   }
 }
 
+/* Files & Canvases browser (rung 16, task 01a1557a-b5f9 stage 4). Same rule
+   as the sheet X above: phone surfaces carry no hover paint (a pressed state
+   instead, `active:bg-base-100` on the rows), and desktop hover is plain CSS
+   gated on a hovering pointer AND the lg breakpoint, keyed on the
+   components' `data-role`s, so their class lists carry no `hover` substring.
+   Rows and node links sit on the base-200 list and hover to base-100 (the
+   pressed slot); tiles, tree rows, the New menu's items and unselected chips
+   sit on base-100 and hover to base-200. A current tree row or selected chip
+   (`aria-current="page"`) keeps its base-300. Pinned by
+   test/platform/design/files_browser_contrast_guard_test.exs. */
+@media (hover: hover) and (min-width: 1024px) {
+  [data-role="files-browser"] [data-role="browser-row"]:hover,
+  [data-role="files-browser"] [data-role="files-row"]:hover,
+  [data-role="files-browser"] [data-role="files-node-link"]:hover {
+    background: var(--color-base-100);
+  }
+
+  [data-role="files-browser"] [data-role="browser-tile"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-recents"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-project"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-space"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-org-link"]:hover,
+  [data-role="files-new-menu"] [data-role="files-new-items"] button:hover,
+  [data-role="files-chips"] [aria-current="false"]:hover {
+    background: var(--color-base-200);
+  }
+}
+
 /* The shared rule hides the bottom-sheet handle at 768px and up; a handle
    that IS the Close button must stay visible wherever it is rendered. */
 @media (min-width: 768px) {

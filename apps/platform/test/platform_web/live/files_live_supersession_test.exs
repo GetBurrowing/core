@@ -362,7 +362,9 @@ defmodule PlatformWeb.FilesLiveSupersessionTest do
 
   defp select_row(view, file_id) do
     view
-    |> element(~s([data-role="files-row"][data-file-id="#{file_id}"]))
+    |> element(
+      ~s([data-role="files-row"][data-file-id="#{file_id}"] [data-role="files-item-link"])
+    )
     |> render_click()
   end
 
