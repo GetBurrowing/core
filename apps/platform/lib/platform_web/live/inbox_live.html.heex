@@ -7,9 +7,7 @@
   <div :if={@live_action != :briefing} class="min-w-0 flex-1 lg:hidden">
     <PlatformWeb.Inbox.InboxList.inbox_list
       rows={@streams.inbox_rows}
-      row_count={
-        clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count)
-      }
+      row_count={clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count)}
       undo={@undo}
       mention_authors={@mention_authors}
       mention_space_labels={@mention_space_labels}
