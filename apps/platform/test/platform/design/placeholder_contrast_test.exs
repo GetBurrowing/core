@@ -70,6 +70,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/partials/rail.ex",
     # The briefing detail's fields (task 01a15ee1 stage 6), from main.
     "platform_web/live/inbox_live/briefing_component.ex",
+    # The space sheet's Search page field (task 01a1557a-8a6d stage 2).
+    "platform_web/live/chat/partials/space_sheet.ex",
     "platform_web/live/meeting_live.html.heex"
   ]
 
@@ -197,7 +199,7 @@ defmodule Platform.Design.PlaceholderContrastTest do
              "--subtle resolves per theme; an override paints a second, unguarded colour."
   end
 
-  test "the four input sites paint placeholder:text-subtle" do
+  test "every template site paints placeholder:text-subtle" do
     for rel <- @template_sites do
       source = File.read!(Path.join(@lib, rel))
 

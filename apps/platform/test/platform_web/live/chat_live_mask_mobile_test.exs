@@ -88,7 +88,11 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
   end
 
   describe "scope pills" do
-    test "both the compact mobile pill and the prominent header pill mask text AND aria-label",
+    # The compact MOBILE header pill was deleted in task 01a1557a-8a6d stage 3;
+    # the phone's scope control is the space sheet's Scope row and its switch.
+    # Its masking assertions moved there, with the same placeholder and the
+    # same three-form refutation, rather than being dropped.
+    test "the header pill and the sheet's Scope row and switch mask text AND aria-label",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
       create_channel("vandelay_ind")
@@ -96,33 +100,54 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       {:ok, view, html} = live(conn, ~p"/chat/vandelay_ind")
 
       assert html =~ "chat-header-scope-pill"
-      assert html =~ "chat-header-scope-pill-mobile"
+      refute html =~ "chat-header-scope-pill-mobile"
       assert html =~ ~s(aria-label="Filter by #{@canary} scope")
+
+      {row, switch} = sheet_scope_nodes(view)
+      assert_name_anywhere(row, @canary)
+      assert_name_anywhere(switch, @canary)
 
       masked =
         view
         |> element(~s(button[phx-click="toggle_mask_names"]))
         |> render_click()
 
-      # Both wrappers still render — masking changes the NAME, never whether
-      # the affordance exists.
+      # The header pill still renders — masking changes the NAME, never
+      # whether the affordance exists.
       assert masked =~ "chat-header-scope-pill"
-      assert masked =~ "chat-header-scope-pill-mobile"
 
       # A masked pill whose screen-reader name still says the real org has not
       # been masked.
       assert masked =~ ~s(aria-label="Filter by Workspace)
       refute masked =~ ~s(aria-label="Filter by #{@canary} scope")
 
-      # Scoped to the pill wrappers themselves — a `<header>`-shaped regex
-      # matches the FIRST header in the document, which is a different element
+      # Scoped to the pill wrapper itself — a `<header>`-shaped regex matches
+      # the FIRST header in the document, which is a different element
       # entirely, and the assertion would pass without ever seeing a pill.
-      for selector <- [".chat-header-scope-pill", ".chat-header-scope-pill-mobile"] do
-        pill = extract(masked, selector)
-        assert pill =~ "Workspace", "expected #{selector} to render a placeholder"
-        refute_name_anywhere(pill, @canary)
+      pill = extract(masked, ".chat-header-scope-pill")
+      assert pill =~ "Workspace", "expected the header pill to render a placeholder"
+      refute_name_anywhere(pill, @canary)
+
+      {row, switch} = sheet_scope_nodes(view)
+
+      for {node, name} <- [{row, "Scope row"}, {switch, "Scope switch"}] do
+        assert node =~ "Workspace", "expected the #{name} to render a placeholder"
+        refute_name_anywhere(node, @canary)
       end
     end
+  end
+
+  # The sheet's Scope row (Space page) and its switch (Scope page), read
+  # through the title button and the row, as a person on a phone reaches them.
+  defp sheet_scope_nodes(view) do
+    view |> element(~s(button[data-role="space-title"])) |> render_click()
+    # The title opens on the All segment; the Scope row is on Space.
+    view |> element(~s(#space-sheet button[data-seg="space"])) |> render_click()
+    row = view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render()
+    view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render_click()
+    switch = view |> element(~s(#space-sheet [data-page="scope"])) |> render()
+    render_click(view, "close_space_sheet", %{})
+    {row, switch}
   end
 
   describe "hidden-channels drawer groupings" do
@@ -161,10 +186,11 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     # `refute_name_anywhere(pill, "Newclient")` would pass on a pill that
     # still says `data-scope="new_client"`.
     @runtime_names ["Newclient", "new_client"]
+    # The compact mobile header pill left in task 01a1557a-8a6d stage 3; its
+    # place is the space sheet's Scope row and switch, asserted below.
     @runtime_pills [
       ".channel-hidden-drawer-group-label",
-      ".chat-header-scope-pill",
-      ".chat-header-scope-pill-mobile"
+      ".chat-header-scope-pill"
     ]
 
     # An Acme member, so the viewer can see the runtime org (the shell's colour
@@ -209,7 +235,8 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       {init_test_session(conn, current_user_id: user.id), visible}
     end
 
-    test "the drawer group label and both header pills mask every spelling", %{conn: conn} do
+    test "the drawer group label, the header pill and the sheet's Scope row mask every spelling",
+         %{conn: conn} do
       {conn, visible} = runtime_org_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
 
@@ -218,6 +245,13 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       for selector <- @runtime_pills, name <- @runtime_names do
         assert_name_anywhere(extract(html, selector), name)
       end
+
+      # The sheet's row and switch carry the org NAME. Their slug is only in
+      # `phx-value-scope`, the attribute the assertions name as the filter's
+      # argument, so only the name is asserted present here.
+      {row, switch} = sheet_scope_nodes(view)
+      assert_name_anywhere(row, "Newclient")
+      assert_name_anywhere(switch, "Newclient")
 
       masked =
         view
@@ -231,6 +265,17 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
 
         for name <- @runtime_names do
           refute_name_anywhere(pill, name)
+        end
+      end
+
+      {row, switch} = sheet_scope_nodes(view)
+
+      for node <- [row, switch] do
+        assert node =~ "Workspace"
+        refute node =~ "data-scope="
+
+        for name <- @runtime_names do
+          refute_name_anywhere(node, name)
         end
       end
     end

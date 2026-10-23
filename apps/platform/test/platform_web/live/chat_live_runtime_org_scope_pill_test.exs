@@ -25,7 +25,10 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
   alias PlatformWeb.Components.ScopePill
 
   @drawer_label ".channel-hidden-drawer-group-label"
-  @header_pills [".chat-header-scope-pill", ".chat-header-scope-pill-mobile"]
+  # The compact mobile header pill was deleted in task 01a1557a-8a6d stage 3
+  # (its place is the space sheet's Scope row, asserted in the shipped-org
+  # regression below).
+  @header_pills [".chat-header-scope-pill"]
 
   # An Acme member: `ScopeColorStyles` emits a rule for every org the VIEWER
   # can see, and a user with no membership sees none, which would leave the
@@ -193,7 +196,7 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
       assert vandelay_ind.name == "Vandelay-Ind"
 
       visible = org_fixture(vandelay_ind, user, "pt")
-      {:ok, _view, html} = live(conn, ~p"/chat/#{visible.id}")
+      {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
 
       drawer = extract(html, @drawer_label)
       assert drawer =~ ~s(data-scope="vandelay_ind")
@@ -231,8 +234,15 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
       assert squeeze(extract(html, ".chat-header-scope-pill > [data-scope]")) ==
                expected.(%{surface: :base_100, clickable: true})
 
-      assert squeeze(extract(html, ".chat-header-scope-pill-mobile > [data-scope]")) ==
-               expected.(%{surface: :base_100, clickable: true, size: :compact})
+      # The phone's scope control is now the space sheet's Scope switch: the
+      # org's name on the label, its stored slug as the `scope_filter` payload.
+      view |> element(~s(button[data-role="space-title"])) |> render_click()
+      # The title opens on the All segment; the Scope row is on Space.
+      view |> element(~s(#space-sheet button[data-seg="space"])) |> render_click()
+      view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render_click()
+      switch = extract(render(view), ~s(#space-sheet [data-role="space-sheet-scope-switch"]))
+      assert switch =~ ~s(phx-value-scope="vandelay_ind")
+      assert switch =~ "Filter to Vandelay-Ind scope"
     end
   end
 end

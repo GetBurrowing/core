@@ -1064,7 +1064,11 @@ defmodule PlatformWeb.Components.ScopePillTest do
     # would have had: wrong ground, still legible-looking. So the inventory
     # is pinned here, and a new `<.scope_pill>` goes red until someone
     # decides which ground it sits on and adds it below.
-    test "the inventory is exactly these four sites, each with its declared surface" do
+    #
+    # Three since task 01a1557a-8a6d stage 3 deleted the compact mobile header
+    # pill (the phone reaches the scope through the space sheet's Scope
+    # switch, which is not a scope pill).
+    test "the inventory is exactly these three sites, each with its declared surface" do
       sites =
         "lib/**/*.{ex,heex}"
         |> Path.wildcard()
@@ -1082,7 +1086,6 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
       assert sites ==
                Enum.sort([
-                 {"live/chat/partials/conversation.ex", ":base_100"},
                  {"live/chat/partials/conversation.ex", ":base_100"},
                  {"live/chat/partials/rail.ex", ":base_200"},
                  {"live/tasks/filters_component.ex", ":base_100"}

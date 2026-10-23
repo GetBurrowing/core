@@ -30,6 +30,7 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.Partials.Overlays
   import PlatformWeb.ChatLive.Partials.MessageContext, only: [message_context_overlay: 1]
   import PlatformWeb.ChatLive.Partials.Rail
+  import PlatformWeb.ChatLive.Partials.SpaceSheet
   import PlatformWeb.ChatLive.RenderHelpers
 
   alias Platform.Accounts
@@ -58,6 +59,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.PrototypeUpload
   alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.ChatLive.SpaceSheetHooks
   alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.AttachHooks
@@ -873,6 +875,9 @@ defmodule PlatformWeb.ChatLive do
       |> AttachHooks.attach()
       |> LargeUploadHooks.attach()
       |> MessagesHooks.attach()
+      # Before PinHooks, which halts the pin broadcasts the open Pinned page
+      # re-reads on (task 01a1557a-8a6d stage 2).
+      |> SpaceSheetHooks.attach()
       |> PinHooks.attach()
       |> SearchHooks.attach()
       |> ChatListHooks.attach()
@@ -1161,6 +1166,7 @@ defmodule PlatformWeb.ChatLive do
        |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
        |> ChatListHooks.reset()
+       |> SpaceSheetHooks.reset()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)

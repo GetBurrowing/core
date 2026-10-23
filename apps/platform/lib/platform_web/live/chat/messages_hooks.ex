@@ -759,6 +759,56 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> Enum.reverse()
   end
 
+  @doc """
+  Expand the inline thread under top-level message `msg_id` (creating the
+  thread if it has none yet): the `toggle_inline_thread` open branch, moved
+  here unchanged so the phone space sheet (task 01a1557a-8a6d) can open a
+  thread it has just scrolled or patched to without the toggle's collapse.
+
+  `focus: false` skips the `focus_inline_thread_compose` push. The sheet
+  passes it: focusing the composer one frame later scrolls the page to the
+  composer, cancelling the sheet's smooth scroll to the parent (measured at
+  375x812: the parent stayed at -1325px), and would raise the phone keyboard
+  on a jump that asked only to see the thread.
+  """
+  def expand_inline_thread(socket, msg_id, opts \\ []) do
+    space = socket.assigns.active_space
+
+    thread =
+      Chat.get_thread_for_message(msg_id) ||
+        case Chat.create_thread(space.id, %{parent_message_id: msg_id}) do
+          {:ok, t} -> t
+          {:error, _} -> nil
+        end
+
+    case thread do
+      nil ->
+        put_flash(socket, :error, "Could not open thread.")
+
+      thread ->
+        thread_msgs = load_thread_messages(space.id, thread.id)
+
+        socket
+        |> update(:expanded_threads, &MapSet.put(&1, msg_id))
+        |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
+        |> update(
+          :thread_previews,
+          &Map.put(&1, msg_id, %{
+            thread_id: thread.id,
+            reply_count: length(thread_msgs),
+            last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
+          })
+        )
+        |> maybe_focus_compose(msg_id, Keyword.get(opts, :focus, true))
+        |> reinsert_stream_message(msg_id)
+    end
+  end
+
+  defp maybe_focus_compose(socket, msg_id, true),
+    do: push_event(socket, "focus_inline_thread_compose", %{message_id: msg_id})
+
+  defp maybe_focus_compose(socket, _msg_id, false), do: socket
+
   @doc "Persist a draft for a space — used when switching spaces."
   @spec save_draft(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
   def save_draft(socket, space_id) do
@@ -981,39 +1031,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       {:halt, socket}
     else
-      space = socket.assigns.active_space
-
-      thread =
-        Chat.get_thread_for_message(msg_id) ||
-          case Chat.create_thread(space.id, %{parent_message_id: msg_id}) do
-            {:ok, t} -> t
-            {:error, _} -> nil
-          end
-
-      case thread do
-        nil ->
-          {:halt, put_flash(socket, :error, "Could not open thread.")}
-
-        thread ->
-          thread_msgs = load_thread_messages(space.id, thread.id)
-
-          socket =
-            socket
-            |> update(:expanded_threads, &MapSet.put(&1, msg_id))
-            |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
-            |> update(
-              :thread_previews,
-              &Map.put(&1, msg_id, %{
-                thread_id: thread.id,
-                reply_count: length(thread_msgs),
-                last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
-              })
-            )
-            |> push_event("focus_inline_thread_compose", %{message_id: msg_id})
-            |> reinsert_stream_message(msg_id)
-
-          {:halt, socket}
-      end
+      {:halt, expand_inline_thread(socket, msg_id)}
     end
   end
 

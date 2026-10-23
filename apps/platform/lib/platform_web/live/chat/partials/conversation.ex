@@ -144,6 +144,12 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # resolved IANA zone (nil renders UTC).
   attr(:goal_cadence_form, :map, default: nil)
   attr(:goal_time_zone, :string, default: nil)
+  # Task 01a1557a-8a6d stage 1 (rung 7): the phone title button opens the
+  # space sheet (`SpaceSheetHooks`). `@space_sheet` drives its
+  # `aria-expanded`; `@agent_status` (PresenceHooks) is the agent-DM
+  # subtitle.
+  attr(:space_sheet, :any, default: nil)
+  attr(:agent_status, :any, default: nil)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
@@ -167,12 +173,15 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            Applied to BOTH breakpoint branches below — the mobile and desktop
            titles are separate nodes, and a mask applied to one of them is the
            shape of bug this stage exists to find. --%>
-      <div class="flex items-center gap-2 overflow-hidden">
+      <%!-- `max-lg:` only (task 01a1557a-8a6d stage 1): on the phone the
+           title takes the row's spare width, so the name truncates last.
+           At lg the row lays out exactly as before. --%>
+      <div class="flex items-center gap-2 overflow-hidden max-lg:min-w-0 max-lg:flex-1">
         <%!-- Mobile: static channel name. Channel switching on the phone is the
              Chat list (task 01a1557a-8562), reached through the back chevron
              below or the tab bar's Chat tab; the pills strip and the drawer
              it opened were deleted in that task's stage 5. --%>
-        <div class="flex items-center gap-2 overflow-hidden lg:hidden">
+        <div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden lg:hidden">
           <%!-- Back to the phone Chat list (task 01a1557a-8562 stage 2,
                coverage row 64). A plain patch link with NO phx-click: a bare
                `phx-click` on a patch link throws in the client, and anything
@@ -188,60 +197,38 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           >
             <span class="hero-chevron-left size-5" aria-hidden="true"></span>
           </.link>
-          <span :if={@active_space.kind == "channel"} class="text-subtle">#</span>
-          <span class="truncate font-semibold">
-            {space_header_name(
-              @active_space,
-              @space_participants,
-              @user_id,
-              space_mask(assigns)
-            )}
-          </span>
-          <%!-- Compact scope-pill on the mobile chat header (chat sidebar
-               mobile Stage 2, Decision #6). Mirrors the desktop header pill
-               (the `hidden lg:flex` block just below) but uses the foundation
-               task's `:compact` size variant for the tight mobile bar. Only
-               rendered for channels — `@active_space_scope` is nil for
-               DMs/groups (no org-scope), so the pill is suppressed there. The
-               `.chat-header-scope-pill-mobile` wrapper enlarges the compact
-               pill's tap target to >=44x44px (app.css): the shared
-               `.scope-pill-hit-expand` overlay only clears the 24px WCAG floor
-               and would be clipped by this row's overflow-hidden. --%>
-          <% mobile_header_scope = !@external? && @active_space_scope %>
-          <span
-            :if={mobile_header_scope}
-            class="chat-header-scope-pill-mobile flex-shrink-0"
+          <%!-- The title IS the way into the space sheet (task 01a1557a-8a6d
+               stage 1): one button holding the name, a chevron and a
+               subtitle. The name goes through `space_header_name/4` +
+               `space_mask/1` like every other title node, and so does the
+               accessible name, so masking covers what a screen reader says
+               too. Focus comes back here when the sheet closes: the Sheet
+               hook stores the element focused when it opened (this button,
+               which the tap focused) and restores it on close. --%>
+          <% title =
+            title_prefix(@active_space) <>
+              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns)) %>
+          <button
+            type="button"
+            phx-click="open_space_sheet"
+            data-role="space-title"
+            aria-haspopup="dialog"
+            aria-controls="space-sheet"
+            aria-expanded={to_string(@space_sheet != nil)}
+            aria-label={"Space details, " <> title}
+            class="flex min-h-11 min-w-0 flex-col justify-center rounded-lg text-left text-base-content focus-visible-ring"
           >
-            <%!-- Masked like the rail (task 01a00c66 stage 3): this pill sits
-                 in the chat header at the top of the phone screen, which is
-                 the MOST visible surface in a mirrored window. The label
-                 override reaches the pill's `aria-label` too. --%>
-            <%!-- `surface` is declared, not inherited (task 01a09333-d374):
-                 the `<header>` sets no fill, so this sits on the shell's
-                 `bg-base-100`. --%>
-            <.scope_pill
-              scope={mobile_header_scope}
-              surface={:base_100}
-              size={:compact}
-              clickable={true}
-              active={@scope_filter == mobile_header_scope}
-              label={
-                if @mask_names?,
-                  do:
-                    Platform.Chat.SidebarMask.label_for_bucket(
-                      Platform.Chat.SidebarMask.context(
-                        @sidebar_sections,
-                        @mask_names?,
-                        @revealed_section_ids
-                      ),
-                      @sidebar_sections,
-                      @active_space_org && @active_space_org.name
-                    ),
-                  else: @active_space_org && @active_space_org.name
-              }
-              value={if !@mask_names? && @active_space_org, do: @active_space_org.slug}
-            />
-          </span>
+            <span class="flex min-w-0 items-center gap-1">
+              <span class="min-w-0 truncate font-semibold">{title}</span>
+              <span class="hero-chevron-down size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+            </span>
+            <span class="truncate text-xs text-subtle" data-role="space-title-subtitle">
+              {space_subtitle(@active_space, @space_participants, @user_id, @agent_status)}
+            </span>
+          </button>
+          <%!-- The compact mobile scope pill that sat here moved to the space
+               sheet's Scope row (task 01a1557a-8a6d stage 3), with the same
+               masked label and the same `scope_filter` event. --%>
         </div>
         <%!-- Desktop: static title --%>
         <span class="hidden lg:flex items-center gap-2 overflow-hidden">
@@ -359,11 +346,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          SERVER REFUSAL IS THE GATE; this is cosmetics over it. Removing
          the condition here re-exposes a dead button, not a hole. A
          button that does nothing when clicked is quiet degradation, and
-         that is the whole reason this line exists. --%>
+         that is the whole reason this line exists.
+
+         Desktop only since task 01a1557a-8a6d stage 1: below lg the Call
+         button at the end of the header carries the same gate and event. --%>
       <button
         :if={@meetings_enabled && !@in_meeting && !@external?}
         phx-click="meeting_join"
-        class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content hover:text-primary hover:bg-primary/10 transition-colors"
+        class="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content hover:text-primary hover:bg-primary/10 transition-colors"
         title="Start or join a meeting in this space"
       >
         <span class="hero-video-camera size-4"></span>
@@ -376,7 +366,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           id="chat-search-form"
           phx-change="search_submit"
           phx-submit="search_submit"
-          class="hidden md:block"
+          class="hidden lg:block"
         >
           <div class="flex items-center gap-2">
             <.input
@@ -404,7 +394,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@canvases != []}
           phx-click="canvas_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
+            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_canvases && "!bg-base-300 !text-primary"
           ]}
         >
@@ -416,7 +406,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@pins != []}
           phx-click="pin_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
+            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_pins && "!bg-base-300 !text-primary"
           ]}
         >
@@ -450,14 +440,12 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
              iOS-HIG 44px touch target on mobile (measured: 20px tall without
              it); released at `md` so the desktop hover surface still matches
              the sibling pin/settings buttons. --%>
-        <% eye_state =
-          cond do
-            @active_agent_participant_id != nil -> "open"
-            @active_agent_armable_id != nil -> "closed"
-            true -> "inert"
-          end %>
+        <%!-- The state and the render condition are `agent_eye_state/2` and
+             `agent_eye?/3`, shared with the space sheet's Agents row (task
+             01a1557a-8a6d stage 1) so the two can never disagree. --%>
+        <% eye_state = agent_eye_state(@active_agent_participant_id, @active_agent_armable_id) %>
         <button
-          :if={(@agent_presence[:joined?] || @has_agent_participant) && @active_space.kind != "dm"}
+          :if={agent_eye?(@agent_presence, @has_agent_participant, @active_space)}
           data-role="agent-eye"
           data-eye-state={eye_state}
           disabled={eye_state == "inert"}
@@ -469,7 +457,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             end
           }
           class={[
-            "flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
+            "hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
             eye_state == "open" && "text-success hover:bg-base-300",
             eye_state == "closed" &&
               "text-subtle hover:text-base-content hover:bg-base-300",
@@ -505,7 +493,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@active_space.kind == "channel"}
           phx-click="members_open"
           data-role="members-open"
-          class="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
+          class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
           title="Channel members"
         >
           <span class="hero-users size-4"></span>
@@ -514,13 +502,27 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
         <button
           phx-click="settings_open"
-          class="flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300"
+          class="hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300"
           title="Space settings"
         >
           <span class="hero-cog-6-tooth size-4"></span>
           <span class="hidden md:inline">settings</span>
         </button>
       </div>
+
+      <%!-- Phone Call (task 01a1557a-8a6d stage 1): the Meet button's gate
+           and event, as the header's one coloured control. The server
+           refusal in `Meetings.join_for_user/3` is still the gate. --%>
+      <button
+        :if={@meetings_enabled && !@in_meeting && !@external?}
+        type="button"
+        phx-click="meeting_join"
+        data-role="space-call"
+        aria-label="Start a call"
+        class="flex size-11 shrink-0 items-center justify-center rounded-lg lg:hidden focus-visible-ring"
+      >
+        <span class="hero-phone size-5 text-primary" aria-hidden="true"></span>
+      </button>
     </header>
     <%!-- The agents goal strip (task 01a0b491, stage 4).
 
@@ -541,248 +543,291 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          a failed count) — and nowhere else, not on the delta, not on a
          falling count, and not on an uncounted goal, which is a normal
          state the heartbeat fires for (task 01a0ca9f stage 3). --%>
+    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 3): below lg the goal
+         lives on the space sheet's Goal page, which renders the SAME
+         `goal_panel/1`. Desktop is unchanged. --%>
     <div
       :if={(@goal_panel || @goal_invite?) && !@embedded}
-      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2"
+      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2 max-lg:hidden"
       data-role="agents-goal-strip"
     >
-      <%!-- The same leader face as the rail row, once. Swapping the leader
-           through `role_assignments` broadcasts on `Roles.assignments_topic/0`
-           and repaints both with no reload — the change is legible across
-           the room because it is a different face, not a different word. --%>
-      <%!-- No placeholder face: in the invitation state there is no panel,
-           so there is no leader to claim and nothing renders here. --%>
-      <.agent_avatar
-        :if={@goal_panel && @goal_panel.leader}
-        name={@goal_panel.leader.name}
-        avatar_url={@goal_panel.leader.avatar_url}
-        size="xs"
-        class="ring-2 ring-primary mt-0.5"
-        title={"#{@goal_panel.leader.name} leads"}
+      <.goal_panel
+        active_space={@active_space}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
       />
-      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span
-          :if={@goal_panel && @goal_panel.leader}
-          class="text-xs text-subtle"
-          data-role="agents-goal-leader"
+    </div>
+    """
+  end
+
+  attr(:active_space, :any, required: true)
+  attr(:goal_panel, :any, required: true)
+  attr(:goal_edit, :boolean, required: true)
+  attr(:can_edit_goal?, :boolean, required: true)
+  attr(:goal_invite?, :boolean, default: false)
+  attr(:goal_scope_options, :list, default: [])
+  attr(:goal_scope_error, :atom, default: nil)
+  attr(:goal_cadence_form, :map, default: nil)
+  attr(:goal_time_zone, :string, default: nil)
+  # DOM ids inside (the cadence selects and their labels) are prefixed by
+  # this, so the space sheet's copy does not duplicate the strip's. The
+  # strip passes nothing: its ids are exactly what they were.
+  attr(:id_prefix, :string, default: "")
+
+  @doc """
+  The goal's body: leader face, sentence and measurement, the pencil, and the
+  edit form with its project select and Check progress controls. Moved
+  verbatim out of the agents goal strip (task 01a1557a-8a6d stage 3) so the
+  strip and the phone space sheet's Goal page render ONE goal UI, not two.
+  Every `data-role` and `phx-*` attribute is on the element it was on; the
+  only change is the `id_prefix` on the two cadence ids.
+  """
+  def goal_panel(assigns) do
+    ~H"""
+    <%!-- The same leader face as the rail row, once. Swapping the leader
+         through `role_assignments` broadcasts on `Roles.assignments_topic/0`
+         and repaints both with no reload — the change is legible across
+         the room because it is a different face, not a different word. --%>
+    <%!-- No placeholder face: in the invitation state there is no panel,
+         so there is no leader to claim and nothing renders here. --%>
+    <.agent_avatar
+      :if={@goal_panel && @goal_panel.leader}
+      name={@goal_panel.leader.name}
+      avatar_url={@goal_panel.leader.avatar_url}
+      size="xs"
+      class="ring-2 ring-primary mt-0.5"
+      title={"#{@goal_panel.leader.name} leads"}
+    />
+    <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span
+        :if={@goal_panel && @goal_panel.leader}
+        class="text-xs text-subtle"
+        data-role="agents-goal-leader"
+      >
+        {@goal_panel.leader.name} leads
+      </span>
+      <%= if @goal_edit do %>
+        <%!-- ONE form, ONE write. The invitation and the pencil both open
+             THIS form, and it always submits `save_goal`, which always
+             runs `Chat.update_space/2` through the stage-1 changeset.
+             The handler's only `goal in [nil, ""]` branch is the
+             install-level first-goal scope gate (task 01a0ca99), not a
+             second write path. --%>
+        <%!-- THE PROJECT SELECT (task 01a0cef1, Saru's canvas "Design
+             direction: choosing the project a goal counts") sits on the
+             goal's own line: input, select, Save, Cancel on ONE row from
+             `sm:` up. Below `sm` the form wraps and the input takes the
+             full width (`max-sm:basis-full`), so the select drops to its
+             own line with the pencil's `max-sm:min-h-11` tap target. No
+             label beyond `aria-label`; base tokens only, `--color-primary`
+             stays on Save. The scope's READING state is the existing
+             "open tasks in <name>" measurement clause, not new markup. --%>
+        <%!-- CHECK PROGRESS (task 01a0e882 stage 3, Saru's canvas "Design
+             direction: goal check cadence"). The cadence controls are a
+             SECOND LINE inside the SAME form, so Save and Cancel commit or
+             discard both. The first line keeps the one-row classes it had
+             on its own `<form>` (now on the inner row), so from `sm:` up
+             the goal row lays out exactly as before. `phx-change` only
+             re-assigns the preview selection; nothing is written until
+             Save. No cron text anywhere: options and preview are words
+             and wall-clock times from `GoalCadenceForm`. --%>
+        <form
+          phx-submit="save_goal"
+          phx-change="goal_form_change"
+          class="flex flex-col gap-2"
+          data-role="agents-goal-form"
         >
-          {@goal_panel.leader.name} leads
-        </span>
-        <%= if @goal_edit do %>
-          <%!-- ONE form, ONE write. The invitation and the pencil both open
-               THIS form, and it always submits `save_goal`, which always
-               runs `Chat.update_space/2` through the stage-1 changeset.
-               The handler's only `goal in [nil, ""]` branch is the
-               install-level first-goal scope gate (task 01a0ca99), not a
-               second write path. --%>
-          <%!-- THE PROJECT SELECT (task 01a0cef1, Saru's canvas "Design
-               direction: choosing the project a goal counts") sits on the
-               goal's own line: input, select, Save, Cancel on ONE row from
-               `sm:` up. Below `sm` the form wraps and the input takes the
-               full width (`max-sm:basis-full`), so the select drops to its
-               own line with the pencil's `max-sm:min-h-11` tap target. No
-               label beyond `aria-label`; base tokens only, `--color-primary`
-               stays on Save. The scope's READING state is the existing
-               "open tasks in <name>" measurement clause, not new markup. --%>
-          <%!-- CHECK PROGRESS (task 01a0e882 stage 3, Saru's canvas "Design
-               direction: goal check cadence"). The cadence controls are a
-               SECOND LINE inside the SAME form, so Save and Cancel commit or
-               discard both. The first line keeps the one-row classes it had
-               on its own `<form>` (now on the inner row), so from `sm:` up
-               the goal row lays out exactly as before. `phx-change` only
-               re-assigns the preview selection; nothing is written until
-               Save. No cron text anywhere: options and preview are words
-               and wall-clock times from `GoalCadenceForm`. --%>
-          <form
-            phx-submit="save_goal"
-            phx-change="goal_form_change"
-            class="flex flex-col gap-2"
-            data-role="agents-goal-form"
-          >
-            <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-              <input
-                type="text"
-                name="goal"
-                value={@goal_panel && @goal_panel.goal}
-                maxlength="500"
-                aria-label="Goal"
-                placeholder="Close backlog items"
-                phx-mounted={JS.focus()}
-                class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
-              />
-              <select
-                name="goal_project_id"
-                aria-label="Project"
-                class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
-                data-role="agents-goal-scope"
-              >
-                <option value="" selected={goal_scope_value(@active_space) == ""}>
-                  All projects
-                </option>
-                <option
-                  :for={{label, value} <- @goal_scope_options}
-                  value={value}
-                  selected={goal_scope_value(@active_space) == value}
-                >
-                  {label}
-                </option>
-              </select>
-              <button type="submit" class="btn btn-sm btn-primary">Save</button>
-              <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
-                Cancel
-              </button>
-            </div>
-            <.goal_cadence_controls
-              :if={@can_edit_goal? && @goal_cadence_form}
-              selection={@goal_cadence_form}
-              time_zone={@goal_time_zone}
+          <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+            <input
+              type="text"
+              name="goal"
+              value={@goal_panel && @goal_panel.goal}
+              maxlength="500"
+              aria-label="Goal"
+              placeholder="Close backlog items"
+              phx-mounted={JS.focus()}
+              class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
             />
-          </form>
-          <%!-- The refusal renders INLINE under the form, in `--color-error`,
-               and nowhere else: not a flash, not a warning. --%>
-          <span
-            :if={@goal_scope_error == :unknown_project}
-            class="text-xs text-error"
-            data-role="agents-goal-scope-error"
-          >
-            That project is not available in this channel's org.
-          </span>
-        <% else %>
-          <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
-               line the goal will occupy, at the goal sentence's `text-sm`,
-               inside the strip's existing padding and border, so nothing
-               moves between wanting a goal, typing it and having it. Ghost,
-               `/60` (the measured AA floor; `/40` fails), and no warning,
-               error or info token: a goal-less channel is not a fault. The
-               tap target matches the pencil's `max-sm:` treatment, and
-               `max-sm:-my-2` hands the extra height back to the strip's own
-               `py-2`. MEASURED at 375x812 without it: the 44px box grew the
-               strip to 61px while the editing form's strip is 45px, so the
-               page jumped 16px on click. With it the box stays 44px tall and
-               the strip is the same height in both states. --%>
-          <button
-            :if={!@goal_panel}
-            type="button"
-            phx-click="edit_goal"
-            class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
-            data-role="agents-goal-invite"
-          >
-            Set a goal for this channel
-          </button>
-          <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
-               375x812 before this change, against goals of growing length:
-               the measurement clause reached 0px at 38 characters and the
-               strip overflowed the viewport (scrollWidth 382 > clientWidth
-               375) at 40, while the goal input allows `maxlength="500"`.
-               The desktop rule below — sentence `shrink-0`, clause
-               `min-w-0 truncate` — is correct at 1280px where there is
-               slack, and at 375px it spends the entire deficit on the one
-               fragment that carries the heartbeat's payload. So: let the
-               row become two lines below `sm` instead of truncating the
-               numeral away. `sm:flex-nowrap` and `sm:shrink-0` restore the
-               desktop rule exactly — at >=640px the computed layout is
-               identical to what shipped in v1, which is why v1's existing
-               assertions in `chat_live_agents_goal_surface_test.exs` must
-               stay green. --%>
-          <div
-            :if={@goal_panel}
-            class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
-            data-role="agents-goal-row"
-          >
-            <%!-- The goal sentence at FULL `--color-base-content`: it is
-                 the most meaningful string on the surface, and the
-                 truncation rule says the most meaningful fragment is the
-                 last thing allowed to truncate. `sm:shrink-0` here,
-                 `min-w-0 truncate` on the clause beside it. Below `sm` the
-                 sentence is NOT `shrink-0`: it wraps onto a second line and
-                 the clause keeps its own line at full width. --%>
-            <span class="text-sm text-base-content sm:shrink-0" data-role="agents-goal-sentence">
-              {@goal_panel.goal}
-            </span>
-            <%!-- The measurement clause at `/60`, which is the measured
-                 contrast FLOOR and not a preference: composited, `/40`
-                 (the treatment `topic` uses two lines up) is 2.85:1 light
-                 and 3.53:1 dark and fails AA in both themes; `/60` is
-                 5.74:1 and 6.26:1. --%>
-            <%!-- An UNCOUNTED goal (task 01a0ca9f stage 3, Saru's canvas
-                 "Design direction: the goal strip when a goal has no
-                 count"). The heartbeat fires for it, so this is a normal
-                 state and not a fault: `/60`, the same tier as the measured
-                 clause, NOT `text-warning` and NOT `text-info`. No mono span,
-                 no rule, no icon — there is no numeral to set in mono, and a
-                 glyph would read as a status. Same slot, size and
-                 truncation as the other two branches. This branch sits
-                 BEFORE the `missing?` one because an uncounted slot is
-                 `missing?: true` too (every no-number consumer keeps
-                 treating it as no-number); it matches on `kind` only, so a
-                 counted slot (`missing?: false`, no `kind`) never reaches it. --%>
-            <%= cond do %>
-              <% @goal_panel.measurement[:kind] == :uncounted -> %>
-                <span
-                  class="min-w-0 truncate text-xs text-subtle"
-                  data-role="agents-goal-measurement-uncounted"
-                >
-                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-              <% @goal_panel.measurement[:missing?] -> %>
-                <%!-- The warning is reserved for a genuine fault:
-                     `:unknown_scope` (the goal's project scope names no
-                     project that exists), `:count_failed`, and the unkinded
-                     missing slots. --%>
-                <span
-                  class="min-w-0 truncate text-xs text-warning"
-                  data-role="agents-goal-measurement-missing"
-                >
-                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-              <% true -> %>
-                <span
-                  class="min-w-0 truncate text-xs text-subtle"
-                  data-role="agents-goal-measurement"
-                >
-                  <%!-- The number, and ONLY the number, in JetBrains Mono
-                       inline in the sentence. A changing digit is legible
-                       at a glance in mono without building a tile around
-                       it. --%>
-                  <span class="font-mono" data-role="agents-goal-number">
-                    {@goal_panel.measurement.value}
-                  </span>
-                  {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-            <% end %>
-            <%!-- TAP TARGET, and this is independent of the reflow above:
-                 MEASURED at 375x812 BEFORE any change, the control's box was
-                 32 x 21 px — under 44px in BOTH dimensions, and it was that
-                 size before this stage existed. `max-sm:` raises the target
-                 with PADDING below `sm` and leaves the glyph at `size-3.5`,
-                 because a bigger pencil is a louder surface and the
-                 no-chrome contract above forbids that. `max-sm:` rather than
-                 a `sm:` reset is deliberate: it adds no class that is live
-                 at >=640px, so the desktop computed box stays 32 x 21 with
-                 nothing to restore. Matches the 44px touch floor every phone
-                 control here keeps (`min-h-11 min-w-11`). --%>
-            <button
-              :if={@can_edit_goal?}
-              type="button"
-              phx-click="edit_goal"
-              class="btn btn-ghost btn-xs shrink-0 max-sm:min-h-11 max-sm:min-w-11"
-              aria-label="Edit goal"
-              title="Edit goal"
+            <select
+              name="goal_project_id"
+              aria-label="Project"
+              class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
+              data-role="agents-goal-scope"
             >
-              <span class="hero-pencil-square size-3.5"></span>
+              <option value="" selected={goal_scope_value(@active_space) == ""}>
+                All projects
+              </option>
+              <option
+                :for={{label, value} <- @goal_scope_options}
+                value={value}
+                selected={goal_scope_value(@active_space) == value}
+              >
+                {label}
+              </option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
+              Cancel
             </button>
           </div>
-        <% end %>
-      </div>
+          <.goal_cadence_controls
+            :if={@can_edit_goal? && @goal_cadence_form}
+            selection={@goal_cadence_form}
+            time_zone={@goal_time_zone}
+            id_prefix={@id_prefix}
+          />
+        </form>
+        <%!-- The refusal renders INLINE under the form, in `--color-error`,
+             and nowhere else: not a flash, not a warning. --%>
+        <span
+          :if={@goal_scope_error == :unknown_project}
+          class="text-xs text-error"
+          data-role="agents-goal-scope-error"
+        >
+          That project is not available in this channel's org.
+        </span>
+      <% else %>
+        <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
+             line the goal will occupy, at the goal sentence's `text-sm`,
+             inside the strip's existing padding and border, so nothing
+             moves between wanting a goal, typing it and having it. Ghost,
+             `/60` (the measured AA floor; `/40` fails), and no warning,
+             error or info token: a goal-less channel is not a fault. The
+             tap target matches the pencil's `max-sm:` treatment, and
+             `max-sm:-my-2` hands the extra height back to the strip's own
+             `py-2`. MEASURED at 375x812 without it: the 44px box grew the
+             strip to 61px while the editing form's strip is 45px, so the
+             page jumped 16px on click. With it the box stays 44px tall and
+             the strip is the same height in both states. --%>
+        <button
+          :if={!@goal_panel}
+          type="button"
+          phx-click="edit_goal"
+          class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
+          data-role="agents-goal-invite"
+        >
+          Set a goal for this channel
+        </button>
+        <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
+             375x812 before this change, against goals of growing length:
+             the measurement clause reached 0px at 38 characters and the
+             strip overflowed the viewport (scrollWidth 382 > clientWidth
+             375) at 40, while the goal input allows `maxlength="500"`.
+             The desktop rule below — sentence `shrink-0`, clause
+             `min-w-0 truncate` — is correct at 1280px where there is
+             slack, and at 375px it spends the entire deficit on the one
+             fragment that carries the heartbeat's payload. So: let the
+             row become two lines below `sm` instead of truncating the
+             numeral away. `sm:flex-nowrap` and `sm:shrink-0` restore the
+             desktop rule exactly — at >=640px the computed layout is
+             identical to what shipped in v1, which is why v1's existing
+             assertions in `chat_live_agents_goal_surface_test.exs` must
+             stay green. --%>
+        <div
+          :if={@goal_panel}
+          class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
+          data-role="agents-goal-row"
+        >
+          <%!-- The goal sentence at FULL `--color-base-content`: it is
+               the most meaningful string on the surface, and the
+               truncation rule says the most meaningful fragment is the
+               last thing allowed to truncate. `sm:shrink-0` here,
+               `min-w-0 truncate` on the clause beside it. Below `sm` the
+               sentence is NOT `shrink-0`: it wraps onto a second line and
+               the clause keeps its own line at full width. --%>
+          <span class="text-sm text-base-content sm:shrink-0" data-role="agents-goal-sentence">
+            {@goal_panel.goal}
+          </span>
+          <%!-- The measurement clause at `/60`, which is the measured
+               contrast FLOOR and not a preference: composited, `/40`
+               (the treatment `topic` uses two lines up) is 2.85:1 light
+               and 3.53:1 dark and fails AA in both themes; `/60` is
+               5.74:1 and 6.26:1. --%>
+          <%!-- An UNCOUNTED goal (task 01a0ca9f stage 3, Saru's canvas
+               "Design direction: the goal strip when a goal has no
+               count"). The heartbeat fires for it, so this is a normal
+               state and not a fault: `/60`, the same tier as the measured
+               clause, NOT `text-warning` and NOT `text-info`. No mono span,
+               no rule, no icon — there is no numeral to set in mono, and a
+               glyph would read as a status. Same slot, size and
+               truncation as the other two branches. This branch sits
+               BEFORE the `missing?` one because an uncounted slot is
+               `missing?: true` too (every no-number consumer keeps
+               treating it as no-number); it matches on `kind` only, so a
+               counted slot (`missing?: false`, no `kind`) never reaches it. --%>
+          <%= cond do %>
+            <% @goal_panel.measurement[:kind] == :uncounted -> %>
+              <span
+                class="min-w-0 truncate text-xs text-subtle"
+                data-role="agents-goal-measurement-uncounted"
+              >
+                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+            <% @goal_panel.measurement[:missing?] -> %>
+              <%!-- The warning is reserved for a genuine fault:
+                   `:unknown_scope` (the goal's project scope names no
+                   project that exists), `:count_failed`, and the unkinded
+                   missing slots. --%>
+              <span
+                class="min-w-0 truncate text-xs text-warning"
+                data-role="agents-goal-measurement-missing"
+              >
+                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+            <% true -> %>
+              <span
+                class="min-w-0 truncate text-xs text-subtle"
+                data-role="agents-goal-measurement"
+              >
+                <%!-- The number, and ONLY the number, in JetBrains Mono
+                     inline in the sentence. A changing digit is legible
+                     at a glance in mono without building a tile around
+                     it. --%>
+                <span class="font-mono" data-role="agents-goal-number">
+                  {@goal_panel.measurement.value}
+                </span>
+                {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+          <% end %>
+          <%!-- TAP TARGET, and this is independent of the reflow above:
+               MEASURED at 375x812 BEFORE any change, the control's box was
+               32 x 21 px — under 44px in BOTH dimensions, and it was that
+               size before this stage existed. `max-sm:` raises the target
+               with PADDING below `sm` and leaves the glyph at `size-3.5`,
+               because a bigger pencil is a louder surface and the
+               no-chrome contract above forbids that. `max-sm:` rather than
+               a `sm:` reset is deliberate: it adds no class that is live
+               at >=640px, so the desktop computed box stays 32 x 21 with
+               nothing to restore. Matches the 44px touch floor every phone
+               control here keeps (`min-h-11 min-w-11`). --%>
+          <button
+            :if={@can_edit_goal?}
+            type="button"
+            phx-click="edit_goal"
+            class="btn btn-ghost btn-xs shrink-0 max-sm:min-h-11 max-sm:min-w-11"
+            aria-label="Edit goal"
+            title="Edit goal"
+          >
+            <span class="hero-pencil-square size-3.5"></span>
+          </button>
+        </div>
+      <% end %>
     </div>
     """
   end
 
   attr(:selection, :map, required: true)
   attr(:time_zone, :string, default: nil)
+  attr(:id_prefix, :string, default: "")
 
   # The Check progress line: a cadence select, an "at" hour select for
   # Once a day only (option VALUE is the UTC hour, label the viewer's local
@@ -802,11 +847,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div class="flex flex-col gap-1" data-role="agents-goal-cadence-line">
       <div class="flex flex-wrap items-center gap-2">
-        <label class="text-xs font-medium text-base-content" for="agents-goal-cadence">
+        <label class="text-xs font-medium text-base-content" for={@id_prefix <> "agents-goal-cadence"}>
           Check progress
         </label>
         <select
-          id="agents-goal-cadence"
+          id={@id_prefix <> "agents-goal-cadence"}
           name="goal_cadence"
           class="select select-bordered select-sm max-sm:min-h-11"
           data-role="agents-goal-cadence"
@@ -820,11 +865,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </option>
         </select>
         <%= if @selection.cadence == :daily do %>
-          <label class="text-xs font-medium text-base-content" for="agents-goal-cadence-hour">
+          <label
+            class="text-xs font-medium text-base-content"
+            for={@id_prefix <> "agents-goal-cadence-hour"}
+          >
             at
           </label>
           <select
-            id="agents-goal-cadence-hour"
+            id={@id_prefix <> "agents-goal-cadence-hour"}
             name="goal_cadence_hour"
             class="select select-bordered select-sm max-sm:min-h-11"
             data-role="agents-goal-cadence-hour"
@@ -874,9 +922,12 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   """
   def search_drawer(assigns) do
     ~H"""
+    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 2): below lg the space
+         sheet's Search page lists the results, so a phone search must not
+         also paint this drawer above the messages. Desktop is unchanged. --%>
     <div
       :if={present?(@search_query)}
-      class="border-b border-edge bg-base-200 px-5 py-3"
+      class="border-b border-edge bg-base-200 px-5 py-3 max-lg:hidden"
     >
       <div class="flex items-center justify-between gap-3">
         <div>
@@ -1396,4 +1447,52 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # A wrapper, not a qualified call — see "WHY THE MASK CALL IS WRAPPED" in
   # the moduledoc.
   defp space_mask(assigns), do: ChatLive.space_mask(assigns)
+
+  @doc """
+  Whether the agent eye renders: an agent is joined or seated, and the space
+  is not a DM (`attention_router.ex` makes DMs unconditionally `:directed`).
+  The header eye and the space sheet's Agents row (task 01a1557a-8a6d) both
+  read this, so they render under one condition.
+  """
+  def agent_eye?(agent_presence, has_agent_participant, space) do
+    (agent_presence[:joined?] || has_agent_participant) && space.kind != "dm"
+  end
+
+  @doc """
+  The agent eye's state: `"open"` (a mutex is held), `"closed"` (a defensible
+  target to arm) or `"inert"` (neither). Shared by the header eye and the
+  space sheet's Agents row.
+  """
+  def agent_eye_state(participant_id, _armable_id) when participant_id != nil, do: "open"
+  def agent_eye_state(_participant_id, armable_id) when armable_id != nil, do: "closed"
+  def agent_eye_state(_participant_id, _armable_id), do: "inert"
+
+  @doc "The `#` a channel's title carries; nothing for any other kind."
+  def title_prefix(%{kind: "channel"}), do: "#"
+  def title_prefix(_space), do: ""
+
+  @doc """
+  The phone title button's subtitle (task 01a1557a-8a6d stage 1). A direct
+  message with an agent shows the agent status, one with a person shows
+  "Direct message", and every other kind counts its people.
+  """
+  def space_subtitle(%{kind: "dm"}, participants, user_id, agent_status) do
+    other = Enum.find(participants, &(&1.participant_id != user_id))
+
+    case other do
+      %{participant_type: "agent"} -> agent_status_label(agent_status)
+      _ -> "Direct message"
+    end
+  end
+
+  def space_subtitle(_space, participants, _user_id, _agent_status),
+    do: people_count(length(participants))
+
+  defp people_count(1), do: "1 person"
+  defp people_count(n), do: "#{n} people"
+
+  defp agent_status_label(:online), do: "Online"
+  defp agent_status_label(:offline), do: "Offline"
+  defp agent_status_label(:thinking), do: "Thinking"
+  defp agent_status_label(_status), do: "Agent"
 end

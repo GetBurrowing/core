@@ -616,7 +616,12 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # tray, its send guard and the large-file send live in
   # `PlatformWeb.ChatLive.AttachHooks`, `Partials.Attach` and
   # `LargeUploadHooks`. 2600 - 38 = 2562, measured by this guard.
-  @chat_live_code_line_count 2562
+  # Task 01a1557a-8a6d stage 1 (the phone space sheet): +4, measured by this
+  # guard on the file merged with rung 11 (2562 -> 2566): the
+  # `Partials.SpaceSheet` import, the `SpaceSheetHooks` alias, its `attach/1`
+  # in mount and its `reset/1` in the `:show` branch. The sheet's events live
+  # in `PlatformWeb.ChatLive.SpaceSheetHooks`, not here.
+  @chat_live_code_line_count 2566
 
   @doc """
   Count the CODE lines of a source file.

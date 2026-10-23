@@ -225,6 +225,8 @@
         external?={@external?}
         space_participants={@space_participants}
         user_id={@user_id}
+        space_sheet={@space_sheet}
+        agent_status={@agent_status}
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
@@ -280,6 +282,48 @@
         canvas_search_focus={@canvas_search_focus}
         prototype_upload={@uploads[PrototypeUpload.upload_name()]}
         can_publish_prototype?={@can_publish_prototype?}
+      />
+
+      <%!-- The phone space sheet (task 01a1557a-8a6d, rung 7), opened by the
+           header's title button. `lg:hidden`; `SpaceSheetHooks` owns it. --%>
+      <.space_sheet
+        :if={@active_space && !@embedded}
+        space_sheet={@space_sheet}
+        active_space={@active_space}
+        space_participants={@space_participants}
+        user_id={@user_id}
+        mask_names?={@mask_names?}
+        revealed_section_ids={@revealed_section_ids}
+        sidebar_sections={@sidebar_sections}
+        external?={@external?}
+        canvases={@canvases}
+        show_canvases={@show_canvases}
+        meetings_enabled={@meetings_enabled}
+        in_meeting={@in_meeting}
+        agent_presence={@agent_presence}
+        has_agent_participant={@has_agent_participant}
+        active_agent_participant_id={@active_agent_participant_id}
+        active_agent_armable_id={@active_agent_armable_id}
+        active_agent_name={@active_agent_name}
+        search_query={@search_query}
+        search_results={@search_results}
+        participants_map={@participants_map}
+        pins={@pins}
+        space_sheet_pins={@space_sheet_pins}
+        space_sheet_threads={@space_sheet_threads}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
+        active_space_scope={@active_space_scope}
+        active_space_org={@active_space_org}
+        scope_filter={@scope_filter}
+        space_sheet_files={@space_sheet_files}
+        space_sheet_links={@space_sheet_links}
       />
 
       <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>

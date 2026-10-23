@@ -3811,6 +3811,58 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  The space's threads that have at least one non-deleted reply, for the phone
+  space sheet's Threads page (task 01a1557a-8a6d stage 2). Most recent reply
+  first, at most 50, each as
+  `%{thread_id, parent_message_id, excerpt, author, reply_count, last_reply_at}`.
+
+  The reply aggregate is `thread_previews_for_messages/1`'s: non-deleted
+  replies only, counted and their latest `inserted_at` taken. `excerpt` and
+  `author` come from the parent message, and are nil when that message is
+  deleted, so a deleted parent's text is never shown.
+
+  The optional `:scope` drops threads in spaces outside an external caller's
+  participant set (`ExternalScope.scope_by_space_id/2`).
+  """
+  @spec list_thread_summaries(binary(), keyword()) :: [map()]
+  def list_thread_summaries(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    replies =
+      from(r in Message,
+        where: r.space_id == ^space_id and not is_nil(r.thread_id) and is_nil(r.deleted_at),
+        group_by: r.thread_id,
+        select: %{
+          thread_id: r.thread_id,
+          reply_count: count(r.id),
+          last_reply_at: max(r.inserted_at)
+        }
+      )
+
+    from(t in Thread,
+      join: r in subquery(replies),
+      on: r.thread_id == t.id,
+      left_join: pm in Message,
+      on: pm.id == t.parent_message_id and is_nil(pm.deleted_at),
+      left_join: a in Participant,
+      on: a.id == pm.participant_id,
+      where: t.space_id == ^space_id,
+      order_by: [desc: r.last_reply_at, desc: t.id],
+      limit: 50,
+      select: %{
+        thread_id: t.id,
+        parent_message_id: t.parent_message_id,
+        excerpt: pm.content,
+        author: a.display_name,
+        reply_count: r.reply_count,
+        last_reply_at: r.last_reply_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+  end
+
+  @doc """
   Idempotent thread creation for a parent message.
 
   If a thread already exists anchored to `parent_message_id`, returns it.
@@ -4338,6 +4390,42 @@ defmodule Platform.Chat do
       where: p.space_id == ^space_id,
       order_by: [asc: p.inserted_at]
     )
+    |> Repo.all()
+  end
+
+  @doc """
+  The space's pins joined to their messages, for the phone space sheet's
+  Pinned page (task 01a1557a-8a6d stage 2): newest pin first, each as
+  `%{pin_id, message_id, space_id, content, author, inserted_at, pinned_at}`.
+  `inserted_at` is the message's. A pin whose message is deleted is left
+  out: its content is gone, and a row with nothing to show is a dead row.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or
+  `%Platform.Access.Scope{}`) drops pins in spaces outside an external
+  caller's participant set, as `list_attachments_for_messages/2` does.
+  """
+  @spec list_pins_with_messages(binary(), keyword()) :: [map()]
+  def list_pins_with_messages(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(p in Pin,
+      join: m in Message,
+      on: m.id == p.message_id and m.space_id == p.space_id and is_nil(m.deleted_at),
+      left_join: a in Participant,
+      on: a.id == m.participant_id,
+      where: p.space_id == ^space_id,
+      order_by: [desc: p.inserted_at, desc: p.id],
+      select: %{
+        pin_id: p.id,
+        message_id: m.id,
+        space_id: p.space_id,
+        content: m.content,
+        author: a.display_name,
+        inserted_at: m.inserted_at,
+        pinned_at: p.inserted_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -5444,6 +5532,133 @@ defmodule Platform.Chat do
     |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
     |> Enum.group_by(& &1.message_id)
+  end
+
+  @doc """
+  The space's shared files, for the phone space sheet's Files and Videos
+  segments (task 01a1557a-8a6d stage 4). `state == "ready"` attachments whose
+  message is not deleted, newest first, at most 50, each as
+  `%{id, filename, content_type, byte_size, message_id, author, inserted_at}`.
+  A pending upload, a canvas-only attachment (no message) and an attachment
+  on a deleted message are all left out.
+
+  The optional `:scope` drops attachments in spaces outside an external
+  caller's participant set (`ExternalScope.scope_by_space_id/2`).
+  """
+  @spec list_space_attachments(binary(), keyword()) :: [map()]
+  def list_space_attachments(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(a in Attachment,
+      join: m in Message,
+      on: m.id == a.message_id and m.space_id == a.space_id and is_nil(m.deleted_at),
+      left_join: p in Participant,
+      on: p.id == m.participant_id,
+      where: a.space_id == ^space_id and a.state == "ready",
+      order_by: [desc: a.inserted_at, desc: a.id],
+      limit: 50,
+      select: %{
+        id: a.id,
+        filename: a.filename,
+        content_type: a.content_type,
+        byte_size: a.byte_size,
+        message_id: m.id,
+        author: p.display_name,
+        inserted_at: a.inserted_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+  end
+
+  # How many recent messages `list_space_links/2` reads, and how many links
+  # it returns. A bounded scan: no link table, no migration.
+  @space_links_window 300
+  @space_links_limit 50
+
+  @doc """
+  The http(s) links shared in a space, for the phone space sheet's Sites and
+  Videos segments (task 01a1557a-8a6d stage 4).
+
+  A link is exactly what the timeline turns into a clickable link: each of
+  the space's #{@space_links_window} most recent non-deleted messages is
+  rendered through `ContentRenderer.render_message/1`, the renderer the
+  message list uses, and the http(s) `href`s of its `<a>` tags are taken. So
+  a bare URL Earmark autolinks, a markdown `[text](url)` link and nothing
+  else count, and the Links list cannot disagree with the timeline. There is
+  no URL regex here to drift from the renderer's.
+
+  Deduplicated by URL keeping the newest, newest first, at most
+  #{@space_links_limit}, each as
+  `%{url, host, kind, message_id, author, inserted_at}` where `kind` is
+  `:video` for a youtube.com / youtu.be / vimeo.com / loom.com host (and
+  their subdomains) and `:site` otherwise. `:scope` as
+  `list_space_attachments/2`.
+  """
+  @spec list_space_links(binary(), keyword()) :: [map()]
+  def list_space_links(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(m in Message,
+      left_join: p in Participant,
+      on: p.id == m.participant_id,
+      where: m.space_id == ^space_id and is_nil(m.deleted_at),
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: @space_links_window,
+      select: %{
+        message_id: m.id,
+        content: m.content,
+        author: p.display_name,
+        inserted_at: m.inserted_at,
+        space_id: m.space_id
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+    |> Enum.flat_map(fn msg ->
+      msg.content
+      |> rendered_link_urls()
+      |> Enum.map(fn url ->
+        host = URI.parse(url).host |> to_string() |> String.downcase()
+
+        %{
+          url: url,
+          host: host,
+          kind: link_kind(host),
+          message_id: msg.message_id,
+          author: msg.author,
+          inserted_at: msg.inserted_at
+        }
+      end)
+    end)
+    |> Enum.uniq_by(& &1.url)
+    |> Enum.take(@space_links_limit)
+  end
+
+  @doc """
+  The http(s) URLs the message renderer turns into links in `content`, in
+  order. Public so the test that holds `list_space_links/2` to the timeline
+  can ask the same question of the same renderer.
+  """
+  @spec rendered_link_urls(String.t() | nil) :: [String.t()]
+  def rendered_link_urls(content) when is_binary(content) and content != "" do
+    content
+    |> Platform.Chat.ContentRenderer.render_message()
+    |> Phoenix.HTML.safe_to_string()
+    |> Floki.parse_fragment!()
+    |> Floki.attribute("a", "href")
+    |> Enum.filter(&String.match?(&1, ~r{\Ahttps?://}i))
+    |> Enum.uniq()
+  end
+
+  def rendered_link_urls(_content), do: []
+
+  @video_hosts ~w(youtube.com youtu.be vimeo.com loom.com)
+
+  defp link_kind(host) do
+    if Enum.any?(@video_hosts, &(host == &1 or String.ends_with?(host, "." <> &1))),
+      do: :video,
+      else: :site
   end
 
   defp publish_canvas_created(canvas) do

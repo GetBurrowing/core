@@ -6598,33 +6598,6 @@ body, .font-suite {
     position: absolute;
     inset: -6px;
   }
-
-  /* Mobile chat-header compact scope-pill (chat sidebar mobile Stage 2,
-     Decision #6). The shared `.scope-pill-hit-expand` overlay above only
-     clears the WCAG 2.5.8 24px floor (~26px on the 14px compact chip) and
-     would additionally be clipped by the header row's `overflow-hidden`
-     (name truncation). In the mobile header we (1) give the wrapper a 44px
-     min box so the flex ancestors reserve the height and nothing clips, and
-     (2) stretch the hit overlay to fill it — yielding a >=44x44px iOS-
-     compliant tap target while the painted chip stays compact. Scoped to
-     this wrapper so dense message-row compact pills keep the correct-for-
-     density 24px overlay. */
-  .chat-header-scope-pill-mobile {
-    @apply inline-flex items-center justify-center;
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .chat-header-scope-pill-mobile .scope-pill-hit-expand::before {
-    top: 50%;
-    right: auto;
-    bottom: auto;
-    left: 50%;
-    width: 100%;
-    min-width: 44px;
-    height: 44px;
-    transform: translate(-50%, -50%);
-  }
 }
 
 /* Org Memory wiki (ADR-0041 T7 stage 4) — wikilink rendering.
