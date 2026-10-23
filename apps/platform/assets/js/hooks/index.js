@@ -5,6 +5,8 @@
 // configured modules. Core never imports a module's hook by name.
 import extensionHooks from "@extensions"
 import AppBadge from "./app_badge"
+import AttachSheet from "./attach_sheet"
+import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
@@ -68,13 +70,14 @@ import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
-import UploadButton from "./upload_button"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
 export default {
   // First, so a core hook of the same name wins over a module's.
   ...extensionHooks,
   AppBadge,
+  AttachFailedPreview,
+  AttachSheet,
   ButtonLoading,
   CandidateClock,
   CanvasRoomBridge,
@@ -141,6 +144,5 @@ export default {
   SidebarCollapse,
   TasksStatusFilter,
   ThemePicker,
-  UploadButton,
   ViewportBreakpoint,
 }

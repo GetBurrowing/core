@@ -34,7 +34,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   `Phoenix.LiveView.allow_upload/3` is called from this component's
   `mount/1` (LiveView supports uploads in stateful LiveComponents), so
   `:steering_attachments` is bound to the component rather than to the
-  shell. The lifecycle mirrors `PlatformWeb.ChatLive.UploadHooks`:
+  shell. The lifecycle mirrors `PlatformWeb.ChatLive.AttachHooks`:
   auto-upload with a `progress` callback that mirrors entries into
   `:steering_upload_previews`, an explicit cancel event, and
   `consume_uploaded_entries/3` at send time.
@@ -805,7 +805,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
     )
   end
 
-  # ── Steering upload helpers (mirrors ChatLive.UploadHooks) ─────────────
+  # ── Steering upload helpers (mirrors ChatLive.AttachHooks) ─────────────
 
   defp handle_steering_attachment_progress(:steering_attachments, entry, socket) do
     preview = %{

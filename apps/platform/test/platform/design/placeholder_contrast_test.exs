@@ -98,7 +98,6 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/admin_vault_live.html.heex" => :global_default,
     "platform_web/live/chat/new_channel_component.ex" => :global_default,
     "platform_web/live/chat/new_conversation_component.ex" => :global_default,
-    "platform_web/live/chat/partials.ex" => :global_default,
     "platform_web/live/chat/partials/composer.ex" => :rule_painted,
     "platform_web/live/chat/partials/conversation.ex" => :global_default,
     "platform_web/live/chat/settings_component.ex" => :global_default,

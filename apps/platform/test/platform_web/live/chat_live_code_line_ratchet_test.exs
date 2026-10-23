@@ -548,8 +548,8 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # Large file uploads (task 01a120be stage 3): +2. The `LargeUploadHooks`
   # alias and its `attach/1` pipeline step; the feature lives in
-  # `PlatformWeb.ChatLive.LargeUploadHooks`, the dialog partial and the
-  # composer partial. 2363 + 2 = 2365.
+  # `PlatformWeb.ChatLive.LargeUploadHooks` and the composer partials.
+  # 2363 + 2 = 2365.
   #
   # Merge of origin/main into 01a120be (deploy stage): main's pin was 2395
   # (01a116de +32 on the 2363 base); this branch adds +2 on that base.
@@ -608,7 +608,15 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `toggle_mask_names` handler persists the requested state through
   # `Accounts.put_mask_names/2`; the mount seed stays one line. Re-measured on
   # top of the stage 5 tree above: 2599 + 1 = 2600.
-  @chat_live_code_line_count 2600
+  # Task 01a1557a-9de3 stage 1 (rung 11, the staged tray): -38. Out went the
+  # upload dialog's send coordinator (the slug-to-@mention caption builder and its
+  # post/stream/reset), the `noop` handler only the dialog panel used, and
+  # the `UploadHooks` alias and attach step; in came the `AttachHooks` alias
+  # and attach step (ahead of `MessagesHooks`) and `auto_upload: true`. The
+  # tray, its send guard and the large-file send live in
+  # `PlatformWeb.ChatLive.AttachHooks`, `Partials.Attach` and
+  # `LargeUploadHooks`. 2600 - 38 = 2562, measured by this guard.
+  @chat_live_code_line_count 2562
 
   @doc """
   Count the CODE lines of a source file.

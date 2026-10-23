@@ -216,8 +216,9 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # was already there when this task changed the colour, and 14 such strings
   # were on feat/redesign b1e35b5c before this task. That set is frozen at an
   # exact ceiling (ADR 0050). A new one fails, and a migrated one fails with
-  # "lower the ceiling".
-  @small_subtle_ceiling 112
+  # "lower the ceiling". Rung 11 (task 01a1557a-9de3) deleted the upload
+  # dialog's large-file row, whose 11px size line was one of them: 112 -> 111.
+  @small_subtle_ceiling 111
   @small_size ~r/(?<![\w-])text-\[(?:\d|1[01])(?:\.\d+)?px\]|(?<![\w-])text-\[0\.(?:[0-6]\d*|7[0-4]\d*)rem\]/
   @tier_collapses [
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex", ">unassigned<"},

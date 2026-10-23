@@ -60,8 +60,8 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
+  alias PlatformWeb.ChatLive.AttachHooks
   alias PlatformWeb.ChatLive.LargeUploadHooks
-  alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.Extensions
   alias PlatformWeb.LifecycleActions
   alias PlatformWeb.ShellLive
@@ -769,6 +769,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:jump_new_message_count, 0)
       |> allow_upload(:attachments,
         accept: :any,
+        auto_upload: true,
         max_entries: @max_upload_entries,
         max_file_size: @max_upload_size,
         progress: &handle_upload_progress/3
@@ -867,14 +868,15 @@ defmodule PlatformWeb.ChatLive do
     socket =
       socket
       |> PresenceHooks.attach()
+      # Ahead of MessagesHooks: both look at "send_message" before the send
+      # (the tray guard, then large files; task 01a1557a-9de3).
+      |> AttachHooks.attach()
+      |> LargeUploadHooks.attach()
       |> MessagesHooks.attach()
       |> PinHooks.attach()
       |> SearchHooks.attach()
       |> ChatListHooks.attach()
       |> MentionsHooks.attach()
-      # Before UploadHooks, which halts "upload_dialog_close" (task 01a120be).
-      |> LargeUploadHooks.attach()
-      |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> Extensions.attach_live_hooks()
       |> ActiveAgentHooks.attach()
@@ -1265,8 +1267,8 @@ defmodule PlatformWeb.ChatLive do
       # correct behaviour there.
       Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
 
-      {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
-      {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
+      {main_cancelled, socket} = AttachHooks.cancel_all(socket, :attachments)
+      {thread_cancelled, socket} = AttachHooks.cancel_all(socket, :thread_attachments)
 
       # Message bookkeeping keyed by id, with no space in it
       # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
@@ -2689,57 +2691,6 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("chat_viewport", _params, socket), do: {:noreply, socket}
 
-  # Cross-feature: upload_send creates a message + attachments. Delegates
-  # post+stream writes to MessagesHooks, resets UploadHooks on success.
-  def handle_event("upload_send", _params, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space,
-         participant when not is_nil(participant) <- socket.assigns.current_participant do
-      caption = String.trim(socket.assigns.upload_caption || "")
-      tagged = socket.assigns.upload_tagged_agents
-
-      mentions =
-        tagged
-        |> MapSet.to_list()
-        |> Enum.reject(fn slug -> String.contains?(caption, "@#{String.capitalize(slug)}") end)
-        |> Enum.map(fn slug -> "@#{String.capitalize(slug)}" end)
-
-      content =
-        case {caption, mentions} do
-          {"", []} -> ""
-          {"", _} -> Enum.join(mentions, " ")
-          {c, []} -> c
-          {c, _} -> c <> " " <> Enum.join(mentions, " ")
-        end
-
-      attrs = %{
-        space_id: space.id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: content
-      }
-
-      case MessagesHooks.post_message_with_upload(socket, :attachments, attrs) do
-        {:ok, socket, msg, attachments} ->
-          {:noreply,
-           socket
-           |> MessagesHooks.stream_insert_message(msg, attachments)
-           |> UploadHooks.reset()}
-
-        {:noop, _socket} ->
-          {:noreply, put_flash(socket, :info, "No files selected")}
-
-        {:error, socket, reason} ->
-          {:noreply, put_flash(socket, :error, reason)}
-      end
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("noop", _params, socket), do: {:noreply, socket}
-
-  # ── End upload staging dialog events ──────────────────────────────────
-
   # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
   # header control that called it (task 019f9790 stage 4): the eye is now the
   # agent mutex, and a second, persisted flag that could disagree with it was
@@ -3950,8 +3901,6 @@ defmodule PlatformWeb.ChatLive do
         "An agent began work on this message while you were editing — your edit was not saved."
     end
   end
-
-  # ── Upload staging dialog events ──────────────────────────────────────
 
   defp handle_upload_progress(_upload_name, _entry, socket) do
     {:noreply, socket}

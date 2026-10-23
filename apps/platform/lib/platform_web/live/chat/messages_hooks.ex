@@ -698,7 +698,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   @doc """
   Insert a message into the stream and populate its attachments map
-  entry. Used by `canvas_create` and `upload_send` coordinators.
+  entry. Used by the `canvas_create` coordinator.
 
   Enriches the message with its current reaction groups so the stream
   item carries everything the template needs — no :reactions_map lookup.
@@ -808,11 +808,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
+      # The tray's staged canvas (rung 11), already re-checked against the
+      # active space by `AttachHooks` before this hook runs.
       attrs = %{
         space_id: space.id,
         participant_id: participant.id,
         content_type: "text",
-        content: String.trim(content || "")
+        content: String.trim(content || ""),
+        canvas_id: socket.assigns[:attach_canvas_id]
       }
 
       case post_message_with_upload(socket, :attachments, attrs) do
@@ -829,9 +832,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
            socket
            |> stream_insert_with_day_label(enriched)
            |> put_attachment_map_entry(msg.id, attachments)
-           |> assign_compose("")
-           |> update(:drafts, &Map.delete(&1, space.id))
-           |> Phoenix.LiveView.push_event("compose_reset", %{})}
+           |> clear_compose()}
 
         {:noop, socket} ->
           {:halt, socket}
@@ -1475,6 +1476,24 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:longpress_menu_for, nil)
   end
 
+  @doc """
+  Clear the composer after a send: the form, the staged canvas, the active
+  space's server-side draft, and (through `compose_reset`) the textarea and
+  its stored draft.
+  """
+  @spec clear_compose(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def clear_compose(socket) do
+    socket = socket |> assign_compose("") |> assign(:attach_canvas_id, nil)
+
+    socket =
+      case socket.assigns[:active_space] do
+        %{id: space_id} -> update(socket, :drafts, &Map.delete(&1, space_id))
+        _ -> socket
+      end
+
+    Phoenix.LiveView.push_event(socket, "compose_reset", %{})
+  end
+
   defp assign_compose(socket, text) do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
   end
@@ -2055,7 +2074,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
-  # ── Upload plumbing shared between send_message, send_thread_message, upload_send ──
+  # ── Upload plumbing shared between send_message and send_thread_message ──
 
   @doc """
   Post a message that may have pending uploads. The upload slot (:attachments
@@ -2075,7 +2094,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       upload_in_progress?(socket, upload_name) ->
         {:error, socket, "Please wait for uploads to finish."}
 
-      content == "" and not has_completed_uploads?(socket, upload_name) ->
+      content == "" and is_nil(attrs[:canvas_id]) and
+          not has_completed_uploads?(socket, upload_name) ->
         {:noop, socket}
 
       true ->

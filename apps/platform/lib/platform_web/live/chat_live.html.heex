@@ -468,18 +468,28 @@
           revealed_section_ids={@revealed_section_ids}
           sidebar_sections={@sidebar_sections}
           limits={@large_upload_limits}
+          large_staged={@large_upload_staged}
+          attach_menu_open={@attach_menu_open}
+          canvases={@canvases}
+          attach_canvas={@attach_canvas_id && Map.get(@canvases_by_id, @attach_canvas_id)}
+          attach_failed={@attach_failed}
         />
       </div>
 
-      <.upload_dialog
-        open={@upload_dialog_open}
-        active_space={@active_space}
-        uploads={@uploads}
-        caption={@upload_caption}
-        tagged_agents={@upload_tagged_agents}
-        large_staged={@large_upload_staged}
-        limits={@large_upload_limits}
+      <%!-- The phone ＋ sheet (rung 11). Outside the glass dock so the fixed
+           sheet stacks above the tab bar. Not when embedded: the meeting
+           rail is itself a sheet, and a second sheet nested in it doubles
+           its backdrop and handle. --%>
+      <PlatformWeb.ChatLive.Partials.Attach.attach_sheet
+        :if={!@embedded && @active_space && is_nil(@active_space.archived_at)}
+        open={@attach_menu_open}
+        canvases={@canvases}
       />
+      <%!-- The desktop drop target (rung 11), shown by the DragDropUpload
+           hook on this element. --%>
+      <PlatformWeb.ChatLive.Partials.Attach.drop_target :if={
+        @active_space && is_nil(@active_space.archived_at)
+      } />
     </div>
 
     <.canvas_overlay

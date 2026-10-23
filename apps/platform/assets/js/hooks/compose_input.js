@@ -8,6 +8,20 @@
 // ever arrives already-prefixed with `"suite:"`, we strip it before passing
 // through so ClientState's own `suite:compose:` prefix isn't doubled.
 import ClientState from "../client_state.js";
+import {
+  attachedToastText,
+  dropBufferedProgress,
+  forgetTrackedFiles,
+  imageFilesFromClipboard,
+  installRetry,
+  leaveUploadChannels,
+  markInterrupted,
+  releaseRetry,
+  restage,
+  snapshotTray,
+  stageFiles,
+  toast,
+} from "../attach_stage.js";
 
 const NAMESPACE = "compose";
 
@@ -37,6 +51,13 @@ function removeDraft(key) {
 // is skipped when focus is back on it by the time the timer fires.
 export function shouldResetViewportAfterBlur(activeElement, el) {
   return activeElement !== el;
+}
+
+// True when a mousedown is on the form's Send button while the caption has
+// focus: that mousedown must not move focus (see `_onSendMousedown`).
+export function shouldHoldFocusOnSend(target, activeElement, el) {
+  if (activeElement !== el || !target || typeof target.closest !== "function") return false;
+  return target.closest('button[type="submit"]') !== null;
 }
 
 const ComposeInput = {
@@ -212,6 +233,33 @@ const ComposeInput = {
       this._lastMentionQuery = null;
       this.el.focus();
     });
+
+    // Paste an image into the chat composer (rung 11, task 01a1557a-9de3):
+    // it stages as a thumbnail in the composer's tray and the caret stays
+    // here. Only the chat composer (`#compose-form`) has the tray; a text
+    // paste is left entirely to the browser.
+    this._onPaste = (e) => {
+      if (!this.el.closest("#compose-form")) return;
+      const files = imageFilesFromClipboard(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      stageFiles(this, files);
+      toast(attachedToastText(files.length));
+    };
+    this.el.addEventListener("paste", this._onPaste);
+    if (this.el.closest("#compose-form")) installRetry(this);
+
+    // Keep the caption focused through a tap on Send. On a phone the
+    // mousedown would blur it, app.css then brings the tab bar back
+    // (`:has([phx-hook="ComposeInput"]:focus)`), the composer jumps up, and
+    // the click lands on whatever moved under the finger: the send was lost.
+    this._form = this.el.closest("form");
+    this._onSendMousedown = (e) => {
+      if (shouldHoldFocusOnSend(e.target, document.activeElement, this.el)) e.preventDefault();
+    };
+    if (this._form) this._form.addEventListener("mousedown", this._onSendMousedown);
+
+    this._applyTouchPlaceholder();
   },
 
   updated() {
@@ -221,6 +269,49 @@ const ComposeInput = {
     }
 
     this._syncDraftState();
+    this._applyTouchPlaceholder();
+  },
+
+  destroyed() {
+    releaseRetry(this);
+    if (this._form) this._form.removeEventListener("mousedown", this._onSendMousedown);
+  },
+
+  // Keep what was staged across a socket drop (see attach_stage.js).
+  disconnected() {
+    if (!this.el.closest("#compose-form")) return;
+    this._trayAtDrop = snapshotTray();
+    markInterrupted(this._trayAtDrop);
+    const view = typeof this.__view === "function" ? this.__view() : null;
+    const socket = this.liveSocket;
+    const settle = () => {
+      dropBufferedProgress(view && view.channel);
+      leaveUploadChannels(socket && socket.socket);
+      forgetTrackedFiles(this.el.closest("#compose-form"));
+    };
+    settle();
+    // LiveView issues a push `getLatencySim()` ms after it is made (0 unless
+    // latency simulation is on), so one can still land in the buffer just
+    // after this callback: settle again once those have been issued.
+    const latency = (socket && typeof socket.getLatencySim === "function" && socket.getLatencySim()) || 0;
+    setTimeout(settle, latency + 50);
+  },
+
+  reconnected() {
+    const snapshot = this._trayAtDrop;
+    this._trayAtDrop = null;
+    // After the rejoin's first render, which has an empty tray.
+    if (snapshot && (snapshot.restage.length > 0 || snapshot.failed.length > 0)) {
+      setTimeout(() => restage(this, snapshot), 300);
+    }
+  },
+
+  // With files staged the server renders the desktop placeholder ("... —
+  // Enter to send") and the touch one in `data-placeholder-touch`; on a
+  // touch device Enter is a newline, so the touch copy drops the hint.
+  _applyTouchPlaceholder() {
+    const touch = this.el.dataset && this.el.dataset.placeholderTouch;
+    if (touch && this._isMobile) this.el.setAttribute("placeholder", touch);
   },
 
   // A hook's `pushEvent` ignores `phx-target` — `View.pushHookEvent/4`

@@ -408,8 +408,13 @@ defmodule PlatformWeb.Components.ChatMessage do
             </div>
           </div>
 
+          <%!-- A text message can carry a canvas too: the composer's tray
+               stages one beside the caption (redesign rung 11). --%>
           <div
-            :if={@msg.content_type == "canvas"}
+            :if={
+              @msg.content_type == "canvas" or
+                (@msg.content_type == "text" and Map.get(@msg, :canvas_id))
+            }
             class="mt-1"
           >
             <.inline_canvas

@@ -160,13 +160,11 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       assert count(html, "form#compose-form[phx-submit=send_message][phx-change=compose_changed]") ==
                1
 
-      assert count(html, "form#upload-send-form[phx-submit=upload_send]") == 1
-
       # A form test that supplies the param key cannot see the template drop
       # it — so assert the RENDERED form carries the input name, rather than
       # trusting a hand-built param map to round-trip.
       assert count(html, "form#compose-form textarea[name='compose[text]']") == 1
-      assert count(html, "form#upload-send-form input[type=file][name=attachments]") == 1
+      assert count(html, "form#compose-form input[type=file][name=attachments]") == 1
     end
   end
 
@@ -189,7 +187,7 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       # The absence is deliberate and asserted so a later refactor cannot
       # restore the forms by accident.
       assert count(html, "form#compose-form") == 0
-      assert count(html, "form#upload-send-form") == 0
+      assert count(html, "input[type=file][name=attachments]") == 0
       # The compose-input-area shell itself stays (it is unconditional), as
       # the dock's child (see the live-space test above).
       assert count(html, "#chat-drop-zone > #chat-dock.chat-dock > div.compose-input-area") == 1

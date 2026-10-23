@@ -24,8 +24,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     * `streaming_replies/1` — the in-flight agent reply bubbles
     * `typing_indicator/1` — the agent-typing dots
     * `composer/1` — `<div class="... compose-input-area safe-area-bottom">`,
-      the compose form, the always-present upload form and the
-      no-participant error line
+      the compose form (with the staged tray and the attachments file
+      input inside it) and the no-participant error line
 
   ## NO COMPONENT HERE MAY ADD A WRAPPER ELEMENT
 
@@ -64,7 +64,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
-  import PlatformWeb.ChatLive.Partials, only: [upload_error_to_string: 1]
+  import PlatformWeb.ChatLive.Partials.Attach, only: [attach_popover: 1, staged_tray: 1]
   import PlatformWeb.ChatLive.RenderHelpers, only: [composer_empty?: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1]
@@ -73,6 +73,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   alias Phoenix.LiveView.JS
   alias Platform.Chat
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.AttachHooks
   alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:active_space, :any, required: true)
@@ -521,10 +522,18 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   # LargeUpload hook's routing. Default keeps every other caller rendering as
   # before. The pending cards are in the timeline (`message_scroller/1`).
   attr(:limits, :map, default: nil)
+  # Staged large files (task 01a120be), shown as file chips in the tray.
+  attr(:large_staged, :list, default: [])
+  # The ＋ menu (rung 11): open state, the space's canvases for its Recent
+  # canvases rows, and the one canvas staged in the tray.
+  attr(:attach_menu_open, :boolean, default: false)
+  attr(:canvases, :list, default: [])
+  attr(:attach_canvas, :any, default: nil)
+  attr(:attach_failed, :list, default: [])
 
   @doc """
   The compose input area: the compose form with its @mention dropdown, the
-  always-present upload submission form and the no-participant error line.
+  staged tray, the attachments file input and the no-participant error line.
 
   The three masking attrs are declared because the textarea placeholder
   interpolates `masked_space_name/2`, which reads them through TOLERANT
@@ -533,6 +542,18 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   every markup assertion still passes.
   """
   def composer(assigns) do
+    tray = %{
+      uploads: assigns.uploads,
+      large_upload_staged: assigns.large_staged,
+      attach_failed: assigns.attach_failed,
+      attach_canvas: assigns.attach_canvas
+    }
+
+    assigns =
+      assigns
+      |> assign(:staged?, AttachHooks.staged?(tray))
+      |> assign(:send_state, AttachHooks.send_state(tray))
+
     ~H"""
     <div class="flex-shrink-0 compose-input-area safe-area-bottom">
       <.large_upload_root
@@ -618,14 +639,32 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           </div>
         </div>
 
+        <%!-- The desktop ＋ popover, anchored above ＋ (the sheet is the
+             phone's; both read `@attach_menu_open`). --%>
+        <.attach_popover :if={@attach_menu_open} canvases={@canvases} />
+
         <%!-- Pill-shaped compose bar --%>
         <div class="compose-pill-bar">
+          <%!-- The staged tray (rung 11): first in the glass field, above
+               the caption line, absent when nothing is staged. --%>
+          <.staged_tray
+            uploads={@uploads}
+            large_staged={@large_staged}
+            limits={@limits}
+            canvas={@attach_canvas}
+            failed={@attach_failed}
+          />
+
+          <%!-- ＋ opens the attach sheet on a phone and the popover on
+               desktop; ＋ again adds more. --%>
           <button
             type="button"
             id="compose-attach-button"
-            phx-hook="UploadButton"
-            phx-click="upload_dialog_open"
-            class="compose-pill-attach cursor-pointer text-subtle hover:bg-base-300/50 transition-colors"
+            phx-click={if @attach_menu_open, do: "attach_menu_close", else: "attach_menu_open"}
+            class="compose-pill-attach cursor-pointer text-subtle active:bg-base-300 lg:hover:bg-base-300/50 transition-colors"
+            aria-label="Attach"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@attach_menu_open)}
             title="Attach files"
           >
             <span class="hero-plus size-5"></span>
@@ -635,7 +674,13 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             name="compose[text]"
             id={@compose_form[:text].id}
             data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
-            placeholder={"Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"}
+            placeholder={
+              if @staged?,
+                do: "Add a message (optional) — Enter to send",
+                else:
+                  "Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"
+            }
+            data-placeholder-touch={@staged? && "Add a message (optional)"}
             autocomplete="off"
             rows="1"
             class="flex-1 text-sm resize-none"
@@ -643,55 +688,25 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             phx-hook="ComposeInput"
           >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
 
+          <%!-- Direction m3 rules 4-5: Send waits for every upload and
+               refuses while a failed or too-large file is staged; files
+               with an empty caption send. --%>
           <button
             type="submit"
             class="compose-pill-send"
-            disabled={is_nil(@current_participant) or composer_empty?(@compose_form)}
-            aria-label="Send message"
+            disabled={
+              is_nil(@current_participant) or @send_state != :ready or
+                (composer_empty?(@compose_form) and not @staged?)
+            }
+            aria-label={if @send_state == :uploading, do: "Uploading", else: "Send message"}
             title="Send"
           >
             <span class="hero-paper-airplane size-4 -rotate-45"></span>
           </button>
         </div>
 
-        <p
-          :for={error <- upload_errors(@uploads.attachments)}
-          class="text-xs text-error"
-        >
-          {upload_error_to_string(error)}
-        </p>
-
-        <div :for={entry <- @uploads.attachments.entries}>
-          <p
-            :for={error <- upload_errors(@uploads.attachments, entry)}
-            class="text-xs text-error"
-          >
-            {entry.client_name}: {upload_error_to_string(error)}
-          </p>
-        </div>
-      </.form>
-
-      <%!-- Always-present upload submission form. Lives OUTSIDE #compose-form
-           (HTML forbids nested forms) so the modal's Send button + textarea
-           can target it via the HTML5 `form="upload-send-form"` attribute.
-           The form is rendered unconditionally so:
-             (a) `inputEl.form` resolves on first paste (no chicken-and-egg
-                 with `:if={entries != []}` form-rendering).
-             (b) LiveView's `pushInput` → `pushFormSubmit` always finds the
-                 form to serialize when the user submits.
-           The hidden file input (`live_file_input`) is the form's only
-           direct child; visible UI for caption + Send lives inside the
-           modal panel and links back to this form via `form=...`. --%>
-      <form
-        :if={@active_space && is_nil(@active_space.archived_at)}
-        id="upload-send-form"
-        phx-hook="ButtonLoading"
-        phx-submit="upload_send"
-        phx-change="upload_caption_change"
-        class="hidden"
-      >
         <.live_file_input upload={@uploads.attachments} class="sr-only" />
-      </form>
+      </.form>
 
       <p :if={is_nil(@current_participant) && @active_space} class="mt-1 text-xs text-error">
         Unable to join space — messages are read-only.
@@ -708,7 +723,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
 
   @doc """
   The element the `LargeUpload` JS hook runs on: it takes files over the
-  composer's inline cap out of the upload dialog and starts the uploads the
+  composer's inline cap out of the composer's file input and starts the uploads the
   server reserved. `data-inline-max` is that cap, from the server; the
   browser holds no limit of its own. It renders nothing visible: the pending
   cards are drawn in the timeline (`large_upload_timeline/1`).

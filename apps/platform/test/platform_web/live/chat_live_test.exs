@@ -1404,266 +1404,302 @@ defmodule PlatformWeb.ChatLiveTest do
     # would catch).
   end
 
-  describe "attachments" do
-    test "rendered file input is non-auto-upload (deferred until Send)", %{conn: conn} do
-      # Confirm the file input does NOT ship with `data-phx-auto-upload="true"`.
-      # Phoenix HEEx omits boolean attributes whose value is false, so removing
-      # `auto_upload: true` from `allow_upload` drops the attribute entirely —
-      # telling the browser NOT to begin transferring bytes the moment a file
-      # is selected. Bytes flow only when the modal Send form submits.
+  describe "attachments (the composer's staged tray, rung 11)" do
+    # Pasted, picked and dropped files stage as thumbnails INSIDE the composer
+    # and post with the typed caption as ONE message through `send_message`
+    # (task 01a1557a-9de3). There is no upload dialog any more.
+
+    defp png(name \\ "shot.png", bytes \\ 1000) do
+      %{name: name, content: String.duplicate("p", bytes), type: "image/png"}
+    end
+
+    defp space_rows(space_id) do
+      import Ecto.Query
+
+      messages =
+        Repo.all(from(m in Platform.Chat.Message, where: m.space_id == ^space_id))
+
+      attachments =
+        Repo.all(
+          from(a in Platform.Chat.Attachment,
+            where: a.space_id == ^space_id and not is_nil(a.message_id)
+          )
+        )
+
+      {messages, attachments}
+    end
+
+    test "the file input lives inside #compose-form and auto-uploads", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
-      html = render(view)
 
-      # Scope to the live_file_input by `name="attachments"`. The id is
-      # auto-generated from the upload ref (live_file_input hardcodes
-      # `id={@upload.ref}` BEFORE `@rest`, so user-supplied ids are silently
-      # dropped — see hooks/upload_button.js for the workaround we use to
-      # locate the input by selector instead of id).
-      assert html =~ ~s(name="attachments")
-      assert html =~ ~s(data-phx-hook="Phoenix.LiveFileUpload")
-      # Critical: the auto-upload signal must not be on. With
-      # auto_upload removed, this attribute is dropped entirely.
-      refute html =~ ~s(data-phx-auto-upload="true")
+      assert has_element?(view, ~s(#compose-form input[type="file"][name="attachments"]))
+      assert has_element?(view, ~s(#compose-form input[name="attachments"][data-phx-auto-upload]))
+      # ＋ opens the attach menu (stage 2); the menu's pickers stage into
+      # this input's upload.
+      assert has_element?(view, ~s(button#compose-attach-button[phx-click="attach_menu_open"]))
     end
 
-    test "upload-send-form is rendered unconditionally on first mount (regression)",
-         %{conn: conn} do
-      # Regression guard for the bug that broke the previous shipping attempt:
-      # if `<form id="upload-send-form">` is `:if`-guarded on `entries != []`,
-      # then on the very first paste/drop, the live_file_input's HTML5
-      # `form="..."` association resolves to null because the referenced form
-      # does not yet exist in the DOM. LiveView's `pushInput` after
-      # `LiveUploader.trackFiles` then has nowhere to serialize → the entry
-      # never registers → the modal stays stuck in dropzone state.
-      #
-      # The fix renders the form unconditionally (active_space presence is
-      # the only gate). The file input is the form's direct child, so
-      # `inputEl.form` resolves on first paste.
+    test "a staged image shows as a thumbnail in the tray inside the composer", %{conn: conn} do
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/chat/general")
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      # Form is in DOM before any entry exists (no entries staged yet).
-      assert html =~ ~s(id="upload-send-form")
-      # File input is a DOM descendant of the form (so `inputEl.form` resolves
-      # to the form natively, no cross-form attr needed).
-      [_, after_form] = String.split(html, ~s(id="upload-send-form"), parts: 2)
-      assert after_form =~ ~s(name="attachments")
+      refute has_element?(view, "[data-role=staged-tray]")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      assert has_element?(
+               view,
+               ~s(#compose-form .compose-pill-bar [data-role=staged-tray] li img[data-phx-hook="Phoenix.LiveImgPreview"][alt="shot.png"])
+             )
+
+      assert has_element?(view, ~s([data-role=staged-tray] button[aria-label="Remove shot.png"]))
+
+      assert has_element?(
+               view,
+               ~s{#compose_text[placeholder="Add a message (optional) — Enter to send"]}
+             )
     end
 
-    test "uploading a file shows it on the message after send", %{conn: conn} do
+    test "Send posts the caption and the staged file as EXACTLY ONE message", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      view |> form("#compose-form", compose: %{text: "caption here"}) |> render_submit()
+
+      {messages, attachments} = space_rows(space.id)
+      assert [message] = messages
+      assert message.content == "caption here"
+      assert [attachment] = attachments
+      assert attachment.message_id == message.id
+      assert attachment.filename == "shot.png"
+
+      # The tray collapses with no empty band.
+      refute has_element?(view, "[data-role=staged-tray]")
+      assert render(view) =~ "/chat/attachments/#{attachment.id}"
+    end
+
+    test "a file with an empty caption sends as one message", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+      view |> form("#compose-form", compose: %{text: ""}) |> render_submit()
+
+      assert {[message], [attachment]} = space_rows(space.id)
+      assert message.content in [nil, ""]
+      assert attachment.message_id == message.id
+    end
+
+    test "Send is disabled and named 'Uploading' mid-transfer, enabled at 100%", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png("slow.png", 1000)])
+
+      render_upload(upload, "slow.png", 50)
+      assert has_element?(view, ~s(button.compose-pill-send[disabled][aria-label="Uploading"]))
+      assert has_element?(view, "[data-role=staged-tray] [data-role=upload-ring]")
+
+      render_upload(upload, "slow.png", 50)
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+      refute has_element?(view, ~s(button.compose-pill-send[aria-label="Uploading"]))
+      refute has_element?(view, "[data-role=staged-tray] [data-role=upload-ring]")
+    end
+
+    test "Enter mid-transfer posts nothing (the server guard behind the disabled button)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png("slow.png", 1000)])
+      render_upload(upload, "slow.png", 50)
+
+      render_submit(view, "send_message", %{"compose" => %{"text" => "too soon"}})
+      assert {[], []} = space_rows(space.id)
+    end
+
+    test "attach_remove drops the entry and the tray disappears with the last one",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # One file_input per file: LiveViewTest serves every entry of one
+      # file_input from a single upload client, so cancelling one entry there
+      # takes its siblings with it (a browser runs one channel per entry).
+      view |> file_input("#compose-form", :attachments, [png("a.png")]) |> render_upload("a.png")
+      view |> file_input("#compose-form", :attachments, [png("b.png")]) |> render_upload("b.png")
+
+      [a, b] =
+        view.pid |> :sys.get_state() |> then(& &1.socket.assigns.uploads.attachments.entries)
+
+      render_click(view, "attach_remove", %{"ref" => a.ref})
+
+      assert has_element?(view, ~s([data-role=staged-tray] img[alt="b.png"]))
+
+      refute has_element?(view, ~s([data-role=staged-tray] img[alt="a.png"]))
+
+      render_click(view, "attach_remove", %{"ref" => b.ref})
+      refute has_element?(view, "[data-role=staged-tray]")
+      refute has_element?(view, "[data-role=staged-area]")
+    end
+
+    test "a non-image file shows as a chip with its size and type", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       upload =
-        file_input(view, "#upload-send-form", :attachments, [
+        file_input(view, "#compose-form", :attachments, [
+          %{name: "spec.pdf", content: String.duplicate("d", 2048), type: "application/pdf"}
+        ])
+
+      render_upload(upload, "spec.pdf")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", "spec")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", ".pdf")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", "· PDF")
+    end
+
+    test "a staged file over the install's limit reads TOO LARGE and disables Send",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      max = Platform.Chat.UploadLimits.max_bytes()
+
+      render_hook(view, "large_upload_stage", %{
+        "ref" => "big-1",
+        "name" => "big.bin",
+        "size" => max + 1,
+        "type" => "application/octet-stream"
+      })
+
+      # A caption is typed, so only the too-large file can be what disables Send.
+      render_change(view, "compose_changed", %{"compose" => %{"text" => "the big one"}})
+
+      assert has_element?(view, ~s([data-role=staged-tray] li[data-too-large="true"]))
+
+      assert has_element?(
+               view,
+               "[data-role=staged-too-large]",
+               "This Burrow install accepts files up to #{Platform.Chat.UploadLimits.label()}."
+             )
+
+      assert has_element?(view, "button.compose-pill-send[disabled]")
+
+      render_click(view, "large_upload_unstage", %{"ref" => "big-1"})
+      refute has_element?(view, "[data-role=staged-tray]")
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+    end
+
+    test "a sixth file past max_entries renders FAILED (outline, no ring, no retry), not uploading",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      files = for i <- 1..6, do: png("p#{i}.png")
+      upload = file_input(view, "#compose-form", :attachments, files)
+      render_upload(upload, "p1.png")
+
+      assert has_element?(view, "[data-role=staged-error]", "Too many files")
+
+      [_ | _] =
+        entries =
+        view.pid |> :sys.get_state() |> then(& &1.socket.assigns.uploads.attachments.entries)
+
+      assert length(entries) == 6
+      excess = List.last(entries)
+      assert excess.client_name == "p6.png"
+
+      assert has_element?(view, ~s(li#staged-#{excess.ref}[data-state="failed"]))
+      assert has_element?(view, ~s(li#staged-#{excess.ref} .outline-error))
+      refute has_element?(view, ~s(li#staged-#{excess.ref} [data-role=upload-ring]))
+      # Too many is a refusal, not a transport failure: removing it is the fix.
+      refute has_element?(view, ~s(li#staged-#{excess.ref} [data-attach-retry]))
+      assert has_element?(view, ~s(li#staged-#{excess.ref} button[aria-label="Remove p6.png"]))
+
+      # Positive control: the first entry, within the limit, is not failed.
+      first = hd(entries)
+      refute has_element?(view, ~s(li#staged-#{first.ref}[data-state="failed"]))
+
+      # Removing the excess entry clears the refusal.
+      render_click(view, "attach_remove", %{"ref" => excess.ref})
+      refute has_element?(view, "[data-role=staged-error]", "Too many files")
+      refute has_element?(view, ~s(li[data-state="failed"]))
+    end
+
+    test "a file a socket drop interrupted comes back FAILED with 'Retry <name>', and retry posts it",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      # What ComposeInput reports on reconnect for an entry that was mid-upload
+      # when the socket dropped (assets/js/attach_stage.js `restage/2`).
+      render_hook(view, "attach_transport_failed", %{
+        "files" => [
           %{
-            name: "hello.txt",
-            content: "hello attachment",
-            type: "text/plain"
-          }
-        ])
+            "id" => "phx-old-1",
+            "name" => "big.png",
+            "size" => 14_000_000,
+            "type" => "image/png"
+          },
+          %{"bogus" => true},
+          %{"id" => "", "name" => "empty-id.png"}
+        ]
+      })
 
-      # Open the upload staging dialog so file previews are visible
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      assert has_element?(view, ~s(li#staged-failed-phx-old-1[data-state="failed"]))
+      assert has_element?(view, ~s(li#staged-failed-phx-old-1 .outline-error))
 
-      assert render_upload(upload, "hello.txt") =~ "hello.txt"
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 button[data-attach-retry="phx-old-1"][aria-label="Retry big.png"])
+             )
 
-      # Set the caption via the change event, then submit the modal's
-      # send form (post-Apr-2026 deferred-upload wiring: the Send button
-      # is `type="submit"` on `#upload-send-form`, not a `phx-click`).
-      render_change(view, "upload_caption_change", %{"caption" => "see file"})
-      view |> form("#upload-send-form", %{"caption" => "see file"}) |> render_submit()
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 img[phx-hook="AttachFailedPreview"][alt="big.png"])
+             )
 
-      html = render(view)
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 button[aria-label="Remove big.png"])
+             )
 
-      assert html =~ "see file"
-      assert html =~ "hello.txt"
+      # Only that thumbnail: the malformed reports render nothing.
+      assert [_] =
+               view
+               |> render()
+               |> LazyHTML.from_document()
+               |> LazyHTML.query("li[data-failed-id]")
+               |> Enum.to_list()
 
-      space = Chat.get_space_by_slug("general")
-      [message | _] = Chat.list_messages(space.id)
-      [attachment] = Chat.list_attachments(message.id)
+      # A failed file blocks Send, as a failed entry does.
+      assert has_element?(view, "button.compose-pill-send[disabled]")
 
-      assert attachment.filename == "hello.txt"
-      assert html =~ "/chat/attachments/#{attachment.id}"
-    end
+      # Retry: the client drops the failed item and stages the same File again.
+      render_click(view, "attach_failed_remove", %{"id" => "phx-old-1"})
+      refute has_element?(view, "li[data-failed-id]")
 
-    test "firing upload_send before bytes are transferred posts no message (defense-in-depth)",
-         %{conn: conn} do
-      # With `auto_upload: true` removed, bytes flow only after the modal
-      # Send form submits. Simulate a race where the `upload_send` server
-      # event fires WITHOUT the upload preflight having run (i.e. no
-      # `render_upload` call). The handler's noop branch (no completed
-      # entries + empty caption) must short-circuit so we do not silently
-      # post an empty message.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      view
+      |> file_input("#compose-form", :attachments, [png("big.png")])
+      |> render_upload("big.png")
 
-      _upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "deferred.txt", content: "won't transfer", type: "text/plain"}
-        ])
+      refute has_element?(view, "button.compose-pill-send[disabled]")
 
-      # Fire upload_send directly without triggering any preflight/chunk
-      # transfer for the file input. Server has no completed entries.
-      render_click(view, "upload_send")
-
-      space = Chat.get_space_by_slug("general")
-      assert Chat.list_messages(space.id) == []
-    end
-
-    test "Send button is disabled while an entry is mid-transfer (0 < progress < 100)",
-         %{conn: conn} do
-      # While bytes are actively moving (0 < progress < 100), the modal Send
-      # button must render the HTML `disabled` attribute so the user sees a
-      # clear, non-clickable state instead of a transient red toast.
-      #
-      # Note: progress == 0 is NOT in-flight — it means the entry is staged
-      # but the byte transfer has not been triggered yet. With deferred
-      # upload, that's exactly the state where Send MUST be enabled so the
-      # user can click it to start the transfer (next test).
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "in-flight.txt", content: "partial bytes", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      # Drive the upload to a non-terminal progress (30%) so the entry
-      # exists with 0 < progress < 100.
-      render_upload(upload, "in-flight.txt", 30)
-      html = render(view)
-
-      # The Send button carries the disabled attribute when in-flight.
-      assert html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "Send button is enabled when an entry is staged but transfer has not started (progress == 0)",
-         %{conn: conn} do
-      # Critical for the deferred-upload flow: the user opens the modal,
-      # selects/pastes a file → entry registers with progress == 0 → user
-      # MUST be able to click Send to trigger the actual byte transfer.
-      # If we disabled Send at progress == 0, the user could never trigger
-      # the upload and the modal would be a permanent dead-end.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "deferred.txt", content: "not yet sent", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      # `preflight_upload` registers the entry on the LV (progress == 0)
-      # without driving any chunk transfer — exactly the deferred state we
-      # care about. `render_upload(_, name, 0)` would also register but
-      # immediately follows with a chunk; preflight_upload is the cleanest
-      # "staged but not transferring" simulation.
-      assert {:ok, _} = preflight_upload(upload)
-      html = render(view)
-
-      # Entry exists, progress is 0, Send must be present and NOT disabled.
-      assert html =~ ~s(class="upload-btn-send")
-      refute html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "Send button is enabled once all entries reach progress == 100", %{conn: conn} do
-      # Counterpart to the previous test: when every entry is fully
-      # transferred, the Send button must NOT carry the disabled
-      # attribute so the user can click through to post.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "done.txt", content: "complete bytes", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      assert render_upload(upload, "done.txt") =~ "done.txt"
-      html = render(view)
-
-      # The Send button does NOT carry the disabled attribute when
-      # every entry is fully transferred.
-      refute html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "dim overlay renders while an entry is mid-upload (0 < progress < 100)",
-         %{conn: conn} do
-      # Stage 2 visual: while bytes are moving for an entry, the
-      # thumbnail must dim with a centered "X% uploading…" label so
-      # the user has unmissable feedback that the transfer is in
-      # progress (replaces the easily-missed 3px cyan strip).
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      # Use a >100-byte payload so render_upload can chunk to a non-
-      # terminal percent — the LiveViewTest helper rounds the requested
-      # percent up to the nearest whole-byte chunk and warns if the
-      # payload is too small to hit the requested value.
-      payload = String.duplicate("x", 1000)
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "midway.txt", content: payload, type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      render_upload(upload, "midway.txt", 40)
-      html = render(view)
-
-      assert html =~ "upload-thumb-progress-overlay"
-      # Match any in-flight percent label so we are robust to the
-      # helper's chunk-rounding (40 → 40-49% depending on chunk size).
-      assert html =~ ~r/\d+% uploading/
-    end
-
-    test "dim overlay does NOT render when entry has not started transferring (progress == 0)",
-         %{conn: conn} do
-      # `live_file_input` registers entries with progress == 0 before
-      # `render_upload` runs. The overlay's :if guard is
-      # `progress > 0 and progress < 100`, so a freshly-selected entry
-      # must NOT show the overlay.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      _upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "fresh.txt", content: "not yet", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-      html = render(view)
-
-      refute html =~ "upload-thumb-progress-overlay"
-      refute html =~ "uploading…"
-    end
-
-    test "dim overlay does NOT render when entry is fully transferred (progress == 100)",
-         %{conn: conn} do
-      # Once a transfer completes the thumbnail must be fully visible
-      # so the user can confirm the file before clicking Send.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "complete.txt", content: "all done", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      assert render_upload(upload, "complete.txt") =~ "complete.txt"
-      html = render(view)
-
-      refute html =~ "upload-thumb-progress-overlay"
-      refute html =~ "uploading…"
+      view |> form("#compose-form", compose: %{text: "after the drop"}) |> render_submit()
+      assert {[message], [attachment]} = space_rows(space.id)
+      assert message.content == "after the drop"
+      assert attachment.filename == "big.png"
     end
 
     test "staged uploads are cancelled when navigating to another space (BACKLOG #10)",
@@ -1675,30 +1711,18 @@ defmodule PlatformWeb.ChatLiveTest do
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       upload =
-        file_input(view, "#upload-send-form", :attachments, [
+        file_input(view, "#compose-form", :attachments, [
           %{name: "leak.txt", content: "would-leak", type: "text/plain"}
         ])
 
-      # Open the staging dialog and progress the upload so the entry
-      # is both staged server-side AND visible in the DOM. The
-      # dialog-close path has its own cancel, so we keep the dialog
-      # open to exercise the space-transition cancel path.
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
       assert render_upload(upload, "leak.txt") =~ "leak.txt"
 
-      # Navigate to another space without closing the dialog or
-      # sending. Both /chat/:space_slug routes map to the same
-      # LiveView so handle_params fires in-process, which is the seam
-      # where we cancel. Use render_patch (same-LV patch) rather than
-      # live_redirect (which may remount).
+      # Both /chat/:space_slug routes map to the same LiveView, so
+      # handle_params fires in-process, which is the seam where we cancel.
       html = render_patch(view, ~p"/chat/other")
 
-      # Flash surfaces on the destination render so the user knows
-      # their staged file was dropped (and can re-select if intended).
       assert html =~ "Canceled 1 pending upload from the previous space"
-
-      # Re-open the staging dialog in the new space: no leaked entry.
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      refute has_element?(view, "[data-role=staged-tray]")
       refute render(view) =~ "leak.txt"
     end
   end
@@ -3353,7 +3377,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "read-only snapshot"
       assert has_element?(view, "#archived-banner")
       refute has_element?(view, "#compose-form")
-      refute has_element?(view, "#upload-send-form")
+      refute has_element?(view, ~s(input[name="attachments"]))
     end
 
     test "active channel still renders the composer (regression)", %{conn: conn} do

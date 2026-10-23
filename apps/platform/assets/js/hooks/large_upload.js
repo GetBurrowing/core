@@ -56,7 +56,7 @@ export function partitionFiles(files, inlineMax) {
   return { small, large }
 }
 
-function inlineMaxFromDom() {
+export function inlineMaxFromDom() {
   const root = document.getElementById("large-upload-root")
   const n = root ? parseInt(root.dataset.inlineMax, 10) : NaN
   return Number.isFinite(n) ? n : NaN
@@ -927,8 +927,8 @@ export const LargeUploadTimeline = {
   },
 }
 
-// On `#large-upload-root` in the composer: takes large files out of the file
-// input and the dialog drop zone, and starts the uploads the server reserved.
+// On `#large-upload-root` in the composer: takes large files out of the
+// composer's file input, and starts the uploads the server reserved.
 const LargeUpload = {
   mounted() {
     installWindowListeners()
@@ -941,14 +941,15 @@ const LargeUpload = {
       stagedFiles.delete(ref)
     })
 
-    // Files picked through the dialog's file input (desktop label and the
-    // mobile + button alike) and dropped on the dialog's drop zone reach
+    // Files picked through the composer's file input (the ＋) reach
     // LiveView's own window listeners in the bubble phase; these
     // capture-phase listeners run first and take the large files out.
+    // Pasted and dropped files are routed before they reach the input
+    // (../attach_stage.js `stageFiles`).
     this._onFileInput = (e) => {
       const input = e.target
       if (!(input instanceof HTMLInputElement) || input.type !== "file") return
-      if (!input.closest("#upload-send-form")) return
+      if (!input.closest("#compose-form")) return
       const files = Array.from(input.files || [])
       const small = routeFiles(this, files)
       if (small.length === files.length) return
@@ -957,28 +958,15 @@ const LargeUpload = {
       input.files = dt.files
       if (small.length === 0) e.stopImmediatePropagation()
     }
-    this._onDrop = (e) => {
-      const target = e.target instanceof Element ? e.target.closest("[phx-drop-target]") : null
-      if (!target || !e.dataTransfer) return
-      const files = Array.from(e.dataTransfer.files || [])
-      const { large } = partitionFiles(files, inlineMaxFromDom())
-      if (large.length === 0) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      const small = routeFiles(this, files)
-      if (small.length > 0) this.uploadTo(this.el, "attachments", small)
-    }
 
     window.addEventListener("change", this._onFileInput, true)
     window.addEventListener("input", this._onFileInput, true)
-    window.addEventListener("drop", this._onDrop, true)
   },
 
   destroyed() {
     // The uploads are NOT stopped: they live in `uploadManager`, not here.
     window.removeEventListener("change", this._onFileInput, true)
     window.removeEventListener("input", this._onFileInput, true)
-    window.removeEventListener("drop", this._onDrop, true)
     uploadManager.detachHook(this)
   },
 }
