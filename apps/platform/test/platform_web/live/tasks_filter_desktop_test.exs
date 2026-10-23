@@ -3,7 +3,8 @@ defmodule PlatformWeb.TasksFilterDesktopTest do
   The desktop Tasks picker and filters (task 01a161fd stage 4):
   `PlatformWeb.Tasks.FilterDesktop` in the board's `page_header`, and the
   desktop kanban narrowed by the status set, Mine and a multi-kind set
-  (`BoardData.narrow_board/3` via `BoardHooks`).
+  (`BoardData.narrow_board/3` via `BoardHooks`). Task 01a168c2 stage 2: the
+  filter popover's Project row and the project picker it hosts.
 
   Every absence is preceded by a positive control on the same render showing
   the same query can find something.
@@ -62,6 +63,51 @@ defmodule PlatformWeb.TasksFilterDesktopTest do
   end
 
   defp open(view, sheet), do: render_click(view, "tasks_filter_open", %{"sheet" => sheet})
+
+  defp pop_doc(view), do: doc(view, "#tasks-filter-popover")
+  defp text(node), do: node |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()
+
+  defp click_row(view),
+    do:
+      view
+      |> element("#tasks-filter-popover [data-role=tasks-filter-project-row]")
+      |> render_click()
+
+  @scrim ~s(#tasks-filter-button-desktop ~ [data-role="tasks-filter-scrim"])
+
+  # A viewer in ONE tenant org (a root-org member reads every project), a
+  # readable home project and a foreign project in another tenant.
+  defp tenant_viewer! do
+    home_org = Platform.TenancyFixtures.tenant_org_id("filter_pop_home_#{u()}")
+    foreign_org = Platform.TenancyFixtures.tenant_org_id("filter_pop_foreign_#{u()}")
+    n = u()
+
+    viewer =
+      Repo.insert!(%User{
+        email: "filter-pop-tenant-#{n}@example.com",
+        name: "Filter Pop tenant #{n}",
+        oidc_sub: "filter-pop-tenant-#{n}"
+      })
+
+    %Platform.Tenancy.OrgMembership{}
+    |> Platform.Tenancy.OrgMembership.changeset(%{
+      user_id: viewer.id,
+      org_id: home_org,
+      role: "member"
+    })
+    |> Repo.insert!()
+
+    {:ok, home} = Tasks.create_project(%{name: "Filter Pop Home #{u()}", org_id: home_org})
+
+    {:ok, foreign} =
+      Tasks.create_project(%{name: "Secret Foreign Project #{u()}", org_id: foreign_org})
+
+    {:ok, foreign_epic} =
+      Tasks.create_epic(%{project_id: foreign.id, name: "Secret Foreign Epic #{u()}"})
+
+    task!(home, "Home task", status: "in_progress")
+    %{viewer: viewer, home: home, foreign: foreign, foreign_epic: foreign_epic}
+  end
 
   setup do
     me = user!()
@@ -234,10 +280,178 @@ defmodule PlatformWeb.TasksFilterDesktopTest do
       end
       |> List.flatten()
 
+    # The picker hosted in the filter popover (task 01a168c2), both levels.
+    open(view, "filter_project")
+    root = q(pop_doc(view), "[data-phx-link]")
+    render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id})
+    epics = q(pop_doc(view), "[data-phx-link]")
+    # Positive control: All projects + the project; All of + the epic.
+    assert length(root) >= 2 and length(epics) >= 2
+    links = links ++ root ++ epics
+
     # Positive control: there are many option links to check.
     assert length(links) > 20
     assert Enum.all?(links, &(attr(&1, "data-phx-link") == "patch"))
     assert Enum.filter(links, &(attr(&1, "phx-click") != nil)) == []
+  end
+
+  # ── The Project row (task 01a168c2 stage 2) ──────────────────────────
+
+  test "the popover's first section is the Project row, with the masked label", ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}")
+    open(view, "filter")
+    pop = pop_doc(view)
+
+    sections =
+      pop
+      |> q("[data-role=tasks-filter-sheet-body] > section")
+      |> Enum.map(&attr(&1, "data-role"))
+
+    assert ["tasks-filter-project", "tasks-filter-sort" | _] = sections
+    [row] = q(pop, "[data-role=tasks-filter-project-row]")
+    assert attr(row, "phx-value-sheet") == "filter_project"
+
+    assert pop |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() ==
+             "#{ctx.p.name} › #{ctx.epic.name}"
+
+    render_click(view, "toggle_mask_names", %{"masked" => "true"})
+    open(view, "filter")
+    pop = pop_doc(view)
+    [value] = q(pop, "[data-role=tasks-filter-project-value]")
+    assert text(value) != "", "positive control: the masked row renders a label"
+    refute text(value) =~ ctx.p.name
+    refute text(value) =~ ctx.epic.name
+  end
+
+  test "the row hosts the picker in the popover and a pick returns to the filter body", ctx do
+    {:ok, other} = Tasks.create_project(%{name: "Filter Pop Other #{u()}"})
+    o = task!(other, "Other project task", status: "in_progress")
+
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    # Positive control: before the pick the kanban carries another project's card.
+    assert MapSet.member?(board_ids(view), o.id)
+
+    open(view, "filter")
+    click_row(view)
+
+    h = header_doc(view)
+    assert [pop] = q(h, "#tasks-filter-popover")
+    assert q(pop, "[data-role=tasks-project-root]") != []
+    assert q(pop, "[data-role=tasks-project-back-filter]") != []
+    assert q(pop, "[data-role=tasks-filter-sheet-body]") == []
+    assert q(pop, "[data-role=tasks-filter-show]") == []
+    assert q(h, "#tasks-title-menu") == []
+    assert h |> q("#tasks-title-picker-desktop") |> hd() |> attr("aria-expanded") == "false"
+    assert h |> q("#tasks-filter-button-desktop") |> hd() |> attr("aria-expanded") == "true"
+
+    view |> element(~s(#tasks-filter-popover [data-project="#{ctx.p.id}"])) |> render_click()
+    assert_patch(view, "/tasks?project=#{ctx.p.id}")
+
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-filter-sheet-body]") != []
+    assert q(pop, "[data-role=tasks-filter-show]") != []
+    assert pop |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == ctx.p.name
+    assert board_ids(view) == MapSet.new([ctx.a.id, ctx.b.id, ctx.c.id, ctx.d.id])
+  end
+
+  test "Back, the epic level, the scrim and Escape inside the hosted picker", ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    open(view, "filter")
+    click_row(view)
+
+    view
+    |> element("#tasks-filter-popover [data-role=tasks-project-back-filter]")
+    |> render_click()
+
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-filter-sheet-body]") != []
+    assert q(pop, "[data-role=tasks-project-root]") == []
+
+    click_row(view)
+
+    view
+    |> element(
+      ~s(#tasks-filter-popover [data-role=tasks-project-epics][phx-value-id="#{ctx.p.id}"])
+    )
+    |> render_click()
+
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-project-epic-level]") != []
+    assert q(pop, ~s([data-epic="#{ctx.epic.id}"])) != []
+    assert q(header_doc(view), "#tasks-title-menu") == []
+
+    view |> element("#tasks-filter-popover [data-role=tasks-project-back]") |> render_click()
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-project-root]") != []
+    assert q(pop, "[data-role=tasks-project-back-filter]") != []
+
+    # The scrim still returns focus to the Filter button.
+    [scrim] = q(header_doc(view), @scrim)
+    assert attr(scrim, "phx-click") =~ "#tasks-filter-button-desktop"
+    assert attr(scrim, "phx-window-keydown") =~ "tasks_filter_close"
+
+    # Escape closes from the hosted picker.
+    view |> element(@scrim) |> render_keydown(%{"key" => "Escape"})
+    assert q(header_doc(view), "#tasks-filter-popover") == []
+
+    # Click-away closes from the hosted epic level.
+    open(view, "filter_project")
+    render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id})
+    assert q(pop_doc(view), "[data-role=tasks-project-epic-level]") != []
+    view |> element(@scrim) |> render_click()
+    assert q(header_doc(view), "#tasks-filter-popover") == []
+  end
+
+  test "a forged epics id from another tenant leaves the hosted picker at its root" do
+    t = tenant_viewer!()
+    view = mount(build_conn(), t.viewer, "/tasks?project=all")
+    open(view, "filter")
+    click_row(view)
+
+    render_click(view, "tasks_filter_epics", %{"id" => t.foreign.id})
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-project-root]") != []
+    assert q(pop, "[data-role=tasks-project-epic-level]") == []
+    refute LazyHTML.to_html(pop) =~ t.foreign.name
+    refute LazyHTML.to_html(pop) =~ t.foreign_epic.name
+
+    # Positive control: the readable home project DOES open its epic level.
+    render_click(view, "tasks_filter_epics", %{"id" => t.home.id})
+    pop = pop_doc(view)
+    assert q(pop, "[data-role=tasks-project-epic-level]") != []
+    assert LazyHTML.to_html(pop) =~ t.home.name
+  end
+
+  test "masking leaves no real project or epic name in the popover's row or picker", ctx do
+    path = "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}"
+
+    states = fn view ->
+      [
+        open(view, "filter") && pop_doc(view),
+        click_row(view) && pop_doc(view),
+        render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id}) && pop_doc(view)
+      ]
+      |> Enum.map(&LazyHTML.to_html/1)
+      |> Enum.join()
+    end
+
+    unmasked = states.(mount(ctx.conn, ctx.me, path))
+    assert unmasked =~ ctx.p.name, "positive control"
+    assert unmasked =~ ctx.epic.name, "positive control"
+
+    view = mount(ctx.conn, ctx.me, path)
+    render_click(view, "toggle_mask_names", %{"masked" => "true"})
+    masked = states.(view)
+    assert masked =~ "tasks-filter-project-value", "positive control: the row renders"
+    assert masked =~ "tasks-project-root", "positive control: the hosted root renders"
+    assert masked =~ "tasks-project-epic-level", "positive control: the epic level renders"
+    refute masked =~ ctx.p.name
+    refute masked =~ ctx.epic.name
+  end
+
+  test "the desktop title keeps its chevron", ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    assert [_] = q(header_doc(view), "#tasks-title-picker-desktop .hero-chevron-down")
   end
 
   test "status, mine and kind lists narrow the kanban columns", ctx do

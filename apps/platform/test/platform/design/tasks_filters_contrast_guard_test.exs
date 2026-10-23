@@ -24,6 +24,15 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
   | search placeholder: --subtle on base-100 (painted; the global `::placeholder` rule) | 4.5 |
   | priority word: base-content on base-200 and on base-100    | 4.5   |
   | sponsor checkbox border: base-content on base-100          | 3.0   |
+  | Project row text: its text slot on base-100 (rest)         | 4.5   |
+  | Project row text: its text slot on its `active:bg-` slot (pressed; desktop hover is base-200) | 4.5 |
+  | Project row chevron: its text slot on base-100 (--subtle, painted) | 3.0 |
+
+  The Project row (task 01a168c2) is found by its data-role. Its classes are
+  `@opt` plus `w-full`, so the guard reads `@opt`'s string from the source;
+  the chevron is found by `tasks-filter-project-chevron`. The 'Project'
+  section label is a section label (above). The chevron is a graphical
+  object, so its floor is 1.4.11's 3:1.
 
   The badge, Show and the disabled footer paint their own fill, so their text
   never meets the sheet or header ground. The guard reads both slots from the
@@ -89,6 +98,8 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
 
   # Utility suffixes that are not colours.
   @text_sizes ~w(xs sm base lg xl 2xl 3xl)
+  # Alignment suffixes (`text-left` in the Project row's `@opt`), not colours.
+  @text_aligns ~w(left center right justify start end)
 
   setup_all do
     app_css = File.read!(@app_css_path)
@@ -157,6 +168,49 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
     end
   end
 
+  # The Project row: {text slot, pressed fill slot, chevron text slot}, read
+  # from the row's tag (whose class names `@opt`) and the chevron's tag.
+  defp row_slots(%{sheets: sheets}) do
+    row = tag_with_role(sheets, "tasks-filter-project-row")
+
+    classes =
+      if row =~ "@opt" do
+        case Regex.run(~r/@opt "([^"]+)"/, sheets) do
+          [_, opt] -> opt
+          nil -> flunk("the row's class names @opt, but @opt is not a string")
+        end
+      else
+        case Regex.run(~r/class="([^"]+)"/, row) do
+          [_, literal] -> literal
+          nil -> flunk("the Project row's class is neither @opt nor a literal")
+        end
+      end
+
+    list = String.split(classes, ~r/\s+/, trim: true)
+
+    texts =
+      for "text-" <> slot <- list,
+          slot not in @text_sizes,
+          slot not in @text_aligns,
+          not String.starts_with?(slot, "["),
+          do: slot
+
+    pressed = for "active:bg-" <> slot <- list, do: slot
+    assert [text] = texts, "row: expected one text slot, got #{inspect(texts)}"
+    assert [press] = pressed, "row: expected one active:bg- slot, got #{inspect(pressed)}"
+
+    chevron = tag_with_role(sheets, "tasks-filter-project-chevron")
+    assert chevron =~ "hero-chevron-right"
+
+    [_, chev_classes] = Regex.run(~r/class="([^"]+)"/, chevron)
+
+    chev_texts =
+      for "text-" <> slot <- String.split(chev_classes), slot not in @text_sizes, do: slot
+
+    assert [chev] = chev_texts, "chevron: expected one text slot, got #{inspect(chev_texts)}"
+    {text, press, chev}
+  end
+
   # ── measurement ────────────────────────────────────────────────────────
 
   defp c(b, token), do: Blocks.resolve!(b, token)
@@ -191,6 +245,7 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
   defp pairs(b, sources) do
     {badge_fill, badge_text} = badge_slots(sources)
     {{show_fill, show_text}, {off_fill, off_text}} = show_slots(sources)
+    {row_text, row_press, row_chev} = row_slots(sources)
 
     [
       {"title / base-200", @aa_text, on(b, "base-content", "base-200")},
@@ -207,7 +262,11 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
       {"placeholder subtle / base-100", @aa_text, on(b, "subtle", "base-100")},
       {"priority / base-200", @aa_text, on(b, "base-content", "base-200")},
       {"priority / base-100", @aa_text, on(b, "base-content", "base-100")},
-      {"sponsor box border / base-100", @aa_non_text, on(b, "base-content", "base-100")}
+      {"sponsor box border / base-100", @aa_non_text, on(b, "base-content", "base-100")},
+      {"project row #{row_text} / base-100", @aa_text, on(b, row_text, "base-100")},
+      {"project row #{row_text} / #{row_press} (pressed, hover)", @aa_text,
+       on(b, row_text, row_press)},
+      {"project row chevron #{row_chev} / base-100", @aa_non_text, on(b, row_chev, "base-100")}
     ]
   end
 
@@ -258,6 +317,12 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
     assert "Show primary-content / primary" in labels
     assert "disabled subtle / base-300" in labels
     assert "badge base-100 / base-content" in labels
+
+    # The Project row (task 01a168c2): the slots its source names.
+    assert {"base-content", "base-200", "subtle"} = row_slots(sources)
+    assert "project row base-content / base-100" in labels
+    assert "project row base-content / base-200 (pressed, hover)" in labels
+    assert "project row chevron subtle / base-100" in labels
   end
 
   # ── structure ──────────────────────────────────────────────────────────
@@ -267,6 +332,8 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
     assert sources.bar =~ ~s(data-role="tasks-filter-badge")
     assert sources.sheets =~ ~s(data-role="tasks-filter-show")
     assert sources.desktop =~ ~s(data-role="tasks-filter-popover")
+    assert sources.sheets =~ ~s(data-role="tasks-filter-project-row")
+    assert sources.sheets =~ ~s(data-role="tasks-filter-project-chevron")
   end
 
   test "no hover: utility, text-base-content/<n>, hex literal or data-theme selector",

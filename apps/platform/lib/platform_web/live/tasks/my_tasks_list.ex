@@ -218,10 +218,15 @@ defmodule PlatformWeb.Tasks.MyTasksList do
         mask_labels={@mask_labels}
       />
       <FilterSheets.filter_sheet
-        open?={@sheet == :filter}
+        open?={FilterSheets.filter_open?(@sheet)}
+        sheet={@sheet}
         url={@url}
         count={@filtered_count}
         active_scopes={@active_scopes}
+        projects={@projects}
+        drill_epics={@drill_epics}
+        project_label={@project_label}
+        epic_label={@epic_label}
         mask_names?={@mask_names?}
         mask_labels={@mask_labels}
       />

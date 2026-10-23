@@ -27,6 +27,16 @@ defmodule PlatformWeb.Tasks.FilterDesktop do
   or epic pick closes the title menu; the filter popover stays open so its
   options apply live (`FilterHooks.after_patch/1`).
 
+  ## The Project row (task 01a168c2)
+
+  The filter popover hosts the project picker when opened from its Project
+  row: `@tasks_filter_sheet` is `{:filter, inner}` and the popover renders
+  `FilterSheets.project_picker/1` at `inner` (with Back to filter) in place
+  of the filter body and footer. The title menu stays closed (its `open?` is
+  `project_open?/1`), so the picker never jumps across the header. A pick
+  returns the popover to the filter body; the scrim and Escape still close it
+  and return focus to the Filter button.
+
   ## Hover
 
   Desktop option hover is plain CSS in app.css (`.tasks-filter-opt`,
@@ -118,9 +128,12 @@ defmodule PlatformWeb.Tasks.FilterDesktop do
         &1
       )
 
+    sheet = shell[:tasks_filter_sheet]
+
     assigns =
       assigns
-      |> assign(:open?, shell[:tasks_filter_sheet] == :filter)
+      |> assign(:open?, FilterSheets.filter_open?(sheet))
+      |> assign(:picker, FilterSheets.filter_picker(sheet))
       |> assign(:url, url)
       |> assign(:count, length(FilterBar.active_filters(url, org_label)))
       |> assign(:close, close("##{@filter_id}"))
@@ -145,15 +158,28 @@ defmodule PlatformWeb.Tasks.FilterDesktop do
         class={[@card, "right-0 w-[400px]"]}
         style="box-shadow: var(--shadow-dropdown);"
       >
-        <div class="min-h-0 overflow-y-auto px-4 pt-2">
+        <div class={["min-h-0 overflow-y-auto px-4 pt-2", @picker && "pb-2"]}>
+          <FilterSheets.project_picker
+            :if={@picker}
+            sheet={@picker}
+            url={@url}
+            projects={@shell[:projects] || []}
+            drill_epics={@shell[:tasks_filter_epics] || []}
+            mask_names?={@shell[:mask_names?] || false}
+            mask_labels={@shell[:mask_labels] || %{}}
+            back_to_filter?
+          />
           <FilterSheets.filter_body
+            :if={is_nil(@picker)}
             url={@url}
             active_scopes={@shell[:active_scopes] || []}
+            project_label={FilterBar.title_project(@shell)}
+            epic_label={FilterBar.title_epic(@shell)}
             mask_names?={@shell[:mask_names?] || false}
             mask_labels={@shell[:mask_labels] || %{}}
           />
         </div>
-        <div class="shrink-0 border-t border-edge bg-base-100 px-4 py-3">
+        <div :if={is_nil(@picker)} class="shrink-0 border-t border-edge bg-base-100 px-4 py-3">
           <FilterSheets.filter_foot
             url={@url}
             count={@shell[:filtered_count] || 0}

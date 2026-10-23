@@ -268,7 +268,12 @@ defmodule PlatformWeb.Tasks.FilterBar do
 
   def title_epic(_assigns), do: nil
 
-  defp title_aria(project, epic) do
+  @doc """
+  The accessible name of a control that changes the project: the title
+  button and the Filter surface's Project row (task 01a168c2). Labels are
+  masked by the caller.
+  """
+  def title_aria(project, epic) do
     "Project: #{project || "All projects"}#{if epic, do: ", epic #{epic}"}. Change project"
   end
 

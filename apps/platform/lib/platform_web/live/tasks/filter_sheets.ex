@@ -17,7 +17,8 @@ defmodule PlatformWeb.Tasks.FilterSheets do
   Every option that changes the URL (project, epic, sort, status, kind, scope,
   sponsor, org, source, Reset) is a plain `<.link patch>` with NO
   `phx-click`, built by `FilterBar.href/2` over `BoardData.tasks_path/1`. Only
-  the epic drill-in (›), Back and 'Show N tasks' are buttons. A pick in the
+  the epic drill-in (›), Back, the Project row and 'Show N tasks' are
+  buttons. A pick in the
   project sheet closes it (`FilterHooks.after_patch/1`); the filter sheet
   stays open, so its options apply live.
 
@@ -27,6 +28,15 @@ defmodule PlatformWeb.Tasks.FilterSheets do
   Pressed options are `active:bg-base-200` on the base-100 sheet; no `hover:`
   utility (desktop hover is stage 4's plain CSS). Status dots are decorative
   (`aria-hidden`): the word beside each carries the meaning.
+
+  ## The Project row (task 01a168c2)
+
+  The filter body opens with a Project row showing the current project (and
+  epic). It is a button, not a link: it changes no URL, it moves
+  `@tasks_filter_sheet` to `{:filter, :project}`, and the filter sheet then
+  hosts `project_picker/1` (with a Back to filter button) in place of its
+  body. The picker's options are the same patch links as everywhere else; a
+  pick returns to the filter body (`FilterHooks.after_patch/1`).
   """
   use Phoenix.Component
 
@@ -89,6 +99,16 @@ defmodule PlatformWeb.Tasks.FilterSheets do
   @doc "True when `@tasks_filter_sheet` opens the project picker (either level)."
   def project_open?(sheet), do: sheet == :project or match?({:epics, _}, sheet)
 
+  @doc """
+  True when `@tasks_filter_sheet` opens the filter surface: its body, or the
+  project picker it hosts (`{:filter, inner}`).
+  """
+  def filter_open?(sheet), do: sheet == :filter or match?({:filter, _}, sheet)
+
+  @doc "The picker state hosted by the filter surface (`:project` | `{:epics, id}`), or nil."
+  def filter_picker({:filter, inner}), do: inner
+  def filter_picker(_sheet), do: nil
+
   attr :sheet, :any, required: true, doc: "@tasks_filter_sheet"
   attr :url, :map, required: true
   attr :projects, :list, default: []
@@ -96,9 +116,14 @@ defmodule PlatformWeb.Tasks.FilterSheets do
   attr :mask_names?, :boolean, default: false
   attr :mask_labels, :map, default: %{}
 
+  attr :back_to_filter?, :boolean,
+    default: false,
+    doc: "hosted by the filter surface: the root level gets a Back to filter button"
+
   @doc """
   The project picker's body, root level and epic level: shared by the phone
-  sheet and the desktop title menu (stage 4).
+  sheet, the desktop title menu (stage 4) and the filter surface's Project
+  row (task 01a168c2).
   """
   def project_picker(assigns) do
     drill_id =
@@ -117,7 +142,25 @@ defmodule PlatformWeb.Tasks.FilterSheets do
 
     ~H"""
     <div :if={is_nil(@drill_id)} data-role="tasks-project-root" class="flex flex-col">
+      <div :if={@back_to_filter?} class="flex min-h-10 items-center gap-2 pb-1.5">
+        <button
+          type="button"
+          phx-click="tasks_filter_back"
+          data-role="tasks-project-back-filter"
+          aria-label="Back to filter"
+          class="inline-flex size-9 shrink-0 items-center justify-center rounded-field text-base-content active:bg-base-200 focus-visible-ring"
+        >
+          <span class="hero-chevron-left size-4" aria-hidden="true"></span>
+        </button>
+        <p
+          class="min-w-0 flex-1 truncate text-base font-semibold text-base-content"
+          aria-hidden="true"
+        >
+          Project
+        </p>
+      </div>
       <p
+        :if={!@back_to_filter?}
         class="flex min-h-10 items-center px-2 pb-1.5 text-base font-semibold text-base-content"
         aria-hidden="true"
       >
@@ -228,15 +271,25 @@ defmodule PlatformWeb.Tasks.FilterSheets do
 
   # ── Filter sheet ────────────────────────────────────────────────────────
 
-  attr :open?, :boolean, required: true
+  attr :open?, :boolean, required: true, doc: "filter_open?(@tasks_filter_sheet)"
+  attr :sheet, :any, default: nil, doc: "@tasks_filter_sheet"
   attr :url, :map, required: true
   attr :count, :integer, required: true, doc: "@filtered_count"
   attr :active_scopes, :list, default: []
+  attr :projects, :list, default: []
+  attr :drill_epics, :list, default: [], doc: "@tasks_filter_epics"
+  attr :project_label, :string, default: nil, doc: "masked; nil means All projects"
+  attr :epic_label, :string, default: nil, doc: "masked"
   attr :mask_names?, :boolean, default: false
   attr :mask_labels, :map, default: %{}
 
-  @doc "The phone filter sheet: `filter_body/1` and `filter_foot/1` in a bottom sheet."
+  @doc """
+  The phone filter sheet: `filter_body/1` and `filter_foot/1` in a bottom
+  sheet, or the project picker it hosts (no footer) after its Project row.
+  """
   def filter_sheet(assigns) do
+    assigns = assign(assigns, :picker, filter_picker(assigns.sheet))
+
     ~H"""
     <.sheet
       id="tasks-filter-sheet"
@@ -248,14 +301,26 @@ defmodule PlatformWeb.Tasks.FilterSheets do
       swipe_dismiss
     >
       <:title>Filter and sort tasks</:title>
+      <.project_picker
+        :if={@open? and @picker != nil}
+        sheet={@picker}
+        url={@url}
+        projects={@projects}
+        drill_epics={@drill_epics}
+        mask_names?={@mask_names?}
+        mask_labels={@mask_labels}
+        back_to_filter?
+      />
       <.filter_body
-        :if={@open?}
+        :if={@open? and is_nil(@picker)}
         url={@url}
         active_scopes={@active_scopes}
+        project_label={@project_label}
+        epic_label={@epic_label}
         mask_names?={@mask_names?}
         mask_labels={@mask_labels}
       />
-      <:actions>
+      <:actions :if={is_nil(@picker)}>
         <.filter_foot :if={@open?} url={@url} count={@count} />
       </:actions>
     </.sheet>
@@ -264,12 +329,15 @@ defmodule PlatformWeb.Tasks.FilterSheets do
 
   attr :url, :map, required: true
   attr :active_scopes, :list, default: []
+  attr :project_label, :string, default: nil, doc: "masked; nil means All projects"
+  attr :epic_label, :string, default: nil, doc: "masked"
   attr :mask_names?, :boolean, default: false
   attr :mask_labels, :map, default: %{}
 
   @doc """
-  Filter and sort: Sort, Status, Kind, Scope, Sponsor, plus Org and Source.
-  Shared by the phone sheet and the desktop popover (stage 4).
+  Filter and sort: the Project row (task 01a168c2), Sort, Status, Kind,
+  Scope, Sponsor, plus Org and Source. Shared by the phone sheet and the
+  desktop popover (stage 4).
   """
   def filter_body(assigns) do
     url = assigns.url
@@ -281,6 +349,7 @@ defmodule PlatformWeb.Tasks.FilterSheets do
       |> assign(:tog, @tog)
       |> assign(:seg, @seg)
       |> assign(:label, @label)
+      |> assign(:opt, @opt)
 
     ~H"""
     <div data-role="tasks-filter-sheet-body" class="flex flex-col">
@@ -291,7 +360,30 @@ defmodule PlatformWeb.Tasks.FilterSheets do
         Filter and sort
       </p>
 
-      <section data-role="tasks-filter-sort" class="py-2.5">
+      <section data-role="tasks-filter-project" class="py-2.5">
+        <p class={@label} aria-hidden="true">Project</p>
+        <button
+          type="button"
+          phx-click="tasks_filter_open"
+          phx-value-sheet="filter_project"
+          data-role="tasks-filter-project-row"
+          aria-haspopup="dialog"
+          aria-label={FilterBar.title_aria(@project_label, @epic_label)}
+          class={[@opt, "w-full"]}
+        >
+          <span data-role="tasks-filter-project-value" class="min-w-0 flex-1 truncate">
+            {project_value(@project_label, @epic_label)}
+          </span>
+          <span
+            data-role="tasks-filter-project-chevron"
+            class="hero-chevron-right size-4 shrink-0 text-subtle"
+            aria-hidden="true"
+          >
+          </span>
+        </button>
+      </section>
+
+      <section data-role="tasks-filter-sort" class="border-t border-edge py-2.5">
         <p class={@label} aria-hidden="true">Sort</p>
         <div role="radiogroup" aria-label="Sort" class="flex flex-wrap gap-2">
           <.link
@@ -480,6 +572,11 @@ defmodule PlatformWeb.Tasks.FilterSheets do
     <span class="text-xs" aria-hidden="true">✓</span>
     """
   end
+
+  # The Project row's value: 'All projects', '<P>' or '<P> › <E>'.
+  defp project_value(nil, _epic), do: "All projects"
+  defp project_value(project, nil), do: project
+  defp project_value(project, epic), do: "#{project} › #{epic}"
 
   @doc "The footer button's copy."
   def show_label(0), do: "No tasks match"

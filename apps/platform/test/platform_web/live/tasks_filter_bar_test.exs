@@ -2,7 +2,8 @@ defmodule PlatformWeb.TasksFilterBarTest do
   @moduledoc """
   The phone Tasks header and sheets (task 01a161fd stage 3, prototype canvas
   01a16202 node `p`): `PlatformWeb.Tasks.FilterBar`, `FilterSheets` and
-  `FilterHooks`.
+  `FilterHooks`. Task 01a168c2 stage 1 adds the Filter sheet's Project row
+  and the project picker it hosts.
 
   Every absence is preceded by a positive control on the same render showing
   the same query can find something.
@@ -54,6 +55,50 @@ defmodule PlatformWeb.TasksFilterBarTest do
     do: Enum.flat_map(nodes, &String.split(attr(&1, "class") || "", ~r/\s+/, trim: true))
 
   defp open(view, sheet), do: render_click(view, "tasks_filter_open", %{"sheet" => sheet})
+
+  defp sheet_doc(view),
+    do: view |> element("#tasks-filter-sheet") |> render() |> LazyHTML.from_fragment()
+
+  defp row_ids(doc),
+    do: doc |> q("[data-role=tasks-my-row]") |> Enum.map(&attr(&1, "data-row-task-id"))
+
+  defp click_row(view),
+    do: view |> element("#tasks-my-list [data-role=tasks-filter-project-row]") |> render_click()
+
+  # A viewer in ONE tenant org (a root-org member reads every project), a
+  # readable home project and a foreign project in another tenant.
+  defp tenant_viewer! do
+    home_org = Platform.TenancyFixtures.tenant_org_id("filter_row_home_#{u()}")
+    foreign_org = Platform.TenancyFixtures.tenant_org_id("filter_row_foreign_#{u()}")
+    n = u()
+
+    viewer =
+      Repo.insert!(%User{
+        email: "filter-row-tenant-#{n}@example.com",
+        name: "Filter Row tenant #{n}",
+        oidc_sub: "filter-row-tenant-#{n}"
+      })
+
+    %Platform.Tenancy.OrgMembership{}
+    |> Platform.Tenancy.OrgMembership.changeset(%{
+      user_id: viewer.id,
+      org_id: home_org,
+      role: "member"
+    })
+    |> Repo.insert!()
+
+    {:ok, home} = Tasks.create_project(%{name: "Filter Row Home #{u()}", org_id: home_org})
+
+    {:ok, foreign} =
+      Tasks.create_project(%{name: "Secret Foreign Project #{u()}", org_id: foreign_org})
+
+    {:ok, foreign_epic} =
+      Tasks.create_epic(%{project_id: foreign.id, name: "Secret Foreign Epic #{u()}"})
+
+    task!(home, "Home task", status: "in_progress")
+    task!(foreign, "Foreign task", status: "in_progress")
+    %{viewer: viewer, home: home, foreign: foreign, foreign_epic: foreign_epic}
+  end
 
   setup do
     me = user!()
@@ -142,6 +187,17 @@ defmodule PlatformWeb.TasksFilterBarTest do
     # Positive control: rows, chips, Clear all, every option and Reset.
     assert length(links) > 20
     assert Enum.filter(links, &(attr(&1, "phx-click") != nil)) == []
+
+    # The picker hosted in the Filter sheet (task 01a168c2), both levels.
+    hosted = [
+      open(view, "filter_project") && sheet_doc(view),
+      render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id}) && sheet_doc(view)
+    ]
+
+    hosted_links = Enum.flat_map(hosted, &q(&1, "[data-phx-link]"))
+    # Positive control: All projects + the project at the root, All of + the epic below.
+    assert length(hosted_links) >= 4
+    assert Enum.filter(hosted_links, &(attr(&1, "phx-click") != nil)) == []
   end
 
   test "both sheets are bottom sheets with handle_close and swipe_dismiss", ctx do
@@ -317,6 +373,223 @@ defmodule PlatformWeb.TasksFilterBarTest do
     masked = states.(view)
     assert masked =~ "tasks-title-project", "positive control: the title renders"
     assert masked =~ "tasks-my-epic", "positive control: the row's epic slot renders"
+    refute masked =~ ctx.p.name
+    refute masked =~ ctx.epic.name
+  end
+
+  # ── The Project row (task 01a168c2 stage 1) ──────────────────────────
+
+  test "the Project row is the Filter sheet's first section and reads the selection", ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    open(view, "filter")
+    d = sheet_doc(view)
+
+    sections =
+      d |> q("[data-role=tasks-filter-sheet-body] > section") |> Enum.map(&attr(&1, "data-role"))
+
+    assert ["tasks-filter-project", "tasks-filter-sort" | _] = sections
+
+    [row] = q(d, "[data-role=tasks-filter-project] [data-role=tasks-filter-project-row]")
+    assert LazyHTML.tag(row) == ["button"]
+    assert attr(row, "type") == "button"
+    assert attr(row, "href") == nil
+    assert attr(row, "phx-click") == "tasks_filter_open"
+    assert attr(row, "phx-value-sheet") == "filter_project"
+    assert attr(row, "aria-haspopup") == "dialog"
+    assert attr(row, "aria-label") == "Project: All projects. Change project"
+    assert "active:bg-base-200" in classes([row])
+    assert "w-full" in classes([row])
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == "All projects"
+    assert [chev] = q(d, "[data-role=tasks-filter-project-row] .hero-chevron-right")
+    assert attr(chev, "aria-hidden") == "true"
+    [label] = q(d, "[data-role=tasks-filter-project] > p")
+    assert text(label) == "Project"
+    assert attr(label, "aria-hidden") == "true"
+    assert "border-t" in classes(q(d, "[data-role=tasks-filter-sort]"))
+
+    view = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}")
+    open(view, "filter")
+    d = sheet_doc(view)
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == ctx.p.name
+
+    view = mount(ctx.conn, ctx.me, "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}")
+    open(view, "filter")
+    d = sheet_doc(view)
+
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() ==
+             "#{ctx.p.name} › #{ctx.epic.name}"
+
+    assert d |> q("[data-role=tasks-filter-project-row]") |> hd() |> attr("aria-label") ==
+             "Project: #{ctx.p.name}, epic #{ctx.epic.name}. Change project"
+  end
+
+  test "the row hosts the picker in the Filter sheet and a pick returns to Filter", ctx do
+    {:ok, other} = Tasks.create_project(%{name: "Filter Row Other #{u()}"})
+    o = task!(other, "Other project task", status: "in_progress")
+
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    # Positive control: before the pick the list carries another project's task.
+    assert o.id in row_ids(list_doc(view))
+    assert ctx.a.id in row_ids(list_doc(view))
+
+    open(view, "filter")
+    click_row(view)
+
+    assert has_element?(
+             view,
+             "#tasks-filter-sheet[data-open=true] [data-role=tasks-project-root]"
+           )
+
+    assert has_element?(view, "#tasks-filter-sheet [data-role=tasks-project-back-filter]")
+    assert has_element?(view, "#tasks-project-sheet[data-open=false]")
+    refute has_element?(view, "#tasks-project-sheet [data-role=tasks-project-root]")
+
+    assert has_element?(
+             view,
+             "#tasks-my-list [data-role=tasks-title-picker][aria-expanded=false]"
+           )
+
+    # The picker replaces the body and the footer.
+    refute has_element?(view, "#tasks-filter-sheet [data-role=tasks-filter-sheet-body]")
+    refute has_element?(view, "#tasks-filter-sheet [data-role=tasks-filter-show]")
+
+    view |> element(~s(#tasks-filter-sheet [data-project="#{ctx.p.id}"])) |> render_click()
+    assert_patch(view, "/tasks?project=#{ctx.p.id}")
+
+    d = list_doc(view)
+    assert d |> q("#tasks-filter-sheet") |> hd() |> attr("data-open") == "true"
+    assert [_] = q(d, "#tasks-filter-sheet [data-role=tasks-filter-sheet-body]")
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == ctx.p.name
+
+    ids = row_ids(d)
+    assert ids != []
+    refute o.id in ids
+    p_ids = MapSet.new([ctx.a.id, ctx.b.id, ctx.c.id])
+    assert Enum.all?(ids, &MapSet.member?(p_ids, &1))
+  end
+
+  test "Back steps out of the hosted picker one level at a time, inside the Filter sheet",
+       ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    open(view, "filter")
+    click_row(view)
+
+    view |> element("#tasks-filter-sheet [data-role=tasks-project-back-filter]") |> render_click()
+
+    assert has_element?(
+             view,
+             "#tasks-filter-sheet[data-open=true] [data-role=tasks-filter-sheet-body]"
+           )
+
+    refute has_element?(view, "#tasks-filter-sheet [data-role=tasks-project-root]")
+
+    click_row(view)
+
+    view
+    |> element(
+      ~s(#tasks-filter-sheet [data-role=tasks-project-epics][phx-value-id="#{ctx.p.id}"])
+    )
+    |> render_click()
+
+    assert has_element?(view, "#tasks-filter-sheet [data-role=tasks-project-epic-level]")
+    assert has_element?(view, ~s(#tasks-filter-sheet [data-epic="#{ctx.epic.id}"]))
+    assert has_element?(view, "#tasks-project-sheet[data-open=false]")
+
+    view |> element("#tasks-filter-sheet [data-role=tasks-project-back]") |> render_click()
+
+    assert has_element?(
+             view,
+             "#tasks-filter-sheet[data-open=true] [data-role=tasks-project-root]"
+           )
+
+    assert has_element?(view, "#tasks-filter-sheet [data-role=tasks-project-back-filter]")
+    assert has_element?(view, "#tasks-project-sheet[data-open=false]")
+
+    # An epic pick from the hosted epic level also returns to Filter.
+    render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id})
+    view |> element(~s(#tasks-filter-sheet [data-epic="#{ctx.epic.id}"])) |> render_click()
+    assert_patch(view, "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}")
+
+    assert view
+           |> element("#tasks-filter-sheet [data-role=tasks-filter-project-value]")
+           |> render() =~
+             "#{ctx.p.name} › #{ctx.epic.name}"
+
+    click_row(view)
+    render_click(view, "tasks_filter_close", %{})
+    assert has_element?(view, "#tasks-filter-sheet[data-open=false]")
+    refute has_element?(view, "#tasks-filter-sheet [data-role=tasks-project-root]")
+  end
+
+  test "the title picker renders no Back to filter and keeps its chevron", ctx do
+    view = mount(ctx.conn, ctx.me, "/tasks?project=all")
+    open(view, "project")
+    d = list_doc(view)
+    [heading] = q(d, "#tasks-project-sheet [data-role=tasks-project-root] > p")
+    assert text(heading) == "Project"
+    assert q(d, "[data-role=tasks-project-back-filter]") == []
+    assert [_] = q(d, "#tasks-title-picker .hero-chevron-down")
+  end
+
+  test "a forged epics id from another tenant leaves the hosted picker at its root" do
+    t = tenant_viewer!()
+    view = mount(build_conn(), t.viewer, "/tasks?project=all")
+    open(view, "filter")
+    click_row(view)
+
+    render_click(view, "tasks_filter_epics", %{"id" => t.foreign.id})
+    d = sheet_doc(view)
+    assert [_] = q(d, "[data-role=tasks-project-root]")
+    assert q(d, "[data-role=tasks-project-epic-level]") == []
+    refute LazyHTML.to_html(d) =~ t.foreign.name
+    refute LazyHTML.to_html(d) =~ t.foreign_epic.name
+
+    # Positive control: the readable home project DOES open its epic level.
+    render_click(view, "tasks_filter_epics", %{"id" => t.home.id})
+    d = sheet_doc(view)
+    assert [_] = q(d, "[data-role=tasks-project-epic-level]")
+    assert LazyHTML.to_html(d) =~ t.home.name
+  end
+
+  test "?project=<foreign id> reads All projects and leaks no foreign name", ctx do
+    t = tenant_viewer!()
+    view = mount(build_conn(), t.viewer, "/tasks?project=#{t.foreign.id}")
+    open(view, "filter")
+    d = list_doc(view)
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == "All projects"
+    assert d |> q("[data-role=tasks-my-row]") |> length() >= 1, "positive control: rows render"
+    refute LazyHTML.to_html(d) =~ t.foreign.name
+
+    # Positive control: a viewer who can read it sees the same name in the row.
+    view = mount(ctx.conn, ctx.me, "/tasks?project=#{t.foreign.id}")
+    open(view, "filter")
+    d = list_doc(view)
+    assert d |> q("[data-role=tasks-filter-project-value]") |> hd() |> text() == t.foreign.name
+  end
+
+  test "masking leaves no real project or epic name in the Filter sheet's row or picker", ctx do
+    path = "/tasks?project=#{ctx.p.id}&epic=#{ctx.epic.id}"
+
+    states = fn view ->
+      [
+        open(view, "filter") && sheet_doc(view),
+        click_row(view) && sheet_doc(view),
+        render_click(view, "tasks_filter_epics", %{"id" => ctx.p.id}) && sheet_doc(view)
+      ]
+      |> Enum.map(&LazyHTML.to_html/1)
+      |> Enum.join()
+    end
+
+    unmasked = states.(mount(ctx.conn, ctx.me, path))
+    assert unmasked =~ ctx.p.name, "positive control"
+    assert unmasked =~ ctx.epic.name, "positive control"
+
+    view = mount(ctx.conn, ctx.me, path)
+    render_click(view, "toggle_mask_names", %{"masked" => "true"})
+    masked = states.(view)
+    assert masked =~ "tasks-filter-project-value", "positive control: the row renders"
+    assert masked =~ "tasks-project-root", "positive control: the hosted root renders"
+    assert masked =~ "tasks-project-epic-level", "positive control: the epic level renders"
     refute masked =~ ctx.p.name
     refute masked =~ ctx.epic.name
   end

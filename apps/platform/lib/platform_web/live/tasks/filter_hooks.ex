@@ -8,10 +8,16 @@ defmodule PlatformWeb.Tasks.FilterHooks do
 
   Owns:
 
-    * `@tasks_filter_sheet`: `nil | :project | {:epics, project_id} | :filter`.
+    * `@tasks_filter_sheet`: `nil | :project | {:epics, project_id} | :filter
+      | {:filter, :project} | {:filter, {:epics, project_id}}`. The
+      `{:filter, inner}` forms (task 01a168c2) are the project picker opened
+      from the Filter surface's Project row: `inner` is the picker's own
+      state, hosted inside the Filter sheet or popover, and Back from its
+      root returns to `:filter`.
     * `@tasks_filter_epics`: the epics of the project drilled into from the
       project sheet, loaded with `EpicLoaders.load_epics/1`.
-    * Events `tasks_filter_open` (`sheet`: "project" | "filter"),
+    * Events `tasks_filter_open` (`sheet`: "project" | "filter" |
+      "filter_project"),
       `tasks_filter_close`, `tasks_filter_epics` (`id`) and
       `tasks_filter_back`, and (stage 5) `tasks_restore_device_project`
       (`id`).
@@ -21,7 +27,9 @@ defmodule PlatformWeb.Tasks.FilterHooks do
   decodes the URL through `BoardHooks.apply_url_filters/3`. That funnel calls
   `after_patch/1`, which closes the PROJECT sheet (a project or epic pick
   closes it, as in the prototype) and leaves the FILTER sheet open, so its
-  options apply live and 'Show N tasks' closes it.
+  options apply live and 'Show N tasks' closes it. A pick from the picker
+  hosted in the Filter sheet returns to the Filter sheet, whose Project row
+  then shows the new project.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -30,7 +38,11 @@ defmodule PlatformWeb.Tasks.FilterHooks do
   alias PlatformWeb.Tasks.{EpicLoaders, FilterBar}
   alias PlatformWeb.Tasks.Selection
 
-  @sheets %{"project" => :project, "filter" => :filter}
+  @sheets %{
+    "project" => :project,
+    "filter" => :filter,
+    "filter_project" => {:filter, :project}
+  }
 
   @doc "Default the sheet state and attach the event hook."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -43,12 +55,14 @@ defmodule PlatformWeb.Tasks.FilterHooks do
 
   @doc """
   Called by `BoardHooks.apply_url_filters/3` on every URL change: the project
-  sheet closes, the filter sheet stays.
+  sheet closes, the filter sheet stays, and the picker hosted in the filter
+  sheet returns to the filter sheet.
   """
   @spec after_patch(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def after_patch(socket) do
     case socket.assigns[:tasks_filter_sheet] do
       :filter -> socket
+      {:filter, _picker} -> assign(socket, :tasks_filter_sheet, :filter)
       _other -> assign(socket, :tasks_filter_sheet, nil)
     end
   end
@@ -71,14 +85,14 @@ defmodule PlatformWeb.Tasks.FilterHooks do
       {:halt,
        socket
        |> assign(:tasks_filter_epics, EpicLoaders.load_epics(project_id))
-       |> assign(:tasks_filter_sheet, {:epics, project_id})}
+       |> assign(:tasks_filter_sheet, epics_state(socket, project_id))}
     else
       _ -> {:halt, socket}
     end
   end
 
   defp handle_event("tasks_filter_back", _params, socket),
-    do: {:halt, assign(socket, :tasks_filter_sheet, :project)}
+    do: {:halt, assign(socket, :tasks_filter_sheet, back(socket.assigns[:tasks_filter_sheet]))}
 
   # Stage 5: `last_project.js` replays a device's project over the server's
   # DEFAULT `?project=all` (nothing remembered for the user). It is a REPLACE
@@ -105,4 +119,16 @@ defmodule PlatformWeb.Tasks.FilterHooks do
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  # The epic level stays in the surface the picker was opened from.
+  defp epics_state(socket, project_id) do
+    case socket.assigns[:tasks_filter_sheet] do
+      {:filter, _picker} -> {:filter, {:epics, project_id}}
+      _other -> {:epics, project_id}
+    end
+  end
+
+  defp back({:filter, {:epics, _id}}), do: {:filter, :project}
+  defp back({:filter, :project}), do: :filter
+  defp back(_sheet), do: :project
 end
