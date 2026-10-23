@@ -136,6 +136,7 @@ defmodule PlatformWeb.SocialLive do
   use PlatformWeb, :live_view
 
   alias Phoenix.LiveView.JS
+  alias PlatformWeb.SocialProjectSetting
 
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Social
@@ -506,6 +507,27 @@ defmodule PlatformWeb.SocialLive do
     end
   end
 
+  # Project for renders (task 01a16532): saves on choose. The approver is
+  # re-checked here and in Social.set_profile_project/4; the id must be one
+  # of the options rebuilt now (SocialProjectSetting.save/3).
+  def handle_event("set_profile_project", params, socket) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, profile} <- SocialProjectSetting.save(profile, user_id, params["project_id"]) do
+      Process.send_after(self(), :project_saved_clear, SocialProjectSetting.saved_ms())
+
+      {:noreply,
+       socket
+       |> assign(:profile, profile)
+       |> assign(:project_setting, %{SocialProjectSetting.load(profile, true) | saved?: true})}
+    else
+      {:error, :not_an_approver} ->
+        {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply, notice(socket, "Those settings could not be saved.")}
+    end
+  end
+
   def handle_event("dismiss_notice", _params, socket),
     do: {:noreply, assign(socket, :notice, nil)}
 
@@ -756,6 +778,9 @@ defmodule PlatformWeb.SocialLive do
     end
   end
 
+  def handle_info(:project_saved_clear, %{assigns: %{project_setting: %{} = s}} = socket),
+    do: {:noreply, assign(socket, :project_setting, %{s | saved?: false})}
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # ONE place a profile becomes current. Every per-profile stream loads here
@@ -808,6 +833,7 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form([]))
     |> assign(:settings_options, %{approvers: [], spaces: []})
+    |> assign(:project_setting, nil)
     |> assign(:settings_form, nil)
     |> assign(:invite_dialog, nil)
     |> assign(:invites_empty?, true)
@@ -830,6 +856,7 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form(platforms))
     |> assign(:settings_options, settings_options(profile, can_edit?))
+    |> assign(:project_setting, SocialProjectSetting.load(profile, can_edit?))
     |> assign(:settings_form, settings_form(profile, %{}))
     |> assign(:invite_dialog, nil)
     |> stream(:accounts, Enum.map(accounts, &account_item(&1, nil)), reset: true)
@@ -2273,6 +2300,7 @@ defmodule PlatformWeb.SocialLive do
                 form={@settings_form}
                 can_edit?={@can_edit?}
                 options={@settings_options}
+                project_setting={@project_setting}
               />
             </div>
           </section>
@@ -3475,6 +3503,7 @@ defmodule PlatformWeb.SocialLive do
   attr :form, :any, required: true
   attr :can_edit?, :boolean, required: true
   attr :options, :map, required: true
+  attr :project_setting, :map, default: nil
 
   defp settings(%{can_edit?: false} = assigns) do
     ~H"""
@@ -3491,6 +3520,7 @@ defmodule PlatformWeb.SocialLive do
         <dt class="text-base-content/70">Hashtags</dt>
         <dd>{Enum.join(@profile.default_hashtags || [], " ")}</dd>
       </div>
+      <SocialProjectSetting.readonly :if={@project_setting} setting={@project_setting} />
     </dl>
     """
   end
@@ -3532,6 +3562,7 @@ defmodule PlatformWeb.SocialLive do
         Save settings
       </button>
     </.form>
+    <SocialProjectSetting.row :if={@project_setting} setting={@project_setting} />
     """
   end
 

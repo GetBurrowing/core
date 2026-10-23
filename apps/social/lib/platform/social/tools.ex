@@ -486,7 +486,7 @@ defmodule Platform.Social.Tools do
       :profile_needs_project,
       Social.profile_needs_project(),
       false,
-      "Ask a human to set the profile's project (one in the profile's org)."
+      "Relay the error to a human in these words: an approver sets it in Social › Settings › Project for renders."
     )
   end
 

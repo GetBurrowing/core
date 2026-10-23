@@ -30,6 +30,18 @@ defmodule Platform.Social do
   "must be a human user"; the FK to `users` is the second layer. Profile
   `approver_user_ids` get the same check on write. Whether the approver is
   in the profile's list is Social 3/7's rule.
+
+  ## Project for renders (task 01a16532)
+
+  A profile's clip renders are stored as files in its project. A new
+  profile without an explicit `project_id` takes
+  `default_render_project_id/1`: the org's only non-archived project, or
+  the first by name (then id). An org with no projects leaves it nil. No
+  project is ever created for this: a silently created project clutters
+  the project switcher (design canvas 01a16763-cfb1, rule 5), so the
+  ticket's "or create a Social project" option was dropped.
+  `set_profile_project/4` is the approver-only way to correct it; there
+  is no agent tool for it.
   """
 
   import Ecto.Query
@@ -154,11 +166,17 @@ defmodule Platform.Social do
   def list_profiles(org_id),
     do: Profile |> scoped_query(org_id) |> order_by([p], asc: p.name) |> Repo.all()
 
+  @doc """
+  Creates a profile in `org_id`. When `attrs` carry no `project_id` key
+  (atom or string), the project defaults to
+  `default_render_project_id/1`; an explicit `project_id` (nil included)
+  wins and is still validated against the org.
+  """
   @spec create_profile(Ecto.UUID.t(), map()) :: {:ok, Profile.t()} | {:error, term()}
   def create_profile(org_id, attrs) do
     case Ecto.UUID.cast(org_id) do
       {:ok, org_id} ->
-        %Profile{org_id: org_id}
+        %Profile{org_id: org_id, project_id: default_project_unless_given(org_id, attrs)}
         |> Profile.changeset(attrs)
         |> validate_profile(org_id)
         |> Repo.insert()
@@ -176,6 +194,73 @@ defmodule Platform.Social do
       |> Profile.changeset(attrs)
       |> validate_profile(profile.org_id)
       |> Repo.update()
+    end
+  end
+
+  defp default_project_unless_given(org_id, attrs) do
+    if Map.has_key?(attrs, :project_id) or Map.has_key?(attrs, "project_id"),
+      do: nil,
+      else: default_render_project_id(org_id)
+  end
+
+  @doc """
+  The project a new profile in `org_id` stores its renders in: the org's
+  non-archived projects ordered by name, then id; none -> nil, otherwise
+  the first. Never creates a project.
+
+  KEEP IN SYNC with the SQL in
+  `priv/repo/migrations/20261023070500_backfill_social_profile_project.exs`
+  (task 01a16532 stage 2), which applies this same rule to existing
+  profiles with a nil project. Names compare in byte order (Elixir term
+  order), which is why that SQL sorts with `COLLATE "C"`.
+  """
+  @spec default_render_project_id(term()) :: Ecto.UUID.t() | nil
+  def default_render_project_id(org_id) do
+    case Ecto.UUID.cast(org_id) do
+      {:ok, org_id} ->
+        [org_id: org_id]
+        |> Platform.Tasks.list_projects_unscoped()
+        |> Enum.filter(&is_nil(&1.archived_at))
+        |> Enum.min_by(&{&1.name, &1.id}, fn -> nil end)
+        |> case do
+          nil -> nil
+          project -> project.id
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  @doc """
+  Sets the project a profile's renders are stored in. Only an approver of
+  the profile may (`approver_check/3`, checked before anything else; a
+  refusal writes nothing). Only `project_id` is cast; it must name a
+  non-archived project in the profile's org, so another org's project, an
+  unknown id, an archived project or a blank are refused. Agents are never
+  approvers, and there is deliberately no agent tool for this.
+  """
+  @spec set_profile_project(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), term()) ::
+          {:ok, Profile.t()}
+          | {:error, :not_found | approver_refusal() | Ecto.Changeset.t()}
+  def set_profile_project(org_id, profile, user_id, project_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id) do
+      profile
+      |> Changeset.cast(%{project_id: project_id}, [:project_id])
+      |> Changeset.validate_required([:project_id])
+      |> validate_project_in_org(profile.org_id)
+      |> validate_project_not_archived()
+      |> Repo.update()
+    end
+  end
+
+  defp validate_project_not_archived(%Changeset{valid?: false} = changeset), do: changeset
+
+  defp validate_project_not_archived(changeset) do
+    case Platform.Tasks.get_project(Changeset.get_field(changeset, :project_id)) do
+      %{archived_at: nil} -> changeset
+      _ -> Changeset.add_error(changeset, :project_id, "must not be an archived project")
     end
   end
 
@@ -214,8 +299,10 @@ defmodule Platform.Social do
         changeset
 
       project_id ->
-        case Platform.Tasks.get_project(project_id) do
-          %{org_id: ^org_id} -> changeset
+        with {:ok, project_id} <- Ecto.UUID.cast(project_id),
+             %{org_id: ^org_id} <- Platform.Tasks.get_project(project_id) do
+          changeset
+        else
           _ -> Changeset.add_error(changeset, :project_id, "must belong to the profile's org")
         end
     end
@@ -2064,7 +2151,7 @@ defmodule Platform.Social do
   @spec profile_needs_project() :: String.t()
   def profile_needs_project,
     do:
-      "the profile needs a project in its org to store renders in; set the profile's project first"
+      "This profile has no project to store renders in. An approver can set one in Social › Settings › Project for renders."
 
   @doc """
   Queues a clip for rendering and returns at once with the clip in

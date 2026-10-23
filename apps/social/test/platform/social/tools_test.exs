@@ -438,7 +438,7 @@ defmodule Platform.Social.ToolsTest do
       F.closed_candidate!(w.meeting, ret, :retracted)
       F.candidate!(w.meeting, filing, %{state: :acting})
 
-      {:ok, bare} = Social.create_profile(w.org_id, %{name: "Bare #{unique()}"})
+      {:ok, bare} = Social.create_profile(w.org_id, %{name: "Bare #{unique()}", project_id: nil})
       {:ok, _} = Social.create_account(w.org_id, bare, %{platform: "x"})
 
       {:ok, m2} =

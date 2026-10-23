@@ -257,7 +257,9 @@ defmodule Platform.Social.ClipSubmitTest do
   end
 
   test "a profile with no project is profile_needs_project", w do
-    {:ok, bare} = Platform.Social.create_profile(w.org_id, %{name: "Bare #{unique()}"})
+    {:ok, bare} =
+      Platform.Social.create_profile(w.org_id, %{name: "Bare #{unique()}", project_id: nil})
+
     assert %Profile{project_id: nil} = bare
 
     assert {:error, %{code: :profile_needs_project}} =
