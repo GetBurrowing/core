@@ -37,9 +37,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     * `%Phoenix.Socket.Broadcast{event: "presence_diff"}`
     * `:refresh_agent_presence`
     * `{:agent_typing, %{space_id: id, typing: bool, participant_id: id}}`
-      — also updates `:composite_status` (owned by ShellLive on_mount);
-      this cross-LV write is preserved for compatibility. The `space_id`
-      was added for BACKLOG #9: because `ChatLive.mount/3` subscribes to
+      — the `space_id` was added for BACKLOG #9: because `ChatLive.mount/3` subscribes to
       every space the user is in (for unread-count updates), typing
       broadcasts from unrelated spaces would otherwise drive the active
       space's "thinking" indicator. Messages whose `space_id` does not
@@ -66,12 +64,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1]
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
   alias Platform.Agents.WorkspaceBootstrap
   alias Platform.Chat
   alias Platform.Chat.Presence, as: ChatPresence
-  alias Platform.Chat.SpaceAgentPresence
   alias Platform.Repo
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MessagesHooks
@@ -100,6 +96,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     # can arrive) so the guards are armed for the whole session, not only after
     # the first `enter_space/4`.
     |> assign(:external_scope_space_ids, external_scope_for(socket.assigns[:user_id]))
+    # `ShellLive` halts every `presence_diff` for views that do not ask for
+    # it; this one does, because the Members sheet re-reads presence on each
+    # diff (task 01a1557a-8f80 stage 3).
+    |> assign(:presence_diff_downstream?, true)
     |> attach_hook(:presence_info, :handle_info, &handle_info/2)
   end
 
@@ -302,7 +302,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
           {:error, _reason} -> mark_presence_unavailable(socket)
         end
 
-      {:halt, socket}
+      # Any diff on any subscribed space can move a person between online and
+      # away (online means anywhere the viewer can see), so the open Members
+      # sheet re-reads rather than patching one space's slice.
+      {:halt, refresh_members_panel(socket)}
     end
   end
 
@@ -443,10 +446,8 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  # Public for unit-test access (cross-LV `:composite_status` write must
-  # stay wrapped in `%AsyncResult{}` — see test in
-  # `presence_hooks_test.exs`). Not part of the public API; called only
-  # from the `{:agent_typing, …}` `handle_info` clause above.
+  # Public for unit-test access. Not part of the public API; called only from
+  # the `{:agent_typing, …}` `handle_info` clause above.
   @doc false
   def apply_agent_typing(socket, typing, participant_id) do
     socket =
@@ -459,62 +460,8 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
         if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
       )
 
-    any_typing = not MapSet.equal?(socket.assigns.agent_typing_pids, MapSet.new())
-
-    # Cross-LV write: :composite_status is owned by ShellLive on_mount and
-    # is bound to `<.async_result>` in the shell template, so it MUST stay
-    # in `%AsyncResult{}` shape — a bare atom here crashes the LV render
-    # with `FunctionClauseError` on `Phoenix.Component.async_result/1`.
-    # `ShellLive.async_ok/2` reuses the existing AsyncResult when present
-    # (preserves LV diffing) and lazily wraps `AsyncResult.loading/0` when
-    # the assign hasn't been seeded yet (e.g. test sockets).
-    #
-    # The wrapped VALUE must also be the `%{healthy:, total:, state:}` map,
-    # not a bare status atom: the shell template reads `composite.total` and
-    # `composite.state`, and an atom raises there. Typing therefore overrides
-    # only the `:state` field and preserves the ratio the roster loader
-    # computed — the count is still true while an agent is thinking.
-    socket =
-      if socket.assigns[:principal_name] do
-        if any_typing do
-          assign(
-            socket,
-            :composite_status,
-            PlatformWeb.ShellLive.async_ok(
-              socket.assigns[:composite_status],
-              composite_with_state(socket.assigns[:composite_status], :busy)
-            )
-          )
-        else
-          case socket.assigns[:active_space] do
-            %{id: space_id} ->
-              composite = SpaceAgentPresence.composite_for_space(space_id)
-
-              assign(
-                socket,
-                :composite_status,
-                PlatformWeb.ShellLive.async_ok(socket.assigns[:composite_status], composite)
-              )
-
-            _ ->
-              socket
-          end
-        end
-      else
-        socket
-      end
-
     {:halt, socket}
   end
-
-  # Override the composite's `:state` while keeping its ratio. Falls back to
-  # an empty ratio when the roster hasn't resolved yet (test sockets seeded
-  # with `AsyncResult.loading/0`), which the shell renders as a bare dot with
-  # no number rather than a fabricated `0/0`.
-  defp composite_with_state(%AsyncResult{result: %{healthy: _, total: _} = c}, state),
-    do: %{c | state: state}
-
-  defp composite_with_state(_other, state), do: %{healthy: 0, total: 0, state: state}
 
   # ── Template helpers (used across MessageList, Threads, Mentions) ────
 
@@ -609,11 +556,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
   # `primary_agent_label/2` used to live here. Its only caller was the dimmed
   # "{primary} listening" hint in the chat header, deleted in task 019f9790
-  # stage 4 along with the other two competing agent controls. Agent naming for
-  # the eye comes from `ActiveAgentHooks.resolve_agent_name/2`, which resolves
-  # the *armed* agent rather than `space.primary_agent_id` — the primary is a
-  # roster @mention-eligibility role, never a default responder. Its private
-  # helper `resolve_agent_name_by_id/1` went with it (no other callers).
+  # stage 4 along with the other two competing agent controls; the eye that
+  # replaced them went in task 01a1557a-8f80 stage 2 (the Agents sheet). The
+  # primary is a roster @mention-eligibility role, never a default responder.
+  # Its private helper `resolve_agent_name_by_id/1` went with it (no other
+  # callers).
 
   # ── Identity helpers (shared between Presence and other features) ──
 
@@ -836,15 +783,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     _ -> false
   end
 
-  # The members panel (task 01a0fd62 stage 3) lists the roster from the DB, so
-  # a join or leave broadcast for the space on screen re-reads it while the
-  # panel is open. Another admin's add in a second window lands here too.
+  # The Members sheet (task 01a1557a-8f80 stage 3) lists the roster from the
+  # DB and presence from `Chat.space_member_presence/2`, so a join, a leave or
+  # a presence diff re-reads it while it is open. Another admin's add in a
+  # second window lands here too. Both surfaces refresh: the phone sheet and
+  # the desktop popover are two instances of the one component.
   defp refresh_members_panel(socket) do
     if socket.assigns[:show_members] do
-      Phoenix.LiveView.send_update(PlatformWeb.ChatLive.MembersComponent,
-        id: "chat-members",
-        refresh: true
-      )
+      for id <- PlatformWeb.ChatLive.MembersComponent.instance_ids() do
+        Phoenix.LiveView.send_update(PlatformWeb.ChatLive.MembersComponent, id: id, refresh: true)
+      end
     end
 
     socket

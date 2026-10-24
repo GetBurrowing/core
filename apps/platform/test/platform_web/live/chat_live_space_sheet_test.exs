@@ -273,17 +273,20 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert lv_assigns(view).space_sheet == nil
     end
 
-    test "Members closes the sheet and opens the members panel", %{conn: conn} do
+    # The Members sheet (task 01a1557a-8f80 stage 3): the row's meta is the
+    # people count and it opens the phone sheet.
+    test "Members closes the sheet and opens the Members sheet", %{conn: conn} do
       user = user!("members")
       channel = space!("channel")
       seat_user(channel, user)
       {view, _html} = open_as(conn, user, channel)
 
       open_sheet(view)
-      refute has_element?(view, "[data-role=members-panel]")
+      refute has_element?(view, "[data-role=members-sheet-body]")
+      assert has_element?(view, @row_members, "1 person")
       view |> element(@row_members) |> render_click()
 
-      assert has_element?(view, "[data-role=members-panel]")
+      assert has_element?(view, "#members-sheet.sheet-open [data-role=members-sheet-body]")
       assert lv_assigns(view).space_sheet == nil
     end
 
@@ -306,7 +309,7 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert lv_assigns(view).space_sheet == nil
     end
 
-    test "Members renders in a channel and not in a DM", %{conn: conn} do
+    test "Members renders in a channel and a group, not in a DM", %{conn: conn} do
       user = user!("members-dm")
       channel = space!("channel")
       seat_user(channel, user)
@@ -314,6 +317,12 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       open_sheet(view)
       assert has_element?(view, @row_members)
       assert has_element?(view, @row_settings)
+
+      group = space!("group")
+      seat_user(group, user)
+      {view, _html} = open_as(conn, user, group)
+      open_sheet(view)
+      assert has_element?(view, @row_members)
 
       dm = space!("dm")
       seat_user(dm, user)
@@ -326,57 +335,38 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
   end
 
   describe "Agents row" do
-    test "renders where the eye renders and fires the eye's events", %{conn: conn} do
+    test "renders where the Agents entry renders and opens the Agents sheet", %{conn: conn} do
       user = user!("agents")
       channel = space!("channel")
       seat_user(channel, user)
-      agent_p = seat_agent(channel, agent!("Helper"))
+      seat_agent(channel, agent!("Helper"))
+      silenced = seat_agent(channel, agent!("Quiet"))
+      {:ok, _} = Chat.set_agent_silenced({:user, user.id}, channel.id, silenced.id, true)
 
       {view, _html} = open_as(conn, user, channel)
 
-      assert has_element?(view, "[data-role='agent-eye'][data-eye-state='closed']")
+      assert has_element?(view, "[data-role='agents-open']")
       open_sheet(view)
-      row = view |> element(@row_agents) |> render()
-      assert row =~ ~s(data-state="closed")
-      assert row =~ "off"
-      refute has_element?(view, "#{@row_agents}[disabled]")
+      # The masters' entry meta: '<awake>/<total> awake · <policy>'.
+      assert view |> element(@row_agents) |> render() =~ "1/2 awake · on-mention"
 
       view |> element(@row_agents) |> render_click()
 
-      assert ActiveAgentStore.get_active(channel.id) == agent_p.id
       assert lv_assigns(view).space_sheet == nil
-      assert has_element?(view, "[data-role='agent-eye'][data-eye-state='open']")
-
-      open_sheet(view)
-      assert view |> element(@row_agents) |> render() =~ "listening: "
-      view |> element(@row_agents) |> render_click()
+      assert lv_assigns(view).agents_sheet_open == true
+      assert has_element?(view, "#agents-sheet.sheet-open")
+      # Opening the sheet arms nothing: the row no longer touches the mutex.
       assert ActiveAgentStore.get_active(channel.id) == nil
-      assert has_element?(view, "[data-role='agent-eye'][data-eye-state='closed']")
     end
 
-    test "is disabled when the eye is inert", %{conn: conn} do
-      user = user!("inert")
-      channel = space!("channel")
-      seat_user(channel, user)
-      seat_agent(channel, agent!("One"))
-      seat_agent(channel, agent!("Two"))
-
-      {view, _html} = open_as(conn, user, channel)
-
-      assert has_element?(view, "[data-role='agent-eye'][data-eye-state='inert']")
-      open_sheet(view)
-      assert has_element?(view, "#{@row_agents}[disabled]")
-      assert view |> element(@row_agents) |> render() =~ "no agent listening"
-    end
-
-    test "is absent where the eye is absent: no agent, and a DM", %{conn: conn} do
+    test "is absent where the Agents entry is absent: no agent, and a DM", %{conn: conn} do
       user = user!("no-agent")
       channel = space!("channel")
       seat_user(channel, user)
       {view, _html} = open_as(conn, user, channel)
       open_sheet(view)
       assert has_element?(view, @row_settings)
-      refute has_element?(view, "[data-role='agent-eye']")
+      refute has_element?(view, "[data-role='agents-open']")
       refute has_element?(view, @row_agents)
 
       dm = space!("dm")
@@ -385,7 +375,7 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       {view, _html} = open_as(conn, user, dm)
       open_sheet(view)
       assert has_element?(view, @row_settings)
-      refute has_element?(view, "[data-role='agent-eye']")
+      refute has_element?(view, "[data-role='agents-open']")
       refute has_element?(view, @row_agents)
     end
   end
@@ -1084,7 +1074,7 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       assert header =~ "chat-header-scope-pill"
 
       for selector <- [
-            "[data-role='agent-eye']",
+            "[data-role='agents-open']",
             "[data-role='members-open']",
             ~s(button[phx-click="settings_open"]),
             ~s(button[phx-click="pin_panel_toggle"])

@@ -5,11 +5,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
 
   ## The feature
 
-  `Chat.add_space_agent/3` / `remove_space_agent/3` broadcast
+  `Chat.add_space_agent/3` / `admin_remove_agent/3` broadcast
   `{:roster_changed, space_id}` on `space_agents:<id>`. `ShellLive`'s on_mount
-  hook used to HALT that message for every view; `MeetingHooks` now declares
-  `:roster_changed_downstream?`, holds the topic for the space the viewer
-  JOINED a call on, and folds the message through `maybe_refresh_roster/2` —
+  hook used to HALT that message for every view that did not opt in (it no
+  longer handles it at all); `MeetingHooks` holds the topic for the space the
+  viewer JOINED a call on, and folds the message through `maybe_refresh_roster/2` —
   keyed by the MESSAGE's space id, guarded by the one the call is on.
 
   ## The fence (first regression case below)
@@ -24,16 +24,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
   `authorize_join/2` and `ensure_chat_space_participant/3`, so participation in
   the one space it holds is proven rather than assumed.
 
-  ## The shared registration (second regression case below)
+  ## The shared registration (deleted)
 
-  `Phoenix.PubSub` runs `keys: :duplicate`: `subscribe/2` adds ONE registration
-  and `unsubscribe/2` removes ALL of a pid's registrations for the topic.
-  `ShellLive` mounts inside this same pid and holds `space_agents:<id>` for its
-  own roster space, and `release_roster_subscriptions/1` fires on a re-resolve
-  and on `participant_left`. While that release was a bare unsubscribe it
-  destroyed the quickmeet's registration too, mid-call, and the only symptom
-  was a People tab that quietly stopped updating. Both holders now go through
-  `PlatformWeb.SpaceTopics`, which refcounts them.
+  A third case covered `ShellLive`'s own `space_agents:<id>` hold, taken for
+  the utility bar's agents meter, releasing on a re-resolve without taking the
+  quickmeet's registration with it. The meter and its hold were deleted in
+  task 01a1557a-8f80 stage 3, so the shell no longer holds the topic and the
+  case had nothing left to drive. `PlatformWeb.SpaceTopics` still refcounts
+  the remaining holders (`space_topics_test.exs`).
 
   Driven through a REAL mounted `ChatLive` in a quickmeet: the claim is that
   the row appears in the rail, which no unit test of the hook module can see.
@@ -178,9 +176,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
     # T3.4 — an agent added to the space while the viewer is in the call
     # appears in the rail.
     test "an agent added to the space appears without a reload",
-         %{conn: conn, space: space, user: user} do
+         %{conn: conn, space: space} do
       capable = declaring_roster_agent!(space, ["meeting_voice"])
-      :ok = Chat.remove_space_agent({:user, user.id}, space.id, capable.id)
+      :ok = remove_from_roster!(space, capable)
       refute capable.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
 
       view = join(conn, space)
@@ -207,16 +205,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
     # Inverted by task 01a05553: an agent that leaves the space is still an
     # active agent and still invitable, so its row is MARKED rather than
     # dropped. The removal is still the case that carries this stage's
-    # surface — `remove_space_agent/3` broadcasts only `{:roster_changed, _}`.
+    # surface — `admin_remove_agent/3` (the Members sheet's Remove) is the
+    # removal that broadcasts `{:roster_changed, _}`.
     test "an agent removed from the space is marked, not dropped, without a reload",
-         %{conn: conn, space: space, user: user} do
+         %{conn: conn, space: space} do
       capable = declaring_roster_agent!(space, ["meeting_voice"])
 
       view = join(conn, space)
       assert has_element?(view, row_selector(capable.id, "invitable"))
       refute has_element?(view, membership_selector(capable.id))
 
-      :ok = Chat.remove_space_agent({:user, user.id}, space.id, capable.id)
+      :ok = remove_from_roster!(space, capable)
 
       assert has_element?(view, row_selector(capable.id, "invitable"))
       assert has_element?(view, membership_selector(capable.id))
@@ -234,12 +233,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
     # does. Confirmed by running it — the mutant that deletes the guard
     # survived it.
     #
-    # The path that genuinely delivers another space's roster change to this
-    # pid is `ShellLive`: it holds the topic for ITS roster space, which is not
-    # this call's, and since this stage it FORWARDS the message downstream. So
-    # that is the arrangement set up below, with the delivery asserted from the
-    # registry before the negative claim is made.
-    test "a roster change the shell forwards for a different space adds no row",
+    # The path that used to deliver another space's roster change to this pid
+    # was `ShellLive`'s agents-meter hold, deleted in task 01a1557a-8f80 stage
+    # 3. With no subscription left that can carry it, the message is delivered
+    # to the LiveView directly, which is the one way left to consult the guard.
+    test "a roster change for a different space adds no row",
          %{conn: conn, space: space, user: user} do
       own = declaring_roster_agent!(space, ["meeting_voice"])
       other_space = seat!(space!("quickmeet-other"), user)
@@ -248,19 +246,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
       view = join(conn, space)
       assert has_element?(view, row_selector(own.id, "invitable"))
 
-      # The shell resolves ITS roster to the other space, which is what puts a
-      # registration for that space's roster topic on this pid.
-      send(view.pid, {:roster_resolved, other_space.id})
-      _ = render(view)
-
-      assert roster_registrations(view, other_space) == 1,
-             "the message below cannot even reach this pid, so the guard under test is " <>
-               "never consulted and this case would be green against any build"
-
       assert has_element?(view, membership_selector(stranger.id)),
              "the stranger should already be listed, as a non-member of this space"
 
       {:ok, _} = Chat.add_space_agent(other_space.id, stranger.id, role: "member")
+      send(view.pid, {:roster_changed, other_space.id})
+      _ = render(view)
 
       # Restated for task 01a05553. The stranger is now LISTED from the first
       # render — it is an active agent, which is the task's whole point — so
@@ -315,70 +306,21 @@ defmodule PlatformWeb.ChatLive.MeetingHooksRosterRefreshTest do
     end
   end
 
-  describe "the shell releasing its roster hold does not kill the People tab" do
-    # THE SHARED-REGISTRATION DEFECT. `ShellLive` runs in this pid and holds
-    # the same topic for its own roster space; its
-    # `release_roster_subscriptions/1` fires on a re-resolve. While that
-    # release was a bare `Phoenix.PubSub.unsubscribe/2` it removed EVERY
-    # registration of the pid, so a call in progress silently stopped updating.
-    test "a roster re-resolve keeps the quickmeet's roster subscription alive",
-         %{conn: conn, space: space, user: user} do
-      _own = declaring_roster_agent!(space, ["meeting_voice"])
+  # The Members sheet's Remove, by an admin of the space: the removal path
+  # that broadcasts `{:roster_changed, _}` since `remove_space_agent/3` went.
+  defp remove_from_roster!(space, agent) do
+    admin_id = Ecto.UUID.generate()
 
-      view = join(conn, space)
+    {:ok, _} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: admin_id,
+        role: "admin",
+        joined_at: DateTime.utc_now()
+      })
 
-      # Drive the shell's roster to the meeting's space THROUGH ITS OWN
-      # MESSAGE rather than through fixtures that make `visible_roster/2`
-      # select it. `{:roster_resolved, sid}` is exactly what
-      # `async_load_roster/3` sends the LiveView, and the subject here is the
-      # release path, not the query that picks the space: a fixture doing the
-      # same job would need an org, a membership and a `space_updated_at`
-      # ordering, any of which drifting turns this case green for the wrong
-      # reason. The precondition below asserts the hold really landed.
-      send(view.pid, {:roster_resolved, space.id})
-      _ = render(view)
-
-      # PRECONDITION: both owners really do hold this one topic. Without this
-      # the release below would have nothing to destroy and the case would pass
-      # against the bare-unsubscribe build too.
-      socket = :sys.get_state(view.pid).socket
-
-      assert SpaceTopics.agents_held_by?(socket, space.id, :quickmeet),
-             "the quickmeet never took a roster hold, so this case cannot see the shell " <>
-               "destroying it"
-
-      assert SpaceTopics.agents_held_by?(socket, space.id, :roster),
-             "the shell's roster did not resolve to the meeting's space, so its release " <>
-               "below touches a different topic and this case proves nothing"
-
-      assert roster_registrations(view, space) == 1,
-             "two holders on one pid are taking two registrations, so every roster change " <>
-               "is folded twice"
-
-      # THE RELEASE. `{:roster_resolved, other}` is what the shell's async
-      # loader sends when the viewer's newest agent-bearing space changes; it
-      # runs `release_roster_subscriptions/1` for the previous one.
-      other = seat!(space!("quickmeet-reresolve"), user)
-      {:ok, _} = Chat.add_space_agent(other.id, bare_agent!("reresolve-agent").id, role: "member")
-
-      send(view.pid, {:roster_resolved, other.id})
-      _ = render(view)
-
-      socket = :sys.get_state(view.pid).socket
-
-      refute SpaceTopics.agents_held_by?(socket, space.id, :roster),
-             "the shell did not release its roster hold, so nothing was under test here"
-
-      assert SpaceTopics.agents_held_by?(socket, space.id, :quickmeet)
-
-      assert roster_registrations(view, space) == 1,
-             "the shell's release took the quickmeet's registration with it, so the People " <>
-               "tab is now silently dead for the rest of the call"
-
-      # And the feature still works, which is the claim the registry count is
-      # only evidence for.
-      arriving = declaring_roster_agent!(space, ["meeting_voice"])
-      assert has_element?(view, row_selector(arriving.id, "invitable"))
-    end
+    participant = Chat.get_agent_participant(space.id, agent.id)
+    {:ok, _} = Chat.admin_remove_agent(Chat.get_space(space.id), admin_id, participant.id)
+    :ok
   end
 end

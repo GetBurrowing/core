@@ -22,9 +22,9 @@ defmodule Platform.Design.SpaceSheetContrastGuardTest do
   | scope switch track on, pressed: primary on base-200    | 3     |
   | header Call icon: primary on base-100                  | 3     |
 
-  A disabled Agents row paints the disabled token through `disabled:`, which
-  WCAG 1.4.3/1.4.11 exempt (an inactive control); it is not measured.
-  `--subtle` is alpha over its ground, so its pairs are PAINTED on the worst
+  No row is disabled: the Agents row stopped toggling the mutex and opens
+  the Agents sheet (task 01a1557a-8f80 stage 2), so the `disabled:` variant
+  went with it. `--subtle` is alpha over its ground, so its pairs are PAINTED on the worst
   pixel `Platform.Design.PaintedComposite` allows. Every other token is opaque
   and measured with `WcagContrast.contrast/2`. The table prints.
 
@@ -166,7 +166,6 @@ defmodule Platform.Design.SpaceSheetContrastGuardTest do
     assert src =~ ~s(do: "border-base-content bg-base-200 font-medium")
     assert src =~ ~s(else: "border-subtle")
     assert src =~ ~S|if(@on?, do: "bg-primary", else: "bg-base-300")|
-    assert src =~ "disabled:text-disabled"
   end
 
   test "no hover, no error colour, no colour literal, no theme qualifier", %{source: src} do

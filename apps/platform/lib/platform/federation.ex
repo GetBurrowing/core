@@ -871,21 +871,35 @@ defmodule Platform.Federation do
     )
   end
 
-  @doc "List spaces an agent participates in, with the participant's attention_mode."
+  @doc """
+  List spaces an agent participates in, each with the space's effective agent
+  attention policy (`Platform.Chat.AttentionRouter.resolve_attention_mode/2`).
+
+  The policy is the space's, not the participant's: a participant's
+  `attention_mode` is read only for humans, so showing it for an agent would
+  contradict the policy the router applies (task 01a1557a-8f80 stage 1).
+  """
   def agent_spaces(%Agent{id: agent_id}) do
     from(p in Participant,
       join: s in Space,
       on: s.id == p.space_id,
       where: p.participant_type == "agent" and p.participant_id == ^agent_id,
-      select: %{
-        space_id: s.id,
-        space_name: s.name,
-        space_slug: s.slug,
-        attention_mode: p.attention_mode
-      },
+      select: {s.id, s.name, s.slug, s.kind, s.agent_attention_policy},
       order_by: [asc: s.name]
     )
     |> Repo.all()
+    |> Enum.map(fn {id, name, slug, kind, policy} ->
+      %{
+        space_id: id,
+        space_name: name,
+        space_slug: slug,
+        attention_policy:
+          Platform.Chat.AttentionRouter.resolve_attention_mode(
+            %Space{kind: kind, agent_attention_policy: policy},
+            nil
+          )
+      }
+    end)
   end
 
   # ── Observability ───────────────────────────────────────────────────

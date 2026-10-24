@@ -1,7 +1,7 @@
-defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
+defmodule PlatformWeb.ChatLive.AgentsSheetHooksTest do
   @moduledoc """
-  Coverage for `ActiveAgentHooks.resolve_armable/2` — the resolver behind the
-  *open* direction of the agent-mutex eye.
+  Coverage for `AgentsSheetHooks.resolve_armable/2` — the resolver behind the
+  arm the Agents sheet's master switch does when it goes back on.
 
   The ordering rules matter:
 
@@ -12,14 +12,14 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
   Rule 1's liveness guard is the subtle one. `ActiveAgentStore` retains its row
   on release, and `clear_if_match/2` leaves a *deleted* agent's participant id
   sitting in `last`, so `get_last_agent/1` can name somebody who is no longer in
-  the space. Without the guard the eye would offer to arm a ghost —
+  the space. Without the guard the master switch would arm a ghost —
   "last-agent-no-longer-a-participant falls through to rule 2" pins that.
   """
 
   use ExUnit.Case, async: true
 
   alias Platform.Chat.ActiveAgentStore
-  alias PlatformWeb.ChatLive.ActiveAgentHooks
+  alias PlatformWeb.ChatLive.AgentsSheetHooks
 
   setup do
     # Unique space id per test: the store is a globally-named ETS table, so
@@ -38,7 +38,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
       ActiveAgentStore.set_active(space_id, remembered.id)
       ActiveAgentStore.clear_active(space_id)
 
-      assert ActiveAgentHooks.resolve_armable(space_id, participants) == {:ok, remembered.id}
+      assert AgentsSheetHooks.resolve_armable(space_id, participants) == {:ok, remembered.id}
     end
 
     test "a remembered agent that is no longer a participant falls through to rule 2", %{
@@ -54,7 +54,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
       assert ActiveAgentStore.get_last_agent(space_id) == deleted.id
 
       # Roster no longer contains the deleted agent — arming it would be a ghost.
-      assert ActiveAgentHooks.resolve_armable(space_id, [survivor, user("Alex")]) ==
+      assert AgentsSheetHooks.resolve_armable(space_id, [survivor, user("Alex")]) ==
                {:ok, survivor.id}
     end
 
@@ -66,7 +66,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
       ActiveAgentStore.set_active(space_id, deleted.id)
       ActiveAgentStore.clear_if_match(space_id, deleted.id)
 
-      assert ActiveAgentHooks.resolve_armable(space_id, [agent("A"), agent("B")]) == :none
+      assert AgentsSheetHooks.resolve_armable(space_id, [agent("A"), agent("B")]) == :none
     end
 
     test "two agents WITH history returns the remembered one", %{space_id: space_id} do
@@ -76,7 +76,7 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
       ActiveAgentStore.set_active(space_id, second.id)
       ActiveAgentStore.clear_active(space_id)
 
-      assert ActiveAgentHooks.resolve_armable(space_id, [first, second]) == {:ok, second.id}
+      assert AgentsSheetHooks.resolve_armable(space_id, [first, second]) == {:ok, second.id}
     end
   end
 
@@ -84,33 +84,33 @@ defmodule PlatformWeb.ChatLive.ActiveAgentHooksTest do
     test "exactly one agent participant arms it", %{space_id: space_id} do
       only = agent("Only")
 
-      assert ActiveAgentHooks.resolve_armable(space_id, [user("Alex"), only, user("Ada")]) ==
+      assert AgentsSheetHooks.resolve_armable(space_id, [user("Alex"), only, user("Ada")]) ==
                {:ok, only.id}
     end
 
     test "users do not count toward the agent tally", %{space_id: space_id} do
       only = agent("Only")
 
-      assert ActiveAgentHooks.resolve_armable(space_id, [only]) == {:ok, only.id}
+      assert AgentsSheetHooks.resolve_armable(space_id, [only]) == {:ok, only.id}
     end
   end
 
   describe "resolve_armable/2 — rule 3 (:none)" do
     test "two agents and no history returns :none", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, [agent("A"), agent("B"), user("Alex")]) ==
+      assert AgentsSheetHooks.resolve_armable(space_id, [agent("A"), agent("B"), user("Alex")]) ==
                :none
     end
 
     test "zero agents returns :none", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, [user("Alex"), user("Ada")]) == :none
+      assert AgentsSheetHooks.resolve_armable(space_id, [user("Alex"), user("Ada")]) == :none
     end
 
     test "an empty roster returns :none", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, []) == :none
+      assert AgentsSheetHooks.resolve_armable(space_id, []) == :none
     end
 
     test "a nil roster returns :none (assign not yet seeded)", %{space_id: space_id} do
-      assert ActiveAgentHooks.resolve_armable(space_id, nil) == :none
+      assert AgentsSheetHooks.resolve_armable(space_id, nil) == :none
     end
   end
 

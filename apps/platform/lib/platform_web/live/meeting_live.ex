@@ -1014,7 +1014,7 @@ defmodule PlatformWeb.MeetingLive do
         # overwritten), and a targeted release that misses the right id is a
         # silent leak that still reads as "we release". `:meeting` is this
         # module's own owner tag, so releasing all of it cannot touch the
-        # shell's `:presence` / `:roster` holds or ChatLive's `:chat_active`.
+        # shell's `:presence` hold or ChatLive's `:chat_active`.
         socket =
           socket
           |> SpaceTopics.release_all(:meeting)
@@ -1180,13 +1180,6 @@ defmodule PlatformWeb.MeetingLive do
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
           |> assign_invite_rows(meeting.chat_space_id, participants)
-          # Task 01a0691d stage 3. Opt in to `ShellLive`'s `:roster_updates`
-          # hook FORWARDING `{:roster_changed, _}` instead of halting it; the
-          # `handle_info/2` clause below is what folds it. Assigned
-          # unconditionally rather than only when connected: the hook reads it
-          # on every message, a disconnected mount receives none, and a flag
-          # that is only sometimes present is the shape that goes stale.
-          |> assign(:roster_changed_downstream?, true)
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at

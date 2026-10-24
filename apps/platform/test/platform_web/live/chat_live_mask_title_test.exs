@@ -181,6 +181,36 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
     end
   end
 
+  # The Members popover renders INSIDE the header and the phone sheet outside
+  # it; both titles read "Members · <space name>" (task 01a1557a-8f80 stage
+  # 3). The first cut built that from `space.name`, so masking hid the header
+  # title and the popover beside it spelled the channel out.
+  describe "Members sheet title" do
+    defp members(view) do
+      view |> element(~s(button[data-role="members-open"])) |> render_click()
+
+      ["#chat-members-popover", "#chat-members"]
+      |> Enum.map(fn id -> view |> element(id) |> render() end)
+    end
+
+    test "MATCHED PAIR: unmasked, both Members instances spell the channel name",
+         %{conn: conn} do
+      {view, _html} = fixture(conn, "members-pair")
+
+      for html <- members(view), do: assert_name_anywhere(html, @org)
+    end
+
+    test "masked, neither Members instance carries the name", %{conn: conn} do
+      {view, _html} = fixture(conn, "members")
+      toggle_mask(view)
+
+      for html <- members(view) do
+        assert html =~ "Members · ", "the title must render, or this refute is vacuous"
+        refute_name_anywhere(html, @org)
+      end
+    end
+  end
+
   describe "named limitation: project-code channels" do
     test "a channel whose name is not its org's name stays visible, masked or not",
          %{conn: conn} do

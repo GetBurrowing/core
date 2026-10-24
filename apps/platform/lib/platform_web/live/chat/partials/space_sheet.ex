@@ -30,7 +30,7 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   Prototype v3 order and copy (master-mobile.html, the Space segment). Stage 1
   rows: Canvases in this space, Members (channels only), Agents (where the
-  header's agent eye renders), Start a call (the Meet button's gate), Space
+  header's Agents entry renders; it opens the Agents sheet), Start a call (the Meet button's gate), Space
   settings. Stage 2 adds Search in space (first), Threads and Pinned; stage 3
   adds Goal and Scope in their prototype positions. There are no placeholder
   rows. Nothing destructive appears here: archive and deletion stay in the
@@ -72,11 +72,13 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
   import PlatformWeb.ChatLive.Partials.Conversation,
-    only: [agent_eye?: 3, agent_eye_state: 2, goal_panel: 1, title_prefix: 1]
+    only: [agents_entry?: 3, goal_panel: 1, title_prefix: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Chat.SidebarMask
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.MembersComponent
+  alias PlatformWeb.ChatLive.Partials.AgentsSheet
   alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:space_sheet, :any, required: true)
@@ -95,9 +97,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   attr(:in_meeting, :boolean, required: true)
   attr(:agent_presence, :map, required: true)
   attr(:has_agent_participant, :boolean, required: true)
-  attr(:active_agent_participant_id, :any, required: true)
-  attr(:active_agent_armable_id, :any, required: true)
-  attr(:active_agent_name, :any, required: true)
+  # `Chat.agent_attention_state/1`, for the Agents row's meta.
+  attr(:agent_attention, :any, required: true)
   # Stage 2's pages.
   attr(:search_query, :any, required: true)
   attr(:search_results, :list, required: true)
@@ -137,10 +138,6 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       |> assign(:name, name)
       |> assign(:title, page_title(assigns.space_sheet, name))
       |> assign(:scope_label, scope_label(assigns))
-      |> assign(
-        :eye_state,
-        agent_eye_state(assigns.active_agent_participant_id, assigns.active_agent_armable_id)
-      )
 
     ~H"""
     <.sheet
@@ -215,26 +212,27 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
               else: JS.push("close_space_sheet") |> JS.push("canvas_panel_toggle")
           }
         />
+        <%!-- The phone way into the Members sheet (task 01a1557a-8f80 stage
+             3): every space but a DM, like the header entry; the meta is the
+             people count. --%>
         <.sheet_row
-          :if={@active_space.kind == "channel"}
+          :if={@active_space.kind != "dm"}
           role="space-sheet-members"
           icon="hero-users"
           label="Members"
-          preview={count_preview(@space_participants)}
+          preview={MembersComponent.people_label(@space_participants)}
           click={JS.push("close_space_sheet") |> JS.push("members_open")}
         />
-        <%!-- The header eye's control on the phone: the same condition, state
-             and events (`agent_eye?/3`, `agent_eye_state/2`), disabled when
-             inert. Rung 8 replaces where this row leads. --%>
+        <%!-- The phone way into the Agents sheet (task 01a1557a-8f80 stage
+             2): the header entry's condition (`agents_entry?/3`); the meta is
+             the masters' '2/4 awake · on-mention'. --%>
         <.sheet_row
-          :if={agent_eye?(@agent_presence, @has_agent_participant, @active_space)}
+          :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
           role="space-sheet-agents"
           icon="hero-cpu-chip"
           label="Agents"
-          preview={agents_preview(@eye_state, @active_agent_name)}
-          disabled={@eye_state == "inert"}
-          data_state={@eye_state}
-          click={agents_click(@eye_state)}
+          preview={AgentsSheet.entry_meta(@agent_attention, @active_space)}
+          click={JS.push("close_space_sheet") |> JS.push("agents_open")}
         />
         <.sheet_row
           role="space-sheet-threads"
@@ -838,22 +836,16 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   attr(:preview, :string, default: nil)
   attr(:preview_body, :boolean, default: false)
   attr(:click, :any, required: true)
-  attr(:disabled, :boolean, default: false)
-  attr(:data_state, :string, default: nil)
 
   # An action row: at least 44px, pressed base-200, body label, subtle
-  # preview that truncates before the label does. A disabled row paints
-  # the disabled text colour through the `disabled:` variant only, so only an
-  # inactive control does.
+  # preview that truncates before the label does.
   defp sheet_row(assigns) do
     ~H"""
     <button
       type="button"
       phx-click={@click}
       data-role={@role}
-      data-state={@data_state}
-      disabled={@disabled}
-      class="flex min-h-11 w-full items-center gap-3 px-4 py-2 text-left text-base-content active:bg-base-200 disabled:text-disabled disabled:active:bg-transparent focus-visible-ring"
+      class="flex min-h-11 w-full items-center gap-3 px-4 py-2 text-left text-base-content active:bg-base-200 focus-visible-ring"
     >
       <span class={[@icon, "size-5 shrink-0"]} aria-hidden="true"></span>
       <span class="shrink-0 text-base">{@label}</span>
@@ -873,14 +865,6 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   # A count, or nothing at zero: a "0" is never shown.
   defp count_preview([]), do: nil
   defp count_preview(list), do: Integer.to_string(length(list))
-
-  defp agents_preview("open", name), do: "listening: #{name || "Agent"}"
-  defp agents_preview("closed", _name), do: "off"
-  defp agents_preview(_inert, _name), do: "no agent listening"
-
-  defp agents_click("open"), do: JS.push("close_space_sheet") |> JS.push("active_agent_clear")
-  defp agents_click("closed"), do: JS.push("close_space_sheet") |> JS.push("active_agent_arm")
-  defp agents_click(_inert), do: nil
 
   # A wrapper, not a qualified call, for the same reason as
   # `Partials.Conversation`'s.

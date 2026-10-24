@@ -123,17 +123,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # plain assign here blanked the People tab on first render.
       |> assign_new(:invite_rows, fn -> [] end)
       |> assign_new(:invitable_agents, fn -> [] end)
-      # Task 01a0691d stage 3. Opt in to `ShellLive`'s `:roster_updates` hook
-      # FORWARDING `{:roster_changed, _}` rather than halting it, which is what
-      # it does for every view that does not ask. The `handle_info/2` clause
-      # below folds it into the People tab's invite rows.
-      #
-      # Set at ATTACH rather than at join, unlike the subscription itself: the
-      # flag only decides whether the shell propagates a message this pid may
-      # not even be subscribed to, so it is free, and a flag toggled on the
-      # join/leave path is one more thing that can end up out of step with the
-      # hold it is supposed to accompany.
-      |> assign(:roster_changed_downstream?, true)
       |> assign_call_shell_defaults()
       # Task 01a0d4fe stage 5: BEFORE the two hooks below, which halt the
       # events they own (the mic toggle among them). See the module.
@@ -1219,10 +1208,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   # An agent was added to, removed from, or promoted on a space's roster
-  # (task 01a0691d stage 3). This clause is reachable at all only because
-  # `ShellLive`'s `:roster_updates` hook now FORWARDS the message for views
-  # carrying `:roster_changed_downstream?`; it halted it for everybody before,
-  # which is why the broadcast existed and no meeting surface could hear it.
+  # (task 01a0691d stage 3). `ShellLive` no longer handles the message at
+  # all (its roster meter went in task 01a1557a-8f80), so it reaches every
+  # view on the pid and needs no opt-in flag.
   #
   # `maybe_refresh_roster/2` is the same fold the live-presence path uses, and
   # it carries the guard for real here: it re-derives only when this viewer is
@@ -1748,8 +1736,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # before `invite_agent/3` runs, because that is what it resolves against.
   #
   # AUTHORIZATION. `Chat.add_space_agent/3` authorizes NOTHING — it is a
-  # bare idempotent insert (`Platform.Chat`, `add_space_agent/3`), unlike its
-  # sibling `Chat.remove_space_agent/3` which is actor-first. Adding an agent
+  # bare idempotent insert (`Platform.Chat`, `add_space_agent/3`). Adding an agent
   # to a space is a real mutation, so it is gated HERE on
   # `SpaceAccess.authorize_writer/2` — the exact check, on the exact space,
   # that `Meetings.invite_agent/3` itself runs as the first step of its own
@@ -2156,8 +2143,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # because the space this socket joined on is not reliably in scope on every
   # leave path (`:active_space` can have moved), and a targeted release that
   # misses is a leak that still reads as "we release". Only `:quickmeet`'s own
-  # holds are dropped, so the shell's `:roster` hold and, on `/meetings`,
-  # `MeetingLive`'s `:meeting` hold both survive.
+  # holds are dropped, so on `/meetings` `MeetingLive`'s `:meeting` hold
+  # survives.
   defp release_roster_topic(socket) do
     SpaceTopics.release_all_agents(socket, :quickmeet)
   end

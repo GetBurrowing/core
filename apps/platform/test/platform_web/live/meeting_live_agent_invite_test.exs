@@ -702,9 +702,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
           joined_at: DateTime.utc_now()
         })
 
-      for entry <- Chat.list_space_agents(space.id) do
-        {:ok, _} = Chat.remove_space_agent({:user, viewer.id}, space.id, entry.agent_id)
-      end
+      for entry <- Chat.list_space_agents(space.id), do: drop_agent_row!(space, entry.agent_id)
 
       # The setup agent lives on ANOTHER space and is still `"active"`, so it
       # would be offered here on its roster row alone. Park every agent.
@@ -758,12 +756,12 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
   # ── The People tab follows the space roster (task 01a0691d stage 3) ─────
   #
-  # `Chat.add_space_agent/3` and `remove_space_agent/3` broadcast
+  # `Chat.add_space_agent/3` and `admin_remove_agent/3` broadcast
   # `{:roster_changed, space_id}` on `space_agents:<id>`; the page must fold it
   # without a reload. `ShellLive`'s on_mount hook used to HALT that message for
-  # every view, so the discriminating mutant here is the one that stops
-  # `MeetingLive` declaring `:roster_changed_downstream?` — with it, both
-  # surfaces go dark at once.
+  # every view that did not opt in; it no longer handles it at all, so the
+  # discriminating mutant here is one that drops `MeetingLive`'s
+  # `{:roster_changed, _}` clause.
   #
   # `render/1` is a synchronous call into the LiveView process and local PubSub
   # delivery is a plain `send`, so a broadcast issued BEFORE the render is
@@ -780,29 +778,30 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     user
   end
 
-  # Steer the shell's OWN roster hold away from the meeting's space.
-  #
-  # `ShellLive` holds `space_agents:<id>` for the viewer's newest agent-bearing
-  # seated space and, since this stage, forwards `{:roster_changed, _}` to the
-  # view. If that space were the meeting's, ONE registration would serve both
-  # holders (`SpaceTopics` refcounts them) and the message would arrive whether
-  # or not `MeetingLive` took a hold of its own — which it must, because the
-  # guest surface mounts with no shell at all. A decoy created LAST is the
-  # newest, so the shell picks it and this file's cases turn on MeetingLive's
-  # own hold.
-  defp decoy_shell_space!(viewer) do
-    decoy = space!()
-    seat!(decoy, viewer)
+  # Takes an agent's row off a space with no broadcast. Fixture setup only,
+  # before any LiveView mounts: the removal the page must follow live is
+  # `remove_from_roster!/2`, the Members sheet's Remove.
+  defp drop_agent_row!(space, agent_id) do
+    Repo.delete!(Chat.get_agent_participant(space.id, agent_id))
+    :ok
+  end
 
-    stranger =
-      Repo.insert!(%Agent{
-        slug: "decoy-#{System.unique_integer([:positive])}",
-        name: "Decoy",
-        status: "active"
+  # The Members sheet's Remove, by an admin of the space (task 01a1557a-8f80
+  # stage 3 deleted `Chat.remove_space_agent/3`, the utility-bar Remove).
+  defp remove_from_roster!(space, agent_id) do
+    admin = user!("roster-admin")
+
+    {:ok, _} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: admin.id,
+        role: "admin",
+        joined_at: DateTime.utc_now()
       })
 
-    {:ok, _} = Chat.add_space_agent(decoy.id, stranger.id, role: "member")
-    decoy
+    participant = Chat.get_agent_participant(space.id, agent_id)
+    {:ok, _} = Chat.admin_remove_agent(Chat.get_space(space.id), admin.id, participant.id)
+    :ok
   end
 
   defp row_selector(agent_id, state),
@@ -832,10 +831,9 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   # ever auto-added to a meeting's space. That is why the pre-01a05553 rail
   # was empty on every meeting ever created.
   defp off_space_agent!(space, features) do
-    remover = seat!(space, user!("off-space-remover"))
     ctx = declaring_roster_agent!(space, features)
 
-    :ok = Chat.remove_space_agent({:user, remover.id}, space.id, ctx.agent.id)
+    :ok = drop_agent_row!(space, ctx.agent.id)
 
     refute ctx.agent.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id),
            "the fixture did not actually take the agent off the space roster"
@@ -1183,20 +1181,19 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     # this stage, and every mutant that removes the roster subscription leaves
     # this case GREEN. Verified, not assumed: M11 survives here.
     #
-    # T3.2 below is the case that carries the surface. `remove_space_agent/3`
-    # deletes the row with a bare `Repo.delete` and broadcasts ONLY
-    # `{:roster_changed, _}`, so the removal genuinely rides this stage's
-    # topic. Kept as a user-facing claim rather than deleted, and labelled so
-    # the next reader does not mistake it for evidence.
+    # T3.2 below was the case that carried the surface while the removal was
+    # `remove_space_agent/3`, which broadcast ONLY `{:roster_changed, _}`. Its
+    # replacement, `admin_remove_agent/3`, also broadcasts
+    # `{:participant_left, _}`, so neither case now isolates the roster
+    # subscription; both are kept as user-facing claims.
     test "an agent added to the space appears without a reload",
          %{conn: conn, space: space, meeting: meeting} do
       viewer = seat!(space, user!("roster-add"))
-      _decoy = decoy_shell_space!(viewer)
       %{agent: capable} = declaring_roster_agent!(space, ["meeting_voice"])
 
       # Off the roster BEFORE the mount, so its later appearance is the
       # broadcast's doing and not the mount's.
-      :ok = Chat.remove_space_agent({:user, viewer.id}, space.id, capable.id)
+      :ok = drop_agent_row!(space, capable.id)
       refute capable.id in Enum.map(Chat.list_space_agents(space.id), & &1.agent_id)
 
       {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
@@ -1225,10 +1222,8 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
     # T3.2 — and one REMOVED is MARKED, not removed (task 01a05553).
     #
-    # This is the case that carries the surface: `remove_space_agent/3`
-    # deletes the row with a bare `Repo.delete` and broadcasts ONLY
-    # `{:roster_changed, _}`, so it genuinely rides the roster subscription
-    # rather than the `{:participant_joined, _}` the add also emits.
+    # The removal is the Members sheet's Remove, `admin_remove_agent/3`,
+    # which broadcasts `{:roster_changed, _}` and `{:participant_left, _}`.
     #
     # Its assertion inverted with this task. An agent that leaves the space is
     # still an active agent and still invitable, so taking its row away would
@@ -1237,14 +1232,13 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
     test "an agent removed from the space is marked, not dropped, without a reload",
          %{conn: conn, space: space, meeting: meeting, agent: agent} do
       viewer = seat!(space, user!("roster-remove"))
-      _decoy = decoy_shell_space!(viewer)
 
       {:ok, view, _html} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
       _ = render(view)
       assert has_element?(view, any_row_selector(agent.id))
       refute has_element?(view, membership_selector(agent.id))
 
-      :ok = Chat.remove_space_agent({:user, viewer.id}, space.id, agent.id)
+      :ok = remove_from_roster!(space, agent.id)
 
       assert has_element?(view, any_row_selector(agent.id))
       assert has_element?(view, membership_selector(agent.id))

@@ -81,7 +81,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # would be an import for nothing.
   import PlatformWeb.Components.ChatHelpers, only: [present?: 1]
   import PlatformWeb.Components.Canvases.CanvasExplorer, only: [canvas_explorer: 1]
-  import PlatformWeb.CoreComponents, only: [input: 1]
+  import PlatformWeb.CoreComponents, only: [icon: 1, input: 1]
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
@@ -92,6 +92,8 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.MembersComponent
+  alias PlatformWeb.ChatLive.Partials.AgentsSheet
   alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:active_space, :any, required: true)
@@ -123,10 +125,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:show_pins, :boolean, required: true)
   attr(:agent_presence, :map, required: true)
   attr(:has_agent_participant, :boolean, required: true)
-  attr(:active_agent_participant_id, :any, required: true)
-  attr(:active_agent_armable_id, :any, required: true)
-  attr(:active_agent_name, :any, required: true)
-  attr(:active_agent_armable_name, :any, required: true)
+  # The Agents sheet (task 01a1557a-8f80 stage 2): its open flag and
+  # `Chat.agent_attention_state/1`, for the header entry and the popover.
+  attr(:agents_sheet_open, :boolean, required: true)
+  attr(:agent_attention, :any, required: true)
+  # The Members sheet (task 01a1557a-8f80 stage 3): its open flag and the
+  # viewer whose presence union decides online/away, for the popover instance.
+  attr(:show_members, :boolean, required: true)
+  attr(:current_user_record, :any, default: nil)
   attr(:goal_panel, :any, required: true)
   attr(:goal_edit, :boolean, required: true)
   attr(:can_edit_goal?, :boolean, required: true)
@@ -414,91 +420,70 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <span>{length(@pins)} pinned</span>
         </button>
 
-        <%!-- Agent eye — the ONE control for the agent mutex (task 019f9790
-             stage 4). It replaces three competing header controls that used
-             to sit here: the "Talking to {name}" pill with its own x-mark
-             sub-button, the dimmed "{primary} listening" hint, and the
-             `watch_enabled` toggle. Those three could disagree with each
-             other and none of them was the thing that actually routes
-             messages. This button IS the mutex (`ActiveAgentStore`):
-
-               open   — a mutex is held; the next message goes to that agent.
-                        Click closes it (`active_agent_clear`).
-               closed — no mutex, but `ActiveAgentHooks.resolve_armable/2`
-                        found a defensible target. Click opens it
-                        (`active_agent_arm`).
-               inert  — no mutex and no defensible target (several agents, no
-                        history). Rendered `disabled` rather than hidden so
-                        the header never reflows as agents join or leave.
-
-             DM spaces render nothing: `attention_router.ex:343` makes DMs
-             unconditionally `:directed`, so there is nothing here to toggle
-             and offering the control would be a lie.
-
-             `data-role` / `data-eye-state` exist so tests assert on state
-             rather than on Tailwind classes. `min-h-11 min-w-11` gives the
-             iOS-HIG 44px touch target on mobile (measured: 20px tall without
-             it); released at `md` so the desktop hover surface still matches
-             the sibling pin/settings buttons. --%>
-        <%!-- The state and the render condition are `agent_eye_state/2` and
-             `agent_eye?/3`, shared with the space sheet's Agents row (task
-             01a1557a-8a6d stage 1) so the two can never disagree. --%>
-        <% eye_state = agent_eye_state(@active_agent_participant_id, @active_agent_armable_id) %>
-        <button
-          :if={agent_eye?(@agent_presence, @has_agent_participant, @active_space)}
-          data-role="agent-eye"
-          data-eye-state={eye_state}
-          disabled={eye_state == "inert"}
-          phx-click={
-            case eye_state do
-              "open" -> "active_agent_clear"
-              "closed" -> "active_agent_arm"
-              _inert -> nil
-            end
-          }
-          class={[
-            "hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
-            eye_state == "open" && "text-success hover:bg-base-300",
-            eye_state == "closed" &&
-              "text-subtle hover:text-base-content hover:bg-base-300",
-            eye_state == "inert" && "text-disabled opacity-50"
-          ]}
-          title={
-            case eye_state do
-              "open" ->
-                "Your next message goes to #{@active_agent_name || "Agent"} — click to talk to people only"
-
-              "closed" ->
-                "Click to resume with #{@active_agent_armable_name || "the agent"}"
-
-              _inert ->
-                "No agent is listening — @mention an agent to open the eye"
-            end
-          }
+        <%!-- The Agents entry (task 01a1557a-8f80 stage 2). It replaces the
+             header agent eye: the eye toggled the ephemeral mutex, which a
+             mention re-armed, so it could not hold "agents off". The Agents
+             popover anchored here (the phone sheet is opened from the space
+             sheet's Agents row) writes the persisted master switch, policy and
+             per-agent silence. Rendered under `agents_entry?/3`: an agent is
+             present and the space is not a DM (`attention_router.ex` makes
+             DMs unconditionally `:directed`). `min-h-11 min-w-11` is the
+             44px touch target, released at `md`. --%>
+        <div
+          :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
+          class="relative hidden lg:block"
         >
-          <span class={[
-            "size-4",
-            if(eye_state == "open", do: "hero-eye", else: "hero-eye-slash")
-          ]}>
-          </span>
-          <span :if={eye_state == "open"} class="hidden md:inline">
-            {@active_agent_name || "Agent"}
-          </span>
-        </button>
+          <button
+            type="button"
+            phx-click="agents_open"
+            data-role="agents-open"
+            aria-label="Agents"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@agents_sheet_open)}
+            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
+          >
+            <.icon name="hero-cpu-chip" class="size-4" />
+            <span class="hidden md:inline">{AgentsSheet.awake_label(@agent_attention)}</span>
+          </button>
+          <AgentsSheet.agents_sheet
+            surface={:popover}
+            open={@agents_sheet_open}
+            state={@agent_attention}
+            active_space={@active_space}
+          />
+        </div>
 
-        <%!-- Channel members panel (task 01a0fd62 stage 3). Channels only:
-             a DM or group has no admin who could bring an agent in from it.
-             `min-h-11 min-w-11` is the agent-eye touch-target pattern above. --%>
-        <button
-          :if={@active_space.kind == "channel"}
-          phx-click="members_open"
-          data-role="members-open"
-          class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
-          title="Channel members"
-        >
-          <span class="hero-users size-4"></span>
-          <span class="hidden md:inline">members</span>
-        </button>
+        <%!-- The Members entry (task 01a1557a-8f80 stage 3): every space but a
+             DM. The popover instance of `MembersComponent` is anchored under
+             it; the phone opens the sheet instance from the space sheet's
+             Members row. `min-h-11 min-w-11` is the Agents entry's touch
+             target, released at `md`. --%>
+        <div :if={@active_space.kind != "dm"} class="relative hidden lg:block">
+          <button
+            type="button"
+            phx-click="members_open"
+            data-role="members-open"
+            aria-label="Members"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@show_members)}
+            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
+          >
+            <.icon name="hero-users" class="size-4" />
+            <span class="hidden md:inline">{MembersComponent.people_label(@space_participants)}</span>
+          </button>
+          <.live_component
+            module={MembersComponent}
+            id="chat-members-popover"
+            surface={:popover}
+            open={@show_members}
+            space={@active_space}
+            space_name={
+              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns))
+            }
+            current_user_id={@user_id}
+            viewer={@current_user_record}
+          />
+        </div>
 
         <button
           phx-click="settings_open"
@@ -1449,23 +1434,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   defp space_mask(assigns), do: ChatLive.space_mask(assigns)
 
   @doc """
-  Whether the agent eye renders: an agent is joined or seated, and the space
-  is not a DM (`attention_router.ex` makes DMs unconditionally `:directed`).
-  The header eye and the space sheet's Agents row (task 01a1557a-8a6d) both
-  read this, so they render under one condition.
+  Whether the Agents entry renders: an agent is joined or seated, and the
+  space is not a DM (`attention_router.ex` makes DMs unconditionally
+  `:directed`). The header `agents-open` button and the space sheet's Agents
+  row (task 01a1557a-8a6d) both read this, so they render under one condition.
   """
-  def agent_eye?(agent_presence, has_agent_participant, space) do
+  def agents_entry?(agent_presence, has_agent_participant, space) do
     (agent_presence[:joined?] || has_agent_participant) && space.kind != "dm"
   end
-
-  @doc """
-  The agent eye's state: `"open"` (a mutex is held), `"closed"` (a defensible
-  target to arm) or `"inert"` (neither). Shared by the header eye and the
-  space sheet's Agents row.
-  """
-  def agent_eye_state(participant_id, _armable_id) when participant_id != nil, do: "open"
-  def agent_eye_state(_participant_id, armable_id) when armable_id != nil, do: "closed"
-  def agent_eye_state(_participant_id, _armable_id), do: "inert"
 
   @doc "The `#` a channel's title carries; nothing for any other kind."
   def title_prefix(%{kind: "channel"}), do: "#"

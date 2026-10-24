@@ -272,9 +272,6 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # moment.
     {"responsibilities:changed", :global},
     {"roles:assignments", :global},
-    # {:roster_changed_any, space_id}. An id, not a roster: receivers recompute
-    # their own union under their own scoping.
-    {"space_agents:*", :global},
     {"tasks:board", :global},
 
     # ── not a topic ──

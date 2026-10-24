@@ -478,7 +478,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <p class="text-xs text-subtle">{space.space_slug}</p>
           </div>
           <span class="rounded-full bg-base-200 px-2.5 py-1 text-[11px] uppercase tracking-widest text-subtle">
-            {space.attention_mode}
+            {String.replace(space.attention_policy, "_", "-")}
           </span>
         </div>
         <div

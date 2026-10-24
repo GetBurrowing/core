@@ -44,7 +44,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Chat.Section
   alias Platform.Chat.Sidebar
 
-  alias PlatformWeb.ChatLive.ActiveAgentHooks
+  alias PlatformWeb.ChatLive.AgentsSheetHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.ChatListData
   alias PlatformWeb.ChatLive.ChatListHooks
@@ -732,8 +732,6 @@ defmodule PlatformWeb.ChatLive do
       # %{message_id, versions} when open. Filled by show_version_history.
       |> assign(:version_history, nil)
       |> assign(:show_settings, false)
-      # Channel members panel (task 01a0fd62 stage 3, MembersComponent).
-      |> assign(:show_members, false)
       |> assign(:quick_emojis, @quick_emojis)
       # `:push_permission` is seeded by `PlatformWeb.ShellLive`'s on_mount
       # (task 019ffb7b stage 3), which every live_session ChatLive is routed
@@ -874,7 +872,10 @@ defmodule PlatformWeb.ChatLive do
       |> MentionsHooks.attach()
       |> CanvasHooks.attach()
       |> Extensions.attach_live_hooks()
-      |> ActiveAgentHooks.attach()
+      |> AgentsSheetHooks.attach()
+      # The Members sheet's open flag and its component messages (task
+      # 01a1557a-8f80 stage 3); `MembersComponent` renders it.
+      |> PlatformWeb.ChatLive.MembersSheetHooks.attach()
       |> MessageContextHooks.attach()
       |> PlatformWeb.ChatLive.MessageActionsHooks.attach()
 
@@ -996,7 +997,7 @@ defmodule PlatformWeb.ChatLive do
         |> MentionsHooks.reset_for_space()
         |> PinHooks.load_for_space(space.id)
         |> CanvasHooks.load_for_space(space.id)
-        |> ActiveAgentHooks.resolve_for_space(space.id, participants)
+        |> AgentsSheetHooks.resolve_for_space(space.id, participants)
         |> clear_unread(space.id)
     end
   end
@@ -1161,7 +1162,7 @@ defmodule PlatformWeb.ChatLive do
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)
-       |> ActiveAgentHooks.resolve_for_space(space.id, participants)
+       |> AgentsSheetHooks.resolve_for_space(space.id, participants)
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
        |> assign(:restricted_channel_ids, restricted_channel_ids)
@@ -2631,13 +2632,6 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("chat_viewport", _params, socket), do: {:noreply, socket}
 
-  # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
-  # header control that called it (task 019f9790 stage 4): the eye is now the
-  # agent mutex, and a second, persisted flag that could disagree with it was
-  # the whole bug. This was the only writer of `chat_spaces.watch_enabled` in
-  # `lib/`; the column stays (no migration) and `AttentionRouter` stops reading
-  # it in stage 5.
-
   # Coordinator: open a canvas and close the thread panel.
   def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
     case CanvasHooks.find(socket, canvas_id) do
@@ -2918,15 +2912,6 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("settings_open", _params, socket) do
     {:noreply, assign(socket, :show_settings, true)}
-  end
-
-  # ── Members panel (see MembersComponent, task 01a0fd62 stage 3) ───────────
-  #
-  # Opened from the header "members" button and from the refused-summon
-  # notice's "View members". Opening is harmless for anyone: the panel's
-  # controls are affordance only and the Chat context re-authorizes writes.
-  def handle_event("members_open", _params, socket) do
-    {:noreply, assign(socket, :show_members, true)}
   end
 
   defp confirm_junk_batch_actor_id(socket) do
@@ -3872,14 +3857,6 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_settings, false)}
   end
 
-  def handle_info({:members_closed}, socket) do
-    {:noreply, assign(socket, :show_members, false)}
-  end
-
-  def handle_info({:members_flash, kind, msg}, socket) do
-    {:noreply, put_flash(socket, kind, msg)}
-  end
-
   def handle_info({:settings_navigate, path}, socket) do
     {:noreply,
      socket
@@ -4156,7 +4133,7 @@ defmodule PlatformWeb.ChatLive do
   # registration for the same topic on this shared pid — is CLOSED (task
   # 01a01a1b). Both surfaces now go through `PlatformWeb.SpaceTopics`, so this
   # releases only chat's own two holds and ShellLive's are released by ShellLive
-  # alone, off its own `:roster_resolved` / `:presence_spaces_resolved` paths.
+  # alone, off its own `:presence_spaces_resolved` path.
   #
   # Both holds, not one: losing access must drop this module's interest in the
   # space entirely, which was the existing intent when a single unsubscribe did

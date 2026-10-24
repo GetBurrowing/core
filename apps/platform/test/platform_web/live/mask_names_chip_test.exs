@@ -173,7 +173,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
       Process.sleep(wait_ms)
       refute Accounts.mask_names?(Accounts.get_user(user.id))
 
-      html = render_hook(view, "toggle_roster", %{})
+      html = render_hook(view, "close_theme_picker", %{})
       assert chip?(html)
       for name <- @chat_orgs, do: refute_name_anywhere(html, name)
     end

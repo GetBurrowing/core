@@ -4,19 +4,23 @@ defmodule Platform.Chat.SpaceAgentTest do
   `chat_participants.role`, so what we exercise here is:
 
     * `set_principal_agent` promotes + demotes the old principal atomically
-    * `add_space_agent` / `remove_space_agent` / `ensure_space_agent` are
-      thin wrappers over agent-participant membership
+    * `add_space_agent` / `ensure_space_agent` are thin wrappers over
+      agent-participant membership
     * Attention routing gates mentions on the agent being a participant
       (the old roster is just membership now)
 
-  Schema-level tests for the deleted `Platform.Chat.SpaceAgent` are gone.
+  Schema-level tests for the deleted `Platform.Chat.SpaceAgent` are gone, and
+  so are the tests for `remove_space_agent/3` and `SpaceAgentPresence`: the
+  utility-bar agents dropdown was their only caller and was deleted with them
+  (task 01a1557a-8f80 stage 3). Removing an agent is `Chat.admin_remove_agent/3`
+  from the Members sheet, covered by `chat_live_members_test.exs`.
   """
   use Platform.DataCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message, SpaceAgentPresence}
+  alias Platform.Chat.{AttentionRouter, Message}
   alias Platform.Repo
 
   defmodule StubAgentChat do
@@ -171,49 +175,6 @@ defmodule Platform.Chat.SpaceAgentTest do
     end
   end
 
-  # The dismisser must be a participant of the space it is dismissing from —
-  # that is the whole point of `remove_space_agent/3`'s actor argument
-  # (task 01a01ce0).
-  defp dismisser!(space_id) do
-    {:ok, p} =
-      Chat.add_participant(space_id, %{
-        participant_type: "user",
-        participant_id: Ecto.UUID.generate(),
-        joined_at: DateTime.utc_now()
-      })
-
-    {:user, p.participant_id}
-  end
-
-  describe "remove_space_agent/3" do
-    test "removes agent from roster (hard-delete, ADR 0038)" do
-      space = create_space()
-      agent = create_agent()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      assert :ok = Chat.remove_space_agent(dismisser!(space.id), space.id, agent.id)
-      assert Chat.get_space_agent(space.id, agent.id) == nil
-    end
-
-    test "returns error when agent not in roster" do
-      space = create_space()
-
-      assert {:error, :not_found} =
-               Chat.remove_space_agent(dismisser!(space.id), space.id, Ecto.UUID.generate())
-    end
-
-    test "a non-participant of the space is refused and the agent stays" do
-      space = create_space()
-      agent = create_agent()
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-
-      assert {:error, :forbidden} =
-               Chat.remove_space_agent({:user, Ecto.UUID.generate()}, space.id, agent.id)
-
-      assert Chat.get_space_agent(space.id, agent.id)
-    end
-  end
-
   describe "list_space_agents/1" do
     test "returns all roster entries with preloaded agents" do
       space = create_space()
@@ -258,121 +219,6 @@ defmodule Platform.Chat.SpaceAgentTest do
 
       active = Chat.list_active_space_agents(space.id)
       assert length(active) == 2
-    end
-  end
-
-  describe "composite/1 — healthy-over-total ratio" do
-    test "empty roster is :none with a zero ratio" do
-      assert SpaceAgentPresence.composite([]) == %{healthy: 0, total: 0, state: :none}
-      assert SpaceAgentPresence.composite_status([]) == :none
-    end
-
-    # REWRITTEN (was "error always wins", asserting :error absorbed the whole
-    # roster). The absorbing fold was documented behaviour and was reversed on
-    # purpose: worst-wins made the meter stop varying. The old assertions were
-    #   composite_status([:active, :error]) == :error
-    #   composite_status([:error, :busy, :active]) == :error
-    # Erroring agents still push the state to :error, but the ratio now carries
-    # how much of the roster is actually fine.
-    test "one error among healthy agents is :error but the ratio still reports the healthy ones" do
-      assert SpaceAgentPresence.composite([:active, :error]) ==
-               %{healthy: 1, total: 2, state: :error}
-
-      assert SpaceAgentPresence.composite([:error, :busy, :active]) ==
-               %{healthy: 2, total: 3, state: :error}
-    end
-
-    # ANTI-VACUITY: asserting a state in isolation passes against a function
-    # that returns one constant. Compute both sides of the transition in one
-    # body and assert they DIFFER, so a refactor that collapses them fails
-    # even if both individual expectations get updated to the same value.
-    test "the erroring roster and the all-healthy roster do not produce the same state" do
-      with_error = SpaceAgentPresence.composite([:active, :active, :active, :error])
-      all_healthy = SpaceAgentPresence.composite([:active, :active, :active, :active])
-
-      assert with_error == %{healthy: 3, total: 4, state: :error}
-      assert all_healthy == %{healthy: 4, total: 4, state: :healthy}
-
-      refute with_error.state == all_healthy.state,
-             "composite state must vary between an erroring and a fully healthy roster; " <>
-               "identical states mean the indicator is decorative"
-    end
-
-    test "dot_color varies across the same transition" do
-      with_error = SpaceAgentPresence.dot_color(:error)
-      all_healthy = SpaceAgentPresence.dot_color(:healthy)
-
-      assert with_error == "bg-error"
-      assert all_healthy == "bg-success"
-
-      refute with_error == all_healthy,
-             "dot_color must differ between :error and :healthy; identical classes mean " <>
-               "the dot is hardcoded"
-    end
-
-    # The regression Alex reported: never-linked agents used to be :error, and
-    # :error absorbed the fold, so the meter was permanently red.
-    test "absent agents are counted in the denominator and are NOT an error" do
-      result = SpaceAgentPresence.composite([:active, :absent, :absent])
-
-      assert result == %{healthy: 1, total: 3, state: :degraded}
-      refute result.state == :error
-    end
-
-    test ":idle and :busy count as healthy" do
-      assert SpaceAgentPresence.composite([:active, :busy, :idle]) ==
-               %{healthy: 3, total: 3, state: :healthy}
-    end
-
-    test "offline agents degrade without erroring" do
-      result = SpaceAgentPresence.composite([:active, :offline])
-
-      assert result == %{healthy: 1, total: 2, state: :degraded}
-      refute result.state == :error
-    end
-
-    test "composite_status/1 delegates to composite/1's state" do
-      for statuses <- [[], [:active], [:active, :absent], [:active, :error]] do
-        assert SpaceAgentPresence.composite_status(statuses) ==
-                 SpaceAgentPresence.composite(statuses).state
-      end
-    end
-  end
-
-  describe "agent_status/1 — external agents" do
-    test "never linked to any runtime is :absent, not :error" do
-      external = %{create_agent() | runtime_type: "external", runtime_id: nil}
-
-      status = SpaceAgentPresence.agent_status(external)
-
-      assert status == :absent
-      refute status == :error
-    end
-
-    test "linked and online is :active; linked and not present is :offline" do
-      agent = create_agent()
-      runtime_id = "rt-#{System.unique_integer([:positive])}"
-
-      runtime =
-        Repo.insert!(%Platform.Agents.AgentRuntime{
-          agent_id: agent.id,
-          owner_user_id: Platform.ExternalUserFixtures.create_user!().id,
-          status: "active",
-          runtime_id: runtime_id
-        })
-
-      external = %{agent | runtime_type: "external", runtime_id: runtime.id}
-
-      Platform.Federation.RuntimePresence.untrack(runtime_id)
-      offline = SpaceAgentPresence.agent_status(external)
-
-      Platform.Federation.RuntimePresence.track(runtime_id)
-      on_exit(fn -> Platform.Federation.RuntimePresence.untrack(runtime_id) end)
-      online = SpaceAgentPresence.agent_status(external)
-
-      assert offline == :offline
-      assert online == :active
-      refute offline == online
     end
   end
 

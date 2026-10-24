@@ -7,21 +7,17 @@ defmodule PlatformWeb.ShellLive do
 
   require Logger
 
-  alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
   alias Platform.Access.Live, as: AccessLive
   alias Platform.Access.Scope
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
   alias Platform.Chat
-  alias Platform.Chat.Presence, as: ChatPresence
-  alias Platform.Chat.SpaceAgentPresence
   alias Platform.Inbox
   alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Push
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tenancy
   alias PlatformWeb.Components.IconRail
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.SpaceTopics
@@ -59,27 +55,10 @@ defmodule PlatformWeb.ShellLive do
     # while new code adopts `root_admin?` via the LiveAuth hook.
     root_user = Platform.Tenancy.root_admin_preloaded?(user_record)
 
-    # Resolve org visibility ONCE and thread it (Tenancy moduledoc). The
-    # preloaded clause costs zero queries because `Accounts.get_user/1`
-    # already preloaded `:org_memberships` with the nested `:org`.
-    roster_visibility = Tenancy.visibility(user_record)
-
     active_module = derive_active_module(socket.view)
 
-    # Synchronous placeholders so the page paints immediately. Heavy DB work
-    # (roster lookup + presence list build) is deferred via `assign_async/3`
-    # below so the WS-connected mount returns to the client without blocking
-    # on Postgres round-trips. The four async-managed assigns are seeded as
-    # `AsyncResult.loading/0` so the template's `<.async_result>` component
-    # has a valid struct to dispatch on for both the disconnected (static)
-    # render and the WS-connected pre-resolution render.
     socket =
       socket
-      |> assign(:roster_items, AsyncResult.loading())
-      |> assign(:composite_status, AsyncResult.loading())
-      |> assign(:principal_name, AsyncResult.loading())
-      |> assign(:presence_list, AsyncResult.loading())
-      |> assign(:roster_space_id, nil)
       # Task 019fe4b1 stage 3: the shell's chat coverage is no longer scoped to
       # one arbitrary space. It is a LIST of space ids, so a `presence_diff` or
       # a `{:new_message, _}` on any of them can rebuild what the shell shows.
@@ -107,16 +86,11 @@ defmodule PlatformWeb.ShellLive do
       # this module.
       |> assign(:shell_chat_space_ids, [])
 
-    # Schedule async load + PubSub subscribes only on the WS-connected mount.
-    # Static/disconnected render skips this entirely (placeholders ship to the
-    # browser, then the connected mount runs and resolves them).
-    #
-    # NOTE: assign_async runs the function in a separate Task process, so we
-    # capture the LV pid up front and send :roster_resolved back to ourselves
-    # once the space_id is known. The existing :roster_updates handle_info
-    # hook reacts to that message to install PubSub subscribes on the LV
-    # process (the Task can't subscribe on our behalf — the messages would
-    # land in the wrong mailbox).
+    # PubSub subscribes only on the WS-connected mount. The chat subscribe set
+    # is resolved in a `start_async/3` Task, which sends
+    # `{:presence_spaces_resolved, ids}` back so the LV process installs the
+    # subscriptions itself (a Task subscribing would put the messages in a
+    # mailbox that dies with it).
     socket =
       if connected?(socket) do
         lv_pid = self()
@@ -142,17 +116,10 @@ defmodule PlatformWeb.ShellLive do
         if is_binary(raw_user_id), do: Inbox.subscribe(raw_user_id)
         if is_binary(raw_user_id), do: AccessLive.subscribe(raw_user_id)
 
-        # One global roster topic for the viewer-scoped union (see
-        # `Chat.global_roster_topic/0`). The per-space subscription installed
-        # by `:roster_resolved` stays as-is for the current space.
-        Phoenix.PubSub.subscribe(Platform.PubSub, Chat.global_roster_topic())
-
         socket
-        |> assign_async(
-          [:roster_items, :composite_status, :principal_name],
-          fn -> async_load_roster(lv_pid, roster_visibility, raw_user_id) end
-        )
-        |> assign_async(:presence_list, fn -> async_load_presence(lv_pid, user_record) end)
+        |> start_async(:shell_chat_space_ids, fn ->
+          resolve_chat_space_ids(lv_pid, raw_user_id)
+        end)
         |> maybe_subscribe_meeting_state(raw_user_id)
       else
         socket
@@ -175,7 +142,6 @@ defmodule PlatformWeb.ShellLive do
       socket
       |> assign(:current_user, current_user)
       |> assign(:current_user_record, user_record)
-      |> assign(:roster_visibility, roster_visibility)
       |> assign(:current_user_id, raw_user_id)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
@@ -197,7 +163,6 @@ defmodule PlatformWeb.ShellLive do
       # Coalescing flag for the deferred recompute below. See
       # `queue_chat_unread_refresh/1`.
       |> assign(:chat_unread_refresh_queued, false)
-      |> assign(:roster_open, false)
       # The theme picker's one open flag (task 01a1557a stage 4). Its checked
       # row and chips live in the browser, owned by the ThemePicker hook.
       |> assign(:theme_picker_open, false)
@@ -216,7 +181,6 @@ defmodule PlatformWeb.ShellLive do
       # dead render and for an unknown zone; `PlatformWeb.MaskNamesLabel`
       # then prints UTC and says so.
       |> assign(:mask_zone, mask_zone(socket))
-      |> assign(:show_presence_panel, false)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
       |> assign(:meeting_space_name, nil)
@@ -332,57 +296,14 @@ defmodule PlatformWeb.ShellLive do
           {:cont, socket}
         end
       end)
+      # The `start_async/3` Task's result is only `:ok`; its work is the
+      # `{:presence_spaces_resolved, ids}` message it sends. Halted here so no
+      # view needs a `handle_async/3` for it.
+      |> attach_hook(:shell_chat_space_ids, :handle_async, fn
+        :shell_chat_space_ids, _result, socket -> {:halt, socket}
+        _name, _result, socket -> {:cont, socket}
+      end)
       |> attach_hook(:roster_updates, :handle_info, fn
-        # The async roster loader sends this once it knows the space_id.
-        # Subscribe in the LV process so future PubSub messages land here,
-        # and assign the bare space_id (so non-template readers like the
-        # presence_diff handler below get a binary, not %AsyncResult{}).
-        {:roster_resolved, sid}, socket when is_binary(sid) ->
-          # Idempotent guard — assign_async could re-run on reset; only
-          # subscribe once per space_id per LV.
-          if socket.assigns[:roster_space_id] != sid do
-            socket = release_roster_subscriptions(socket)
-
-            {:halt,
-             socket
-             |> SpaceTopics.hold(sid, :roster)
-             # Task 01a0691d stage 3: through `SpaceTopics` too, for the same
-             # reason `chat:space:<id>` is — `/meetings` and the quickmeet now
-             # want this topic on the same pid. See the release below.
-             |> SpaceTopics.hold_agents(sid, :roster)
-             |> assign(:roster_space_id, sid)}
-          else
-            {:halt, socket}
-          end
-
-        {:roster_resolved, nil}, socket ->
-          # Async load found no spaces; nothing to subscribe to.
-          {:halt, socket}
-
-        # Task 01a0691d stage 3. `MeetingLive` and `MeetingHooks` fold this
-        # same message into the People tab's invite rows, and they run BEHIND
-        # this hook, which used to halt it for every view — so the topic was
-        # live, the broadcast was real, and nothing downstream could ever see
-        # it.
-        #
-        # Forwarding it unconditionally is NOT the fix. The
-        # `:authenticated`/`:admin` sessions mount views with no `handle_info`
-        # catch-all (`ChangelogLive` has exactly one clause; also
-        # `AdminFederationLive`, `RecoveryLive`), and a forwarded
-        # `{:roster_changed, _}` would `FunctionClauseError` them. So a view
-        # OPTS IN with `:roster_changed_downstream?` and everyone else keeps
-        # the halt they have always had. The shell refreshes its own roster on
-        # both branches; only the propagation differs. Precedent for `:cont`
-        # from this hook: the `{:participant_left, _}` clause below.
-        {:roster_changed, space_id}, socket ->
-          socket = refresh_roster(socket, space_id)
-
-          if socket.assigns[:roster_changed_downstream?] do
-            {:cont, socket}
-          else
-            {:halt, socket}
-          end
-
         # Task 01a01a1b stage 3. The shell releases ITS OWN holds when the
         # viewer loses access to a space, because nobody else may.
         #
@@ -408,32 +329,18 @@ defmodule PlatformWeb.ShellLive do
             sid = participant.space_id
             held = socket.assigns[:shell_chat_space_ids] || []
 
-            socket =
-              socket
-              |> SpaceTopics.release(sid, :presence)
-              |> assign(:shell_chat_space_ids, List.delete(held, sid))
-
-            # The roster hold is a single space, so this is a no-op unless the
-            # revoked space happens to be the one the roster resolved to.
-            socket =
-              if socket.assigns[:roster_space_id] == sid do
-                socket
-                |> release_roster_subscriptions()
-                |> assign(:roster_space_id, nil)
-              else
-                socket
-              end
-
-            {:cont, socket}
+            {:cont,
+             socket
+             |> SpaceTopics.release(sid, :presence)
+             |> assign(:shell_chat_space_ids, List.delete(held, sid))}
           else
             {:cont, socket}
           end
 
-        # Task 019fe4b1 stage 3: the presence loader runs in a Task, so — same
-        # reason as `{:roster_resolved, sid}` above — it hands the resolved
-        # space-id set back here and the LV process installs the subscriptions
-        # itself. Subscribing from the Task would put the diffs in a mailbox
-        # that dies with it.
+        # Task 019fe4b1 stage 3: the subscribe set is resolved in a Task
+        # (`resolve_chat_space_ids/2`), so it hands the set back here and the
+        # LV process installs the subscriptions itself. Subscribing from the
+        # Task would put the messages in a mailbox that dies with it.
         {:presence_spaces_resolved, space_ids}, socket when is_list(space_ids) ->
           # Task 01a01a1b stage 2, finding 2. This used to be append-only:
           # it subscribed `space_ids -- already` and assigned
@@ -472,33 +379,18 @@ defmodule PlatformWeb.ShellLive do
             {:halt, queue_chat_unread_refresh(socket)}
           end
 
-        # Global fan-out for the viewer-scoped union: any roster mutation
-        # anywhere pings us, and `refresh_roster/2` re-scopes from the
-        # viewer's visibility rather than trusting the space id.
-        {:roster_changed_any, space_id}, socket ->
-          {:halt, refresh_roster(socket, space_id)}
-
+        # The shell subscribes every member space, so a `presence_diff` reaches
+        # every view on this pid. Since the people-online badge was deleted
+        # (task 01a1557a-8f80 stage 3) the shell has no use for it; it halts
+        # the diff for views with no clause for it and forwards it to a view
+        # that opts in with `:presence_diff_downstream?` (ChatLive's
+        # PresenceHooks, which refreshes the Members sheet).
         %Phoenix.Socket.Broadcast{event: "presence_diff"}, socket ->
-          # Any diff on ANY subscribed space invalidates the union, so rebuild
-          # the whole thing rather than patching one space's slice — the badge
-          # dedupes a person who is online in two spaces, and a per-space patch
-          # cannot know whether their other space still holds them.
-          result =
-            ChatPresence.list_online_for_viewer(socket.assigns[:current_user_record])
-
-          next =
-            case {result, socket.assigns[:presence_list]} do
-              # A transient failure must not blank a list we already had: keep
-              # the last good answer rather than flashing the error state.
-              # Deliberately only for a NON-EMPTY prior — an empty prior is not
-              # an answer worth preserving, and letting it win would turn the
-              # fallback into the very failure-renders-as-zero bug this task
-              # exists to remove.
-              {{:error, _}, %AsyncResult{result: {:ok, [_ | _]} = prev}} -> prev
-              {other, _} -> other
-            end
-
-          {:halt, assign(socket, :presence_list, async_ok(socket.assigns[:presence_list], next))}
+          if socket.assigns[:presence_diff_downstream?] do
+            {:cont, socket}
+          else
+            {:halt, socket}
+          end
 
         {:meeting_joined, payload}, socket ->
           path = socket.assigns[:current_path] || "/"
@@ -795,15 +687,6 @@ defmodule PlatformWeb.ShellLive do
             {:halt, assign(socket, :sidebar_collapsed, collapsed)}
           end
 
-        "toggle_presence_panel", _params, socket ->
-          {:halt, assign(socket, :show_presence_panel, !socket.assigns.show_presence_panel)}
-
-        "toggle_roster", _params, socket ->
-          {:halt, assign(socket, :roster_open, !socket.assigns.roster_open)}
-
-        "close_roster", _params, socket ->
-          {:halt, assign(socket, :roster_open, false)}
-
         "toggle_theme_picker", _params, socket ->
           {:halt, assign(socket, :theme_picker_open, !socket.assigns[:theme_picker_open])}
 
@@ -850,23 +733,6 @@ defmodule PlatformWeb.ShellLive do
           else
             {:halt, shell_toggle_mask_names(socket, params["masked"] in ["true", true])}
           end
-
-        "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
-          # ADR 0027: dismissed role removed — just remove the agent from roster.
-          #
-          # `space_id` is client-supplied and this hook runs on SIX
-          # live_sessions, so the membership check lives in
-          # `Chat.remove_space_agent/3` rather than here. ShellLive assigns
-          # `:current_user_id` (NOT `:user_id`), it is nil on anonymous shells,
-          # and bracket access is what keeps that a `{:user, nil}` actor —
-          # which `SpaceAccess` DENIES rather than raising on.
-          Platform.Chat.remove_space_agent(
-            {:user, socket.assigns[:current_user_id]},
-            space_id,
-            agent_id
-          )
-
-          {:halt, refresh_roster(socket, space_id)}
 
         _event, _params, socket ->
           {:cont, socket}
@@ -1084,326 +950,25 @@ defmodule PlatformWeb.ShellLive do
     _ -> nil
   end
 
-  # Release what the ROSTER branch took out for the space it is about to stop
-  # tracking. Without this the old space's topics stay registered for the life
-  # of the LV.
+  # The shell's chat subscribe set (task 01a01f4c): `Chat.list_member_space_ids/1`,
+  # participation-only and every kind. It decides which `chat:space:<id>`
+  # topics this pid holds, so it decides whether the rail badge can move on a
+  # live post from `/tasks`. It carries no names, which is why it carries no
+  # org fence. Runs in the `start_async/3` Task and hands the set back as
+  # `{:presence_spaces_resolved, ids}` for the LV process to subscribe.
   #
-  # The registry semantics are unchanged and are still the reason this is
-  # delicate: `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2`, which
-  # removes EVERY registration this pid holds for the topic, not the one this
-  # branch added. Subscribing twice and unsubscribing once leaves zero
-  # subscriptions, not one — which is exactly how the unread badge died in
-  # `cb429830`.
-  #
-  # What changed (task 01a01a1b stage 2) is who is allowed to make that call.
-  # `chat:space:<id>` is SHARED — roster, presence, the chat rail and the
-  # tasks execution pane all want it on this one pid — so this function used
-  # to guard its unsubscribe behind `unless prev in :shell_chat_space_ids`. That
-  # asymmetry is now WRONG, not merely redundant: `PlatformWeb.SpaceTopics` is
-  # the single writer and refcounts the holders, so a conditional release
-  # would leave `:roster` recorded as a holder forever and pin the
-  # subscription open with no surface able to drop it. The release below is
-  # therefore unconditional; SpaceTopics decides whether it unsubscribes.
-  #
-  #   * `space_agents:<id>` USED TO BE roster-EXCLUSIVE, and that premise —
-  #     not the bare call itself — was what made a direct
-  #     `Phoenix.PubSub.unsubscribe/2` sound here. Task 01a0691d stage 3
-  #     retires it: `MeetingLive` (member and guest mounts) and
-  #     `ChatLive.MeetingHooks` (on join) now hold the same topic for the
-  #     People tab's invite rows, and they mount inside THIS pid. The bare
-  #     unsubscribe would have destroyed their registration along with the
-  #     roster's, on a call still in progress, with the only symptom a People
-  #     tab that quietly stopped updating.
-  #
-  #     So it goes through `SpaceTopics` on exactly the same argument as
-  #     `chat:space:<id>`: two writers on one pid make a guard held by only
-  #     one of them unsound rather than merely incomplete. The release is
-  #     unconditional and `SpaceTopics` decides whether it unsubscribes.
-  defp release_roster_subscriptions(socket) do
-    case socket.assigns[:roster_space_id] do
-      prev when is_binary(prev) ->
-        socket
-        |> SpaceTopics.release(prev, :roster)
-        |> SpaceTopics.release_agents(prev, :roster)
-
-      _ ->
-        socket
-    end
-  end
-
-  @doc false
-  # Synchronous refresh path used by PubSub (`{:roster_changed, sid}`,
-  # `{:roster_changed_any, sid}`) and the `dismiss_agent` event. Wraps each
-  # updated assign in `AsyncResult.ok/2` so the template's `<.async_result>`
-  # component continues to see an `%AsyncResult{ok?: true}` shape after the
-  # initial async load resolves.
-  #
-  # The incoming space_id is only a *ping*: the meter is the viewer-scoped
-  # union over every visible space, so recomputing from that one space would
-  # overwrite the union with a subset. We always recompute the full set.
-  def refresh_roster(socket, _space_id) do
-    %{roster_items: items, composite: composite, principal_name: principal_name} =
-      visible_roster(
-        socket.assigns[:roster_visibility] || :none,
-        viewer_id(socket.assigns[:current_user_record])
-      )
-
-    socket
-    |> assign(:roster_items, async_ok(socket.assigns[:roster_items], items))
-    |> assign(:principal_name, async_ok(socket.assigns[:principal_name], principal_name))
-    |> assign(:composite_status, async_ok(socket.assigns[:composite_status], composite))
-  end
-
-  # ── Viewer-scoped agent roster ────────────────────────────────────────────
-  #
-  # The meter lives in the global shell chrome and renders on `/tasks`,
-  # `/admin`, `/canvases` and every other surface where there is no current
-  # space, so "the current space's roster" is undefined for most of the pages
-  # it appears on. The scope is therefore org-wide but viewer-scoped: the
-  # distinct set of agents on the rosters of spaces the viewer can see. The
-  # previous behaviour (oldest non-archived space in the whole install) leaked
-  # agents from orgs the viewer has no membership in.
-  #
-  # Returns `%{roster_items: [{roster_entry, status}], composite: composite,
-  # principal_name: binary | nil, space_id: binary | nil}`.
-  # Task 01a011e6 stage 3 — CONFIDENTIALITY FENCE. Read before editing this
-  # query, and NARROW ONLY: every clause below removes rows, and any change
-  # that admits rows the current query rejects widens a metadata leak.
-  #
-  # `visible_roster/2` feeds two things: the Agents meter, and — via
-  # `space_id` → `{:roster_resolved, sid}` → `SpaceTopics.hold/3` — the
-  # per-space PubSub subscription this LiveView installs. So a space that
-  # reaches this result set is a space this session receives broadcasts for.
-  # It used to be fenced by `Tenancy.scope/3` alone, which (its own docs say)
-  # "answers which ORGS only" and expects the caller to add which specific
-  # rows. The caller never did, so any org-mate's session subscribed to the
-  # org's most-recently-active agent-bearing space whether or not they were a
-  # member of it. Nothing leaked into assigns or the render — every content
-  # write in `ChatLive.MessagesHooks` is gated on `msg.space_id ==
-  # active_space.id` — but the space's existence and activity timing did.
-  #
-  # Two clauses do the fencing now:
-  #
-  #   1. membership — an `exists/1` subquery requiring the viewer to hold a
-  #      `participant_type: "user"` row on the space. This is deliberately the
-  #      same shape as `Chat.list_viewer_presence_space_ids/1`, which this
-  #      same LiveView already uses on the presence path. It is NOT the shape
-  #      of `ChatLive.presence_subscribe_space_ids/2`, which intersects only
-  #      for external users and passes every id through for internal staff.
-  #
-  #      Since task 01a01f4c this roster query is also WIDER-FENCED than the
-  #      shell's own chat subscribe set, which is participation-only. The
-  #      asymmetry is deliberate and the roster is an explicit NON-GOAL of that
-  #      change: the roster exposes which agents exist where, and the subscribe
-  #      set exposes nothing on its own. Do not unfence this to match it.
-  #
-  #   2. kind — `@private_roster_kinds` is excluded outright, on top of
-  #      membership, so a DM can never enter the subscribe set even via a
-  #      membership row. `"execution"` is deliberately NOT in that list: it is
-  #      private, but clause (1) already reduces it to execution spaces the
-  #      viewer participates in, and excluding it outright would empty the
-  #      meter for the spaces agents actually work in.
-  #
-  # A third fence is accidental and MUST NOT be relaxed: `p.participant_type
-  # == "agent"` means a space with only human participants contributes no
-  # rows at all. That is the only reason human-to-human DMs were never
-  # exposed by the pre-fix query, and it is reinforced by `Chat.create_space/1`
-  # skipping the default agent for DMs. Making this query "more complete" by
-  # relaxing it would widen the leak rather than close it.
-  #
-  # Narrowing is visible in the UI, which is why it carries a human gate: a
-  # viewer who is a member of no agent-bearing space now gets an empty meter
-  # and a nil `principal_name`, and `shell.html.heex:107` gates the Agents
-  # button on that. Expected, not a regression.
-  @private_roster_kinds ["dm"]
-
-  # No viewer id (anonymous / non-user mount) means no membership rows can
-  # match, so short-circuit rather than running a query that can only be
-  # empty. Fails closed by construction.
-  defp visible_roster(_visibility, viewer_id) when not is_binary(viewer_id),
-    do: empty_roster()
-
-  defp visible_roster(visibility, viewer_id) do
-    rows =
-      from(p in Chat.Participant,
-        join: s in Platform.Chat.Space,
-        as: :space,
-        on: s.id == p.space_id,
-        where: p.participant_type == "agent" and is_nil(s.archived_at),
-        where: s.kind not in @private_roster_kinds,
-        where:
-          exists(
-            from(vp in Chat.Participant,
-              where:
-                vp.space_id == parent_as(:space).id and
-                  vp.participant_type == "user" and
-                  vp.participant_id == ^viewer_id,
-              select: 1
-            )
-          ),
-        select: %{
-          space_id: p.space_id,
-          agent_id: p.participant_id,
-          role: p.role,
-          inserted_at: p.joined_at,
-          space_updated_at: s.updated_at
-        }
-      )
-      |> Tenancy.scope(visibility, binding: :space, field: :org_id)
-      |> Repo.all()
-
-    agents_by_id =
-      case Enum.map(rows, & &1.agent_id) |> Enum.uniq() do
-        [] -> %{}
-        ids -> Repo.all(from(a in Agent, where: a.id in ^ids)) |> Map.new(&{&1.id, &1})
-      end
-
-    # Distinct on AGENT, not on participant row: an agent sitting on five
-    # visible spaces must count once or the ratio's denominator inflates.
-    # Principal rows sort first so the surviving row is the most meaningful
-    # one for that agent.
-    entries =
-      rows
-      |> Enum.sort_by(fn r -> {r.role != "principal", r.agent_id} end)
-      |> Enum.uniq_by(& &1.agent_id)
-      |> Enum.map(fn r ->
-        %{
-          space_id: r.space_id,
-          agent_id: r.agent_id,
-          role: r.role,
-          agent: Map.get(agents_by_id, r.agent_id),
-          inserted_at: r.inserted_at
-        }
-      end)
-
-    roster_items = Enum.map(entries, fn e -> {e, SpaceAgentPresence.agent_status(e.agent)} end)
-    composite = SpaceAgentPresence.composite(Enum.map(roster_items, fn {_e, s} -> s end))
-
-    # `principal_name`'s MEANING CHANGED with this scope: with a viewer-scoped
-    # union there is no single principal, so this is now the principal of the
-    # viewer's most-recently-active visible space (nil when there is none).
-    # The assign is kept because `shell.html.heex:107` gates the whole Agents
-    # button on it, and its `:186-195` legacy-dot branch still covers nil.
-    newest = rows |> Enum.sort_by(& &1.space_updated_at, {:desc, DateTime}) |> List.first()
-
-    principal_row =
-      case newest do
-        nil ->
-          nil
-
-        %{space_id: sid} ->
-          Enum.find(rows, fn r -> r.space_id == sid and r.role == "principal" end) ||
-            Enum.find(rows, fn r -> r.role == "principal" end)
-      end
-
-    principal_name =
-      case principal_row && Map.get(agents_by_id, principal_row.agent_id) do
-        %Agent{name: name} -> name
-        _ -> nil
-      end
-
-    %{
-      roster_items: roster_items,
-      composite: composite,
-      principal_name: principal_name,
-      space_id: newest && newest.space_id
-    }
-  end
-
-  defp empty_roster do
-    %{
-      roster_items: [],
-      composite: SpaceAgentPresence.composite([]),
-      principal_name: nil,
-      space_id: nil
-    }
-  end
-
-  defp viewer_id(%{id: id}) when is_binary(id), do: id
-  defp viewer_id(_), do: nil
-
-  @doc """
-  Canonical wrap-or-rewrap helper for the AsyncResult-bound shell assigns
-  (`:roster_items`, `:composite_status`, `:principal_name`, `:presence_list`).
-
-  Reuses the existing `%AsyncResult{}` when present so LV diffing keeps the
-  assign identity stable; falls back to wrapping a fresh `AsyncResult.loading/0`
-  for synchronous callers (e.g. `refresh_roster/2` on a non-async-bootstrapped
-  socket, or cross-LV writers like `PlatformWeb.ChatLive.PresenceHooks` that
-  update `:composite_status` from `apply_agent_typing/3`).
-
-  Public so cross-LV writers can keep the assign in the shape the
-  `<.async_result>` template component requires; assigning a bare atom would
-  crash the render with `FunctionClauseError`.
-  """
-  def async_ok(%AsyncResult{} = existing, value), do: AsyncResult.ok(existing, value)
-  def async_ok(_other, value), do: AsyncResult.ok(AsyncResult.loading(), value)
-
-  # Async loader: runs in a Task, returns {:ok, %{...assigns}} for the four
-  # roster keys. Sends {:roster_resolved, sid} back to the LV so it can install
-  # PubSub subscribes on its own process (Tasks can't subscribe on the LV's
-  # behalf — messages would land in the wrong mailbox).
-  defp async_load_roster(lv_pid, visibility, viewer_id) do
-    %{
-      roster_items: items,
-      composite: composite,
-      principal_name: principal_name,
-      space_id: sid
-    } = visible_roster(visibility, viewer_id)
-
-    # `:roster_resolved` still carries a single space id — it drives the
-    # per-space `chat:space:<id>` subscription, which remains per-space. The
-    # viewer-scoped union is kept fresh by the global topic instead.
-    send(lv_pid, {:roster_resolved, sid})
-
-    {:ok,
-     %{
-       roster_items: items,
-       composite_status: composite,
-       principal_name: principal_name
-     }}
-  end
-
-  # Task 019fe4b1 stage 3: the shell presence badge is the VIEWER's answer, not
-  # the oldest space's, and the online union comes from
-  # `Presence.list_online_for_viewer/1`.
-  #
-  # This one Task resolves TWO different sets, and they must not be conflated:
-  #
-  #   * the shell's CHAT SUBSCRIBE SET is `Chat.list_member_space_ids/1`,
-  #     participation-only and every kind (task 01a01f4c). It decides which
-  #     `chat:space:<id>` topics this pid holds, so it decides whether the rail
-  #     badge can move on a live post from `/tasks`. It exposes nothing on its
-  #     own, which is why it carries no org fence.
-  #   * the PRESENCE LIST is `Presence.list_online_for_viewer/1`, which
-  #     re-derives its own org-fenced set from
-  #     `Chat.list_viewer_presence_space_ids/1`. It carries other people's
-  #     names, so it stays fenced. Do not "optimise" it to reuse the subscribe
-  #     set resolved above.
-  #
-  # `list_member_space_ids/2` is guarded `when is_binary(user_id)` and has no
-  # total clause, unlike `list_viewer_presence_space_ids/1`, so the nil
-  # `user_record` is matched explicitly below rather than left to raise. Nil is
-  # reachable: `ShellLive` runs first in every `on_mount` chain, ahead of
-  # `LiveAuth`, so `assign_async/3` has already spawned this Task before any
-  # auth redirect can halt the mount (see `router.ex`, which states
-  # nil-tolerance as a property of this hook).
-  #
-  # The `{:ok, list}` / `{:error, reason}` tuple is stored AS the assign value
-  # rather than being unwrapped here, because "nobody else is online" and "the
-  # read failed" are different facts and the template has to be able to render
-  # them differently. Unwrapping to `[]` on error is exactly the bug this task
-  # exists to remove.
-  defp async_load_presence(lv_pid, %{id: user_id} = user_record) when is_binary(user_id) do
+  # `list_member_space_ids/1` is guarded `when is_binary(user_id)`, and a nil
+  # user is reachable: `ShellLive` runs first in every `on_mount` chain, ahead
+  # of `LiveAuth`, so the Task has already spawned before any auth redirect
+  # can halt the mount (see `router.ex`).
+  defp resolve_chat_space_ids(lv_pid, user_id) when is_binary(user_id) do
     send(lv_pid, {:presence_spaces_resolved, Chat.list_member_space_ids(user_id)})
-
-    {:ok, %{presence_list: ChatPresence.list_online_for_viewer(user_record)}}
+    :ok
   end
 
-  defp async_load_presence(lv_pid, user_record) do
+  defp resolve_chat_space_ids(lv_pid, _user_id) do
     send(lv_pid, {:presence_spaces_resolved, []})
-
-    {:ok, %{presence_list: ChatPresence.list_online_for_viewer(user_record)}}
+    :ok
   end
 
   defp maybe_subscribe_meeting_state(socket, raw_user_id) when is_binary(raw_user_id) do

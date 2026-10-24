@@ -23,7 +23,7 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
   EVERY refute here is paired, IN THE SAME TEST, with a positive control proving
   the legitimate subscriber DID receive what it was entitled to.
 
-  The topics in this file are genuinely global: `chat:spaces`, `space_agents:*`,
+  The topics in this file are genuinely global: `chat:spaces`,
   `chat:sidebar:defaults` and `audit:all` have no "outside the scope" at the
   broadcast layer, because every connected session is a subscriber by design. So
   the assertion is mostly the second half of the brief — a subscriber "cannot
@@ -244,10 +244,14 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
     end
   end
 
-  # ── space_agents:* — global ping vs the per-space topic ────────────────────
+  # ── space_agents:<space_id> — the per-space roster topic ───────────────────
+  #
+  # The global `space_agents:*` ping this describe also covered was deleted in
+  # task 01a1557a-8f80 stage 3 with its only subscriber, the utility bar's
+  # agents meter. What is left to hold is that the per-space topic is per space.
 
-  describe "space_agents:* vs space_agents:<space_id>" do
-    test "the per-space roster topic never fires for a sibling space, and the global ping carries no agent detail" do
+  describe "space_agents:<space_id>" do
+    test "the per-space roster topic never fires for a sibling space" do
       ours = channel!("Our Roster Channel")
       theirs = channel!("Their Roster Channel")
       their_agent = agent!()
@@ -259,21 +263,13 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
         Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{ours.id}")
       end)
 
-      # The global ping, for this process.
-      assert :ok = Phoenix.PubSub.subscribe(Platform.PubSub, Chat.global_roster_topic())
+      # PROOF THE EVENT IS ON THE WIRE: this process hears THEIR topic.
+      assert :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{theirs.id}")
 
       # A real roster mutation in the OTHER space.
       assert {:ok, _entry} = Chat.add_space_agent(theirs.id, their_agent.id)
 
-      # PROOF THE EVENT WAS ON THE WIRE, and simultaneously the assertion that
-      # the global ping is a space id and NOTHING ELSE. The two topics carry
-      # different event atoms (`:roster_changed_any` global, `:roster_changed`
-      # per-space), so there is no ambiguity about which subscription delivered
-      # which copy — and this bound 2-tuple is what fails if the ping is ever
-      # enriched in place with the agent. The module @doc calls it "a ping, not
-      # an authorization" (`chat.ex:4201`); this is that sentence made
-      # executable.
-      assert_receive {:roster_changed_any, ^their_id}, 1_000
+      assert_receive {:roster_changed, ^their_id}, 1_000
 
       # THE LEAK ASSERTION: our space's roster subscribers heard nothing.
       refute_receive {:roster_ours, {:roster_changed, ^their_id}}, 300
@@ -287,29 +283,7 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
                      "the per-space roster subscription delivered nothing even for its OWN " <>
                        "space, so the refute above was passing for the wrong reason"
 
-      # Companion to the bound tuple above, covering the other enrichment shape:
-      # an ADDITIONAL, detail-bearing broadcast alongside the ping. That would
-      # hand every session in the install the agent roster of every private
-      # space, and the bound receive above would not see it.
-      everything = collect(200)
-
-      assert everything != [],
-             "nothing at all was queued, so the two content refutes below have no input and " <>
-               "cannot fail — the global ping from our own space's mutation should be here"
-
-      refute_any_mentions(
-        everything,
-        their_agent.id,
-        "a roster broadcast carried the foreign agent's id:"
-      )
-
-      refute_any_mentions(
-        everything,
-        their_agent.name,
-        "a roster broadcast carried the foreign agent's name:"
-      )
-
-      Phoenix.PubSub.unsubscribe(Platform.PubSub, Chat.global_roster_topic())
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, "space_agents:#{theirs.id}")
     end
   end
 

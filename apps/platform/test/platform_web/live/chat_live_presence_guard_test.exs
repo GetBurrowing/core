@@ -19,6 +19,15 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
   The tracker is killed FOR REAL via `Supervisor.terminate_child/2` — not a
   mock, not an injected error tuple, and never a pattern-based process kill
   (this machine runs other agents' processes).
+
+  ## Where presence is read (task 01a1557a-8f80 stage 3)
+
+  The utility bar's people-online badge and panel this test opened were
+  deleted; presence is now read in the space's Members sheet
+  (`Chat.space_member_presence/2`). The same two-render comparison runs there:
+  healthy shows online/away words, a dead tracker shows "Presence
+  unavailable" and NO online or away word on any row, so a failed read can
+  never read as everybody away.
   """
   use PlatformWeb.ConnCase, async: false
 
@@ -72,15 +81,26 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
   end
 
   defp open_presence_panel(view) do
-    view |> element(~s([data-test-id="shell-presence-badge"])) |> render_click()
+    view |> element(~s([data-role="members-open"])) |> render_click()
   end
 
+  # The presence facts the desktop popover renders: each person row's
+  # `data-presence` word, plus "unavailable" when the failure row renders.
   defp presence_markers(html) do
-    html
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query(~s([data-test-id^="shell-presence-"]))
-    |> LazyHTML.attribute("data-test-id")
-    |> MapSet.new()
+    popover = html |> LazyHTML.from_fragment() |> LazyHTML.query("#members-popover")
+
+    words =
+      popover
+      |> LazyHTML.query(~s([data-role="members-person-row"]))
+      |> LazyHTML.attribute("data-presence")
+
+    unavailable =
+      if LazyHTML.to_tree(LazyHTML.query(popover, ~s([data-role="members-presence-unavailable"]))) ==
+           [],
+         do: [],
+         else: ["unavailable"]
+
+    MapSet.new(words ++ unavailable)
   end
 
   # The tracker is VM-global. Terminating it delivers the shutdown to this
@@ -152,11 +172,11 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
 
     healthy_markers = presence_markers(healthy)
 
-    assert MapSet.member?(healthy_markers, "shell-presence-row"),
-           "positive control failed: expected shell-presence-row in the healthy render, got: " <>
+    assert MapSet.member?(healthy_markers, "online"),
+           "positive control failed: expected an online row in the healthy render, got: " <>
              inspect(Enum.sort(healthy_markers))
 
-    refute MapSet.member?(healthy_markers, "shell-presence-unavailable")
+    refute MapSet.member?(healthy_markers, "unavailable")
 
     healthy_assigns = :sys.get_state(healthy_view.pid).socket.assigns
     assert healthy_assigns.presence_status == :ok
@@ -175,9 +195,18 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
 
     broken_markers = presence_markers(broken)
 
-    assert MapSet.member?(broken_markers, "shell-presence-unavailable"),
-           "expected the dead-tracker render to carry shell-presence-unavailable, got: " <>
+    assert MapSet.member?(broken_markers, "unavailable"),
+           "expected the dead-tracker render to carry Presence unavailable, got: " <>
              inspect(Enum.sort(broken_markers))
+
+    assert broken =~ "Presence unavailable"
+
+    # A failed read is NEVER away (nor online): every row is "unknown".
+    refute MapSet.member?(broken_markers, "away"),
+           "a failed presence read rendered a member as away"
+
+    refute MapSet.member?(broken_markers, "online")
+    assert MapSet.member?(broken_markers, "unknown"), "the people rows did not render at all"
 
     broken_assigns = :sys.get_state(broken_view.pid).socket.assigns
 
@@ -195,15 +224,15 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
     # distinction. If a dead tracker rendered identically to a healthy one, the
     # unavailable state would be decorative and this fix would have reproduced
     # the very defect it exists to prevent.
-    assert MapSet.member?(healthy_markers, "shell-presence-row") and
-             not MapSet.member?(broken_markers, "shell-presence-row"),
-           "expected shell-presence-row to be present in the healthy render and ABSENT in the " <>
+    assert MapSet.member?(healthy_markers, "online") and
+             not MapSet.member?(broken_markers, "online"),
+           "expected an online row to be present in the healthy render and ABSENT in the " <>
              "dead-tracker render. healthy=#{inspect(Enum.sort(healthy_markers))} " <>
              "broken=#{inspect(Enum.sort(broken_markers))}"
 
-    assert not MapSet.member?(healthy_markers, "shell-presence-unavailable") and
-             MapSet.member?(broken_markers, "shell-presence-unavailable"),
-           "expected shell-presence-unavailable to be ABSENT in the healthy render and present " <>
+    assert not MapSet.member?(healthy_markers, "unavailable") and
+             MapSet.member?(broken_markers, "unavailable"),
+           "expected Presence unavailable to be ABSENT in the healthy render and present " <>
              "in the dead-tracker render. healthy=#{inspect(Enum.sort(healthy_markers))} " <>
              "broken=#{inspect(Enum.sort(broken_markers))}"
 

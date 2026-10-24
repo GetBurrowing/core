@@ -252,10 +252,10 @@
         show_pins={@show_pins}
         agent_presence={@agent_presence}
         has_agent_participant={@has_agent_participant}
-        active_agent_participant_id={@active_agent_participant_id}
-        active_agent_armable_id={@active_agent_armable_id}
-        active_agent_name={@active_agent_name}
-        active_agent_armable_name={@active_agent_armable_name}
+        agents_sheet_open={@agents_sheet_open}
+        agent_attention={@agent_attention}
+        show_members={@show_members}
+        current_user_record={assigns[:current_user_record]}
         goal_panel={@goal_panel}
         goal_edit={@goal_edit}
         can_edit_goal?={@can_edit_goal?}
@@ -317,9 +317,7 @@
         in_meeting={@in_meeting}
         agent_presence={@agent_presence}
         has_agent_participant={@has_agent_participant}
-        active_agent_participant_id={@active_agent_participant_id}
-        active_agent_armable_id={@active_agent_armable_id}
-        active_agent_name={@active_agent_name}
+        agent_attention={@agent_attention}
         search_query={@search_query}
         search_results={@search_results}
         participants_map={@participants_map}
@@ -339,6 +337,17 @@
         scope_filter={@scope_filter}
         space_sheet_files={@space_sheet_files}
         space_sheet_links={@space_sheet_links}
+      />
+
+      <%!-- The phone Agents sheet (task 01a1557a-8f80 stage 2), opened from
+           the space sheet's Agents row; the desktop popover renders under the
+           header's `agents-open` button. `AgentsSheetHooks` owns both. --%>
+      <PlatformWeb.ChatLive.Partials.AgentsSheet.agents_sheet
+        :if={@active_space && !@embedded}
+        surface={:sheet}
+        open={@agents_sheet_open}
+        state={@agent_attention}
+        active_space={@active_space}
       />
 
       <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
@@ -616,15 +625,22 @@
   current_user_id={@user_id}
 />
 
-<%!-- Channel members panel (task 01a0fd62 stage 3). Opened by the header
-     "members" button (channels only) and the refused-summon notice. --%>
+<%!-- The phone Members sheet (task 01a1557a-8f80 stage 3), opened from the
+     space sheet's Members row; the desktop popover is the second instance,
+     rendered under the header's `members-open` button. --%>
 <.live_component
   :if={!@embedded}
   module={MembersComponent}
   id="chat-members"
+  surface={:sheet}
   open={@show_members}
   space={@active_space}
+  space_name={
+    @active_space &&
+      space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns))
+  }
   current_user_id={@user_id}
+  viewer={assigns[:current_user_record]}
 />
 
 <%!-- New-channel creation is internal-only chrome — external users never see a

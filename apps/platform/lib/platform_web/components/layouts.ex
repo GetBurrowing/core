@@ -316,24 +316,6 @@ defmodule PlatformWeb.Layouts do
     """
   end
 
-  @doc "Returns a Tailwind color class for the agent status indicator."
-  def agent_status_color(:online), do: "bg-success"
-  def agent_status_color(:thinking), do: "bg-sky-400"
-  def agent_status_color(:offline), do: "bg-warning"
-  def agent_status_color(:idle), do: "bg-warning"
-  def agent_status_color(:paused), do: "bg-warning"
-  def agent_status_color(:error), do: "bg-error"
-  def agent_status_color(_), do: "bg-base-content/30"
-
-  @doc "Returns a compact text label for the shell agent indicator."
-  def agent_status_label(:online), do: "Agent"
-  def agent_status_label(:thinking), do: "Agent"
-  def agent_status_label(:offline), do: "Agent"
-  def agent_status_label(:idle), do: "Agent"
-  def agent_status_label(:paused), do: "Agent"
-  def agent_status_label(:error), do: "Agent"
-  def agent_status_label(_), do: "Agent"
-
   @doc """
   Shows the flash group with standard titles and content.
 

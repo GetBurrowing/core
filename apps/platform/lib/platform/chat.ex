@@ -6300,6 +6300,10 @@ defmodule Platform.Chat do
          true <- participant.participant_type == "agent" || {:error, :not_an_agent},
          {:ok, removed} <- remove_participant(participant) do
       Platform.Chat.ActiveAgentStore.clear_if_match(space.id, removed.id)
+      # The roster signal the deleted utility-bar Remove sent
+      # (`remove_space_agent/3`, task 01a1557a-8f80 stage 3): the quickmeet's
+      # People tab follows `{:roster_changed, _}`, not `{:participant_left, _}`.
+      broadcast_roster_changed(space.id, removed.participant_id, :removed)
       {:ok, removed}
     end
   end
@@ -6557,40 +6561,253 @@ defmodule Platform.Chat do
     end
   end
 
+  # ── Agent attention controls (task 01a1557a-8f80 stage 1) ─────────────────
+  #
+  # Three choices any USER participant of a space may make about its agents:
+  # silence one agent, switch every agent off with the master switch, and
+  # pick the attention policy. `Platform.Chat.AttentionRouter` obeys all
+  # three. Each writer composes `SpaceAccess.authorize_writer/2` in its own
+  # body, takes the space id from the caller (a LiveView passes
+  # `socket.assigns.active_space`, never a param), refuses an agent actor so
+  # an agent cannot unsilence itself, and broadcasts
+  # `{:agent_attention_changed, space_id}` on the space topic.
+  #
+  # Not `can_summon_agents?/2`: that rule governs adding and removing agents.
+  # The header eye these controls replace had no rule beyond membership.
+
   @doc """
-  Remove an agent from a space entirely (hard delete, ADR 0038).
+  Silence (`true`) or wake (`false`) one agent participant of a space.
 
-  Actor-first (task 01a01ce0, stage 1). `actor` must hold a
-  `chat_participants` row in `space_id`; the sole caller,
-  `PlatformWeb.ShellLive`'s `"dismiss_agent"` clause, previously passed a
-  client-supplied `space_id` with no membership check of any kind.
+  A silenced agent is mention-only: it never receives an un-mentioned message
+  (as mutex holder, by policy fan-out, or as the execution assignee fallback),
+  but an @mention still routes to it. Silencing the agent that currently holds
+  the space's active-agent mutex clears the mutex.
 
-  The archived check is new here too, and deliberate: `ensure_space_writable/1`
-  is the guard every other public write path already carries, and an archived
-  channel is a read-only snapshot for human and agent alike (task 019e95ea).
-  Execution spaces stay exempt, so orchestration teardown is unaffected. See
-  `pin_message/2` for why authorization runs first.
+  `participant_id` is the `chat_participants.id` of an AGENT participant of
+  `space_id`; anything else (a user row, another space's agent, a malformed
+  id) is `{:error, :not_found}`.
   """
-  @spec remove_space_agent(SpaceAccess.actor(), binary(), binary()) ::
-          :ok | {:error, :forbidden | :space_archived | :not_found}
-  def remove_space_agent(actor, space_id, agent_id) do
-    with {:ok, _participant} <- SpaceAccess.authorize_writer(space_id, actor),
-         :ok <- ensure_space_writable(space_id) do
-      do_remove_space_agent(space_id, agent_id)
+  @spec set_agent_silenced(SpaceAccess.actor(), binary(), binary(), boolean()) ::
+          {:ok, Participant.t()}
+          | {:error, :forbidden | :space_archived | :not_found | Ecto.Changeset.t()}
+  def set_agent_silenced(actor, space_id, participant_id, silenced)
+      when is_boolean(silenced) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Participant{} = agent <- space_agent_participant(space_id, participant_id) do
+      with {:ok, updated} <-
+             agent |> Participant.changeset(%{silenced: silenced}) |> Repo.update() do
+        if silenced, do: Platform.Chat.ActiveAgentStore.clear_if_match(space_id, updated.id)
+        broadcast_agent_attention_changed(space_id)
+        {:ok, updated}
+      end
+    else
+      nil -> {:error, :not_found}
+      error -> error
     end
   end
 
-  defp do_remove_space_agent(space_id, agent_id) do
-    case get_agent_participant(space_id, agent_id) do
-      nil ->
-        {:error, :not_found}
+  @doc """
+  Set the space's master switch, `chat_spaces.agents_awake`.
 
-      %Participant{} = participant ->
-        {:ok, _} = Repo.delete(participant)
-        broadcast_roster_changed(space_id, agent_id, :removed)
-        :ok
+  Off: no un-mentioned message reaches any agent in the space and the
+  active-agent mutex is cleared; @mentions still route. Per-agent `silenced`
+  values are never touched. Arming an agent when the switch goes back on is
+  the caller's (the Agents sheet's hook arms
+  `PlatformWeb.ChatLive.AgentsSheetHooks.resolve_armable/2`'s target); this
+  writer only persists.
+  """
+  @spec set_agents_awake(SpaceAccess.actor(), binary(), boolean()) ::
+          {:ok, Space.t()}
+          | {:error, :forbidden | :space_archived | :not_found | Ecto.Changeset.t()}
+  def set_agents_awake(actor, space_id, awake) when is_boolean(awake) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         {:ok, updated} <-
+           space |> Space.agent_attention_changeset(%{agents_awake: awake}) |> Repo.update() do
+      unless awake, do: Platform.Chat.ActiveAgentStore.clear_active(space_id)
+      broadcast_agent_attention_changed(space_id)
+      {:ok, updated}
+    else
+      nil -> {:error, :not_found}
+      error -> error
     end
   end
+
+  @doc """
+  Set the space's agent attention policy, `chat_spaces.agent_attention_policy`
+  (`"on_mention" | "directed" | "collaborative"`).
+
+  Applies to channel and group spaces only: any other kind (a DM is always
+  directed, an execution space keeps its assignee fallback) is
+  `{:error, :not_applicable}`. An unknown value is a changeset error.
+  """
+  @spec set_agent_attention_policy(SpaceAccess.actor(), binary(), String.t()) ::
+          {:ok, Space.t()}
+          | {:error, :forbidden | :space_archived | :not_found | :not_applicable}
+          | {:error, Ecto.Changeset.t()}
+  def set_agent_attention_policy(actor, space_id, policy) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         :ok <- ensure_policy_applicable(space),
+         {:ok, updated} <-
+           space
+           |> Space.agent_attention_changeset(%{agent_attention_policy: policy})
+           |> Repo.update() do
+      broadcast_agent_attention_changed(space_id)
+      {:ok, updated}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc """
+  The agent attention state of a space, for the Agents sheet:
+
+      %{
+        agents_awake: boolean,
+        policy: stored value or nil,
+        effective_policy: what the router applies (nil -> the kind default),
+        agents: [%{participant_id, agent_id, name, slot, silenced}]
+      }
+
+  `agents` holds every agent participant, sorted by name; `slot` is the
+  rung-3 accent slot from `agent_slot_map_for_participants/1`. A space that
+  does not exist is `nil`.
+  """
+  @spec agent_attention_state(binary()) ::
+          %{
+            agents_awake: boolean(),
+            policy: String.t() | nil,
+            effective_policy: String.t(),
+            agents: [map()]
+          }
+          | nil
+  def agent_attention_state(space_id) when is_binary(space_id) do
+    with true <- Platform.UUID.valid?(space_id),
+         %Space{} = space <- Repo.get(Space, space_id) do
+      agents =
+        from(p in Participant,
+          where: p.space_id == ^space_id and p.participant_type == "agent"
+        )
+        |> Repo.all()
+
+      slots = agent_slot_map_for_participants(agents)
+      names = agent_names_by_id(agents)
+
+      %{
+        agents_awake: space.agents_awake,
+        policy: space.agent_attention_policy,
+        effective_policy: Platform.Chat.AttentionRouter.resolve_attention_mode(space, nil),
+        agents:
+          agents
+          |> Enum.map(fn p ->
+            %{
+              participant_id: p.id,
+              agent_id: p.participant_id,
+              name: attention_agent_name(p, names),
+              slot: Map.get(slots, p.id),
+              silenced: p.silenced
+            }
+          end)
+          |> Enum.sort_by(&{String.downcase(&1.name), &1.participant_id})
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp agent_names_by_id([]), do: %{}
+
+  defp agent_names_by_id(agents) do
+    agent_ids = Enum.map(agents, & &1.participant_id)
+
+    from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.name})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp attention_agent_name(%Participant{display_name: name}, _names)
+       when is_binary(name) and name != "",
+       do: name
+
+  defp attention_agent_name(%Participant{participant_id: agent_id}, names),
+    do: Map.get(names, agent_id) || "Agent"
+
+  @doc """
+  The Members sheet's People section (task 01a1557a-8f80 stage 3): the space's
+  user participants split into `online` and `away`.
+
+  ONLINE means the user appears in `Platform.Chat.Presence.list_online_for_viewer/1`
+  (online anywhere in Burrow the viewer can see, because ChatLive tracks a
+  user only in the space on screen) or IS the viewer. AWAY is every other
+  user participant of the space. The viewer leads `online` with `you?: true`;
+  otherwise each list is sorted by name. Agents are never listed here.
+
+  A failed presence read is `{:error, reason}`. It is never turned into a
+  list with everybody away: "we could not ask" and "nobody is here" are
+  different facts, the distinction `list_online_for_viewer/1` exists to keep.
+  """
+  @spec space_member_presence(binary(), map()) ::
+          {:ok, %{online: [map()], away: [map()]}} | {:error, term()}
+  def space_member_presence(space_id, %{id: viewer_id} = viewer) when is_binary(space_id) do
+    case Platform.Chat.Presence.list_online_for_viewer(viewer) do
+      {:ok, online} ->
+        online_ids = MapSet.new(online, & &1.user_id)
+
+        {here, away} =
+          space_id
+          |> list_participants(participant_type: "user")
+          |> Enum.map(&member_row(&1, viewer_id))
+          |> Enum.split_with(&(&1.you? or MapSet.member?(online_ids, &1.user_id)))
+
+        {:ok, %{online: sort_members(here), away: sort_members(away)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc "A user participant as a Members sheet row: `%{participant_id, user_id, name, you?}`."
+  @spec member_row(%Participant{}, binary() | nil) :: map()
+  def member_row(%Participant{} = participant, viewer_id) do
+    %{
+      participant_id: participant.id,
+      user_id: participant.participant_id,
+      name: participant.display_name || "Unknown",
+      you?: participant.participant_id == viewer_id
+    }
+  end
+
+  @doc "Members sheet order: the viewer first, then by name."
+  @spec sort_members([map()]) :: [map()]
+  def sort_members(rows),
+    do: Enum.sort_by(rows, &{!&1.you?, String.downcase(&1.name), &1.participant_id})
+
+  # An agent holds a participant row too, so `authorize_writer/2` alone would
+  # let an agent unsilence itself or wake a space a member switched off.
+  defp ensure_user_writer(%Participant{participant_type: "user"}), do: :ok
+  defp ensure_user_writer(_participant), do: {:error, :forbidden}
+
+  defp ensure_policy_applicable(%Space{kind: kind}) when kind in ["channel", "group"], do: :ok
+  defp ensure_policy_applicable(_space), do: {:error, :not_applicable}
+
+  defp space_agent_participant(space_id, participant_id) when is_binary(participant_id) do
+    if Platform.UUID.valid?(participant_id) do
+      Repo.get_by(Participant, id: participant_id, space_id: space_id, participant_type: "agent")
+    end
+  end
+
+  defp space_agent_participant(_space_id, _participant_id), do: nil
+
+  defp broadcast_agent_attention_changed(space_id),
+    do: ChatPubSub.broadcast(space_id, {:agent_attention_changed, space_id})
 
   @doc """
   Ensure an agent is on a space's roster. Idempotent.
@@ -6712,26 +6929,7 @@ defmodule Platform.Chat do
       "space_agents:#{space_id}",
       {:roster_changed, space_id}
     )
-
-    # Additive global fan-out. The shell's agents meter is viewer-scoped
-    # across every visible space, so it cannot subscribe to N per-space
-    # topics without unbounded fan-out; it subscribes to this one topic
-    # instead and recomputes its union on receipt. The per-space topic
-    # above and all of its subscribers are untouched.
-    Phoenix.PubSub.broadcast(
-      Platform.PubSub,
-      global_roster_topic(),
-      {:roster_changed_any, space_id}
-    )
   end
-
-  @doc """
-  Single global topic carrying `{:roster_changed_any, space_id}` for every
-  roster mutation in the install. Subscribers must re-scope for themselves —
-  the message is a "something changed" ping, not an authorization.
-  """
-  @spec global_roster_topic() :: String.t()
-  def global_roster_topic, do: "space_agents:*"
 
   # ── Unread counts ──────────────────────────────────────────────────────────
 

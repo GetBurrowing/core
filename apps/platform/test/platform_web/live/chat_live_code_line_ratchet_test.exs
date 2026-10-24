@@ -639,7 +639,12 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `removes_content` branch of `save_edit` and the `:pending_save_edit`
   # assign went with the custom removal modal; the native confirm in the
   # MessageEditor hook replaced it.
-  @chat_live_code_line_count 2524
+  # Task 01a1557a-8f80 stage 3 (Members sheet): -9, measured by this guard
+  # (2524 -> 2515). The `members_open` handler, the `{:members_closed}` and
+  # `{:members_flash, _, _}` clauses and the `:show_members` seed moved to
+  # `PlatformWeb.ChatLive.MembersSheetHooks` (attached fully qualified, so no
+  # alias line).
+  @chat_live_code_line_count 2515
 
   @doc """
   Count the CODE lines of a source file.
