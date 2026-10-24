@@ -1246,7 +1246,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
         assert LazyHTML.attribute(cam, "data-pending") == []
 
         assert LazyHTML.attribute(cam, "class") == [
-                 "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+                 "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
                ]
       end
     end
@@ -1358,7 +1358,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
         # `/40` is the DISABLED treatment on this rail and an inactive tab
         # is not disabled (design canvas 01a084be, "Palette").
-        assert class =~ "text-base-content/60"
+        assert class =~ "text-subtle"
         refute class =~ "text-base-content/40"
       end
     end

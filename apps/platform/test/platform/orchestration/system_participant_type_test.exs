@@ -15,7 +15,7 @@ defmodule Platform.Orchestration.SystemParticipantTypeTest do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{Participant, SpaceAgentPresence}
+  alias Platform.Chat.Participant
   alias Platform.Federation.ToolSurface
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
@@ -49,7 +49,9 @@ defmodule Platform.Orchestration.SystemParticipantTypeTest do
 
     before = length(Chat.list_active_space_agents(space.id))
     assert before == 3
-    assert SpaceAgentPresence.composite_for_space(space.id).total == 3
+    # The Agents sheet's `<awake>/<total>` denominator (task 01a1557a-8f80);
+    # it replaced the utility-bar agents meter this used to read.
+    assert length(Chat.agent_attention_state(space.id).agents) == 3
 
     # Each execution space mints a router through the real write path.
     routers =
@@ -64,7 +66,7 @@ defmodule Platform.Orchestration.SystemParticipantTypeTest do
     assert length(Chat.list_active_space_agents(space.id)) == before,
            "denominator moved once execution-space routers existed"
 
-    assert SpaceAgentPresence.composite_for_space(space.id).total == before
+    assert length(Chat.agent_attention_state(space.id).agents) == before
 
     # Asserted AFTER the denominator so a regression detonates naming the thing
     # that matters, not its mechanism.

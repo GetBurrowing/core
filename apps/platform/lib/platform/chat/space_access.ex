@@ -11,13 +11,13 @@ defmodule Platform.Chat.SpaceAccess do
 
   ## The hole this closes
 
-  `PlatformWeb.ChatLive.PinHooks`'s `"pin_toggle"` clause and `ShellLive`'s
-  `"dismiss_agent"` clause both take a `space-id` out of the client's own
-  event params. `PinHooks`'s only guard was `socket.assigns.current_participant`
-  — membership of the space being VIEWED, never of the space named in the
-  params — and `dismiss_agent` had no membership guard at all. A session open
-  on space A could push a forged `space-id` for space B and pin, unpin, or
-  evict an agent there.
+  `PlatformWeb.ChatLive.PinHooks`'s `"pin_toggle"` clause and the shell's
+  agents dropdown Remove event (deleted in task 01a1557a-8f80 stage 3) both took a
+  `space-id` out of the client's own event params. `PinHooks`'s only guard was
+  `socket.assigns.current_participant` — membership of the space being VIEWED,
+  never of the space named in the params — and the Remove event had no
+  membership guard at all. A session open on space A could push a forged
+  `space-id` for space B and pin, unpin, or evict an agent there.
 
   THE CHECK BELONGS IN THE CONTEXT FUNCTION, NOT THE HOOK. A guard in
   `pin_hooks.ex` protects one caller; a guard in `Chat.pin_message/2` protects

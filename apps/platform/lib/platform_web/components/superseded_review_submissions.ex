@@ -51,7 +51,7 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
       <div class="border-t border-edge"></div>
       <button
         type="button"
-        class="flex items-center gap-1 text-xs text-base-content/60"
+        class="flex items-center gap-1 text-xs text-subtle"
         phx-click="gate_toggle_superseded"
         phx-target={@target}
         aria-expanded={to_string(@expanded)}
@@ -65,7 +65,7 @@ defmodule PlatformWeb.Components.SupersededReviewSubmissions do
         <div
           :for={review <- @reviews}
           data-role="superseded-review"
-          class="rounded-lg border border-edge p-3 space-y-1 text-base-content/60"
+          class="rounded-lg border border-edge p-3 space-y-1 text-subtle"
         >
           <div :for={item <- review.items} class="text-sm">{item.label}</div>
           <div class="text-xs">{superseded_timestamps(review)}</div>

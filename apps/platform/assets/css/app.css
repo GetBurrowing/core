@@ -39,17 +39,6 @@
   width: var(--suite-sidebar-width, 224px);
 }
 
-/* Safelist: dynamic classes generated at runtime that Tailwind cannot scan */
-@layer utilities {
-  /* Agent presence status dots */
-  .bg-red-500 { background-color: #ef4444; }
-  .bg-blue-500 { background-color: #3b82f6; }
-  .bg-green-500 { background-color: #22c55e; }
-  .bg-green-400 { background-color: #4ade80; }
-  .bg-zinc-500 { background-color: #71717a; }
-  .bg-zinc-400 { background-color: #a1a1aa; }
-}
-
 /*
  * Force-include hero icon classes used in dynamic expressions (if/else)
  * so Tailwind's scanner picks them up even when not statically present:
@@ -89,6 +78,10 @@
      base-300, and is DARKER than the surface, the light-theme direction
      test/platform/design/border_token_direction_test.exs pins. */
   --edge: #d9d3c9;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* Focus-ring slot, theme-split (task 01a0833d). WCAG 2.2 SC 1.4.11 Non-text
      Contrast wants 3:1 minimum against every adjacent ground. The slot reads
      --color-interactive (#8b3b04), which measures 7.3919:1 on base-100
@@ -150,21 +143,6 @@
   --color-primary-content: #fbfaf9;           /* light text on deep orange */
   --color-secondary: #635b53;                 /* warm grey */
   --color-secondary-content: oklch(100% 0 0);
-  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
-     Muted is --color-secondary; daisyUI has no third slot, so this is a new
-     name. Being text, it owes 4.5:1 on every ground, and it must stay more
-     than 0.5:1 dimmer than muted on base-100 or the two tiers merge.
-
-     On the muted tint's own line (the oklch chroma and hue of #635b53, only
-     lightness raised), #726961 is the lightest 8-bit step that clears all
-     three grounds: 5.1536:1 on base-100, 4.8939:1 on base-200 and 4.5302:1 on
-     base-300. Muted measures 6.3911:1 on base-100. Computed through
-     Platform.Design.WcagContrast and recomputed against this comment by
-     test/platform/design/burrow_palette_guard_test.exs.
-
-     Declared --faint, never --color-faint: the @theme inline block below maps
-     the --color-* key, as it does for --edge. */
-  --faint: #726961;
   /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2): base-content
      at reduced strength, exactly what Tailwind compiled the retired
      base-content-at-55% utility to, so Burrow paints the same pixel it did.
@@ -174,6 +152,27 @@
      4.6867:1 on base-100, 4.6350:1 on base-200 and 4.5414:1 on base-300.
      Declared --subtle, never --color-subtle; see the @theme inline block. */
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  /* Disabled and decorative (task 01a15902 stage 1): the two text colours
+     WCAG 1.4.3 exempts, declared the way --subtle is. --disabled is text
+     inside a control that is actually disabled, and nothing else; it keeps
+     today's look of base-content at about 40%. --decorative is aria-hidden
+     glyphs only (middle-dot separators, watermark art). Being exempt, neither
+     is held to 4.5:1, so test/platform/design/text_exemption_guard_test.exs
+     holds where they may be used instead: text-disabled only on an element
+     carrying disabled or aria-disabled, text-decorative only on one carrying
+     aria-hidden="true". Declared bare, never as --color-*; see the
+     @theme inline block. */
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Glass tab bar (task 01a1557a-7a71 stage 1): the bar is base-200 at this
+     alpha. The masters' 0.72 measures 2.5594:1 for the worst tab label
+     (inactive --subtle or active primary) painted on the bar over pure black
+     or pure white, Chrome 147 and 151; 0.96, the lowest swept alpha that
+     clears 4.5:1 for every label and 3:1 for every icon and the More dot,
+     measures 4.5124:1 (test/support/fixtures/painted_glass/, held by
+     test/platform/design/bottom_nav_glass_guard_test.exs). */
+  --glass-alpha: 0.96;
+  --glass-blur: 18px;
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. The
      burrow_palette_guard test fails if one is painted as a text colour. */
@@ -204,16 +203,56 @@
   --color-success-content: oklch(100% 0 0);
   --color-warning: #925d0c;                   /* 5.3105:1 under its #fbfaf9 content */
   --color-warning-content: #fbfaf9;
-  --color-error: oklch(63% 0.22 25);          /* #EF4444 */
-  /* Black, not white (task 01a120c5). White on this red measures 3.8948:1,
-     under the 4.5:1 AA floor for text, and had since before the recolor;
-     the Burrow guard asserts every fill/content pair clears AA, and this was
-     the one other pair that failed it. Black measures 5.3918:1. The red
-     itself is unchanged. */
-  --color-error-content: oklch(0% 0 0);
+  /* Retuned by task 01a160c4 (the designer's ruling): same hue, lower
+     lightness, so error TEXT clears 4.5:1 on both grounds. The LIGHT and DARK
+     blocks carry different reds on purpose; never collapse them. Measured by
+     error_token_contrast_guard_test.exs: on base-100 4.8708:1, on
+     base-200 4.6254:1 (the old oklch(63% 0.22 25) was 3.7360 / 3.5478). */
+  --color-error: #da1729;
+  /* White, not black: white on #da1729 measures 5.0778:1, black only
+     4.1357:1. (Black was right for the old, lighter red.) */
+  --color-error-content: oklch(100% 0 0);
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #0e7382;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #2d7638;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #925d0c;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #ad4b07;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #1e74a6;
+  /* theme.js #1e74a6 measures 4.4088:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5320:1. */
+  --ag-blue-text: #1c72a4;
+  --ag-purple: #805eb6;
+  /* theme.js #805eb6 measures 4.3573:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5300:1. */
+  --ag-purple-text: #7e5bb3;
+  --ag-brick: #ae5548;
+  /* theme.js #ae5548 measures 4.3399:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5185:1. */
+  --ag-brick-text: #ab5246;
+  --ag-rose: #a85276;
+  /* theme.js #a85276 measures 4.4047:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5278:1. */
+  --ag-rose-text: #a65074;
+  --ag-indigo: #546aba;
+  /* theme.js #546aba measures 4.3812:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5079:1. */
+  --ag-indigo-text: #5268b8;
+  --ag-lime: #4f7b00;
+  /* theme.js #4f7b00 measures 4.3682:1 on the painted 8% tint;
+     this value, on the same oklch hue line, measures 4.5457:1. */
+  --ag-lime-text: #4d7802;
+  /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
+  --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
+  --radius-box: 0.75rem;        /* 12px cards/modals/sheets; was 14px (re-skin Phase 1), eased 2026-10-23 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -248,6 +287,10 @@
      Direction, not value, is what is pinned. See
      test/platform/design/border_token_direction_test.exs. */
   --edge: #383b42;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* Focus-ring slot, theme-split (task 01a0833d). Dark rings with the
      primary and clears WCAG 2.2 SC 1.4.11 with room to spare: #f47721
      measures 6.1588:1 on base-100 (#191b20), 6.7002:1 on base-200 (#111214)
@@ -266,23 +309,18 @@
   --color-primary-content: oklch(0% 0 0);     /* black text on orange */
   --color-secondary: #a9abb2;
   --color-secondary-content: oklch(0% 0 0);
-  /* Faint, the quietest TEXT tier (task 01a1557a): placeholders, timestamps.
-     The masters' #6f727a failed AA on all three grounds. #8a8d95, the lowest
-     step on the same tint that clears them, painted 4.1987:1 on the thread
-     composer's #252c3d fill (stage 2, measured on screenshot pixels), so
-     faint went up the same tint (+6 per channel) to #90939b, the lowest step
-     that also clears that fill: 5.6053:1 on base-100, 6.0981:1 on base-200,
-     4.8674:1 on base-300 and 4.5360:1 on #252c3d. Muted measures 7.5105:1
-     on base-100, so faint stays visibly dimmer. Computed through
-     Platform.Design.WcagContrast and recomputed against this comment by
-     test/platform/design/burrow_palette_guard_test.exs and
-     faint_adoption_test.exs. Declared --faint, never --color-faint; see the
-     @theme inline block below. */
-  --faint: #90939b;
   /* Subtle, the secondary-text tier (task 01a1557a stage 5 r2); see the light
      block. Painted under every measured browser formula it measures 5.3276:1
      on base-100, 5.4963:1 on base-200 and 4.9321:1 on base-300. */
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);
+  /* Disabled and decorative (task 01a15902 stage 1); see the light block. */
+  --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
+  /* Glass tab bar (task 01a1557a-7a71 stage 1); see the light block. The
+     masters' 0.72 measures 2.7131:1 for the worst tab label painted over pure
+     black or white; 0.87, the measured floor, measures 4.5673:1. */
+  --glass-alpha: 0.87;
+  --glass-blur: 18px;
   /* Status -dim steps (task 01a1557a; values from the project's
      design/burrow-redesign page): FILLS AND BORDERS ONLY, never text. */
   --info-dim: #175660;
@@ -305,13 +343,42 @@
   --color-success-content: oklch(0% 0 0);
   --color-warning: #e5a33d;
   --color-warning-content: oklch(0% 0 0);
-  --color-error: oklch(63% 0.22 25);
-  /* Black, not white: white on this red is 3.8948:1, under AA; black is
-     5.3918:1. Same fix, same reason, as the light block. */
+  /* Retuned by task 01a160c4: a LIGHTER red than the light block's, so
+     error text clears 4.5:1 on the dark grounds. On base-100 4.5983:1, on
+     base-200 5.0026:1 (the old oklch(63% 0.22 25) was 4.4233 / 4.8122). */
+  --color-error: #f53c41;
+  /* Black, not white: black on #f53c41 measures 5.6052:1, white only
+     3.7465:1. */
   --color-error-content: oklch(0% 0 0);
+  /* agent-slots:begin (task 01a1557a rung 3). Agent identity slots, from theme.js agTeal..agLime
+     (ids as Platform.Agents.ColorPalette). --ag-<id> is the rail, ring and pill border;
+     --ag-<id>-text the name and pill text, measured on the painted tint by
+     test/platform/design/agent_slot_tokens_guard_test.exs. */
+  --ag-tint-pct: 8%;
+  --ag-teal: #22d3ee;
+  --ag-teal-text: var(--ag-teal);
+  --ag-green: #6bae75;
+  --ag-green-text: var(--ag-green);
+  --ag-amber: #e5a33d;
+  --ag-amber-text: var(--ag-amber);
+  --ag-orange: #f47721;
+  --ag-orange-text: var(--ag-orange);
+  --ag-blue: #59bbfb;
+  --ag-blue-text: var(--ag-blue);
+  --ag-purple: #c89eff;
+  --ag-purple-text: var(--ag-purple);
+  --ag-brick: #ef806f;
+  --ag-brick-text: var(--ag-brick);
+  --ag-rose: #fc90bc;
+  --ag-rose-text: var(--ag-rose);
+  --ag-indigo: #86a4ff;
+  --ag-indigo-text: var(--ag-indigo);
+  --ag-lime: #9fd959;
+  --ag-lime-text: var(--ag-lime);
+  /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
+  --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
+  --radius-box: 0.75rem;        /* 12px cards/modals/sheets; was 14px (re-skin Phase 1), eased 2026-10-23 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -343,23 +410,103 @@
    breaks. */
 @theme inline {
   --color-edge: var(--edge);
+  /* Rung 13: bg-viewer / text-on-viewer for the in-app viewer. */
+  --color-viewer: var(--viewer);
+  --color-on-viewer: var(--on-viewer);
   /* Same arrangement for the focus ring (task 01a0833d): the theme blocks
      declare --focus-ring, and this mapping is the only thing that mints a
      ring-focus-ring utility for the WCAG 2.2 SC 1.4.11 focus indicator.
      Without it every ring-focus-ring call site falls back to currentColor. */
   --color-focus-ring: var(--focus-ring);
   /* Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
-     The theme blocks declare --faint and the three status -dim steps; these
-     mappings mint text-faint and the bg-/border- utilities for the -dim
-     steps. The -dim steps are fills and borders only, never text. */
-  --color-faint: var(--faint);
+     The theme blocks declare the three status -dim steps; these mappings mint
+     the bg-/border- utilities for them. The -dim steps are fills and borders
+     only, never text. (The faint text tier that also lived here is retired,
+     task 01a15902 stage 2: text has two levels, body and subtle.) */
   /* text-subtle (task 01a1557a stage 5 r2): every theme block, Burrow's and
      each preset's in theme_presets.css, declares --subtle at its own
      strength. */
   --color-subtle: var(--subtle);
+  /* text-disabled and text-decorative (task 01a15902 stage 1): the two
+     WCAG-exempt text colours, declared in every theme block like --subtle.
+     Where each may be used is held by text_exemption_guard_test.exs. */
+  --color-disabled: var(--disabled);
+  --color-decorative: var(--decorative);
   --color-info-dim: var(--info-dim);
   --color-success-dim: var(--success-dim);
   --color-warning-dim: var(--warning-dim);
+}
+
+/* Agent slot tints (task 01a1557a rung 3). ONE declaration per slot, here and
+   not per theme block: each theme block declares only --ag-<id>,
+   --ag-<id>-text and --ag-tint-pct.
+
+   OPAQUE, by design: the masters' form, color-mix(in srgb, var(--ag) 8%,
+   var(--surface)), a mix with base-100 and not a translucent hue over
+   whatever ground a row sits on. So name-on-tint is a contrast between two
+   opaque colours the guard knows, whatever the container ground.
+
+   NO HOVER TINT (design deviation, Saru's ruling for rung 3): the masters
+   deepen the tint to 14% on hover (master-desktop.html .group.agent
+   .m:hover). Painted, --subtle on that 14% tint fell under 4.5:1 in 7 of
+   the 8 non-high-contrast blocks (worst Burrow sand dark, 4.34:1), so an
+   agent row keeps its rest tint on hover and takes whatever hover a human
+   row has.
+
+   WHY THE SELECTOR LISTS EVERY THEME-BEARING ELEMENT. A var() inside a custom
+   property is substituted on the element that DECLARES the property, and the
+   result inherits as a finished colour. Declared on :root alone, a nested
+   [data-preset][data-theme] swatch would inherit the page's tint. Matching
+   every element that carries a theme recomputes the mix from that element's
+   own block. High contrast sets the pct to 0%: the tint is base-100 and
+   the rail stays. Painted under Chrome 147 and 151:
+   test/support/fixtures/painted_mix/, held by
+   test/platform/design/agent_slot_tokens_guard_test.exs. */
+:root,
+[data-theme],
+[data-preset] {
+  --ag-teal-tint: color-mix(in srgb, var(--ag-teal) var(--ag-tint-pct), var(--color-base-100));
+  --ag-green-tint: color-mix(in srgb, var(--ag-green) var(--ag-tint-pct), var(--color-base-100));
+  --ag-amber-tint: color-mix(in srgb, var(--ag-amber) var(--ag-tint-pct), var(--color-base-100));
+  --ag-orange-tint: color-mix(in srgb, var(--ag-orange) var(--ag-tint-pct), var(--color-base-100));
+  --ag-blue-tint: color-mix(in srgb, var(--ag-blue) var(--ag-tint-pct), var(--color-base-100));
+  --ag-purple-tint: color-mix(in srgb, var(--ag-purple) var(--ag-tint-pct), var(--color-base-100));
+  --ag-brick-tint: color-mix(in srgb, var(--ag-brick) var(--ag-tint-pct), var(--color-base-100));
+  --ag-rose-tint: color-mix(in srgb, var(--ag-rose) var(--ag-tint-pct), var(--color-base-100));
+  --ag-indigo-tint: color-mix(in srgb, var(--ag-indigo) var(--ag-tint-pct), var(--color-base-100));
+  --ag-lime-tint: color-mix(in srgb, var(--ag-lime) var(--ag-tint-pct), var(--color-base-100));
+}
+
+/* Every placeholder defaults to the secondary-text tier (task 01a15902
+   stage 2). Tailwind v4 preflight paints ::placeholder at
+   color-mix(in oklab, currentcolor 50%, transparent), so an input with no
+   placeholder class painted base-content at 50%, under 4.5:1 on the light
+   grounds. Placeholder text is text (WCAG 1.4.3 exempts only inactive
+   controls). In @layer base, after preflight in the same layer, so every
+   placeholder: utility still wins. daisyUI's 20% placeholder applies to
+   :disabled controls only, which 1.4.3 exempts; it is left alone.
+   placeholder_contrast_test.exs holds this rule. */
+@layer base {
+  ::placeholder {
+    color: var(--color-subtle);
+  }
+}
+
+/* An inactive daisyUI tab paints the secondary-text tier (task 01a15907
+   stage 4; backlog 01a15ca0; Saru's ruling: subtle, not disabled). daisyUI's
+   own rule paints it base-content at 50%, about 3.85:1 on light grounds,
+   and as vendor CSS neither the class ratchet nor the stylesheet floor sees
+   it. The selector is daisyUI's own resting-tab selector, so hover, checked,
+   tab-active and aria-selected keep daisyUI's full base-content: a state
+   variant goes to body, never to subtle. UNLAYERED on purpose: the built
+   stylesheet emits daisyUI's .tab rules inside @layer utilities (measured
+   in the dev build, task 01a15907 stage 4), so a components-layer rule
+   lost to them; an unlayered rule outranks every layer. Same specificity
+   as daisyUI's. The guard also refuses a per-site text colour class on a
+   .tab, so this rule is the tab colour's one source. Held by
+   test/platform/design/inactive_tab_contrast_test.exs. */
+.tab:not(:checked, label:has(:checked), :hover, .tab-active, [aria-selected="true"]) {
+  color: var(--color-subtle);
 }
 
 /* Add variants based on LiveView classes */
@@ -576,22 +723,24 @@
    buttons after a 100ms delay (avoids spinner flicker on near-instant
    round-trips). The CSS below then dims the button content and renders
    a pseudo-element spinner — no per-button markup changes required.
+   `press-hold` buttons (nav shell and menu triggers, rule 5 below) are
+   excluded: they keep their width and fill and dim only a label.
 
    The universal `prefers-reduced-motion` rule below (~line 172) auto-
    disables the spinner rotation for users who request reduced motion.
    ────────────────────────────────────────────────────── */
 @layer components {
-  .btn[aria-busy="true"] {
+  .btn[aria-busy="true"]:not(.press-hold) {
     cursor: wait;
     pointer-events: none;
     position: relative;
   }
 
-  .btn[aria-busy="true"] > * {
+  .btn[aria-busy="true"]:not(.press-hold) > * {
     opacity: 0.5;
   }
 
-  .btn[aria-busy="true"]::after {
+  .btn[aria-busy="true"]:not(.press-hold)::after {
     content: "";
     position: absolute;
     top: 50%;
@@ -607,8 +756,8 @@
   }
 
   /* Smaller spinner for btn-xs / btn-sm */
-  .btn-xs[aria-busy="true"]::after,
-  .btn-sm[aria-busy="true"]::after {
+  .btn-xs[aria-busy="true"]:not(.press-hold)::after,
+  .btn-sm[aria-busy="true"]:not(.press-hold)::after {
     width: 0.75rem;
     height: 0.75rem;
     margin-top: -0.375rem;
@@ -1000,7 +1149,9 @@ html {
   background: var(--color-base-300);
   border-radius: 0.5rem 0.5rem 0 0;
   font-size: 0.75em;
-  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
+  /* Metadata beside the code it labels: the secondary-text tier (task
+     01a15907 stage 5; was base-content 70% over transparent). */
+  color: var(--color-subtle);
 }
 
 .code-block-header + pre {
@@ -1203,7 +1354,8 @@ body, .font-suite {
 
 /* Dark shadows: light-theme shadows vanish on #191b20 — darker and wider,
    while hairline borders stay the primary depth cue. Same dual-selector
-   pattern as .msg-agent below (explicit data-theme wins over OS preference). */
+   pattern as the chip and focus-ring blocks (explicit data-theme wins over
+   OS preference). */
 [data-theme="dark"] {
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.40);
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
@@ -1227,91 +1379,128 @@ body, .font-suite {
 }
 
 /* ── Agent message differentiation ──────────────────────────────── */
-/* Applied to messages from AI agents in chat.
-   --agent-accent is set per-message via inline style from the agent's stored color.
-   Falls back to the original blue when not set. */
+/* Agent identity slots (task 01a1557a rung 3 stage 2). An agent row
+   carries data-agent-slot="<id>" (Platform.Agents.ColorPalette's ids, from
+   Chat.agent_slot_map_for_participants/1; nil, blank or unknown is "blue").
+   The ten pointer rules below are the ONE place a slot id becomes colour:
+   each points the row-local --ag, --ag-text and --ag-tint at that slot's
+   theme tokens (declared per theme block, measured by
+   test/platform/design/agent_slot_tokens_guard_test.exs). There is no
+   hover pointer: no hover tint exists (see "Agent slot tints" above).
 
-/* --agent-accent clamp (design-system 01-foundations §1.4, re-skin Phase 1):
-   runtime agent colors are clamped to L ∈ [0.35, 0.80] so near-white or
-   near-black accents stay visible as borders, rings, and name text on both
-   themes. Browsers without relative-color syntax get the unclamped
-   passthrough — identical to previous behavior. */
-.msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge {
-  --agent-accent-safe: var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207)));
-}
+   The tokens are already AA-chosen per preset and mode, so nothing here
+   clamps, mixes or translucently layers them: a rule that moved a token off
+   its measured value would void the measurement. */
+[data-agent-slot="teal"] { --ag: var(--ag-teal); --ag-text: var(--ag-teal-text); --ag-tint: var(--ag-teal-tint); }
+[data-agent-slot="green"] { --ag: var(--ag-green); --ag-text: var(--ag-green-text); --ag-tint: var(--ag-green-tint); }
+[data-agent-slot="amber"] { --ag: var(--ag-amber); --ag-text: var(--ag-amber-text); --ag-tint: var(--ag-amber-tint); }
+[data-agent-slot="orange"] { --ag: var(--ag-orange); --ag-text: var(--ag-orange-text); --ag-tint: var(--ag-orange-tint); }
+[data-agent-slot="blue"] { --ag: var(--ag-blue); --ag-text: var(--ag-blue-text); --ag-tint: var(--ag-blue-tint); }
+[data-agent-slot="purple"] { --ag: var(--ag-purple); --ag-text: var(--ag-purple-text); --ag-tint: var(--ag-purple-tint); }
+[data-agent-slot="brick"] { --ag: var(--ag-brick); --ag-text: var(--ag-brick-text); --ag-tint: var(--ag-brick-tint); }
+[data-agent-slot="rose"] { --ag: var(--ag-rose); --ag-text: var(--ag-rose-text); --ag-tint: var(--ag-rose-tint); }
+[data-agent-slot="indigo"] { --ag: var(--ag-indigo); --ag-text: var(--ag-indigo-text); --ag-tint: var(--ag-indigo-tint); }
+[data-agent-slot="lime"] { --ag: var(--ag-lime); --ag-text: var(--ag-lime-text); --ag-tint: var(--ag-lime-tint); }
 
-@supports (color: oklch(from red clamp(0.35, l, 0.8) c h)) {
-  .msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge, .agent-owned {
-    --agent-accent-safe: oklch(from var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207))) clamp(0.35, l, 0.80) c h);
-  }
-}
-
+/* The row: 3px rail at full hue, the slot's opaque tint as its ground.
+   One rule for every theme and mode, because the tokens already differ per
+   block. Hover leaves the tint at rest; see .msg-agent > .message-row-inner
+   below for why the human rows' hover fill is not drawn here. */
 .msg-agent {
-  --agent-accent-fallback: oklch(82% 0.12 207); /* blue default */
-  border-left: 3px solid var(--agent-accent-safe);
-  background: color-mix(in oklch, var(--agent-accent-safe) 6%, transparent);
+  border-left: 3px solid var(--ag);
+  background: var(--ag-tint);
   border-radius: 0 0.5rem 0.5rem 0;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--agent-accent-safe) 8%, transparent);
   margin: 2px 0;
   padding-left: calc(0.75rem + 3px);
 }
 
-.msg-agent:hover {
-  background: color-mix(in oklch, var(--agent-accent-safe) 10%, transparent);
+/* NO ROW-INNER HOVER FILL ON AGENT ROWS (design deviation, Saru's ruling,
+   canvas 01a15b1e-d673 r2). Human rows hover with `hover:bg-base-200/40` on
+   .message-row-inner; over an agent row that composites base-200 at 40%
+   onto the tint under the name, a strength nobody has painted, so its
+   contrast is unknown. Agent rows keep the tint at rest on hover, and keep
+   the human rows' other hover cue: the message actions appearing.
+   Two classes against Tailwind's one hover variant, and unlayered, so this
+   wins in every state. */
+.msg-agent > .message-row-inner,
+.msg-agent > .message-row-inner:hover {
+  background-color: transparent;
 }
 
-/* In dark mode, use neutral stepped surfaces for agent messages to match the
-   comp rather than the older cyan-tinted wash. Keep the accent border as the
-   identity cue, but make the bubble itself part of the surface system. */
-[data-theme="dark"] .msg-agent {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  background: #1c2531;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-  border-left-color: var(--agent-accent-safe);
-}
-
-[data-theme="dark"] .msg-agent:hover {
-  background: #262c3c;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .msg-agent {
-    --agent-accent-fallback: oklch(82% 0.12 207);
-    background: #1c2531;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-    border-left-color: var(--agent-accent-safe);
-  }
-
-  :root:not([data-theme="light"]) .msg-agent:hover {
-    background: #262c3c;
-  }
-}
-
+/* Avatar ring: 2px at full hue. The 10px hue glow is dropped: it was a
+   translucent mix nobody measured, and the ring is the identity cue. */
 .msg-agent-avatar {
-  /* Uses --agent-accent from closest ancestor with the property set */
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  box-shadow: 0 0 0 2px var(--agent-accent-safe),
-              0 0 10px color-mix(in oklch, var(--agent-accent-safe) 20%, transparent);
+  box-shadow: 0 0 0 2px var(--ag);
 }
 
+/* Name: body size, semibold, in the slot TEXT token (Saru: "Name: body
+   size, semibold"). The body is text-sm, so 0.875rem. */
 .msg-agent-name {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  color: var(--agent-accent-safe);
-  font-weight: 700;
-  letter-spacing: 0.03em;
+  color: var(--ag-text);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
 }
 
+/* "AI" pill: the SAME pair as the name, so one measurement covers both
+   (Saru: "Pill: 11-12px medium, uppercase"). Text --ag-text, border --ag,
+   no fill of its own: it sits on the row's tint, the ground the name was
+   measured on. */
 .msg-agent-badge {
-  --agent-accent-fallback: oklch(82% 0.12 207);
-  font-size: 0.625rem;
-  font-weight: 700;
+  font-size: 11px;
+  line-height: 1rem;
+  font-weight: 500;
+  text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 1px 5px;
+  padding: 0 5px;
   border-radius: 9999px;
-  border: 1px solid var(--agent-accent-safe);
-  color: var(--agent-accent-safe);
+  border: 1px solid var(--ag);
+  color: var(--ag-text);
+  background: transparent;
   vertical-align: middle;
   margin-left: 4px;
+}
+
+/* Meeting agent tile (task 01a1557a rung 3 stage 3): the same slot skin as
+   .msg-agent, so the rail reads the same in chat and on the tile edge
+   (Saru's canvas 01a15b1e-d673, "Signature element: the 3px rail").
+   Skin only: nothing here changes geometry.
+
+   Rail: an INSET 3px left shadow in var(--ag), not a border, so the tile's
+   box does not move. It is composed with Tailwind's ring shadow variables,
+   because this unlayered rule beats the `ring-2 ring-primary` utility the
+   tile wears while speaking: the speaking ring stays primary (a status)
+   and draws outside the rail.
+
+   Ground: var(--ag-tint), the same 8% opaque tint the chat row paints
+   (0% in high contrast, i.e. base-100), behind avatar AND voice tiles.
+   The masters use 12% on the tile; 8% is a recorded deviation, so one
+   painted tint per slot covers both surfaces. */
+.meeting-agent-tile[data-agent-slot] {
+  background: var(--ag-tint);
+  box-shadow:
+    inset 3px 0 0 var(--ag),
+    var(--tw-ring-offset-shadow, 0 0 #0000),
+    var(--tw-ring-shadow, 0 0 #0000),
+    var(--tw-shadow, 0 0 #0000);
+}
+
+/* Avatar ring: 2px var(--ag), as .msg-agent-avatar. */
+.meeting-agent-tile[data-agent-slot] .agent-tile-avatar {
+  box-shadow: 0 0 0 2px var(--ag);
+}
+
+/* Name chip band. White 10px text on `bg-black/60` (markup), a SOLID band
+   at a painted strength, replacing the old `from-black/60` gradient. The
+   gradient's pixel behind the glyphs' top row (14px above the tile bottom)
+   painted at 2.2257:1 (Burrow light), 2.5422:1 (sand light) and 1.9621:1
+   (high-contrast light) for white text, on HeadlessChrome 147 at 375 and
+   1280; the solid band is measured on every painted tint by
+   agent_slot_tokens_guard_test.exs ("tile chip"). High contrast needs 7:1
+   for name text, which black at 60% over its white base-100 cannot give
+   (5.74:1), so there the band is opaque black (21:1). */
+[data-preset="high-contrast"] .agent-tile-chip {
+  background-color: #000;
 }
 
 .human-avatar {
@@ -1432,12 +1621,12 @@ body, .font-suite {
 
 @keyframes attention-avatar-glow {
   0%, 100% {
-    box-shadow: 0 0 0 2px var(--agent-accent, oklch(82% 0.12 207)),
-                0 0 8px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);
+    box-shadow: 0 0 0 2px var(--ag, var(--ag-blue)),
+                0 0 8px color-mix(in oklch, var(--ag, var(--ag-blue)) 30%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 3px var(--agent-accent, oklch(82% 0.12 207)),
-                0 0 16px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);
+    box-shadow: 0 0 0 3px var(--ag, var(--ag-blue)),
+                0 0 16px color-mix(in oklch, var(--ag, var(--ag-blue)) 50%, transparent);
   }
 }
 
@@ -1464,74 +1653,35 @@ body, .font-suite {
 
 /* ═══ THREAD & REPLY SYSTEM — exact-match to thread-reply-prototype.html ═══ */
 
-/* ── Left-gutter reply button (desktop) ── */
-.msg-reply-gutter {
-  position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
-  width: 28px; height: 28px; border-radius: 50%; border: none;
-  background: #252c3d; color: var(--color-primary); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: all 0.15s ease; z-index: 10;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.08);
-  font-size: 14px;
-}
-.message:hover .msg-reply-gutter,
-.group:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
-.msg-reply-gutter:hover { background: var(--color-primary); color: var(--color-primary-content); transform: translateY(-50%) scale(1.1); }
-[data-theme="light"] .msg-reply-gutter { box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px #E0E0E0; background: #F5F5F5; }
-
-/* Thread indicator (collapsed state) */
+/* Thread chip (collapsed state; redesign rung 9 stage 3, masters
+   `.thread-ind`): '↩ N replies · time' in subtle text, no fill and no
+   avatar. Pressed dims it; the desktop hover lifts it to base-content. */
 .thread-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
+  margin-top: 4px;
+  padding: 4px 0;
+  border: none;
+  background: none;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--color-primary);
-  transition: background 150ms ease;
-  opacity: 0.85;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-subtle);
+  font-variant-numeric: tabular-nums;
 }
-.thread-indicator:hover {
-  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
-  opacity: 1;
+.thread-indicator:active { opacity: 0.7; }
+@media (hover: hover) and (min-width: 1024px) {
+  .thread-indicator:hover { color: var(--color-base-content); }
 }
-.thread-indicator .ti-count { font-weight: 600; }
-.thread-indicator .ti-time { color: #666; }
 
-/* Thread avatar stack */
-.thread-avatars {
-  display: flex;
-  margin-right: 4px;
-}
-.thread-avatars .t-av {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  font-size: 8px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #161b26;
-  margin-left: -6px;
-}
-.thread-avatars .t-av:first-child { margin-left: 0; }
-.thread-avatars .t-av.ai { background: var(--color-primary); color: var(--color-primary-content); }
-.thread-avatars .t-av.human { background: rgba(255,255,255,0.12); color: #B0B0B0; }
-[data-theme="light"] .thread-avatars .t-av { border-color: #FFFFFF; }
-[data-theme="light"] .thread-avatars .t-av.human { background: #D0D0D0; color: #4A4A4A; }
-
-/* Thread replies container */
+/* Thread replies container: indented under the parent with a hairline. */
 .thread-replies {
   margin-top: 8px;
   padding: 8px 0 8px 16px;
-  border-left: 2px solid rgba(255,255,255,0.07);
+  border-left: 1px solid var(--color-edge);
   margin-left: 6px;
 }
 .thread-replies.collapsed { display: none; }
-[data-theme="light"] .thread-replies { border-left-color: #E0E0E0; }
 
 /* Individual thread reply */
 .thread-reply {
@@ -1577,47 +1727,94 @@ body, .font-suite {
   letter-spacing: 0.04em;
 }
 
-/* Thread inline composer */
+/* Thread inline composer. The reply box is the space composer's chip field
+   (redesign rung 10, stage 4): a contenteditable `.thread-input` inside
+   `.thread-field-box`, with the space composer's chips
+   (`.compose-chip`) and its @mention list. */
 .thread-composer {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   margin-top: 8px;
   padding: 4px 0 0 10px;
 }
 .thread-composer-form {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   width: 100%;
 }
-.thread-input {
+/* The box the @mention list hangs from. */
+.thread-field-box {
+  position: relative;
   flex: 1;
+  min-width: 0;
+}
+.thread-input {
+  display: block;
+  max-height: calc(1.5em * 5 + 18px);
+  overflow-y: auto;
   padding: 8px 14px;
   background: #252c3d;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 20px;
   color: #E5E5E5;
-  font-size: 13px;
+  /* text-base, as the space field: 16px also stops iOS zooming on focus. */
+  font-size: 1rem;
+  line-height: 1.5;
   font-family: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   outline: none;
+  cursor: text;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 .thread-input:focus {
   border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 8%, transparent);
 }
-/* Faint, the quietest text tier (task 01a1557a stage 2). #666 painted
-   2.4329:1 on the #252c3d fill and the light #888 3.5449:1 on #ffffff; both
-   fail AA. --faint resolves per theme, so one rule serves both and the light
-   override is gone. The #252c3d fill is darker-blue than every theme ground
-   and is what set the dark --faint value; faint_adoption_test.exs holds
-   faint at 4.5:1 on it. */
-.thread-input::placeholder { color: var(--faint); }
+/* The thread placeholder paints the secondary-text tier (task 01a15902
+   stage 2; it was the retired faint tier, and #666 / #888 before that, which
+   failed AA). --color-subtle resolves per theme, so one rule serves every
+   preset. The #252c3d / #ffffff fills are not theme grounds, so
+   placeholder_contrast_test.exs measures --subtle on them in all 12
+   variants. The field is a contenteditable, so the placeholder is
+   `:empty::before` (as `.compose-field`'s), painted only while it is empty. */
+.thread-input:empty::before {
+  content: attr(data-placeholder);
+  display: block;
+  color: var(--color-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+/* The @mention list above the reply box: the planned exception to "in
+   flow". This box is inside #message-list, where a list in flow would push
+   it down and grow the scroller, so the list is attached to the box's top
+   edge instead: exactly its width, no gap, over the thread messages above
+   it. The panel keeps the space list's glass, edge and radius, and no
+   shadow. Taking no space,
+   it never changes the scroller's scrollTop or #message-list's padding. */
+.thread-field-box .mention-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 20;
+  display: block;
+  height: auto;
+  margin: 0;
+}
 .thread-send {
-  width: 30px;
+  min-width: 30px;
   height: 30px;
-  border-radius: 50%;
+  padding: 0 12px;
+  margin-bottom: 4px;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
   border: none;
   background: var(--color-primary);
   color: var(--color-primary-content);
@@ -1628,32 +1825,33 @@ body, .font-suite {
   flex-shrink: 0;
   transition: filter 150ms ease;
 }
-.thread-send:hover { filter: brightness(1.1); }
 .thread-send:disabled { opacity: 0.4; cursor: not-allowed; }
+@media (hover: hover) and (min-width: 1024px) {
+  .thread-send:not(:disabled):hover { filter: brightness(1.1); }
+}
 [data-theme="light"] .thread-input {
   background: #FFFFFF;
   border-color: #E0E0E0;
   color: var(--color-base-content);
 }
 
-/* Thread collapse button */
+/* The footer 'collapse' (masters `.thread-ind[data-thread=close]`). */
 .thread-collapse {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   margin-top: 6px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  color: #666;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--color-subtle);
   cursor: pointer;
-  transition: color 150ms ease, background 150ms ease;
+  transition: color 150ms ease;
   background: none;
   border: none;
   font-family: inherit;
 }
-.thread-collapse:hover { color: #B0B0B0; background: rgba(255,255,255,0.02); }
-[data-theme="light"] .thread-collapse:hover { background: rgba(0,0,0,0.02); }
+@media (hover: hover) and (min-width: 1024px) {
+  .thread-collapse:hover { color: var(--color-base-content); }
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    IMAGE UPLOAD PANEL & GALLERY — matches reference-image-upload.html
@@ -1674,9 +1872,19 @@ body, .font-suite {
   --text-primary: #E5E5E5;
   --text-secondary: #B0B0B0;
   --text-muted: #666;
+  /* These four names are ALSO Tailwind v4's radius theme variables, and this
+     block is unlayered, so it re-sizes every `rounded-sm` ... `rounded-3xl`
+     utility in the app, not just the gallery below. Eased 2026-10-23 (sponsor feedback:
+     "back off on the rounded corners ... don't make it so pronounced"):
+     md 10 -> 8px, lg 14 -> 10px, and 2xl / 3xl (Tailwind's 16 / 24px) pinned
+     to 12 / 16px, so the largest card radius matches --radius-box. sm and xl
+     keep their values. `rounded-full` is untouched. */
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
   --radius-pill: 28px;
   --transition: 150ms ease;
   --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--ui-border);
@@ -1700,190 +1908,6 @@ body, .font-suite {
   --text-secondary: #64748B;
   --text-muted: #94A3B8;
   --shadow-elevated: 0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px var(--ui-border);
-}
-
-/* ── Upload Backdrop ───────────────────────────────── */
-.upload-backdrop {
-  position: absolute; inset: 0; z-index: 50;
-  background: rgba(0,0,0,0.5); backdrop-filter: blur(3px);
-  display: flex; align-items: center; justify-content: center;
-  animation: fadeIn 0.15s ease;
-}
-
-/* ── Upload Panel ──────────────────────────────────── */
-.upload-panel {
-  width: 580px; max-width: calc(100% - 40px); max-height: calc(100vh - 120px);
-  background: var(--bg-elevated); border-radius: 16px;
-  box-shadow: var(--shadow-elevated);
-  display: flex; flex-direction: column; overflow: hidden;
-  animation: scaleIn 0.2s ease;
-}
-
-/* Panel Header */
-.upload-header {
-  display: flex; align-items: center; padding: 16px 20px;
-  border-bottom: 1px solid var(--ui-border); gap: 12px;
-}
-.upload-header-icon {
-  width: 36px; height: 36px; border-radius: 10px; background: var(--cyan-dim);
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
-.upload-header-icon svg { width: 20px; height: 20px; color: var(--cyan); }
-.upload-header-text { flex: 1; }
-.upload-title { font-size: 15px; font-weight: 700; color: var(--text-primary); }
-.upload-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
-.upload-close {
-  width: 32px; height: 32px; border-radius: 8px; border: none;
-  background: transparent; color: var(--text-muted); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: var(--transition);
-}
-.upload-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.upload-close svg { width: 18px; height: 18px; }
-
-/* Drop Zone (empty state) */
-.upload-dropzone {
-  margin: 16px 20px; padding: 48px 32px;
-  border: 2px dashed var(--ui-border); border-radius: 12px;
-  display: flex; flex-direction: column; align-items: center; gap: 12px;
-  text-align: center; transition: var(--transition); cursor: pointer;
-}
-.upload-dropzone:hover, .upload-dropzone.dragover {
-  border-color: var(--cyan); background: var(--cyan-dim);
-}
-.upload-dropzone svg { width: 48px; height: 48px; color: var(--text-muted); opacity: 0.5; }
-.upload-dropzone:hover svg, .upload-dropzone.dragover svg { color: var(--cyan); opacity: 0.8; }
-.upload-dropzone-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-.upload-dropzone-sub { font-size: 13px; color: var(--text-secondary); }
-.upload-dropzone-or { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
-.upload-browse-btn {
-  padding: 8px 20px; border-radius: 8px; border: 1px solid var(--cyan);
-  background: transparent; color: var(--cyan); font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: var(--transition); font-family: inherit;
-}
-.upload-browse-btn:hover { background: var(--cyan); color: #000; }
-.upload-dropzone-formats { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-
-/* Image Grid (populated state) */
-.upload-grid-area {
-  display: flex; flex-direction: column; gap: 12px;
-  padding: 16px 20px; flex: 1; overflow-y: auto;
-}
-.upload-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
-}
-.upload-thumb {
-  position: relative; aspect-ratio: 4/3; border-radius: var(--radius-sm);
-  overflow: hidden; border: 1px solid var(--ui-border); cursor: pointer;
-  transition: var(--transition); background: var(--bg-card);
-}
-.upload-thumb:hover { border-color: var(--cyan-muted); }
-.upload-thumb-inner {
-  width: 100%; height: 100%; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 4px;
-  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-surface) 100%);
-  color: var(--text-muted); font-size: 11px;
-}
-.upload-thumb-inner svg { width: 28px; height: 28px; opacity: 0.4; }
-.upload-thumb-inner img { width: 100%; height: 100%; object-fit: cover; }
-.upload-thumb-name {
-  position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 8px;
-  background: linear-gradient(transparent, rgba(0,0,0,0.7));
-  font-size: 10px; color: #FFF; font-weight: 500;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.upload-thumb-remove {
-  position: absolute; top: -4px; right: -4px; width: 20px; height: 20px;
-  border-radius: 50%; background: var(--danger); color: #FFF;
-  border: 2px solid var(--bg-elevated); display: flex; align-items: center;
-  justify-content: center; cursor: pointer; font-size: 11px; font-weight: 700;
-  opacity: 0; transition: var(--transition);
-}
-.upload-thumb:hover .upload-thumb-remove { opacity: 1; }
-
-/* Add More tile */
-.upload-add-tile {
-  aspect-ratio: 4/3; border-radius: var(--radius-sm); border: 1px dashed var(--ui-border);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; cursor: pointer; transition: var(--transition);
-  color: var(--text-muted); font-size: 11px; background: transparent;
-  font-family: inherit;
-}
-.upload-add-tile:hover {
-  border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim);
-}
-.upload-add-tile svg { width: 24px; height: 24px; }
-
-/* Agent Tag Section */
-.upload-agent-section {
-  padding: 12px 20px; border-top: 1px solid var(--ui-border);
-}
-.upload-agent-label {
-  font-size: 11px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 8px;
-}
-.upload-agent-chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.agent-chip {
-  display: flex; align-items: center; gap: 5px; padding: 5px 12px;
-  border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer;
-  transition: var(--transition); border: 1px solid var(--ui-border);
-  background: transparent; font-family: inherit; color: var(--text-secondary);
-}
-.agent-chip:hover { background: var(--bg-hover); }
-.agent-chip.selected { border-color: currentColor; background: transparent; }
-.agent-chip .chip-dot { width: 8px; height: 8px; border-radius: 50%; }
-.agent-chip.beacon { color: var(--agent-beacon); }
-.agent-chip.beacon .chip-dot { background: var(--agent-beacon); }
-.agent-chip.pixel { color: var(--agent-pixel); }
-.agent-chip.pixel .chip-dot { background: var(--agent-pixel); }
-.agent-chip.builder { color: var(--agent-builder); }
-.agent-chip.builder .chip-dot { background: var(--agent-builder); }
-.agent-chip.higgins { color: var(--agent-higgins); }
-.agent-chip.higgins .chip-dot { background: var(--agent-higgins); }
-.agent-chip.selected.beacon { background: rgba(6,182,212,0.1); }
-.agent-chip.selected.pixel { background: rgba(248,158,11,0.1); }
-.agent-chip.selected.builder { background: rgba(168,85,247,0.1); }
-.agent-chip.selected.higgins { background: rgba(16,185,129,0.1); }
-
-/* Comment Box */
-.upload-comment {
-  padding: 0 20px 12px;
-}
-.upload-comment-input {
-  width: 100%; padding: 10px 14px; background: var(--bg-surface);
-  border: 1px solid var(--ui-border); border-radius: var(--radius-md);
-  color: var(--text-primary); font-size: 13px; font-family: inherit;
-  outline: none; resize: vertical; min-height: 64px; max-height: 120px;
-  transition: var(--transition);
-}
-.upload-comment-input:focus { border-color: var(--cyan-muted); }
-.upload-comment-input::placeholder { color: var(--text-muted); }
-
-/* Panel Footer */
-.upload-footer {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 20px; border-top: 1px solid var(--ui-border); gap: 12px;
-}
-.upload-count { font-size: 12px; color: var(--text-muted); }
-.upload-count strong { color: var(--text-secondary); }
-.upload-footer-actions { display: flex; gap: 8px; }
-.upload-btn-cancel {
-  padding: 8px 18px; border-radius: 8px; border: 1px solid var(--ui-border);
-  background: transparent; color: var(--text-secondary); font-size: 13px;
-  font-weight: 500; cursor: pointer; transition: var(--transition); font-family: inherit;
-}
-.upload-btn-cancel:hover { background: var(--bg-hover); color: var(--text-primary); }
-.upload-btn-send {
-  padding: 8px 24px; border-radius: 8px; border: none;
-  background: var(--cyan); color: #000; font-size: 13px;
-  font-weight: 700; cursor: pointer; transition: var(--transition); font-family: inherit;
-  display: flex; align-items: center; gap: 6px;
-}
-.upload-btn-send:hover { filter: brightness(1.1); }
-.upload-btn-send svg { width: 16px; height: 16px; }
-.upload-btn-send:disabled {
-  opacity: 0.4; cursor: not-allowed; filter: none;
 }
 
 /* ── Image Gallery (posted in chat) ────────────────── */
@@ -1941,47 +1965,6 @@ body, .font-suite {
 .image-agent-tag.builder { background: rgba(168,85,247,0.25); color: #A855F7; border: 1px solid rgba(168,85,247,0.3); }
 .image-agent-tag.higgins { background: rgba(16,185,129,0.25); color: #10B981; border: 1px solid rgba(16,185,129,0.3); }
 .image-agent-tag .tag-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-
-/* ── Paste Toast ───────────────────────────────────── */
-.paste-toast {
-  position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
-  background: var(--bg-card); border: 1px solid var(--cyan); border-radius: var(--radius-md);
-  padding: 10px 18px; display: none; align-items: center; gap: 10px;
-  box-shadow: 0 4px 20px rgba(0,191,255,0.15); z-index: 100;
-  animation: slideUp 0.25s ease;
-}
-.paste-toast.visible { display: flex; }
-.paste-toast svg { width: 18px; height: 18px; color: var(--cyan); flex-shrink: 0; }
-.paste-toast-text { font-size: 13px; color: var(--text-primary); }
-.paste-toast-text strong { color: var(--cyan); }
-
-/* ── Drag overlay (full chat area) ─────────────────── */
-.drag-hint {
-  position: absolute; inset: 0; z-index: 60;
-  display: none; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
-}
-.drag-hint.visible { display: flex; }
-.drag-hint-box {
-  padding: 48px 56px; border: 2px dashed var(--cyan); border-radius: 16px;
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  background: rgba(0,191,255,0.04); animation: pulse-border 2s ease infinite;
-}
-.drag-hint-box svg { width: 48px; height: 48px; color: var(--cyan); opacity: 0.7; }
-.drag-hint-title { font-size: 17px; font-weight: 600; color: var(--text-primary); }
-.drag-hint-sub { font-size: 13px; color: var(--text-secondary); }
-
-/* ── Upload / Gallery Animations ──────────────────── */
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-@keyframes slideUp {
-  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-@keyframes pulse-border {
-  0%, 100% { border-color: var(--cyan); }
-  50% { border-color: var(--cyan-muted); }
-}
 
 /* Chat message "you've been scrolled to" pulse (task 019e0f29 Stage 6).
    Briefly highlights a message row when the user clicks the
@@ -2045,14 +2028,16 @@ body, .font-suite {
   animation: chat-message-jump-tint 2s ease-out forwards;
 }
 .chat-message-jump:focus { outline: none; }
-/* Focus lands on the ROW after a jump, and the hover action row reveals on
-   `group-focus-within`, which matches the focused row itself. Left alone the
-   strip floats over the author's name on arrival (measured at 375px). Keep
-   it hidden while the row itself holds focus; Tab into the row still
-   reveals it, because focus is then on a descendant, not the row. */
-[data-message-id]:focus:not(:hover) > .message-row-inner .message-action-row {
-  opacity: 0;
-  pointer-events: none;
+/* Focus lands on the ROW after a jump, and on desktop the message pill
+   reveals on focus-within, which matches the focused row itself. Left alone
+   the pill would float over the row on arrival. Keep it hidden while the row
+   itself holds a POINTER-caused focus. A keyboard focus on the row matches
+   `:focus-visible` and keeps the pill, which is what lets Tab go on into
+   it. */
+[data-message-id]:focus:not(:focus-visible):not(:hover):not([data-pill-open])
+  > .message-row-inner
+  > .message-pill {
+  display: none;
 }
 .chat-message-jump:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -2064,35 +2049,20 @@ body, .font-suite {
   .chat-message-jump::after { animation: none; opacity: 0.1; }
 }
 
-/* Secondary labels in the Context panel ("From the agent", "Replying to",
-   the source line): the design direction names `neutral` at text-xs. Light
-   uses the token raw. Dark gets the same correction the reaction picker
-   measured for this token on base-100 (1.86:1 raw), by mixing the foreground
-   into neutral rather than moving the token. */
-.message-context-label { color: var(--color-neutral); }
-[data-theme="dark"] .message-context-label {
-  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .message-context-label {
-    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+/* The agent's name in the 'Answering' panel's lead line ("<agent> was
+   answering:", redesign rung 9 stage 2): the agent's accent text token,
+   resolved by the `data-agent-slot` on the span (rung 3's pointer rules
+   above). Its secondary labels moved to `text-subtle` utilities, so the old
+   `.message-context-label` rule went with them. */
+.message-context-agent-name { color: var(--ag-text); }
 
 /* Canvas picker meta line ("#space · edited Oct 13", task 01a1559a stage 3).
-   The design direction names `neutral` at text-xs and requires 4.5:1. Light
-   uses the token raw (7.18:1 on base-100 per the `.reaction-picker` measurement
-   in this file); dark takes the same 50% base-content mix as `.message-context-label`,
-   because raw neutral is 1.86:1 on the dark panel. */
-.canvas-picker-meta { color: var(--color-neutral); }
-[data-theme="dark"] .canvas-picker-meta {
-  color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .canvas-picker-meta {
-    color: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+   Secondary text, so it paints the secondary-text token (task 01a15902
+   stage 1): --color-subtle resolves to each theme block's own --subtle, which
+   the theme guards hold at 4.5:1 on all three grounds in every preset. It
+   was `neutral` raw in light and a 50% base-content/neutral mix in dark,
+   a private colour-mix no secondary-text count could see. */
+.canvas-picker-meta { color: var(--color-subtle); }
 
 /* ── Jump-to-latest chip (task 01a03c76 stage 3) ──────────────────
    The way back to the tip of a conversation for a reader who scrolled up
@@ -2650,7 +2620,10 @@ body, .font-suite {
   container-type: inline-size;
   background: oklch(0.21 0 0);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 26px;
+  /* --radius-box (12px), not the 26px pill it was: a 26px curve on a pill
+     that grows (staged tray, typed lines) cut into the tray's top-left tile
+     (sponsor feedback, 2026-10-23). */
+  border-radius: var(--radius-box);
   padding: 8px 8px 8px 18px;
   /* Cinema Mobile easing — same curve used across the chat surface for state transitions */
   transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -2749,9 +2722,10 @@ body, .font-suite {
 /* The composer placeholder (task 01a1557a stage 2), the design direction's
    signature element: a quiet invitation that still reads as live text, not
    a disabled control. Without this rule it painted Tailwind preflight's 50%
-   currentColor. --faint resolves per theme. */
+   currentColor. It paints the secondary-text tier, --color-subtle, which
+   resolves per theme (task 01a15902 stage 2; it was the retired faint tier). */
 .compose-pill-bar textarea::placeholder {
-  color: var(--faint);
+  color: var(--color-subtle);
 }
 
 /* iOS Safari auto-zooms any input with font-size < 16px on focus, and
@@ -2914,15 +2888,19 @@ body, .font-suite {
   height: 36px;
   min-height: 36px;
   border-radius: 50% !important;
-  background: oklch(0.75 0.15 207) !important;
-  color: oklch(0.15 0 0) !important;
+  background: var(--color-primary) !important;
+  color: var(--color-primary-content) !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
   flex-shrink: 0;
   padding: 0 !important;
   border: none !important;
-  box-shadow: 0 0 16px oklch(0.75 0.15 207 / 0.18);
+  box-shadow: none;
+  /* No double-tap-zoom wait on the most-pressed button, and no grey iOS
+     tap flash over the press state below. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
               opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -2931,7 +2909,6 @@ body, .font-suite {
 
 .compose-pill-send:hover:not(:disabled) {
   transform: scale(1.05);
-  box-shadow: 0 0 18px oklch(0.75 0.15 207 / 0.4);
 }
 
 /* Active press feedback per ui-ux-pro-max scale-feedback rule (≤100ms tap response) */
@@ -2940,28 +2917,700 @@ body, .font-suite {
 }
 
 /* Empty composer or no-participant: button is non-actionable.
-   Background fades to neutral surface, glow drops, cursor reflects state.
-   This is the visible counterpart to the disabled attr in chat_live.html.heex
-   (folds in old "[DELETE] Send button doesn't reflect empty-composer state"
-   bug — composer_empty?/1 in chat_live.ex drives the disabled attr). */
+   Redesign rung 10 (direction canvas 01a16233, node pal "Primary"): at rest
+   Send is a subtle icon on the composer's own ground, and it is disabled for
+   real (the `disabled` attribute, which ComposeInput also toggles on every
+   edit). No fill, no fade: the icon paints --color-subtle at full opacity,
+   the placeholder's ink, so the placeholder's under-glass floor covers it.
+   Lit (above) is the primary fill.
+   composer_empty?/1 drives the server side of the disabled attr. */
 .compose-pill-send:disabled {
-  background: oklch(0.30 0 0) !important;
-  color: oklch(0.55 0 0) !important;
+  background: transparent !important;
+  color: var(--color-subtle) !important;
   box-shadow: none;
-  cursor: not-allowed;
-  opacity: 0.7;
+  cursor: default;
+  opacity: 1;
   transform: none;
 }
 
-[data-theme="light"] .compose-pill-send:disabled {
-  background: oklch(0.90 0 0) !important;
-  color: oklch(0.55 0 0) !important;
+/* ── Send feel "4g: Ring + flash" (2026-10-23) ─────────────────────────
+   lib/send_feel.js sets the two states on <html>, not on the button (a
+   LiveView patch would strip a class on a server-rendered button mid
+   animation): `data-send-down` while a pointer is down on Send,
+   `data-send-go` for 470ms after an actual send. Ported from the approved
+   prototype, with tokens for its literals: accent -> --color-primary, its
+   white icon -> --color-primary-content. The two flash colours (#fff3e8 and
+   #ffd0a8 over #f07f33) are --color-primary mixed 90% and 62% with white,
+   so they follow every preset.
+
+   The flash runs through two registered percentages rather than animating
+   background/color directly: those are `!important` on Send (the lit and
+   disabled rules above) and an !important declaration beats an animation.
+   While `data-send-go` is on, Send stays lit even though the send has
+   just emptied the field and disabled it; that is the point of the flash. */
+@property --send-flash {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+
+@property --send-ink {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+
+.compose-pill-send {
+  position: relative;
+  transition-property: transform, filter, box-shadow, opacity, background;
+  transition-duration: 70ms, 70ms, 200ms, 200ms, 200ms;
+}
+
+/* Press: respond on pointerdown, not click. */
+:root[data-send-down] .compose-pill-send:not(:disabled) {
+  transform: scale(0.9);
+  filter: brightness(0.8);
+}
+
+:root[data-send-go] .compose-pill-send {
+  --send-fill: color-mix(in oklab, var(--color-primary), #fff var(--send-flash));
+  background: var(--send-fill) !important;
+  color: color-mix(
+    in oklab,
+    var(--color-primary-content),
+    var(--color-primary) var(--send-ink)
+  ) !important;
+  animation: send-go 0.32s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+@keyframes send-go {
+  0% {
+    transform: scale(0.9);
+    --send-flash: 90%;
+    --send-ink: 100%;
+  }
+  25% {
+    --send-flash: 62%;
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 22px 6px color-mix(in oklab, var(--color-primary) 50%, transparent);
+  }
+  100% {
+    transform: none;
+    box-shadow: none;
+    --send-flash: 0%;
+    --send-ink: 0%;
+  }
+}
+
+@keyframes send-glow {
+  50% {
+    box-shadow: 0 0 22px 6px color-mix(in oklab, var(--color-primary) 50%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+/* The ring: Send's own <span class="send-ring">. Nothing between Send and
+   the chat pane clips it (the pill and the dock set no overflow). */
+.compose-pill-send .send-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid var(--color-primary);
+  opacity: 0;
+  pointer-events: none;
+}
+
+:root[data-send-go] .compose-pill-send .send-ring {
+  animation: send-ring 0.45s ease-out;
+}
+
+@keyframes send-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.3);
+    opacity: 0;
+  }
+}
+
+/* Reduced motion keeps the press and skips the flash and the ring. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-send-go] .compose-pill-send,
+  :root[data-send-go] .compose-pill-send::before,
+  :root[data-send-go] .compose-input-area .compose-pill-send::before,
+  :root[data-send-go] .compose-pill-send .send-ring {
+    animation: none;
+  }
+}
+
+/* ── The rich field, its chips and the @ button (redesign rung 10) ────
+   #compose_text is a contenteditable (see Partials.Composer.composer/1).
+   Body text is text-base (16px, which also stops iOS zooming on focus);
+   the field grows to 5 lines, then scrolls inside. The textarea rules above
+   stay for the composers that are still textareas. */
+.compose-field {
+  flex: 1;
+  min-width: 7.5rem;
+  max-height: calc(1.5em * 5 + 8px);
+  overflow-y: auto;
+  padding: 4px 0;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline: none;
+  cursor: text;
+}
+
+/* The placeholder, painted only while the field is empty. Same ink as the
+   textarea's ::placeholder (--color-subtle), one line, truncating. */
+.compose-field:empty::before {
+  content: attr(data-placeholder);
+  display: block;
+  color: var(--color-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* A picked name: base-300 fill, base-content medium text. Inline, so it
+   wraps with the text around it and never truncates; a long name breaks
+   across lines with its fill on each fragment. */
+.compose-chip {
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--color-base-300);
+  color: var(--color-base-content);
+  font-weight: 500;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* The @ button. Its whole square is tappable (hit testing follows
+   border-radius, so the ::after square covers the corners), and on touch it
+   is 44px with the same -1px block margin as attach and Send below lg, so it
+   overlaps the pill's border instead of growing the 44px pill. */
+.compose-mention-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-subtle);
+  font-size: 1rem;
+  font-weight: 600;
+  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.compose-mention-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.compose-mention-button:active {
+  background: var(--color-base-300);
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .compose-mention-button:hover {
+    background: color-mix(in oklab, var(--color-base-300) 50%, transparent);
+  }
+}
+
+@media (hover: none) {
+  .compose-mention-button {
+    width: 44px;
+    height: 44px;
+    margin-block: -1px;
+  }
+}
+
+/* ── The in-flow @mention list (redesign rung 10, stage 3) ─────────────
+   Partials.MentionList, rendered inside #compose-form directly above the
+   pill. Direction canvas 01a16233 (nodes lay, pal, rules) for the tokens,
+   prototype 01a137f2 `.mention-strip` for the row anatomy.
+
+   Surface: the composer's own glass (the phone pill's base-200 recipe), its
+   edge, NO shadow; same width as the pill and no gap to it (the -8px cancels
+   the form's gap-2). The highlighted row (the one Enter or Tab picks, moved
+   by the arrow keys, pressed by a finger) is base-100. Names are
+   base-content and never tinted; the kind pill and the notes are --subtle.
+
+   Clearance. Below lg the dock is an absolute overlay and the list grows it
+   upward over the conversation; hooks/chat_dock.js subtracts the list's
+   height, so --chat-dock-h (and --phone-chrome-bottom) follow the field
+   only. At lg the dock is `display: contents`, so the list would shrink the
+   conversation's viewport and ScrollToBottom would re-pin it: there the
+   list's in-flow box is 0 tall and the panel overflows upward from it, over
+   the conversation, and the viewport and scrollTop are untouched. */
+.mention-list {
+  margin-bottom: -8px;
+}
+
+.mention-list-panel {
+  overflow: hidden;
+  border: 1px solid var(--color-edge);
+  border-radius: 16px;
+  background: color-mix(
+    in srgb,
+    var(--color-base-200) calc(var(--glass-alpha) * 100%),
+    transparent
+  );
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+}
+
+.mention-list-box {
+  max-height: 212px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 4px 0;
+}
+
+/* min-height, not height: a row with a note (`.mention-list-note`, the
+   second line) grows to fit it, 6px above and below; a row without one is
+   50px (40px at lg). */
+.mention-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 50px;
+  padding: 6px 16px;
+  color: var(--color-base-content);
+  font-size: 1rem;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mention-list-row[aria-selected="true"] {
+  background: var(--color-base-100);
+}
+
+/* The text column: the name line (name + kind pill), then the note on a
+   line of its own. It takes the row's remaining width, so only a name too
+   long for that width ellipsizes, and the note wraps instead. */
+.mention-list-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.mention-list-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mention-list-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--color-base-content);
+}
+
+.mention-list-kind {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--color-edge);
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-subtle);
+}
+
+/* The second line. It wraps and never ellipsizes: what picking the row
+   does must read whole, down to the phone thread list's ~220px. */
+.mention-list-note {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-subtle);
+}
+
+.mention-list-broadcast {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: var(--color-base-300);
+  color: var(--color-base-content);
+}
+
+.mention-list-empty {
+  display: flex;
+  align-items: center;
+  height: 50px;
+  padding: 0 16px;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-subtle);
+}
+
+@media (min-width: 1024px) {
+  .mention-list {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 0;
+  }
+
+  /* The panel keeps its own height and overflows upward out of the
+     0-tall box (flex-end), over the conversation. */
+  .mention-list-panel {
+    flex-shrink: 0;
+  }
+
+  .mention-list-box {
+    max-height: 200px;
+  }
+
+  .mention-list-row {
+    gap: 10px;
+    min-height: 40px;
+    padding: 4px 12px;
+  }
+
+  .mention-list-line {
+    gap: 10px;
+  }
+
+  .mention-list-empty {
+    height: 40px;
+    padding: 0 12px;
+  }
+}
+
+/* Desktop hover highlights the row the pointer is on, in the same paint as
+   the keyboard highlight; the hook also moves its highlight there, so the
+   keys continue from the hovered row. */
+@media (hover: hover) and (min-width: 1024px) {
+  .mention-list-row:hover {
+    background: var(--color-base-100);
+  }
+}
+
+/* Opaque fallback, as the pill's: no translucency, no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .mention-list-panel {
+    background: var(--color-base-200);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@container (max-width: 260px) {
+  .compose-field {
+    flex-basis: 100%;
+    order: -1;
+  }
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .compose-pill-bar {
     background: oklch(0.21 0 0);
     border-color: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* Phone composer (task 01a15f2e stage 2; Saru's canvas 01a15f2f, nodes meas
+   r3/r4, type and pal). Below lg ONLY: every desktop composer rule above is
+   untouched, and phone_composer_css_guard_test.exs snapshots them.
+
+   Geometry. The pill is 44px border-box at rest and grows only with typed
+   lines (the textarea's 200px cap is markup, rung 10's). Attach and send
+   keep 44x44 boxes; a -1px block margin lets those boxes overlap the pill's
+   1px border instead of adding 2px to its height (42px content + 2px border
+   = 44). Send's painted disc is its whole 44px box, as on desktop touch.
+   A smaller painted circle inside a 44px box (the `.chat-jump-chip` shape)
+   was built and dropped: it needs background-clip, which
+   chip_soft_contrast_test.exs refuses file-wide, or shrinking the send box
+   under the (hover: none) 44px rule, which stays. A 44px square ::after on
+   each button makes the whole square tappable, corners included, which the
+   round border box alone would not (hit testing follows border-radius).
+   The sides sit 12px in, aligned with the tab bar's left/right: 12px.
+
+   Glass. The tab bar's own declarations, so stage 4's painted fixtures cover
+   both surfaces. The background is unconditional and reaches (0,3,0) with
+   :root, later in source than the theme backgrounds ((0,2,0) light, (0,3,0)
+   dark and its prefers-color-scheme copy), so it wins without a data-theme
+   selector. The border sits behind :not(:focus-within), so it never
+   competes with the :focus-within ring rules (up to (0,4,0)): when focused
+   the ring's border colour and 2px band apply exactly as on desktop.
+
+   Send: no resting glow below lg. Its colour is rung 10's and unchanged.
+
+   Placeholder: one line with an ellipsis while empty; the channel name is
+   what truncates. */
+@media (max-width: 1023.98px) {
+  .compose-input-area {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  :root .compose-input-area .compose-pill-bar {
+    min-height: 44px;
+    padding: 0;
+    background: color-mix(
+      in srgb,
+      var(--color-base-200) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  }
+
+  .compose-input-area .compose-pill-bar:not(:focus-within) {
+    border: 1px solid var(--color-base-300);
+  }
+
+  .compose-input-area .compose-pill-attach,
+  .compose-input-area .compose-pill-send {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    margin-block: -1px;
+  }
+
+  .compose-input-area .compose-pill-attach::after,
+  .compose-input-area .compose-pill-send::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+
+  /* No resting glow. (0,2,0), so the shared :hover rule (rung 10's) is left
+     as it is. */
+  .compose-input-area .compose-pill-send {
+    box-shadow: none;
+  }
+
+  /* Send sits wholly INSIDE the pill (sponsor feedback, 2026-10-23: it straddled the
+     right edge, its disc painted over the focus border). The 44px box keeps
+     its -1px block margin and full-box ::after, so the tap target is
+     unchanged; only the PAINT shrinks. The disc is a 34px ::before centred
+     in the box: 4px clear of the inner border top and bottom and 5px from
+     the right, mirroring ＋ (same 44px box against the left inner edge).
+     The box itself paints nothing, so no fill can cross the border. This is
+     the third route to "a smaller painted circle inside a 44px box" the
+     note above weighs: neither background-clip nor a smaller box. */
+  .compose-input-area .compose-pill-send {
+    background: transparent !important;
+    isolation: isolate;
+  }
+
+  .compose-input-area .compose-pill-send::before {
+    content: "";
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    z-index: -1;
+  }
+
+  .compose-input-area .compose-pill-send:disabled::before {
+    background: transparent;
+  }
+
+  /* Send feel (above): on the phone the disc is ::before, so the flash
+     paints there and the 44px box stays clear; the ring starts at the
+     disc's edge. */
+  /* The glow goes on the disc too: on the 44px box it left a dark band
+     between the disc and the halo. `!important` because the box's own
+     send-go animation would otherwise paint it. */
+  :root[data-send-go] .compose-input-area .compose-pill-send {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  :root[data-send-go] .compose-input-area .compose-pill-send::before {
+    background: var(--send-fill);
+    animation: send-glow 0.32s cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+
+  .compose-input-area .compose-pill-send .send-ring {
+    inset: 5px;
+  }
+
+  /* On a grown pill (typed lines, staged tray) the controls sit on the
+     bottom line, by the caret, rather than floating mid-height. On one line
+     the 44px boxes ARE the line, so this changes nothing there. */
+  .compose-input-area .compose-pill-attach,
+  .compose-input-area .compose-mention-button,
+  .compose-input-area .compose-pill-send {
+    align-self: flex-end;
+  }
+
+  /* The staged tray inset. The phone pill has no padding, so the tray's
+     first tile sat in the pill's corner and the curve cut into it. 4px in
+     from the inner border (the tray list's own pt-1 is the top 4px), so a
+     tile's 8px radius is the pill's 12px minus that inset: concentric. */
+  .compose-input-area [data-role="staged-area"] {
+    padding-inline: 4px;
+  }
+
+  .compose-input-area .compose-pill-bar textarea:placeholder-shown,
+  .compose-input-area .compose-pill-bar textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Opaque fallback, as the tab bar's: no translucency, no blur. */
+  @media (prefers-reduced-transparency: reduce) {
+    :root .compose-input-area .compose-pill-bar {
+      --glass-alpha: 1;
+      --glass-blur: 0px;
+      background: var(--color-base-200);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
+/* The chat dock (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
+   "the conversation fills the whole screen"). #chat-dock wraps the four
+   contiguous siblings below the timeline: streaming replies, the
+   jump-to-latest anchor, the typing indicator and the composer.
+
+   At EVERY width the wrapper is `display: contents`, so it generates no box
+   and its four children stay flex items of #chat-drop-zone exactly as they
+   were: desktop (lg and up) and embedded chat (meetings) lay out as before.
+
+   Below lg, on a routed (non-embedded) mount, `.chat-dock--glass` turns it
+   into an absolute overlay at the bottom of #chat-drop-zone. The timeline
+   (#chat-message-scroller, flex-1) then runs to the bottom of the screen,
+   under the glass composer and the glass tab bar, and pads its END by
+   --phone-chrome-bottom: the dock's measured height (--chat-dock-h, written
+   on <html> by hooks/chat_dock.js) plus 8px, so the newest message ends 8px
+   above the dock. The fallback covers the first paint before the hook
+   mounts: 8 gap + 44 pill + 8 over the bar's clearance.
+
+   The dock is pointer-events: none and only its children take taps, so a tap
+   in the 8px between the pill and the bar lands on the message beneath.
+   z-index 20: above the timeline, below the tab bar (30), the upload dialog
+   (50), and every sheet and modal (100 and up). */
+.chat-dock {
+  display: contents;
+}
+
+@media (max-width: 1023.98px) {
+  #chat-drop-zone:has(> .chat-dock--glass) {
+    position: relative;
+    /* + --keyboard-inset: set only while the soft keyboard is up (see
+       the data-keyboard-open rule below), 0 otherwise. */
+    --phone-chrome-bottom: calc(
+      var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) +
+        var(--keyboard-inset, 0px) + 8px
+    );
+  }
+
+  .chat-dock.chat-dock--glass {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    padding-bottom: calc(8px + var(--bottom-nav-clearance));
+    pointer-events: none;
+  }
+
+  .chat-dock--glass > * {
+    pointer-events: auto;
+  }
+
+  /* Soft keyboard up (2026-10-23; ChatDock's watchKeyboard, see
+     js/lib/keyboard_inset.js). The keyboard covers the tab bar's slot AND the
+     home-indicator inset, so the dock keeps only the 8px gap: the report measured
+     about 85px of dead ground between the pill and the iOS keyboard, which
+     is the bar's clearance at inset 34. `bottom` lifts the dock by whatever
+     part of the layout viewport the keyboard still hides after the browser's
+     own pan (0 when iOS pans all the way); the chat zone's
+     --phone-chrome-bottom above adds the same inset, so the last message
+     still ends 8px above the pill. */
+  :root[data-keyboard-open] .chat-dock.chat-dock--glass {
+    bottom: var(--keyboard-inset, 0px);
+    padding-bottom: 8px;
+  }
+
+  /* The gap comes from the dock. Embedded composers keep the
+     `8px + clearance` rule further down. Its 12px top padding goes too, so
+     the dock is the pill plus the gap (planner geometry: 137 at inset 34). */
+  .chat-dock--glass .compose-input-area {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  /* The typing row paints the tab bar's glass, so its text never sits
+     straight on message text. (The streaming reply rows keep their own
+     opaque `.msg-agent` tint and 3px rail: a `border` shorthand here would
+     erase the rail, and the tint already keeps message text out from
+     behind them.) */
+  .chat-dock--glass > [data-role="typing-indicator"] {
+    background: color-mix(
+      in srgb,
+      var(--color-base-200) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+    border: 1px solid var(--color-base-300);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .chat-dock--glass > [data-role="typing-indicator"] {
+      --glass-alpha: 1;
+      --glass-blur: 0px;
+      background: var(--color-base-200);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* High contrast owes 7:1 for text, and its --subtle misses that on
+     base-200 (see the tab bar's --tab-ink override), so the typing row's
+     text is full base-content there, as the bar's tab ink is. */
+  [data-preset="high-contrast"] .chat-dock--glass > [data-role="typing-indicator"] {
+    color: var(--color-base-content);
+  }
+
+  /* Timeline end padding. Unlayered, so it beats `py-4` on #message-list. */
+  #chat-drop-zone:has(> .chat-dock--glass) #message-list {
+    padding-bottom: var(--phone-chrome-bottom);
   }
 }
 
@@ -3147,21 +3796,6 @@ body, .font-suite {
   transition: transform 0.1s ease;
 }
 
-/* ── V3 long-press menu (mobile) ─────────────────────────────────────────── */
-
-/* Lifted clone of the target message bubble. Positioned at the original
-   message's rect at mount, animates to the viewport center via CSS
-   transition when the .lifted class is added. See
-   assets/js/hooks/message_lift.js. */
-.message-lift {
-  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
-  will-change: transform;
-}
-
-.message-lift.lifted {
-  transform: translate(var(--lift-dx, 0), var(--lift-dy, 0)) scale(1.02);
-}
-
 /* ── Reaction picker — bottom sheet on mobile, centered modal on desktop ── */
 
 /* Container is always an inset-0 fixed overlay; positioning of the
@@ -3219,32 +3853,18 @@ body, .font-suite {
      inside this component only — no app-level token moves — by mixing the
      foreground into neutral. See the dark block below for the resulting
      numbers. */
-  --reaction-picker-label: var(--color-neutral);
+  --reaction-picker-label: var(--color-subtle);
 
   display: none;
 }
 
 .reaction-picker[data-open="true"] { display: flex; }
 
-/* The dark correction. 50% base-content into neutral gives #9a9596, which is
-   5.85:1 on the panel and 5.30:1 on the tinted sticky header — both clear of
-   the 4.5:1 small-text floor with headroom, and still visibly quieter than
-   --color-base-content, which would be ~14:1 and would stop reading as
-   structural. Light is untouched: it already passes at 7.48:1, and mixing a
-   black foreground into it there would make the labels heavier than designed.
-
-   Three-state theming, matching the pattern this file already uses at the
-   `.msg-agent` and `.chip-soft` blocks: an explicit `data-theme="dark"` wins
-   outright, and the unset default follows `prefers-color-scheme`. */
-[data-theme="dark"] .reaction-picker {
-  --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .reaction-picker {
-    --reaction-picker-label: color-mix(in oklab, var(--color-base-content) 50%, var(--color-neutral));
-  }
-}
+/* The labels paint the secondary-text tier in both themes (task 01a15907
+   stage 5). The dark correction that lived here mixed base-content 50% into
+   neutral, an opaque third grey; --color-subtle resolves per theme block
+   (dark included) and is guarded at 4.5:1 on every ground, so one
+   declaration serves both themes. */
 
 /* Mobile: bottom-sheet. The panel slides up from the bottom of the
    viewport with iOS-style rounded top corners and honors the bottom
@@ -3384,8 +4004,7 @@ body, .font-suite {
 
 /* `overscroll-behavior: contain` stops the chat behind an open sheet from
    scrolling on iOS once this area hits its end. The body scroll lock in the
-   hook covers the rest of the surface: message_lift.js's lock is already gone
-   by the time the picker opens, because the longpress menu closes first. */
+   hook covers the rest of the surface. */
 .reaction-picker-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -3776,16 +4395,21 @@ body, .font-suite {
 .reaction-pill { transition: transform 120ms ease, background-color 120ms ease; }
 .reaction-pill:active { transform: scale(0.94); }
 
-@media (hover: none) and (pointer: coarse) {
-  .reaction-pill {
-    padding: 0.25rem 0.625rem;
-    font-size: 0.8125rem;
-    min-height: 32px;
+/* Redesign rung 9 stage 3: the pill is 28px tall everywhere; below lg a
+   transparent pseudo-element grows its hit area to 44px tall, and the row's
+   4px gap keeps neighbours apart. The hover fill is desktop only. */
+@media (width < 64rem) {
+  .reaction-pill::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    bottom: -8px;
+    left: -2px;
+    right: -2px;
   }
-  .reaction-add-btn {
-    min-height: 32px;
-    padding: 0.25rem 0.625rem;
-  }
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .reaction-pill:not([data-mine]):hover { background-color: var(--color-base-300); }
 }
 
 /* THE HOVER HEIGHT REVEAL IS GONE (task 01a000c0 stage 4).
@@ -3807,11 +4431,9 @@ body, .font-suite {
        there is no empty box left to collapse or expand. `data-empty` went
        with it.
 
-   The `.reaction-add-btn` opacity rules that shared this block went too:
-   stage 3 deleted the element that carried the class. The coarse-pointer
-   block above still sizes `.reaction-add-btn` — left deliberately untouched
-   under this task's instructions; it is inert until something re-introduces
-   that class. */
+   The add-reaction button's rules that shared this block went too: stage 3
+   deleted the element that carried the class, and redesign rung 9 stage 4
+   swept its last coarse-pointer sizing rule. */
 
 /* ── Grouped continuation rows ────────────────────────────────────────
    Applied by ScrollToBottom.applyGrouping() to every message whose author
@@ -3841,215 +4463,99 @@ body, .font-suite {
    In a real conversation that is most messages, and it directly contradicts
    the requirement stage 3 was built to satisfy.
 
-   Verified by pressing Tab rather than by reading this file: before the
-   change, 60 Shift+Tab presses walking back from the compose box reached
-   only the left-gutter reply button on grouped rows and never once landed
-   on "Add reaction" inside one.
-
-   So hide the repeated TEXT and keep the action row. */
-.message-row--grouped .message-header > :not(.message-action-row) {
+   The action row has since gone (redesign rung 9: its controls are the
+   message pill, which sits outside the header). What the header holds now
+   is the author's name and the time, and nothing else may go in it:
+   anything a continuation row must still show or reach lives OUTSIDE the
+   header. The '(edited)' affix ([data-role="message-edited"], the only way
+   into version history) once sat in the header and was hidden on every
+   continuation row by this rule; it now follows the message text. */
+.message-row--grouped .message-header > * {
   display: none;
 }
 
-/* With every in-flow child gone the header is a zero-height flex box sitting
-   exactly where the message body starts — which makes it the right anchor
-   for the action row below, and a better one than the row: the row box also
-   contains the day separator, so anything positioned against it lands in the
-   wrong place on the first message of a day.
+/* ── Message tap pill (redesign rung 9, task 01a1557a-9406) ─────────────
+   The 4-glyph pill (`[data-role="message-pill"]`, chat_message.ex) is the
+   one place a message's quick actions live. It replaced the desktop hover
+   row, the left-gutter reply and the dead long-press lift pill.
 
-   This used to be scoped to `.message-row--grouped .message-header`, but the
-   action row is an ORDINARY IN-FLOW flex child on every row, grouped or not
-   — its base classes (`opacity-0 pointer-events-none`) carry no `hover:`/
-   `pointer:` gate, so it is present with `display:flex` and reserves its
-   full min-content width (measured 324px for 7 buttons) on every render, on
-   every device. On an ungrouped (first-of-run) row that pushes the
-   flex-shrinkable, unwrapped sender-name span below its own content width
-   at narrow viewports (315px available at 375px), wrapping the name onto two
-   lines at rest, unhovered — confirmed with `(hover: hover)` and
-   `(pointer: fine)` both true, so this is not a touch-only bug. Taking the
-   row out of flow unconditionally is the same fix the grouped case already
-   used, generalized to every row so it can never reserve header width. */
-.message-header {
-  position: relative;
+   Phone: hidden until the MessageGestures hook sets `data-pill-open` on the
+   row, which it does inside the tap's own pointerup handler. Desktop: the
+   same pill also shows on hover and while the row holds focus, gated on a
+   real cursor at lg so a latched `:hover` after a tap never opens it. The
+   band behind an open pill is the raised surface (base-300), as the
+   masters draw it. Child combinators throughout, so nothing here reaches a
+   row nested inside another. */
+.message-pill {
+  display: none;
 }
 
-/* The action row then has to leave the flow. Left in it, the header would
-   stop being zero-height and every continuation row would grow by the
-   height of a button — reintroducing on every row exactly the reflow this
-   ticket removed from the hover state. Floating a hover affordance over the
-   row is the pattern `.msg-reply-gutter` already uses further up this file,
-   for the same reason.
-
-   It stays `opacity: 0` until hover or focus-within (Tailwind classes, in
-   chat_message.ex), so a row is visually untouched at rest and still
-   measures its no-action-row width — for a grouped row that's the 31px it
-   measured before; for an ungrouped row this now also keeps the action row
-   from ever reserving width against the sender name.
-
-   `right: 0` against the header lands it at the same x it occupies on a
-   run-opening row, and `top` pins it to the FIRST line of the body rather
-   than the row's centre. Centring looked right on a one-line row and cut the
-   text of a wrapped one in half lengthwise — the strip sat across the middle
-   of the glyphs with their ascenders poking out above it.
-
-   The backing is not decoration: revealed, these buttons sit ON TOP of the
-   message text (on an ungrouped row, on top of the name/timestamp baseline),
-   and `--color-base-100` is the pane's own surface in both themes, so it
-   occludes what's underneath instead of tinting it. */
-.message-action-row {
-  position: absolute;
-  right: 0;
-  top: -0.125rem;
-  z-index: 10;
-  background-color: var(--color-base-100);
-  border-radius: 0.5rem;
-  padding-inline: 0.25rem;
+[data-pill-open] > .message-row-inner > .message-pill {
+  display: flex;
 }
 
-/* ── No hover strip on a touch screen (task 01a0d8de stage 5) ──────────
-   The strip reveals on hover and on focus-within. Tailwind already gates
-   the hover variant on `(hover: hover)`; the focus-within variant has no
-   such gate, so on a phone any TAP that focuses something in the row
-   revealed the strip. A tap on the header "Context" button focuses it on
-   mousedown, the 354px-wide strip appears over the header, the mouseup
-   lands on the strip's overflow button, and the click resolves to their
-   common ancestor: the sheet never opened (measured at 375px, 2 of 2
-   taps). The double-tap actions sheet is the touch path to everything in
-   the strip, so on `hover: none` the strip stays hidden and inert.
-
-   Keyboard focus is the one exception, because a phone or tablet with a
-   hardware keyboard has no other way to reach these buttons. A pointer
-   focus does not match `:focus-visible`, a Tab does, so focus INSIDE the
-   strip still reveals it. Focus on the Context trigger (or anywhere else
-   in the row outside the strip) does not. */
-@media (hover: none) {
-  .message-action-row {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .message-action-row:has(:focus-visible) {
-    opacity: 1;
-    pointer-events: auto;
-  }
+[data-pill-open] > .message-row-inner {
+  background-color: var(--color-base-300);
+  border-radius: var(--radius-box);
 }
 
-/* The Context trigger is 10px text, a 15px-tall box. Below lg it gets a
-   transparent `::after` that grows the HIT area to 45px tall and 8px wider
-   without moving anything in layout: a pseudo-element hit-tests as its
-   originating element, so a tap on it is a tap on the button. More of the
-   growth goes down, into this message's own first line, than up, into the
-   message above. */
-.message-context-trigger {
-  position: relative;
+.message-pill-copy-check {
+  display: none;
 }
 
+/* The buttons are 28px circles; below lg the hit area grows to 44px tall
+   through a transparent pseudo-element, which hit-tests as its button.
+   Horizontally each one stops at half the gap, so neighbours never overlap
+   and a tap can only land on one. */
 @media (width < 64rem) {
-  .message-context-trigger::after {
+  .message-pill-btn::after {
     content: "";
     position: absolute;
-    top: -12px;
-    bottom: -18px;
-    left: -4px;
-    right: -4px;
+    top: -8px;
+    bottom: -8px;
+    left: -1px;
+    right: -1px;
+  }
+
+  /* The hook owns press-and-hold on a message, so the native selection
+     menu must not compete for it (the reason long-press was once dropped).
+     Copy in the pill and the actions sheet replaces native selection on a
+     phone. Fields inside a message (the inline thread reply) stay
+     selectable. */
+  [phx-hook="MessageGestures"] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  [phx-hook="MessageGestures"] :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
   }
 }
 
-/* ── Hover feedback on the individual action buttons ──────────────────
-   The sponsor filed "the emoji buttons don't work on desktop", then
-   retracted it to "maybe it does work". The buttons were live the whole
-   time; the hover state was simply too faint to prove it, so a working
-   control read as a dead one. That is a real defect — an affordance that
-   does not answer the cursor — and this block is the fix.
-
-   WHY `hover:bg-base-300` (the Tailwind class still on every button in
-   chat_message.ex) was not enough, measured rather than eyeballed. The
-   strip's own backing is `--color-base-100`, so the hover fill is read
-   against THAT, not against the page:
-
-     light   base-100 #FFFFFF vs base-300 oklch(88%)  ->  1.36:1   (pre-Burrow)
-     dark    base-100 (pre-Burrow) vs base-300 oklch(20%)  ->  1.09:1
-     light   base-100 #fbfaf9 vs base-300 #efebe7  ->  1.1376:1   (Burrow)
-     dark    base-100 #191b20 vs base-300 #25272b  ->  1.1516:1   (Burrow)
-
-   1.09:1 is not a subtle hover, it is no hover: in dark the fill lands
-   within a percent of the surface it sits on, because base-300 is defined
-   as the RAISED surface for a base-200 sidebar and was never a step away
-   from the base-100 chat pane. Confirmed on screen before touching this
-   file — a hovered button in dark is indistinguishable from an unhovered
-   one.
-
-   It bites the four quick-react emoji hardest, which is exactly where the
-   report came from. Every other button in the row also carries
-   `text-base-content/50 hover:text-base-content`, so it has a second,
-   working signal. An emoji is a colour glyph that ignores `color`
-   entirely, so for those four the invisible fill was the ONLY feedback
-   there was.
-
-   So: two signals, neither depending on a lightness step that a theme can
-   flatten.
-
-     scale   1.2. Sized off the gap, not chosen by eye. The row is `gap-1`
-             (4px) and the widest button is a quick-react emoji at 30px
-             (the icon buttons are 28px), so 1.2 grows the worst case by
-             3px per side: it expands INTO the gap and stops 1px short of
-             the neighbour's box, which is what keeps it from stealing a
-             neighbour's clickable edge. 1.3 would grow that same button
-             4.5px per side and overrun the 4px gap. Growth is
-             centre-origin, so the pointer can never end up outside the
-             element it just grew, which would oscillate.
-
-     fill    `--color-base-content` at 18%, composited over the strip.
-             Derived from a token instead of naming a surface, so it steps
-             AWAY from the backing in both themes by construction: it
-             darkens on light, lightens on dark, and cannot silently
-             collapse the way a fixed base-300 did. Measures 1.69:1 light
-             and 1.94:1 dark — both well clear of the 1.09:1 that started
-             this, and the scale is carrying the rest.
-
-   `transform` on the BUTTONS only, never on `.message-action-row`. The row
-   is `position: absolute` (see above) to stop it reserving header width
-   and wrapping the sender name at phone widths, #759, and a transform on
-   it — or on any ancestor — would make it the containing block for its own
-   `position: absolute` and undo that. Transform also creates a stacking
-   context; on a leaf button that is harmless, which is the other reason it
-   goes here and not one level up.
-
-   No layout property is touched: `transform` paints, it does not reflow,
-   so the resting geometry `chat_message_density.spec.ts` pins (63px opener
-   / 31px continuation, sender name one line box at 320/375/414) is
-   measured on an unhovered row and is untouched by every rule in here.
-
-   120ms ease matches `.reaction-pill` a few hundred lines up, which
-   already scales on `:active` — same gesture vocabulary, one timing.
-
-   Gated on a real cursor. `:hover` latches after a tap on a touchscreen,
-   and a button left magnified after the finger lifts reads as stuck. Touch
-   keeps precisely today's behaviour; this is a desktop pointer fix. */
-@media (hover: hover) and (pointer: fine) {
-  .message-action-row > button {
-    transition:
-      transform 120ms ease,
-      background-color 120ms ease,
-      color 120ms ease;
+@media (hover: hover) and (min-width: 1024px) {
+  [data-message-id]:hover > .message-row-inner > .message-pill,
+  [data-message-id]:focus-within > .message-row-inner > .message-pill {
+    display: flex;
   }
 
-  .message-action-row > button:hover {
-    transform: scale(1.2);
-    background-color: color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  [data-message-id]:hover > .message-row-inner {
+    background-color: var(--color-base-300);
+    border-radius: var(--radius-box);
   }
 
-  /* The magnify is decoration on top of a colour change that already says
-     "hovered", so honouring a reduced-motion preference costs nothing that
-     matters: drop the movement, keep the fill. */
-  @media (prefers-reduced-motion: reduce) {
-    .message-action-row > button {
-      transition: background-color 120ms ease, color 120ms ease;
-    }
+  .message-pill-btn:hover {
+    background-color: var(--color-base-100);
+  }
 
-    .message-action-row > button:hover {
-      transform: none;
-    }
+  /* Copy confirms with a check for 1.5s (the hook sets `data-copy-check`). */
+  .message-pill-btn[data-copy-check] .message-pill-copy-glyph {
+    display: none;
+  }
+
+  .message-pill-btn[data-copy-check] .message-pill-copy-check {
+    display: inline-block;
   }
 }
 
@@ -4179,125 +4685,6 @@ body, .font-suite {
   --run-radius-bottom: 0;
   margin-block-end: 0;
 }
-
-/* Scrim with backdrop blur. Fallback: solid semi-transparent background
-   for browsers without backdrop-filter support (older Mobile Safari). */
-.longpress-scrim {
-  background: rgba(10, 10, 10, 0.55);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
-  animation: longpress-scrim-in 220ms ease-out both;
-}
-
-@keyframes longpress-scrim-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Emoji quick-react pill — sits above the lifted message clone.
-   --clone-half-h is set by MessageLift JS to (rect.height * 1.02) / 2.
-   translate(-50%, -100%) anchors the pill's bottom edge at the top-anchor.
-   The max() floor on top is a safety net: even if --clone-half-h is large
-   (or set incorrectly), the pill never computes above the safe-area inset
-   plus a 60px margin. The MessageLift JS hook also collapses --clone-half-h
-   to 0 in tall-message mode and the [data-tall-message] override below
-   pins the pill to the bottom edge. */
-.longpress-pill {
-  position: fixed;
-  left: 50%;
-  top: max(
-    calc(env(safe-area-inset-top, 0px) + 60px),
-    calc(50% - var(--clone-half-h, 40px) - 12px)
-  );
-  transform: translate(-50%, -100%);
-  z-index: 70;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 6px;
-  border-radius: 9999px;
-  background: var(--color-base-100, #fff);
-  box-shadow:
-    0 12px 28px -6px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(0, 0, 0, 0.04);
-  animation: longpress-pill-in 240ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  transform-origin: bottom center;
-}
-
-/* Tall-message mode: when MessageLift detects a target message > 60% of
-   viewport height, it sets data-tall-message on the overlay root. Pin the
-   pill to the bottom edge with safe-area-inset-bottom padding so the user
-   can always reach it with their thumb, regardless of message length. */
-#longpress-menu[data-tall-message="true"] .longpress-pill {
-  top: auto;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
-  transform: translate(-50%, 0);
-  transform-origin: bottom center;
-}
-
-#longpress-menu[data-tall-message="true"] .longpress-pill {
-  /* Adjusted entry animation: slide up from below instead of dropping in
-     from above, since the pill now lives at the bottom edge. */
-  animation: longpress-pill-in-bottom 240ms cubic-bezier(0.34, 1.56, 0.64, 1)
-    both;
-}
-
-@keyframes longpress-pill-in-bottom {
-  from {
-    opacity: 0;
-    transform: translate(-50%, 0) scale(0.88) translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(1) translateY(0);
-  }
-}
-
-/* Tall-message mode also skips the lift translate + scale on the message
-   clone — there's no meaningful "center" to lift an oversized message
-   toward, so we just let it sit dimmed in place. */
-#longpress-menu[data-tall-message="true"] .message-lift.lifted {
-  transform: none;
-}
-
-@keyframes longpress-pill-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -100%) scale(0.88) translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -100%) scale(1) translateY(0);
-  }
-}
-
-.longpress-pill-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 9999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  transition: transform 120ms ease;
-}
-
-.longpress-pill-btn:active {
-  transform: scale(0.9);
-}
-
-.longpress-pill-more {
-  background: var(--color-base-200, #f3f4f6);
-  color: var(--color-base-content, #18181b);
-}
-
-.longpress-pill-divider {
-  width: 1px;
-  height: 24px;
-  background: var(--color-base-300, #e5e7eb);
-  margin: 0 2px;
-}
-
 
 /* Reactor popover — desktop-only hover affordance on reaction pills.
    Rendered as a portal to document.body by the ReactorPopover hook so
@@ -4444,13 +4831,35 @@ body, .font-suite {
    ui-ux-pro-max `bottom-nav-limit` + `tab-bar-ios` rules. Cinema Mobile
    aesthetic — alpha-modulated hairline border, easing curve from #11.
 
-   --bottom-nav-height clearance variable: 0 by default so desktop layouts
-   are unaffected; switches to 56px (matching .bottom-nav-tab min-height)
-   below `lg:` so any viewport-anchored element (FABs, meeting bar, captions,
-   side panels) can offset above the nav with `calc(... + var(--bottom-nav-height))`.
+   --bottom-nav-offset is the bar's bottom edge above the viewport bottom:
+   max(inset - 13px, 8px), so the bar sits 13px down INTO the home-indicator
+   area on a notched phone (21px at inset 34) and 8px up where there is no
+   inset (Saru's canvas 01a15f2f, task 01a15f2e stage 1).
+
+   --bottom-nav-height NO LONGER MEANS THE BAR'S HEIGHT below lg. It means
+   "the bar's top edge minus the safe-area inset":
+   offset + 64px - env(safe-area-inset-bottom), so that
+   env(safe-area-inset-bottom) + var(--bottom-nav-height) lands exactly on
+   the bar's top edge at every inset (85px at inset 34, 72px at inset 0).
+   The name is kept, not renamed, because about 40 inline call sites (FABs,
+   toasts, panels, sheets, meeting surfaces) write that sum and follow the
+   lowered bar with no edit. It is 0 by default so desktop layouts are
+   unaffected, and 0 again whenever the bar is hidden (the three hide rules
+   below), so those call sites drop to the safe area with it.
+   --bottom-nav-clearance is that same sum, the bar's top edge, for elements
+   that must end AT the bar (the More sheet's panel).
+   --phone-chrome-bottom is the END padding of scrollers and footers: the
+   bar's top edge plus 8px of breathing room, so a last row ends 8px above
+   the glass (`.clears-tab-bar` below).
+   --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
+   stack on top of it (the in-call mini bar); 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
+  --bottom-nav-gap: 0px;
+  --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 8px);
+  --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
   /* Persistent meeting bar height. Set inline on the shell root to 3rem
      when `@meeting_active` is true (see shell.html.heex). The :root
      default of 0px keeps any `calc(... + var(--meeting-bar-height))`
@@ -4459,32 +4868,245 @@ body, .font-suite {
      the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
   --meeting-bar-height: 0px;
 }
+/* Only where the bar exists: a document with no `[data-bottom-rail]` (the
+   guest `meet.` surface, auth pages) reserves nothing. */
 @media (max-width: 1023.98px) {
-  :root {
-    --bottom-nav-height: 56px;
+  :root:has([data-bottom-rail]) {
+    --bottom-nav-height: calc(var(--bottom-nav-offset) + 64px - env(safe-area-inset-bottom, 0px));
+    --bottom-nav-gap: 12px;
   }
 }
 
+/* Hide the bar in exactly the product lead's three cases (Saru's rule 8), never on
+   scroll, CSS only so no state can go stale when an element is removed while
+   focused:
+     1. keyboard up with a composer focused. "Keyboard up" is detected by its
+        proxy, focus on a ComposeInput textarea (chat, thread, task steering);
+     2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
+        in-app chat viewer, the file preview, the full-screen prototype);
+     3. the in-call room ([data-in-call], MeetingLive while in the call). The
+        mini bar on OTHER tabs during a call does not hide it.
+   Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */
+:root:has([phx-hook="ComposeInput"]:focus),
+:root:has([data-fullscreen-viewer]),
+:root:has([data-in-call]) {
+  --bottom-nav-height: 0px;
+  --bottom-nav-gap: 0px;
+}
+
+/* Glass tab bar (task 01a1557a-7a71, Burrow redesign 4, stage 1). ONE
+   token-driven paint path for every theme and preset; nothing here is
+   qualified by data-theme, and no colour literal appears in a .bottom-nav*
+   rule. Geometry and markup are stages 2 and 3.
+
+   Surface: --color-base-200 at --glass-alpha, both tokens per theme block.
+   DEVIATION from the masters (canvas 01a1382f-7dda-7001-b4cd-6856b8bd9b37),
+   which compose glass from SURFACE (base-100 under rung 2's mapping): this
+   follows Saru's direction (canvas 01a15b55-6565-7000-9dc1-0858ad0c7736,
+   "base-200 at --glass-alpha"), which is the ground the bar sits on.
+
+   Every --glass-alpha is a MEASURED floor, not a taste: the lowest alpha at
+   which the tab ink clears 4.5:1 (7:1 in High contrast) and the icon and the
+   More dot 3:1, painted over pure black AND pure white, on Chrome 151 and
+   Chrome 147. Blur counts for nothing. Fixtures:
+   test/support/fixtures/painted_glass/; guard:
+   test/platform/design/bottom_nav_glass_guard_test.exs.
+
+   Colour mechanism: color-mix(in srgb, <base-200> <alpha*100>%, transparent).
+   Measured against rgb(from var(--color-base-200) r g b / alpha) in all ten
+   variants at five alphas over both backdrops: both resolve per preset and
+   paint within 0.88 of a byte of the exact composite on Chrome 147 and within
+   0.80 on Chrome 151, pixel-identical to each other. color-mix is kept
+   because the build pipeline already emits it with an opaque fallback. */
 .bottom-nav {
-  position: sticky;
-  bottom: 0;
+  /* Tab ink. A bar-scoped variable so High contrast can raise it without
+     touching its own --subtle; see the override below. */
+  --tab-ink: var(--color-subtle);
+  /* Floating geometry (task 01a1557a-7a71 stage 3; Saru's rule 7, masters
+     .tabbar; lowered in task 01a15f2e stage 1, Saru's canvas 01a15f2f):
+     fixed, 12px from the sides, its bottom edge --bottom-nav-offset above
+     the viewport bottom (21px at inset 34, 8px at inset 0), 64px tall
+     (--tab-h 64 x density 1), radius the masters' --r-xl
+     (round(radius x 1.57)) from --radius-box. No shadow: the glass and its
+     1px base-300 border are the only separation. Content scrolls UNDER the
+     glass; scrollers pad their end with --phone-chrome-bottom. z-index 30
+     keeps every modal and sheet above it; the More sheet alone goes UNDER it
+     (rule below). */
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: var(--bottom-nav-offset);
+  height: 64px;
+  border-radius: round(calc(var(--radius-box) * 1.57), 1px);
+  overflow: hidden;
   z-index: 30;
   display: flex;
-  align-items: flex-end;
-  background: oklch(8% 0 0 / 0.96);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(12px);
-  /* Both the shell's viewport height AND env(safe-area-inset-bottom) padding
-     here are required for a flush iOS PWA bottom-nav. With
-     viewport-fit=cover (set on the meta tag in root.html.heex), the
-     layout viewport extends across the home-indicator gesture zone — so
-     the .bottom-nav at sticky bottom: 0 sits right at the screen edge,
-     but its background does NOT reach into the gesture zone unless the
-     element itself is taller. This padding extends the bg downward into
-     the gesture zone, eliminating the dark band under the icons that
-     PR #339 left behind. The icons remain at flex-end of the un-padded
-     content area, ABOVE the home indicator. */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  align-items: stretch;
+  background: color-mix(
+    in srgb,
+    var(--color-base-200) calc(var(--glass-alpha) * 100%),
+    transparent
+  );
+  border: 1px solid var(--color-base-300);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  /* Hide and return: a 150ms slide plus fade. Visibility flips at the END of
+     the hide (out of the tab order and the a11y tree once gone) and at the
+     START of the return. */
+  transition:
+    transform 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    visibility 0s linear 0s;
+}
+
+:root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
+:root:has([data-fullscreen-viewer]) .bottom-nav,
+:root:has([data-in-call]) .bottom-nav {
+  transform: translateY(calc(100% + var(--bottom-nav-offset)));
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 150ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    visibility 0s linear 150ms;
+}
+
+/* The More sheet opens under the bar (masters coverage row 5): while it is
+   open the bar rises above the sheet (z-index 100) and its scrim, so More
+   reads active and Chat, Tasks and Meetings stay one tap away. Scoped to the
+   More sheet by id; every other sheet still covers the bar. The More sheet's
+   panel ends at the bar's top edge (.more-sheet .sheet-panel below). */
+:root:has(#more-sheet.sheet-open) .bottom-nav {
+  z-index: 110;
+}
+
+/* The composer's ＋ sheet (redesign rung 11): base-200, the composer's and
+   the tab bar's fill (direction canvas 01a16558 m1); its rows and tiles are
+   base-100 on it. */
+.attach-sheet .sheet-panel {
+  background: var(--color-base-200);
+}
+
+.more-sheet .sheet-panel {
+  padding-bottom: var(--bottom-nav-clearance);
+  /* Height (Saru rule 1; task 01a1557a-807f stage 3). The panel ends under
+     the bar and pads by its clearance (above), and boxes are border-box, so
+     capping the WHOLE panel at 100dvh minus a 48px top margin leaves
+     100dvh - 48px - var(--bottom-nav-clearance) for the visible sheet: the
+     scrim stays tappable above it and the footer (Settings) stays above the
+     bar while the list scrolls. The rise is 200ms for this sheet only (Saru
+     rule 9); the shared reduced-motion rule (`.sheet-panel { transition:
+     none !important }`) still removes it. */
+  max-height: calc(100dvh - 48px);
+  transition-duration: 200ms;
+}
+
+/* Scroll-end clearance below lg (task 01a1557a-7a71 stage 3; task 01a15f2e
+   stage 1). Content scrolls UNDER the glass, so a scroller's or footer's END
+   pads by --phone-chrome-bottom (the bar's top edge plus 8px) and its last
+   row ends 8px above the bar. Applied per scroller, never to <main>, which
+   would put nothing but the page ground behind the glass. Unlayered, so it
+   beats the scroller's own Tailwind padding utilities (p-4, md:p-6).
+     .compose-input-area: the chat composer, masters
+       `.compose{padding-bottom:calc(88px + env(safe-area-inset-bottom))}`
+       (12px + the bar's top edge; 8px since task 01a15f2e stage 2, Saru's
+       gap). With the composer focused the bar hides and
+       the clearance drops to the safe area, so it sits on the keyboard.
+     .clears-tab-bar: the scrollers and footers the measured inventory
+       found under the bar (the stage 3 evidence lists them). */
+@media (max-width: 1023.98px) {
+  .compose-input-area {
+    padding-bottom: calc(8px + var(--bottom-nav-clearance));
+  }
+
+  /* A composer inside a sheet (the embedded meeting chat in the call rail's
+     bottom sheet, z-index 100) has no bar under it: the sheet covers the bar
+     (z-index 30). So it sits 8px above the safe area, Saru's rule r4 for a
+     composer with no bar under it, the same 8px the focused routed composer
+     keeps. Measured before this rule: 93 / 80 at inset 34 / 0, i.e. 85 / 72px
+     of dead space over a bar nobody could see. Keyed on the Sheet component's
+     own panel, never on a meeting class (task 01a15f2e follow-up). */
+  .sheet-panel .compose-input-area {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .clears-tab-bar {
+    padding-bottom: var(--phone-chrome-bottom);
+  }
+}
+
+/* Phone Chat list rows (task 01a1557a-8562 stages 2 and 4). A row opens its
+   sheet on a long-press (the RowLongPress hook), so iOS must not raise its own
+   callout or start a text selection under the finger (Saru, canvas 01a15d7c `states`). No
+   colour here: the row's paint is utilities (`active:bg-base-100` on the
+   base-200 list), measured in chat_list_contrast_guard_test.exs. */
+[data-role="chat-list-row"] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The Chat list's sheets (task 01a1557a-8562 stage 3): search, New and Chat
+   list options. The shared `.sheet*` rules paint the base-100 surface; only
+   these three are the list's own. */
+
+/* The handle is the Close button (`handle_close`). base-300 measures under
+   3:1 on base-100 (more_sheet_contrast_guard_test.exs H-handle), so it paints
+   with --color-subtle, as the More sheet's does. */
+.chat-list-sheet .sheet-handle {
+  background: var(--color-subtle);
+}
+
+/* Search keeps a full-height feel within the shared 90vh cap, so the field
+   does not jump as the result groups grow and shrink. */
+.chat-list-search-sheet .sheet-panel {
+  min-height: 85dvh;
+}
+
+/* A match is carried by weight, not a highlight colour (Saru, canvas
+   01a15d7c `states`): `ts_headline`'s <mark> keeps the snippet's own colour
+   and ground. Scoped to this sheet; the in-space search drawer keeps its own
+   treatment. */
+.chat-list-search-sheet mark {
+  background: transparent;
+  color: inherit;
+  font-weight: 500;
+}
+
+/* The native `type="search"` clear glyph paints in the browser's own blue,
+   outside the palette and unmeasured. The field drops it; clearing is the
+   keyboard's job, as it is in the prototype. */
+.chat-list-search-sheet input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Under reduced motion it simply disappears (Saru's rule 8). */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav {
+    transition: none;
+  }
+}
+
+/* High contrast owes 7:1 for text. Its --subtle (base-content at 55%) paints
+   4.7417:1 (light) and 6.2450:1 (dark) on its own opaque base-200, identical on
+   Chrome 147 and 151, so the tab ink in HC is full base-content (21:1).
+   DEVIATION from Saru's "text-subtle" for inactive tabs (canvas
+   01a15b55-6565-7000-9dc1-0858ad0c7736), recorded with its measurement. HC
+   --subtle itself is unchanged. Qualified by preset, never by theme. */
+[data-preset="high-contrast"] .bottom-nav {
+  --tab-ink: var(--color-base-content);
+}
+
+/* Opaque fallback (Saru's rule 2): no translucency, no blur. */
+@media (prefers-reduced-transparency: reduce) {
+  .bottom-nav {
+    --glass-alpha: 1;
+    --glass-blur: 0px;
+    background: var(--color-base-200);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 /* Desktop: hide the bottom-nav entirely (the desktop left rail in
@@ -4498,11 +5120,6 @@ body, .font-suite {
   }
 }
 
-[data-theme="light"] .bottom-nav {
-  background: oklch(98% 0 0 / 0.96);
-  border-top-color: rgba(0, 0, 0, 0.08);
-}
-
 .bottom-nav-tab {
   flex: 1;
   display: flex;
@@ -4510,67 +5127,147 @@ body, .font-suite {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  /* Symmetrical padding; safe-area lives on .bottom-nav (parent). */
-  padding: 8px 0;
-  min-height: 56px;
-  color: oklch(50% 0 0);
+  /* Four equal cells; each >= 44x44 (Saru's rule 6). The bar is 64px tall,
+     so every cell is the bar's full height. */
+  padding: 6px 0;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--tab-ink);
   position: relative;
+  /* Above the sliding pill (.bottom-nav-pill-layer, z-index 0). */
+  z-index: 1;
   cursor: pointer;
-  transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
-              transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  touch-action: manipulation;
+  /* Ink release eases out over 120ms; ink press-in is instant (the :active
+     rule below zeroes it). Press feedback canvas 01a167b0, rule 1. The cell
+     scales to .92 and back over 80ms (sliding pill, prototype t1). */
+  transition:
+    color 120ms ease-out,
+    transform 80ms;
   background: transparent;
   border: 0;
   text-decoration: none;
 }
 
-.bottom-nav-tab:hover {
-  color: oklch(70% 0 0);
-}
-
-.bottom-nav-tab:active {
-  transform: scale(0.97);
-}
-
-/* The interactive text colour, not the fill-only primary (task
-   01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 1; Burrow values task 01a120c5).
-   This tab has TWO light grounds and they pull in opposite directions:
-
-     [data-theme="light"] .bottom-nav   #F8F8F8   interactive #8b3b04  7.2791
-     unqualified .bottom-nav on light   #0C0C0C   interactive #8b3b04  2.5444
-     dark theme .bottom-nav             #030303   interactive #ff9b55  9.9095
-
-   (Pre-Burrow, the cyan interactive measured 4.4478 / 4.1661 / 12.0046 here.)
-
-   NO colour can clear AA on both light grounds: clearing it on the near-white
-   nav needs a relative luminance of at most 0.170406, clearing it on the
-   near-black nav needs at least 0.190978. The second ground exists only
-   because `.bottom-nav` declares its light background under [data-theme="light"]
-   with no `prefers-color-scheme: light` twin, so a viewer who picks the "system"
-   theme gets a near-black nav under light tokens. That missing variant is the
-   real defect and is filed as a follow-up; it is not this stage's to fix.
-
-   Optimised for the [data-theme="light"] nav, which is what an explicit-light
-   viewer paints, and the Burrow orange now clears AA there. The deep orange is
-   WORSE than the old cyan on the near-black ground, 2.5444:1, and that applies
-   to the ::before bar too, which owes 3:1 as a non-text cue (it clears on the
-   other two grounds, 7.2791 and 9.9095). Recorded in
-   primary_contrast_sweep_test.exs clauses F3, F4 and the ::before clause.
-   Weight and size of the label
-   are unchanged; the large-text allowance is not a contrast fix. */
-.bottom-nav-tab--active {
-  color: var(--color-interactive);
-}
-
-.bottom-nav-tab--active::before {
-  content: '';
+/* Sliding pill (the product lead's pick of ten tab-feel prototypes: t1).
+   A soft primary tint sits behind the current tab and springs across when it
+   changes. The TabPill hook (assets/js/hooks/tab_pill.js) sets --pill-x and
+   --pill-w from the current (or nav-pending) tab and places it with no
+   transition on mount and on resize, so a page load never slides it in. The
+   layer is `phx-update="ignore"`, so a LiveView patch keeps the hook's
+   inline geometry. Starts transparent until the hook has placed it. */
+.bottom-nav-pill-layer {
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 28px;
-  height: 3px;
-  background: var(--color-interactive);
-  border-radius: 0 0 3px 3px;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.bottom-nav-pill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: var(--pill-w, 0px);
+  transform: translateX(var(--pill-x, 0px));
+  border-radius: var(--radius-box);
+  /* primary at 16% in dark themes (the prototype, which is dark-only), 6% in
+     light ones. The active label is primary ink ON the pill, and any tint
+     costs it contrast. Measured on Chrome, page under the glass white/black:
+     at 16% every light preset fell to 3.7-4.3:1 and High contrast light to
+     6.3:1 (it owes 7). At 6% light presets are 4.5-5.0 over white and 4.3
+     over black (no pill: 4.9-5.5 / 4.6), High contrast light 7.5. Dark
+     presets at 16% are 5.5-6.8 over black (no pill: 6.8-8.9), High contrast
+     dark 7.5. light-dark() follows the theme's color-scheme, so no rule here
+     is qualified by data-theme. A browser without light-dark() keeps 6%. */
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  background: light-dark(
+    color-mix(in srgb, var(--color-primary) 6%, transparent),
+    color-mix(in srgb, var(--color-primary) 16%, transparent)
+  );
+  opacity: 0;
+  transition:
+    transform 0.45s cubic-bezier(0.3, 1.5, 0.5, 1),
+    width 0.45s;
+}
+
+/* Pressed: the whole cell scales to .92 while the pointer is down (the hook's
+   `is-pressed`, set on pointerdown as in prototype t1). */
+.bottom-nav-tab.is-pressed {
+  transform: scale(0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-pill {
+    transition: none;
+  }
+
+  .bottom-nav-tab.is-pressed {
+    transform: none;
+  }
+}
+
+/* Hover lifts an INACTIVE tab's ink to full base-content: never dimmer than
+   rest, so the rest-state measurement bounds it. Only on hover-capable
+   pointers, and never on the active tab (task 01a1557a-7a71 stage 5, review
+   finding E4): on touch, :hover sticks to the tapped More button while its
+   sheet is open, and an unscoped rule here (0,2,0) beat
+   `.bottom-nav-tab--active` (0,1,0), repainting More base-content instead of
+   primary. The glass guard refuses any bar :hover rule outside
+   (hover: hover) or one that can match the active tab. */
+@media (hover: hover) {
+  .bottom-nav-tab:not(.bottom-nav-tab--active):not([data-nav-pending]):hover {
+    color: var(--color-base-content);
+  }
+}
+
+/* Keyboard focus (task 01a1557a-7a71 stage 5, review finding case 3 step
+   10): the focus-ring token, drawn INSIDE the cell. `.bottom-nav` clips with
+   overflow: hidden, so an outline or an outset ring would be cut to a sliver.
+   The radius follows the bar's own so the edge cells' ring is not clipped at
+   the rounded corners. Painted >= 3:1 against the glass in all ten variants
+   over #000 and #fff (test/support/fixtures/painted_glass/focus_ring.csv). */
+.bottom-nav-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+  border-radius: calc(round(calc(var(--radius-box) * 1.57), 1px) - 1px);
+}
+
+/* Pressed (task 01a166be-b5b9, canvas 01a167b0 four-states table): an
+   inactive tab's ink lifts to body, instantly. Since the sliding pill (t1)
+   the whole CELL scales to .92 over 80ms (`.bottom-nav-tab.is-pressed`
+   above), replacing the icon-only scale; the label never changes weight.
+   The ink rule excludes the active tab so nothing but
+   `.bottom-nav-tab--active` paints its colour. Reduced motion keeps the ink
+   and drops the scale. */
+.bottom-nav-tab:active {
+  transition:
+    color 0ms,
+    transform 80ms;
+}
+
+.bottom-nav-tab:not(.bottom-nav-tab--active):active {
+  color: var(--color-base-content);
+}
+
+/* Active: the primary, measured on the painted glass like the inactive ink
+   (it used --color-interactive while the nav had a theme-qualified light
+   ground; that ground and its F3/F4 findings are gone). The shape change
+   (filled icon, medium label) is stage 2's markup; the top bar is retired. */
+.bottom-nav-tab--active {
+  color: var(--color-primary);
+}
+
+/* More dot (Saru's rule 5): rendered by stage 2. Primary, non-text 3:1 on the
+   painted glass over both backdrops, held by the glass guard. */
+.bottom-nav-dot {
+  position: absolute;
+  top: 8px;
+  left: calc(50% + 8px);
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--color-primary);
 }
 
 /* Desktop icon-rail clusters stack their tiles vertically. Without this,
@@ -4582,8 +5279,8 @@ body, .font-suite {
   gap: 0.125rem;
 }
 
-/* Desktop icon-rail active-tile accent — 3px LEFT-bar mirroring the
-   mobile TOP-bar above. Same visual language, axis rotated.
+/* Desktop icon-rail active-tile accent — 3px LEFT-bar. (The mobile tab
+   bar's TOP-bar it once mirrored was retired by task 01a1557a-7a71 stage 1.)
    Sits alongside the `bg-base-300 text-primary` pill applied by
    icon_rail.ex's `desktop_active_class/2`. */
 .icon-rail-tab {
@@ -4598,21 +5295,62 @@ body, .font-suite {
   text-decoration: none;
   /* Halo colour for an unread badge sitting on this tile (task 01a01b29
      stage 2). Declared on the TILE, not on the badge, and overridden below
-     for hover and active, because the halo has to be whatever the tile
-     itself is painted: base-200 at rest, base-300 once the tile lifts. A
+     for the active tile, because the halo has to be whatever the tile
+     itself is painted: base-200 at rest, hover and press (none of them
+     fill since task 01a166be-b5b9), base-300 on the current tile. A
      hardcoded base-200 ring would read as a seam on the active tile. */
   --icon-rail-badge-halo: var(--color-base-200);
 }
 
-.icon-rail-tab:hover {
-  background: var(--color-base-300);
-  --icon-rail-badge-halo: var(--color-base-300);
+/* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0).
+   Hover used to paint base-300, the same fill as the current tile, so hover
+   and current read alike. Now: rest icon ink is subtle; hover lifts it to
+   body (ink only, hover-capable pointers only); pressed scales the icon to
+   0.92 and lifts it to body, instantly, easing back over 120ms; current
+   keeps `bg-base-300 text-primary` and the leading bar. The icon is the
+   only thing that moves; the label never changes size or weight. */
+.icon-rail-icon {
+  transition: color 120ms ease-out, transform 120ms ease-out;
+}
+
+.icon-rail-tab:not(.icon-rail-tab--active) .icon-rail-icon {
+  color: var(--color-subtle);
+}
+
+@media (hover: hover) {
+  .icon-rail-tab:not(.icon-rail-tab--active):hover .icon-rail-icon {
+    color: var(--color-base-content);
+  }
+}
+
+.icon-rail-tab:not(.icon-rail-tab--active):active .icon-rail-icon {
+  color: var(--color-base-content);
+}
+
+.icon-rail-tab:active .icon-rail-icon {
+  transform: scale(0.92);
+  transition-duration: 0ms;
+}
+
+/* Child rows carry no icon, so their press is the row ruling for a base-200
+   root: base-100 fill, one step from the sidebar (canvas 01a167b0). */
+.icon-rail-tab--child:not(.icon-rail-tab--active):active {
+  background: var(--color-base-100);
+  --icon-rail-badge-halo: var(--color-base-100);
 }
 
 /* Same fill as desktop_active_class/2's `bg-base-300`, so the halo tracks it.
    Declared after the base rule because the two selectors tie on specificity. */
 .icon-rail-tab--active {
   --icon-rail-badge-halo: var(--color-base-300);
+}
+
+/* Reduced motion (canvas 01a167b0 rule 8): no scale on press. The ink change
+   stays. The universal reduce block already zeroes the durations. */
+@media (prefers-reduced-motion: reduce) {
+  .icon-rail-tab:active .icon-rail-icon {
+    transform: none;
+  }
 }
 
 /* Unread badge on a rail tile (task 01a01b29 stage 2). Shared by the Inbox
@@ -4691,7 +5429,9 @@ body, .font-suite {
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+  /* The secondary-text tier (task 01a15902 stage 6; was base-content at
+     50%, 3.80:1 on sand light). */
+  color: var(--color-subtle);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -4706,7 +5446,7 @@ body, .font-suite {
 
 .icon-rail-tab--child .icon-rail-label {
   font-weight: 400;
-  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+  color: var(--color-base-content);
 }
 
 .icon-rail-tab--child.icon-rail-tab--active .icon-rail-label {
@@ -4719,153 +5459,442 @@ body, .font-suite {
   flex-shrink: 0;
 }
 
+/* Tab label (Saru's type note): 11px, regular at rest, medium when active,
+   no letter-spacing. */
 .bottom-nav-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 11px;
+  font-weight: 400;
   line-height: 1;
 }
 
-.bottom-nav-badge {
-  position: absolute;
-  top: 6px;
-  right: calc(50% - 22px);
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 9999px;
-  background: var(--color-primary);
-  color: oklch(15% 0 0);
-  font-size: 9px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 2px border in the bottom-nav background color isolates the badge from
-     the icon visually (per ui-ux-pro-max badge-separation guideline). */
-  border: 2px solid oklch(8% 0 0);
+.bottom-nav-tab--active .bottom-nav-label {
+  font-weight: 500;
 }
 
-[data-theme="light"] .bottom-nav-badge {
-  border-color: oklch(98% 0 0);
-}
-
-/* ── More-sheet content classes (task 019e0d4b Stage 2) ───────────────
-   The chrome (root, scrim, panel, handle, header, title, close) was
-   removed when more_sheet.ex was refactored to use the generic
-   <.sheet> component. Only the in-body content classes remain below.
+/* ── More sheet paint (task 01a1557a-807f stage 3) ─────────────────────
+   Semantic tokens only, every variant from the same rules: no colour
+   literal and no `[data-theme]`-qualified selector (held by
+   more_sheet_contrast_guard_test.exs, which also measures every pair below
+   in all ten variants). Saru (canvas 01a15bc3): an opaque base-100 sheet,
+   not glass; rows 15px regular in base-content; the current row marked by
+   a leading bar, weight 600 and a check (task 01a166be-b5b9 moved it off
+   the base-200 fill); a 1px base-300 divider; the Inbox badge primary on
+   primary-content. Everything is scoped to `.more-sheet` (the root class
+   more_sheet.ex passes to <.sheet>); the shared `.sheet*` rules serve the
+   other sheets and are not touched here.
    ──────────────────────────────────────────────────────────────────── */
 .more-sheet-list {
-  overflow-y: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 12px;
+  display: flex;
+  flex-direction: column;
 }
 
-[data-theme="light"] .more-sheet-list {
-  border-top-color: rgba(0, 0, 0, 0.08);
+/* Fit (an iPhone's visible area). The visible sheet is 100dvh - 48px -
+   var(--bottom-nav-clearance): 544px in Safari's 390x664 on a 390x844
+   phone, 547px at 375x667 (iPhone SE). The 44px handle, ten 44px rows and
+   the 53px Settings footer (44px row, 4px padding each side, 1px divider)
+   need 541px, so the body pads only 4px below the list and nothing above it
+   (the handle's own 44px already spaces the first row from the top). */
+.more-sheet .sheet-body {
+  padding: 0 1.5rem 4px;
 }
 
-.more-sheet-section-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: oklch(50% 0 0);
-  padding: 12px 16px 4px;
-  margin: 0;
-}
-
-.more-sheet-row {
+.more-sheet-row,
+.more-sheet-settings {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 11px 16px;
-  min-height: 52px;
-  font-size: 14px;
-  color: oklch(95% 0 0);
+  padding: 0 16px;
+  /* The 44px touch-target floor, and no taller, so every row fits (above). */
+  min-height: 44px;
+  border-radius: var(--radius-field);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--color-base-content);
   text-decoration: none;
   cursor: pointer;
-  transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  /* Release eases out over 120ms; press-in is instant (:active below). */
+  transition: background-color 120ms ease-out;
 }
 
-[data-theme="light"] .more-sheet-row {
-  color: oklch(15% 0 0);
+/* Scroll cue, for a screen too short for every row (375x553 and below). A
+   `[data-role=more-sheet-cue]` strip sits in the list just before the last
+   row: sticky to the bottom of the scrolling body, a fade from transparent
+   to base-100 with a chevron, zero layout height (a negative bottom margin
+   as tall as itself). Rows are positioned, so they paint in DOM order: the
+   cue covers every row above it, and the last row, opaque base-100, covers
+   the cue. While the list overflows the cue pins to the visible bottom; once
+   the last row scrolls into view (the end), or when every row fits, the
+   last row sits over it and it is gone. CSS only, no scroll listener, and
+   no `animation-timeline` (iOS Safari 26 and up only): sticky positioning
+   works on every iOS Safari. The cue is 32px, shorter than a row, so the
+   last row covers all of it. The last-row fill sits before the hover and
+   pressed rules so those still win on it. */
+.more-sheet-cue {
+  position: sticky;
+  bottom: 0;
+  height: 32px;
+  margin-bottom: -32px;
+  pointer-events: none;
 }
 
-.more-sheet-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+.more-sheet-row:last-child {
+  background-color: var(--color-base-100);
 }
 
-[data-theme="light"] .more-sheet-row:hover {
-  background: rgba(0, 0, 0, 0.04);
+/* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0;
+   until then hover, pressed and current were all base-200). Inside the
+   base-100 sheet: hover base-200 on hover-capable pointers only, pressed
+   base-300 (one step darker), current NO fill but a 3px base-content bar
+   on the leading edge plus weight 600, never colour alone. A fill now
+   always means touch. */
+@media (hover: hover) {
+  .more-sheet-row:hover,
+  .more-sheet-settings:hover {
+    background-color: var(--color-base-200);
+  }
 }
 
-.more-sheet-row:active {
-  transform: scale(0.99);
+.more-sheet-row:active,
+.more-sheet-settings:active {
+  background-color: var(--color-base-300);
+  transition-duration: 0ms;
 }
 
-.more-sheet-icon {
+.more-sheet-row--current {
+  font-weight: 600;
+}
+
+.more-sheet-row--current::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-base-content);
+}
+
+.more-sheet-icon,
+.more-sheet-check {
   width: 22px;
   height: 22px;
-  color: oklch(70% 0 0);
   flex-shrink: 0;
+  color: var(--color-base-content);
 }
 
-[data-theme="light"] .more-sheet-icon {
-  color: oklch(40% 0 0);
+/* ── Optimistic navigation (task 01a166be-b5b9 stage 2) ─────────────────
+   Canvas 01a167b0 m2 ("the optimistic tab") and rules 2, 3, 4, 7, 8. State
+   comes from assets/js/lib/nav_pending.js, set in the tap's click:
+   `data-nav-pending` on the tapped control (and on the More tab for a More
+   sheet row), `data-nav-yielded` on the control that was current in the
+   same bar or rail. The tapped control takes the current look at once and
+   the yielded one drops it in the same frame, so only one ever looks
+   current. The indicator (tab icon, rail bar, chat-row bar) breathes
+   1 -> 0.55 -> 1 over 900ms, starting only after 150ms, so a switch that
+   lands sooner shows the press and the swap and no pulse. The server's next
+   render owns the current tab; this is a client hint only. Semantic slots
+   only. A failed navigation strips both attributes (the module's rollback).
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes nav-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
 }
 
-.more-sheet-divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.08);
-  margin: 6px 16px;
+/* Reduced motion's pending look: a steady 60%, still after the 150ms grace.
+   The universal reduce block shortens the duration, not the delay. */
+@keyframes nav-pending-steady {
+  to {
+    opacity: 0.6;
+  }
 }
 
-[data-theme="light"] .more-sheet-divider {
-  background: rgba(0, 0, 0, 0.08);
+/* Bottom tabs: the current ink and label weight move to the tapped tab. */
+/* Swap and yield are instant (one frame), not the 120ms release ease. The
+   hover lift skips a pending tab, so a pointer resting on it cannot hide
+   the swap. */
+.bottom-nav-tab[data-nav-pending] {
+  color: var(--color-primary);
+  transition-duration: 0ms;
 }
 
-.more-sheet-profile {
-  padding: 12px 16px;
-  min-height: 60px;
+.bottom-nav-tab[data-nav-pending] .bottom-nav-label {
+  font-weight: 500;
 }
 
-.more-sheet-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 9999px;
-  background: linear-gradient(135deg, oklch(70% 0.14 200), oklch(60% 0.18 280));
-  color: oklch(98% 0 0);
+.bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+.bottom-nav-tab--active[data-nav-yielded] {
+  color: var(--tab-ink);
+  transition-duration: 0ms;
+}
+
+.bottom-nav-tab--active[data-nav-yielded] .bottom-nav-label {
+  font-weight: 400;
+}
+
+/* Desk rail: the base-300 tile and the leading bar move to the tapped tile.
+   Unlayered, so they also beat the yielded tile's `bg-base-300` utility. */
+.icon-rail-tab[data-nav-pending] {
+  background-color: var(--color-base-300);
+  --icon-rail-badge-halo: var(--color-base-300);
+}
+
+.icon-rail-tab[data-nav-pending]:not(.icon-rail-tab--active) .icon-rail-icon {
+  color: var(--color-base-content);
+}
+
+.icon-rail-tab[data-nav-pending]::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 28px;
+  background: var(--color-primary);
+  border-radius: 0 3px 3px 0;
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+/* The rail's own base-200 (what a resting tile shows through), so the badge
+   halo keeps matching the tile. */
+.icon-rail-tab--active[data-nav-yielded] {
+  background-color: var(--color-base-200);
+  --icon-rail-badge-halo: var(--color-base-200);
+}
+
+.icon-rail-tab--active[data-nav-yielded] .icon-rail-icon {
+  color: var(--color-subtle);
+}
+
+.icon-rail-tab--active[data-nav-yielded]::before {
+  content: none;
+}
+
+/* More sheet (rule 3): the tapped row keeps the base-300 pressed fill and
+   the sheet leaves on the tap, 180ms after 80ms, instead of waiting for the
+   destination's remount. The More tab carries the pending cue meanwhile
+   (the bottom-tab rules above). The shared reduced-motion rule
+   (`.sheet-panel { transition: none !important }`) makes the close instant. */
+.more-sheet-row[data-nav-pending],
+.more-sheet-settings[data-nav-pending] {
+  background-color: var(--color-base-300);
+}
+
+.more-sheet:has([data-nav-pending]) {
+  pointer-events: none;
+}
+
+.more-sheet:has([data-nav-pending]) .sheet-panel {
+  transform: translateY(100%);
+  transition: transform 180ms var(--ease-standard) 80ms;
+}
+
+.more-sheet:has([data-nav-pending]) .sheet-backdrop {
+  background: transparent;
+  transition: background 180ms var(--ease-standard) 80ms;
+}
+
+/* Chat rows (rule 4): the tapped row takes the leading 3px base-content
+   current bar, pulsing per rule 2, until the patch lands. The list has no
+   current-row state of its own, so the module keeps the bar on one row. */
+.chat-list-row[data-nav-pending] {
+  position: relative;
+}
+
+.chat-list-row[data-nav-pending]::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-base-content);
+  animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
+}
+
+/* Reduced motion (rule 8): no pulse; the pending indicator holds a steady
+   60% opacity once the 150ms grace has passed. */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab[data-nav-pending] .bottom-nav-icon {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+
+  .icon-rail-tab[data-nav-pending]::before {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+
+  .chat-list-row[data-nav-pending]::before {
+    animation: nav-pending-steady 1ms linear 150ms forwards;
+  }
+}
+
+/* The rollback toast (rule 7) is the flash surface's own `toast` + `alert`
+   built client-side; the error slot paints its icon only. */
+.nav-rollback-toast {
+  background-color: var(--color-base-100);
+  color: var(--color-base-content);
+  border-color: var(--color-base-300);
+}
+
+/* Menu items (task 01a166be-b5b9, canvas 01a167b0 four-states table): the
+   pressed fill is one step darker than the `hover:bg-base-200` the items
+   carry inside their base-100 popover, so press never reads as hover. Covers
+   the Tasks create menu and the Tasks settings dropdown, both `role="menu"`;
+   the phone settings sheet's link carries `active:bg-base-300` itself. */
+[role="menu"] [role="menuitem"]:active {
+  background-color: var(--color-base-300);
+}
+
+/* Rule 5 (task 01a166be-b5b9 stage 3, canvas 01a167b0): a `phx-click`
+   button in the nav shell or a menu trigger HOLDS its pressed look while
+   LiveView's round trip is in flight (`.phx-click-loading`), and gets
+   `aria-busy` after 100ms (`installPressHold`, hooks/button_loading.js).
+   Buttons opt in with the `press-hold` class. Fills come from each button's
+   own `phx-click-loading:` utilities where the button is utility-painted;
+   the rules below cover what utilities cannot reach (the unlayered tab and
+   daisyUI's button variables). Nothing here changes a width: only ink,
+   fill and the label's opacity move. */
+.press-hold.phx-click-loading {
+  transition-duration: 0ms;
+}
+
+.press-hold[aria-busy="true"] {
+  cursor: progress;
+}
+
+/* The More tab: the pressed cell (0.92, body ink on an inactive tab) stays
+   while the sheet's open/close round trip runs, and the label dims to 60%. */
+.bottom-nav-tab.press-hold.phx-click-loading:not(.bottom-nav-tab--active) {
+  color: var(--color-base-content);
+}
+
+.bottom-nav-tab.press-hold.phx-click-loading {
+  transform: scale(0.92);
+}
+
+.bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-label {
+  opacity: 0.6;
+}
+
+/* daisyUI buttons (the Tasks create-menu trigger): hold daisyUI's own
+   `:active` fill, the same mix its press paints. */
+.btn.press-hold.phx-click-loading:not(.btn-active) {
+  --btn-bg: color-mix(in oklab, var(--btn-color, var(--color-base-200)), black 5%);
+  --btn-border: color-mix(in oklab, var(--btn-color, var(--color-base-200)), black 7%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab.press-hold.phx-click-loading {
+    transform: none;
+  }
+}
+
+/* Top progress bar (rule 6, ./js/lib/top_bar.js): topbar.js pins its canvas
+   to top: 0 inline; on a phone the bar sits below the status bar instead. */
+.topbar-progress {
+  top: env(safe-area-inset-top, 0px) !important;
+}
+
+/* The pinned Settings footer: the shared `.sheet-actions` top border is the
+   divider (1px base-300); only its padding is the More sheet's own, so the
+   Settings row lines up with the list rows above it. */
+.more-sheet .sheet-actions {
+  padding: 4px 1.5rem;
+}
+
+/* Drag handle. Saru names base-300, a border token: it measures under 3:1 on
+   base-100 in every variant (H-handle, measured in
+   more_sheet_contrast_guard_test.exs), so the handle paints with
+   --color-subtle, the lowest-contrast semantic text token that clears 3:1
+   against the sheet in all ten. */
+/* The handle as a Close button (`<.sheet handle_close>`, task 01a1557a-807f
+   stage 4; Saru rule 2). A 44px-tall, 88px-wide hit target around the
+   unchanged 36x4 bar; `touch-action: none` hands a drag that starts on it to
+   the Sheet hook's swipe-down instead of the page. Opt-in markup only: no
+   other sheet renders `.sheet-handle-button`. */
+.sheet-handle-button {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  font-weight: 600;
-  flex-shrink: 0;
+  width: 88px;
+  min-height: 44px;
+  margin: 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-field);
+  cursor: grab;
+  touch-action: none;
 }
 
-.more-sheet-profile-info {
-  flex: 1;
-  min-width: 0;
+.sheet-handle-button .sheet-handle {
+  margin: 0;
 }
 
-.more-sheet-profile-name {
-  font-weight: 500;
-  font-size: 14px;
-  line-height: 1.2;
+/* The sheet's header X (`.sheet-close-button`, every sheet without
+   `handle_close`; task 01a161c4 stage 2). Phone-list palette ruling: no
+   hover paint on phone surfaces; the phone gets a pressed state
+   (`active:bg-base-200` on the markup). Desktop hover is plain CSS, gated on
+   a hovering pointer AND the lg breakpoint, so the X's class list carries no
+   `hover` substring for the markup scans to trip on. Unlayered on purpose:
+   it must beat the `text-subtle` utility while hovered. */
+@media (hover: hover) and (min-width: 1024px) {
+  .sheet-close-button:hover {
+    color: var(--color-base-content);
+    background: var(--color-base-200);
+  }
 }
 
-.more-sheet-profile-meta {
-  font-size: 11px;
-  color: oklch(50% 0 0);
-  margin-top: 2px;
+/* Files & Canvases browser (rung 16, task 01a1557a-b5f9 stage 4). Same rule
+   as the sheet X above: phone surfaces carry no hover paint (a pressed state
+   instead, `active:bg-base-100` on the rows), and desktop hover is plain CSS
+   gated on a hovering pointer AND the lg breakpoint, keyed on the
+   components' `data-role`s, so their class lists carry no `hover` substring.
+   Rows and node links sit on the base-200 list and hover to base-100 (the
+   pressed slot); tiles, tree rows, the New menu's items and unselected chips
+   sit on base-100 and hover to base-200. A current tree row or selected chip
+   (`aria-current="page"`) keeps its base-300. Pinned by
+   test/platform/design/files_browser_contrast_guard_test.exs. */
+@media (hover: hover) and (min-width: 1024px) {
+  [data-role="files-browser"] [data-role="browser-row"]:hover,
+  [data-role="files-browser"] [data-role="files-row"]:hover,
+  [data-role="files-browser"] [data-role="files-node-link"]:hover {
+    background: var(--color-base-100);
+  }
+
+  [data-role="files-browser"] [data-role="browser-tile"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-recents"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-project"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-space"][aria-current="false"]:hover,
+  [data-role="files-tree"] [data-role="files-tree-org-link"]:hover,
+  [data-role="files-new-menu"] [data-role="files-new-items"] button:hover,
+  [data-role="files-chips"] [aria-current="false"]:hover {
+    background: var(--color-base-200);
+  }
 }
 
-.more-sheet-chevron {
-  width: 16px;
-  height: 16px;
-  color: oklch(50% 0 0);
-  flex-shrink: 0;
+/* The shared rule hides the bottom-sheet handle at 768px and up; a handle
+   that IS the Close button must stay visible wherever it is rendered. */
+@media (min-width: 768px) {
+  .sheet-bottom .sheet-handle-button .sheet-handle {
+    display: block;
+  }
+}
+
+.more-sheet .sheet-handle {
+  background: var(--color-subtle);
 }
 
 
@@ -5052,7 +6081,7 @@ body, .font-suite {
     font-size: 12px;
     line-height: 1;
     white-space: nowrap;
-    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+    color: var(--color-subtle); /* task 01a15902 stage 6; was base-content at 60% */
   }
 
   .sheet-handle__fill.candidate-drain--warning {
@@ -5540,8 +6569,8 @@ body, .font-suite {
 
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
    Per-section container + header + row affordances. The rail is desktop
-   only; mobile uses the existing flat browser overlay (see
-   chat_live.html.heex `mobile_browser_open` block).
+   only; the phone uses the Chat list (`Partials.ChatList`, task
+   01a1557a-8562).
 
    The drag-handle (`.channel-section-drag-handle`) is opacity-0 by
    default and lifts to opacity-100 on `group-hover` of the parent
@@ -5587,7 +6616,7 @@ body, .font-suite {
   /* The eye toggle, sized and weighted like the kebab beside it so the header
      row still reads as one pair of controls rather than a new emphasis. */
   .channel-mask-toggle {
-    @apply inline-flex items-center justify-center rounded p-1 text-base-content/60;
+    @apply inline-flex items-center justify-center rounded p-1 text-subtle;
     @apply hover:bg-base-200 hover:text-base-content;
   }
 
@@ -5599,16 +6628,7 @@ body, .font-suite {
      not hover-gated, so it survives touch. */
   .channel-section-reveal-button {
     @apply inline-flex flex-shrink-0 items-center justify-center rounded p-0.5;
-    @apply text-base-content/60 hover:bg-base-200 hover:text-base-content;
-  }
-
-  /* The drawer's reveal control (task 01a00c66 stage 3). Same control, same
-     event, same accessible name as the rail's — only the hit area grows, to
-     the 44px touch floor the rest of the drawer's controls already use.
-     `ml-auto` pushes it to the trailing edge of the header row, where the
-     drawer's other per-row controls sit. */
-  .channel-section-reveal-button--touch {
-    @apply ml-auto min-h-11 min-w-11 p-0;
+    @apply text-subtle hover:bg-base-200 hover:text-base-content;
   }
 
   /* One org deliberately shown while the mode is on. The border marks it as an
@@ -5631,11 +6651,11 @@ body, .font-suite {
   /* Decorative chevron (aria-hidden in the markup). `--color-base-content` per
      the design direction — no new colour token. */
   .channel-section-chevron {
-    @apply flex-shrink-0 text-base-content/60;
+    @apply flex-shrink-0 text-subtle;
   }
 
   .channel-section-label {
-    @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
+    @apply text-xs font-semibold uppercase tracking-widest text-base-content;
   }
 
   /* Color-only section swatch in the section header. Communicates the section's
@@ -5684,168 +6704,20 @@ body, .font-suite {
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
   .channel-section-drag-handle {
-    @apply ml-auto cursor-grab opacity-0 text-base-content/40 transition-opacity duration-150 group-hover:opacity-100;
+    @apply ml-auto cursor-grab opacity-0 text-subtle transition-opacity duration-150 group-hover:opacity-100;
   }
 
   .channel-section-drag-handle:active {
     cursor: grabbing;
   }
 
-  /* Touch variant of the drag handle — mobile channel-browser overlay only
-     (chat sidebar mobile Stage 3). Touch has no hover, so the handle is
-     always visible while rendered (it's edit-gated in the template instead),
-     and its hit box is >=44x44px (iOS guideline) even though the glyph
-     paints small.
-
-     Suppression rules — each fixes ONE native behavior that otherwise
-     steals the long-press gesture (rationale mirrored in
-     section_reorder_touch.js's header; keep the two in sync):
-       - touch-action: none — on the HANDLE ONLY, so the browser never
-         claims a handle-origin touch for scrolling (we'd get pointercancel
-         mid-hold). On the row/section it would kill scroll-into-drag.
-       - -webkit-touch-callout: none — suppresses the iOS long-press
-         copy/paste callout, which fires at ~the same threshold as our
-         400ms hold and swallows the gesture. */
-  .channel-section-drag-handle--touch {
-    /* ml-0 overrides the base class's ml-auto: in the mobile drawer the
-       handle always renders as the last child of the right-aligned control
-       cluster (after .channel-section-move-controls, which owns ml-auto) —
-       two auto margins would split the free space and float the cluster
-       mid-row. */
-    @apply flex items-center justify-center opacity-100 min-h-11 min-w-11 ml-0;
-    touch-action: none;
-    -webkit-touch-callout: none;
-  }
-
-  /* Active-drag state toggled by SectionReorderTouch on the mobile rail.
-     user-select is suppressed ONLY while a drag is live — statically it
-     would break legitimate text selection in the drawer; without it iOS
-     starts selecting the section label mid-drag. */
-  .section-touch-drag-active {
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  /* Up/down section move controls in the mobile drawer (Stage 4 — the
-     WCAG 2.5.7 non-drag alternative to the long-press drag). ml-auto pulls
-     the control cluster (buttons + drag handle after it) to the right edge
-     of the section header. Buttons are full 44px touch targets; disabled
-     (boundary) buttons dim rather than disappear so the control cluster
-     doesn't shift as sections move. */
-  .channel-section-move-controls {
-    @apply ml-auto flex items-center;
-  }
-
-  .channel-section-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-    touch-action: manipulation;
-  }
-
-  /* Disabled (boundary) buttons: solid /40 token, NOT an opacity multiplier.
-     opacity-30 stacked on the /60 base color rendered ≈18% white (≈1.8:1 on
-     the drawer bg) — invisible on a real phone (design review, 2026-07-09). /40 is
-     ≈3.5:1: clearly dimmer than enabled (≈6:1) but unmistakably present.
-     WCAG 1.4.11 exempts disabled controls; we hold its 3:1 floor anyway
-     because "present but disabled" is this drawer's whole convention. */
-  .channel-section-move-button--touch:disabled {
-    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
-  }
-
-  /* Channel-ROW reorder chrome in the mobile drawer (row reorder Stage 1;
-     always-visible since the 2026-07-09 a11y revision). Every edit-mode row
-     renders its ▲▼ pair + ☰ handle in this single flush cluster — no
-     internal gap, so the row's arrow columns align exactly with the section
-     header's (the row container's gap-3 otherwise offset them 12px). Same
-     44px targets and disabled treatment as the section buttons. */
-  .channel-row-move-controls--touch {
-    @apply flex items-center flex-shrink-0;
-  }
-
-  .channel-row-move-button--touch {
-    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-    touch-action: manipulation;
-  }
-
-  .channel-row-move-button--touch:disabled {
-    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
-  }
-
-  /* Row touch-drag handle (channel-row reorder Stage 2 — activates the slot
-     Stage 1 held with an inert placeholder). Deliberately smaller and dimmer
-     than the section handle (text-sm glyph vs the section's full-size ☰) so
-     the two drag scopes read differently at a glance. touch-action +
-     -webkit-touch-callout mirror the section handle's suppression CSS — see
-     the rationale block above .channel-section-drag-handle--touch; each rule
-     fixes one specific gesture failure. */
-  .channel-row-drag-handle {
-    /* /45 not /30: this is an ENABLED control, so WCAG 1.4.11's 3:1 floor
-       genuinely applies (/30 ≈ 2.6:1 on the drawer bg). Still visibly
-       quieter than the section handle's /60. */
-    @apply flex items-center justify-center min-h-11 min-w-11 flex-shrink-0 text-sm text-base-content/45;
-    touch-action: none;
-    -webkit-touch-callout: none;
-  }
-
-  /* Active-drag state toggled by RowReorderTouch on its wrapper — same
-     drag-scoped user-select suppression as .section-touch-drag-active
-     (statically it would break text selection; without it iOS starts
-     selecting the row label mid-drag). */
-  .row-touch-drag-active {
-    user-select: none;
-    -webkit-user-select: none;
-  }
-
-  /* Row being touch-dragged (Stage 3): the row goes fully invisible — its
-     vacated space IS the open slot the siblings shift around, and the
-     fixed-position ghost is what the user sees under their finger. (The
-     Stage 2 interim dimmed it to 50%; two half-visible copies read as a
-     rendering glitch once the ghost exists.) */
-  .channel-row-wrap--touch-dragging {
-    @apply opacity-0;
-  }
-
-  /* Finger-tracked ghost (Stage 3 lift): fixed clone of the dragged row,
-     scaled 1.02 with an elevation shadow, solid drawer-surface background
-     so it stays readable while passing over other rows. pointer-events
-     none — elementFromPoint/slot math must see through it. */
-  .channel-row-ghost {
-    @apply fixed z-50 pointer-events-none flex items-center gap-3 px-4 py-3 text-sm rounded-lg bg-base-200 shadow-lg;
-    transform: scale(1.02);
-  }
-
-  /* Slot-opening motion (Stage 3): sibling rows glide between their two
-     possible positions while a row drag is live. transform-only — no
-     height/layout animation. Scoped to the drag-active class so rows cost
-     nothing at rest. */
-  .row-touch-drag-active [data-channel-id] {
-    transition: transform 180ms ease;
-  }
-
-  /* prefers-reduced-motion: siblings jump instantly between positions
-     instead of gliding; the ghost still tracks the finger (direct
-     manipulation, not decorative motion). */
-  @media (prefers-reduced-motion: reduce) {
-    .row-touch-drag-active [data-channel-id] {
-      transition: none;
-    }
-  }
-
-  /* During a row drag, every section EXCEPT the drag's source dims —
-     communicates the within-section clamp mid-gesture (designer rec 17):
-     the dimmed areas visibly aren't drop targets. */
-  .row-touch-drag-active section:not(.channel-section--row-drag-source) {
-    @apply opacity-50;
-    transition: opacity 150ms ease;
-  }
-
-  /* Mobile drawer footer ("+ New channel"): normal spacing-3 bottom padding
-     PLUS the device safe-area inset. The shared .safe-area-bottom utility
+  /* Full-screen list footer (the external switcher's "+ New conversation"):
+     normal spacing-3 bottom
+     padding PLUS the device safe-area inset. The shared .safe-area-bottom utility
      REPLACES padding-bottom with the inset, which is 0 everywhere except
      notched iOS — on desktop PWA the window's rounded corners then clipped
      the label (found in design review, 2026-07-05). */
-  .mobile-drawer-footer-safe {
+  .footer-safe-bottom {
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
 
@@ -5865,7 +6737,7 @@ body, .font-suite {
 
   /* Empty-state hint inside a sub-org section that has no channels yet. */
   .channel-section-empty {
-    @apply px-2 py-1 text-xs italic text-base-content/40 leading-snug;
+    @apply px-2 py-1 text-xs italic text-subtle leading-snug;
   }
 
   /* Single channel / DM row — shared across all sections so we don't
@@ -5939,7 +6811,7 @@ body, .font-suite {
 
      `transition` covers colour and background on hover/focus. */
   .channel-row-actions-button {
-    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/60 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
+    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-subtle hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
   }
 
   /* 44x44 touch target from a hit-area pseudo-element, not from the box.
@@ -5995,7 +6867,7 @@ body, .font-suite {
     justify-content: center;
     width: 24px;
     height: 24px;
-      color: color-mix(in oklch, var(--color-base-content) 60%, transparent);
+      color: var(--color-subtle); /* task 01a15902 stage 6; was base-content at 60% */
     transition:
       color 75ms ease,
       background-color 75ms ease;
@@ -6045,7 +6917,7 @@ body, .font-suite {
      "More" menu below.) Reused for the admin "Done (admin)" via its own
      accented rule. */
   .channel-edit-toggle {
-    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content hover:text-primary hover:bg-base-300 transition-colors;
   }
 
   .channel-edit-toggle[aria-pressed="true"] {
@@ -6061,7 +6933,7 @@ body, .font-suite {
   /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
      hover/open so it doesn't compete with the CHANNELS label. */
   .channel-sidebar-menu-button {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
   }
 
   .channel-sidebar-menu-button[aria-expanded="true"] {
@@ -6079,7 +6951,7 @@ body, .font-suite {
 
   /* One menu row. Left-aligned, full-width tap target, hover highlight. */
   .channel-sidebar-menu-item {
-    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content/80 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
+    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
   }
 
   /* The admin entry point — warning accent so "Edit company default" reads as
@@ -6092,7 +6964,7 @@ body, .font-suite {
      states which layout is being edited without a second control. Truncates
      rather than overflowing at narrow widths. */
   .channel-edit-mode-label {
-    @apply min-w-0 truncate text-xs font-medium text-base-content/60;
+    @apply min-w-0 truncate text-xs font-medium text-subtle;
   }
 
   /* Admin variant of the mode label — admin accent to match admin-edit chrome. */
@@ -6104,7 +6976,7 @@ body, .font-suite {
      the actual drag is owned by the ChannelMembershipDrag hook, which only
      starts on this element so a row-link click still navigates. */
   .channel-row-grab {
-    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-base-content/40 leading-none;
+    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-subtle leading-none;
   }
 
   .channel-row-grab:active {
@@ -6119,17 +6991,17 @@ body, .font-suite {
   }
 
   .channel-row-move-button {
-    @apply inline-flex items-center justify-center w-5 h-5 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+    @apply inline-flex items-center justify-center w-5 h-5 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
   }
 
   .channel-row-move-button:disabled {
-    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-base-content/50;
+    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-disabled;
   }
 
   /* Per-section Hide control in the section header (edit mode). Mirrors the
      section drag handle's quiet treatment but stays visible in edit mode. */
   .channel-section-hide-button {
-    @apply inline-flex items-center justify-center w-6 h-6 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+    @apply inline-flex items-center justify-center w-6 h-6 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
   }
 
   /* Dragged channel row — faded while a drag is in flight (mirrors the
@@ -6149,7 +7021,7 @@ body, .font-suite {
      the "+ New channel" visual vocabulary so the rail's chrome stays
      consistent. */
   .channel-reset-layout-button {
-    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors;
   }
 
   /* ── Root-admin "Edit default" mode (chat sidebar Stage 6) ────────────
@@ -6246,7 +7118,7 @@ body, .font-suite {
   }
 
   .channel-hidden-drawer-item {
-    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content/70 rounded hover:bg-base-300/60;
+    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content rounded hover:bg-base-300/60;
   }
 
   .channel-hidden-drawer-show {
@@ -6397,7 +7269,7 @@ body, .font-suite {
      dismissed as broken. A real <button> in the markup, so focus-visible is the
      browser's and the tab order is the DOM's. */
   .channel-ajar-show-all {
-    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors;
+    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded font-medium text-base-content hover:text-base-content hover:bg-base-300 transition-colors;
   }
 
   /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).
@@ -6427,33 +7299,6 @@ body, .font-suite {
     content: "";
     position: absolute;
     inset: -6px;
-  }
-
-  /* Mobile chat-header compact scope-pill (chat sidebar mobile Stage 2,
-     Decision #6). The shared `.scope-pill-hit-expand` overlay above only
-     clears the WCAG 2.5.8 24px floor (~26px on the 14px compact chip) and
-     would additionally be clipped by the header row's `overflow-hidden`
-     (name truncation). In the mobile header we (1) give the wrapper a 44px
-     min box so the flex ancestors reserve the height and nothing clips, and
-     (2) stretch the hit overlay to fill it — yielding a >=44x44px iOS-
-     compliant tap target while the painted chip stays compact. Scoped to
-     this wrapper so dense message-row compact pills keep the correct-for-
-     density 24px overlay. */
-  .chat-header-scope-pill-mobile {
-    @apply inline-flex items-center justify-center;
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .chat-header-scope-pill-mobile .scope-pill-hit-expand::before {
-    top: 50%;
-    right: auto;
-    bottom: auto;
-    left: 50%;
-    width: 100%;
-    min-width: 44px;
-    height: 44px;
-    transform: translate(-50%, -50%);
   }
 }
 
@@ -6742,9 +7587,10 @@ body, .font-suite {
 
   /* Agent-owned marker: the chat .msg-agent accent edge, reusable on any
      container (agent-assigned task cards adopt it in the Tasks pilot).
-     --agent-accent-safe comes from the shared clamp block above. */
+     --ag comes from the container's data-agent-slot pointer rule (task
+     01a1557a rung 3 stage 2); with no slot it is the blue slot's rail. */
   .agent-owned {
-    border-left: 3px solid var(--agent-accent-safe);
+    border-left: 3px solid var(--ag, var(--ag-blue));
   }
 
   /* Form-control height consistency (design review 2026-07-12): inside a
@@ -7078,9 +7924,11 @@ body, .font-suite {
        warn  --color-warning @ 70%      #975E00  5.37:1  (worst 5.14:1) */
   --cc-countdown-rest: var(--color-neutral);
   --cc-countdown-warn: color-mix(in oklch, var(--color-warning) 70%, black);
-  /* Stop is red only on hover/focus, and its label sits on --cc-btn-bg
-     (#f4f5f8), where raw --color-error is 3.57:1 — under AA for an
-     11.5px label. 5.21:1 here, still unmistakably red. */
+  /* Stop (and Undo) is red only on hover/focus. The red is the colour of
+     the 11.5px LABEL on --cc-btn-bg (#f4f5f8); the fill does not change,
+     so the floor is 4.5:1 text. Raw --color-error is 4.6578:1 there; the
+     85% mix toward black holds the label at 6.5841:1 (Burrow light), lowest
+     6.5841:1 across the light variants (error_token_contrast_guard_test.exs). */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, black);
   /* ── The correction drawer (task 01a0740e stage 2) ──
      The pencil in the countdown foot opens a panel INSIDE the armed
@@ -7156,7 +8004,7 @@ body, .font-suite {
 
        Stopped  --color-neutral @ 90%  #696364  5.39:1  (title is 14.23:1)
        Undo     --cc-btn-fg           #3D4453  8.96:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #C22B30  5.23:1  on --cc-btn-bg */
+       Undo hover --cc-stop-hover     #AF101F  6.6044:1  on --cc-btn-bg */
   --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 90%, white);
   --cc-skeleton-a: #eceef2;
   --cc-skeleton-b: #dcdfe7;
@@ -7231,8 +8079,10 @@ body, .font-suite {
        warn  --color-warning         #F49A00  7.86:1  (worst 7.78:1) */
   --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
   --cc-countdown-warn: var(--color-warning);
-  /* Raw --color-error is 4.23:1 on --cc-btn-bg (#1a1f2b), under AA.
-     5.36:1 here. */
+  /* The Stop/Undo hover LABEL colour on --cc-btn-bg (#1a1f2b): 4.5:1
+     text, since the fill does not change. Raw --color-error is 4.3969:1
+     there; 5.5338:1 here (Burrow dark), lowest 5.5338:1 across the dark
+     variants (error_token_contrast_guard_test.exs). */
   --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
   /* ── The correction drawer (task 01a0740e stage 2) ──
      See the light block for the slot map and for the two slots left
@@ -7283,7 +8133,7 @@ body, .font-suite {
 
        Stopped  --color-neutral @ 60%  #8F8B8C  5.43:1  (title is 14.21:1)
        Undo     --cc-btn-fg           #AEB6C6  8.08:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #F8605C  5.35:1  on --cc-btn-bg
+       Undo hover --cc-stop-hover     #FB635F  5.5317:1  on --cc-btn-bg
 
      The 60% here is the same figure --cc-countdown-rest arrived at from
      the same starting token; they are kept as two tokens because they
@@ -8440,18 +9290,23 @@ body, .font-suite {
    by reading the painted `getComputedStyle().color` off the live element
    after the change, not by reasoning about the cascade.
 
-   The `prefers-color-scheme` twin is the house pattern (see `.msg-agent`
+   The `prefers-color-scheme` twin is the house pattern (see `.chip-soft`
    above): the dark theme is declared `prefersdark: true`, and a page that
    runs no script (or paints before the `theme-boot` script runs) has no
    `data-theme` at all, so a viewer under a dark OS gets the dark palette
-   with no `[data-theme=dark]` to match. */
+   with no `[data-theme=dark]` to match.
+
+   Task 01a15907 stage 5: the colour is now the secondary-text token,
+   `var(--color-subtle)`, which resolves in every dark block to the same
+   base-content 55% over transparent measured above. No base-content mix
+   below 100% is declared outside the --subtle definitions. */
 [data-theme="dark"] [data-role="canvas-search-indexing-state"] {
-  color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+  color: var(--color-subtle);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) [data-role="canvas-search-indexing-state"] {
-    color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+    color: var(--color-subtle);
   }
 }
 
@@ -8585,4 +9440,70 @@ html.screen-share-fullscreen-active,
 body.screen-share-fullscreen-active {
   overflow: hidden !important;
   overscroll-behavior: none;
+}
+
+/* Tasks filters, desktop hover (task 01a161fd stage 4; the designer's
+   prototype canvas 01a16202, Desktop mode). The title menu's options and the
+   filter popover's toggles take base-200 under a real pointer at lg and up.
+   Plain CSS on named classes, never a `hover:` utility: the same options
+   render in the phone sheets, where hover is ruled out. */
+@media (hover: hover) and (min-width: 1024px) {
+  .tasks-filter-opt:hover,
+  .tasks-filter-tog:hover {
+    background-color: var(--color-base-200);
+  }
+}
+
+/* ── "Names masked" chip (task 01a1600d stage 3) ─────────────────────────
+   PlatformWeb.Components.MaskNamesChip; direction canvas 01a1616c, node
+   `lay`. Below lg the chip shows its full label for 4 seconds after it is
+   inserted, then collapses to the eye-slash icon, giving the header back to
+   the title. CSS only: no hook, no timer, no server round trip. So the
+   collapse replays whenever the chip element is re-inserted (a full load,
+   or navigation to a different LiveView); a patch within one LiveView keeps
+   the element and therefore the collapsed state. The button's aria-label
+   never changes, so the accessible name is the same before and after.
+
+   The negative left margin at the end cancels the button's gap-1.5, so the
+   collapsed pill is the icon plus its own padding.
+
+   Under prefers-reduced-motion the label changes without animation at the
+   same moment: zero duration, the SAME 4s delay. (The universal reduce rule
+   near the top of this file also forces animation-duration to 0.01ms and
+   leaves the delay alone.)
+
+   Desktop (lg and up) always shows the label and the end time. Its hover is
+   plain CSS here, never a `hover:` utility, and only where hover exists:
+   base-100, the same step as the phone's pressed state, which the contrast
+   guard measures for the label, time and icon in all ten variants.
+   Semantic variables only. */
+@keyframes mask-chip-collapse {
+  to {
+    max-width: 0;
+    opacity: 0;
+    margin-left: -0.375rem;
+  }
+}
+
+@media (width < 64rem) {
+  [data-role="mask-chip-label"] {
+    display: inline-block;
+    max-width: 8rem;
+    overflow: hidden;
+    vertical-align: bottom;
+    animation: mask-chip-collapse 200ms ease-out 4s forwards;
+  }
+}
+
+@media (width < 64rem) and (prefers-reduced-motion: reduce) {
+  [data-role="mask-chip-label"] {
+    animation-duration: 0s;
+    animation-delay: 4s;
+  }
+}
+
+@media (hover: hover) and (width >= 64rem) {
+  [data-role="mask-names-chip"]:hover {
+    background-color: var(--color-base-100);
+  }
 }

@@ -689,12 +689,12 @@ defmodule PlatformWeb.SocialComposer do
             <h2 id="composer-heading" class="truncate text-lg font-semibold">
               {heading(@step, @idea_form.params["title"])}
             </h2>
-            <p :if={@profile} class="truncate text-sm text-base-content/70">
+            <p :if={@profile} class="truncate text-sm text-base-content">
               {step_hint(@step, @profile)}
             </p>
           </div>
           <ol
-            class="hidden items-center gap-2 text-xs font-medium text-base-content/70 sm:flex"
+            class="hidden items-center gap-2 text-xs font-medium text-base-content sm:flex"
             aria-label="Steps"
           >
             <li class={[@step == :idea && "text-base-content"]}>1 Idea</li>
@@ -758,7 +758,7 @@ defmodule PlatformWeb.SocialComposer do
       class="flex min-h-0 flex-1 flex-col"
     >
       <div class="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
-        <p :if={@composable == []} class="text-sm text-base-content/70" data-role="composer-no-brand">
+        <p :if={@composable == []} class="text-sm text-base-content" data-role="composer-no-brand">
           You can't post for any brand here yet.
         </p>
 
@@ -812,7 +812,7 @@ defmodule PlatformWeb.SocialComposer do
 
         <fieldset :if={@profile} class="space-y-2" data-role="composer-accounts">
           <legend class="mb-1 text-sm font-semibold">Accounts</legend>
-          <p :if={@accounts == []} class="text-sm text-base-content/70">
+          <p :if={@accounts == []} class="text-sm text-base-content">
             {@profile.name} has no accounts yet. Connect one in Connections.
           </p>
           <input type="hidden" name="idea[account_ids][]" value="" />
@@ -833,18 +833,18 @@ defmodule PlatformWeb.SocialComposer do
             <span class="min-w-0 flex-1">
               <span class="block truncate text-sm font-medium">
                 {SocialHelpers.platform_label(account.platform)}
-                <span class="font-normal text-base-content/70">{account.handle}</span>
+                <span class="font-normal text-base-content">{account.handle}</span>
               </span>
               <span
                 :if={account.approval_mode == "draft_only"}
-                class="block text-xs text-base-content/70"
+                class="block text-xs text-base-content"
                 data-role="composer-by-hand"
               >
                 You post this yourself
               </span>
               <span
                 :if={owner_name(@owners, account)}
-                class="block text-xs text-base-content/70"
+                class="block text-xs text-base-content"
                 data-role="composer-owner"
               >
                 {owner_name(@owners, account)}'s account: they approve it
@@ -923,7 +923,7 @@ defmodule PlatformWeb.SocialComposer do
       </p>
       <p
         :if={@failed > 0 and not @loading?}
-        class="text-xs text-base-content/70"
+        class="text-xs text-base-content"
         data-role="composer-left-out"
       >
         {@failed} {if @failed == 1, do: "version", else: "versions"} didn't draft and won't be sent. Try again on the column, or send the rest.
@@ -1011,7 +1011,7 @@ defmodule PlatformWeb.SocialComposer do
         <SocialPreview.glyph platform={@account.platform} class="size-4 shrink-0" />
         <span class="min-w-0 flex-1 truncate text-sm font-semibold">
           {SocialHelpers.platform_label(@account.platform)}
-          <span class="font-normal text-base-content/70">{@account.handle}</span>
+          <span class="font-normal text-base-content">{@account.handle}</span>
         </span>
         <button
           type="button"
@@ -1050,7 +1050,7 @@ defmodule PlatformWeb.SocialComposer do
         data-role="composer-error"
       >
         <p class="font-medium">This version didn't draft.</p>
-        <p class="text-base-content/80">{@column.error}</p>
+        <p class="text-base-content">{@column.error}</p>
       </div>
 
       <div :if={@column.state == :ok} class="flex min-w-0 flex-col gap-3">
@@ -1097,19 +1097,19 @@ defmodule PlatformWeb.SocialComposer do
         />
 
         <section class="space-y-2 rounded-box bg-base-200 p-3 text-sm" data-role="composer-rationale">
-          <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/70">
+          <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content">
             Why this version
           </h3>
           <dl class="space-y-2">
             <div :if={@column.rationale.why_format}>
               <dt class="font-medium">Format</dt>
-              <dd class="text-base-content/80" data-role="composer-why-format">
+              <dd class="text-base-content" data-role="composer-why-format">
                 {@column.rationale.why_format}
               </dd>
             </div>
             <div>
               <dt class="font-medium">Time</dt>
-              <dd class="text-base-content/80" data-role="composer-why-time">
+              <dd class="text-base-content" data-role="composer-why-time">
                 {@column.rationale.why_time}
               </dd>
             </div>
@@ -1118,7 +1118,7 @@ defmodule PlatformWeb.SocialComposer do
               <dd
                 class={[
                   (@column.rationale.banned || @column.rationale.repeat) && "text-warning",
-                  !(@column.rationale.banned || @column.rationale.repeat) && "text-base-content/80"
+                  !(@column.rationale.banned || @column.rationale.repeat) && "text-base-content"
                 ]}
                 data-role="composer-voice-check"
               >

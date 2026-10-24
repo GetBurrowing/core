@@ -104,6 +104,14 @@ defmodule Platform.Chat.AttentionRouterTest do
     message
   end
 
+  # The policy every channel and group that existed before task 01a1557a-8f80
+  # was backfilled with.
+  defp on_mention!(space) do
+    space
+    |> Platform.Chat.Space.agent_attention_changeset(%{agent_attention_policy: "on_mention"})
+    |> Repo.update!()
+  end
+
   defp unique_slug do
     "test-#{System.unique_integer([:positive])}"
   end
@@ -761,7 +769,10 @@ defmodule Platform.Chat.AttentionRouterTest do
     test "returns empty (silence) and does not arm the principal agent" do
       agent = create_agent(%{name: "Zip"})
 
-      space = create_space(%{kind: "group"})
+      # Task 01a1557a-8f80 stage 1: on_mention, the value the migration
+      # backfilled on every pre-existing group (a new group defaults to
+      # collaborative, covered under "agent attention controls").
+      space = create_space(%{kind: "group"}) |> on_mention!()
       user = create_participant(space.id)
 
       Chat.add_agent_participant(space.id, agent, display_name: "Zip")
@@ -880,7 +891,11 @@ defmodule Platform.Chat.AttentionRouterTest do
       # Two agents so the stale-vs-present distinction is still exercised:
       # agent is dismissed, agent2 stays in the roster and must NOT inherit
       # the eye.
-      space = create_space(%{kind: "group"})
+      #
+      # Task 01a1557a-8f80 stage 1: on_mention, the value the migration
+      # backfilled on every pre-existing group. A group created now defaults
+      # to collaborative, which would hand the message to agent2 by policy.
+      space = create_space(%{kind: "group"}) |> on_mention!()
 
       user = create_participant(space.id)
 
@@ -943,8 +958,9 @@ defmodule Platform.Chat.AttentionRouterTest do
 
   # The header eye IS the mutex (task 019f9790). Before this task three
   # header controls disagreed with one another and none of them was the
-  # thing that actually routed messages; `watch_enabled` + `primary_agent_id`
-  # could re-arm an agent behind the user's back. These tests pin the
+  # thing that actually routed messages; the old watch column (since renamed
+  # `agents_awake`) + `primary_agent_id` could re-arm an agent behind the
+  # user's back. These tests pin the
   # lifecycle the eye now promises, end to end through the router.
   describe "eye-as-mutex lifecycle" do
     setup do
@@ -1957,6 +1973,499 @@ defmodule Platform.Chat.AttentionRouterTest do
         assert AttentionRouter.push_notification("Blake", message, :all, space, []).space_kind ==
                  kind
       end
+    end
+  end
+
+  # ── Notification level (task 01a1557a-e538 stage 1) ────────────────────────
+  #
+  # User A is in the default "mention" mode and absent from the space (no
+  # presence is tracked in the test). The `:notifications_module` seam makes
+  # `deliver_push/2` call `fan_out_to_user/2` synchronously, so the push the
+  # router decided is observable without Push itself.
+  defmodule LevelRecorder do
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:level_push, user_id, payload})
+      :ok
+    end
+
+    def fan_out_to_humans(ids, payload, opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:level_push_humans, ids, payload, opts})
+      :ok
+    end
+  end
+
+  describe "notification level" do
+    setup do
+      Application.put_env(:platform, :notifications_module, LevelRecorder)
+      :persistent_term.put({LevelRecorder, :owner}, self())
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :notifications_module)
+        :persistent_term.erase({LevelRecorder, :owner})
+      end)
+
+      :ok
+    end
+
+    defp level_user(level) do
+      user = insert_test_user(name: "Level #{level}")
+      if level, do: {:ok, _} = Platform.Accounts.put_notification_level(user.id, level)
+      user
+    end
+
+    defp join_level_space(space, user, display_name) do
+      create_participant(space.id, %{
+        participant_id: user.id,
+        display_name: display_name,
+        attention_mode: "mention"
+      })
+    end
+
+    defp decisions_for(decisions, participant),
+      do:
+        decisions |> Enum.filter(&(&1.participant_id == participant.id)) |> Enum.map(& &1.reason)
+
+    defp setup_channel(level) do
+      space = create_space(%{kind: "channel"})
+      a = level_user(level)
+      a_row = join_level_space(space, a, "Avery Level")
+      author = create_participant(space.id, %{display_name: "Blake Author"})
+      {space, a, a_row, author}
+    end
+
+    test "level all: a plain channel message gives A an :all decision and one push" do
+      {space, a, a_row, author} = setup_channel("all")
+
+      message = create_message(space.id, author.id, %{content: "plain update"})
+      {:ok, decisions} = AttentionRouter.route(message)
+      drain()
+
+      assert decisions_for(decisions, a_row) == [:all]
+      a_id = a.id
+      assert_received {:level_push, ^a_id, %{kind: "chat_message"}}
+      refute_received {:level_push, _, _}
+    end
+
+    test "level mentions (stored, and the unset default): no decision and no push" do
+      for level <- ["mentions", nil] do
+        {space, _a, a_row, author} = setup_channel(level)
+
+        message = create_message(space.id, author.id, %{content: "plain update"})
+        {:ok, decisions} = AttentionRouter.route(message)
+        drain()
+
+        assert decisions_for(decisions, a_row) == []
+        refute_received {:level_push, _, _}
+      end
+    end
+
+    test "level direct: the router decides as today (the gate lives in Push)" do
+      {space, a, a_row, author} = setup_channel("direct")
+
+      plain = create_message(space.id, author.id, %{content: "plain update"})
+      {:ok, plain_decisions} = AttentionRouter.route(plain)
+      drain()
+      assert decisions_for(plain_decisions, a_row) == []
+      refute_received {:level_push, _, _}
+
+      mention = create_message(space.id, author.id, %{content: "@[Avery Level] look"})
+      {:ok, mention_decisions} = AttentionRouter.route(mention)
+      drain()
+      assert decisions_for(mention_decisions, a_row) == [:mention]
+      a_id = a.id
+      assert_received {:level_push, ^a_id, %{kind: "chat_mention"}}
+    end
+
+    test "level mentions: a DM still decides :all and an at-here still decides :here" do
+      dm = create_space(%{kind: "dm"})
+      a = level_user("mentions")
+      a_row = join_level_space(dm, a, "Avery Level")
+      author = create_participant(dm.id, %{display_name: "Blake Author"})
+
+      {:ok, dm_decisions} =
+        AttentionRouter.route(create_message(dm.id, author.id, %{content: "hi"}))
+
+      drain()
+      assert decisions_for(dm_decisions, a_row) == [:all]
+
+      {space, _a, ch_row, ch_author} = setup_channel("mentions")
+
+      {:ok, here_decisions} =
+        AttentionRouter.route(
+          create_message(space.id, ch_author.id, %{content: "@[here] standup"})
+        )
+
+      drain()
+      assert decisions_for(here_decisions, ch_row) == [:here]
+    end
+
+    # The router reads every human recipient's level in ONE query. The router
+    # runs the query in its own process, so the handler keys on the query's
+    # params instead: the "notification_level" key plus one of THIS test's
+    # user ids, which no sibling test can produce.
+    test "levels are read in ONE query per message, however many humans are present" do
+      space = create_space(%{kind: "channel"})
+      users = for level <- ["all", "mentions", nil], do: level_user(level)
+      Enum.with_index(users, fn u, i -> join_level_space(space, u, "Level Reader #{i}") end)
+      author = create_participant(space.id, %{display_name: "Blake Author"})
+      ids = MapSet.new(Enum.flat_map(users, &[&1.id, Ecto.UUID.dump!(&1.id)]))
+
+      parent = self()
+      handler_id = "router-level-queries-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :repo, :query],
+          fn _e, _m, meta, _c ->
+            params = List.flatten(meta[:params] || [])
+
+            if "notification_level" in params and Enum.any?(params, &MapSet.member?(ids, &1)) do
+              send(parent, {:level_query, handler_id})
+            end
+          end,
+          nil
+        )
+
+      try do
+        {:ok, _} = AttentionRouter.route(create_message(space.id, author.id, %{content: "hi"}))
+        drain()
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      count =
+        Stream.repeatedly(fn ->
+          receive do
+            {:level_query, ^handler_id} -> 1
+          after
+            0 -> nil
+          end
+        end)
+        |> Enum.take_while(& &1)
+        |> length()
+
+      assert count == 1
+    end
+
+    test "level all: an at-here message still yields exactly one :here for A" do
+      {space, _a, a_row, author} = setup_channel("all")
+
+      {:ok, decisions} =
+        AttentionRouter.route(create_message(space.id, author.id, %{content: "@[here] standup"}))
+
+      drain()
+      assert decisions_for(decisions, a_row) == [:here]
+    end
+  end
+
+  # Task 01a1557a-8f80 stage 1: per-agent silence, the space master switch
+  # (`agents_awake`) and the space attention policy. Every case states the
+  # decisions `route/1` returns; the positive controls sit in the same space.
+  describe "agent attention controls" do
+    defp silence!(participant) do
+      participant
+      |> Platform.Chat.Participant.changeset(%{silenced: true})
+      |> Repo.update!()
+    end
+
+    defp attention!(space, attrs) do
+      space
+      |> Platform.Chat.Space.agent_attention_changeset(attrs)
+      |> Repo.update!()
+    end
+
+    defp roster_agent!(space, name, role) do
+      agent = create_agent(%{name: name})
+      {:ok, participant} = Chat.add_agent_participant(space.id, agent, display_name: name)
+      Chat.add_space_agent(space.id, agent.id, role: role)
+      participant
+    end
+
+    test "a silenced mutex holder gets no :active_agent decision" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      holder = roster_agent!(space, "Zip", "principal")
+      ActiveAgentStore.set_active(space.id, holder.id)
+      holder_id = holder.id
+
+      # POSITIVE CONTROL: awake, the holder hears an un-mentioned message.
+      control = create_message(space.id, user.id, %{content: "before"})
+
+      assert {:ok, [%{participant_id: ^holder_id, reason: :active_agent}]} =
+               AttentionRouter.route(control)
+
+      silence!(holder)
+      message = create_message(space.id, user.id, %{content: "after"})
+      assert {:ok, []} = AttentionRouter.route(message)
+      refute_receive {:agent_chat_called, "after", _}, 200
+      drain()
+    end
+
+    test "the debug line names the policy, the switch, the decisions and the silenced skip" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      holder = roster_agent!(space, "Zip", "principal")
+      ActiveAgentStore.set_active(space.id, holder.id)
+      silence!(holder)
+      message = create_message(space.id, user.id, %{content: "quiet please"})
+
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, []} = AttentionRouter.route(message)
+        end)
+
+      assert log =~
+               "[AttentionRouter] agent_route space=#{space.id} message=#{message.id} " <>
+                 "policy=on_mention awake=true decisions= silenced_skipped=#{holder.id}\n"
+
+      # And a routed decision renders as `<participant_id>:<reason>`.
+      awake = roster_agent!(space, "Nova", "member")
+      mention = create_message(space.id, user.id, %{content: "hi @[Nova]"})
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:ok, _} = AttentionRouter.route(mention)
+        end)
+
+      assert log =~
+               "[AttentionRouter] agent_route space=#{space.id} message=#{mention.id} " <>
+                 "policy=on_mention awake=true decisions=#{awake.id}:mention silenced_skipped=\n"
+
+      drain()
+    end
+
+    test "a silenced agent still answers an @mention, and the mention does not arm it" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = roster_agent!(space, "Zip", "member") |> silence!()
+      agent_id = agent.id
+
+      message = create_message(space.id, user.id, %{content: "hey @[Zip] one question"})
+
+      assert {:ok, [%{participant_id: ^agent_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      # So the next un-mentioned message reaches nobody.
+      followup = create_message(space.id, user.id, %{content: "and again"})
+      assert {:ok, []} = AttentionRouter.route(followup)
+
+      # POSITIVE CONTROL: the same mention of an awake agent arms it.
+      awake = roster_agent!(space, "Nova", "member")
+      awake_id = awake.id
+      control = create_message(space.id, user.id, %{content: "hey @[Nova] one question"})
+
+      assert {:ok, [%{participant_id: ^awake_id, reason: :mention}]} =
+               AttentionRouter.route(control)
+
+      assert ActiveAgentStore.get_active(space.id) == awake_id
+      drain()
+    end
+
+    test "a silenced mention leaves another agent's mutex where it was" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      holder = roster_agent!(space, "Nova", "principal")
+      silenced = roster_agent!(space, "Zip", "member") |> silence!()
+      ActiveAgentStore.set_active(space.id, holder.id)
+
+      message = create_message(space.id, user.id, %{content: "@[Zip] quick one"})
+      silenced_id = silenced.id
+
+      assert {:ok, [%{participant_id: ^silenced_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      assert ActiveAgentStore.get_active(space.id) == holder.id
+      drain()
+    end
+
+    test "agents_awake false: a held mutex hears nothing, a mention still routes" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      holder = roster_agent!(space, "Zip", "principal")
+      ActiveAgentStore.set_active(space.id, holder.id)
+      space = attention!(space, %{agents_awake: false})
+      holder_id = holder.id
+
+      message = create_message(space.id, user.id, %{content: "still there?"})
+      assert {:ok, []} = AttentionRouter.route(message)
+
+      mention = create_message(space.id, user.id, %{content: "@[Zip] direct question"})
+
+      assert {:ok, [%{participant_id: ^holder_id, reason: :mention}]} =
+               AttentionRouter.route(mention)
+
+      after_mention = create_message(space.id, user.id, %{content: "after the mention"})
+      assert {:ok, []} = AttentionRouter.route(after_mention)
+
+      # POSITIVE CONTROL: the switch back on, the holder hears it again.
+      ActiveAgentStore.set_active(space.id, holder.id)
+      attention!(space, %{agents_awake: true})
+      back = create_message(space.id, user.id, %{content: "back on"})
+
+      assert {:ok, [%{participant_id: ^holder_id, reason: :active_agent}]} =
+               AttentionRouter.route(back)
+
+      drain()
+    end
+
+    test "agents_awake false also silences directed and collaborative fan-out" do
+      for policy <- ~w(directed collaborative) do
+        space = create_space(%{kind: "channel"})
+        user = create_participant(space.id)
+        _lead = roster_agent!(space, "Lead", "principal")
+        space = attention!(space, %{agent_attention_policy: policy, agents_awake: false})
+
+        message = create_message(space.id, user.id, %{content: "anyone?"})
+        assert {:ok, []} = AttentionRouter.route(message), policy
+      end
+
+      drain()
+    end
+
+    test "collaborative fans out to every eligible roster agent and skips the silenced one" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      lead = roster_agent!(space, "Lead", "principal")
+      helper = roster_agent!(space, "Helper", "member")
+      quiet = roster_agent!(space, "Quiet", "member") |> silence!()
+      attention!(space, %{agent_attention_policy: "collaborative"})
+
+      message = create_message(space.id, user.id, %{content: "thoughts on this?"})
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.sort(Enum.map(decisions, &{&1.participant_id, &1.reason})) ==
+               Enum.sort([{lead.id, :collaborative}, {helper.id, :collaborative}])
+
+      refute Enum.any?(decisions, &(&1.participant_id == quiet.id))
+      # Collaborative does not arm the mutex.
+      assert ActiveAgentStore.get_active(space.id) == nil
+      drain()
+    end
+
+    test "a NULL policy on a group created now is the collaborative kind default" do
+      space = create_space(%{kind: "group"})
+      user = create_participant(space.id)
+      lead = roster_agent!(space, "Lead", "principal")
+      lead_id = lead.id
+
+      assert Repo.get!(Platform.Chat.Space, space.id).agent_attention_policy == nil
+      message = create_message(space.id, user.id, %{content: "hello group"})
+
+      assert {:ok, [%{participant_id: ^lead_id, reason: :collaborative}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+
+    test "collaborative: the mutex holder alone hears it when it is eligible" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      lead = roster_agent!(space, "Lead", "principal")
+      helper = roster_agent!(space, "Helper", "member")
+      attention!(space, %{agent_attention_policy: "collaborative"})
+      ActiveAgentStore.set_active(space.id, helper.id)
+      helper_id = helper.id
+
+      message = create_message(space.id, user.id, %{content: "continuing"})
+
+      assert {:ok, [%{participant_id: ^helper_id, reason: :active_agent}]} =
+               AttentionRouter.route(message)
+
+      refute lead.id == helper_id
+      drain()
+    end
+
+    test "directed picks the principal, then the sole eligible agent, else nobody" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      lead = roster_agent!(space, "Lead", "principal")
+      helper = roster_agent!(space, "Helper", "member")
+      attention!(space, %{agent_attention_policy: "directed"})
+      lead_id = lead.id
+      helper_id = helper.id
+
+      message = create_message(space.id, user.id, %{content: "who takes this?"})
+
+      assert {:ok, [%{participant_id: ^lead_id, reason: :directed}]} =
+               AttentionRouter.route(message)
+
+      # Directed arms the mutex.
+      assert ActiveAgentStore.get_active(space.id) == lead_id
+
+      # The principal silenced: the sole remaining eligible agent.
+      ActiveAgentStore.clear_active(space.id)
+      silence!(lead)
+      sole = create_message(space.id, user.id, %{content: "and this?"})
+
+      assert {:ok, [%{participant_id: ^helper_id, reason: :directed}]} =
+               AttentionRouter.route(sole)
+
+      # Two eligible members and no principal: no defensible answer.
+      ActiveAgentStore.clear_active(space.id)
+      _third = roster_agent!(space, "Third", "member")
+      ambiguous = create_message(space.id, user.id, %{content: "anyone?"})
+      assert {:ok, []} = AttentionRouter.route(ambiguous)
+      drain()
+    end
+
+    test "an agent-authored un-mentioned message never fans out under collaborative or directed" do
+      for policy <- ~w(collaborative directed) do
+        space = create_space(%{kind: "channel"})
+        user = create_participant(space.id)
+        lead = roster_agent!(space, "Lead", "principal")
+        helper = roster_agent!(space, "Helper", "member")
+        attention!(space, %{agent_attention_policy: policy})
+
+        message = create_message(space.id, helper.id, %{content: "agent musing"})
+        assert {:ok, []} = AttentionRouter.route(message), policy
+
+        # POSITIVE CONTROL: the same message from the human fans out.
+        control = create_message(space.id, user.id, %{content: "human musing"})
+        {:ok, decisions} = AttentionRouter.route(control)
+        assert Enum.any?(decisions, &(&1.participant_id == lead.id)), policy
+        ActiveAgentStore.clear_active(space.id)
+      end
+
+      drain()
+    end
+
+    test "a silenced execution assignee gets no :watch" do
+      agent = create_agent(%{name: "Beacon"})
+      {:ok, project} = Tasks.create_project(%{name: "Silenced assignee project"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Silenced assignee task",
+          status: "in_progress",
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      user = create_participant(space.id)
+
+      # POSITIVE CONTROL: awake, the assignee is woken by `:watch`.
+      control = create_message(space.id, user.id, %{content: "status?"})
+
+      assert {:ok, [%{participant_id: assignee_id, reason: :watch}]} =
+               AttentionRouter.route(control)
+
+      assignee = Repo.get!(Platform.Chat.Participant, assignee_id)
+      silence!(assignee)
+      ActiveAgentStore.clear_active(space.id)
+
+      message = create_message(space.id, user.id, %{content: "status now?"})
+      assert {:ok, []} = AttentionRouter.route(message)
+      assert ActiveAgentStore.get_active(space.id) == nil
+      drain()
     end
   end
 end

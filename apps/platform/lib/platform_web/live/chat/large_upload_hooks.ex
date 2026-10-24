@@ -1,7 +1,7 @@
 defmodule PlatformWeb.ChatLive.LargeUploadHooks do
   @moduledoc """
   Lifecycle hook module for large-file uploads in `PlatformWeb.ChatLive`
-  (task 01a120be stage 3, ADR 0035; mirrors `PlatformWeb.ChatLive.UploadHooks`).
+  (task 01a120be stage 3, ADR 0035; mirrors `PlatformWeb.ChatLive.AttachHooks`).
 
   Files over the composer's inline cap (`ChatLive.max_upload_size/0`, 15 MB)
   never ride the LiveView websocket. The browser (`assets/js/hooks/large_upload.js`)
@@ -32,11 +32,14 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
     * Events: `"large_upload_stage"`, `"large_upload_unstage"`,
       `"large_upload_start"`, `"large_upload_rereserve"` (the reservation
       expired while the browser still holds the File),
-      `"large_upload_cancel"`, and a pass-through look at `"upload_send"` /
-      `"upload_dialog_close"`.
+      `"large_upload_cancel"`, and a look at `"send_message"`.
 
-  Attach it BEFORE `UploadHooks`: `UploadHooks` halts `"upload_dialog_close"`,
-  and this module must see it to drop staged large files.
+  Staged large files show as file chips in the composer's staged tray
+  (`Partials.Attach.staged_tray/1`), beside the inline entries.
+
+  Attach it BEFORE `MessagesHooks`: on `"send_message"` with no inline file
+  staged this module posts the caption with the first large file and halts,
+  so the caption does not post a second time as a text message.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -47,7 +50,7 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.UploadLimits
   alias Platform.Repo
-  alias PlatformWeb.ChatLive.UploadHooks
+  alias PlatformWeb.ChatLive.MessagesHooks
 
   @doc "Attach large-upload handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -86,10 +89,7 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
     staged_list =
       Enum.reject(socket.assigns.large_upload_staged, &(&1.ref == ref)) ++ [staged]
 
-    {:halt,
-     socket
-     |> assign(:large_upload_staged, staged_list)
-     |> assign(:upload_dialog_open, true)}
+    {:halt, assign(socket, :large_upload_staged, staged_list)}
   end
 
   defp handle_event("large_upload_unstage", %{"ref" => ref}, socket) do
@@ -102,23 +102,18 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
      |> push_event("large_upload:forget", %{ref: ref})}
   end
 
-  defp handle_event("upload_dialog_close", _params, socket) do
-    {:cont, clear_staged(socket)}
-  end
-
   # Send: reserve every staged large file, hand the reservations to the
-  # browser, and let the parent's `upload_send` post any inline files. When
-  # nothing inline is staged, the caption rides the first large file's
-  # message and the parent (which would flash "No files selected") is
-  # skipped.
-  defp handle_event("upload_send", _params, socket) do
+  # browser, and let `MessagesHooks`' `send_message` post the caption with
+  # any inline files. When nothing inline is staged, the caption rides the
+  # first large file's message and the composer is cleared here instead.
+  defp handle_event("send_message", params, socket) do
     case Enum.reject(socket.assigns.large_upload_staged, & &1.too_large?) do
       [] ->
         {:cont, socket}
 
       sendable ->
         inline? = inline_entries?(socket)
-        caption = if inline?, do: "", else: String.trim(socket.assigns[:upload_caption] || "")
+        caption = if inline?, do: "", else: String.trim(caption(params))
 
         {socket, begun} =
           sendable
@@ -137,11 +132,11 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
           |> push_event("large_upload:begin", %{uploads: Enum.reverse(begun)})
           |> clear_staged()
 
-        if inline?, do: {:cont, socket}, else: {:halt, UploadHooks.reset(socket)}
+        if inline?, do: {:cont, socket}, else: {:halt, MessagesHooks.clear_compose(socket)}
     end
   end
 
-  # Reserve one file directly (the browser path goes through "upload_send";
+  # Reserve one file directly (the browser path goes through "send_message";
   # this is the per-file form of the same call).
   defp handle_event("large_upload_start", params, socket) do
     file = %{
@@ -298,6 +293,9 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooks do
   defp rereserve_error(:forbidden), do: "not_a_participant"
   defp rereserve_error(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp rereserve_error(_reason), do: "not_started"
+
+  defp caption(%{"compose" => %{"text" => text}}) when is_binary(text), do: text
+  defp caption(_params), do: ""
 
   defp to_int(n) when is_integer(n), do: n
 

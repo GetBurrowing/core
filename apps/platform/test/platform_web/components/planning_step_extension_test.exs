@@ -372,7 +372,7 @@ defmodule PlatformWeb.Components.PlanningStepExtensionTest do
       # module with no colours at all cannot pass this test.
       assert src =~ "text-error"
       assert src =~ "bg-warning/10"
-      assert src =~ "text-base-content/60"
+      assert src =~ "text-subtle"
 
       refute src =~ ~r/#[0-9a-fA-F]{6}\b/
       refute src =~ "oklch("

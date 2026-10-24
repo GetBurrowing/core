@@ -25,12 +25,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `:messages` (stream — items are `%Message{}` enriched with `:reactions`)
     * `:attachments_map` — msg_id → [attachments]
     * `:reaction_picker_for` — msg_id | nil — when set, the picker is open for that message
-    * `:longpress_menu_for` — msg_id | nil — when set, the mobile quick-react popover (double-tap entry) is open for that message
     * `:compose_form`
-    * `:thread_compose_form`
-    * `:active_thread`
-    * `:thread_messages`
-    * `:thread_attachments_map`
     * `:thread_previews` — parent_msg_id → %{thread_id, reply_count, last_reply_at}
     * `:expanded_threads` — MapSet of parent_msg_ids with inline threads open
     * `:inline_thread_messages` — parent_msg_id → [thread messages]
@@ -50,11 +45,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   ## Events
 
-    * Compose: `"send_message"`, `"compose_changed"` (+ draft save),
-      `"open_lightbox"`, `"close_lightbox"`
+    * Compose: `"send_message"`, `"compose_changed"` (+ draft save)
     * Reactions: `"react"`, `"open_reaction_picker"`, `"close_reaction_picker"`
-    * Threads: `"open_thread"`, `"close_thread"`, `"send_thread_message"`,
-      `"toggle_inline_thread"`, `"send_inline_thread_message"`
+    * Threads: `"toggle_inline_thread"` (the thread chip and its footer
+      collapse), `"send_inline_thread_message"`. Reply in thread's
+      open-only `"open_inline_thread"` lives in `MessageActionsHooks` and
+      calls `expand_inline_thread/3`.
     * Refused summons: `"dismiss_refused_summon"`
     * Lazy canvases: `"inline_canvas_mount"` (`message_id` or `message_ids`)
 
@@ -76,7 +72,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `resolve_anchor/1` — classify a deep-link target as top-level vs.
       thread reply
     * `stream_insert_message/2` — used by `canvas_create` (parent)
-    * `reset_thread_panel/1` — used by `canvas_open`, `canvas_create`
+    * `expand_inline_thread/3` — open (never collapse) an inline thread;
+      used by `MessageActionsHooks` and `SpaceSheetHooks`
+    * `reaction_group/3` — one emoji's reactors, re-read from the DB
     * `open_thread_context/3` — used by `search_open_result` when target
       is in a thread
     * `set_highlight/2` — used by `search_open_result`
@@ -107,7 +105,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.AttachmentLinks
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.ClosedDms
+  alias Platform.Chat.LinkCards
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.ChatListData
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.NativeDonation
 
@@ -136,10 +136,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     socket
     |> assign(:attachments_map, %{})
     |> assign(:reaction_picker_for, nil)
-    |> assign(:longpress_menu_for, nil)
-    |> assign(:active_thread, nil)
-    |> assign(:thread_messages, [])
-    |> assign(:thread_attachments_map, %{})
     |> assign(:thread_previews, %{})
     |> assign(:expanded_threads, MapSet.new())
     |> assign(:inline_thread_messages, %{})
@@ -162,7 +158,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:newest_evicted?, false)
     |> assign(:evicted_tail_message_ids, MapSet.new())
     |> assign_compose("")
-    |> assign_thread_compose("")
     |> assign(:refused_summons, %{})
     |> assign(:mounted_inline_canvas_ids, MapSet.new())
     |> assign(:load_older_failed?, false)
@@ -348,11 +343,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     socket
     |> assign(:attachments_map, attachments_map)
     |> assign(:reaction_picker_for, nil)
-    |> assign(:longpress_menu_for, nil)
     |> assign(:thread_previews, thread_previews)
-    |> assign(:active_thread, nil)
-    |> assign(:thread_messages, [])
-    |> assign(:thread_attachments_map, %{})
     |> assign(:expanded_threads, MapSet.new())
     |> assign(:inline_thread_messages, %{})
     |> assign(:streaming_replies, %{})
@@ -698,7 +689,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   @doc """
   Insert a message into the stream and populate its attachments map
-  entry. Used by `canvas_create` and `upload_send` coordinators.
+  entry. Used by the `canvas_create` coordinator.
 
   Enriches the message with its current reaction groups so the stream
   item carries everything the template needs — no :reactions_map lookup.
@@ -727,15 +718,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> put_attachment_map_entry(message.id, attachments)
   end
 
-  @doc "Clear the thread panel. Used by canvas_open and canvas_create."
-  @spec reset_thread_panel(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  def reset_thread_panel(socket) do
-    socket
-    |> assign(:active_thread, nil)
-    |> assign(:thread_messages, [])
-    |> assign(:thread_attachments_map, %{})
-  end
-
   @doc """
   Expand an inline thread for a given parent message and pre-load the
   thread messages. Used by `search_open_result` on the parent when a
@@ -757,6 +739,56 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> Chat.list_messages(thread_id: thread_id, limit: 100)
     |> Enum.reverse()
   end
+
+  @doc """
+  Expand the inline thread under top-level message `msg_id` (creating the
+  thread if it has none yet): the `toggle_inline_thread` open branch, moved
+  here unchanged so the phone space sheet (task 01a1557a-8a6d) can open a
+  thread it has just scrolled or patched to without the toggle's collapse.
+
+  `focus: false` skips the `focus_inline_thread_compose` push. The sheet
+  passes it: focusing the composer one frame later scrolls the page to the
+  composer, cancelling the sheet's smooth scroll to the parent (measured at
+  375x812: the parent stayed at -1325px), and would raise the phone keyboard
+  on a jump that asked only to see the thread.
+  """
+  def expand_inline_thread(socket, msg_id, opts \\ []) do
+    space = socket.assigns.active_space
+
+    thread =
+      Chat.get_thread_for_message(msg_id) ||
+        case Chat.create_thread(space.id, %{parent_message_id: msg_id}) do
+          {:ok, t} -> t
+          {:error, _} -> nil
+        end
+
+    case thread do
+      nil ->
+        put_flash(socket, :error, "Could not open thread.")
+
+      thread ->
+        thread_msgs = load_thread_messages(space.id, thread.id)
+
+        socket
+        |> update(:expanded_threads, &MapSet.put(&1, msg_id))
+        |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
+        |> update(
+          :thread_previews,
+          &Map.put(&1, msg_id, %{
+            thread_id: thread.id,
+            reply_count: length(thread_msgs),
+            last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
+          })
+        )
+        |> maybe_focus_compose(msg_id, Keyword.get(opts, :focus, true))
+        |> reinsert_stream_message(msg_id)
+    end
+  end
+
+  defp maybe_focus_compose(socket, msg_id, true),
+    do: push_event(socket, "focus_inline_thread_compose", %{message_id: msg_id})
+
+  defp maybe_focus_compose(socket, _msg_id, false), do: socket
 
   @doc "Persist a draft for a space — used when switching spaces."
   @spec save_draft(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
@@ -818,11 +850,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
+      # The tray's staged canvas (rung 11), already re-checked against the
+      # active space by `AttachHooks` before this hook runs.
       attrs = %{
         space_id: space.id,
         participant_id: participant.id,
         content_type: "text",
-        content: String.trim(content || "")
+        content: String.trim(content || ""),
+        canvas_id: socket.assigns[:attach_canvas_id]
       }
 
       case post_message_with_upload(socket, :attachments, attrs) do
@@ -839,9 +874,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
            socket
            |> stream_insert_with_day_label(enriched)
            |> put_attachment_map_entry(msg.id, attachments_with_links(msg, socket, attachments))
-           |> assign_compose("")
-           |> update(:drafts, &Map.delete(&1, space.id))
-           |> Phoenix.LiveView.push_event("compose_reset", %{})}
+           |> clear_compose()}
 
         {:noop, socket} ->
           {:halt, socket}
@@ -868,23 +901,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_event("compose_changed", _params, socket), do: {:halt, socket}
 
-  defp handle_event("open_lightbox", %{"url" => url}, socket),
-    do: {:halt, assign(socket, :lightbox_url, url)}
-
-  defp handle_event("close_lightbox", _params, socket),
-    do: {:halt, assign(socket, :lightbox_url, nil)}
-
   defp handle_event("open_reaction_picker", %{"message-id" => msg_id}, socket),
     do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
 
   defp handle_event("close_reaction_picker", _params, socket),
     do: {:halt, assign(socket, :reaction_picker_for, nil)}
-
-  defp handle_event("open_longpress_menu", %{"message_id" => msg_id}, socket),
-    do: {:halt, assign(socket, :longpress_menu_for, msg_id)}
-
-  defp handle_event("close_longpress_menu", _params, socket),
-    do: {:halt, assign(socket, :longpress_menu_for, nil)}
 
   # Jump-to-latest (task 01a03c76 stage 1; second boolean added by task
   # 01a0419a stage 4).
@@ -915,57 +936,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("react", %{"message-id" => msg_id, "emoji" => emoji}, socket),
     do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}
 
-  defp handle_event("open_thread", %{"message-id" => message_id}, socket),
-    do: handle_event("toggle_inline_thread", %{"message-id" => message_id}, socket)
-
-  defp handle_event("open_thread", %{"message_id" => message_id}, socket),
-    do: handle_event("toggle_inline_thread", %{"message-id" => message_id}, socket)
-
-  defp handle_event("close_thread", _params, socket) do
-    {:halt,
-     socket
-     |> assign(:active_thread, nil)
-     |> assign(:thread_messages, [])
-     |> assign(:thread_attachments_map, %{})}
-  end
-
-  defp handle_event(
-         "send_thread_message",
-         %{"thread_compose" => %{"text" => content}},
-         socket
-       ) do
-    with thread when not is_nil(thread) <- socket.assigns.active_thread,
-         participant when not is_nil(participant) <- socket.assigns.current_participant do
-      attrs = %{
-        space_id: thread.space_id,
-        thread_id: thread.id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: String.trim(content || "")
-      }
-
-      case post_message_with_upload(socket, :thread_attachments, attrs) do
-        {:ok, socket, msg, attachments} ->
-          {:halt,
-           socket
-           |> update(:thread_messages, &(&1 ++ [msg]))
-           |> put_thread_attachment_map_entry(
-             msg.id,
-             attachments_with_links(msg, socket, attachments)
-           )
-           |> assign_thread_compose("")}
-
-        {:noop, socket} ->
-          {:halt, socket}
-
-        {:error, socket, reason} ->
-          {:halt, put_flash(socket, :error, reason)}
-      end
-    else
-      _ -> {:halt, socket}
-    end
-  end
-
   defp handle_event("toggle_inline_thread", %{"message_id" => msg_id}, socket),
     do: handle_event("toggle_inline_thread", %{"message-id" => msg_id}, socket)
 
@@ -979,39 +949,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       {:halt, socket}
     else
-      space = socket.assigns.active_space
-
-      thread =
-        Chat.get_thread_for_message(msg_id) ||
-          case Chat.create_thread(space.id, %{parent_message_id: msg_id}) do
-            {:ok, t} -> t
-            {:error, _} -> nil
-          end
-
-      case thread do
-        nil ->
-          {:halt, put_flash(socket, :error, "Could not open thread.")}
-
-        thread ->
-          thread_msgs = load_thread_messages(space.id, thread.id)
-
-          socket =
-            socket
-            |> update(:expanded_threads, &MapSet.put(&1, msg_id))
-            |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
-            |> update(
-              :thread_previews,
-              &Map.put(&1, msg_id, %{
-                thread_id: thread.id,
-                reply_count: length(thread_msgs),
-                last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
-              })
-            )
-            |> push_event("focus_inline_thread_compose", %{message_id: msg_id})
-            |> reinsert_stream_message(msg_id)
-
-          {:halt, socket}
-      end
+      {:halt, expand_inline_thread(socket, msg_id)}
     end
   end
 
@@ -1111,6 +1049,13 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     is_own_message =
       not is_nil(current_participant) and msg.participant_id == current_participant.id
 
+    # The phone Chat list's excerpt for this space (task 01a1557a-8562
+    # stage 2), patched from the message in hand: no query. Every arrival,
+    # background or not, so the list is current when the reader patches
+    # back to it. `ChatListData.put_message/2` ignores thread replies and
+    # spaces the list does not show.
+    socket = ChatListData.put_message(socket, msg)
+
     socket =
       if is_background_dm and not is_own_message do
         socket
@@ -1164,15 +1109,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
          |> put_attachment_map_entry(msg.id, attachments)
          |> SearchHooks.maybe_refresh()}
       else
-        socket =
-          if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
-            socket
-            |> update(:thread_messages, &(&1 ++ [msg]))
-            |> put_thread_attachment_map_entry(msg.id, attachments)
-          else
-            socket
-          end
-
         socket = maybe_update_inline_thread(socket, msg)
 
         {:halt, SearchHooks.maybe_refresh(socket)}
@@ -1263,6 +1199,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:message_deleted, msg}, socket) do
+    # A deleted top-level message may have been its space's list excerpt, so
+    # re-read that ONE space (task 01a1557a-8562 stage 2). A thread reply
+    # never is, so it costs nothing.
+    socket =
+      if is_nil(msg.thread_id),
+        do: ChatListData.refresh_space(socket, msg.space_id),
+        else: socket
+
     if same_active_space?(socket, msg) do
       rendered_ids = MapSet.delete(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
 
@@ -1272,7 +1216,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
        |> drop_day_label(msg.id)
        |> assign(:rendered_message_ids, rendered_ids)
        |> delete_attachment_map_entry(msg.id)
-       |> delete_thread_attachment_map_entry(msg.id)
        |> SearchHooks.maybe_refresh()}
     else
       {:halt, socket}
@@ -1472,18 +1415,28 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       socket
   end
 
-  defp close_picker(socket) do
-    socket
-    |> assign(:reaction_picker_for, nil)
-    |> assign(:longpress_menu_for, nil)
+  defp close_picker(socket), do: assign(socket, :reaction_picker_for, nil)
+
+  @doc """
+  Clear the composer after a send: the form, the staged canvas, the active
+  space's server-side draft, and (through `compose_reset`) the textarea and
+  its stored draft.
+  """
+  @spec clear_compose(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def clear_compose(socket) do
+    socket = socket |> assign_compose("") |> assign(:attach_canvas_id, nil)
+
+    socket =
+      case socket.assigns[:active_space] do
+        %{id: space_id} -> update(socket, :drafts, &Map.delete(&1, space_id))
+        _ -> socket
+      end
+
+    Phoenix.LiveView.push_event(socket, "compose_reset", %{})
   end
 
   defp assign_compose(socket, text) do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
-  end
-
-  defp assign_thread_compose(socket, text) do
-    assign(socket, :thread_compose_form, to_form(%{"text" => text}, as: :thread_compose))
   end
 
   defp restore_draft(socket, space_id) do
@@ -1542,7 +1495,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         socket
 
       msg ->
-        enriched = enrich_with_reactions(msg, socket)
+        # The version count rides along, or the re-rendered row loses its
+        # '(edited)' affix (it gates on `versions_count`): measured after a
+        # cancelled edit, which reinserts the row (redesign rung 9 stage 4).
+        enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
         stream_reinsert_with_day_label(socket, enriched)
     end
   end
@@ -1554,7 +1510,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   singular path. Missing or deleted ids are silently dropped.
 
   Used by hooks that mutate a parent assign affecting many rows — e.g.
-  presence changes that update `@participants_map`, `@agent_colors_map`,
+  presence changes that update `@participants_map`, `@agent_slots_map`,
   `@agent_participant_ids`, `@highlighted_message_id`, or
   `@pinned_message_ids` — to avoid the N+1 that would result from
   per-message `reinsert_stream_message/2` calls. Returns the socket
@@ -1596,7 +1552,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         |> Chat.get_messages_by_ids(scope: socket.assigns[:external_scope])
         |> Enum.filter(&(&1.space_id == space_id))
         |> Enum.reduce(socket, fn msg, acc ->
-          enriched = enrich_with_reactions(msg, acc)
+          enriched = msg |> enrich_versions_count() |> enrich_with_reactions(acc)
           stream_reinsert_with_day_label(acc, enriched)
         end)
     end
@@ -1638,6 +1594,23 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # with many more participants.
   @reactor_list_cap 20
 
+  @doc """
+  The reaction group for one `emoji` on message `msg_id`, re-read from the
+  database with the same builder that renders the pills
+  (`%{emoji, count, reacted_by_me, reactors, extra_count}`). An emoji nobody
+  used gives an empty group. Used by `MessageActionsHooks`' reactors sheet,
+  which must never trust the pill's client JSON.
+  """
+  @spec reaction_group(Phoenix.LiveView.Socket.t(), binary(), binary()) :: map()
+  def reaction_group(socket, msg_id, emoji) do
+    my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id
+    participants_map = socket.assigns[:participants_map] || %{}
+    agent_ids = socket.assigns[:agent_participant_ids] || MapSet.new()
+
+    rows = msg_id |> Chat.list_reactions() |> Enum.filter(&(&1.emoji == emoji))
+    build_reaction_group(emoji, rows, my_id, participants_map, agent_ids)
+  end
+
   # Bulk-enrich a list of messages with their current reaction groups.
   # Used when loading a space: one batched query, then group per message.
   defp enrich_messages_with_reactions(messages, socket) do
@@ -1660,6 +1633,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       %{msg | reactions: groups}
     end)
+    |> LinkCards.annotate(viewer_user_id(socket))
   end
 
   # Single-message enrichment. Used on every stream_insert (new message,
@@ -1689,7 +1663,18 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end)
       |> Enum.sort_by(& &1.emoji)
 
-    %{msg | reactions: groups}
+    [%{msg | reactions: groups}]
+    |> LinkCards.annotate(viewer_user_id(socket))
+    |> hd()
+  end
+
+  # Rung 13 stage 1: link cards are resolved for the viewing user, at the
+  # same two enrichment points every stream insert passes through.
+  defp viewer_user_id(socket) do
+    case viewer_principal(socket) do
+      {:user, id} -> id
+      _ -> nil
+    end
   end
 
   # ── Day-bucket separator labels (task 019e21c7 Stage 5) ───────────────
@@ -1988,22 +1973,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     assign(socket, :attachments_map, Map.delete(socket.assigns.attachments_map, message_id))
   end
 
-  defp put_thread_attachment_map_entry(socket, message_id, attachments) do
-    assign(
-      socket,
-      :thread_attachments_map,
-      Map.put(socket.assigns.thread_attachments_map, message_id, attachments)
-    )
-  end
-
-  defp delete_thread_attachment_map_entry(socket, message_id) do
-    assign(
-      socket,
-      :thread_attachments_map,
-      Map.delete(socket.assigns.thread_attachments_map, message_id)
-    )
-  end
-
   defp increment_unread(socket, space_id) do
     current = Map.get(socket.assigns.unread_counts, space_id, 0)
     update(socket, :unread_counts, &Map.put(&1, space_id, current + 1))
@@ -2088,12 +2057,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
-  # ── Upload plumbing shared between send_message, send_thread_message, upload_send ──
+  # ── Upload plumbing for send_message ──
 
   @doc """
-  Post a message that may have pending uploads. The upload slot (:attachments
-  or :thread_attachments) is configured via `allow_upload` on the parent
-  LiveView. Returns `{:ok, socket, msg, attachments}` | `{:noop, socket}`
+  Post a message that may have pending uploads. The upload slot (today only
+  `:attachments`) is configured via `allow_upload` on the parent LiveView. Returns `{:ok, socket, msg, attachments}` | `{:noop, socket}`
   | `{:error, socket, reason}`.
   """
   @spec post_message_with_upload(Phoenix.LiveView.Socket.t(), atom(), map()) ::
@@ -2108,7 +2076,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       upload_in_progress?(socket, upload_name) ->
         {:error, socket, "Please wait for uploads to finish."}
 
-      content == "" and not has_completed_uploads?(socket, upload_name) ->
+      content == "" and is_nil(attrs[:canvas_id]) and
+          not has_completed_uploads?(socket, upload_name) ->
         {:noop, socket}
 
       true ->

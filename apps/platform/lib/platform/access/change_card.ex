@@ -47,7 +47,7 @@ defmodule Platform.Access.ChangeCard do
             text(
               "inherited",
               "Inherits: " <> inherited_summary(inherited),
-              "text-base-content/60"
+              "text-subtle"
             )
           ]
         )
@@ -187,7 +187,7 @@ defmodule Platform.Access.ChangeCard do
 
     [
       text("applied", "✓ Applied. Access has changed."),
-      text("approver", "Applied by #{name}, #{time}", "text-base-content/60"),
+      text("approver", "Applied by #{name}, #{time}", "text-subtle"),
       node("action_row", "undo", %{
         "actions" => [%{"label" => "Undo", "value" => "access_undo", "variant" => "outline"}]
       })

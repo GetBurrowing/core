@@ -24,12 +24,13 @@ defmodule PlatformWeb.ChatLive do
 
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.ChatLive.Partials.Composer
+  import PlatformWeb.ChatLive.Partials.ChatList
   import PlatformWeb.ChatLive.Partials.Conversation
   import PlatformWeb.ChatLive.Partials.ExternalRail
-  import PlatformWeb.ChatLive.Partials.MobileBrowser
   import PlatformWeb.ChatLive.Partials.Overlays
   import PlatformWeb.ChatLive.Partials.MessageContext, only: [message_context_overlay: 1]
   import PlatformWeb.ChatLive.Partials.Rail
+  import PlatformWeb.ChatLive.Partials.SpaceSheet
   import PlatformWeb.ChatLive.RenderHelpers
 
   alias Platform.Accounts
@@ -43,8 +44,10 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Chat.Section
   alias Platform.Chat.Sidebar
 
-  alias PlatformWeb.ChatLive.ActiveAgentHooks
+  alias PlatformWeb.ChatLive.AgentsSheetHooks
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.ChatListData
+  alias PlatformWeb.ChatLive.ChatListHooks
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
@@ -56,21 +59,22 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.PrototypeUpload
   alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.ChatLive.SpaceSheetHooks
   alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
+  alias PlatformWeb.ChatLive.AttachHooks
   alias PlatformWeb.ChatLive.LargeUploadHooks
-  alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.Extensions
   alias PlatformWeb.LifecycleActions
   alias PlatformWeb.ShellLive
   alias PlatformWeb.SpaceTopics
 
   # The quick-react row's contents, for every surface that renders one: the
-  # desktop hover action row, the mobile double-tap pill and the mobile
-  # message-actions sheet. All three take it from this assign, and this assign
+  # message-actions sheet's quick-react strip and the message tap pill's
+  # thumbs-up (its first entry). Both take it from this assign, and this assign
   # now has exactly one source (task 019e0814 stage 2).
   #
-  # It used to be a FOUR-emoji literal on this line while the longpress pill
+  # It used to be a FOUR-emoji literal on this line while a since-deleted pill
   # carried a SIX-emoji `~w()` of its own, so the product disagreed with itself
   # about what a quick reaction is — on the same message, in the same account,
   # differing only by which device it was opened on. Six is the number the
@@ -444,33 +448,31 @@ defmodule PlatformWeb.ChatLive do
     socket =
       socket
       |> assign(:page_title, "Chat")
-      # Screen-share name masking (task 01a00c66). Session-only view state:
-      # OFF by default, never persisted to a preferences row / cookie /
-      # localStorage, never broadcast.
+      # Screen-share name masking (task 01a00c66; persisted per user by task
+      # 01a1557a-e538 stage 2). Seeded on EVERY mount from the person's own
+      # preference, `Accounts.mask_names?/1`, which reads the `%User{}` that
+      # ShellLive's on_mount loaded (`:current_user_record`), so it costs no
+      # query.
       #
-      # THESE TWO LINES ARE THE WHOLE PERSISTENCE MODEL, and they only hold
-      # because channel switching is a `patch`, not a `navigate`. Stage 6
-      # found the opposite: every rail row in `chat_live.html.heex` used
-      # `<.link navigate=…>`, which remounts ChatLive over the same socket, so
-      # `mount/3` re-ran and BOTH the mask flag and the per-org reveal set were
-      # reset mid-screen-share — real names silently repainting, with the strip
-      # that would have signalled it gone from the DOM too. Those rows are now
-      # `<.link patch=…>`; `handle_params/3` already did 100% of the
-      # per-channel work, so no state had to move.
-      #
-      # The LiveView process lifetime IS the session scope, structurally:
-      #   * in-session nav → patch → same process → both assigns survive
-      #   * full page reload → new process → assigns start fresh → the rail
-      #     comes back with REAL names, which is deliberate. Someone who
-      #     masked for one call and returns next morning must not find a rail
-      #     where their orgs appear to be missing.
-      # Do NOT "improve" this with sessionStorage: it survives a reload and
-      # would break the second bullet.
-      #
-      # If you add a new way to reach `/chat/:space_slug` from inside this
-      # LiveView, it must be a patch. A `navigate` re-enters `mount/3` here
-      # and silently unmasks.
-      |> assign(:mask_names?, false)
+      # The model:
+      #   * ON stores `preferences["mask_names_until"] = now + 12h`; OFF
+      #     deletes it. Masked iff that instant is in the future. The product owner
+      #     approved the 12-hour cross-device scope on 2026-10-21: "12 hour
+      #     cross-device is fine".
+      #   * A reload or a navigate within 12 hours comes back MASKED: the
+      #     mount reads the preference, so a remount can no longer silently
+      #     unmask mid-screen-share.
+      #   * After 12 hours it comes back with REAL names. That keeps
+      #     01a00c66's next-morning rule: someone who masked for one call and
+      #     returns next morning must not find a rail where their orgs appear
+      #     to be missing.
+      #   * Per user, no broadcast, no write to chat_spaces or org rows. The
+      #     state follows the person across their own devices; a LiveView
+      #     already open elsewhere picks a change up at its next mount.
+      #   * The per-section reveal set below stays per-LiveView and starts
+      #     empty on every mount, so a fresh mount is fully masked.
+      # Do NOT add sessionStorage or a PubSub broadcast on top of this.
+      |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
       |> assign(:revealed_section_ids, MapSet.new())
       |> assign(:user_id, user_id)
       # The HELD PubSub subscribe set is NOT an assign of this module. Task
@@ -696,27 +698,22 @@ defmodule PlatformWeb.ChatLive do
       # / `close_junk_batch_modal` below.
       |> assign(:show_junk_batch_modal, false)
       |> assign(:junk_batch_target, nil)
-      |> assign(:mobile_browser_open, false)
-      # Drawer search query (mobile channel search Stage 1). Filters the
-      # drawer's rendered sections/DMs in-memory at RENDER time via the
-      # drawer_filter_* helpers — the underlying assigns stay unfiltered
-      # because the desktop rail renders from the same data and must never
-      # be filtered by the mobile drawer's search.
+      # The external mobile switcher's search query (`drawer_search` /
+      # `drawer_search_clear`, its own live event names). Filters the
+      # switcher's rows at RENDER time; the underlying assigns stay
+      # unfiltered because the desktop rail renders from the same data.
       |> assign(:drawer_query, "")
-      # Stage 2: whether the CURRENT drawer open was declared as a search
-      # (magnifying-glass entry) — drives client-side focus via the
-      # DrawerSearchFocus hook. Recomputed on every toggle.
-      |> assign(:drawer_search_intent, false)
-      # Channel-row reorder Stage 3 (a11y): text for the drawer's polite
-      # aria-live region, set after every row move so screen-reader users
-      # get confirmation the reorder happened. nil renders an empty region.
-      |> assign(:drawer_reorder_announcement, nil)
-      # Mobile drawer row-actions sheet (task 019fe998): nil when closed,
-      # else the space_id of the row whose overflow control was tapped. Only
+      # Text for the reorder announcer's polite aria-live region (the phone
+      # Chat list's Edit order, task 01a1557a-8562 stage 4), set after every
+      # row move so screen-reader users hear that it happened.
+      |> assign(:reorder_announcement, nil)
+      # The desktop rail's row-actions dialog (task 019ff8ba; the phone's row
+      # sheet opens from `@list_sheet` instead since task 01a1557a-8562): nil
+      # when closed, else the space_id of the row whose trigger was clicked. Only
       # the ID is held — name and pinned-ness are re-derived at render by
       # `row_actions_target/5`, so the sheet's header and its Pin/Unpin verb
       # stay correct after any change to the underlying row. Same shape as
-      # `:open_message_actions_id` above.
+      # `:open_message_actions_id` (`MessageActionsHooks`).
       |> assign(:row_actions_space_id, nil)
       |> assign(:show_new_channel_modal, false)
       # The org a new channel is filed into by default, and the destinations
@@ -727,34 +724,27 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:active_org_id, resolve_active_org_id(socket))
       |> assign(:new_channel_org_options, new_channel_org_options(user_id))
       |> assign(:show_new_conversation_modal, false)
-      # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
-      # The matching message struct is lifted into :open_message_actions_msg so
-      # the sheet template can gate items (e.g. "Edit message") on per-message
-      # attributes like author and content_type without needing access to the
-      # stream row at template time.
-      |> assign(:open_message_actions_id, nil)
-      |> assign(:open_message_actions_msg, nil)
       # Inline edit state (task 019e0f29 Stage 5). `editing_message_id` is
       # the id of the message whose bubble is currently swapped for the
-      # editor; nil means no edit in progress. `pending_save_edit` carries
-      # %{message_id, body} when the user has clicked Save on an edit
-      # that shortens the original — the removal-warning modal is open and
-      # waiting on their confirmation.
+      # editor; nil means no edit in progress.
       |> assign(:editing_message_id, nil)
-      |> assign(:pending_save_edit, nil)
       # Version history popover (task 019e0f29 Stage 6). nil when closed;
       # %{message_id, versions} when open. Filled by show_version_history.
       |> assign(:version_history, nil)
       |> assign(:show_settings, false)
-      # Channel members panel (task 01a0fd62 stage 3, MembersComponent).
-      |> assign(:show_members, false)
       |> assign(:quick_emojis, @quick_emojis)
       # `:push_permission` is seeded by `PlatformWeb.ShellLive`'s on_mount
       # (task 019ffb7b stage 3), which every live_session ChatLive is routed
       # under runs. Seeding it a second time here would overwrite a state the
       # hook may already have reported.
       |> assign(:unread_counts, Chat.unread_counts_for_user(user_id))
-      |> assign(:lightbox_url, nil)
+      # The phone Chat list's data (task 01a1557a-8562 stage 2). Seeded empty;
+      # `handle_params/3` for `:index` loads all three, because that is the
+      # only live action that renders the list, and it runs straight after
+      # mount. `:list_private_ids` drives the lock glyph on channel rows.
+      |> assign(list_excerpts: %{}, list_identities: %{})
+      |> assign(:list_private_ids, MapSet.new())
+      |> PlatformWeb.ChatLive.ViewerHooks.attach()
       # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
       # added by task 01a0419a stage 4). Both booleans are reported by the
       # ScrollToBottom hook — the NEAR_BOTTOM_PX (150) and DEEP_HISTORY_PX
@@ -769,6 +759,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:jump_new_message_count, 0)
       |> allow_upload(:attachments,
         accept: :any,
+        auto_upload: true,
         max_entries: @max_upload_entries,
         max_file_size: @max_upload_size,
         progress: &handle_upload_progress/3
@@ -867,17 +858,26 @@ defmodule PlatformWeb.ChatLive do
     socket =
       socket
       |> PresenceHooks.attach()
+      # Ahead of MessagesHooks: both look at "send_message" before the send
+      # (the tray guard, then large files; task 01a1557a-9de3).
+      |> AttachHooks.attach()
+      |> LargeUploadHooks.attach()
       |> MessagesHooks.attach()
+      # Before PinHooks, which halts the pin broadcasts the open Pinned page
+      # re-reads on (task 01a1557a-8a6d stage 2).
+      |> SpaceSheetHooks.attach()
       |> PinHooks.attach()
       |> SearchHooks.attach()
+      |> ChatListHooks.attach()
       |> MentionsHooks.attach()
-      # Before UploadHooks, which halts "upload_dialog_close" (task 01a120be).
-      |> LargeUploadHooks.attach()
-      |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> Extensions.attach_live_hooks()
-      |> ActiveAgentHooks.attach()
+      |> AgentsSheetHooks.attach()
+      # The Members sheet's open flag and its component messages (task
+      # 01a1557a-8f80 stage 3); `MembersComponent` renders it.
+      |> PlatformWeb.ChatLive.MembersSheetHooks.attach()
       |> MessageContextHooks.attach()
+      |> PlatformWeb.ChatLive.MessageActionsHooks.attach()
 
     # Meeting hooks own join/leave for the LiveKit room. When embedded
     # inside `MeetingLive`, the parent already owns the meeting lifecycle
@@ -997,58 +997,14 @@ defmodule PlatformWeb.ChatLive do
         |> MentionsHooks.reset_for_space()
         |> PinHooks.load_for_space(space.id)
         |> CanvasHooks.load_for_space(space.id)
-        |> ActiveAgentHooks.resolve_for_space(space.id, participants)
+        |> AgentsSheetHooks.resolve_for_space(space.id, participants)
         |> clear_unread(space.id)
     end
   end
 
   @impl true
   def handle_params(%{"space_slug" => slug_or_id} = params, _url, socket) do
-    # Save the outgoing channel's draft AND cancel any staged uploads —
-    # the upload slots are LV-process-scoped, not per-space, so without
-    # an explicit cancel, a file staged in space A remains visible and
-    # send-eligible in space B's composer (BACKLOG #10).
-    socket =
-      if prev = socket.assigns.active_space do
-        # Release ONLY the active-space hold. Task 01a011e9 had to
-        # unsubscribe-then-conditionally-resubscribe here, because
-        # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` on a
-        # `keys: :duplicate` registry and so dropped every entry this pid held
-        # for the topic — including the one `mount/3` took to feed the unread
-        # badge of a space nobody is looking at. That workaround is gone
-        # (task 01a01a1b): `SpaceTopics.release/3` unsubscribes only when the
-        # holder set empties, so a rail space keeps its `:chat_rail` hold
-        # through the navigation and a space reached only by URL — an execution
-        # space, say, which the rail never lists — has nothing left holding it
-        # and is unsubscribed. Same two end states as the restore branch
-        # produced, with no window in which the registration does not exist.
-        socket = unsubscribe_space(socket, prev.id, :chat_active)
-
-        # Deliberately NOT given the same treatment: only the enter path below
-        # subscribes `active_agent:`, so removing every entry is the whole of the
-        # correct behaviour there.
-        Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
-
-        {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
-        {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
-
-        # Message bookkeeping keyed by id, with no space in it
-        # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
-        # stop being on screen the moment we leave `prev`. Drop it here, in
-        # the same teardown as the draft and the presence untrack, so nothing
-        # between this point and the new space's loader can re-hydrate the
-        # outgoing space's messages into the incoming space's stream
-        # (task 01a0119e).
-        socket =
-          socket
-          |> PresenceHooks.leave_space(prev.id)
-          |> MessagesHooks.save_draft(prev.id)
-          |> MessagesHooks.clear_rendered_messages()
-
-        flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
-      else
-        socket
-      end
+    socket = leave_active_space(socket)
 
     # Try slug first, then ID fallback (for DM/group spaces without slugs).
     # The `:org_id` opt scopes ambiguous slugs (e.g. "general", which now
@@ -1201,11 +1157,12 @@ defmodule PlatformWeb.ChatLive do
        |> PresenceHooks.enter_space(space, participant, participants)
        |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
+       |> ChatListHooks.leave_list()
+       |> SpaceSheetHooks.reset()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)
-       |> ActiveAgentHooks.resolve_for_space(space.id, participants)
-       |> assign(:mobile_browser_open, false)
+       |> AgentsSheetHooks.resolve_for_space(space.id, participants)
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
        |> assign(:restricted_channel_ids, restricted_channel_ids)
@@ -1239,28 +1196,94 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # `/chat` (`:index`). Since task 01a1557a-8562 stage 2 this is the phone
+  # Chat list (`Partials.ChatList`), not a redirect to the first channel:
+  # the open space is released and the list's data loaded, and nothing
+  # navigates. Desktop still lands in a channel, but through
+  # `handle_event("chat_viewport", ...)` once the `ViewportBreakpoint` hook
+  # reports `below: false`. The deliberate cost: a desktop GET /chat no longer
+  # 302s on the dead render; it patches after connect.
+  #
+  # External users land here too, on their own list: with no active space the
+  # external mobile switcher (`ExternalRail.external_mobile_switcher/1`) is
+  # what a phone shows at /chat, and a desktop patches into its first channel
+  # through the same `chat_viewport` report (task 01a1557a-8562 stage 5).
   def handle_params(_params, _url, socket) do
     restricted_ids =
       restricted_channel_ids(socket, socket.assigns.channels, socket.assigns.archived_channels)
 
-    socket = assign(socket, :restricted_channel_ids, restricted_ids)
+    socket =
+      socket
+      |> assign(:restricted_channel_ids, restricted_ids)
+      |> leave_active_space()
+      |> assign(:active_space, nil)
+      |> assign(:current_participant, nil)
 
-    # A denied deep link navigates here with this flash. Keep /chat as its
-    # landing URL instead of immediately selecting an unrelated channel.
-    if Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin" do
+    if socket.assigns.external? do
       {:noreply, socket}
     else
-      default_chat_landing(socket, restricted_ids)
+      {:noreply, socket |> assign(:page_title, "Chat") |> ChatListData.assign_all()}
     end
   end
 
-  defp default_chat_landing(socket, restricted_ids) do
-    case Enum.reject(socket.assigns.channels, &MapSet.member?(restricted_ids, &1.id)) do
-      [first | _] ->
-        {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
+  # A denied deep link navigates to /chat with this flash. /chat stays its
+  # landing URL instead of immediately selecting an unrelated channel.
+  defp restricted_flash?(socket),
+    do: Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin"
 
-      [] ->
-        {:noreply, socket}
+  # Release the outgoing space (task 01a1557a-8562 stage 2 factored this out
+  # of the `:show` branch so `:index` runs the same teardown): save its draft,
+  # cancel staged uploads, drop the `:chat_active` hold and the `active_agent:`
+  # subscription, and leave presence. A no-op when no space is open.
+  #
+  # Called from BOTH `handle_params/3` branches. On `:index` the caller then
+  # assigns `active_space: nil`, so a message arriving in the space just left
+  # takes the background path in `MessagesHooks` and counts as unread on the
+  # list instead of being swallowed as "already on screen".
+  defp leave_active_space(socket) do
+    # Save the outgoing channel's draft AND cancel any staged uploads —
+    # the upload slots are LV-process-scoped, not per-space, so without
+    # an explicit cancel, a file staged in space A remains visible and
+    # send-eligible in space B's composer (BACKLOG #10).
+    if prev = socket.assigns.active_space do
+      # Release ONLY the active-space hold. Task 01a011e9 had to
+      # unsubscribe-then-conditionally-resubscribe here, because
+      # `Phoenix.PubSub.unsubscribe/2` is `Registry.unregister/2` on a
+      # `keys: :duplicate` registry and so dropped every entry this pid held
+      # for the topic — including the one `mount/3` took to feed the unread
+      # badge of a space nobody is looking at. That workaround is gone
+      # (task 01a01a1b): `SpaceTopics.release/3` unsubscribes only when the
+      # holder set empties, so a rail space keeps its `:chat_rail` hold
+      # through the navigation and a space reached only by URL — an execution
+      # space, say, which the rail never lists — has nothing left holding it
+      # and is unsubscribed. Same two end states as the restore branch
+      # produced, with no window in which the registration does not exist.
+      socket = unsubscribe_space(socket, prev.id, :chat_active)
+
+      # Deliberately NOT given the same treatment: only the enter path below
+      # subscribes `active_agent:`, so removing every entry is the whole of the
+      # correct behaviour there.
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
+
+      {main_cancelled, socket} = AttachHooks.cancel_all(socket, :attachments)
+      {thread_cancelled, socket} = AttachHooks.cancel_all(socket, :thread_attachments)
+
+      # Message bookkeeping keyed by id, with no space in it
+      # (`:rendered_message_ids`, `:msg_day_labels`), describes rows that
+      # stop being on screen the moment we leave `prev`. Drop it here, in
+      # the same teardown as the draft and the presence untrack, so nothing
+      # between this point and the new space's loader can re-hydrate the
+      # outgoing space's messages into the incoming space's stream
+      # (task 01a0119e).
+      socket =
+        socket
+        |> PresenceHooks.leave_space(prev.id)
+        |> MessagesHooks.save_draft(prev.id)
+        |> MessagesHooks.clear_rendered_messages()
+
+      flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
+    else
+      socket
     end
   end
 
@@ -1387,7 +1410,7 @@ defmodule PlatformWeb.ChatLive do
   # Stage 2 (search-forward entry): the opener can declare a search intent
   # (phx-value-intent="search" on the pills-strip magnifying glass — whose
   # aria-label has always promised "Search channels and DMs"). The intent
-  # rides to the drawer's input as a data attribute; the DrawerSearchFocus
+  # rides to the drawer's input as a data attribute; the SearchFocus
   # hook focuses the field client-side on mount. Openers WITHOUT the intent
   # get a plain browse drawer — no focus, no keyboard.
   # ── Agents goal editing (task 01a0b491 stage 4) ───────────────────────────
@@ -1479,26 +1502,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("toggle_mobile_browser", params, socket) do
-    opening = !socket.assigns.mobile_browser_open
-
-    {:noreply,
-     socket
-     |> assign(:mobile_browser_open, opening)
-     |> assign(:drawer_search_intent, opening and params["intent"] == "search")
-     # Toggling closed discards the search, same as close_mobile_browser.
-     |> then(&if(opening, do: &1, else: assign(&1, :drawer_query, "")))}
-  end
-
-  def handle_event("close_mobile_browser", _params, socket) do
-    # Closing the drawer discards any in-progress search — reopening always
-    # starts from the full browse list, never stale state.
-    {:noreply,
-     socket
-     |> assign(:mobile_browser_open, false)
-     |> assign(:drawer_query, "")}
-  end
-
   # ── Junk-batch confirmation modal (M5b/019f6e2c stage 4) ────────────────
   #
   # `CanvasHooks` opens the modal by assigning `:show_junk_batch_modal`
@@ -1563,7 +1566,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # Filter-as-you-type over the drawer's already-loaded sections + DMs.
   # Pure assign write — the filtering itself happens at render via the
-  # drawer_filter_* helpers, so there is no query cost and the desktop
+  # list_filter_* helpers, so there is no query cost and the desktop
   # rail (same underlying assigns) is untouched. The input is debounced
   # client-side (phx-debounce) and the value is length-capped here because
   # it is external input, even though it only ever feeds String.contains?.
@@ -2269,9 +2272,13 @@ defmodule PlatformWeb.ChatLive do
   # resurrected on the next share and one org is silently visible — the feature
   # failing in the exact direction it exists to prevent.
   #
-  # Pure view state: no write, no broadcast.
+  # The REQUESTED state is persisted through `Accounts.put_mask_names/2`, the
+  # one write path (12-hour expiry, per user), before it is assigned. No
+  # broadcast. An anonymous session has no user row: the write is a no-op
+  # and the assign alone carries the mode for this LiveView.
   def handle_event("toggle_mask_names", params, socket) do
     masked? = truthy?(params["masked"])
+    socket = PlatformWeb.ShellLive.put_mask_names(socket, masked?)
 
     {:noreply,
      socket
@@ -2426,28 +2433,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
-  # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
-  # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
-  def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
-    # Lift the message struct alongside the id so the sheet template can
-    # gate items (e.g. "Edit message") on per-message attributes (author,
-    # content_type) — see chat_live.html.heex around the Edit affordance.
-    msg = Platform.Chat.get_message(msg_id)
-
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, msg_id)
-     |> assign(:open_message_actions_msg, msg)}
-  end
-
-  def handle_event("close_message_actions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, nil)
-     |> assign(:open_message_actions_msg, nil)}
-  end
-
   # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
   #
   # Pin, unpin and hide were all revealed by `group-hover/row:` /
@@ -2457,7 +2442,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # These two handlers are the ONLY new events, and they carry no business
   # logic: the sheet's actions reuse `toggle_pinned` and `hide_channel`
-  # unchanged. Same shape as `open_message_actions` above.
+  # unchanged. Same shape as `open_message_actions` in `MessageActionsHooks`.
   #
   # Only the id is stored. Name and pinned-ness are re-derived at render, so
   # the header and the Pin/Unpin verb cannot go stale against the row.
@@ -2540,12 +2525,9 @@ defmodule PlatformWeb.ChatLive do
   # `edit_message_clicked` opens the editor by setting editing_message_id;
   # the chat_message component swaps the bubble for chat_message_editor
   # when @editing_message_id matches the row's msg id. `cancel_edit`
-  # closes the editor. `save_edit` is the form-submit handler — it
-  # branches on the `removes_content` flag the JS hook set:
-  #   - "true"  → stash the pending edit, surface the removal-warning
-  #               modal (Section F.4 Policy 4 of the contract).
-  #   - "false" → fire the edit immediately.
-  # `confirm_save_edit` / `cancel_save_edit` handle the modal buttons.
+  # closes the editor. `save_edit` is the form-submit handler and applies
+  # the edit directly: the MessageEditor hook already asked with the native
+  # confirm when the edit removes most of the text (redesign rung 9 stage 4).
 
   def handle_event("edit_message_clicked", params, socket) do
     msg_id = params["message-id"] || params["message_id"]
@@ -2567,10 +2549,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("cancel_edit", _params, socket) do
     msg_id = socket.assigns.editing_message_id
 
-    socket =
-      socket
-      |> assign(:editing_message_id, nil)
-      |> assign(:pending_save_edit, nil)
+    socket = assign(socket, :editing_message_id, nil)
 
     case msg_id do
       nil -> {:noreply, socket}
@@ -2578,36 +2557,8 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event(
-        "save_edit",
-        %{"message_id" => message_id, "body" => body, "removes_content" => flag},
-        socket
-      ) do
-    if flag == "true" do
-      # Stash the pending edit and let the removal-warning modal open
-      # via the @pending_save_edit assign. Keep the editor open in the
-      # background so a Cancel on the modal keeps the user's draft.
-      {:noreply, assign(socket, :pending_save_edit, %{message_id: message_id, body: body})}
-    else
-      apply_save_edit(socket, message_id, body)
-    end
-  end
-
-  def handle_event("confirm_save_edit", _params, socket) do
-    case socket.assigns.pending_save_edit do
-      %{message_id: message_id, body: body} ->
-        socket = assign(socket, :pending_save_edit, nil)
-        apply_save_edit(socket, message_id, body)
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_save_edit", _params, socket) do
-    # Modal dismissed; keep the editor open with the user's draft so
-    # they can revise.
-    {:noreply, assign(socket, :pending_save_edit, nil)}
+  def handle_event("save_edit", %{"message_id" => message_id, "body" => body}, socket) do
+    apply_save_edit(socket, message_id, body)
   end
 
   # Coordinator: Search event that also writes MessagesHooks state
@@ -2639,7 +2590,6 @@ defmodule PlatformWeb.ChatLive do
       message ->
         {:noreply,
          socket
-         |> MessagesHooks.reset_thread_panel()
          |> SearchHooks.set_highlights(message.id)}
     end
   end
@@ -2667,63 +2617,20 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :notification_banner_dismissed, true)}
   end
 
-  # Cross-feature: upload_send creates a message + attachments. Delegates
-  # post+stream writes to MessagesHooks, resets UploadHooks on success.
-  def handle_event("upload_send", _params, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space,
-         participant when not is_nil(participant) <- socket.assigns.current_participant do
-      caption = String.trim(socket.assigns.upload_caption || "")
-      tagged = socket.assigns.upload_tagged_agents
-
-      mentions =
-        tagged
-        |> MapSet.to_list()
-        |> Enum.reject(fn slug -> String.contains?(caption, "@#{String.capitalize(slug)}") end)
-        |> Enum.map(fn slug -> "@#{String.capitalize(slug)}" end)
-
-      content =
-        case {caption, mentions} do
-          {"", []} -> ""
-          {"", _} -> Enum.join(mentions, " ")
-          {c, []} -> c
-          {c, _} -> c <> " " <> Enum.join(mentions, " ")
-        end
-
-      attrs = %{
-        space_id: space.id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: content
-      }
-
-      case MessagesHooks.post_message_with_upload(socket, :attachments, attrs) do
-        {:ok, socket, msg, attachments} ->
-          {:noreply,
-           socket
-           |> MessagesHooks.stream_insert_message(msg, attachments)
-           |> UploadHooks.reset()}
-
-        {:noop, _socket} ->
-          {:noreply, put_flash(socket, :info, "No files selected")}
-
-        {:error, socket, reason} ->
-          {:noreply, put_flash(socket, :error, reason)}
-      end
-    else
+  # The `ViewportBreakpoint` report from `/chat` (task 01a1557a-8562 stage 2).
+  # `/chat` is the phone Chat list, which is `lg:hidden`; a desktop viewport
+  # would see nothing, so `below: false` at `:index` patches into the first
+  # unrestricted channel, the landing desktop has always had. The restricted
+  # deep-link flash keeps /chat as before. `below: true` (a phone) stays on
+  # the list. Any other payload, or any other live action, is ignored.
+  def handle_event("chat_viewport", %{"below" => false}, socket) do
+    case not restricted_flash?(socket) && ChatListData.desktop_landing(socket.assigns) do
+      %{} = first -> {:noreply, push_patch(socket, to: ~p"/chat/#{space_nav_target(first)}")}
       _ -> {:noreply, socket}
     end
   end
 
-  def handle_event("noop", _params, socket), do: {:noreply, socket}
-
-  # ── End upload staging dialog events ──────────────────────────────────
-
-  # `handle_event("toggle_watch", ...)` used to live here. Deleted with the
-  # header control that called it (task 019f9790 stage 4): the eye is now the
-  # agent mutex, and a second, persisted flag that could disagree with it was
-  # the whole bug. This was the only writer of `chat_spaces.watch_enabled` in
-  # `lib/`; the column stays (no migration) and `AttentionRouter` stops reading
-  # it in stage 5.
+  def handle_event("chat_viewport", _params, socket), do: {:noreply, socket}
 
   # Coordinator: open a canvas and close the thread panel.
   def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
@@ -2734,8 +2641,7 @@ defmodule PlatformWeb.ChatLive do
       canvas ->
         {:noreply,
          socket
-         |> CanvasHooks.set_active(canvas)
-         |> MessagesHooks.reset_thread_panel()}
+         |> CanvasHooks.set_active(canvas)}
     end
   end
 
@@ -2770,7 +2676,6 @@ defmodule PlatformWeb.ChatLive do
          |> CanvasHooks.put(canvas)
          |> MessagesHooks.stream_insert_message(message)
          |> CanvasHooks.set_active(canvas)
-         |> MessagesHooks.reset_thread_panel()
          |> CanvasHooks.show_panel()
          |> CanvasHooks.reset_new_form()
          |> put_flash(:info, PrototypeUpload.success_message(published))}
@@ -2804,7 +2709,6 @@ defmodule PlatformWeb.ChatLive do
            |> CanvasHooks.put(canvas)
            |> MessagesHooks.stream_insert_message(message)
            |> CanvasHooks.set_active(canvas)
-           |> MessagesHooks.reset_thread_panel()
            |> CanvasHooks.show_panel()
            |> CanvasHooks.reset_new_form()}
 
@@ -3010,15 +2914,6 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_settings, true)}
   end
 
-  # ── Members panel (see MembersComponent, task 01a0fd62 stage 3) ───────────
-  #
-  # Opened from the header "members" button and from the refused-summon
-  # notice's "View members". Opening is harmless for anyone: the panel's
-  # controls are affordance only and the Chat context re-authorizes writes.
-  def handle_event("members_open", _params, socket) do
-    {:noreply, assign(socket, :show_members, true)}
-  end
-
   defp confirm_junk_batch_actor_id(socket) do
     case socket.assigns do
       %{current_participant: %{user_id: id}} when is_binary(id) -> id
@@ -3213,7 +3108,7 @@ defmodule PlatformWeb.ChatLive do
         {name, nil} -> "Moved ##{name}"
       end
 
-    assign(socket, :drawer_reorder_announcement, text)
+    assign(socket, :reorder_announcement, text)
   end
 
   defp apply_channel_move(socket, section_id, ids) do
@@ -3311,7 +3206,7 @@ defmodule PlatformWeb.ChatLive do
         {name, nil} -> "Moved #{name}"
       end
 
-    assign(socket, :drawer_reorder_announcement, text)
+    assign(socket, :reorder_announcement, text)
   end
 
   # Recompute `@sidebar_sections` from the current channel list + saved
@@ -3319,16 +3214,21 @@ defmodule PlatformWeb.ChatLive do
   # `users.preferences`, read fresh by the resolver). The resolver owns the
   # render order — id-keyed personal order over `Section.position` default — so
   # an admin reorder stays visible to non-customized users.
+  #
+  # `@list_collapsed` (the phone list's folds, task 01a166bf stage 3) is
+  # re-read here too: every `:sidebar_changed` reconcile ends in this function,
+  # which is how a fold made in one session reaches the user's others. Its
+  # mount-time seed lives in `ChatListHooks.attach/1`.
   defp recompute_sidebar(socket) do
-    assign(
-      socket,
-      :sidebar_sections,
-      resolve_sidebar_sections(
-        socket.assigns.user_id,
-        socket.assigns.channels,
-        socket.assigns.hidden_channel_ids,
-        socket.assigns.agents_block
-      )
+    assign(socket,
+      sidebar_sections:
+        resolve_sidebar_sections(
+          socket.assigns.user_id,
+          socket.assigns.channels,
+          socket.assigns.hidden_channel_ids,
+          socket.assigns.agents_block
+        ),
+      list_collapsed: Sidebar.collapsed_section_ids(socket.assigns.user_id)
     )
   end
 
@@ -3929,8 +3829,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # ── Upload staging dialog events ──────────────────────────────────────
-
   defp handle_upload_progress(_upload_name, _entry, socket) do
     {:noreply, socket}
   end
@@ -3957,14 +3855,6 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_info({:settings_closed}, socket) do
     {:noreply, assign(socket, :show_settings, false)}
-  end
-
-  def handle_info({:members_closed}, socket) do
-    {:noreply, assign(socket, :show_members, false)}
-  end
-
-  def handle_info({:members_flash, kind, msg}, socket) do
-    {:noreply, put_flash(socket, kind, msg)}
   end
 
   def handle_info({:settings_navigate, path}, socket) do
@@ -4243,7 +4133,7 @@ defmodule PlatformWeb.ChatLive do
   # registration for the same topic on this shared pid — is CLOSED (task
   # 01a01a1b). Both surfaces now go through `PlatformWeb.SpaceTopics`, so this
   # releases only chat's own two holds and ShellLive's are released by ShellLive
-  # alone, off its own `:roster_resolved` / `:presence_spaces_resolved` paths.
+  # alone, off its own `:presence_spaces_resolved` path.
   #
   # Both holds, not one: losing access must drop this module's interest in the
   # space entirely, which was the existing intent when a single unsubscribe did
@@ -4350,7 +4240,9 @@ defmodule PlatformWeb.ChatLive do
       # sites already emit `:sidebar_changed`, every one of them changes what
       # the viewer can see, and a grant path added later that forgets a second
       # bespoke broadcast would re-create this exact defect one layer up.
-      reconcile_rail_subscriptions(socket)
+      socket
+      |> reconcile_rail_subscriptions()
+      |> ChatListData.maybe_refresh()
     end
   end
 
@@ -5637,6 +5529,7 @@ defmodule PlatformWeb.ChatLive do
         socket
         |> assign(:pinned_task_spaces, pinned)
         |> assign(:spaces, channels ++ pinned ++ dm_conversations)
+        |> ChatListData.maybe_refresh()
     end
   end
 

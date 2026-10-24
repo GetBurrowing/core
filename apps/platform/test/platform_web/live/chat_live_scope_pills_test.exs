@@ -187,25 +187,29 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   end
 
   describe "mobile chat-header compact scope-pill (chat sidebar mobile Stage 2)" do
-    test "mobile header renders the compact clickable scope-pill for an active channel",
+    # The compact mobile header pill was deleted in task 01a1557a-8a6d stage
+    # 3. The phone reaches the same `scope_filter` event, with the same
+    # payload, through the space sheet's Scope switch.
+    test "the phone header has no compact pill; the sheet's Scope switch fires scope_filter",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("initech")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/initech")
+      {:ok, view, html} = live_at(conn, ~p"/chat/initech")
 
-      # The mobile header (lg:hidden) carries its OWN wrapper, distinct from the
-      # desktop `.chat-header-scope-pill` so it can size the pill compact and
-      # own the 44px tap-target CSS. Present in the DOM even though CSS hides it
-      # above the lg breakpoint.
-      assert html =~ "chat-header-scope-pill-mobile",
-             "Mobile chat header should render the compact scope-pill wrapper for an active channel"
+      refute html =~ "chat-header-scope-pill-mobile"
+      assert html =~ "chat-header-scope-pill"
 
-      # It's the compact + clickable variant — the component adds
-      # `.scope-pill-hit-expand` only for `size={:compact} clickable={true}`,
-      # and it pushes the same `scope_filter` event as the desktop pill.
-      assert html =~ "scope-pill-hit-expand"
-      assert html =~ ~s(phx-value-scope="initech")
+      view |> element(~s(button[data-role="space-title"])) |> render_click()
+      # The title opens on the All segment; the Scope row is on Space.
+      view |> element(~s(#space-sheet button[data-seg="space"])) |> render_click()
+      view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render_click()
+
+      switch = ~s(#space-sheet button[data-role="space-sheet-scope-switch"])
+      assert view |> element(switch) |> render() =~ ~s(phx-value-scope="initech")
+
+      view |> element(switch) |> render_click()
+      assert render(view) =~ ~s(aria-checked="true")
     end
 
     test "mobile header pill is suppressed on a DM/group surface (no org-scope)",

@@ -1,10 +1,15 @@
 defmodule PlatformWeb.ChatLive.Partials.MessageContext do
   @moduledoc """
-  The "What this message is answering" panel for agent messages (task
-  01a0d8de stage 3), and the two frames it renders in: a non-modal popover
-  anchored under the message header on desktop, and a bottom sheet on
-  mobile. State lives in `PlatformWeb.ChatLive.MessageContextHooks`; these
-  are function components with no state of their own.
+  The 'Answering' panel for agent messages (task 01a0d8de stage 3; re-skinned
+  in redesign rung 9 stage 2 per direction canvas 01a1666e node m2 and the
+  masters' 'Answering' stub), and the two frames it renders in: a non-modal
+  popover anchored under the message header on desktop, and a bottom sheet on
+  mobile. One content component, `message_context_panel/1`, renders both.
+  State lives in `PlatformWeb.ChatLive.MessageContextHooks`; these are
+  function components with no state of their own.
+
+  The full text is shown: the stored context is capped at 200 characters, so
+  the old "Show more" clamp was dropped.
 
   Design direction: canvas "Design direction: agent message context
   (01a0d8de)". The panel answers in the order a person asks: what the agent
@@ -23,15 +28,9 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
 
   use Phoenix.Component
 
-  alias Phoenix.LiveView.JS
-
+  import PlatformWeb.CoreComponents, only: [icon: 1]
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
-
-  # Two lines of `text-sm` at the panel's 22rem width hold roughly 80
-  # characters (measured on the dev rig: a 107-character line was clamped),
-  # so past this "Show more" is offered. The stored context is capped at 200.
-  @show_more_at 80
 
   attr(:message_context, :any, required: true)
   attr(:mobile?, :boolean, default: false)
@@ -67,16 +66,16 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
       class="fixed left-1/2 top-24 z-40 w-[calc(100vw-1rem)] max-w-[22rem] -translate-x-1/2 rounded-box border border-edge bg-base-100 p-4 shadow-lg focus:outline-none"
     >
       <div class="mb-3 flex items-start justify-between gap-2">
-        <h2 id="message-context-popover-title" class="text-sm font-semibold text-base-content">
-          What this message is answering
+        <h2 id="message-context-popover-title" class="text-base font-semibold text-base-content">
+          Answering
         </h2>
         <button
           type="button"
           phx-click="close_message_context"
           aria-label="Close"
-          class="-m-1 rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class="-m-1 rounded p-1 text-subtle lg:hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <span class="hero-x-mark size-4" aria-hidden="true"></span>
+          <.icon name="hero-x-mark" class="size-4" />
         </button>
       </div>
       <.message_context_panel context={@message_context} id_prefix="message-context-popover" />
@@ -89,9 +88,12 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
       placement={:bottom}
       on_close="close_message_context"
       data-role="message-context-sheet"
+      handle_close
+      swipe_dismiss
     >
-      <:title>What this message is answering</:title>
+      <:title>Answering</:title>
       <div class="px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <p class="pb-3 text-base font-semibold text-base-content" aria-hidden="true">Answering</p>
         <.message_context_panel context={@message_context} id_prefix="message-context-sheet" />
       </div>
     </.sheet>
@@ -101,50 +103,50 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
   attr(:context, :map, required: true)
   attr(:id_prefix, :string, required: true)
 
-  @doc "The panel body, shared by the popover and the sheet."
+  @doc """
+  The panel body, shared by the popover and the sheet: the lead line naming
+  the agent in its accent, the quoted message it answers, the agent's own
+  context line, the generated summary when there is one, and the two
+  buttons, 'Jump to message' and 'Retry summary'. Neutral fills only.
+  """
   def message_context_panel(assigns) do
+    context = assigns.context
+
     assigns =
-      assign(
-        assigns,
-        :show_more?,
-        is_binary(assigns.context.agent_context) and
-          String.length(assigns.context.agent_context) > @show_more_at
+      assigns
+      |> assign(:agent_name, Map.get(context, :agent_name) || "The agent")
+      |> assign(:agent_slot, Map.get(context, :agent_slot))
+      |> assign(
+        :nothing?,
+        context.agent_context == nil and context.reply_to == nil and context.summary == nil
+      )
+      |> assign(
+        :retry?,
+        context.summary != :loading and context.summary != {:error, :not_configured}
       )
 
     ~H"""
     <div
-      class="flex flex-col gap-4"
+      class="flex flex-col gap-3 text-[15px] text-base-content"
       data-role="message-context-panel"
       data-context-message-id={@context.message_id}
     >
-      <section :if={@context.agent_context} data-role="message-context-agent">
-        <p class="message-context-label text-xs">From the agent</p>
-        <p
-          id={"#{@id_prefix}-agent-text"}
-          data-role="message-context-agent-text"
-          class="mt-1 line-clamp-2 break-words text-sm text-base-content"
+      <p data-role="message-context-lead" class="break-words">
+        <span
+          data-agent-slot={@agent_slot}
+          data-role="message-context-agent-name"
+          class="message-context-agent-name font-semibold"
         >
-          {@context.agent_context}
-        </p>
-        <button
-          :if={@show_more?}
-          type="button"
-          phx-click={
-            JS.remove_class("line-clamp-2", to: "##{@id_prefix}-agent-text")
-            |> JS.hide()
-          }
-          class="mt-1 rounded text-xs text-base-content/60 hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          Show more
-        </button>
-      </section>
+          {@agent_name}
+        </span>
+        was answering:
+      </p>
 
       <section :if={@context.reply_to} data-role="message-context-reply-to">
-        <p class="message-context-label text-xs">Replying to</p>
         <%= case @context.reply_to do %>
           <% %{status: :visible} = reply -> %>
-            <div class="mt-1 border-l-2 border-edge pl-3">
-              <p class="message-context-label flex items-baseline gap-1.5 text-xs">
+            <div class="rounded-box bg-base-200 px-3 py-2">
+              <p class="flex items-baseline gap-1.5 text-[13px] text-subtle">
                 <span class="truncate font-medium" data-role="message-context-reply-author">
                   {reply.author}
                 </span>
@@ -155,85 +157,93 @@ defmodule PlatformWeb.ChatLive.Partials.MessageContext do
                   class="shrink-0"
                 />
               </p>
-              <p
-                data-role="message-context-reply-preview"
-                class="mt-0.5 line-clamp-2 break-words text-sm text-base-content/80"
-              >
+              <p data-role="message-context-reply-preview" class="mt-0.5 break-words">
                 {reply.preview}
               </p>
-              <button
-                type="button"
-                data-role="message-context-jump"
-                phx-click="jump_to_answered_message"
-                phx-value-message-id={reply.message_id}
-                class="mt-1 inline-flex min-h-11 items-center gap-1 rounded text-xs font-medium text-base-content/70 hover:text-base-content hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:min-h-0"
-              >
-                Jump to message <span class="hero-arrow-right size-3" aria-hidden="true"></span>
-              </button>
             </div>
           <% _ -> %>
-            <p data-role="message-context-no-access" class="mt-1 text-sm text-base-content/70">
+            <p data-role="message-context-no-access" class="rounded-box bg-base-200 px-3 py-2">
               Replying to a message you don't have access to
             </p>
         <% end %>
       </section>
 
+      <section :if={@context.agent_context} data-role="message-context-agent">
+        <p id={"#{@id_prefix}-agent-text"} data-role="message-context-agent-text" class="break-words">
+          {@context.agent_context}
+        </p>
+        <p class="mt-0.5 text-[13px] text-subtle">agent context</p>
+      </section>
+
+      <p :if={@nothing?} data-role="message-context-none" class="text-subtle">
+        Summary not generated yet
+      </p>
+
       <section :if={@context.summary} data-role="message-context-generated">
-        <span class="badge badge-info badge-sm">Generated summary</span>
+        <p class="mb-0.5 text-[13px] text-subtle">Generated summary</p>
         <%= case @context.summary do %>
           <% :loading -> %>
-            <div
+            <p
               data-role="message-context-summary-loading"
-              class="mt-2 flex flex-col gap-1.5"
               aria-busy="true"
-              aria-label="Generating summary"
+              class="text-subtle"
             >
-              <div class="skeleton h-3 w-full"></div>
-              <div class="skeleton h-3 w-11/12"></div>
-              <div class="skeleton h-3 w-2/3"></div>
-            </div>
+              Summarising…
+            </p>
           <% {:ok, result} -> %>
             <p
               data-role="message-context-summary"
               data-source-message-ids={Enum.join(result.source_message_ids, ",")}
-              class="mt-2 break-words text-sm text-base-content"
+              class="break-words"
             >
               <span :for={line <- String.split(result.text, "\n")} class="block">{line}</span>
             </p>
           <% {:error, :not_configured} -> %>
-            <p
-              data-role="message-context-summary-unavailable"
-              class="mt-2 text-sm text-base-content/70"
-            >
+            <p data-role="message-context-summary-unavailable">
               Summaries are not available on this install.
             </p>
           <% {:error, :no_history} -> %>
-            <p data-role="message-context-summary-empty" class="mt-2 text-sm text-base-content/70">
+            <p data-role="message-context-summary-empty">
               There are no earlier messages you can see to summarise.
             </p>
           <% {:error, _reason} -> %>
-            <div data-role="message-context-summary-error" class="mt-2 flex items-center gap-3">
-              <p class="text-sm text-error">The summary could not be generated.</p>
-              <button
-                type="button"
-                data-role="message-context-retry"
-                phx-click="retry_message_context"
-                class="btn btn-ghost btn-xs min-h-11 lg:min-h-0"
-              >
-                Retry
-              </button>
-            </div>
+            <p data-role="message-context-summary-error" class="flex items-center gap-2">
+              <.icon name="hero-exclamation-circle" class="size-5 shrink-0 bg-error" />
+              The summary could not be generated.
+            </p>
         <% end %>
         <%!-- Says what a summary was made from, so only where there is one
              (or one on the way): not beside an error or an unavailable note. --%>
         <p
           :if={@context.summary == :loading or match?({:ok, _}, @context.summary)}
           data-role="message-context-summary-source"
-          class="message-context-label mt-2 text-xs"
+          class="mt-1 text-[13px] text-subtle"
         >
           Summarised by Burrow from the messages before this one that you can see.
         </p>
       </section>
+
+      <div class="flex flex-wrap gap-2">
+        <button
+          :if={match?(%{status: :visible}, @context.reply_to)}
+          type="button"
+          data-role="message-context-jump"
+          phx-click="jump_to_answered_message"
+          phx-value-message-id={@context.reply_to.message_id}
+          class="inline-flex min-h-11 items-center gap-2 rounded-box bg-base-200 px-3 text-base-content active:bg-base-300 lg:min-h-9 lg:hover:bg-base-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <.icon name="hero-arrow-up" class="size-4 text-subtle" /> Jump to message
+        </button>
+        <button
+          :if={@retry?}
+          type="button"
+          data-role="message-context-retry"
+          phx-click="retry_message_context"
+          class="inline-flex min-h-11 items-center gap-2 rounded-box bg-base-200 px-3 text-base-content active:bg-base-300 lg:min-h-9 lg:hover:bg-base-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <.icon name="hero-arrow-path" class="size-4 text-subtle" /> Retry summary
+        </button>
+      </div>
     </div>
     """
   end

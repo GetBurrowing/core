@@ -103,7 +103,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Org Memory")
+     |> assign(:page_title, "Org memory")
      |> assign(:pages, pages)
      |> assign(:namespace_tree, tree)
      |> assign(:burrow_docs, burrow_docs)
@@ -1035,8 +1035,7 @@ defmodule PlatformWeb.OrgMemoryLive do
           "flex items-center gap-1.5 rounded-t-lg border-x border-t px-4 py-1.5 text-sm transition-colors",
           if(Atom.to_string(@view_mode) == tab,
             do: "border-edge bg-base-100 font-medium text-base-content",
-            else:
-              "border-transparent text-base-content/50 hover:bg-base-300/60 hover:text-base-content"
+            else: "border-transparent text-subtle hover:bg-base-300/60 hover:text-base-content"
           )
         ]}
       >
@@ -1066,7 +1065,7 @@ defmodule PlatformWeb.OrgMemoryLive do
       <div class="flex items-center justify-between border-b border-edge px-6 py-3">
         <div>
           <h1 class="text-lg font-bold">Create Memory Page</h1>
-          <p class="text-xs text-base-content/40">Choose a template or create a custom page</p>
+          <p class="text-xs text-subtle">Choose a template or create a custom page</p>
         </div>
         <button phx-click="cancel_create" class="btn btn-ghost btn-sm">
           Cancel
@@ -1075,7 +1074,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
       <div class="flex-1 overflow-y-auto px-6 py-6">
         <%!-- Template cards --%>
-        <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content/50">
+        <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content">
           Templates
         </h2>
         <div class="grid grid-cols-2 gap-3 mb-8">
@@ -1101,14 +1100,14 @@ defmodule PlatformWeb.OrgMemoryLive do
               <span class={[
                 NamespaceTree.file_icon(key),
                 "size-5 mb-2",
-                if(existing, do: "text-base-content/30", else: "text-primary")
+                if(existing, do: "text-subtle", else: "text-primary")
               ]}>
               </span>
               <span class="text-sm font-medium">{key}</span>
-              <span class="text-xs text-base-content/40 mt-0.5">
+              <span class="text-xs text-subtle mt-0.5">
                 {template_description(key)}
               </span>
-              <span :if={existing} class="mt-1 text-xs text-base-content/30">
+              <span :if={existing} class="mt-1 text-xs text-subtle">
                 Already exists
               </span>
             </button>
@@ -1116,12 +1115,12 @@ defmodule PlatformWeb.OrgMemoryLive do
         </div>
 
         <%!-- Custom page input --%>
-        <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content/50">
+        <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content">
           Custom Page
         </h2>
         <div class="flex items-end gap-3">
           <div class="flex-1">
-            <label class="text-xs text-base-content/50 mb-1 block">
+            <label class="text-xs font-medium text-base-content mb-1 block">
               Page path (e.g. <code>org/custom.md</code>)
             </label>
             <input

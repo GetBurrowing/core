@@ -364,7 +364,7 @@ defmodule PlatformWeb.SocialCalendar do
           <.platform_icon platform={@item.account.platform} class="size-3.5" />
           <span class="sr-only">{platform_label(@item.account.platform)}</span>
         </span>
-        <span :if={!@compact?} class="min-w-0 flex-1 truncate text-sm text-base-content/80">
+        <span :if={!@compact?} class="min-w-0 flex-1 truncate text-sm text-base-content">
           {@item.account.handle}
         </span>
         <.state_mark state={@item.state} label={state_label(@item)} />
@@ -395,7 +395,7 @@ defmodule PlatformWeb.SocialCalendar do
       data-role="social-calendar-group"
       data-count={length(@group.items)}
     >
-      <p class="flex items-center gap-1 px-1 text-xs text-base-content/80">
+      <p class="flex items-center gap-1 px-1 text-xs text-base-content">
         <.icon name="hero-square-3-stack-3d-micro" class="size-3" />
         <span>{length(@group.items)} posts, one idea</span>
       </p>

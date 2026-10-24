@@ -85,7 +85,8 @@ export function buildSearchField(doc) {
  * The count is `aria-hidden`. The number reaches a screen reader through the
  * hook's separate live region, which was mounted before there was anything to
  * announce; a live region on THIS row would be destroyed and recreated by the
- * swap and would announce nothing (`mobile_browser.ex:280-284`).
+ * swap and would announce nothing (the same rule the Chat list's reorder
+ * announcer follows).
  */
 export function buildModeBar(doc) {
   const bar = doc.createElement("div")

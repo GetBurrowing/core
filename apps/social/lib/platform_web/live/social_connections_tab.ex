@@ -921,7 +921,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
         Go to Settings
       </button>
     </div>
-    <p :if={@accounts_empty?} class="mb-3 text-base-content/70" data-role="social-empty">
+    <p :if={@accounts_empty?} class="mb-3 text-base-content" data-role="social-empty">
       No accounts yet for {@profile.name}. Add one to start posting.
     </p>
     <div
@@ -1101,7 +1101,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
            it. The account name keeps its width; the owner gives up space. --%>
       <span
         :if={@owner}
-        class="flex min-w-0 basis-full items-center gap-1.5 pl-[5.75rem] text-sm text-base-content/70 sm:flex-1 sm:basis-auto sm:pl-0"
+        class="flex min-w-0 basis-full items-center gap-1.5 pl-[5.75rem] text-sm text-base-content sm:flex-1 sm:basis-auto sm:pl-0"
         data-role="social-account-owner"
       >
         <span class="grid size-5 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral text-[10px] text-neutral-content">
@@ -1180,13 +1180,13 @@ defmodule PlatformWeb.SocialConnectionsTab do
           >
             Connect
           </button>
-          <span :if={!@can_connect?} class="text-sm text-base-content/70">Not connected</span>
+          <span :if={!@can_connect?} class="text-sm text-base-content">Not connected</span>
       <% end %>
     </span>
     <button
       :if={@can_edit?}
       type="button"
-      class="btn btn-ghost btn-sm shrink-0 text-base-content/70"
+      class="btn btn-ghost btn-sm shrink-0 text-base-content"
       phx-click="open_remove"
       phx-value-id={@account.id}
       data-role="social-account-remove"
@@ -1255,7 +1255,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
         >
           <span class={[
             "flex items-start gap-1.5",
-            reason.tone == :info && "text-base-content/70"
+            reason.tone == :info && "text-base-content"
           ]}>
             <.icon
               name={Map.fetch!(@reason_icons, reason.tone)}
@@ -1271,7 +1271,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
           />
         </li>
       </ul>
-      <p class="flex flex-wrap gap-x-4 gap-y-1 text-base-content/70">
+      <p class="flex flex-wrap gap-x-4 gap-y-1 text-base-content">
         <span data-role="social-account-last-posted">
           <%= cond do %>
             <% @health.last_published_at && @health.last_published_url -> %>
@@ -1364,7 +1364,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
       <span
         class={[
           "whitespace-nowrap text-sm",
-          if(@invite.expiring?, do: "text-warning", else: "text-base-content/70")
+          if(@invite.expiring?, do: "text-warning", else: "text-base-content")
         ]}
         data-role="social-invite-expiry"
         data-expiring={to_string(@invite.expiring?)}
@@ -1416,7 +1416,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
           </button>
         </div>
         <%= if @dialog.step == :form do %>
-          <p class="mb-3 text-sm text-base-content/70">
+          <p class="mb-3 text-sm text-base-content">
             They connect their own account and approve every post under their name.
           </p>
           <.form
@@ -1474,7 +1474,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
               Copy
             </button>
           </div>
-          <p class="mt-2 text-sm text-base-content/70" data-role="social-invite-terms">
+          <p class="mt-2 text-sm text-base-content" data-role="social-invite-terms">
             Single use. Works for a signed-in Burrow user. Expires {@dialog.expires_on}.
           </p>
           <div class="modal-action mt-3">
@@ -1506,7 +1506,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
       <p data-role="social-remove-sentence">
         <span :for={{class, text} <- @segments} class={class}>{text}</span>
       </p>
-      <p :if={@account.status} class="mt-1 text-base-content/70" data-role="social-remove-reconnect">
+      <p :if={@account.status} class="mt-1 text-base-content" data-role="social-remove-reconnect">
         You can reconnect this account later.
       </p>
       <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

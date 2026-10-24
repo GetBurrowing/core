@@ -70,13 +70,10 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
 
   ## VACUITY FENCE
 
-  PR #791 fenced `visible_roster/2` to spaces the viewer PARTICIPATES IN (the
-  CONFIDENTIALITY FENCE comment in `shell_live.ex`). A fixture that seeds an
-  agent-bearing space without joining the viewer yields an empty roster, which
-  resolves `{:roster_resolved, nil}`, holds nothing, and would make a low count
-  pass for a reason unrelated to subscription hygiene. Case 1 therefore joins
-  the viewer AND carries an anti-vacuity assertion that the seeded agent really
-  appears in the roster before any count is trusted.
+  Case 1 asserts the subject is in the shell's presence input
+  (`Chat.list_viewer_presence_space_ids/1`) before any count is trusted. It
+  used to assert the shell's roster had resolved to it; that roster was
+  deleted in task 01a1557a-8f80 stage 3.
 
   `async: false` — `Platform.PubSub`'s registry is VM-global.
 
@@ -88,7 +85,6 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
-  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Orchestration.ExecutionSpace
@@ -97,16 +93,16 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   alias Platform.Tenancy.OrgMembership
 
   describe "shell and chat in one pid" do
-    test "a space held by roster, presence and the rail keeps exactly one registration when chat navigates away — and it still delivers",
+    # The shell's roster holder went with the utility bar's agents meter in
+    # task 01a1557a-8f80; presence and the rail are the shell-and-chat
+    # holders left.
+    test "a space held by presence and the rail keeps exactly one registration when chat navigates away — and it still delivers",
          %{conn: conn} do
       viewer = create_user!("Hollowbrook Viewer")
-      agent = create_agent!("HollowbrookBot")
 
-      # S: joined (=> presence set, => rail, => past the #791 roster fence) and
-      # carrying a principal agent so the roster actually resolves TO IT.
+      # S: joined (=> presence set, => rail).
       subject = create_channel!("hollowbrook")
       join!(subject.id, viewer)
-      Chat.set_principal_agent(subject.id, agent.id)
 
       elsewhere = create_channel!("marram")
       join!(elsewhere.id, viewer)
@@ -122,23 +118,21 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
       view = mount_chat(conn, viewer, subject)
       pid = view.pid
 
-      # ANTI-VACUITY for the #791 fence, asserted BEFORE any count is trusted.
-      assert agent.id in roster_agent_ids(pid),
-             "anti-vacuity failed: the seeded agent is absent from the roster, so the " <>
-               "roster branch never ran and every count below is meaningless"
+      # ANTI-VACUITY: the shell really is a holder of S, read off the INPUT to
+      # its presence branch rather than anything the holder map wrote.
+      assert subject.id in Chat.list_viewer_presence_space_ids(viewer)
 
-      # THREE holders on ONE pid — `:roster` (shell), `:presence` (shell),
-      # `:chat_rail` + `:chat_active` (chat) — and ONE registration. Stage 1
-      # measured 3 here.
+      # Holders on ONE pid — `:presence` (shell), `:chat_rail` + `:chat_active`
+      # (chat) — and ONE registration. Stage 1 measured 3 here, with the
+      # deleted roster holder.
       assert registrations(pid, subject) == 1,
-             "roster, presence and chat must SHARE one registration on a shared pid"
+             "presence and chat must SHARE one registration on a shared pid"
 
       render_patch(view, ~p"/chat/#{Chat.space_path_segment(elsewhere)}")
       _ = :sys.get_state(pid)
 
-      # THE CROSS-SURFACE CASE. Chat released `:chat_active` and the roster
-      # moved to `elsewhere`, so both of those holds are gone — but `:presence`
-      # and `:chat_rail` still hold S. Before this task chat's teardown was a
+      # THE CROSS-SURFACE CASE. Chat released `:chat_active`, so that hold is
+      # gone — but `:presence` and `:chat_rail` still hold S. Before this task chat's teardown was a
       # bare `Registry.unregister/2` and this read 0, silently, for the rest of
       # the session.
       assert registrations(pid, subject) == 1,
@@ -151,8 +145,13 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
       # non-zero above proves the instrument can read a registration at all.
       assert registrations(pid, control) == 0
 
-      # A COUNT OF 1 IS NOT DELIVERY.
-      assert_shell_receives_roster_ping(view, subject.id, "HollowbrookDeliveryBot")
+      # A COUNT OF 1 IS NOT DELIVERY. S is a background rail row now, so a
+      # message on it moves its pill only if the surviving registration
+      # delivers — and moves it by exactly one.
+      post_from_a_stranger(subject, "hollowbrook delivery probe")
+
+      assert unread_pill(render(view), subject) == "1",
+             "the surviving registration on S did not deliver exactly once"
     end
 
     test "single delivery: a rail space the shell also holds increments unread ONCE per message",
@@ -283,35 +282,6 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   # LiveView is also subscribed to — a refresh triggered by THAT topic would
   # happen whether or not the `chat:space:<id>` registration survived, and the
   # assertion would pass for the wrong reason.
-  defp assert_shell_receives_roster_ping(view, space_id, agent_name) do
-    agent = create_agent!(agent_name)
-
-    Repo.insert!(%Chat.Participant{
-      space_id: space_id,
-      participant_type: "agent",
-      participant_id: agent.id,
-      role: "member",
-      display_name: agent.name,
-      joined_at: DateTime.utc_now()
-    })
-
-    refute agent.id in roster_agent_ids(view.pid),
-           "anti-vacuity failed: the LiveView already knows about #{agent_name}, so its " <>
-             "later presence proves nothing about delivery"
-
-    Phoenix.PubSub.broadcast(
-      Platform.PubSub,
-      ChatPubSub.space_topic(space_id),
-      {:roster_changed, space_id}
-    )
-
-    _ = render(view)
-
-    assert agent.id in roster_agent_ids(view.pid),
-           "the surviving registration on #{ChatPubSub.space_topic(space_id)} did not " <>
-             "DELIVER to the shell: a broadcast on it produced no roster recomputation"
-  end
-
   # Arrival AT THE PROCESS, via the VM's receive trace. Used on `/tasks`, where
   # the retained execution space is not rendered after the switch and there is
   # no downstream observable to read.
@@ -337,12 +307,6 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
     end
   end
 
-  defp roster_agent_ids(pid) do
-    :sys.get_state(pid).socket.assigns.roster_items.result
-    |> Kernel.||([])
-    |> Enum.map(fn {entry, _status} -> entry.agent_id end)
-  end
-
   # The unread pill on one rail row, or nil when the row carries none. Scoped
   # to `#chat-sidebar` because the same row renders again in the mobile drawer
   # and the switcher, and an unscoped query would concatenate their texts into
@@ -364,10 +328,9 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
 
   # ── Mount helpers ─────────────────────────────────────────────────────────
 
-  # `render_async/1` waits for both of ShellLive's `assign_async` loaders; each
+  # `render_async/1` waits for ShellLive's `start_async` Task, which
   # `send/2`s its resolution before returning, and the trailing round trips
-  # guarantee the LiveView has processed `{:roster_resolved, _}` and
-  # `{:presence_spaces_resolved, _}`. Never `Process.sleep/1` — that pins the
+  # guarantee the LiveView has processed `{:presence_spaces_resolved, _}`. Never `Process.sleep/1` — that pins the
   # box's timing rather than the code's ordering.
   defp settle(view) do
     _ = render_async(view)
@@ -427,15 +390,6 @@ defmodule PlatformWeb.SpaceTopicsCrossSurfaceTest do
   defp create_execution_space!(name) do
     {:ok, space} = Chat.create_space(%{name: name, kind: "execution"})
     space
-  end
-
-  defp create_agent!(name) do
-    Repo.insert!(%Agent{
-      name: name,
-      slug: "#{String.downcase(name)}-#{System.unique_integer([:positive])}",
-      status: "active",
-      runtime_type: "builtin"
-    })
   end
 
   defp join!(space_id, %User{} = user) do

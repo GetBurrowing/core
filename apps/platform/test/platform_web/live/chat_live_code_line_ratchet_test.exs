@@ -109,16 +109,18 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   @render_helpers_path Path.join(@app_root, "lib/platform_web/live/chat/render_helpers.ex")
   @external_rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/external_rail.ex")
   @rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/rail.ex")
-  @mobile_browser_path Path.join(
-                         @app_root,
-                         "lib/platform_web/live/chat/partials/mobile_browser.ex"
-                       )
+  # The phone Chat list (task 01a1557a-8562) took the deleted drawer's slot.
+  @chat_list_path Path.join(@app_root, "lib/platform_web/live/chat/partials/chat_list.ex")
   @conversation_path Path.join(
                        @app_root,
                        "lib/platform_web/live/chat/partials/conversation.ex"
                      )
   @composer_path Path.join(@app_root, "lib/platform_web/live/chat/partials/composer.ex")
   @overlays_path Path.join(@app_root, "lib/platform_web/live/chat/partials/overlays.ex")
+  @message_actions_hooks_path Path.join(
+                                @app_root,
+                                "lib/platform_web/live/chat/message_actions_hooks.ex"
+                              )
 
   # Every file the chat surface's load-bearing explanation is allowed to live
   # in. The comment FLOOR below sums over this list so an extraction cannot
@@ -128,10 +130,11 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
     @render_helpers_path,
     @external_rail_path,
     @rail_path,
-    @mobile_browser_path,
+    @chat_list_path,
     @conversation_path,
     @composer_path,
-    @overlays_path
+    @overlays_path,
+    @message_actions_hooks_path
   ]
 
   # MEASURED on `origin/main` @ f1311a42, 2026-08-25, by `code_line_count/1`
@@ -226,17 +229,17 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # green ratchet as proof the prose survived. The proof that it survived in
   # stage 3 is the diff: the move was byte-identical.
   # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
-  # stage 4 moved `<div id="mobile-channel-browser">` — the mobile channel
-  # browser drawer, ~917 lines of markup — out of `chat_live.html.heex` into
-  # `PlatformWeb.ChatLive.Partials.MobileBrowser`. Same shape as stages 2 and
+  # stage 4 moved the mobile channel browser drawer, ~917 lines of markup,
+  # out of `chat_live.html.heex` into its own partial (deleted with the drawer
+  # in task 01a1557a-8562 stage 5). Same shape as stages 2 and
   # 3: the markup this pin does not count leaves a `.heex`, and the single
   # code line it adds to `chat_live.ex` is the new `import`:
   #
   #     2,193  stage 3 pin
-  #     +    1  `import PlatformWeb.ChatLive.Partials.MobileBrowser`
+  #     +    1  `import` of the drawer partial
   #     =2,194  <- the pin
   #
-  # `partials/mobile_browser.ex` is registered in `@explained_paths` above,
+  # The drawer partial was registered in `@explained_paths` above,
   # and the comment floor does NOT move for the same reason stage 3 recorded:
   # the prose that travelled with this drawer is `<%!-- --%>` HEEx comments
   # and `@moduledoc` / `@doc` heredocs, and `comment_line_count/1` counts
@@ -246,7 +249,7 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # surface (2,720 elements) in every one.
   # RE-MEASURED again on the same branch, 2026-08-26, after task 01a0312e
   # stage 5 moved the top half of the conversation pane — the space
-  # `<header>`, the mobile Pinned strip, the mobile channel-pills strip and
+  # `<header>`, the mobile Pinned strip, the mobile pills strip and
   # the search / pins / canvases drawers, ~720 lines of markup — out of
   # `chat_live.html.heex` into `PlatformWeb.ChatLive.Partials.Conversation`.
   # Unlike stages 2-4 the pin DROPS, and the arithmetic is worth stating
@@ -550,8 +553,8 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # Large file uploads (task 01a120be stage 3): +2. The `LargeUploadHooks`
   # alias and its `attach/1` pipeline step; the feature lives in
-  # `PlatformWeb.ChatLive.LargeUploadHooks`, the dialog partial and the
-  # composer partial. 2363 + 2 = 2365.
+  # `PlatformWeb.ChatLive.LargeUploadHooks` and the composer partials.
+  # 2363 + 2 = 2365.
   #
   # Merge of origin/main into 01a120be (deploy stage): main's pin was 2395
   # (01a116de +32 on the 2363 base); this branch adds +2 on that base.
@@ -587,7 +590,61 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # one `list_orgs/0` read into `channel_sections/5`'s new `scope_orgs` and
   # `scope_palette` keys, and the reassign picker's `scope` lookup.
   # 2582 + 17 = 2599, measured by this guard on the formatted file.
-  @chat_live_code_line_count 2599
+  # Task 01a1557a-8562 stage 2 (the phone Chat list at /chat): +26. `/chat`
+  # stops redirecting: the `:index` branch of `handle_params/3` now releases
+  # the open space through `leave_active_space/1` (the `:show` branch's
+  # teardown, factored out rather than copied) and loads the list's data;
+  # `restricted_flash?/1`, the `chat_viewport` clauses that land a desktop in
+  # its first channel, the `@list_excerpts` / `@list_identities` seeds and the
+  # two `ChatListData.maybe_refresh/1` pipes. The list's data loading,
+  # refresh gate and landing choice live in `PlatformWeb.ChatLive.ChatListData`,
+  # not here. 2599 + 26 = 2625, measured by this guard.
+  # Task 01a1557a-8562 stage 3 (the list's sheets): +3, the
+  # `ChatListHooks` alias, its `attach/1` in mount and its `reset/1` in the
+  # `:show` branch. The sheets' events and search live in
+  # `PlatformWeb.ChatLive.ChatListHooks`, not here. 2625 + 3 = 2628.
+  # Task 01a1557a-8562 stage 5 (the phone drawer, pills and pinned strip
+  # deleted): -29, measured by this guard (2628 -> 2599). Out went the
+  # `MobileBrowser` import, the `:mobile_browser_open` and
+  # `:drawer_search_intent` assigns, the `toggle_mobile_browser` and
+  # `close_mobile_browser` handlers and `default_chat_landing/2`; the `:index`
+  # branch of `handle_params/3` lost its external-user landing.
+  # Task 01a1557a-e538 stage 2 (mask names persisted per user): +1. The
+  # `toggle_mask_names` handler persists the requested state through
+  # `Accounts.put_mask_names/2`; the mount seed stays one line. Re-measured on
+  # top of the stage 5 tree above: 2599 + 1 = 2600.
+  # Task 01a1557a-9de3 stage 1 (rung 11, the staged tray): -38. Out went the
+  # upload dialog's send coordinator (the slug-to-@mention caption builder and its
+  # post/stream/reset), the `noop` handler only the dialog panel used, and
+  # the `UploadHooks` alias and attach step; in came the `AttachHooks` alias
+  # and attach step (ahead of `MessagesHooks`) and `auto_upload: true`. The
+  # tray, its send guard and the large-file send live in
+  # `PlatformWeb.ChatLive.AttachHooks`, `Partials.Attach` and
+  # `LargeUploadHooks`. 2600 - 38 = 2562, measured by this guard.
+  # Task 01a1557a-8a6d stage 1 (the phone space sheet): +4, measured by this
+  # guard on the file merged with rung 11 (2562 -> 2566): the
+  # `Partials.SpaceSheet` import, the `SpaceSheetHooks` alias, its `attach/1`
+  # in mount and its `reset/1` in the `:show` branch. The sheet's events live
+  # in `PlatformWeb.ChatLive.SpaceSheetHooks`, not here.
+  # Task 01a1557a-9406 stage 2 (redesign rung 9, the actions sheet): -14,
+  # measured by this guard (2566 -> 2552). `open_message_actions` /
+  # `close_message_actions` and the two mount seeds moved in place to
+  # `PlatformWeb.ChatLive.MessageActionsHooks` (attached fully qualified, so
+  # no alias line), which also owns the new `delete_message`.
+  # Task 01a1557a-9406 stage 3 (reactions and inline threads): -4, measured
+  # by this guard (2552 -> 2548). The four `MessagesHooks.reset_thread_panel/1`
+  # calls went with the thread side panel no template rendered.
+  # Task 01a1557a-9406 stage 4 (edit guard): -24, measured by this guard
+  # (2548 -> 2524). `confirm_save_edit` / `cancel_save_edit`, the
+  # `removes_content` branch of `save_edit` and the `:pending_save_edit`
+  # assign went with the custom removal modal; the native confirm in the
+  # MessageEditor hook replaced it.
+  # Task 01a1557a-8f80 stage 3 (Members sheet): -9, measured by this guard
+  # (2524 -> 2515). The `members_open` handler, the `{:members_closed}` and
+  # `{:members_flash, _, _}` clauses and the `:show_members` seed moved to
+  # `PlatformWeb.ChatLive.MembersSheetHooks` (attached fully qualified, so no
+  # alias line).
+  @chat_live_code_line_count 2515
 
   @doc """
   Count the CODE lines of a source file.

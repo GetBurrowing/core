@@ -173,7 +173,7 @@ defmodule PlatformWeb.SocialCreateProfile do
           <h2 class="text-lg font-semibold" data-role="social-create-heading">
             Set up your first social profile
           </h2>
-          <p class="mt-1 mb-4 text-base-content/70" data-role="social-create-explanation">
+          <p class="mt-1 mb-4 text-base-content" data-role="social-create-explanation">
             A profile is a brand or person you post for. You'll be its first approver.
           </p>
           <.create_form form={@form} orgs={@orgs} focus?={true} />
@@ -181,7 +181,7 @@ defmodule PlatformWeb.SocialCreateProfile do
       </div>
     <% else %>
       <div class="px-4 py-12 text-center sm:px-6">
-        <p class="text-base-content/70" data-role="social-no-profiles">
+        <p class="text-base-content" data-role="social-no-profiles">
           No social profiles yet. Ask an org member to set one up.
         </p>
       </div>
@@ -290,7 +290,7 @@ defmodule PlatformWeb.SocialCreateProfile do
         </p>
       </div>
       <div class="fieldset py-0">
-        <label for="social-create-home-url" class="label mb-1 font-medium text-base-content/70">
+        <label for="social-create-home-url" class="label mb-1 font-medium text-base-content">
           Home page (optional)
         </label>
         <input
@@ -304,7 +304,7 @@ defmodule PlatformWeb.SocialCreateProfile do
           aria-describedby="social-create-home-hint"
           data-role="social-create-home-url"
         />
-        <p id="social-create-home-hint" class="mt-1 text-sm text-base-content/70">
+        <p id="social-create-home-hint" class="mt-1 text-sm text-base-content">
           Where clips link back to. Add it later in Settings if you like.
         </p>
         <p

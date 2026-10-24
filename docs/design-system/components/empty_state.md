@@ -286,7 +286,7 @@ CSS rules land in `app.css` (proposed):
 | `chat_live.html.heex:454` (search no results) | `:standard` | `03-voice.md` §5.5 |
 | Future: chat space empty (no posts)      | `:conversational` | `03-voice.md` §5.2 |
 | `tasks_live.html.heex:331` (no tasks)    | `:conversational` | `03-voice.md` §5.3 |
-| `activity_live.html.heex` (no actions)   | **`:minimal`**     | `03-voice.md` §5.4 (the design lead pin) |
+| Activity page (no actions; page retired by task 01a1557a-7a71 stage 4) | **`:minimal`** | `03-voice.md` §5.4 (the design lead pin) |
 
 ### Inline empty-state replacement
 
@@ -324,6 +324,6 @@ Existing inline pattern (e.g. `chat_live.html.heex:54-55`):
 - [ ] Add CSS rules to `app.css` (folded into `05-app-css-diff.md`).
 - [ ] Migrate the 4 chat empty-state sites in `chat_live.html.heex`.
 - [ ] Migrate `tasks_live.html.heex` empty-state.
-- [ ] Migrate `activity_live.html.heex` empty-state — **MUST use `:minimal`, not `:conversational`** (the design lead pin).
+- [x] ~~Migrate the Activity page's empty-state~~ (page retired by task 01a1557a-7a71 stage 4; the `:minimal` pin no longer has a site).
 - [ ] Manual verification: each empty state renders the verbatim copy from `03-voice.md` §5.
 - [ ] LiveView tests: when the list is empty, `assert has_element?(view, ".empty-state")`; when the list has items, `assert not has_element?(view, ".empty-state")`.

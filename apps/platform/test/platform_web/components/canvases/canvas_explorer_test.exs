@@ -860,7 +860,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorerTest do
         html |> q(~s([data-role="canvas-explorer-row-meta"])) |> LazyHTML.attribute("class")
 
       assert class =~ "text-[12.5px]"
-      assert class =~ "text-base-content/60"
+      assert class =~ "text-subtle"
       refute class =~ "text-base-content/40"
     end
 

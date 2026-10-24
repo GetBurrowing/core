@@ -95,8 +95,7 @@ defmodule Platform.Chat.EditCrossClientTest do
 
       render_hook(view_a, "save_edit", %{
         "message_id" => msg.id,
-        "body" => "updated cross-client body",
-        "removes_content" => "false"
+        "body" => "updated cross-client body"
       })
 
       # View A reflects the edit

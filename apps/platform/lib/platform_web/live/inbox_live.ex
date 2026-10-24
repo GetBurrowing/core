@@ -32,7 +32,8 @@ defmodule PlatformWeb.InboxLive do
     * `handle_info({:inbox_item_added, item}, socket)` →
       `stream_insert(stream, item, at: 0)` + bump that section's count.
     * `handle_event("dismiss", %{"id" => id}, socket)` →
-      `Inbox.mark_dismissed/2` + `stream_delete_by_dom_id/3` + drop the count.
+      `Inbox.dismiss_many(user_id, [id])` + `stream_delete_by_dom_id/3` + drop
+      the count (since redesign rung 14; it was `Inbox.mark_dismissed/2`).
     * `handle_event("open", %{"id" => id, "url" => url}, socket)` →
       `Inbox.open_item/2` then `push_navigate` to the item's url. Opening an
       action row (`Inbox.action_kinds/0`) marks it read and it STAYS listed;
@@ -144,6 +145,76 @@ defmodule PlatformWeb.InboxLive do
   Migration `20260817120000_backfill_read_as_dismissed_inbox_items.exs` copied
   `read_at` into `dismissed_at` for every pre-existing row when this shipped,
   so nobody's history came back as a pile of new work on deploy day.
+
+  ## Phone list (redesign rung 14, task 01a1557a-ad2d)
+
+  Below `lg` the Inbox is a flat list under More (stage 2 renders it). This
+  module feeds it; the desktop sections, checkboxes, selection bar,
+  `Clear all (N)`, the timed toast with its Undo, the notification-state row
+  and the `open` event are unchanged.
+
+    * **`:inbox_rows`** is a fourth stream, flat, in `load_items/1` order
+      (newest first), dom ids `inbox-row-<id>`. It is reset with the three
+      section streams in `init_sections/2`, gets live inserts at 0, and loses
+      rows wherever the section streams do (`dismiss`, `remove_rows/3`).
+    * **`:mention_authors`** (`Inbox.mention_authors/1`) and
+      **`:source_titles`** (`Inbox.source_titles/1`) feed each row's author
+      slot: the person or agent behind a mention, or the task or meeting title
+      behind any other row. Both are derived in `init_sections/2` and merged
+      one entry per live insert.
+
+  Decisions recorded here:
+
+    * **D1: every kind stays listed.** The prototype screen shows only chat
+      rows, but this list carries every core and extension kind. Filtering to
+      mentions would make Clear all sweep rows the user cannot see (it sweeps
+      `unread_scope/1`), or need a narrowed sweep while the More sheet's badge
+      still counts them, which breaks "clear what you can see" and ADR 0049's
+      count = reachable list. Saru confirmed this on Inbox canvas 01a15ec4
+      rev 2: one row shape covers every kind.
+    * **D2: no reply rows.** No reply kind exists (`Inbox.Item` `@kinds`), and
+      adding a producer is a notification-policy change, not a re-skin.
+    * **D5: a tap keeps today's open semantics**, `Inbox.open_item/2`: a
+      non-action row is dismissed, an action row is marked read and stays.
+      A read-only open would reverse task 01a11703, and the reconciler's
+      `chat_mention` clause dismisses a read mention on the next load anyway.
+
+  **`@undo`** is `nil | %{ids: [id], message: String.t()}`, the phone header's
+  Undo. It is set from the ids an action RETURNED as changed:
+  `dismiss_all_unread/1` (`clear_all`), `dismiss_many/2` (`dismiss_selected`,
+  and the single `dismiss`, which now goes through `dismiss_many/2` for exactly
+  this reason). An action that changed nothing leaves it as it was.
+  `undo_last` restores those ids, then clears `@undo` and the toast;
+  `undo_clear` (the desktop toast's Undo) clears `@undo` too. Nothing else
+  clears it: live inserts and `:inbox_changed` / dismissed / read reloads do
+  not, so it lasts until the user takes another action or leaves the screen
+  (which ends the LiveView). `open_undo_toast/2` deliberately does NOT set it:
+  that toast is mount-derived, and a mount-derived Undo would hold the phone
+  header's Clear all slot for five minutes after every open.
+
+  **Open by params.** A phone row is `<.link patch={~p"/inbox?open=<id>"}>`
+  with no `phx-click`, and `handle_params/3` does the open: `open_item/2`,
+  then `push_navigate` to the row's STORED url as a PUSH (an unknown,
+  foreign or url-less row patches back to `/inbox` with `replace: true`). Why not a click
+  on the link: a bare-string `phx-click` on a navigate/patch link throws
+  `this[kind] is not a function`, and a `JS.push` on a redirect link never
+  reaches the server (measured in rung 5), so a state change on a link must
+  happen in `handle_params/3`. Why not a plain `navigate` to the item url: it
+  would skip `open_item/2`, so a mention would not be acknowledged, an action
+  row would never be marked read, and a `task_sponsor_assigned` row (which has
+  no reconciler clause) would never clear.
+
+  Why the navigate is a PUSH, not a replace (task review, e2e 7007). The
+  LiveView client adds a patch link's history entry only when the server
+  acknowledges the patch. A `push_navigate` from that patch's
+  `handle_params/3` answers it with a redirect instead, so `?open=` never
+  enters history at all. A REPLACE redirect then overwrote the `/inbox` entry
+  itself, and Back skipped the Inbox (measured by the reviewer at 58be50965:
+  history.length unchanged after an open). A push leaves `/inbox` in place
+  and adds the destination, so Back lands on `/inbox`, and it can never land
+  on `?open=` because that URL is never recorded.
+  `handle_params/3` also resets `@row_sheet` (the long-press sheet's subject,
+  set by `open_row_sheet`) on every call.
 
   ## The daily briefing, filter chips and the detail pane (task 01a15ee1 stage 4)
 
@@ -272,6 +343,10 @@ defmodule PlatformWeb.InboxLive do
      # derives on connected mount.
      # It is the ONLY place the undo ids live — no persistence, no journal table.
      |> assign(:toast, nil)
+     # The phone header's Undo (redesign rung 14): `nil | %{ids:, message:}`.
+     # See "Phone list" in the moduledoc for what sets and clears it.
+     |> assign(:undo, nil)
+     |> assign(:row_sheet, nil)
      |> assign(:filter, "all")
      |> assign(:filters, @filters)
      |> assign(:detail_date, nil)
@@ -291,16 +366,28 @@ defmodule PlatformWeb.InboxLive do
       else: nil
   end
 
+  # One handle_params/3 for both sides of the main -> feat/redesign sync:
+  # task 01a15ee1's `?f=` filter and briefing detail (the list is derived
+  # here, before the first render), and redesign rung 14's `?open=<id>` phone
+  # open plus the `@row_sheet` reset (see "Open by params" below). The list is
+  # derived on every call, `?open=` included, so no render ever lacks it.
   @impl true
   def handle_params(params, _uri, socket) do
     socket =
       socket
+      |> assign(:row_sheet, nil)
       |> assign(:filter, parse_filter(params["f"]))
       |> assign(:detail_date, detail_date(socket.assigns.live_action, params["date"]))
       |> assign(:meeting_detail_id, meeting_detail_id(socket.assigns.live_action, params))
       |> reload_sections()
 
-    {:noreply, socket |> maybe_open_briefing() |> maybe_open_meeting_briefing()}
+    case params do
+      %{"open" => id} when is_binary(id) ->
+        {:noreply, open_by_params(socket, id)}
+
+      _ ->
+        {:noreply, socket |> maybe_open_briefing() |> maybe_open_meeting_briefing()}
+    end
   end
 
   defp parse_filter(f) when f in ["briefing", "mentions", "tasks"], do: f
@@ -403,9 +490,11 @@ defmodule PlatformWeb.InboxLive do
         {:noreply,
          socket
          |> stream_insert(stream_name(section), decorate(item), at: 0)
+         |> stream_insert(:inbox_rows, decorate(item), at: 0)
          |> update_count(section, +1)
          |> track_section(item.id, section)
-         |> merge_mention_labels(section, item)}
+         |> merge_mention_labels(section, item)
+         |> merge_row_sources(item)}
 
       true ->
         {:noreply, socket}
@@ -468,21 +557,31 @@ defmodule PlatformWeb.InboxLive do
   # ── Events ─────────────────────────────────────────────────────────────
 
   @impl true
+  # One row, through `dismiss_many/2` (redesign rung 14) so the phone Undo is
+  # built from the ids this call ACTUALLY changed: a row dismissed on another
+  # tab first is absent from the return, and `@undo` is then left as it was.
+  # `dismiss_many/2` broadcasts one `{:inbox_changed, user_id}` (ShellLive's
+  # badge handles it the same as the per-row event it replaces). The
+  # `:item_sections` membership check is also the malformed-id guard: only ids
+  # this LiveView rendered reach the `uuid` cast.
   def handle_event("dismiss", %{"id" => id}, socket) do
     user_id = socket.assigns.current_user_id
 
     with true <- is_binary(user_id),
          {section, sections} when not is_nil(section) <-
            Map.pop(socket.assigns.item_sections, id) do
-      Inbox.mark_dismissed(id, user_id)
+      {:ok, dismissed_ids} = Inbox.dismiss_many(user_id, [id])
 
       {:noreply,
        socket
        |> stream_delete_by_dom_id(stream_name(section), dom_id(id))
+       |> stream_delete_by_dom_id(:inbox_rows, phone_dom_id(id))
        |> update_count(section, -1)
-       |> assign(:item_sections, sections)}
+       |> assign(:item_sections, sections)
+       |> assign(:row_sheet, nil)
+       |> set_undo(dismissed_ids, "Notification dismissed")}
     else
-      _ -> {:noreply, socket}
+      _ -> {:noreply, dismiss_briefing_row(socket, id)}
     end
   end
 
@@ -559,7 +658,8 @@ defmodule PlatformWeb.InboxLive do
        socket
        |> remove_rows(dismissed_ids, selected)
        |> assign(:selected, %{})
-       |> maybe_toast(build_toast(dismissed_ids))}
+       |> maybe_toast(build_toast(dismissed_ids))
+       |> set_undo(dismissed_ids)}
     else
       {:noreply, socket}
     end
@@ -590,7 +690,8 @@ defmodule PlatformWeb.InboxLive do
        socket
        |> assign(:selected, %{})
        |> reload_sections()
-       |> maybe_toast(build_toast(dismissed_ids))}
+       |> maybe_toast(build_toast(dismissed_ids))
+       |> set_undo(dismissed_ids)}
     else
       {:noreply, socket}
     end
@@ -609,8 +710,36 @@ defmodule PlatformWeb.InboxLive do
       {:ok, _restored} = Inbox.restore_many(user_id, ids)
     end
 
-    {:noreply, socket |> assign(:toast, nil) |> reload_sections()}
+    {:noreply, socket |> assign(:toast, nil) |> assign(:undo, nil) |> reload_sections()}
   end
+
+  # The phone header's Undo (redesign rung 14): restore exactly the ids the
+  # last dismissing action reported changing, then drop both undo affordances
+  # (they describe the same action) and re-derive. A no-op without `@undo`.
+  def handle_event("undo_last", _params, socket) do
+    user_id = socket.assigns.current_user_id
+
+    case socket.assigns.undo do
+      %{ids: [_ | _] = ids} when is_binary(user_id) ->
+        {:ok, _restored} = Inbox.restore_many(user_id, ids)
+
+        {:noreply, socket |> assign(:undo, nil) |> assign(:toast, nil) |> reload_sections()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # The long-press row sheet (rendered in stage 3). Only a row this LiveView
+  # is showing can be the sheet's subject.
+  def handle_event("open_row_sheet", %{"id" => id}, socket) do
+    if Map.has_key?(socket.assigns.item_sections, id),
+      do: {:noreply, assign(socket, :row_sheet, id)},
+      else: {:noreply, socket}
+  end
+
+  def handle_event("close_row_sheet", _params, socket),
+    do: {:noreply, assign(socket, :row_sheet, nil)}
 
   def handle_event("dismiss_toast", _params, socket), do: {:noreply, assign(socket, :toast, nil)}
 
@@ -675,15 +804,76 @@ defmodule PlatformWeb.InboxLive do
     end
   end
 
+  # ── Open by params (redesign rung 14) ──────────────────────────────────
+
+  # A phone row is a `patch` link to `/inbox?open=<id>` with no phx-click (see
+  # "Phone list" in the moduledoc for why), so the open happens HERE. The
+  # destination is the row's stored `url`, never a query param. The navigate
+  # is a PUSH: the client never records `?open=` (the patch is answered with a
+  # redirect), so a replace would overwrite `/inbox` itself and Back would skip
+  # the Inbox. The failed-open patch back to `/inbox` stays a replace.
+  # `handle_params/3` itself is defined once, above, beside the filter.
+
+  defp open_by_params(socket, id) do
+    user_id = socket.assigns.current_user_id
+
+    result = if is_binary(user_id), do: Inbox.open_item(id, user_id), else: {:error, :not_found}
+
+    case result do
+      {:ok, %Item{url: url}} when is_binary(url) and url != "" ->
+        push_navigate(socket, to: url)
+
+      _ ->
+        push_patch(socket, to: ~p"/inbox", replace: true)
+    end
+  end
+
+  # The phone row sheet's Dismiss on a briefing or meeting briefing row: those
+  # rows are not in `:item_sections` (they are not in a desktop section), so
+  # they are matched against `@briefing_rows` and `@meeting_briefing_rows`
+  # instead, then the list re-derives like `dismiss_briefing`. Same
+  # `dismiss_many/2` + `set_undo/3` as any row.
+  defp dismiss_briefing_row(socket, id) do
+    user_id = socket.assigns.current_user_id
+    rows = socket.assigns.briefing_rows ++ socket.assigns.meeting_briefing_rows
+
+    if is_binary(user_id) and Enum.any?(rows, &(&1.id == id)) do
+      {:ok, dismissed_ids} = Inbox.dismiss_many(user_id, [id])
+
+      socket
+      |> assign(:row_sheet, nil)
+      |> reload_sections()
+      |> set_undo(dismissed_ids, "Notification dismissed")
+    else
+      socket
+    end
+  end
+
+  # ── Phone undo ─────────────────────────────────────────────────────────
+
+  # An action that changed nothing leaves `@undo` as it was (there is nothing
+  # new to undo, and the previous action's undo is still true).
+  defp set_undo(socket, ids), do: set_undo(socket, ids, nil)
+
+  defp set_undo(socket, [], _message), do: socket
+
+  defp set_undo(socket, ids, message) do
+    message = message || build_toast(ids).message
+    assign(socket, :undo, %{ids: ids, message: message})
+  end
+
   # ── Section wiring ─────────────────────────────────────────────────────
 
   # Partition the initial list into the three sections, configure a stream per
   # section, seed the per-section counts (which drive section visibility) and
   # the id → section map (which routes a dismiss to the right stream).
   defp init_sections(socket, items) do
-    {briefings, items} = Enum.split_with(items, &(&1.kind == "briefing"))
-    {meeting_briefings, items} = Enum.split_with(items, &(&1.kind == "meeting_briefing"))
-    grouped = Enum.group_by(items, &section_for(&1.kind))
+    # Briefing and meeting briefing rows are not in the desktop sections
+    # (tasks 01a15ee1, 01a1694a); they stay in the phone list, which lists
+    # every kind (rung 14 D1) and whose Clear all count includes them.
+    {briefings, sectioned} = Enum.split_with(items, &(&1.kind == "briefing"))
+    {meeting_briefings, sectioned} = Enum.split_with(sectioned, &(&1.kind == "meeting_briefing"))
+    grouped = Enum.group_by(sectioned, &section_for(&1.kind))
     review = Map.get(grouped, :review, [])
     mentions = grouped |> Map.get(:mentions, []) |> sort_mentions()
     meetings = Map.get(grouped, :meetings, [])
@@ -692,10 +882,15 @@ defmodule PlatformWeb.InboxLive do
     |> stream(:review_items, Enum.map(review, &decorate/1), dom_id: &row_dom_id/1, reset: true)
     |> stream(:mention_items, Enum.map(mentions, &decorate/1), dom_id: &row_dom_id/1, reset: true)
     |> stream(:meeting_items, Enum.map(meetings, &decorate/1), dom_id: &row_dom_id/1, reset: true)
+    # The phone list (redesign rung 14): one flat stream in `load_items/1`
+    # order, newest first. The three section streams above still feed desktop.
+    |> stream(:inbox_rows, Enum.map(items, &decorate/1), dom_id: &phone_row_dom_id/1, reset: true)
+    |> assign(:mention_authors, Inbox.mention_authors(items))
+    |> assign(:source_titles, Inbox.source_titles(items))
     |> assign(:review_count, length(review))
     |> assign(:mention_count, length(mentions))
     |> assign(:meeting_count, length(meetings))
-    |> assign(:item_sections, section_map(items))
+    |> assign(:item_sections, section_map(sectioned))
     |> assign(
       :mention_space_labels,
       resolve_mention_labels(mentions, socket.assigns.current_user_id)
@@ -893,6 +1088,7 @@ defmodule PlatformWeb.InboxLive do
         section ->
           acc
           |> stream_delete_by_dom_id(stream_name(section), dom_id(id))
+          |> stream_delete_by_dom_id(:inbox_rows, phone_dom_id(id))
           |> update_count(section, -1)
           |> assign(:item_sections, Map.delete(acc.assigns.item_sections, id))
       end
@@ -1001,6 +1197,9 @@ defmodule PlatformWeb.InboxLive do
   defp row_dom_id(%Item{id: id}), do: dom_id(id)
   defp dom_id(id), do: "inbox-item-#{id}"
 
+  defp phone_row_dom_id(%Item{id: id}), do: phone_dom_id(id)
+  defp phone_dom_id(id), do: "inbox-row-#{id}"
+
   @doc """
   The mention grouping/label key — the chat space slug parsed from the item's
   `/chat/<slug>` url. Falls back to the whole url, then to "". Public so the
@@ -1100,6 +1299,20 @@ defmodule PlatformWeb.InboxLive do
   end
 
   defp merge_mention_labels(socket, _section, _item), do: socket
+
+  # A live insert's author / source title, merged one entry at a time like the
+  # space labels above, so the inserted phone row renders its author slot.
+  defp merge_row_sources(socket, %Item{} = item) do
+    socket
+    |> assign(
+      :mention_authors,
+      Map.merge(socket.assigns.mention_authors, Inbox.mention_authors([item]))
+    )
+    |> assign(
+      :source_titles,
+      Map.merge(socket.assigns.source_titles, Inbox.source_titles([item]))
+    )
+  end
 
   # ── Internals ──────────────────────────────────────────────────────────
 

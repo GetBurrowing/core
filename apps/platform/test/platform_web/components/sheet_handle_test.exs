@@ -78,7 +78,22 @@ defmodule PlatformWeb.Components.SheetHandleTest do
   end
 
   describe "existing call sites are unchanged" do
-    test "more_sheet still renders the plain aria-hidden grab bar" do
+    # The More sheet opted into `handle_close` in task 01a1557a-807f stage 4,
+    # so it is no longer a plain call site; the theme picker sheet is one.
+    test "the theme picker sheet still renders the plain aria-hidden grab bar" do
+      assigns = %{}
+
+      html =
+        rendered_to_string(~H"""
+        <PlatformWeb.Components.ThemePicker.theme_picker_sheet open={true} user={nil} />
+        """)
+
+      assert html =~ ~s(<div class="sheet-handle" aria-hidden="true"></div>)
+      refute html =~ ~s(role="status")
+      refute html =~ "sheet-handle-button"
+    end
+
+    test "the More sheet's handle is its Close button, not a status handle" do
       assigns = %{}
 
       html =
@@ -90,7 +105,8 @@ defmodule PlatformWeb.Components.SheetHandleTest do
         />
         """)
 
-      assert html =~ ~s(<div class="sheet-handle" aria-hidden="true"></div>)
+      assert html =~ "sheet-handle-button"
+      refute html =~ ~s(<div class="sheet-handle" aria-hidden="true"></div>)
       refute html =~ ~s(role="status")
     end
   end

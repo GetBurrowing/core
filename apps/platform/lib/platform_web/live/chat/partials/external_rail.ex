@@ -29,7 +29,6 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   import PlatformWeb.ChatLive.RenderHelpers,
     only: [drawer_filter_external_spaces: 3, sidebar_display_name: 2, unread_label: 1]
 
-  alias Phoenix.LiveView.JS
   alias PlatformWeb.ChatLive
 
   @mask_keys [:sidebar_sections, :mask_names?, :revealed_section_ids]
@@ -133,9 +132,9 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
             class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
             data-role="external-empty"
           >
-            <span class="hero-chat-bubble-left-right size-8 text-base-content/30"></span>
-            <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
-            <p class="text-xs text-base-content/50">
+            <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
+            <p class="text-sm font-medium text-base-content">Nothing here yet</p>
+            <p class="text-xs text-subtle">
               Your conversations will appear here.
             </p>
           </div>
@@ -148,7 +147,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               @active_space && @active_space.id == space.id && "channel-row--active"
             ]}
           >
-            <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
+            <span :if={space.kind == "channel"} class="text-subtle">#</span>
             <span class="truncate flex-1">
               {if space.kind == "channel",
                 do: ChatLive.masked_space_name(@mask_assigns, space.name),
@@ -171,7 +170,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         phx-click="new_conversation_open"
         aria-label="New conversation"
         data-role="external-new-conversation"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors"
         style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));"
       >
         <span class="hero-plus size-4"></span>
@@ -183,7 +182,6 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
 
   attr(:external?, :boolean, required: true)
   attr(:embedded, :boolean, required: true)
-  attr(:mobile_browser_open, :boolean, required: true)
   attr(:external_user, :any, required: true)
   attr(:channels, :list, required: true)
   attr(:dm_conversations, :list, required: true)
@@ -191,7 +189,6 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   attr(:unread_counts, :map, required: true)
   attr(:user_id, :any, required: true)
   attr(:drawer_query, :string, required: true)
-  attr(:drawer_search_intent, :any, required: true)
   attr(:sidebar_sections, :list, default: [])
   attr(:mask_names?, :boolean, default: false)
   attr(:revealed_section_ids, :any, default: nil)
@@ -199,17 +196,22 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   @doc """
   External mobile channel switcher (task 019f9257-a83e).
 
-  The internal `#mobile-channel-browser` is `!@external?`-gated because its
-  sectioned org-tree browser, new-channel affordance and scope-pills are all
-  internal-discovery chrome. External users get this FLAT parallel: the same
-  `fixed inset-0 z-40 lg:hidden` shell + `drawer_search` + `DrawerSearchFocus`
-  hook, but a single flat `@channels ++ @dm_conversations` list (the exact set
+  The internal phone Chat list (`ChatList.chat_list/1`) is `!@external?`-gated
+  because its sectioned layout, new-channel affordance and options are
+  internal-discovery chrome. External users get this FLAT parallel: a
+  `fixed inset-0 z-40 lg:hidden` shell + `drawer_search` + `SearchFocus`
+  hook, a single flat `@channels ++ @dm_conversations` list (the exact set
   `external_rail/1` renders), plus the app brand / identity / logout that the
   chrome-less `:external` layout (layouts.ex) has nowhere else to hang on
-  mobile. Opened by the pills-strip search button (`toggle_mobile_browser`); on
-  the no-space landing it is shown by default — the list IS the landing
-  (iOS-Messages model, Saru direction). Semantic tokens only; safe-area
-  utilities reused from the internal overlay.
+  mobile.
+
+  It renders exactly when no space is open: the list IS the landing
+  (iOS-Messages model, Saru direction). /chat clears the active space, and a
+  space's back chevron patches to /chat, so that is how an external phone
+  user returns here (task 01a1557a-8562 stage 5; the pills-strip search
+  button that used to open it on top of a space was deleted with the drawer,
+  and so was the close × that only that opening needed). Semantic tokens
+  only.
   """
   def external_mobile_switcher(assigns) do
     assigns =
@@ -219,7 +221,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       |> assign_brand_name()
 
     ~H"""
-    <%= if @external? and !@embedded and (@mobile_browser_open or is_nil(@active_space)) do %>
+    <%= if @external? and !@embedded and is_nil(@active_space) do %>
       <div
         id="external-mobile-switcher"
         data-role="external-mobile-switcher"
@@ -242,16 +244,6 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               >
                 <span class="hero-arrow-right-start-on-rectangle size-5"></span>
               </a>
-              <%!-- No close control on the landing (is_nil(@active_space)) — the
-                   switcher IS the screen there, nothing to reveal behind it. --%>
-              <button
-                :if={@active_space}
-                phx-click="close_mobile_browser"
-                class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
-                aria-label="Close"
-              >
-                <span class="hero-x-mark size-5"></span>
-              </button>
             </div>
           </div>
           <div
@@ -280,7 +272,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         <div class="flex-shrink-0 px-4 py-2 border-b border-edge" role="search">
           <form class="relative" phx-change="drawer_search" phx-submit="drawer_search">
             <span
-              class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-base-content/40"
+              class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-subtle"
               aria-hidden="true"
             >
             </span>
@@ -289,8 +281,8 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               type="search"
               name="value"
               value={@drawer_query}
-              phx-hook="DrawerSearchFocus"
-              data-search-intent={to_string(@drawer_search_intent)}
+              phx-hook="SearchFocus"
+              data-blur-on-scroll="external-switcher-list"
               phx-debounce="150"
               placeholder="Find a conversation"
               autocomplete="off"
@@ -299,13 +291,13 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               spellcheck="false"
               enterkeyhint="go"
               aria-label="Find a conversation"
-              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-faint focus:border-primary focus:outline-none"
+              class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
             />
             <button
               :if={@drawer_query != ""}
               type="button"
               phx-click="drawer_search_clear"
-              class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-base-content/50 hover:text-base-content"
+              class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-subtle hover:text-base-content"
               aria-label="Clear search"
             >
               <span class="hero-x-mark size-4"></span>
@@ -315,7 +307,11 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
 
         <% external_switcher_filtered =
           drawer_filter_external_spaces(@external_switcher_spaces, @drawer_query, @user_id) %>
-        <nav class="flex-1 overflow-y-auto py-2" aria-label="Your conversations">
+        <nav
+          id="external-switcher-list"
+          class="flex-1 overflow-y-auto py-2"
+          aria-label="Your conversations"
+        >
           <%= if @external_switcher_spaces == [] do %>
             <%!-- Calm zero-allowlist empty state — mirrors the external rail's
                  `external-empty`. NEVER an internal "browse channels" hint. --%>
@@ -323,25 +319,22 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
               class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
               data-role="external-empty"
             >
-              <span class="hero-chat-bubble-left-right size-8 text-base-content/30"></span>
-              <p class="text-sm font-medium text-base-content/70">Nothing here yet</p>
-              <p class="text-xs text-base-content/50">
+              <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
+              <p class="text-sm font-medium text-base-content">Nothing here yet</p>
+              <p class="text-xs text-subtle">
                 Your conversations will appear here.
               </p>
             </div>
           <% else %>
             <%= if external_switcher_filtered == [] do %>
-              <p class="px-4 py-6 text-center text-sm text-base-content/50">No matches</p>
+              <p class="px-4 py-6 text-center text-sm text-subtle">No matches</p>
             <% else %>
               <.link
                 :for={space <- external_switcher_filtered}
                 patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-                class={[
-                  "channel-row",
-                  @active_space && @active_space.id == space.id && "channel-row--active"
-                ]}
+                class="channel-row"
               >
-                <span :if={space.kind == "channel"} class="text-base-content/40">#</span>
+                <span :if={space.kind == "channel"} class="text-subtle">#</span>
                 <span class="truncate flex-1">
                   {if space.kind == "channel",
                     do: ChatLive.masked_space_name(@mask_assigns, space.name),
@@ -358,15 +351,14 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         </nav>
 
         <%!-- DM picker foot — the ONE discovery affordance external users keep
-             (filtered to allowlisted humans server-side). Closes the switcher as
-             the create flow opens. `mobile-drawer-footer-safe` adds the
-             home-indicator inset ON TOP of the normal padding. --%>
+             (filtered to allowlisted humans server-side). `footer-safe-bottom` adds
+             the home-indicator inset ON TOP of the normal padding. --%>
         <button
           type="button"
-          phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+          phx-click="new_conversation_open"
           aria-label="New conversation"
           data-role="external-new-conversation"
-          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+          class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-4 pt-3 text-sm text-base-content hover:text-primary hover:bg-base-200 transition-colors footer-safe-bottom"
         >
           <span class="hero-plus size-5"></span>
           <span>New conversation</span>

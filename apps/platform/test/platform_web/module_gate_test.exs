@@ -52,6 +52,26 @@ defmodule PlatformWeb.ModuleGateTest do
     assert missing == []
   end
 
+  test "Settings is a deliberately ungated view routed in the authenticated session" do
+    # Task 01a1557a-807f stage 1. The sweep above passes only because the
+    # view is listed here; this pins that it is ungated rather than mapped.
+    assert PlatformWeb.SettingsLive in ModuleGate.ungated_views()
+    refute Map.has_key?(ModuleGate.view_modules(), PlatformWeb.SettingsLive)
+
+    assert %{phoenix_live_view: {PlatformWeb.SettingsLive, :index, _, %{name: :authenticated}}} =
+             Phoenix.Router.route_info(PlatformWeb.Router, "GET", "/settings", "localhost")
+
+    member = user!() |> member!("member")
+
+    assert ModuleGate.mounts?(
+             Scope.for_user(Platform.Accounts.get_user(member.id)),
+             PlatformWeb.SettingsLive
+           )
+
+    refute ModuleGate.mounts?(nil, PlatformWeb.AdminLive)
+    refute ModuleGate.mounts?(%Scope{}, PlatformWeb.NoSuchLive)
+  end
+
   test "the authenticated session installs the mount gate for live navigation" do
     router = File.read!("lib/platform_web/router.ex")
 
@@ -150,7 +170,9 @@ defmodule PlatformWeb.ModuleGateTest do
     {"/files", :files, PlatformWeb.FilesLive},
     {"/org_memory", :context, PlatformWeb.OrgMemoryLive},
     {"/inbox", :inbox, PlatformWeb.InboxLive},
-    {"/activity", :activity, PlatformWeb.ActivityLive},
+    # The Activity page is retired (task 01a1557a-7a71 stage 4); the
+    # `activity` module now gates /changelog, so the lock keeps coverage here.
+    {"/changelog", :activity, PlatformWeb.ChangelogLive},
     {"/email", :email, PlatformWeb.EmailLive},
     {"/skills", :skills, PlatformWeb.SkillsLive},
     {"/control/experiments", :experiments, PlatformWeb.ExperimentsLive}

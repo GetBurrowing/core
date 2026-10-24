@@ -66,6 +66,28 @@ defmodule Platform.Access.Restrictions do
     )
   end
 
+  @doc """
+  The ids among `ids` that carry ANY restriction row, as a MapSet: the
+  role-gated ("private") channels, whether or not a given reader holds the
+  role. One query for the whole list. Which of them a reader cannot open is
+  `Platform.Access.restricted_space_ids/2`'s answer, not this one's.
+  """
+  def gated_space_ids(ids) when is_list(ids) do
+    case Enum.filter(ids, &Platform.UUID.valid?/1) do
+      [] ->
+        MapSet.new()
+
+      valid ->
+        from(r in SpaceRestriction,
+          where: r.space_id in ^valid,
+          distinct: true,
+          select: r.space_id
+        )
+        |> Repo.all()
+        |> MapSet.new()
+    end
+  end
+
   defp root_id do
     case Tenancy.get_root_org() do
       %{id: id} -> id

@@ -89,7 +89,7 @@ defmodule PlatformWeb.ChangelogLive do
       <div class="flex items-center justify-between border-b border-edge px-6 py-4">
         <div>
           <h1 class="text-xl font-bold">Changelog</h1>
-          <p class="text-sm text-base-content/60">Recent changes merged to main</p>
+          <p class="text-sm text-subtle">Recent changes merged to main</p>
         </div>
         <div>
           <select
@@ -108,9 +108,9 @@ defmodule PlatformWeb.ChangelogLive do
       </div>
 
       <%!-- Feed --%>
-      <div class="flex-1 overflow-y-auto px-6 py-4">
+      <div class="flex-1 overflow-y-auto px-6 py-4 clears-tab-bar">
         <%= if @grouped == [] do %>
-          <div class="flex flex-col items-center justify-center py-16 text-base-content/40">
+          <div class="flex flex-col items-center justify-center py-16 text-subtle">
             <span class="hero-newspaper mb-3 size-12"></span>
             <p class="text-lg font-medium">No changes yet</p>
             <p class="text-sm">Merged PRs will appear here automatically.</p>
@@ -119,7 +119,7 @@ defmodule PlatformWeb.ChangelogLive do
           <div class="space-y-8">
             <%= for {label, entries} <- @grouped do %>
               <div>
-                <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content/50">
+                <h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-base-content">
                   {label}
                 </h2>
                 <div class="space-y-3">
@@ -162,13 +162,13 @@ defmodule PlatformWeb.ChangelogLive do
 
           <%!-- Description --%>
           <%= if @entry.description do %>
-            <p class="mt-1 line-clamp-2 text-sm text-base-content/60">
+            <p class="mt-1 line-clamp-2 text-sm text-subtle">
               {@entry.description}
             </p>
           <% end %>
 
           <%!-- Meta row: author, PR link, linked task --%>
-          <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-base-content/50">
+          <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-subtle">
             <%= if @entry.author do %>
               <span class="flex items-center gap-1">
                 <span class="hero-user-circle size-3.5"></span>
@@ -197,7 +197,7 @@ defmodule PlatformWeb.ChangelogLive do
               </.link>
             <% end %>
 
-            <span class="text-base-content/30">
+            <span class="text-subtle">
               {format_time(@entry.merged_at)}
             </span>
           </div>

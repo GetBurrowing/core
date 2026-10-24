@@ -473,7 +473,7 @@ defmodule PlatformWeb.SocialQueueTab do
           </h2>
           <span
             :if={not @queue_empty?}
-            class="text-sm text-base-content/70"
+            class="text-sm text-base-content"
             data-role="queue-summary"
           >
             {plural(length(@queue_keys), "idea")} · {plural(@queue_post_count, "post")}
@@ -518,7 +518,7 @@ defmodule PlatformWeb.SocialQueueTab do
         >
           <%= if @connect? do %>
             <p class="font-medium">Connect an account to start.</p>
-            <p class="mt-1 text-sm text-base-content/70">
+            <p class="mt-1 text-sm text-base-content">
               Agents draft posts for {@profile.name} once it has somewhere to post.
             </p>
             <button
@@ -533,7 +533,7 @@ defmodule PlatformWeb.SocialQueueTab do
           <% else %>
             <.icon name="hero-check-circle" class="mx-auto size-8 text-success" />
             <p class="mt-2 text-lg font-medium">Nothing needs you.</p>
-            <p class="mt-1 text-sm text-base-content/70">
+            <p class="mt-1 text-sm text-base-content">
               {if @scope == :all,
                 do: "Every brand is caught up.",
                 else: "#{@profile && @profile.name} is caught up."}
@@ -572,16 +572,16 @@ defmodule PlatformWeb.SocialQueueTab do
         data-href="?tab=clips"
         class="flex w-full items-center gap-3 rounded-xl border border-edge bg-base-100 px-4 py-3 text-left hover:bg-base-200"
       >
-        <.icon name="hero-film" class="size-5 shrink-0 text-base-content/70" />
+        <.icon name="hero-film" class="size-5 shrink-0 text-base-content" />
         <span class="flex-1 text-sm font-medium">
           {plural(@queue_clips_waiting, "clip")} waiting in Clips
         </span>
-        <.icon name="hero-chevron-right-mini" class="size-4 text-base-content/70" />
+        <.icon name="hero-chevron-right-mini" class="size-4 text-base-content" />
       </button>
 
       <section aria-labelledby="queue-scheduled" class="space-y-2" data-role="queue-scheduled">
         <h2 id="queue-scheduled" class="text-base font-semibold">Scheduled · next 7 days</h2>
-        <p :if={@queue_scheduled_empty?} class="text-sm text-base-content/70">
+        <p :if={@queue_scheduled_empty?} class="text-sm text-base-content">
           Nothing scheduled in the next 7 days.
         </p>
         <ul
@@ -600,7 +600,7 @@ defmodule PlatformWeb.SocialQueueTab do
               <li
                 :for={p <- g.posts}
                 data-role="queue-scheduled-post"
-                class="flex items-center gap-1.5 text-[13px] text-base-content/70"
+                class="flex items-center gap-1.5 text-[13px] text-base-content"
               >
                 <SocialPreview.glyph
                   platform={account_platform(@queue_accounts, p)}
@@ -639,7 +639,7 @@ defmodule PlatformWeb.SocialQueueTab do
                 cover_controls={false}
               />
             <% else %>
-              <p class="rounded-xl border border-edge bg-base-100 p-3 text-sm text-base-content/70">
+              <p class="rounded-xl border border-edge bg-base-100 p-3 text-sm text-base-content">
                 {account_label(@queue_accounts, row.post)}: {row.post.error || "did not publish."}
               </p>
             <% end %>
@@ -671,7 +671,7 @@ defmodule PlatformWeb.SocialQueueTab do
             />
             <span class="min-w-0 flex-1 truncate">
               <span class="font-medium">{account_label(@queue_accounts, p)}</span>
-              <span class="text-base-content/70">
+              <span class="text-base-content">
                 · {SocialIdeaCard.clock(
                   QueueFeed.published_at(p),
                   post_tz(p, @queue_accounts, @queue_profiles)

@@ -226,10 +226,10 @@ defmodule PlatformWeb.SocialInviteLanding do
       >
         <%= case @landing.state do %>
           <% :checking -> %>
-            <p class="text-base-content/70">Checking your connection...</p>
+            <p class="text-base-content">Checking your connection...</p>
           <% :signed_out -> %>
             <h1 class="text-2xl font-semibold">You've been invited to connect an account</h1>
-            <p class="mt-2 text-base-content/70">Sign in to Burrow to see who invited you.</p>
+            <p class="mt-2 text-base-content">Sign in to Burrow to see who invited you.</p>
             <a
               href="/auth/login"
               class="btn btn-primary mt-6 w-full"
@@ -268,7 +268,7 @@ defmodule PlatformWeb.SocialInviteLanding do
     <h1 class="text-2xl font-semibold" data-role="social-invite-headline">
       Connect your {@landing.platform} to {@landing.brand}
     </h1>
-    <p class="mt-1 text-sm text-base-content/70" data-role="social-invite-meta">
+    <p class="mt-1 text-sm text-base-content" data-role="social-invite-meta">
       {@landing.inviter} invited you. Link expires {@landing.expires_on}.
     </p>
     <ul class="mt-5 list-disc space-y-2 pl-5">

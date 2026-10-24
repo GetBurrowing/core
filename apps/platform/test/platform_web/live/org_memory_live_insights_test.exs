@@ -424,7 +424,7 @@ defmodule PlatformWeb.OrgMemoryLiveInsightsTest do
                Enum.sort(["PAGE EDIT", "QUESTION", "BRIEFING", "TASK", "BRIEFING"])
 
       for label <- labels do
-        assert LazyHTML.attribute(label, "class") == ["font-mono text-xs text-base-content/70"]
+        assert LazyHTML.attribute(label, "class") == ["font-mono text-xs text-subtle"]
       end
 
       # The previews are the artefacts.

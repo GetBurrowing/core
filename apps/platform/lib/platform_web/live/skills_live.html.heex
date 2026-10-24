@@ -2,7 +2,7 @@
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Skills
       </h1>
       <span class="badge badge-ghost badge-sm">{length(@skills)}</span>
@@ -14,7 +14,7 @@
 
   <%!-- Skill grid --%>
   <div class="flex-1 overflow-y-auto p-4">
-    <div :if={@skills == []} class="flex items-center justify-center h-full text-base-content/30">
+    <div :if={@skills == []} class="flex items-center justify-center h-full text-subtle">
       No skills yet. Create one to get started.
     </div>
 
@@ -28,14 +28,14 @@
         <div class="card-body gap-2 p-4">
           <div class="flex items-start justify-between gap-2">
             <h3 class="text-sm font-semibold">{skill.name}</h3>
-            <span class="text-[10px] text-base-content/40 whitespace-nowrap">
+            <span class="text-[10px] text-subtle whitespace-nowrap">
               {relative_time(skill.updated_at)}
             </span>
           </div>
-          <p :if={skill.description} class="text-xs text-base-content/60 line-clamp-2">
+          <p :if={skill.description} class="text-xs text-subtle line-clamp-2">
             {skill.description}
           </p>
-          <p :if={!skill.description} class="text-xs text-base-content/30 italic">
+          <p :if={!skill.description} class="text-xs text-subtle italic">
             No description
           </p>
         </div>
@@ -133,13 +133,13 @@
 
       <%!-- Attachments section --%>
       <div :if={@skill_attachments_grouped} class="space-y-4 border-t border-edge pt-4">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
           Attached To
         </h3>
 
         <%!-- Projects --%>
         <div class="space-y-2">
-          <p class="text-xs font-medium text-base-content/60">Projects</p>
+          <p class="text-xs font-medium text-subtle">Projects</p>
           <div class="flex flex-wrap gap-2">
             <div
               :for={
@@ -151,7 +151,7 @@
               <button
                 phx-click="detach_skill_from_project"
                 phx-value-project_id={project_id}
-                class="ml-0.5 text-base-content/40 hover:text-error"
+                class="ml-0.5 text-subtle hover:text-error"
                 title="Detach from project"
               >
                 <span class="hero-x-mark size-3"></span>
@@ -181,7 +181,7 @@
 
         <%!-- Epics --%>
         <div class="space-y-2">
-          <p class="text-xs font-medium text-base-content/60">Epics</p>
+          <p class="text-xs font-medium text-subtle">Epics</p>
           <div class="flex flex-wrap gap-2">
             <div
               :for={{epic_id, epic_name} <- Map.get(@skill_attachments_grouped, "epic", [])}
@@ -191,7 +191,7 @@
               <button
                 phx-click="detach_skill_from_epic"
                 phx-value-epic_id={epic_id}
-                class="ml-0.5 text-base-content/40 hover:text-error"
+                class="ml-0.5 text-subtle hover:text-error"
                 title="Detach from epic"
               >
                 <span class="hero-x-mark size-3"></span>
@@ -219,11 +219,11 @@
 
         <%!-- Tasks (read-only) --%>
         <div :if={Map.get(@skill_attachments_grouped, "task", []) != []} class="space-y-1">
-          <p class="text-xs font-medium text-base-content/60">Tasks (manage from task detail)</p>
+          <p class="text-xs font-medium text-subtle">Tasks (manage from task detail)</p>
           <div class="flex flex-wrap gap-2">
             <span
               :for={{_task_id, task_title} <- Map.get(@skill_attachments_grouped, "task", [])}
-              class="rounded-full bg-base-200 px-2 py-0.5 text-xs border border-edge text-base-content/60"
+              class="rounded-full bg-base-200 px-2 py-0.5 text-xs border border-edge text-subtle"
             >
               {task_title}
             </span>

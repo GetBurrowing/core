@@ -92,8 +92,15 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
   # `GET /chat` redirects to the first channel once one exists.
   defp live_following_redirect(conn) do
     case live(conn, ~p"/chat") do
-      {:error, {:live_redirect, %{to: path}}} -> live(conn, path)
-      ok -> ok
+      {:error, {:live_redirect, %{to: path}}} ->
+        live(conn, path)
+
+      # Since task 01a1557a-8562 stage 2, /chat is the phone Chat list and
+      # does not redirect. Land in the first channel the way a desktop
+      # viewport does: the ViewportBreakpoint hook's `below: false` report.
+      {:ok, view, _html} ->
+        render_hook(view, "chat_viewport", %{"below" => false})
+        {:ok, view, render(view)}
     end
   end
 
@@ -103,17 +110,10 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
     {view, html}
   end
 
-  # The rail's control. The drawer carries an identical one, so the rail
-  # selector is scoped to the sidebar to keep `element/2` unambiguous.
+  # The rail's control, scoped to the sidebar to keep `element/2` unambiguous.
   defp toggle_mask(view) do
     view
     |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-    |> render_click()
-  end
-
-  defp open_drawer(view) do
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
     |> render_click()
   end
 
@@ -157,31 +157,10 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
     end
   end
 
-  describe "absence — mobile drawer" do
-    test "no spelling survives with the drawer open, in the drawer or the document",
-         %{conn: conn} do
-      {view, _html} = conn |> authenticated_conn("mobile") |> mounted_view()
-
-      open_drawer(view)
-      html = toggle_mask(view)
-      drawer = extract(html, "#mobile-channel-browser")
-
-      assert drawer != "", "the drawer must be open, or the refutes below are vacuous"
-
-      for name <- @orgs do
-        refute_name_anywhere(drawer, name)
-        refute_name_anywhere(html, name)
-      end
-    end
-
-    test "MATCHED PAIR: the open drawer carries the real names unmasked", %{conn: conn} do
-      {view, _html} = conn |> authenticated_conn("mobile-pair") |> mounted_view()
-
-      drawer = view |> open_drawer() |> extract("#mobile-channel-browser")
-
-      for name <- @orgs, do: assert_name_anywhere(drawer, name)
-    end
-  end
+  # The phone's masked surface is the Chat list since task 01a1557a-8562
+  # (the drawer this file used to open was deleted): its absence pair is
+  # chat_live_chat_list_test.exs "masked: no org-derived name and no excerpt
+  # text anywhere in #chat-list".
 
   describe "per-item reveal leaks exactly one name" do
     test "revealing one org brings back that org and leaves the others absent",
@@ -249,7 +228,6 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
     test "no user-facing string in this feature contains \"client\"", %{conn: conn} do
       {view, _html} = conn |> authenticated_conn("words") |> mounted_view()
 
-      open_drawer(view)
       html = toggle_mask(view)
 
       # Scoped to THIS feature's surfaces. A document-wide refute would trip

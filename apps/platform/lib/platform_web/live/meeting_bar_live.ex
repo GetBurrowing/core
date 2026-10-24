@@ -93,7 +93,7 @@ defmodule PlatformWeb.MeetingBarLive do
       phx-hook="MeetingBar"
       data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
       class={[
-        "fixed bottom-[var(--bottom-nav-height,0px)] inset-x-0 z-40 h-12 bg-base-200 border-t border-edge shadow-lg flex items-center gap-3 px-4",
+        "fixed bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px))] inset-x-0 z-40 h-12 bg-base-200 border-t border-edge shadow-lg flex items-center gap-3 px-4",
         if(@sidebar_collapsed, do: "lg:left-14", else: "lg:left-56"),
         if(!@meeting_active || @on_meeting_page, do: "hidden")
       ]}
@@ -110,7 +110,7 @@ defmodule PlatformWeb.MeetingBarLive do
       </div>
 
       <%!-- Duration timer (updated by MeetingTimer JS hook) --%>
-      <span class="tabular-nums text-base-content/60 text-xs font-mono" data-timer>
+      <span class="tabular-nums text-subtle text-xs font-mono" data-timer>
         00:00
       </span>
 
@@ -133,7 +133,7 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@mic_on,
-            do: "text-base-content/70 hover:bg-base-300",
+            do: "text-base-content hover:bg-base-300",
             else: "text-error bg-error/10 hover:bg-error/20"
           ),
           @mic_pending && "ring-2 ring-warning"
@@ -150,8 +150,8 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@camera_on,
-            do: "text-base-content/70 hover:bg-base-300",
-            else: "text-base-content/40 hover:bg-base-300"
+            do: "text-base-content hover:bg-base-300",
+            else: "text-subtle hover:bg-base-300"
           )
         ]}
         title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}

@@ -173,7 +173,7 @@ defmodule PlatformWeb.Components.PlanningStepExtension do
   @treatments %{
     complete: %{
       icon: "hero-check-badge",
-      tone: "text-base-content/60",
+      tone: "text-subtle",
       chip: "bg-base-200/60"
     },
     failed: %{

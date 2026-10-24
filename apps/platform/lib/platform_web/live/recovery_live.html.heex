@@ -5,7 +5,7 @@
   ]} />
   <%!-- Header (mirrors the Admin surface chrome) — title left, org filter right --%>
   <div class="flex items-center justify-between gap-3 border-b border-edge px-4 py-3">
-    <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+    <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
       Recovery · Archived &amp; scheduled
     </h1>
     <form :if={@org_options != []} phx-change="filter_org" class="shrink-0">
@@ -22,7 +22,7 @@
     </form>
   </div>
 
-  <div class="min-h-0 flex-1 overflow-y-auto p-4">
+  <div class="min-h-0 flex-1 overflow-y-auto p-4 clears-tab-bar">
     <div class="mx-auto max-w-6xl">
       <%= cond do %>
         <% @rows == [] -> %>
@@ -47,7 +47,7 @@
           <div class="overflow-x-auto rounded-box border border-edge bg-base-100">
             <table class="w-full border-collapse text-sm">
               <thead>
-                <tr class="border-b border-edge text-left text-xs font-medium uppercase tracking-wide text-base-content/50">
+                <tr class="border-b border-edge text-left text-xs font-medium uppercase tracking-wide text-base-content">
                   <th class="w-10 px-4 py-2.5">
                     <span class="sr-only">Select</span>
                   </th>
@@ -96,7 +96,7 @@
   <div
     :if={@selected != %{}}
     data-role="selection-bar"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] left-1/2 z-40 -translate-x-1/2"
+    class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-1/2 z-40 -translate-x-1/2"
   >
     <div class="flex items-center gap-3 rounded-full border border-edge bg-base-100 px-4 py-2 shadow-md">
       <span class="text-sm font-medium tabular-nums text-base-content">
@@ -113,7 +113,7 @@
       <button
         type="button"
         phx-click="clear_selection"
-        class="focus-visible-ring rounded px-1 text-sm text-base-content/60 hover:text-base-content"
+        class="focus-visible-ring rounded px-1 text-sm font-medium text-base-content hover:text-base-content"
       >
         Clear
       </button>
@@ -128,7 +128,7 @@
     data-role="recovery-toast"
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] right-4 z-50 max-w-sm"
+    class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-4 z-50 max-w-sm"
   >
     <div class="flex items-start gap-3 rounded-lg border border-success/25 bg-base-100 px-4 py-3 shadow-md">
       <.icon name="hero-check-circle-solid" class="size-5 shrink-0 text-success" />
@@ -147,7 +147,7 @@
             type="button"
             phx-click="undo_restore"
             data-role="toast-undo"
-            class="focus-visible-ring rounded text-xs font-medium text-base-content/70 hover:text-base-content"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content hover:text-base-content"
           >
             Undo
           </button>

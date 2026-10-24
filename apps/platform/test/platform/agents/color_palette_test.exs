@@ -10,36 +10,43 @@ defmodule Platform.Agents.ColorPaletteTest do
       assert length(colors) > 0
     end
 
-    test "each color has id, label, and accent fields" do
+    test "each slot has an id, a label and a token, and no colour value" do
       for color <- ColorPalette.all() do
         assert is_binary(color.id), "expected id to be a string for #{inspect(color)}"
         assert is_binary(color.label), "expected label to be a string for #{inspect(color)}"
-        assert is_binary(color.accent), "expected accent to be a string for #{inspect(color)}"
-
-        assert String.starts_with?(color.accent, "oklch("),
-               "expected OKLCH accent for #{color.id}"
+        assert Map.keys(color) |> Enum.sort() == [:id, :label, :token]
       end
+    end
+
+    test "the pre-token accent API is gone (task 01a1557a rung 3 stage 2)" do
+      Code.ensure_loaded!(ColorPalette)
+      refute function_exported?(ColorPalette, :accent_for, 1)
+      refute function_exported?(ColorPalette, :default_accent, 0)
     end
   end
 
-  describe "accent_for/1" do
-    test "returns default accent for nil" do
-      assert ColorPalette.accent_for(nil) == ColorPalette.default_accent()
-    end
+  describe "slots and tokens" do
+    test "the ten slot ids are the masters' ten, one token each" do
+      assert Enum.sort(ColorPalette.ids()) ==
+               Enum.sort(~w(teal green amber orange blue purple brick rose indigo lime))
 
-    test "returns default accent for unknown color id" do
-      assert ColorPalette.accent_for("nonexistent") == ColorPalette.default_accent()
-    end
-
-    test "returns the correct accent for known color ids" do
-      for %{id: id, accent: expected_accent} <- ColorPalette.all() do
-        assert ColorPalette.accent_for(id) == expected_accent,
-               "expected accent for #{id} to be #{expected_accent}"
+      for color <- ColorPalette.all() do
+        assert color.token == "--ag-" <> color.id
+        assert ColorPalette.token(color.id) == color.token
       end
     end
 
-    test "blue is the default fallback" do
-      assert ColorPalette.default_accent() =~ "207"
+    test "slot_for/1 keeps a known id and resolves nil, blank and unknown to blue" do
+      for id <- ColorPalette.ids(), do: assert(ColorPalette.slot_for(id) == id)
+
+      for stored <- [nil, "", "  ", "magenta", "Purple", 42] do
+        assert ColorPalette.slot_for(stored) == "blue", "stored #{inspect(stored)}"
+      end
+    end
+
+    test "token/1 falls back to the blue slot's token" do
+      assert ColorPalette.token(nil) == "--ag-blue"
+      assert ColorPalette.token("magenta") == "--ag-blue"
     end
   end
 

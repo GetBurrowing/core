@@ -40,8 +40,12 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
 
   @banner_text "Get notified when someone mentions you."
   @banner "[data-role='chat-notification-banner']"
-  @enable_button "button[phx-click='enable_notifications']"
-  @dismiss_button "button[phx-click='dismiss_notification_banner']"
+  # Scoped to the DESKTOP banner's own buttons. Since task 01a1557a-8562
+  # stage 2 the phone Chat list carries a second banner with the same two
+  # events (`chat-list-notification-*`, covered at the end of this file), so
+  # a bare `phx-click` selector would match two elements.
+  @enable_button "button[data-role='chat-notification-enable']"
+  @dismiss_button "button[data-role='chat-notification-dismiss']"
 
   defp member_conn(conn) do
     n = System.unique_integer([:positive])
@@ -479,6 +483,20 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
       render_hook(view, "push_subscribe_failed", %{})
 
       assert render(view) =~ @banner_text
+    end
+  end
+
+  # Task 01a1557a-8562 stage 2: phones get the banner inside the Chat list
+  # (`chat-list-notification-banner`), so this top-of-page one is desktop-only.
+  # The list's own states are covered in chat_live_chat_list_test.exs.
+  describe "breakpoints (01a1557a-8562 stage 2)" do
+    test "the top-of-page banner is hidden below lg; the list banner shows there",
+         %{conn: conn} do
+      view = mount_chat(member_conn(conn))
+      render_hook(view, "push_permission_state", %{"state" => "prompt"})
+
+      assert has_element?(view, "#{@banner}[class*='hidden lg:flex']")
+      assert has_element?(view, "#chat-list [data-role='chat-list-notification-banner']")
     end
   end
 end

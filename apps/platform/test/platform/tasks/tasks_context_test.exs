@@ -1303,6 +1303,39 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "group_by_status/1 (task 01a166be stage 3)" do
+    test "equals list_by_status/1 over the same options, order included" do
+      {:ok, p} = Tasks.create_project(%{name: "Group P"})
+      {:ok, other} = Tasks.create_project(%{name: "Group Other"})
+
+      statuses =
+        ~w(backlog planning in_progress blocked in_review deploying done cancelled stack_pending)
+
+      # Two tasks per status with updated_at deliberately NOT in insert order,
+      # so a bucket ordered by inserted_at (list_all_tasks/1) would differ.
+      for {status, i} <- Enum.with_index(statuses ++ statuses) do
+        {:ok, t} = Tasks.create_task(%{project_id: p.id, title: "G #{i}"})
+        at = DateTime.add(~U[2026-01-01 00:00:00.000000Z], rem(i * 7919, 97), :minute)
+
+        {1, _} =
+          Repo.update_all(from(x in Task, where: x.id == ^t.id),
+            set: [status: status, updated_at: at]
+          )
+      end
+
+      {:ok, _} = Tasks.create_task(%{project_id: other.id, title: "elsewhere"})
+
+      ids = fn buckets -> Map.new(buckets, fn {k, ts} -> {k, Enum.map(ts, & &1.id)} end) end
+      expected = ids.(Tasks.list_by_status(project_id: p.id))
+
+      # Positive control: the fixture fills every bucket, with two or more rows.
+      assert Enum.all?(expected, fn {_k, list} -> length(list) >= 2 end)
+      assert length(expected.done) == 4
+
+      assert ids.(Tasks.group_by_status(Tasks.list_all_tasks(project_id: p.id))) == expected
+    end
+  end
+
   describe "list_by_status/1 — 7-column kanban data shape (Tasks v2 stage 1)" do
     # Stage 1 of task 019e389c-1f65 (revised 2026-05-19): a dedicated Planning
     # bucket is added between Backlog and In Progress, and a dedicated Blocked

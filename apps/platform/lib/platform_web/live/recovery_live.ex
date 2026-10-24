@@ -500,7 +500,7 @@ defmodule PlatformWeb.RecoveryLive do
         />
       </td>
 
-      <td class="px-4 py-3 text-base-content/70">
+      <td class="px-4 py-3 text-base-content">
         <div class="flex min-w-0 items-center gap-2">
           <span
             :if={org_scope_slug(@row)}
@@ -514,7 +514,7 @@ defmodule PlatformWeb.RecoveryLive do
 
       <td class="px-4 py-3">
         <div class={["flex min-w-0 items-center gap-2.5", @indent && "pl-8"]}>
-          <.icon name={kind_icon(@row.type)} class="size-4 shrink-0 text-base-content/40" />
+          <.icon name={kind_icon(@row.type)} class="size-4 shrink-0 text-subtle" />
           <span class="truncate font-medium text-base-content">{@row.name}</span>
         </div>
         <button
@@ -523,7 +523,7 @@ defmodule PlatformWeb.RecoveryLive do
           phx-click="toggle_expand"
           phx-value-id={@row.id}
           data-role="expand-toggle"
-          class="focus-visible-ring mt-1.5 inline-flex items-center gap-1 rounded pl-[26px] text-xs text-base-content/50 hover:text-base-content"
+          class="focus-visible-ring mt-1.5 inline-flex items-center gap-1 rounded pl-[26px] text-xs text-subtle hover:text-base-content"
           aria-expanded={@expanded}
         >
           <.icon
@@ -534,14 +534,14 @@ defmodule PlatformWeb.RecoveryLive do
         </button>
       </td>
 
-      <td class="px-4 py-3 text-base-content/70">{type_label(@row.type)}</td>
+      <td class="px-4 py-3 text-base-content">{type_label(@row.type)}</td>
 
       <td class="px-4 py-3">
         <.chip :if={@row.status == :scheduled} tone="warning">Scheduled for deletion</.chip>
         <.chip :if={@row.status == :archived} tone="neutral">Archived</.chip>
       </td>
 
-      <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content/70">
+      <td class="whitespace-nowrap px-4 py-3 tabular-nums text-base-content">
         {format_date(@row.archived_at)}
       </td>
 
@@ -552,10 +552,10 @@ defmodule PlatformWeb.RecoveryLive do
             <span class={["tabular-nums", deadline_class(tone)]}>
               {format_date(permanent_delete_at(scheduled_at(@row), @retention_days))}
             </span>
-            <span class="text-xs text-base-content/50">{label}</span>
+            <span class="text-xs text-subtle">{label}</span>
           </div>
         <% else %>
-          <span class="text-base-content/30">—</span>
+          <span class="text-subtle">—</span>
         <% end %>
       </td>
 
@@ -603,7 +603,7 @@ defmodule PlatformWeb.RecoveryLive do
             "size-3",
             if(@active?,
               do: "text-base-content",
-              else: "text-base-content/30 group-hover:text-base-content/60"
+              else: "text-subtle group-hover:text-subtle"
             )
           ]}
         />

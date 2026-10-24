@@ -726,6 +726,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
+    |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
     # The lobby's own agent-capability list (task 019e07cd, meetings-vs-
     # mockups audit). `attach_guest/1` below only `assign_new`s an empty
     # default for `:invite_rows` -- it has to, since it also runs on the
@@ -1013,7 +1014,7 @@ defmodule PlatformWeb.MeetingLive do
         # overwritten), and a targeted release that misses the right id is a
         # silent leak that still reads as "we release". `:meeting` is this
         # module's own owner tag, so releasing all of it cannot touch the
-        # shell's `:presence` / `:roster` holds or ChatLive's `:chat_active`.
+        # shell's `:presence` hold or ChatLive's `:chat_active`.
         socket =
           socket
           |> SpaceTopics.release_all(:meeting)
@@ -1170,17 +1171,15 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
+          # Task 01a1557a rung 3 stage 3: `participant.id => ColorPalette slot`
+          # for the gallery's promoted agent tile, keyed like the gallery
+          # entries (the live view model's `:id`; its `:participant_id` is the
+          # agent id the lookup reads `agent.color` from).
+          |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
           # The invite-an-agent control's options (task 01a04c2f). Seeded
           # here and re-derived by `refresh_participants/1`, so an agent that
           # joins the call leaves the list on the same tick its tile appears.
           |> assign_invite_rows(meeting.chat_space_id, participants)
-          # Task 01a0691d stage 3. Opt in to `ShellLive`'s `:roster_updates`
-          # hook FORWARDING `{:roster_changed, _}` instead of halting it; the
-          # `handle_info/2` clause below is what folds it. Assigned
-          # unconditionally rather than only when connected: the hook reads it
-          # on every message, a disconnected mount receives none, and a flag
-          # that is only sometimes present is the shape that goes stale.
-          |> assign(:roster_changed_downstream?, true)
           # Per-meeting agent activity (task 01a04a98), seeded from the
           # LIVE intent queue rather than from the tile's old
           # `activity_state={:idle}` literal. A socket that mounts at
@@ -1938,7 +1937,7 @@ defmodule PlatformWeb.MeetingLive do
   def calendar_card_status_class("scheduled"), do: "border-primary/40 bg-primary/15 text-primary"
 
   def calendar_card_status_class(_other),
-    do: "border-edge bg-base-200 text-base-content/60"
+    do: "border-edge bg-base-200 text-subtle"
 
   @doc """
   How many meetings the rendered WEEK actually draws.
@@ -2492,7 +2491,7 @@ defmodule PlatformWeb.MeetingLive do
   defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
   defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
   defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
-  defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-base-content/60"
+  defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-subtle"
 
   # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
   # ships `:short_label` on the action-item chip precisely so the phone does
@@ -4495,7 +4494,14 @@ defmodule PlatformWeb.MeetingLive do
 
     socket
     |> clear_agent_removal_error(id)
-    |> assign(:agent_removal_undo, %{agent_id: agent_id, agent_name: name, ref: ref})
+    |> assign(:agent_removal_undo, %{
+      agent_id: agent_id,
+      agent_name: name,
+      ref: ref,
+      # The gone row keeps the agent's rail (task 01a1557a rung 3 stage 3);
+      # the agent has left `@agents_by_id` by the time that row renders.
+      slot: removed_agent_slot(socket, agent_id)
+    })
   end
 
   defp apply_agent_removal_result(socket, id, name, {:ok, {:ok, %{outcome: :removed}}}) do
@@ -4537,6 +4543,13 @@ defmodule PlatformWeb.MeetingLive do
       # again' button").
       Map.put(agent_removal_errors(socket), id, "Couldn't remove #{name}.")
     )
+  end
+
+  defp removed_agent_slot(socket, agent_id) do
+    case socket.assigns[:agents_by_id] do
+      %{^agent_id => %{color: color}} -> Platform.Agents.ColorPalette.slot_for(color)
+      _ -> Platform.Agents.ColorPalette.slot_for(nil)
+    end
   end
 
   defp clear_agent_removal_error(socket, id),
@@ -6102,6 +6115,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
+    |> assign(:agent_slots, Chat.agent_slot_map_for_participants(participants))
     |> assign_invite_rows(space_id, participants)
   end
 
@@ -9114,7 +9128,7 @@ defmodule PlatformWeb.MeetingLive do
 
     ~H"""
     <span
-      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-base-content/50 sm:flex lg:hidden 2xl:flex"
+      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-subtle sm:flex lg:hidden 2xl:flex"
       data-role="meeting-roster-count"
       data-people={@people}
       data-agents={@agents}

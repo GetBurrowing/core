@@ -245,7 +245,7 @@ defmodule Platform.Agents.NativeAgents do
 
     ## This file
 
-    This file is managed from Agent Resources in Burrow and is rewritten every time you
+    This file is managed from Agents in Burrow and is rewritten every time you
     start. Ask your owner to change it there; edits made here do not last.
     """
   end

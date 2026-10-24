@@ -268,7 +268,7 @@ defmodule PlatformWeb.PipelineLive do
     ~H"""
     <div
       data-role="pipeline-page"
-      class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6"
+      class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6 clears-tab-bar"
     >
       <div class="flex flex-wrap items-center justify-between gap-3">
         <h1 class="text-xl font-bold">Pipeline health</h1>
@@ -328,7 +328,7 @@ defmodule PlatformWeb.PipelineLive do
             <div :if={not @sparse?} class="flex gap-[2px] w-full">
               <div
                 :for={row <- measured(@breakdown)}
-                class="text-[10px] text-base-content/70 text-center truncate"
+                class="text-xs text-base-content text-center truncate"
                 style={"width: #{segment_width(row, @breakdown)}"}
                 title={phase_label(row.phase)}
               >

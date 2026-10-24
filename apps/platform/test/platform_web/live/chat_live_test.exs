@@ -24,13 +24,14 @@ defmodule PlatformWeb.ChatLiveTest do
   # `Chat.list_reactions_grouped/1`, which groups by exact match. A row that
   # dropped the variation selector would detach every heart reaction already in
   # the database into a second pill, and no migration repairs that.
+  # The set is the designer's masters' six (redesign rung 9 stage 2).
   @quick_react_row [
     "\u{1F44D}",
-    "\u{1F389}",
-    "\u{2705}",
+    "\u{1F525}",
     "\u{2764}\u{FE0F}",
     "\u{1F602}",
-    "\u{1F64F}"
+    "\u{1F440}",
+    "\u{2705}"
   ]
 
   setup do
@@ -347,19 +348,15 @@ defmodule PlatformWeb.ChatLiveTest do
     # changes don't auto-sync to .value after user input).
     assert_push_event(view, "compose_reset", %{})
 
-    # Server-side, the form's `[:text].value` is also cleared — the textarea
-    # body in the next render should not contain the sentinel. (The message
-    # itself appears in the message stream; we check the form region.)
+    # Server-side, the form's `[:text].value` is also cleared. Since redesign
+    # rung 10 the form value is the hidden `compose[text]` input behind the
+    # chip field (the field itself is `phx-update="ignore"` and JS-owned), so
+    # the next render's hidden input must be empty. (The message itself
+    # appears in the message stream, which may contain the sentinel.)
     html = render(view)
-    # The message body is in the stream and is allowed to contain the sentinel
-    # there; we want the textarea body specifically to not contain it.
-    # Phoenix.HTML.Form.normalize_value("text", "") renders "" inside the textarea.
-    refute html =~ ~s(<textarea\n              name="compose[text]"\n) <> ".*" <> sentinel
-    # Tighter: form must serialize text="" — easier check: no <textarea ...>SENTINEL</textarea>
-    refute Regex.match?(
-             ~r/<textarea[^>]*name="compose\[text\]"[^>]*>[^<]*#{Regex.escape(sentinel)}[^<]*<\/textarea>/s,
-             html
-           )
+    assert has_element?(view, ~s(input#compose_text_value[hidden][name="compose[text]"]))
+    refute has_element?(view, ~s(input#compose_text_value[value*="#{sentinel}"]))
+    refute html =~ ~s(value="#{sentinel}")
   end
 
   test "sending a message renders it once in the chat", %{conn: conn} do
@@ -1305,7 +1302,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [root_message | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => root_message.id})
+      render_click(view, "open_inline_thread", %{"message-id" => root_message.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{
@@ -1404,266 +1401,302 @@ defmodule PlatformWeb.ChatLiveTest do
     # would catch).
   end
 
-  describe "attachments" do
-    test "rendered file input is non-auto-upload (deferred until Send)", %{conn: conn} do
-      # Confirm the file input does NOT ship with `data-phx-auto-upload="true"`.
-      # Phoenix HEEx omits boolean attributes whose value is false, so removing
-      # `auto_upload: true` from `allow_upload` drops the attribute entirely —
-      # telling the browser NOT to begin transferring bytes the moment a file
-      # is selected. Bytes flow only when the modal Send form submits.
+  describe "attachments (the composer's staged tray, rung 11)" do
+    # Pasted, picked and dropped files stage as thumbnails INSIDE the composer
+    # and post with the typed caption as ONE message through `send_message`
+    # (task 01a1557a-9de3). There is no upload dialog any more.
+
+    defp png(name \\ "shot.png", bytes \\ 1000) do
+      %{name: name, content: String.duplicate("p", bytes), type: "image/png"}
+    end
+
+    defp space_rows(space_id) do
+      import Ecto.Query
+
+      messages =
+        Repo.all(from(m in Platform.Chat.Message, where: m.space_id == ^space_id))
+
+      attachments =
+        Repo.all(
+          from(a in Platform.Chat.Attachment,
+            where: a.space_id == ^space_id and not is_nil(a.message_id)
+          )
+        )
+
+      {messages, attachments}
+    end
+
+    test "the file input lives inside #compose-form and auto-uploads", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
-      html = render(view)
 
-      # Scope to the live_file_input by `name="attachments"`. The id is
-      # auto-generated from the upload ref (live_file_input hardcodes
-      # `id={@upload.ref}` BEFORE `@rest`, so user-supplied ids are silently
-      # dropped — see hooks/upload_button.js for the workaround we use to
-      # locate the input by selector instead of id).
-      assert html =~ ~s(name="attachments")
-      assert html =~ ~s(data-phx-hook="Phoenix.LiveFileUpload")
-      # Critical: the auto-upload signal must not be on. With
-      # auto_upload removed, this attribute is dropped entirely.
-      refute html =~ ~s(data-phx-auto-upload="true")
+      assert has_element?(view, ~s(#compose-form input[type="file"][name="attachments"]))
+      assert has_element?(view, ~s(#compose-form input[name="attachments"][data-phx-auto-upload]))
+      # ＋ opens the attach menu (stage 2); the menu's pickers stage into
+      # this input's upload.
+      assert has_element?(view, ~s(button#compose-attach-button[phx-click="attach_menu_open"]))
     end
 
-    test "upload-send-form is rendered unconditionally on first mount (regression)",
-         %{conn: conn} do
-      # Regression guard for the bug that broke the previous shipping attempt:
-      # if `<form id="upload-send-form">` is `:if`-guarded on `entries != []`,
-      # then on the very first paste/drop, the live_file_input's HTML5
-      # `form="..."` association resolves to null because the referenced form
-      # does not yet exist in the DOM. LiveView's `pushInput` after
-      # `LiveUploader.trackFiles` then has nowhere to serialize → the entry
-      # never registers → the modal stays stuck in dropzone state.
-      #
-      # The fix renders the form unconditionally (active_space presence is
-      # the only gate). The file input is the form's direct child, so
-      # `inputEl.form` resolves on first paste.
+    test "a staged image shows as a thumbnail in the tray inside the composer", %{conn: conn} do
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/chat/general")
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      # Form is in DOM before any entry exists (no entries staged yet).
-      assert html =~ ~s(id="upload-send-form")
-      # File input is a DOM descendant of the form (so `inputEl.form` resolves
-      # to the form natively, no cross-form attr needed).
-      [_, after_form] = String.split(html, ~s(id="upload-send-form"), parts: 2)
-      assert after_form =~ ~s(name="attachments")
+      refute has_element?(view, "[data-role=staged-tray]")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      assert has_element?(
+               view,
+               ~s(#compose-form .compose-pill-bar [data-role=staged-tray] li img[data-phx-hook="Phoenix.LiveImgPreview"][alt="shot.png"])
+             )
+
+      assert has_element?(view, ~s([data-role=staged-tray] button[aria-label="Remove shot.png"]))
+
+      assert has_element?(
+               view,
+               ~s{#compose_text[data-placeholder="Add a message (optional) — Enter to send"]}
+             )
     end
 
-    test "uploading a file shows it on the message after send", %{conn: conn} do
+    test "Send posts the caption and the staged file as EXACTLY ONE message", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      view |> form("#compose-form", compose: %{text: "caption here"}) |> render_submit()
+
+      {messages, attachments} = space_rows(space.id)
+      assert [message] = messages
+      assert message.content == "caption here"
+      assert [attachment] = attachments
+      assert attachment.message_id == message.id
+      assert attachment.filename == "shot.png"
+
+      # The tray collapses with no empty band.
+      refute has_element?(view, "[data-role=staged-tray]")
+      assert render(view) =~ "/chat/attachments/#{attachment.id}"
+    end
+
+    test "a file with an empty caption sends as one message", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png()])
+      render_upload(upload, "shot.png")
+
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+      view |> form("#compose-form", compose: %{text: ""}) |> render_submit()
+
+      assert {[message], [attachment]} = space_rows(space.id)
+      assert message.content in [nil, ""]
+      assert attachment.message_id == message.id
+    end
+
+    test "Send is disabled and named 'Uploading' mid-transfer, enabled at 100%", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png("slow.png", 1000)])
+
+      render_upload(upload, "slow.png", 50)
+      assert has_element?(view, ~s(button.compose-pill-send[disabled][aria-label="Uploading"]))
+      assert has_element?(view, "[data-role=staged-tray] [data-role=upload-ring]")
+
+      render_upload(upload, "slow.png", 50)
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+      refute has_element?(view, ~s(button.compose-pill-send[aria-label="Uploading"]))
+      refute has_element?(view, "[data-role=staged-tray] [data-role=upload-ring]")
+    end
+
+    test "Enter mid-transfer posts nothing (the server guard behind the disabled button)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      upload = file_input(view, "#compose-form", :attachments, [png("slow.png", 1000)])
+      render_upload(upload, "slow.png", 50)
+
+      render_submit(view, "send_message", %{"compose" => %{"text" => "too soon"}})
+      assert {[], []} = space_rows(space.id)
+    end
+
+    test "attach_remove drops the entry and the tray disappears with the last one",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # One file_input per file: LiveViewTest serves every entry of one
+      # file_input from a single upload client, so cancelling one entry there
+      # takes its siblings with it (a browser runs one channel per entry).
+      view |> file_input("#compose-form", :attachments, [png("a.png")]) |> render_upload("a.png")
+      view |> file_input("#compose-form", :attachments, [png("b.png")]) |> render_upload("b.png")
+
+      [a, b] =
+        view.pid |> :sys.get_state() |> then(& &1.socket.assigns.uploads.attachments.entries)
+
+      render_click(view, "attach_remove", %{"ref" => a.ref})
+
+      assert has_element?(view, ~s([data-role=staged-tray] img[alt="b.png"]))
+
+      refute has_element?(view, ~s([data-role=staged-tray] img[alt="a.png"]))
+
+      render_click(view, "attach_remove", %{"ref" => b.ref})
+      refute has_element?(view, "[data-role=staged-tray]")
+      refute has_element?(view, "[data-role=staged-area]")
+    end
+
+    test "a non-image file shows as a chip with its size and type", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       upload =
-        file_input(view, "#upload-send-form", :attachments, [
+        file_input(view, "#compose-form", :attachments, [
+          %{name: "spec.pdf", content: String.duplicate("d", 2048), type: "application/pdf"}
+        ])
+
+      render_upload(upload, "spec.pdf")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", "spec")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", ".pdf")
+      assert has_element?(view, "[data-role=staged-tray] [data-role=file-chip]", "· PDF")
+    end
+
+    test "a staged file over the install's limit reads TOO LARGE and disables Send",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      max = Platform.Chat.UploadLimits.max_bytes()
+
+      render_hook(view, "large_upload_stage", %{
+        "ref" => "big-1",
+        "name" => "big.bin",
+        "size" => max + 1,
+        "type" => "application/octet-stream"
+      })
+
+      # A caption is typed, so only the too-large file can be what disables Send.
+      render_change(view, "compose_changed", %{"compose" => %{"text" => "the big one"}})
+
+      assert has_element?(view, ~s([data-role=staged-tray] li[data-too-large="true"]))
+
+      assert has_element?(
+               view,
+               "[data-role=staged-too-large]",
+               "This Burrow install accepts files up to #{Platform.Chat.UploadLimits.label()}."
+             )
+
+      assert has_element?(view, "button.compose-pill-send[disabled]")
+
+      render_click(view, "large_upload_unstage", %{"ref" => "big-1"})
+      refute has_element?(view, "[data-role=staged-tray]")
+      refute has_element?(view, "button.compose-pill-send[disabled]")
+    end
+
+    test "a sixth file past max_entries renders FAILED (outline, no ring, no retry), not uploading",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      files = for i <- 1..6, do: png("p#{i}.png")
+      upload = file_input(view, "#compose-form", :attachments, files)
+      render_upload(upload, "p1.png")
+
+      assert has_element?(view, "[data-role=staged-error]", "Too many files")
+
+      [_ | _] =
+        entries =
+        view.pid |> :sys.get_state() |> then(& &1.socket.assigns.uploads.attachments.entries)
+
+      assert length(entries) == 6
+      excess = List.last(entries)
+      assert excess.client_name == "p6.png"
+
+      assert has_element?(view, ~s(li#staged-#{excess.ref}[data-state="failed"]))
+      assert has_element?(view, ~s(li#staged-#{excess.ref} .outline-error))
+      refute has_element?(view, ~s(li#staged-#{excess.ref} [data-role=upload-ring]))
+      # Too many is a refusal, not a transport failure: removing it is the fix.
+      refute has_element?(view, ~s(li#staged-#{excess.ref} [data-attach-retry]))
+      assert has_element?(view, ~s(li#staged-#{excess.ref} button[aria-label="Remove p6.png"]))
+
+      # Positive control: the first entry, within the limit, is not failed.
+      first = hd(entries)
+      refute has_element?(view, ~s(li#staged-#{first.ref}[data-state="failed"]))
+
+      # Removing the excess entry clears the refusal.
+      render_click(view, "attach_remove", %{"ref" => excess.ref})
+      refute has_element?(view, "[data-role=staged-error]", "Too many files")
+      refute has_element?(view, ~s(li[data-state="failed"]))
+    end
+
+    test "a file a socket drop interrupted comes back FAILED with 'Retry <name>', and retry posts it",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      space = Chat.get_space_by_slug("general")
+
+      # What ComposeInput reports on reconnect for an entry that was mid-upload
+      # when the socket dropped (assets/js/attach_stage.js `restage/2`).
+      render_hook(view, "attach_transport_failed", %{
+        "files" => [
           %{
-            name: "hello.txt",
-            content: "hello attachment",
-            type: "text/plain"
-          }
-        ])
+            "id" => "phx-old-1",
+            "name" => "big.png",
+            "size" => 14_000_000,
+            "type" => "image/png"
+          },
+          %{"bogus" => true},
+          %{"id" => "", "name" => "empty-id.png"}
+        ]
+      })
 
-      # Open the upload staging dialog so file previews are visible
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      assert has_element?(view, ~s(li#staged-failed-phx-old-1[data-state="failed"]))
+      assert has_element?(view, ~s(li#staged-failed-phx-old-1 .outline-error))
 
-      assert render_upload(upload, "hello.txt") =~ "hello.txt"
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 button[data-attach-retry="phx-old-1"][aria-label="Retry big.png"])
+             )
 
-      # Set the caption via the change event, then submit the modal's
-      # send form (post-Apr-2026 deferred-upload wiring: the Send button
-      # is `type="submit"` on `#upload-send-form`, not a `phx-click`).
-      render_change(view, "upload_caption_change", %{"caption" => "see file"})
-      view |> form("#upload-send-form", %{"caption" => "see file"}) |> render_submit()
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 img[phx-hook="AttachFailedPreview"][alt="big.png"])
+             )
 
-      html = render(view)
+      assert has_element?(
+               view,
+               ~s(li#staged-failed-phx-old-1 button[aria-label="Remove big.png"])
+             )
 
-      assert html =~ "see file"
-      assert html =~ "hello.txt"
+      # Only that thumbnail: the malformed reports render nothing.
+      assert [_] =
+               view
+               |> render()
+               |> LazyHTML.from_document()
+               |> LazyHTML.query("li[data-failed-id]")
+               |> Enum.to_list()
 
-      space = Chat.get_space_by_slug("general")
-      [message | _] = Chat.list_messages(space.id)
-      [attachment] = Chat.list_attachments(message.id)
+      # A failed file blocks Send, as a failed entry does.
+      assert has_element?(view, "button.compose-pill-send[disabled]")
 
-      assert attachment.filename == "hello.txt"
-      assert html =~ "/chat/attachments/#{attachment.id}"
-    end
+      # Retry: the client drops the failed item and stages the same File again.
+      render_click(view, "attach_failed_remove", %{"id" => "phx-old-1"})
+      refute has_element?(view, "li[data-failed-id]")
 
-    test "firing upload_send before bytes are transferred posts no message (defense-in-depth)",
-         %{conn: conn} do
-      # With `auto_upload: true` removed, bytes flow only after the modal
-      # Send form submits. Simulate a race where the `upload_send` server
-      # event fires WITHOUT the upload preflight having run (i.e. no
-      # `render_upload` call). The handler's noop branch (no completed
-      # entries + empty caption) must short-circuit so we do not silently
-      # post an empty message.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      view
+      |> file_input("#compose-form", :attachments, [png("big.png")])
+      |> render_upload("big.png")
 
-      _upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "deferred.txt", content: "won't transfer", type: "text/plain"}
-        ])
+      refute has_element?(view, "button.compose-pill-send[disabled]")
 
-      # Fire upload_send directly without triggering any preflight/chunk
-      # transfer for the file input. Server has no completed entries.
-      render_click(view, "upload_send")
-
-      space = Chat.get_space_by_slug("general")
-      assert Chat.list_messages(space.id) == []
-    end
-
-    test "Send button is disabled while an entry is mid-transfer (0 < progress < 100)",
-         %{conn: conn} do
-      # While bytes are actively moving (0 < progress < 100), the modal Send
-      # button must render the HTML `disabled` attribute so the user sees a
-      # clear, non-clickable state instead of a transient red toast.
-      #
-      # Note: progress == 0 is NOT in-flight — it means the entry is staged
-      # but the byte transfer has not been triggered yet. With deferred
-      # upload, that's exactly the state where Send MUST be enabled so the
-      # user can click it to start the transfer (next test).
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "in-flight.txt", content: "partial bytes", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      # Drive the upload to a non-terminal progress (30%) so the entry
-      # exists with 0 < progress < 100.
-      render_upload(upload, "in-flight.txt", 30)
-      html = render(view)
-
-      # The Send button carries the disabled attribute when in-flight.
-      assert html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "Send button is enabled when an entry is staged but transfer has not started (progress == 0)",
-         %{conn: conn} do
-      # Critical for the deferred-upload flow: the user opens the modal,
-      # selects/pastes a file → entry registers with progress == 0 → user
-      # MUST be able to click Send to trigger the actual byte transfer.
-      # If we disabled Send at progress == 0, the user could never trigger
-      # the upload and the modal would be a permanent dead-end.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "deferred.txt", content: "not yet sent", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      # `preflight_upload` registers the entry on the LV (progress == 0)
-      # without driving any chunk transfer — exactly the deferred state we
-      # care about. `render_upload(_, name, 0)` would also register but
-      # immediately follows with a chunk; preflight_upload is the cleanest
-      # "staged but not transferring" simulation.
-      assert {:ok, _} = preflight_upload(upload)
-      html = render(view)
-
-      # Entry exists, progress is 0, Send must be present and NOT disabled.
-      assert html =~ ~s(class="upload-btn-send")
-      refute html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "Send button is enabled once all entries reach progress == 100", %{conn: conn} do
-      # Counterpart to the previous test: when every entry is fully
-      # transferred, the Send button must NOT carry the disabled
-      # attribute so the user can click through to post.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "done.txt", content: "complete bytes", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      assert render_upload(upload, "done.txt") =~ "done.txt"
-      html = render(view)
-
-      # The Send button does NOT carry the disabled attribute when
-      # every entry is fully transferred.
-      refute html =~ ~r/<button[^>]*class="upload-btn-send"[^>]*disabled/s
-    end
-
-    test "dim overlay renders while an entry is mid-upload (0 < progress < 100)",
-         %{conn: conn} do
-      # Stage 2 visual: while bytes are moving for an entry, the
-      # thumbnail must dim with a centered "X% uploading…" label so
-      # the user has unmissable feedback that the transfer is in
-      # progress (replaces the easily-missed 3px cyan strip).
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      # Use a >100-byte payload so render_upload can chunk to a non-
-      # terminal percent — the LiveViewTest helper rounds the requested
-      # percent up to the nearest whole-byte chunk and warns if the
-      # payload is too small to hit the requested value.
-      payload = String.duplicate("x", 1000)
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "midway.txt", content: payload, type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      render_upload(upload, "midway.txt", 40)
-      html = render(view)
-
-      assert html =~ "upload-thumb-progress-overlay"
-      # Match any in-flight percent label so we are robust to the
-      # helper's chunk-rounding (40 → 40-49% depending on chunk size).
-      assert html =~ ~r/\d+% uploading/
-    end
-
-    test "dim overlay does NOT render when entry has not started transferring (progress == 0)",
-         %{conn: conn} do
-      # `live_file_input` registers entries with progress == 0 before
-      # `render_upload` runs. The overlay's :if guard is
-      # `progress > 0 and progress < 100`, so a freshly-selected entry
-      # must NOT show the overlay.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      _upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "fresh.txt", content: "not yet", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-      html = render(view)
-
-      refute html =~ "upload-thumb-progress-overlay"
-      refute html =~ "uploading…"
-    end
-
-    test "dim overlay does NOT render when entry is fully transferred (progress == 100)",
-         %{conn: conn} do
-      # Once a transfer completes the thumbnail must be fully visible
-      # so the user can confirm the file before clicking Send.
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      upload =
-        file_input(view, "#upload-send-form", :attachments, [
-          %{name: "complete.txt", content: "all done", type: "text/plain"}
-        ])
-
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
-
-      assert render_upload(upload, "complete.txt") =~ "complete.txt"
-      html = render(view)
-
-      refute html =~ "upload-thumb-progress-overlay"
-      refute html =~ "uploading…"
+      view |> form("#compose-form", compose: %{text: "after the drop"}) |> render_submit()
+      assert {[message], [attachment]} = space_rows(space.id)
+      assert message.content == "after the drop"
+      assert attachment.filename == "big.png"
     end
 
     test "staged uploads are cancelled when navigating to another space (BACKLOG #10)",
@@ -1675,30 +1708,18 @@ defmodule PlatformWeb.ChatLiveTest do
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       upload =
-        file_input(view, "#upload-send-form", :attachments, [
+        file_input(view, "#compose-form", :attachments, [
           %{name: "leak.txt", content: "would-leak", type: "text/plain"}
         ])
 
-      # Open the staging dialog and progress the upload so the entry
-      # is both staged server-side AND visible in the DOM. The
-      # dialog-close path has its own cancel, so we keep the dialog
-      # open to exercise the space-transition cancel path.
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
       assert render_upload(upload, "leak.txt") =~ "leak.txt"
 
-      # Navigate to another space without closing the dialog or
-      # sending. Both /chat/:space_slug routes map to the same
-      # LiveView so handle_params fires in-process, which is the seam
-      # where we cancel. Use render_patch (same-LV patch) rather than
-      # live_redirect (which may remount).
+      # Both /chat/:space_slug routes map to the same LiveView, so
+      # handle_params fires in-process, which is the seam where we cancel.
       html = render_patch(view, ~p"/chat/other")
 
-      # Flash surfaces on the destination render so the user knows
-      # their staged file was dropped (and can re-select if intended).
       assert html =~ "Canceled 1 pending upload from the previous space"
-
-      # Re-open the staging dialog in the new space: no leaked entry.
-      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      refute has_element?(view, "[data-role=staged-tray]")
       refute render(view) =~ "leak.txt"
     end
   end
@@ -1818,13 +1839,23 @@ defmodule PlatformWeb.ChatLiveTest do
       html = render(view)
       assert html =~ "react to me"
 
-      # Quick emoji buttons should be present (in the action bar). Asserted
-      # against the pinned row rather than a hand-listed subset: this test
-      # listed four of the six and so stayed green through the entire period
-      # the hover row and the double-tap pill disagreed (task 019e0814
-      # stage 2). A subset check cannot see a missing emoji.
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # On the row itself the tap pill offers ONE quick reaction, the first of
+      # the pinned set (redesign rung 9). The full set lives in the actions
+      # sheet the pill's More opens. Asserted against the pinned row rather
+      # than a hand-listed subset: this test once listed four of the six and
+      # so stayed green while two surfaces disagreed (task 019e0814 stage 2).
+      assert has_element?(
+               view,
+               ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[phx-value-emoji="#{hd(@quick_react_row)}"])
+             )
+
+      sheet = render_click(view, "open_message_actions", %{"id" => msg.id})
+
       for emoji <- @quick_react_row do
-        assert html =~ emoji
+        assert sheet =~ ~s(phx-value-emoji="#{emoji}")
       end
     end
 
@@ -1849,10 +1880,14 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render(view)
 
-      # The add-reaction control MUST render even though the message has no
+      # The add-reaction path MUST exist even though the message has no
       # reactions. That is what task 019e3402 stage 1 was protecting, and it
-      # still holds.
-      assert html =~ ~s(aria-label="Add reaction")
+      # still holds: the pill's More opens the actions sheet, whose "+"
+      # opens the picker (redesign rung 9 deleted the hover row's "+").
+      assert has_element?(
+               view,
+               ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="More actions"])
+             )
 
       # THE GUARD MOVED, IT DID NOT VANISH (task 01a000c0 stage 3). This used
       # to also assert `reaction-add-btn`, the dashed pill that sat in the
@@ -1865,12 +1900,12 @@ defmodule PlatformWeb.ChatLiveTest do
       # home, rather than deleting the case.
       refute html =~ "reaction-add-btn"
 
-      assert html =~ ~s(phx-click="open_reaction_picker")
+      render_click(view, "open_message_actions", %{"id" => msg.id})
 
-      # And it is inside the action row, not orphaned somewhere else in the
-      # markup — the row is revealed by opacity so it stays tab-reachable
-      # (see the comment on that div in chat_message.ex).
-      assert html =~ "group-focus-within:opacity-100"
+      assert has_element?(
+               view,
+               ~s(#message-actions-more-reactions[aria-label="More reactions"])
+             )
     end
 
     test "reacting to a message persists the reaction and updates the reaction count in the UI",
@@ -2461,10 +2496,15 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
-  # ── Quick-react popover (mobile double-tap) ─────────────────────────────────
+  # ── Message tap pill (redesign rung 9, task 01a1557a-9406) ──────────────────
+  #
+  # The pill replaced the dead long-press lift pill, the desktop hover row and
+  # the left-gutter reply. Gesture timing (tap, double-tap, long-press) is
+  # unit-tested in assets/test/hooks/message_gestures.test.js; these pin the
+  # server half: the markup the hook drives and the events its buttons fire.
 
-  describe "quick-react popover" do
-    test "opening the popover renders the dialog with the target message id",
+  describe "message pill" do
+    test "message rows carry the MessageGestures hook, data-message-id, data-is-own-message and one pill",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/general")
@@ -2472,82 +2512,43 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(id="longpress-menu")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap target"})
+      |> form("#compose-form", compose: %{text: "pill attach"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-
-      assert html =~ ~s(id="longpress-menu")
-      assert html =~ ~s(aria-label="Message actions")
-      # The MessageLift hook reads the target via this attribute and clones
-      # the corresponding DOM element on mount.
-      assert html =~ ~s(data-target-message-id="#{msg.id}")
-      assert html =~ ~s(phx-hook="MessageLift")
-      # Scrim + pill render together; the Copy / Open-in-thread / Pin action
-      # card was removed when long-press was replaced with double-tap, since
-      # the card surfaced actions that either duplicated the browser's
-      # native selection menu (Copy) or were frequently triggered by
-      # accident (Pin).
-      assert html =~ "longpress-scrim"
-      assert html =~ "longpress-pill"
-      # Action card container and its rows are gone — verified via the
-      # container class (checking the row labels would false-positive on
-      # the desktop hover-bar, which reuses strings like "Copy message"
-      # as button titles).
-      refute html =~ "longpress-card"
-      refute html =~ "longpress-card-label"
-      assert html =~ ~s(aria-label="Quick reactions")
-      # Emojis should all be present in the pill.
-      for emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏) do
-        assert html =~ emoji
-      end
+      row = ~s([data-message-id="#{msg.id}"][phx-hook="MessageGestures"])
+      assert has_element?(view, row)
+      assert has_element?(view, ~s(#{row}[data-is-own-message="true"][tabindex="0"]))
+      assert has_element?(view, ~s(#{row} [data-role="message-pill"][role="toolbar"]))
+      refute has_element?(view, ~s(#{row} .message-action-row))
+      refute has_element?(view, ~s(#{row} .msg-reply-gutter))
     end
 
-    test "closing the popover removes it from the DOM", %{conn: conn} do
+    test "the pill's More button opens the actions sheet", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap close"})
+      |> form("#compose-form", compose: %{text: "pill more target"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-      assert html =~ ~s(id="longpress-menu")
-
-      html = render_click(view, "close_longpress_menu", %{})
-      refute html =~ ~s(id="longpress-menu")
-    end
-
-    test "message bubbles carry the LongpressMenu hook, data-message-id, and data-is-own-message",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      refute has_element?(view, "#message-actions-sheet")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap attach"})
-      |> render_submit()
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="More actions"])
+      )
+      |> render_click()
 
-      space = Chat.get_space_by_slug("general")
-      [msg | _] = Chat.list_messages(space.id)
-
-      html = render(view)
-      # Hook name retained for minimal churn; the JS now listens for
-      # double-tap rather than a 450ms hold.
-      assert html =~ ~s(phx-hook="LongpressMenu")
-      assert html =~ ~s(data-message-id="#{msg.id}")
-      # Authorship flag is what the JS reads to skip firing on the
-      # current user's own bubbles (reserved for edit gesture, PR2).
-      assert html =~ ~s(data-is-own-message="true")
+      assert has_element?(view, "#message-actions-sheet")
     end
 
-    test "tapping an emoji in the pill persists a reaction and closes the popover",
-         %{conn: conn} do
+    test "the pill's thumbs-up persists the first quick reaction", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -2558,17 +2559,36 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+      view
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="React with thumbs up"])
+      )
+      |> render_click()
 
-      # Fire the same event the pill emits (phx-click="react" with
-      # message-id + emoji as phx-value-* attributes).
-      html = render_click(view, "react", %{"message-id" => msg.id, "emoji" => "🎉"})
+      [first | _] = Platform.Chat.Emoji.quick_defaults()
+      assert [%{emoji: ^first}] = Chat.list_reactions(msg.id)
+    end
 
-      # Reaction persisted.
-      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+    test "the pill's Reply opens the inline thread", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      # Popover closed — close_picker/1 also resets :longpress_menu_for.
-      refute html =~ ~s(id="longpress-menu")
+      view
+      |> form("#compose-form", compose: %{text: "pill reply target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      refute has_element?(view, "#inline-thread-#{msg.id}")
+
+      view
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="Reply in thread"])
+      )
+      |> render_click()
+
+      assert has_element?(view, "#inline-thread-#{msg.id}")
     end
   end
 
@@ -2584,8 +2604,8 @@ defmodule PlatformWeb.ChatLiveTest do
   # the reaction and close the sheet, with no picker in between. A test that
   # has to open the picker to succeed is testing the wrong thing.
   #
-  # The strip is 👍 ❤️ 😂 🎉 + — five targets in ONE row, the last of them a
-  # "+" that opens the picker. Sam ruled out the separate "More
+  # The strip is the masters' 👍 🔥 ❤️ 😂 👀 ✅ then ＋ (redesign rung 9) —
+  # seven targets in ONE row, the last of them a "+" that opens the picker. Sam ruled out the separate "More
   # reactions…" row these tests originally pinned: stage 3 puts a "+" beside
   # the same four emoji in the desktop hover row, and a labelled menu row on
   # touch against a glyph on pointer would be two ways to do one thing.
@@ -2620,7 +2640,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # template and never this literal alone.
       for emoji <- @quick_react_row do
         assert html =~ ~s(phx-value-emoji="#{emoji}")
-        assert html =~ ~s(aria-label="React with #{emoji}")
+        assert html =~ ~s(aria-label="React with #{Platform.Chat.Emoji.quick_name(emoji)}")
       end
 
       # Every strip button carries the sheet's target message id, so a tap
@@ -2629,15 +2649,19 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # The strip sits ABOVE "Reply in thread" — ordering is the design, not
       # an accident: the one-tap path is first, the menu rows follow.
-      strip_at = :binary.match(html, "message-actions-quick-reactions") |> elem(0)
-      reply_at = :binary.match(html, "Reply in thread") |> elem(0)
+      # Measured inside the sheet only: every message row's tap pill also
+      # carries a "Reply in thread" label, earlier in the page.
+      {sheet_at, _} = :binary.match(html, ~s(id="message-actions-sheet"))
+      sheet = binary_part(html, sheet_at, byte_size(html) - sheet_at)
+      strip_at = :binary.match(sheet, "message-actions-quick-reactions") |> elem(0)
+      reply_at = :binary.match(sheet, "Reply in thread") |> elem(0)
       assert strip_at < reply_at
 
       # The escape hatch is the "+" INSIDE the strip, not a labelled row of
       # its own — Sam's ruling, and the shape stage 3 gives the desktop
       # hover row. So it must fall between the strip and "Reply in thread",
       # and the old bottom row must be gone entirely.
-      more_at = :binary.match(html, ~s(id="message-actions-more-reactions")) |> elem(0)
+      more_at = :binary.match(sheet, ~s(id="message-actions-more-reactions")) |> elem(0)
       assert strip_at < more_at
       assert more_at < reply_at
       refute html =~ "More reactions…"
@@ -2666,8 +2690,8 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(phx-value-emoji="+")
 
       # ALL of them, "+" included, are 44x44. size-11 is Tailwind's 2.75rem on
-      # both axes, matching the .longpress-pill-btn hit target this strip
-      # borrows from. shrink-0 stops flex from squeezing one below 44px on a
+      # both axes, matching the old quick-react pill's hit target this strip
+      # borrowed from. shrink-0 stops flex from squeezing one below 44px on a
       # narrow phone — the "+" is last in the row and would be squeezed first,
       # and the row got longer when the set went from four to six.
       assert length(buttons) == length(@quick_react_row) + 1
@@ -2688,10 +2712,10 @@ defmodule PlatformWeb.ChatLiveTest do
       # then push("close_message_actions"). Firing the bare event by name
       # would skip the wiring this stage is adding.
       view
-      |> element("#message-actions-quick-reactions button", "🎉")
+      |> element("#message-actions-quick-reactions button", "🔥")
       |> render_click()
 
-      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+      assert [%{emoji: "🔥"}] = Chat.list_reactions(msg.id)
 
       html = render(view)
 
@@ -2723,7 +2747,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert [] = Chat.list_reactions(msg.id)
     end
 
-    test "the sheet's Pin / Unpin row pins and unpins the message and closes the sheet",
+    test "the sheet's Pin message row pins and unpins the message and closes the sheet",
          %{view: view, msg: msg} do
       # Phones have no hover pin button, so this sheet row is their only way
       # to pin. Click the real element so the chained JS command runs as it
@@ -2758,53 +2782,6 @@ defmodule PlatformWeb.ChatLiveTest do
 
   # ── Mobile drawer ────────────────────────────────────────────────────────────
 
-  describe "mobile drawer (new-conversation / new-channel)" do
-    test "toggling the mobile drawer exposes both 'new conversation' and 'new channel' buttons",
-         %{conn: conn} do
-      # Before PR 1 the desktop sidebar had the only "+"/new-conversation and
-      # "+"/new-channel affordances, wrapped in `<aside class="hidden lg:flex">`.
-      # On mobile that rendered as nothing — users could see existing
-      # conversations but had no way to start one. This test pins the mobile
-      # drawer's entry points.
-      conn = authenticated_conn(conn)
-      {:ok, view, html} = live(conn, ~p"/chat/general")
-
-      # Drawer is closed on initial load → the drawer's new-conversation
-      # affordance isn't rendered yet. (Desktop sidebar has its own
-      # `aria-label="New channel"` button — always in the DOM but hidden
-      # via `hidden lg:flex` on mobile — so we only refute the
-      # new-conversation affordance, which is drawer-only.)
-      refute html =~ ~s(aria-label="New conversation")
-
-      # Open the drawer.
-      html = render_click(view, "toggle_mobile_browser", %{})
-
-      # Both drawer affordances now render. They dispatch the same LV
-      # events the desktop sidebar uses — modal wiring is shared; only
-      # the trigger surfaces were missing on mobile.
-      assert html =~ ~s(aria-label="New conversation")
-      assert html =~ ~s(aria-label="New channel")
-      assert html =~ "new_conversation_open"
-      assert html =~ "new_channel_open"
-
-      # Precision: both "+ " buttons must chain `close_mobile_browser`
-      # after opening the modal, otherwise the modal renders behind the
-      # drawer. Bounded by 100 chars to ensure the two pushes are part
-      # of the same `phx-click` attribute, not just co-present elsewhere
-      # (the drawer header close button and sidebar links also fire
-      # `close_mobile_browser` on their own).
-      assert Regex.match?(
-               ~r/new_channel_open.{0,100}close_mobile_browser|close_mobile_browser.{0,100}new_channel_open/s,
-               html
-             )
-
-      assert Regex.match?(
-               ~r/new_conversation_open.{0,100}close_mobile_browser|close_mobile_browser.{0,100}new_conversation_open/s,
-               html
-             )
-    end
-  end
-
   # ── Threads ──────────────────────────────────────────────────────────────────
 
   describe "threads" do
@@ -2820,10 +2797,10 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug(slug)
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_click(view, "open_thread", %{"message-id" => msg.id})
+      html = render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       assert html =~ "inline-thread-compose-form-#{msg.id}"
-      assert html =~ "Reply in thread..."
+      assert html =~ "Reply in thread"
     end
 
     test "toggling the inline thread closed hides its composer", %{conn: conn} do
@@ -2837,7 +2814,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
       html = render_click(view, "toggle_inline_thread", %{"message-id" => msg.id})
 
       refute html =~ "inline-thread-compose-form-#{msg.id}"
@@ -2854,7 +2831,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{"text" => "thread reply", "message_id" => msg.id}
@@ -2877,7 +2854,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{
@@ -2921,7 +2898,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{"text" => "timestamp thread reply", "message_id" => msg.id}
@@ -3400,7 +3377,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "read-only snapshot"
       assert has_element?(view, "#archived-banner")
       refute has_element?(view, "#compose-form")
-      refute has_element?(view, "#upload-send-form")
+      refute has_element?(view, ~s(input[name="attachments"]))
     end
 
     test "active channel still renders the composer (regression)", %{conn: conn} do
@@ -4378,7 +4355,7 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
-  # ── Quick-react row: one set, three surfaces ─────────────────────────────────
+  # ── Quick-react row: one set, two surfaces ─────────────────────────────────
 
   # The emoji of one quick-react row, in DOM order, read off `phx-value-emoji`.
   #
@@ -4394,11 +4371,13 @@ defmodule PlatformWeb.ChatLiveTest do
     |> Enum.map(&(&1 |> Floki.attribute("phx-value-emoji") |> List.first()))
   end
 
-  defp hover_row_selector(msg_id) do
-    ~s(.message-action-row button[phx-value-message-id="#{msg_id}"][phx-value-emoji])
+  # The tap pill (redesign rung 9) carries one react button: the FIRST of the
+  # set. The hover row and the long-press pill that used to render the whole
+  # set are deleted.
+  defp pill_react_selector(msg_id) do
+    ~s([data-message-id="#{msg_id}"] [data-role="message-pill"] button[phx-value-emoji])
   end
 
-  @longpress_pill_selector ".longpress-pill button[phx-value-emoji]"
   @actions_sheet_selector "#message-actions-quick-reactions button[phx-value-emoji]"
 
   describe "quick-react row is one set across every surface" do
@@ -4416,17 +4395,11 @@ defmodule PlatformWeb.ChatLiveTest do
       %{view: view, msg: msg}
     end
 
-    test "the desktop hover row renders the pinned set, in order", %{view: view, msg: msg} do
+    test "the tap pill's react button posts the first of the pinned set",
+         %{view: view, msg: msg} do
       html = render(view)
 
-      assert quick_row_emoji(html, hover_row_selector(msg.id)) == @quick_react_row
-    end
-
-    test "the mobile double-tap pill renders the pinned set, in order",
-         %{view: view, msg: msg} do
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-
-      assert quick_row_emoji(html, @longpress_pill_selector) == @quick_react_row
+      assert quick_row_emoji(html, pill_react_selector(msg.id)) == [hd(@quick_react_row)]
     end
 
     test "the mobile message-actions sheet renders the pinned set, in order",
@@ -4436,20 +4409,13 @@ defmodule PlatformWeb.ChatLiveTest do
       assert quick_row_emoji(html, @actions_sheet_selector) == @quick_react_row
     end
 
-    test "all three surfaces agree with each other on one render pass",
+    test "the surfaces agree with each other on one render pass",
          %{view: view, msg: msg} do
-      # The three assertions above each compare a surface to the pin. This
-      # compares the surfaces to EACH OTHER, which is the defect being closed:
-      # every one of them looked right in isolation while the pointer row
-      # offered four emoji and the touch pill offered six, on the same message,
-      # in the same account, differing only by the device it was opened on.
-      hover = quick_row_emoji(render(view), hover_row_selector(msg.id))
-
-      pill =
-        quick_row_emoji(
-          render_hook(view, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
+      # The assertions above each compare a surface to the pin. This compares
+      # the surfaces to EACH OTHER, which is the defect being closed: every one
+      # of them once looked right in isolation while the pointer row offered
+      # four emoji and the touch pill offered six, on the same message.
+      [pill] = quick_row_emoji(render(view), pill_react_selector(msg.id))
 
       sheet =
         quick_row_emoji(
@@ -4457,9 +4423,8 @@ defmodule PlatformWeb.ChatLiveTest do
           @actions_sheet_selector
         )
 
-      assert hover == pill
-      assert pill == sheet
-      assert length(hover) == 6
+      assert pill == hd(sheet)
+      assert length(sheet) == 6
     end
 
     test "the picker control is still a control, not a seventh emoji",
@@ -4469,12 +4434,6 @@ defmodule PlatformWeb.ChatLiveTest do
       # Counted separately on each surface, the way the sheet's own strip test
       # counts them, because "the + is a control, not an emoji" is a rule about
       # kinds and not about a total.
-      pill_html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-      pill_buttons = pill_html |> Floki.parse_document!() |> Floki.find(".longpress-pill button")
-
-      assert length(pill_buttons) == 7
-      assert [_] = Floki.find(pill_buttons, ".longpress-pill-more")
-
       sheet_html = render_click(view, "open_message_actions", %{"id" => msg.id})
 
       sheet_buttons =
@@ -4485,7 +4444,6 @@ defmodule PlatformWeb.ChatLiveTest do
       assert length(sheet_buttons) == 7
       assert [_] = Floki.find(sheet_buttons, "#message-actions-more-reactions")
 
-      refute pill_html =~ ~s(phx-value-emoji="+")
       refute sheet_html =~ ~s(phx-value-emoji="+")
     end
   end
@@ -4530,29 +4488,12 @@ defmodule PlatformWeb.ChatLiveTest do
       assert [%{emoji: "\u{1F64F}"}] = Chat.list_reactions(msg.id)
       assert render(view_b) =~ "same row for everyone"
 
-      selector = hover_row_selector(msg.id)
-      alice_row = quick_row_emoji(render(view_a), selector)
-      bob_row = quick_row_emoji(render(view_b), selector)
-
-      assert alice_row == bob_row
-      assert alice_row == @quick_react_row
-
-      # And on touch, where the reacting gesture and the row both live in the
-      # same overlay.
-      alice_pill =
-        quick_row_emoji(
-          render_hook(view_a, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
-
-      bob_pill =
-        quick_row_emoji(
-          render_hook(view_b, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
+      selector = pill_react_selector(msg.id)
+      alice_pill = quick_row_emoji(render(view_a), selector)
+      bob_pill = quick_row_emoji(render(view_b), selector)
 
       assert alice_pill == bob_pill
-      assert alice_pill == @quick_react_row
+      assert alice_pill == [hd(@quick_react_row)]
 
       alice_sheet =
         quick_row_emoji(

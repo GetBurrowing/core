@@ -64,6 +64,11 @@ defmodule Platform.Chat.Message do
     # so the separator must live INSIDE the stream item to survive.
     field(:day_label, :string, virtual: true, default: nil)
 
+    # Redesign rung 13 stage 1: the link cards THIS viewer sees under the
+    # message (`Platform.Chat.LinkCards.annotate/2`, set by MessagesHooks).
+    # nil = not annotated (thread panel, search), which renders plain links.
+    field(:link_cards, {:array, :map}, virtual: true, default: nil)
+
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 

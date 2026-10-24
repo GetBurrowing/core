@@ -31,7 +31,8 @@ defmodule PlatformWeb.AvatarComponents do
     "xs" => "size-5 text-[10px]",
     "sm" => "size-6 text-xs",
     "md" => "size-8 text-sm",
-    "lg" => "size-10 text-base"
+    "lg" => "size-10 text-base",
+    "xl" => "size-[72px] text-[26px]"
   }
 
   @circle_base "rounded-full overflow-hidden flex items-center justify-center"
@@ -43,7 +44,7 @@ defmodule PlatformWeb.AvatarComponents do
   attr(:name, :string, required: true)
   attr(:avatar_url, :string, default: nil)
   attr(:seed, :any, default: nil)
-  attr(:size, :string, default: "md", values: ["xs", "sm", "md", "lg"])
+  attr(:size, :string, default: "md", values: ["xs", "sm", "md", "lg", "xl"])
   attr(:class, :any, default: nil)
   attr(:title, :string, default: nil)
   attr(:rest, :global)
@@ -89,7 +90,7 @@ defmodule PlatformWeb.AvatarComponents do
   """
   attr(:name, :string, required: true)
   attr(:avatar_url, :string, default: nil)
-  attr(:size, :string, default: "md", values: ["xs", "sm", "md", "lg"])
+  attr(:size, :string, default: "md", values: ["xs", "sm", "md", "lg", "xl"])
   attr(:class, :any, default: nil)
   attr(:fallback_class, :any, default: "bg-base-300 text-primary")
   attr(:title, :string, default: nil)

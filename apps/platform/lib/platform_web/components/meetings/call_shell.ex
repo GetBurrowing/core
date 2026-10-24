@@ -692,7 +692,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             "relative flex items-center justify-center px-2 py-2.5 text-[12.5px] transition-colors",
             if(id == @active,
               do: "min-w-0 flex-1 font-semibold text-base-content",
-              else: "flex-none font-medium text-base-content/60 hover:text-base-content/80"
+              else: "flex-none font-medium text-subtle hover:text-base-content"
             )
           ]}
         >
@@ -846,7 +846,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
                  captured. --%>
             <p
               :if={@candidates == [] and @candidates_closed == [] and is_nil(@candidate_error)}
-              class="text-base-content/40 p-3 text-xs"
+              class="text-subtle p-3 text-xs"
               data-role="call-rail-canvas-empty"
             >
               <%= if @meeting do %>
@@ -1049,7 +1049,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       data-role="meeting-agent-invite"
     >
       <div class="px-1 pb-1.5">
-        <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/50">
+        <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content">
           Invite an agent
         </span>
       </div>
@@ -1068,7 +1068,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
                 class={[
                   "min-w-0 truncate text-[13px] leading-tight",
                   if(row.state in [:incapable, :in_call],
-                    do: "text-base-content/50",
+                    do: "text-subtle",
                     else: "text-base-content"
                   )
                 ]}
@@ -1078,7 +1078,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               </span>
               <span
                 :if={not in_space?(row)}
-                class="shrink-0 text-[10px] uppercase tracking-wide text-base-content/40"
+                class="shrink-0 text-[10px] uppercase tracking-wide text-subtle"
                 data-role="meeting-agent-invite-membership"
               >
                 not in space
@@ -1086,7 +1086,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             </span>
             <span
               :if={invite_reason(row)}
-              class="block truncate text-[11px] text-base-content/50"
+              class="block truncate text-[11px] text-subtle"
               data-role="meeting-agent-invite-reason"
             >
               {invite_reason(row)}
@@ -1102,7 +1102,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
             data-agent-id={row.agent.id}
             data-invite-pending={row.state == :pending && "true"}
             aria-label={invite_label(row)}
-            class="btn btn-ghost btn-xs shrink-0 font-normal text-base-content/70 hover:text-base-content"
+            class="btn btn-ghost btn-xs shrink-0 font-normal text-base-content hover:text-base-content"
           >
             <span
               :if={row.state == :pending}
@@ -1117,7 +1117,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
         <li
           :if={@invite_rows == []}
-          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-[11px] leading-relaxed text-base-content/50"
+          class="rounded-box border border-dashed border-edge px-3 py-2.5 text-[11px] leading-relaxed text-subtle"
           data-role="meeting-agent-invite-empty"
         >
           No active agents yet. Every active agent appears here, whether or not it is already in
@@ -1353,7 +1353,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-on={to_string(@sharing)}
         aria-pressed={to_string(@sharing)}
         aria-label={if @sharing, do: "Stop sharing your screen", else: "Share your screen"}
-        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
       >
         <span class="hero-arrow-up-tray size-4" aria-hidden="true"></span>
         <.toggling_label on={@sharing} when_on="Stop sharing" when_off="Share" />
@@ -1391,7 +1391,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       <p
         :if={@native && !@native.camera && !@media_error}
         data-role="call-control-native-note"
-        class="min-w-0 truncate text-sm text-base-content/70"
+        class="min-w-0 truncate text-sm text-base-content"
       >
         Audio only in the app
       </p>
@@ -1408,7 +1408,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   # outranks the plain utility, so the ring computed to `none` and pending
   # looked like nothing at all. `disabled` stays: it is what makes the
   # button inert to pointer AND keyboard while the native call answers.
-  @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+  @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
 
   defp mic_class(nil, _mic_on, _pending), do: @mic_class
 
@@ -1424,7 +1424,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   # Browser and a camera at rest: byte-identical to before. Pending takes
   # the mic's warning ring (`ring-2!`, for the same daisyUI reason).
-  @camera_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+  @camera_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
 
   defp camera_class(nil, _pending), do: @camera_class
   defp camera_class(_native, true), do: [@camera_class, "ring-2! ring-warning"]

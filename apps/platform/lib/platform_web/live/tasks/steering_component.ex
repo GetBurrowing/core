@@ -34,7 +34,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   `Phoenix.LiveView.allow_upload/3` is called from this component's
   `mount/1` (LiveView supports uploads in stateful LiveComponents), so
   `:steering_attachments` is bound to the component rather than to the
-  shell. The lifecycle mirrors `PlatformWeb.ChatLive.UploadHooks`:
+  shell. The lifecycle mirrors `PlatformWeb.ChatLive.AttachHooks`:
   auto-upload with a `progress` callback that mirrors entries into
   `:steering_upload_previews`, an explicit cancel event, and
   `consume_uploaded_entries/3` at send time.
@@ -147,7 +147,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
 
       <div :if={@execution_space_id} class="space-y-2">
         <div class="flex items-center justify-between">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
             Execution Log
           </h3>
           <button
@@ -164,7 +164,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
         <div :if={!@execution_log_collapsed}>
           <div
             :if={@execution_log == []}
-            class="text-xs text-base-content/30 italic py-2"
+            class="text-xs text-subtle italic py-2"
           >
             No messages yet
           </div>
@@ -181,7 +181,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
               class={"flex flex-col gap-0.5 text-xs #{if msg.log_only, do: "opacity-50", else: ""} #{if msg.content_type == "system", do: "border-l-2 border-edge pl-2", else: ""} #{if msg.sender_type == "user", do: "border-l-2 border-primary pl-2", else: ""}"}
             >
               <div class="flex items-start gap-2">
-                <span class="text-base-content/40 whitespace-nowrap shrink-0">
+                <span class="text-subtle whitespace-nowrap shrink-0">
                   {format_log_timestamp(msg.inserted_at)}
                 </span>
                 <span class={"font-medium shrink-0 #{log_sender_color(msg.sender_type, msg.content_type)}"}>
@@ -215,7 +215,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                       target="_blank"
                       class="inline-flex items-center gap-1 rounded-lg border border-edge bg-base-200 px-2 py-1 text-xs hover:border-primary transition-colors"
                     >
-                      <span class="hero-document size-3.5 text-base-content/50"></span>
+                      <span class="hero-document size-3.5 text-subtle"></span>
                       <span class="truncate max-w-[120px]">{att.filename}</span>
                     </a>
                   <% end %>
@@ -251,8 +251,8 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                   />
                 <% else %>
                   <div class="w-16 h-16 rounded-lg border border-edge bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
-                    <span class="hero-document size-5 text-base-content/40"></span>
-                    <span class="text-[8px] text-base-content/60 truncate w-full text-center">
+                    <span class="hero-document size-5 text-subtle"></span>
+                    <span class="text-[8px] text-subtle truncate w-full text-center">
                       {entry.client_name}
                     </span>
                   </div>
@@ -290,12 +290,12 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
               >
                 <div class="w-16 h-16 rounded-lg border border-edge bg-base-200 flex flex-col items-center justify-center gap-0.5 px-1">
                   <span class={[
-                    "size-5 text-base-content/40",
+                    "size-5 text-subtle",
                     String.starts_with?(entry.client_type, "image/") && "hero-photo",
                     !String.starts_with?(entry.client_type, "image/") && "hero-document"
                   ]}>
                   </span>
-                  <span class="text-[8px] text-base-content/60 truncate w-full text-center">
+                  <span class="text-[8px] text-subtle truncate w-full text-center">
                     {entry.client_name}
                   </span>
                 </div>
@@ -375,7 +375,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                       "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
                       suggestion.participant_type == "broadcast" && "bg-warning/10 text-warning",
                       suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
-                      suggestion.participant_type == "user" && "bg-base-300 text-base-content/50"
+                      suggestion.participant_type == "user" && "bg-base-300 text-subtle"
                     ]}>
                       {suggestion.participant_type}
                     </span>
@@ -389,7 +389,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
               <button
                 type="button"
                 onclick="this.closest('form').querySelector('input[type=file]').click()"
-                class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
+                class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-subtle hover:bg-base-300 transition-colors"
                 title="Attach files"
                 disabled={is_nil(@execution_space_id)}
               >
@@ -448,7 +448,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
       <%!-- Outputs --%>
       <div :if={@execution_space_id} class="space-y-2">
         <div class="flex items-center gap-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
             Outputs
           </h3>
           <span :if={@output_canvases != []} class="badge badge-ghost badge-xs">
@@ -456,7 +456,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
           </span>
         </div>
 
-        <div :if={@output_canvases == []} class="text-xs text-base-content/30 italic py-1">
+        <div :if={@output_canvases == []} class="text-xs text-subtle italic py-1">
           No outputs yet
         </div>
 
@@ -468,7 +468,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <div class="truncate text-sm font-medium">{canvas.title || "Output"}</div>
-                <div class="text-xs text-base-content/50">
+                <div class="text-xs text-subtle">
                   {Platform.Chat.CanvasDocument.root_kind(canvas.document) || "canvas"} • {Calendar.strftime(
                     canvas.inserted_at,
                     "%b %-d, %-I:%M %p"
@@ -805,7 +805,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
     )
   end
 
-  # ── Steering upload helpers (mirrors ChatLive.UploadHooks) ─────────────
+  # ── Steering upload helpers (mirrors ChatLive.AttachHooks) ─────────────
 
   defp handle_steering_attachment_progress(:steering_attachments, entry, socket) do
     preview = %{
@@ -963,7 +963,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   defp log_sender_color("agent", "system"), do: "text-warning"
   defp log_sender_color("agent", _content_type), do: "text-info"
   defp log_sender_color("user", _content_type), do: "text-primary"
-  defp log_sender_color(_sender_type, _content_type), do: "text-base-content/60"
+  defp log_sender_color(_sender_type, _content_type), do: "text-subtle"
 
   defp upload_error_to_string(:too_large), do: "File is too large"
   defp upload_error_to_string(:too_many_files), do: "Too many files selected"

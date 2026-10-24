@@ -80,14 +80,14 @@ defmodule PlatformWeb.SocialPreview do
         <span
           :if={@viewer_owner? or field(@account, :owner_name)}
           data-role="owner-line"
-          class="text-base-content/70"
+          class="text-base-content"
         >
           Posts as {if @viewer_owner?, do: "you", else: field(@account, :owner_name)}
         </span>
         <span
           :if={@limits[:max_body] && @platform != "x"}
           data-role="char-count"
-          class="ml-auto font-mono text-xs text-base-content/70"
+          class="ml-auto font-mono text-xs text-base-content"
         >
           {number(PlatformLimits.count(@platform, @body))} / {number(@limits.max_body)}
         </span>
@@ -125,12 +125,12 @@ defmodule PlatformWeb.SocialPreview do
         <.avatar account={@account} class="size-12 text-lg" />
         <div class="min-w-0 flex-1 leading-tight">
           <p class="truncate text-sm font-semibold">{display_name(@account)}</p>
-          <p class="truncate text-xs text-base-content/70">{field(@account, :handle)}</p>
-          <p class="flex items-center gap-1 text-xs text-base-content/70">
+          <p class="truncate text-xs text-base-content">{field(@account, :handle)}</p>
+          <p class="flex items-center gap-1 text-xs text-base-content">
             Now · <.icon name="hero-globe-americas-mini" class="size-3" />
           </p>
         </div>
-        <.icon name="hero-ellipsis-horizontal" class="size-5 shrink-0 text-base-content/70" />
+        <.icon name="hero-ellipsis-horizontal" class="size-5 shrink-0 text-base-content" />
       </header>
 
       <div class="px-4 pt-2 text-sm leading-5">
@@ -148,15 +148,15 @@ defmodule PlatformWeb.SocialPreview do
         class="mt-3 block border-y border-edge bg-base-200"
       >
         <div class="flex aspect-[1.91/1] w-full items-center justify-center bg-base-300">
-          <.icon name="hero-link" class="size-8 text-base-content/50" />
+          <.icon name="hero-link" class="size-8 text-subtle" />
         </div>
         <div class="px-3 py-2">
           <p class="truncate text-sm font-semibold">{link_path(@link_url)}</p>
-          <p class="truncate text-xs text-base-content/70">{link_host(@link_url)}</p>
+          <p class="truncate text-xs text-base-content">{link_host(@link_url)}</p>
         </div>
       </a>
 
-      <div class="mx-3 mt-2 grid grid-cols-4 border-t border-edge py-1 text-xs font-semibold text-base-content/70">
+      <div class="mx-3 mt-2 grid grid-cols-4 border-t border-edge py-1 text-xs font-semibold text-base-content">
         <span class="flex flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] sm:flex-row sm:gap-1 sm:py-2 sm:text-xs">
           <.icon name="hero-hand-thumb-up" class="size-5" /><span>Like</span>
         </span>
@@ -218,12 +218,12 @@ defmodule PlatformWeb.SocialPreview do
         <div class="min-w-0 flex-1 pb-3">
           <header class="flex items-center gap-1 text-[15px] leading-5">
             <span class="max-w-[60%] shrink-0 truncate font-bold">{display_name(@account)}</span>
-            <span class="min-w-0 truncate text-base-content/70">
+            <span class="min-w-0 truncate text-base-content">
               @{field(@account, :handle)} · now
             </span>
             <.icon
               name="hero-ellipsis-horizontal"
-              class="ml-auto size-5 shrink-0 text-base-content/70"
+              class="ml-auto size-5 shrink-0 text-base-content"
             />
           </header>
           <p class="break-words text-[15px] leading-5">
@@ -239,13 +239,13 @@ defmodule PlatformWeb.SocialPreview do
             class="mt-3 block overflow-hidden rounded-2xl border border-edge"
           >
             <div class="relative flex aspect-[1.91/1] w-full items-center justify-center bg-base-300">
-              <.icon name="hero-link" class="size-8 text-base-content/50" />
+              <.icon name="hero-link" class="size-8 text-subtle" />
               <span class="absolute bottom-2 left-2 max-w-[90%] truncate rounded bg-base-100 px-1.5 text-xs">
                 {link_host(@link_url)}
               </span>
             </div>
           </a>
-          <div class="mt-3 flex max-w-[425px] items-center justify-between text-base-content/70">
+          <div class="mt-3 flex max-w-[425px] items-center justify-between text-base-content">
             <.icon name="hero-chat-bubble-oval-left" class="size-[18px]" />
             <.icon name="hero-arrow-path-rounded-square" class="size-[18px]" />
             <.icon name="hero-heart" class="size-[18px]" />
@@ -261,7 +261,7 @@ defmodule PlatformWeb.SocialPreview do
               "mt-2 font-mono text-xs",
               if(post.count > post.limit,
                 do: "font-semibold text-base-content",
-                else: "text-base-content/70"
+                else: "text-base-content"
               )
             ]}
           >
@@ -327,7 +327,7 @@ defmodule PlatformWeb.SocialPreview do
         />
         <div
           :if={!@first}
-          class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-base-content/70"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-base-content"
         >
           <.icon name="hero-photo" class="size-10" />
           <span class="text-sm">Instagram needs an image or video</span>
@@ -518,7 +518,7 @@ defmodule PlatformWeb.SocialPreview do
           phx-click={JS.hide(to: "##{@short_id}") |> JS.show(to: "##{@full_id}", display: "inline")}
           class={[
             "cursor-pointer whitespace-nowrap font-semibold hover:underline",
-            if(@on_media?, do: "text-white", else: "text-base-content/70")
+            if(@on_media?, do: "text-white", else: "text-base-content")
           ]}
         >
           {if String.starts_with?(@fold_label, "…"), do: @fold_label, else: "… " <> @fold_label}

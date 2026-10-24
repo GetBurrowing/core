@@ -1421,7 +1421,7 @@ const GameStream = {
     })
     const warn = latencyWarn(p50, this.warnMs)
     this.statsEl.classList.toggle("text-warning", warn)
-    this.statsEl.classList.toggle("text-base-content/60", !warn)
+    this.statsEl.classList.toggle("text-subtle", !warn)
   },
 
   tick() {

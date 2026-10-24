@@ -152,33 +152,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
   # ── Mobile surfaces ─────────────────────────────────────────────────────
   #
-  # The desktop rail is `hidden lg:flex`, so below `lg` the Pinned block does
-  # not render at all. Pinned conversations reach mobile through two other
-  # surfaces, both of which read the same `@channel_sections.pinned` list.
-
-  # The horizontally-scrollable chip strip above the message list. Requires an
-  # active space, so callers must land on a concrete chat route.
-  defp mobile_strip(html) do
-    case Regex.run(~r/<nav[^>]*data-role="mobile-pinned-strip".*?<\/nav>/s, html) do
-      [match] -> match
-      _ -> nil
-    end
-  end
-
-  # The Pinned section inside the mobile "Conversations" drawer. Both this and
-  # the desktop block carry `aria-label="Pinned"`; only the desktop one carries
-  # `data-section-key`, which is what separates them here.
-  #
-  # The `<section>` anchor matters: the mobile chip strip above the message
-  # list is a `<nav aria-label="Pinned">` and is a different surface.
-  defp drawer_pinned_section(html) do
-    ~r/<section[^>]*aria-label="Pinned"[^>]*>.*?<\/section>/s
-    |> Regex.scan(html)
-    |> Enum.map(&hd/1)
-    |> Enum.reject(&String.contains?(&1, ~s(data-section-key="pinned")))
-    |> List.first()
-  end
-
   # ── Reorder helpers (task 019fe987) ─────────────────────────────────────
 
   # The rows of a block, top to bottom, by the space id each carries.
@@ -227,20 +200,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
   defp count(slice, needle), do: slice |> String.split(needle) |> length() |> Kernel.-(1)
 
-  # The drawer, open, in personal-edit mode. Edit mode also clears
-  # `@drawer_query`, which is the state the drawer's reorder chrome is gated
-  # on, so the order of these two clicks is not interchangeable.
-  defp drawer_in_edit_mode(conn, space) do
-    {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
-
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
-    |> render_click()
-
-    html = render_click(view, "toggle_sidebar_edit", %{})
-    {view, html}
-  end
-
   # How many pinned SECTIONS a slice renders.
   #
   # The count is the only assertion that can tell one block from two, and it
@@ -251,33 +210,11 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   #
   # Matched on the OPENING TAG and on the `Pinned` PREFIX of the accessible
   # name, so the count survives a later copy change and still catches a
-  # re-split into two differently-named blocks. Anchored to `<section>`, which
-  # excludes the `<nav aria-label="Pinned">` chip strip on mobile.
+  # re-split into two differently-named blocks.
   defp pinned_section_count(html) do
     ~r/<section[^>]*aria-label="Pinned[^"]*"/
     |> Regex.scan(html)
     |> length()
-  end
-
-  defp open_mobile_drawer(conn, space) do
-    {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
-
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
-    |> render_click()
-
-    render(view)
-  end
-
-  # A row or chip that rendered `{space.name}` for a DM produces a lone glyph
-  # and an empty label, because a DM row has no `name`. This is the shape the
-  # mobile surfaces shipped before the fix, and the thing worth asserting
-  # against directly: a person rendered as an unnamed channel.
-  defp nameless_hash_rows(slice) do
-    slice
-    |> rows()
-    |> Enum.map(&row_text/1)
-    |> Enum.filter(&(&1 == "#" or &1 == ""))
   end
 
   # Every `<a>` in a slice, raw.
@@ -552,20 +489,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert Regex.run(~r/aria-label="([^"]*)"/, pinned_block(sidebar)) |> Enum.at(1) ==
                "Pinned"
     end
-
-    test "the mobile drawer's section carries the same label", %{conn: conn} do
-      # Two surfaces or neither. A rename on one is a rename that a phone user
-      # never sees.
-      {conn, user} = authed(conn)
-      channel = create_channel("gen-migration")
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-
-      html = open_mobile_drawer(conn, channel)
-      section = drawer_pinned_section(html)
-
-      assert section, "expected a Pinned section in the mobile drawer"
-      assert label_text(section) == "Pinned"
-    end
   end
 
   # ── 6. No reserved gutter, no client colour (v3) ────────────────────────
@@ -656,101 +579,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     end
   end
 
-  # ── Mobile surfaces carry the same row identity ─────────────────────────
-  #
-  # Wiring the pin set into `channel_sections/4` switched on two mobile
-  # surfaces that had been dead since they were written, because every caller
-  # passed an empty set. Neither branched on kind, so a pinned DM rendered
-  # `{space.name}`, which for a DM is nil: a person appeared as an unnamed
-  # CHANNEL. The absence assertions below are the ones that catch that.
-
-  describe "mobile pinned strip" do
-    test "a channel chip carries the hash and a DM chip is a bare name", %{conn: conn} do
-      {conn, user} = authed(conn)
-      channel = create_channel("mobile-chan")
-      dm = create_dm(user, "Alex Rivera")
-
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-      {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
-
-      {:ok, _view, html} = live(conn, ~p"/chat/#{channel.slug}")
-      strip = mobile_strip(html)
-
-      assert strip, "expected the mobile pinned strip to render"
-
-      channel_chip = row_containing(strip, "Mobile-chan")
-      dm_chip = row_containing(strip, "Alex Rivera")
-
-      assert channel_chip, "expected a chip for the pinned channel"
-      assert dm_chip, "expected a chip for the pinned DM"
-
-      assert channel_chip =~ ~s(data-role="pinned-row-hash")
-      assert row_text(channel_chip) == "# Mobile-chan"
-
-      # Same pairing as desktop: no marker AND the name is present. Asserting
-      # the whole text is what stops an empty chip passing the "no hash" half.
-      refute dm_chip =~ ~s(data-role="pinned-row-hash")
-      assert row_text(dm_chip) == "Alex Rivera"
-
-      refute strip =~ ~s(data-role="pinned-row-avatar")
-      refute strip =~ "human-avatar"
-
-      assert nameless_hash_rows(strip) == [],
-             "the strip renders a pinned conversation with no label: #{inspect(nameless_hash_rows(strip))}"
-    end
-
-    test "the strip carries neither the bookmark icon nor an avatar", %{conn: conn} do
-      # Every chip in the strip is a pin, so a pin icon on all of them carries
-      # no information. The hash is what varies.
-      {conn, user} = authed(conn)
-      channel = create_channel("mobile-icon")
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-
-      {:ok, _view, html} = live(conn, ~p"/chat/#{channel.slug}")
-      strip = mobile_strip(html)
-
-      refute strip =~ "hero-bookmark-solid"
-      refute strip =~ "human-avatar"
-    end
-  end
-
-  describe "mobile conversations drawer" do
-    test "a pinned DM renders its display name, not a bare hash", %{conn: conn} do
-      {conn, user} = authed(conn)
-      channel = create_channel("drawer-chan")
-      dm = create_dm(user, "Alex Rivera")
-
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-      {:ok, _} = Sidebar.set_space_pinned(user.id, dm.id, true)
-
-      section = conn |> open_mobile_drawer(channel) |> drawer_pinned_section()
-
-      assert section, "expected a Pinned section in the mobile drawer"
-
-      channel_row = row_containing(section, "Drawer-chan")
-      dm_row = row_containing(section, "Alex Rivera")
-
-      assert channel_row, "expected a drawer row for the pinned channel"
-      assert dm_row, "expected a drawer row for the pinned DM"
-
-      assert channel_row =~ ~s(data-role="pinned-row-hash")
-      assert row_text(channel_row) == "# Drawer-chan"
-
-      # The worst of the three surfaces before the fix: a person rendering as
-      # a `#` with no name read as an unnamed CHANNEL, the wrong object type
-      # rather than a missing label. Both halves are asserted together.
-      refute dm_row =~ ~s(data-role="pinned-row-hash")
-      assert row_text(dm_row) == "Alex Rivera"
-      assert dm_row =~ ~s(data-role="pinned-row-indent")
-
-      refute section =~ ~s(data-role="pinned-row-avatar")
-      refute section =~ "human-avatar"
-
-      assert nameless_hash_rows(section) == [],
-             "the drawer renders a pinned conversation as a bare glyph: #{inspect(nameless_hash_rows(section))}"
-    end
-  end
-
   # ── ONE block, three kinds of row (task 019feec6-73d9) ──────────────────
   #
   # The rail carried two adjacent pinned blocks until 2026-08-10: "Pinned
@@ -781,26 +609,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert label_text(pinned_block(sidebar)) == "Pinned"
     end
 
-    test "the mobile drawer renders exactly one pinned section", %{conn: conn} do
-      {conn, user} = authed(conn)
-
-      channel = create_channel("one-block-drawer")
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-      seed_pinned_task_for(user, "One Block Drawer Task")
-
-      html = open_mobile_drawer(conn, channel)
-
-      # The desktop rail is in the same DOM (hidden below `lg`), so the page
-      # holds exactly two pinned sections: one per surface. Counting the page
-      # and the rail separately pins down WHICH surface split, if one does.
-      assert pinned_section_count(desktop_sidebar(html)) == 1
-
-      assert pinned_section_count(html) == 2,
-             "expected one pinned section per surface, got #{pinned_section_count(html)} on the page"
-
-      assert label_text(drawer_pinned_section(html)) == "Pinned"
-    end
-
     test "the one block holds a channel, a person and a task conversation",
          %{conn: conn} do
       {conn, user} = authed(conn)
@@ -819,7 +627,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
       # Each row's WHOLE visible text. A presence check would pass on a row
       # that rendered a glyph and an empty label, which is the exact bug the
-      # mobile surfaces shipped when this list first mixed kinds.
+      # since-deleted phone drawer shipped when this list first mixed kinds.
       assert row_text(row_containing(block, "Three-kinds")) == "# Three-kinds"
       assert row_text(row_containing(block, "Alex Rivera")) == "Alex Rivera"
       assert row_text(row_containing(block, "Three Kinds Task")) == "Three Kinds Task"
@@ -936,25 +744,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert Sidebar.list_pinned_space_ids(user.id) == [beta.id, alpha.id]
     end
 
-    test "the mobile drawer renders the new order after a move", %{conn: conn} do
-      {conn, user} = authed(conn)
-      alpha = create_channel("drawer-alpha")
-      beta = create_channel("drawer-beta")
-      gamma = create_channel("drawer-gamma")
-
-      for space <- [alpha, beta, gamma],
-          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
-
-      {view, _html} = drawer_in_edit_mode(conn, alpha)
-
-      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
-
-      assert Sidebar.list_pinned_space_ids(user.id) == [alpha.id, gamma.id, beta.id]
-
-      assert html |> drawer_pinned_section() |> pinned_order() ==
-               [alpha.id, gamma.id, beta.id]
-    end
-
     test "a move naming a space that is no longer pinned changes nothing", %{conn: conn} do
       # A second tab unpinned it between the render and the drop. The rail
       # ignores the event rather than raising or shuffling the block.
@@ -1012,28 +801,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
       assert count(edit_block, ~s(phx-click="move_pinned")) == 4
       assert count(edit_block, "channel-row-grab") == 2
-    end
-
-    test "the mobile drawer carries no arrows at rest", %{conn: conn} do
-      {conn, user} = authed(conn)
-      alpha = create_channel("drawer-rest-alpha")
-      beta = create_channel("drawer-rest-beta")
-
-      for space <- [alpha, beta],
-          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
-
-      browse = conn |> open_mobile_drawer(alpha) |> drawer_pinned_section()
-
-      assert browse, "expected the drawer's Pinned section"
-      refute browse =~ "move_pinned"
-
-      # Edit mode. Predicted: 2 rows × 2 buttons = 4.
-      {_view, edit_html} = drawer_in_edit_mode(conn, alpha)
-      edit = drawer_pinned_section(edit_html)
-
-      assert count(edit, ~s(phx-click="move_pinned")) == 4
-      assert count(edit, ~s(phx-value-direction="up")) == 2
-      assert count(edit, ~s(phx-value-direction="down")) == 2
     end
   end
 
@@ -1254,33 +1021,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       assert rendered == [task_space.id | persisted],
              "the rail does not render the stored order. rendered #{inspect(rendered)}, stored #{inspect(persisted)}"
     end
-
-    test "in the mobile drawer", %{conn: conn} do
-      # Both surfaces or neither. An earlier stage on this stack wired the
-      # rail, left the drawer rendering rows that could not do the thing, and
-      # reached a human approval gate before anyone noticed.
-      {conn, user} = authed(conn)
-      alpha = create_channel("mirror-drawer-alpha")
-      beta = create_channel("mirror-drawer-beta")
-      gamma = create_channel("mirror-drawer-gamma")
-
-      for space <- [alpha, beta, gamma],
-          do: {:ok, _} = Sidebar.set_space_pinned(user.id, space.id, true)
-
-      %{space: task_space} = seed_pinned_task_for(user, "Mirror Drawer Task")
-
-      {view, _html} = drawer_in_edit_mode(conn, alpha)
-
-      html = render_click(view, "move_pinned", %{"space_id" => gamma.id, "direction" => "up"})
-
-      persisted = Sidebar.list_pinned_space_ids(user.id)
-      assert persisted == [alpha.id, gamma.id, beta.id]
-
-      rendered = html |> drawer_pinned_section() |> pinned_order()
-
-      assert rendered == [task_space.id | persisted],
-             "the drawer does not render the stored order. rendered #{inspect(rendered)}, stored #{inspect(persisted)}"
-    end
   end
 
   # ── Task rows lead the block (task 019feec6-73d9) ───────────────────────
@@ -1288,9 +1028,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   # Robin, 2026-08-11: "if I'm working on a task and I deliberately pin, I
   # would want to have that as easiest to access while I'm on the go / on my
   # phone." Tasks sat at the BOTTOM when the two blocks were first merged.
-  # Putting them on top also makes the rail agree with the mobile chip strip,
-  # which already iterates `@pinned_task_spaces` before
-  # `@channel_sections.pinned`.
   #
   # The cost is accepted: a task row removes itself when its task hits done
   # or cancelled, so every conversation row below it shifts up. No animation,
@@ -1313,23 +1050,6 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       # rendered a glyph and an empty label.
       assert row_texts(block) == ["Ordering Task", "# Ordering-chan"],
              "the Pinned block is not task-first: #{inspect(row_texts(block))}"
-    end
-
-    test "the mobile drawer renders the same order", %{conn: conn} do
-      # Two surfaces or neither. An ordering change on the rail alone is a
-      # change the phone user Robin described never sees.
-      {conn, user} = authed(conn)
-
-      channel = create_channel("ordering-drawer")
-      {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
-      seed_pinned_task_for(user, "Ordering Drawer Task")
-
-      section = conn |> open_mobile_drawer(channel) |> drawer_pinned_section()
-
-      assert section, "expected a Pinned section in the mobile drawer"
-
-      assert row_texts(section) == ["Ordering Drawer Task", "# Ordering-drawer"],
-             "the drawer's Pinned section is not task-first: #{inspect(row_texts(section))}"
     end
 
     test "the task still leads when a channel AND a person are pinned too", %{conn: conn} do
@@ -1360,46 +1080,29 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
   # ── One glyph for a task conversation (task 019feec6-73d9) ──────────────
   #
-  # The chip strip marked a task with `hero-map-pin-mini` while both rail
-  # surfaces used `hero-clipboard-document-list-mini`: one concept, two
-  # glyphs, decided by which surface the reader happened to be on. The glyph
-  # is the ONLY thing distinguishing the three kinds of pinned row, so it is
-  # the one thing that cannot vary by surface.
+  # A since-deleted phone surface marked a task with `hero-map-pin-mini`
+  # while the rail used `hero-clipboard-document-list-mini`: one concept, two
+  # glyphs. The glyph is the ONLY thing distinguishing the three kinds of
+  # pinned row in the rail.
 
   describe "the task glyph" do
-    test "the rail row, the drawer row and the mobile chip all carry the same glyph",
-         %{conn: conn} do
+    # The phone's pinned task row (the drawer row and the pinned-strip chip
+    # this test also covered) was deleted with the drawer in task
+    # 01a1557a-8562 stage 5; the Chat list draws a pinned task with a check
+    # disc (chat_list.ex `avatar/1`).
+    test "the rail row carries the task glyph", %{conn: conn} do
       {conn, user} = authed(conn)
 
       channel = create_channel("glyph-chan")
       {:ok, _} = Sidebar.set_space_pinned(user.id, channel.id, true)
       seed_pinned_task_for(user, "Glyph Task")
 
-      # One render carries all three surfaces: the drawer overlay, the rail
-      # (in the DOM, hidden below `lg`) and the chip strip in the main pane.
-      html = open_mobile_drawer(conn, channel)
+      {:ok, _view, html} = live(conn, ~p"/chat/#{channel.slug}")
+      markup = html |> desktop_sidebar() |> pinned_block() |> row_containing("Glyph Task")
 
-      surfaces = [
-        {"rail row", html |> desktop_sidebar() |> pinned_block() |> row_containing("Glyph Task")},
-        {"drawer row", html |> drawer_pinned_section() |> row_containing("Glyph Task")},
-        {"mobile chip", html |> mobile_strip() |> row_containing("Glyph Task")}
-      ]
-
-      for {surface, markup} <- surfaces do
-        assert markup, "no #{surface} rendered for the pinned task"
-
-        assert markup =~ "hero-clipboard-document-list-mini",
-               "the #{surface} does not carry the task glyph"
-
-        refute markup =~ "hero-map-pin-mini",
-               "the #{surface} still carries the old pin glyph"
-      end
-
-      # And nowhere else in the strip either — the channel chip never had a
-      # glyph of its own, so a surviving `hero-map-pin-mini` anywhere in this
-      # element is a task marker that was missed.
-      refute mobile_strip(html) =~ "hero-map-pin-mini",
-             "hero-map-pin-mini survives somewhere in the mobile pinned strip"
+      assert markup, "no rail row rendered for the pinned task"
+      assert markup =~ "hero-clipboard-document-list-mini"
+      refute markup =~ "hero-map-pin-mini"
     end
   end
 
@@ -1496,5 +1199,93 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     end
 
     :ok
+  end
+
+  # ── Unread weight (task 01a166bf stage 2) ────────────────────────────────
+
+  describe "unread weight on the rail" do
+    test "desktop rail: unread name semibold, read name regular", %{conn: conn} do
+      {conn, user} = authed(conn)
+      n = System.unique_integer([:positive])
+
+      # Four rows across three rail blocks: Pinned (channel unread, DM read),
+      # Direct (DM unread) and the org section (channel read).
+      unread_pin = create_channel("weight-pin-#{n}")
+      read_channel = create_channel("weight-read-#{n}")
+      unread_dm = create_dm(user, "Unread Person")
+      read_dm = create_dm(user, "Read Person")
+
+      for ch <- [unread_pin, read_channel] do
+        {:ok, _} =
+          Chat.add_participant(ch.id, %{
+            participant_type: "user",
+            participant_id: user.id,
+            display_name: user.name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      post = fn space, from_me? ->
+        p =
+          Enum.find(Chat.list_participants(space.id), fn p ->
+            p.participant_id == user.id == from_me?
+          end) ||
+            elem(
+              Chat.add_participant(space.id, %{
+                participant_type: "user",
+                participant_id: Ecto.UUID.generate(),
+                display_name: "Poster",
+                joined_at: DateTime.utc_now()
+              }),
+              1
+            )
+
+        {:ok, _} =
+          Chat.post_message(%{
+            space_id: space.id,
+            participant_id: p.id,
+            content_type: "text",
+            content: "weight #{n}"
+          })
+      end
+
+      post.(unread_pin, false)
+      post.(read_channel, true)
+      post.(unread_dm, false)
+      post.(read_dm, true)
+
+      {:ok, _} = Sidebar.set_space_pinned(user.id, unread_pin.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, read_dm.id, true)
+
+      {:ok, view, _} = live_rail(conn)
+
+      name = fn space ->
+        "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(space)}'] span.truncate"
+      end
+
+      # Positive controls: every row renders on the rail, and the unread
+      # rows carry their pill.
+      for s <- [unread_pin, read_channel, unread_dm, read_dm] do
+        assert has_element?(view, name.(s)), "no rail row for #{s.id}"
+      end
+
+      for s <- [unread_pin, unread_dm] do
+        assert has_element?(view, "#{name.(s)}.font-semibold")
+
+        assert has_element?(
+                 view,
+                 "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(s)}'] .channel-row-unread-pill"
+               )
+      end
+
+      for s <- [read_channel, read_dm] do
+        refute has_element?(view, "#{name.(s)}.font-semibold")
+
+        refute has_element?(
+                 view,
+                 "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(s)}'] .channel-row-unread-pill"
+               )
+      end
+    end
   end
 end

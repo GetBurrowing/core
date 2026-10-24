@@ -16,7 +16,8 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   handing it to a `Platform.Chat` write with no membership check:
   `PinHooks`'s `"pin_toggle"` (guarded only by
   `socket.assigns.current_participant`, which is membership of the space being
-  VIEWED) and `ShellLive`'s `"dismiss_agent"` (no membership check at all).
+  VIEWED) and `ShellLive`'s utility-bar agent Remove event (no membership
+  check at all; the event and its dropdown were deleted in task 01a1557a-8f80).
   Neither was a hard case. Both were written by people who had no reason to
   think a `space-id` param needed checking, because nothing said so.
 
@@ -42,9 +43,9 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
        definitions only, so copying it verbatim would have missed every public
        callback; this file's splitter takes `defp?`.
     3. An anonymous `fn` clause inside `attach_hook(_, :handle_event, fn ...
-       end)`. This is the form `"dismiss_agent"` uses. Only `shell_live.ex`
-       uses it today, at two sites, and a splitter keyed on `def` would see
-       neither.
+       end)`. This is the form the utility-bar Remove event used. Only
+       `shell_live.ex` uses it today, at two sites, and a splitter keyed on
+       `def` would see neither.
     4. A named function captured under a DIFFERENT name, resolved from
        `attach_hook(_, :handle_event, &<name>/3)` rather than assumed to be
        `handle_event`. `meeting_hooks.ex` attaches `&handle_guest_event/3`.
@@ -151,7 +152,8 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   # A handler calling one of these has been through the choke point. Test 2
   # verifies the claim against `chat.ex` per function, so an entry cannot be
   # added here to silence the audit without the function actually composing.
-  @space_authorized_chat_calls ~w(pin_message unpin_message remove_space_agent reserve_space_upload)
+  @space_authorized_chat_calls ~w(pin_message unpin_message reserve_space_upload
+                                 set_agent_silenced set_agents_awake set_agent_attention_policy)
 
   # ── The allowlist ─────────────────────────────────────────────────────────
   #
@@ -673,7 +675,7 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
     `Platform.Chat.SpaceAccess.authorize_writer/2`.
 
     That is the shape of the defect this guard exists for: before task
-    01a01ce0, `"pin_toggle"` and `"dismiss_agent"` both let a session open on
+    01a01ce0, `"pin_toggle"` and the shell's agent Remove event both let a session open on
     one space write to a different one by editing a single field of a LiveView
     event. A membership check in the HANDLER protects one caller; the check
     belongs in the context function, where every future caller inherits it.

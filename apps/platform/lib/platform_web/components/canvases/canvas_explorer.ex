@@ -266,12 +266,12 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
             phx-target={@target}
             aria-label="Collapse the canvas list"
             data-role="canvas-explorer-collapse"
-            class="flex items-center gap-1 text-[12.5px] font-semibold text-base-content/60"
+            class="flex items-center gap-1 text-[12.5px] font-semibold text-base-content"
           >
             <.icon name="hero-chevron-left" class="size-3.5" />
             <span>Canvases</span>
           </button>
-          <span class="text-[12.5px] font-semibold text-base-content/60">
+          <span class="text-[12.5px] font-semibold text-subtle">
             · {@strip_count}
           </span>
         </div>
@@ -297,7 +297,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         <p
           :if={@groups == []}
           data-role="canvas-explorer-empty"
-          class="px-3 py-4 text-[12.5px] text-base-content/60"
+          class="px-3 py-4 text-[12.5px] text-subtle"
         >
           No canvases here yet.
         </p>
@@ -311,7 +311,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         <p
           :if={@searching? && @groups != [] && @match_total == 0}
           data-role="canvas-explorer-no-matches"
-          class="px-3 py-4 text-[12.5px] text-base-content/60"
+          class="px-3 py-4 text-[12.5px] text-subtle"
         >
           Nothing matched “{@query}”.
         </p>
@@ -343,7 +343,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         phx-target={@target}
         aria-label="Open the canvas list"
         data-role="canvas-explorer-strip-open"
-        class="text-base-content/60"
+        class="text-subtle"
       >
         <.icon name="hero-folder" class="size-4" />
       </button>
@@ -359,7 +359,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
             else: "Open the canvas list and search"
         }
         data-role="canvas-explorer-strip-search"
-        class="relative text-base-content/60"
+        class="relative text-subtle"
       >
         <.icon name="hero-magnifying-glass" class="size-4" />
         <%!-- `--color-info`, the meeting rail's unread-dot slot, so a dot
@@ -375,7 +375,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
 
       <span
         data-role="canvas-explorer-strip-count"
-        class="text-[12.5px] font-semibold text-base-content/60"
+        class="text-[12.5px] font-semibold text-subtle"
       >
         {@count}
       </span>
@@ -424,7 +424,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
           aria-expanded={to_string(@expanded)}
           aria-controls={@rows_id}
           data-role="canvas-explorer-group-header"
-          class="flex w-full items-center gap-1 border-b border-edge bg-base-200 px-3 py-1.5 text-left text-[12.5px] font-semibold text-base-content/60"
+          class="flex w-full items-center gap-1 border-b border-edge bg-base-200 px-3 py-1.5 text-left text-[12.5px] font-semibold text-subtle"
         >
           <.icon
             name={if @expanded, do: "hero-chevron-down", else: "hero-chevron-right"}
@@ -458,7 +458,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         <p
           :if={@shown == []}
           data-role="canvas-explorer-group-empty"
-          class="px-3 py-3 text-[12.5px] text-base-content/60"
+          class="px-3 py-3 text-[12.5px] text-subtle"
         >
           Nothing in here.
         </p>
@@ -471,7 +471,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
         <div
           :if={@pager}
           data-role="canvas-explorer-pager"
-          class="flex items-center gap-3 border-b border-edge px-3 py-1.5 text-[12.5px] text-base-content/60"
+          class="flex items-center gap-3 border-b border-edge px-3 py-1.5 text-[12.5px] text-subtle"
         >
           <span data-role="canvas-explorer-page-range">{@pager.range}</span>
           <button
@@ -611,7 +611,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
       <span
         :if={@searching? && @meta}
         data-role="canvas-explorer-row-meta"
-        class="mt-0.5 block truncate text-[12.5px] text-base-content/60"
+        class="mt-0.5 block truncate text-[12.5px] text-subtle"
       >
         {@meta}
       </span>
@@ -619,7 +619,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
       <span
         :if={@searching? && @lineage}
         data-role="canvas-explorer-row-lineage"
-        class="block truncate text-[12.5px] text-base-content/60"
+        class="block truncate text-[12.5px] text-subtle"
       >
         {@lineage}
       </span>
@@ -689,7 +689,7 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
     <span
       phx-no-format
       data-role="canvas-result-snippet"
-      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content/65"
+      class="mt-0.5 flex min-w-0 items-baseline gap-1 overflow-hidden rounded bg-base-content/5 px-1.5 py-0.5 text-xs font-normal text-base-content"
     ><%= if @match do %><span
         :if={@leading}
         data-role="canvas-result-snippet-leading"

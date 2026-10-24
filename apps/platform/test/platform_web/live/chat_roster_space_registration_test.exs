@@ -1,5 +1,12 @@
 defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
   @moduledoc """
+  UPDATE, task 01a1557a-8f80 stage 3: the shell's roster branch (holder 2
+  below) was deleted with the utility bar's agents meter. The subject space is
+  now reached by TWO holders, the rail and presence, and still holds ONE
+  registration; the roster-exclusive `space_agents:<id>` topic now has no
+  shell holder at all, which the test asserts. The history below is kept as
+  written.
+
   Task 01a01d10 stage 3. The worst instance of the defect: one space carrying
   THREE `chat:space:<id>` registrations on a single LiveView pid, so its unread
   pill moved by three per message and every reaction, pin, canvas and presence
@@ -96,7 +103,7 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.{Org, OrgMembership}
 
-  describe "a background space that the roster, presence and the rail all reach" do
+  describe "a background space that presence and the rail both reach" do
     test "holds one registration and moves its badge by one", %{conn: conn} do
       %{viewer: viewer, org: org} = org_affiliated_viewer!()
 
@@ -104,9 +111,9 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
       # the unsubscribe-then-subscribe round trip that would launder its count.
       active = channel!("larkspur", org)
 
-      # THE SUBJECT. Agent-bearing, so `visible_roster/2` selects it; viewer
-      # participant row plus matching `org_id`, so it is in the presence set;
-      # a channel, so it is on the rail. All three holders reach it.
+      # THE SUBJECT. Agent-bearing (the deleted roster branch would have
+      # selected it); viewer participant row plus matching `org_id`, so it is
+      # in the presence set; a channel, so it is on the rail.
       roster_space = channel!("marigold", org)
 
       # CONTROL. On the rail, no participant row, no agent: one registration
@@ -119,7 +126,7 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
 
       view = mount_chat(conn, viewer, active)
 
-      # ── Preconditions: all three holders really do reach this space ───────
+      # ── Preconditions: both holders really do reach this space ────────────
 
       assert {:orgs, _} = Tenancy.visibility(viewer),
              "the viewer resolved to :none or :root_all, so the org fence is not being " <>
@@ -127,18 +134,16 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
 
       presence_set = Chat.list_viewer_presence_space_ids(viewer)
 
-      # HOLDER 3, from the database side.
+      # The presence holder, from the database side.
       assert roster_space.id in presence_set,
              "the subject is not in ShellLive's presence set, so the presence branch " <>
-               "never reaches it and this fixture cannot produce three registrations"
+               "never reaches it and this fixture cannot produce two registrations"
 
-      # HOLDER 2, from the REGISTRY. `space_agents:<id>` is roster-exclusive,
-      # so a registration on it is proof the roster branch ran AND that it
-      # selected this space, without reading any assign the code under test
-      # writes.
-      assert agent_topic_registrations(view, roster_space) == 1,
-             "the roster branch did not select the subject, so the roster holder is " <>
-               "absent and a count of 1 below would mean two holders rather than three"
+      # The deleted roster branch, from the REGISTRY. `space_agents:<id>` was
+      # roster-exclusive on a chat surface, so no registration on it is left.
+      assert agent_topic_registrations(view, roster_space) == 0,
+             "the session holds a space_agents registration on an agent space, so " <>
+               "something still subscribes the deleted agents meter's topic"
 
       # HOLDER 1 is ChatLive's rail, established by the control below holding
       # a registration under identical conditions minus the agent and the
@@ -175,20 +180,18 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
                "LiveView holds a registration per holder and increment_unread/2 ran once " <>
                "per delivery"
 
-      # ── The cause: exactly one registration for three holders ────────────
+      # ── The cause: exactly one registration for two holders ──────────────
 
       assert registrations(view, roster_space) == 1,
              "the roster space holds more than one registration on one pid, so every " <>
                "broadcast on it (reactions, pins, canvases, presence) is handled more " <>
                "than once"
 
-      # ── Anti-vacuity: THREE distinct owners, not one that arrived alone ───
+      # ── Anti-vacuity: TWO distinct owners, not one that arrived alone ─────
 
       # A count of 1 is the right answer for two different reasons, and only
-      # one of them is the fix: it is also what a build produces when two of
-      # the three holders never arrived. Two of the three are already proven
-      # from the registry above (`space_agents:<id>` for the roster, and the
-      # control for the rail). This names all three explicitly.
+      # one of them is the fix: it is also what a build produces when one of
+      # the holders never arrived. This names both explicitly.
       #
       # Read off the holder map and labelled as such: an assign WRITTEN BY the
       # code under test, so it is NOT evidence about the registry. The
@@ -198,10 +201,10 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
       # registry has collapsed the three into one entry.
       socket = :sys.get_state(view.pid).socket
 
-      for owner <- [:chat_rail, :roster, :presence] do
+      for owner <- [:chat_rail, :presence] do
         assert PlatformWeb.SpaceTopics.held_by?(socket, roster_space.id, owner),
                "#{inspect(owner)} never took a hold on the roster space, so the count of " <>
-                 "1 above means a holder failed to arrive rather than that three of them " <>
+                 "1 above means a holder failed to arrive rather than that two of them " <>
                  "shared one registration"
       end
 
@@ -211,65 +214,11 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
     end
   end
 
-  describe "the roster confidentiality fence, measured on the roster-exclusive topic" do
-    # Task 01a011e6's fence: an org-mate's session must not subscribe to a
-    # space they are not a member of. The old positive control was a literal
-    # `member_count == 2` on `chat:space:<id>`; the collapse to 1 removed its
-    # ability to discriminate. This restores the discriminator on
-    # `space_agents:<id>`, which stays one-per-roster-space after the collapse
-    # because only the roster branch ever subscribes it.
-    #
-    # Deliberately in a NEW file rather than as an edit to
-    # `shell_live_test.exs`, which tasks 01a02491 and 01a01f4c may both be
-    # touching.
-    test "no roster subscription for an agent space the viewer never joined", %{conn: conn} do
-      %{viewer: viewer, org: org} = org_affiliated_viewer!()
-
-      active = channel!("larkspur", org)
-      roster_space = channel!("marigold", org)
-
-      # Same kind, same org, agent-bearing, and created AFTER the member
-      # space. The only difference is the missing participant row.
-      foreign = channel!("oleander", org)
-
-      join!(active, viewer)
-      join!(roster_space, viewer)
-      seed_agent!(roster_space, "Fixture Roster Agent")
-      seed_agent!(foreign, "Fixture Foreign Agent")
-
-      view = mount_chat(conn, viewer, active)
-
-      # The fence, as a database fact first: a space with no viewer row is not
-      # in the presence set either, so neither shell branch can reach it.
-      presence_set = Chat.list_viewer_presence_space_ids(viewer)
-      refute foreign.id in presence_set
-      assert roster_space.id in presence_set
-
-      # THE FENCE.
-      assert agent_topic_registrations(view, foreign) == 0,
-             "the session holds a roster subscription on a space the viewer never " <>
-               "joined, so the 01a011e6 confidentiality fence is open"
-
-      # THE POSITIVE CONTROL, and the replacement for the retired
-      # `member_count == 2`. An unpaired refute above would pass against a
-      # build whose roster branch never ran at all. This is registry evidence,
-      # on a topic only the roster branch subscribes, that the path under test
-      # was alive and selected the member space.
-      assert agent_topic_registrations(view, roster_space) == 1,
-             "the roster path never subscribed the member space either, so the fence " <>
-               "assertion above is green because the roster branch is DEAD rather than " <>
-               "because it is fenced"
-
-      # Documented for the next reader, because the intuitive assertion here
-      # is wrong: an internal viewer's rail is workspace-wide, so ChatLive
-      # holds a `:chat_rail` registration on `foreign` despite the missing
-      # participant row. One is the rail. It is not a leak, and asserting 0
-      # would red against correct code.
-      assert registrations(view, foreign) == 1,
-             "the non-member space holds a number of chat:space registrations that is " <>
-               "neither the rail's one nor zero, so a shell branch has added one"
-    end
-  end
+  # "the roster confidentiality fence, measured on the roster-exclusive topic"
+  # was deleted in task 01a1557a-8f80 stage 3: it fenced the shell's roster
+  # subscription, which no longer exists, and its positive control (the member
+  # space DOES hold a roster registration) can no longer be true. The test
+  # above asserts that no `space_agents:<id>` registration is left.
 
   # ── Fixtures ──────────────────────────────────────────────────────────────
 

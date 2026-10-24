@@ -40,13 +40,25 @@ const ASSETS = resolve(HERE, "..");
 // game_stream hook (flag-gated, GAME_STREAM_ENABLED) as an island like
 // emoji_island.js.
 //
-// Raised from 896 KB to 912 KB by task 01a13ca2 (Burrow iOS hybrid video,
-// companion connection), measured in CI with the with-Play build: main was
-// 909,510 bytes at d6577958 and the task branch was 919,160 bytes. That is
-// first-party meeting hook code (the companion Room, per-person grouping, and
-// the sharer label and its share-end teardown), not an island. 912 KB still
-// catches the recorded Excalidraw leak by a factor of nine.
-const MAX_BYTES = 912 * 1024;
+// Raised from 896 KB to 960 KB by task 01a166be (redesign press feedback):
+// the WITH-Play app.js measured 919,154 bytes in CI run 39929391456, 1,650
+// over 896 KB, after nav_pending.js and top_bar.js (optimistic tab swap,
+// pending pulse, rollback toast) landed as first-party code. Task 01a1557a-997a
+// (Burrow redesign 10: composer chip field and in-flow @mention list) made the
+// same raise independently: with-Play app.js measured 929,835 bytes against
+// feat/redesign f61f50e31's 914,453 (+15,382: the contenteditable
+// compose_input hook and lib/mention_field.js). Both are first-party hook code.
+// Same reasoning as above: 960 KB still catches an island leak (~8.2 MB) by a
+// factor of eight.
+//
+// Task 01a13ca2 (Burrow iOS hybrid video, companion connection) raised the
+// ceiling on main from 896 KB to 912 KB, measured in CI with the with-Play
+// build: main was 909,510 bytes at d6577958 and the task branch was 919,160
+// bytes. That is first-party meeting hook code (the companion Room,
+// per-person grouping, and the sharer label and its share-end teardown), not
+// an island. When main was merged into feat/redesign the higher 960 KB
+// ceiling was kept; it covers both sides' first-party growth.
+const MAX_BYTES = 960 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

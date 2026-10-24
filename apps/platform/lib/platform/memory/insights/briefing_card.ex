@@ -114,7 +114,7 @@ defmodule Platform.Memory.Insights.BriefingCard do
         })
       ] ++
         if sections == [],
-          do: [text("empty", "Nothing new today.", "text-base-content/60")],
+          do: [text("empty", "Nothing new today.", "text-subtle")],
           else: sections
 
     %{

@@ -135,6 +135,148 @@ defmodule PlatformWeb.Components.SheetTest do
     end
   end
 
+  # Task 01a1557a-807f stage 4: written and shown green BEFORE `handle_close`
+  # and `swipe_dismiss` existed. The twelve call sites that pass neither must
+  # keep exactly this markup.
+  describe "sheet/1 — default markup (no opt-ins)" do
+    test "decorative aria-hidden handle, header X button, visible title, no swipe stamp" do
+      html = render_sheet(%{open: true, title: "Title"})
+      doc = LazyHTML.from_fragment(html)
+
+      handle = LazyHTML.query(doc, ".sheet-panel > div.sheet-handle")
+      assert Enum.count(handle) == 1
+      assert LazyHTML.attribute(handle, "aria-hidden") == ["true"]
+      assert LazyHTML.query(doc, ".sheet-handle-button") |> Enum.count() == 0
+      assert LazyHTML.query(doc, "button.sheet-handle") |> Enum.count() == 0
+
+      close = LazyHTML.query(doc, ~s(header.sheet-header button[aria-label="Close"]))
+      assert Enum.count(close) == 1
+      assert LazyHTML.attribute(close, "phx-click") == ["close_sheet"]
+
+      [title_class] = doc |> LazyHTML.query("h2#test-sheet-title") |> LazyHTML.attribute("class")
+      assert title_class == "sheet-title"
+      refute title_class =~ "sr-only"
+
+      assert doc |> LazyHTML.query("[data-swipe-dismiss]") |> Enum.count() == 0
+    end
+  end
+
+  describe "sheet/1 — handle_close and swipe_dismiss opt-ins (task 01a1557a-807f stage 4)" do
+    defp render_opted(attrs) do
+      assigns = Map.merge(%{handle_close: false, swipe_dismiss: false, placement: :bottom}, attrs)
+
+      rendered_to_string(~H"""
+      <.sheet
+        id="opt-sheet"
+        open={true}
+        placement={@placement}
+        on_close="close_more_sheet"
+        handle_close={@handle_close}
+        swipe_dismiss={@swipe_dismiss}
+      >
+        <:title>More</:title>
+        <p>body</p>
+      </.sheet>
+      """)
+      |> LazyHTML.from_fragment()
+    end
+
+    test "handle_close: the handle is a Close button; no X; the title is visually hidden" do
+      doc = render_opted(%{handle_close: true})
+
+      button = LazyHTML.query(doc, ".sheet-panel > button.sheet-handle-button")
+      assert Enum.count(button) == 1
+      assert LazyHTML.attribute(button, "type") == ["button"]
+      assert LazyHTML.attribute(button, "aria-label") == ["Close"]
+      assert LazyHTML.attribute(button, "phx-click") == ["close_more_sheet"]
+      # The visible 36x4 bar is still there, inside, decorative.
+      assert button |> LazyHTML.query(".sheet-handle[aria-hidden=true]") |> Enum.count() == 1
+      # Exactly one Close control: the handle.
+      assert doc |> LazyHTML.query(~s(button[aria-label="Close"])) |> Enum.count() == 1
+      assert doc |> LazyHTML.query("header .sheet-close-button") |> Enum.count() == 0
+
+      [title_class] = doc |> LazyHTML.query("h2#opt-sheet-title") |> LazyHTML.attribute("class")
+      assert title_class =~ "sr-only"
+      assert doc |> LazyHTML.query("h2#opt-sheet-title") |> LazyHTML.text() =~ "More"
+
+      assert LazyHTML.attribute(LazyHTML.query(doc, "#opt-sheet"), "aria-labelledby") == [
+               "opt-sheet-title"
+             ]
+
+      assert doc |> LazyHTML.query("[data-swipe-dismiss]") |> Enum.count() == 0
+    end
+
+    # Task 01a161c4 stage 1. swipe_dismiss without the handle Close button
+    # used to render (X present, bare div.sheet-handle with touch-action:
+    # auto), so a real touch drag got pointercancel and never closed. The
+    # invariant "swipe_dismiss implies .sheet-handle-button renders" now
+    # raises at render on every way to break it.
+    test "swipe_dismiss without handle_close raises, naming the sheet and the fix" do
+      error =
+        assert_raise ArgumentError, ~r/handle_close/, fn ->
+          render_opted(%{swipe_dismiss: true})
+        end
+
+      assert error.message =~ ~s(id="opt-sheet")
+      assert error.message =~ "aria-hidden title line"
+    end
+
+    test "swipe_dismiss + handle_close on a non-bottom placement raises" do
+      assert_raise ArgumentError, ~r/placement: :right/, fn ->
+        render_opted(%{swipe_dismiss: true, handle_close: true, placement: :right})
+      end
+    end
+
+    test "swipe_dismiss + handle_close with a filled :handle slot raises" do
+      assigns = %{}
+
+      assert_raise ArgumentError, ~r/:handle slot filled: true/, fn ->
+        rendered_to_string(~H"""
+        <.sheet id="slot-sheet" open={true} on_close="close" handle_close swipe_dismiss>
+          <:title>Call</:title>
+          <:handle>Starts in 2 min</:handle>
+          <p>body</p>
+        </.sheet>
+        """)
+      end
+    end
+
+    test "swipe_dismiss + handle_close renders the stamp and the handle Close button only" do
+      doc = render_opted(%{swipe_dismiss: true, handle_close: true})
+
+      assert LazyHTML.attribute(LazyHTML.query(doc, "#opt-sheet"), "data-swipe-dismiss") == [
+               "true"
+             ]
+
+      assert doc |> LazyHTML.query(".sheet-panel > button.sheet-handle-button") |> Enum.count() ==
+               1
+
+      assert doc |> LazyHTML.query(".sheet-panel > div.sheet-handle") |> Enum.count() == 0
+      assert doc |> LazyHTML.query("header .sheet-close-button") |> Enum.count() == 0
+    end
+  end
+
+  # Task 01a161c4 stage 2. Phone-list palette ruling: no hover paint on phone
+  # surfaces, a pressed state instead. Desktop hover lives in app.css under
+  # `(hover: hover) and (min-width: 1024px)`, so the X's class list carries
+  # no `hover` substring for markup scans to trip on.
+  describe "sheet/1 — the header X's classes" do
+    test "no hover substring in any class token; pressed is active:bg-base-200" do
+      doc = render_sheet(%{open: true, title: "Title"}) |> LazyHTML.from_fragment()
+
+      x = LazyHTML.query(doc, "header .sheet-close-button")
+      assert Enum.count(x) == 1
+
+      [class] = LazyHTML.attribute(x, "class")
+      tokens = String.split(class)
+      assert length(tokens) >= 5
+
+      assert Enum.filter(tokens, &String.contains?(&1, "hover")) == []
+      assert "active:bg-base-200" in tokens
+      assert "text-subtle" in tokens
+    end
+  end
+
   describe "sheet/1 — :class extension" do
     test "extra class is appended to the root element" do
       html = render_sheet(%{class: "lg:hidden custom-thing"})

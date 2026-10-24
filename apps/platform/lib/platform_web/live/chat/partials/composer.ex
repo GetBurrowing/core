@@ -4,7 +4,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   message scroller, the streaming/typing indicators and the composer.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
-  `ChatLive.Partials.Rail`, `ChatLive.Partials.MobileBrowser` and
+  `ChatLive.Partials.Rail`, `ChatLive.Partials.ChatList` and
   `ChatLive.Partials.Conversation` (ADR 0035): function components, no
   state, each taking a declared set of attrs. Extracted from
   `chat_live.html.heex` in task 01a0312e stage 6 as a PURE MOVE — every
@@ -24,8 +24,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     * `streaming_replies/1` — the in-flight agent reply bubbles
     * `typing_indicator/1` — the agent-typing dots
     * `composer/1` — `<div class="... compose-input-area safe-area-bottom">`,
-      the compose form, the always-present upload form and the
-      no-participant error line
+      the compose form (with the staged tray and the attachments file
+      input inside it) and the no-participant error line
 
   ## NO COMPONENT HERE MAY ADD A WRAPPER ELEMENT
 
@@ -64,7 +64,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
-  import PlatformWeb.ChatLive.Partials, only: [upload_error_to_string: 1]
+  import PlatformWeb.ChatLive.Partials.Attach, only: [attach_popover: 1, staged_tray: 1]
+  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1]
   import PlatformWeb.ChatLive.RenderHelpers, only: [composer_empty?: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1]
@@ -73,6 +74,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   alias Phoenix.LiveView.JS
   alias Platform.Chat
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.AttachHooks
+  alias PlatformWeb.ChatLive.Partials.MentionList
   alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:active_space, :any, required: true)
@@ -106,7 +109,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     >
       <%= if @active_space.deletion_scheduled_at do %>
         <span class="hero-trash size-4 flex-shrink-0 text-error"></span>
-        <p class="flex-1 text-sm text-base-content/70">
+        <p class="flex-1 text-sm text-base-content">
           This channel is scheduled for permanent deletion on {Calendar.strftime(
             DateTime.add(
               @active_space.deletion_scheduled_at,
@@ -125,8 +128,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           Cancel deletion
         </button>
       <% else %>
-        <span class="hero-archive-box size-4 flex-shrink-0 text-base-content/60"></span>
-        <p class="flex-1 text-sm text-base-content/70">
+        <span class="hero-archive-box size-4 flex-shrink-0 text-subtle"></span>
+        <p class="flex-1 text-sm text-base-content">
           This channel was archived on {Calendar.strftime(
             @active_space.archived_at,
             "%B %-d, %Y"
@@ -154,7 +157,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:active_space, :any, required: true)
   attr(:current_participant, :any, required: true)
   attr(:agent_participant_ids, :any, required: true)
-  attr(:agent_colors_map, :map, required: true)
+  attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
   attr(:quick_emojis, :list, required: true)
   attr(:pinned_message_ids, :any, required: true)
@@ -166,6 +169,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:inline_thread_messages, :any, required: true)
   attr(:mention_suggestions, :list, required: true)
   attr(:mention_source, :any, required: true)
+  # The typed @query, for the thread reply list's empty row (see composer/1).
+  attr(:mention_query, :string, default: nil)
   attr(:editing_message_id, :any, required: true)
   # Task 01a10322 stage 4: who is reading, for the reply-failure row.
   attr(:viewer_user_id, :string, default: nil)
@@ -279,7 +284,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           msg={msg}
           current_participant={@current_participant}
           agent_participant_ids={@agent_participant_ids}
-          agent_colors_map={@agent_colors_map}
+          agent_slots_map={@agent_slots_map}
           participants_map={@participants_map}
           quick_emojis={@quick_emojis}
           pinned_message_ids={@pinned_message_ids}
@@ -291,6 +296,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           inline_thread_messages={@inline_thread_messages}
           mention_suggestions={@mention_suggestions}
           mention_source={@mention_source}
+          mention_query={@mention_query}
           editing_message_id={@editing_message_id}
           read_only={@active_space != nil && @active_space.archived_at != nil}
           refused_summons={@refused_summons}
@@ -391,7 +397,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           @embedded and @active_space != nil and @active_space.archived_at == nil and
             MapSet.size(@rendered_message_ids) == 0
         }
-        class="px-3 py-5 text-[12.5px] leading-normal text-base-content/50"
+        class="px-3 py-5 text-[12.5px] leading-normal text-subtle"
         data-role="call-rail-chat-empty"
       >
         Nothing typed yet. Messages appear here as people type them; the Transcript tab is for
@@ -407,7 +413,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         phx-hook="InfiniteScroll"
         data-direction="newer"
         data-loading={if @loading_newer, do: "true"}
-        class="flex justify-center py-2 text-xs text-base-content/40"
+        class="flex justify-center py-2 text-xs text-subtle"
       >
         <span :if={@loading_newer} class="hero-arrow-path size-3 animate-spin"></span>
         <span :if={!@loading_newer}>Loading newer messages…</span>
@@ -417,46 +423,60 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   end
 
   attr(:streaming_replies, :map, required: true)
-  attr(:agent_colors_map, :map, required: true)
+  # participant id -> palette slot id; the bubble wears the same
+  # `data-agent-slot` the settled row will (task 01a1557a rung 3 stage 2).
+  attr(:agent_slots_map, :map, default: %{})
   attr(:participants_map, :map, required: true)
 
   @doc """
   The in-flight agent reply bubbles — one per streaming chunk.
+
+  Skinned from the same slot tokens as the settled agent row: the row's
+  rail and tint (`msg-agent`), ring and name. The caret is a status (in
+  progress), so it is base-content, never the hue; the body is full
+  base-content, as a settled message body is.
+
+  The bubbles sit in `#chat-streaming-replies`, an always-rendered container
+  with no box of its own (`contents`, so each bubble is still laid out as a
+  child of the dock). A bubble arriving is then inserted INSIDE that
+  container, never as a new sibling ahead of the composer area: LiveView's
+  DOM patch would walk past the composer area and re-append it after the new
+  node, and the focused field would blur (rung 10 stage 5; the typing
+  indicator's shape, see `typing_indicator/1`).
   """
   def streaming_replies(assigns) do
     ~H"""
     <%!-- Streaming reply bubbles --%>
-    <div
-      :for={{chunk_id, entry} <- @streaming_replies}
-      :if={entry.text != nil and entry.text != ""}
-      id={"streaming-#{chunk_id}"}
-      class="flex-shrink-0 px-5 pb-2 msg-agent"
-      style={
-        "--agent-accent: #{Map.get(@agent_colors_map, entry.participant_id, Platform.Agents.ColorPalette.default_accent())};"
-      }
-    >
-      <div class="flex items-start gap-2">
-        <%!-- The face shown WHILE the agent is typing. It has to be the same
+    <div id="chat-streaming-replies" class="contents">
+      <div
+        :for={{chunk_id, entry} <- @streaming_replies}
+        :if={entry.text != nil and entry.text != ""}
+        id={"streaming-#{chunk_id}"}
+        class="flex-shrink-0 px-5 pb-2 msg-agent"
+        data-agent-slot={
+          Platform.Agents.ColorPalette.slot_for(Map.get(@agent_slots_map, entry.participant_id))
+        }
+      >
+        <div class="flex items-start gap-2">
+          <%!-- The face shown WHILE the agent is typing. It has to be the same
              avatar the settled message row draws, or the image would pop in
              only once the stream finishes and read as a rendering bug. --%>
-        <.agent_avatar
-          name={PresenceHooks.sender_name(@participants_map, entry.participant_id)}
-          avatar_url={PresenceHooks.sender_avatar_url(@participants_map, entry.participant_id)}
-          size="sm"
-          class="msg-agent-avatar"
-        />
-        <div class="min-w-0 flex-1">
-          <div class="text-xs font-medium mb-0.5 msg-agent-name">
-            {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
-          </div>
-          <div
-            class="text-sm text-base-content/80 border-l-2 pl-3"
-            style="border-color: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);"
-          >
-            {entry.text}<span
-              class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm"
-              style="background: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);"
-            ></span>
+          <.agent_avatar
+            name={PresenceHooks.sender_name(@participants_map, entry.participant_id)}
+            avatar_url={PresenceHooks.sender_avatar_url(@participants_map, entry.participant_id)}
+            size="sm"
+            class="msg-agent-avatar"
+          />
+          <div class="min-w-0 flex-1">
+            <div class="mb-0.5 msg-agent-name">
+              {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
+            </div>
+            <div data-role="streaming-body" class="text-sm text-base-content">
+              {entry.text}<span
+                data-role="streaming-caret"
+                class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm bg-base-content"
+              ></span>
+            </div>
           </div>
         </div>
       </div>
@@ -471,15 +491,40 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   @doc """
   The agent-typing dots. Suppressed while a stream is in flight — the
   bubble above already shows the agent is working.
+
+  The wrapper (`#chat-typing-indicator`) is ALWAYS rendered; only its
+  contents come and go, and while nobody is typing it is `hidden` (so it
+  takes no height and paints no glass band). It sits in `#chat-dock`
+  directly before the composer area, and a wrapper that came and went
+  would be a new sibling there: LiveView's DOM patch then re-adds the
+  composer area, and the focused field blurs. Measured on the dev rig
+  before this (redesign rung 10, stage 5): an Enter send in a space with
+  an agent lost focus about 60ms later, when "Atlas is thinking…"
+  appeared. The DOM id is its morph key, so a re-render of the template
+  never mints it anew (see `Partials.MentionList`'s "Ids").
   """
   def typing_indicator(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :typing?,
+        not MapSet.equal?(assigns.agent_typing_pids, MapSet.new()) and
+          assigns.streaming_replies == %{}
+      )
+
     ~H"""
     <%!-- Typing indicator --%>
     <div
-      :if={not MapSet.equal?(@agent_typing_pids, MapSet.new()) and @streaming_replies == %{}}
-      class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
+      id="chat-typing-indicator"
+      data-role="typing-indicator"
+      data-typing={to_string(@typing?)}
+      hidden={!@typing?}
+      class={[
+        "flex-shrink-0 px-5 pb-1 items-center gap-2 text-xs text-subtle",
+        if(@typing?, do: "flex", else: "hidden")
+      ]}
     >
-      <span class="flex gap-0.5 items-center">
+      <span :if={@typing?} class="flex gap-0.5 items-center">
         <span
           class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
           style="animation-delay: 0ms"
@@ -496,7 +541,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         >
         </span>
       </span>
-      <span>
+      <span :if={@typing?}>
         {PresenceHooks.thinking_label(@agent_typing_pids, @participants_map)} is thinking…
       </span>
     </div>
@@ -509,6 +554,10 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:uploads, :any, required: true)
   attr(:mention_suggestions, :list, required: true)
   attr(:mention_source, :any, required: true)
+  # The typed @query, for the list's empty row ("No one matches ..."). nil
+  # (the default) means the caller does not pass it; the list then opens only
+  # with suggestions and simply stays closed when nothing matches.
+  attr(:mention_query, :string, default: nil)
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
@@ -516,18 +565,38 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   # LargeUpload hook's routing. Default keeps every other caller rendering as
   # before. The pending cards are in the timeline (`message_scroller/1`).
   attr(:limits, :map, default: nil)
+  # Staged large files (task 01a120be), shown as file chips in the tray.
+  attr(:large_staged, :list, default: [])
+  # The ＋ menu (rung 11): open state, the space's canvases for its Recent
+  # canvases rows, and the one canvas staged in the tray.
+  attr(:attach_menu_open, :boolean, default: false)
+  attr(:canvases, :list, default: [])
+  attr(:attach_canvas, :any, default: nil)
+  attr(:attach_failed, :list, default: [])
 
   @doc """
-  The compose input area: the compose form with its @mention dropdown, the
-  always-present upload submission form and the no-participant error line.
+  The compose input area: the compose form with its in-flow @mention list, the
+  staged tray, the attachments file input and the no-participant error line.
 
-  The three masking attrs are declared because the textarea placeholder
+  The three masking attrs are declared because the field's placeholder
   interpolates `masked_space_name/2`, which reads them through TOLERANT
   `assigns[...]` access — a missing declaration renders the REAL channel
   name into the placeholder with screen-share masking switched on, and
   every markup assertion still passes.
   """
   def composer(assigns) do
+    tray = %{
+      uploads: assigns.uploads,
+      large_upload_staged: assigns.large_staged,
+      attach_failed: assigns.attach_failed,
+      attach_canvas: assigns.attach_canvas
+    }
+
+    assigns =
+      assigns
+      |> assign(:staged?, AttachHooks.staged?(tray))
+      |> assign(:send_state, AttachHooks.send_state(tray))
+
     ~H"""
     <div class="flex-shrink-0 compose-input-area safe-area-bottom">
       <.large_upload_root
@@ -546,147 +615,146 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         phx-change="compose_changed"
         class="flex flex-col gap-2"
       >
-        <%!-- @mention autocomplete dropdown --%>
-        <div
-          :if={@mention_suggestions != [] && @mention_source == "compose-form"}
-          class="relative"
-        >
-          <div class="absolute bottom-0 left-0 z-50 w-64 rounded-2xl border border-base-content/10 bg-base-100 shadow-lg overflow-hidden">
-            <div class="py-1">
-              <button
-                :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
-                type="button"
-                data-mention-suggestion={if idx == 0, do: "first"}
-                phx-click={
-                  JS.dispatch("chat:insert-mention",
-                    to: "##{@compose_form[:text].id}",
-                    detail: %{name: suggestion.name}
-                  )
-                }
-                class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
-              >
-                <%= cond do %>
-                  <% suggestion.participant_type == "broadcast" -> %>
-                    <div class="w-6 h-6 rounded-full bg-warning/15 text-warning flex items-center justify-center flex-shrink-0">
-                      <span class="hero-megaphone size-4"></span>
-                    </div>
-                  <% suggestion.participant_type == "agent" -> %>
-                    <%!-- The human branch below already showed a stored photo
-                         here; the agent branch drew a letter, so picking who
-                         to @mention showed faces for people and initials for
-                         agents. `suggestion.avatar_url` was in hand the whole
-                         time — the identity map fills it for agents too. --%>
-                    <.agent_avatar
-                      name={suggestion.name}
-                      avatar_url={suggestion.avatar_url}
-                      size="sm"
-                      class="flex-shrink-0"
-                    />
-                  <% true -> %>
-                    <.human_avatar
-                      name={suggestion.name}
-                      avatar_url={suggestion.avatar_url}
-                      seed={suggestion.avatar_seed}
-                      size="sm"
-                      class="flex-shrink-0"
-                    />
-                <% end %>
-                <span class="flex-1 min-w-0 truncate">
-                  <span class="font-medium">{suggestion.name}</span>
-                  <span
-                    :if={suggestion.participant_type == "broadcast"}
-                    class="block text-xs text-base-content/60 truncate"
-                  >
-                    Notify everyone in the channel
-                  </span>
-                </span>
-                <span class={[
-                  "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
-                  suggestion.participant_type == "broadcast" && "bg-warning/10 text-warning",
-                  suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
-                  suggestion.participant_type == "user" && "bg-base-300 text-base-content/50"
-                ]}>
-                  {suggestion.participant_type}
-                </span>
-              </button>
-            </div>
-          </div>
+        <%!-- The @mention list (redesign rung 10, stage 3): in flow, directly
+             above the pill, on the composer's glass. Open only for this
+             form's own query; the inline thread reply has its own. Its
+             wrapper is always rendered (see MentionList's moduledoc), so
+             opening it never moves the field. --%>
+        <.mention_list
+          open={
+            @mention_source == "compose-form" and
+              MentionList.open?(@mention_suggestions, @mention_query)
+          }
+          id="compose-mention-list"
+          suggestions={@mention_suggestions}
+          query={@mention_query}
+          field_id={@compose_form[:text].id}
+        />
+
+        <%!-- The desktop ＋ popover, anchored above ＋ (the sheet is the
+             phone's; both read `@attach_menu_open`). --%>
+        <%!-- In an always-rendered, box-less slot: the popover coming and
+             going is then never a new sibling ahead of the pill (rung 10
+             stage 5; see `typing_indicator/1`). --%>
+        <div id="compose-attach-popover-slot" class="contents">
+          <.attach_popover :if={@attach_menu_open} canvases={@canvases} />
         </div>
 
         <%!-- Pill-shaped compose bar --%>
         <div class="compose-pill-bar">
+          <%!-- The staged tray (rung 11): first in the glass field, above
+               the caption line, absent when nothing is staged. --%>
+          <%!-- The tray comes and goes (a pasted image stages while the
+               field has focus) inside an always-rendered, box-less slot,
+               so it is never a new sibling ahead of the field: the DOM
+               patch would re-append the field after it and blur it (rung
+               10 stage 5). `contents` keeps the tray's own flex item
+               rules (`order-first basis-full`) working in the pill. --%>
+          <div id="compose-staged-slot" class="contents">
+            <.staged_tray
+              uploads={@uploads}
+              large_staged={@large_staged}
+              limits={@limits}
+              canvas={@attach_canvas}
+              failed={@attach_failed}
+            />
+          </div>
+
+          <%!-- ＋ opens the attach sheet on a phone and the popover on
+               desktop; ＋ again adds more. --%>
           <button
             type="button"
             id="compose-attach-button"
-            phx-hook="UploadButton"
-            phx-click="upload_dialog_open"
-            class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
+            phx-click={if @attach_menu_open, do: "attach_menu_close", else: "attach_menu_open"}
+            class="compose-pill-attach cursor-pointer text-subtle active:bg-base-300 lg:hover:bg-base-300/50 transition-colors"
+            aria-label="Attach"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@attach_menu_open)}
             title="Attach files"
           >
             <span class="hero-plus size-5"></span>
           </button>
 
-          <textarea
+          <%!-- The rich field (redesign rung 10): a contenteditable whose
+               @mentions are chips. LiveView never patches what is typed
+               (`phx-update="ignore"`); ComposeInput serializes it to ADR
+               0037 `@[Name]` text in the hidden `compose[text]` input on
+               every edit, which is what `phx-change` and `phx-submit` read.
+               That input is `type="text"` with the `hidden` attribute, not
+               `type="hidden"`: it is equally invisible, unfocusable and
+               absent from the accessibility tree, and LiveViewTest's
+               `form/3` accepts a typed value for it, which it refuses for a
+               hidden input (one fixed value only). --%>
+          <input
+            type="text"
             name="compose[text]"
-            id={@compose_form[:text].id}
-            data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
-            placeholder={"Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"}
+            id="compose_text_value"
+            value={Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}
+            hidden
             autocomplete="off"
-            rows="1"
-            class="flex-1 text-sm resize-none"
-            style="line-height:1.5;padding:4px 0;min-height:28px;max-height:200px;overflow-y:auto;field-sizing:content"
+          />
+          <div
+            id={@compose_form[:text].id}
+            class="compose-field"
+            contenteditable="true"
             phx-hook="ComposeInput"
-          >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
+            phx-update="ignore"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-controls="compose-mention-list"
+            aria-multiline="true"
+            aria-label="Message"
+            enterkeyhint="send"
+            data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
+            data-placeholder={
+              if @staged?,
+                do: "Add a message (optional) — Enter to send",
+                else:
+                  "Message ##{masked_space_name(assigns, (@active_space && @active_space.name) || "")}"
+            }
+            data-placeholder-touch={@staged? && "Add a message (optional)"}
+            data-value-input="compose_text_value"
+          ></div>
 
+          <%!-- Inserts "@" at the caret, which opens the mention list. The
+               hook prevents the press from taking focus off the field. --%>
+          <button
+            type="button"
+            data-role="compose-mention-button"
+            class="compose-mention-button"
+            aria-label="Mention someone"
+            title="Mention someone"
+          >
+            @
+          </button>
+
+          <%!-- Direction m3 rules 4-5: Send waits for every upload and
+               refuses while a failed or too-large file is staged; files
+               with an empty caption send. --%>
           <button
             type="submit"
             class="compose-pill-send"
-            disabled={is_nil(@current_participant) or composer_empty?(@compose_form)}
-            aria-label="Send message"
+            disabled={
+              is_nil(@current_participant) or @send_state != :ready or
+                (composer_empty?(@compose_form) and not @staged?)
+            }
+            data-send-blocked={to_string(is_nil(@current_participant) or @send_state != :ready)}
+            data-staged={to_string(@staged?)}
+            aria-label={if @send_state == :uploading, do: "Uploading", else: "Send message"}
             title="Send"
           >
             <span class="hero-paper-airplane size-4 -rotate-45"></span>
+            <%!-- The send ring (send feel "4g", lib/send_feel.js): a
+                 decoration that goes out on a send. Its own element because
+                 the phone Send already spends ::before (its disc) and
+                 ::after (its 44px tap square). --%>
+            <span class="send-ring" aria-hidden="true"></span>
           </button>
         </div>
 
-        <p
-          :for={error <- upload_errors(@uploads.attachments)}
-          class="text-xs text-error"
-        >
-          {upload_error_to_string(error)}
-        </p>
-
-        <div :for={entry <- @uploads.attachments.entries}>
-          <p
-            :for={error <- upload_errors(@uploads.attachments, entry)}
-            class="text-xs text-error"
-          >
-            {entry.client_name}: {upload_error_to_string(error)}
-          </p>
-        </div>
-      </.form>
-
-      <%!-- Always-present upload submission form. Lives OUTSIDE #compose-form
-           (HTML forbids nested forms) so the modal's Send button + textarea
-           can target it via the HTML5 `form="upload-send-form"` attribute.
-           The form is rendered unconditionally so:
-             (a) `inputEl.form` resolves on first paste (no chicken-and-egg
-                 with `:if={entries != []}` form-rendering).
-             (b) LiveView's `pushInput` → `pushFormSubmit` always finds the
-                 form to serialize when the user submits.
-           The hidden file input (`live_file_input`) is the form's only
-           direct child; visible UI for caption + Send lives inside the
-           modal panel and links back to this form via `form=...`. --%>
-      <form
-        :if={@active_space && is_nil(@active_space.archived_at)}
-        id="upload-send-form"
-        phx-hook="ButtonLoading"
-        phx-submit="upload_send"
-        phx-change="upload_caption_change"
-        class="hidden"
-      >
         <.live_file_input upload={@uploads.attachments} class="sr-only" />
-      </form>
+      </.form>
 
       <p :if={is_nil(@current_participant) && @active_space} class="mt-1 text-xs text-error">
         Unable to join space — messages are read-only.
@@ -703,7 +771,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
 
   @doc """
   The element the `LargeUpload` JS hook runs on: it takes files over the
-  composer's inline cap out of the upload dialog and starts the uploads the
+  composer's inline cap out of the composer's file input and starts the uploads the
   server reserved. `data-inline-max` is that cap, from the server; the
   browser holds no limit of its own. It renders nothing visible: the pending
   cards are drawn in the timeline (`large_upload_timeline/1`).
@@ -777,7 +845,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
               <span class="text-sm font-bold text-base-content">
                 {PresenceHooks.sender_name(@participants_map, @current_participant.id)}
               </span>
-              <span data-slot="time" class="text-[10px] text-base-content/40"></span>
+              <span data-slot="time" class="text-[10px] text-subtle"></span>
             </div>
           </div>
         </div>

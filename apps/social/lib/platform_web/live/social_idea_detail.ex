@@ -111,7 +111,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
     <span
       :if={!@composer? and is_nil(@agent_name)}
       data-role="idea-draft-no-agent"
-      class="text-xs text-base-content/70"
+      class="text-xs text-base-content"
     >
       No drafting agent yet. Choose one in Settings.
     </span>
@@ -179,7 +179,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
             >
               <.icon name={@source.icon} class="size-3.5" /> {@source.label}
             </span>
-            <span class="text-xs text-base-content/70" data-role="idea-detail-brand">
+            <span class="text-xs text-base-content" data-role="idea-detail-brand">
               {@detail.profile.name}
             </span>
             <span class="badge badge-ghost badge-sm ml-auto font-medium" data-role="idea-detail-stage">
@@ -197,7 +197,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
             <.source_link source={@detail.source} />
             <span
               :if={@detail.agent_name}
-              class="text-xs text-base-content/70"
+              class="text-xs text-base-content"
               data-role="idea-detail-agent"
             >
               <.icon name="hero-sparkles-micro" class="size-3.5" /> {@detail.agent_name}
@@ -232,7 +232,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
           <p
             :if={!@detail.can_write?}
             data-role="idea-detail-read-only"
-            class="text-xs text-base-content/70"
+            class="text-xs text-base-content"
           >
             You can read this idea. Approvers of {@detail.profile.name} can change it.
           </p>
@@ -261,7 +261,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
             <p
               :if={@detail.posts == []}
               data-role="idea-versions-empty"
-              class="rounded-xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/70"
+              class="rounded-xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content"
             >
               No versions yet. They appear here, one per account, as they are drafted.
             </p>
@@ -304,7 +304,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
               <p
                 :if={@detail.notes == []}
                 data-role="idea-notes-empty"
-                class="text-sm text-base-content/70"
+                class="text-sm text-base-content"
               >
                 No notes yet. Notes here reach the drafting agent through its idea list.
               </p>
@@ -316,7 +316,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
                   data-author-kind={row.note.author_kind}
                   class="rounded-lg border border-base-300 px-3 py-2"
                 >
-                  <p class="text-xs text-base-content/70">
+                  <p class="text-xs text-base-content">
                     <span class="font-medium text-base-content" data-role="idea-note-author">
                       {row.author_name}
                     </span>
@@ -354,7 +354,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
               <p
                 :if={@detail.events == []}
                 data-role="idea-log-empty"
-                class="text-sm text-base-content/70"
+                class="text-sm text-base-content"
               >
                 Nothing has happened to this idea's posts yet.
               </p>
@@ -371,17 +371,17 @@ defmodule PlatformWeb.SocialIdeaDetail do
                     <details class="group">
                       <summary class="cursor-pointer list-none rounded px-1 py-0.5 hover:bg-base-200">
                         <.log_line row={row} tz={@tz} />
-                        <span class="text-xs text-base-content/60 group-open:hidden">
+                        <span class="text-xs text-subtle group-open:hidden">
                           · show change
                         </span>
                       </summary>
                       <div class="mt-1 grid gap-2 sm:grid-cols-2" data-role="idea-log-diff">
                         <div class="rounded border border-base-300 p-2">
-                          <p class="text-xs font-medium text-base-content/70">Before</p>
+                          <p class="text-xs font-medium text-base-content">Before</p>
                           <.text_block role="idea-log-before" text={row.event.body_before} />
                         </div>
                         <div class="rounded border border-base-300 p-2">
-                          <p class="text-xs font-medium text-base-content/70">After</p>
+                          <p class="text-xs font-medium text-base-content">After</p>
                           <.text_block role="idea-log-after" text={row.event.body_after} />
                         </div>
                       </div>
@@ -423,17 +423,17 @@ defmodule PlatformWeb.SocialIdeaDetail do
     ~H"""
     <span data-role="idea-log-text">
       <span class="font-medium">{@row.actor_name}</span>
-      <span class="text-base-content/70" data-role="idea-log-kind">({@row.actor_kind})</span>
+      <span class="text-base-content" data-role="idea-log-kind">({@row.actor_kind})</span>
       {Map.get(verbs(), @row.event.action, @row.event.action)} {(@row.platform &&
                                                                    platform_label(@row.platform)) ||
         "a post"}
-      <span class="text-base-content/70">
+      <span class="text-base-content">
         · {SocialIdeaCard.when_text(@row.at, @tz)}
       </span>
     </span>
     <span
       :if={@row.event.note}
-      class="block pl-1 text-xs text-base-content/70"
+      class="block pl-1 text-xs text-base-content"
       data-role="idea-log-note"
     >
       {@row.event.note}
@@ -519,12 +519,12 @@ defmodule PlatformWeb.SocialIdeaDetail do
       <p class="flex items-center gap-1.5 text-sm font-medium">
         <PlatformWeb.SocialPreview.glyph :if={@platform} platform={@platform} class="size-4" />
         {platform_label(@platform)}
-        <span :if={@account && @account.handle} class="font-normal text-base-content/70">
+        <span :if={@account && @account.handle} class="font-normal text-base-content">
           {@account.handle}
         </span>
       </p>
 
-      <p :if={@fields == []} class="text-sm text-base-content/70" data-role="idea-options-none">
+      <p :if={@fields == []} class="text-sm text-base-content" data-role="idea-options-none">
         {platform_label(@platform)} takes no extra options here.
       </p>
 
@@ -586,14 +586,14 @@ defmodule PlatformWeb.SocialIdeaDetail do
         data-role="idea-options-read"
       >
         <div :for={f <- @fields} class="flex gap-2">
-          <dt class="shrink-0 text-base-content/70">{f.label}:</dt>
+          <dt class="shrink-0 text-base-content">{f.label}:</dt>
           <dd data-role="idea-option-value" data-key={f.key}>
             {Map.get(@values, f.key) || "Not set"}
           </dd>
         </div>
       </dl>
 
-      <p :if={@cover} class="text-xs text-base-content/70" data-role="idea-options-cover">
+      <p :if={@cover} class="text-xs text-base-content" data-role="idea-options-cover">
         {@cover}
       </p>
     </div>

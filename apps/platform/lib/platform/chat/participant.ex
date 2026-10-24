@@ -32,6 +32,12 @@ defmodule Platform.Chat.Participant do
     # the row was created by a mention grant and its history is bounded from
     # that instant (task 01a0ac64-a959-7001-9ca2-e429535a1bb2).
     field(:history_visible_from, :utc_datetime_usec)
+
+    # An agent participant a space member has silenced (task 01a1557a-8f80
+    # stage 1): mention-only. `Platform.Chat.AttentionRouter` never hands it
+    # an un-mentioned message; an @mention still routes. Written only by
+    # `Platform.Chat.set_agent_silenced/4`. Meaningless on a user row.
+    field(:silenced, :boolean, default: false)
   end
 
   def changeset(participant, attrs) do
@@ -47,7 +53,8 @@ defmodule Platform.Chat.Participant do
       :attention_mode,
       :attention_config,
       :joined_at,
-      :history_visible_from
+      :history_visible_from,
+      :silenced
     ])
     |> validate_required([:space_id, :participant_type, :participant_id, :role, :joined_at])
     |> validate_inclusion(:participant_type, @participant_types)

@@ -10,16 +10,13 @@ defmodule PlatformWeb.ChatLive.Partials do
     * `notification_banner/1` — notification opt-in bar
     * `move_to_org_picker/1` — the admin destination chooser for a channel
     * `move_to_org_dialog/1` — the confirmation a chosen destination opens
-    * `row_actions_control/1` — per-row overflow control in the mobile drawer
-    * `row_actions_sheet/1` — the bottom sheet that control opens
+    * `row_actions_sheet/1` — the phone Chat list's row sheet (long-press)
     * `row_actions_trigger/1` — per-row overflow control in the desktop rail
     * `row_actions_dialog/1` — the centred menu that trigger opens
-    * `upload_dialog/1` — staging modal for attachments
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
-    * `image_lightbox/1` — full-screen image viewer
-    * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, shared
-      by the desktop rail and the mobile content pane
+    * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, in
+      the desktop rail
   """
 
   use Phoenix.Component
@@ -39,22 +36,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   "no spaces yet": what is empty, why, and the two agent-mediated actions
   (create a space / connect an agent).
 
-  Lives HERE, in the shared module, because it renders on TWO surfaces that
-  are mutually exclusive at any one viewport width: the desktop rail
-  (`Rail.rail/1`, inside `#chat-sidebar`, which is `display: none` below
-  `lg`) and the mobile content pane (`Conversation.mobile_no_spaces_pane/1`,
-  which is `lg:hidden`). Before task 01a0312e stage 8 only the rail copy
-  existed, so a brand-new user on a phone got a literally blank content pane
-  with no create, join or browse affordance anywhere on screen — the
-  `MobileBrowser` zero-state that should have covered them is opened by
-  `toggle_mobile_browser`, and that trigger lives in the channel-pills strip,
-  which is itself gated on `@active_space` and therefore never renders for a
-  user who has no spaces to be active in. The empty state was behind a door
-  with no handle.
-
-  One definition rather than two so the §5.1 copy cannot drift between the
-  two breakpoints. The component renders no wrapper of its own — each caller
-  owns its own positioning and its own render condition.
+  Rendered by the desktop rail (`Rail.rail/1`, inside `#chat-sidebar`). Its
+  phone twin, the conversation pane's no-spaces state, was deleted in task
+  01a1557a-8562 stage 5: the phone Chat list's own empty states (coverage
+  rows 35 and 37) replaced it. The component renders no wrapper of its own —
+  the caller owns its positioning and its render condition.
   """
   def brand_new_user_empty_state(assigns) do
     ~H"""
@@ -159,7 +145,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div
       :if={@push_permission == "prompt" and not @dismissed}
-      class="flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
+      class="hidden lg:flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
       role="status"
       data-role="chat-notification-banner"
     >
@@ -240,7 +226,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              keeps the whole name AND the box. --%>
         <h2 id="move-to-org-picker-title" class="break-words text-base font-semibold">
           {"Move ##{@picker.channel_name}"}
-          <span class="font-normal text-base-content/60">to organisation</span>
+          <span class="font-normal text-subtle">to organisation</span>
         </h2>
         <div class="mt-3 flex flex-col gap-1">
           <button
@@ -340,7 +326,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </h2>
         <%!-- All four lines share ONE aria-describedby container so a screen
              reader hears the org-scope consequence, not just the first line. --%>
-        <div id="move-to-org-body" class="mt-3 flex flex-col gap-2 text-sm text-base-content/80">
+        <div id="move-to-org-body" class="mt-3 flex flex-col gap-2 text-sm text-base-content">
           <p>{"Everyone sees this channel filed under #{@confirm.to.name}."}</p>
           <p>Nobody is added to or removed from the channel.</p>
           <p>
@@ -372,135 +358,63 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc """
-  Overflow control for one MOBILE DRAWER conversation row (task 019fe998).
+  The phone row sheet: the bottom sheet a Chat list row's long-press opens
+  (task 01a1557a-8562 stage 4). It began as the drawer's row sheet (task
+  019fe998); the drawer and its row control were deleted in stage 5.
 
-  The touch counterpart to the rail's `row_actions_trigger/1`. Before either
-  existed the rail row carried its actions directly, and a phone could reach
-  none of them. "Move to organisation…" was `opacity-0` with
-  `group-hover/row:opacity-100 focus-within:opacity-100` carried inline, and
-  Tailwind compiles `group-hover:` inside `@media (hover: hover)`, which never
-  matches on a touch device. The sub-org row's `.channel-row-hide-button` was
-  `opacity-0` revealed by a plain-CSS `.channel-row-wrap:hover` /
-  `:focus-within`: not media-gated, still asking a finger for a hover it
-  cannot produce. Only the pin was visible at rest, and only from 2026-08-11.
-
-  This control is therefore ALWAYS visible: no `opacity-0` and no hover
-  variant anywhere in its class list, which
-  `chat_live_drawer_row_actions_test.exs` asserts by refutation.
-
-  ## One control, not a row of icons
-
-  44px is the touch floor, so pin beside hide is 88px taken permanently from a
-  375px drawer whose names already truncate. One overflow costs 44px once and
-  holds every action the row grows later. The name keeps `flex-1 min-w-0
-  truncate` on the sibling link and this control is `flex-shrink-0`, so a long
-  display name can never crush it.
-
-  ## Accessible name
-
-  Carries the verb AND the target: "More actions for Alex Morgan". A bare
-  "More" is meaningless in a list of twenty identical controls, and a DM has
-  no `name` field — reaching for `space.name` renders it empty, which has
-  already shipped on this surface once. Callers pass the row's resolved label.
-
-  Renders as a SIBLING of the row's navigate-link, never a child: a `<button>`
-  inside an `<a>` is invalid HTML, and LiveView binds click on `window` in the
-  bubble phase, so a nested control needs a `stopPropagation` guard that
-  swallows navigation along with the event.
-
-  ## Right gutter
-
-  `mr-2` is load-bearing, not spacing taste. Without it the control's border
-  box ends exactly on the viewport's right edge (measured: right 375 on a
-  375px screen), and `focus-visible:ring-2` draws 2px OUTSIDE that box, so the
-  keyboard focus ring was clipped by the screen edge. 8px is also the gutter
-  the drawer's existing row control already uses (the pinned-task row's unpin
-  button), so this matches the neighbouring control rather than inventing a
-  third value.
-  """
-  attr(:space_id, :string, required: true)
-  attr(:name, :string, required: true)
-
-  def row_actions_control(assigns) do
-    ~H"""
-    <button
-      type="button"
-      class="mr-2 flex min-h-11 min-w-11 flex-shrink-0 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-      phx-click="open_row_actions"
-      phx-value-space_id={@space_id}
-      data-role="drawer-row-actions"
-      data-space-id={@space_id}
-      aria-haspopup="dialog"
-      aria-label={"More actions for #{@name}"}
-    >
-      <span class="hero-ellipsis-vertical size-5"></span>
-    </button>
-    """
-  end
-
-  @doc """
-  The bottom sheet `row_actions_control/1` opens (task 019fe998).
-
-  Wraps the shared `PlatformWeb.Components.Sheet` primitive — the same one
-  `Components.MoreSheet` wraps. No second sheet, no bespoke popover.
+  Wraps the shared `PlatformWeb.Components.Sheet` primitive with rung 5's
+  `handle_close` and `swipe_dismiss`. No second sheet, no bespoke popover.
 
   ## Placement and breakpoint
 
-  Rendered at the TEMPLATE ROOT, not inside `#mobile-channel-browser`. `.sheet`
-  is `position: fixed`, and a CSS `transform` on any ancestor becomes the
-  containing block for fixed descendants — an overlay rendered inside a
-  transformed rail centres on the rail instead of the viewport, which has
-  shipped here before.
+  Rendered at the TEMPLATE ROOT. `.sheet` is `position: fixed`, and a CSS
+  `transform` on any ancestor becomes the containing block for fixed
+  descendants, which has shipped here before. `lg:hidden` is load-bearing:
+  the design system scopes sheets to mobile; desktop keeps
+  `row_actions_dialog/1`.
 
-  `lg:hidden` is load-bearing, not decoration. The designer reported the bottom-sheet
-  component rendering on desktop at all widths on 2026-07-12; the design
-  system scopes sheets to mobile. Desktop keeps its hover-and-focus reveal.
+  ## Items (prototype master-mobile.html v3 :1299-1304, copy verbatim)
 
-  ## Actions
+    * 'Pin to top' / 'Unpin from top' fire the EXISTING `toggle_pinned`,
+      which takes the desired next state, so a duplicated event is
+      idempotent rather than a silent unpin.
+    * 'Hide channel' ('hidden everywhere until you unhide') on a channel the
+      resolver marks `hideable` (`hide_channel`). A DM no longer shows Hide:
+      the Hidden drawer that reverses it lists channels only, so a hidden DM
+      had no way back (prototype :1302).
+    * 'Close conversation' ('hides it until the next message') on a DM or
+      group (`close_dm`). Nothing is deleted, so the red this sheet has never
+      spent stays unspent.
 
-  Both reuse the EXISTING server handlers. `toggle_pinned` takes the desired
-  next state rather than flipping what it finds, so a duplicated event from a
-  render race is idempotent instead of a silent unpin. `hide_channel` takes
-  `id`. Nothing here is destructive, so `--color-error` stays unspent: the day
-  something in this sheet is destructive, it reads instantly.
+  NOT built: 'Mute' / 'Unmute' ('mentions still notify'). There is no mute
+  state to read or write: `chat_participants.attention_mode` defaults to
+  "mention", which already notifies on mentions only, so mapping Mute onto it
+  would show a false muted state for most people. Task 01a14a91 (per-channel
+  notifications) adds the Off mode, this row and the muted marker.
 
-  `@target` is nil whenever the sheet is closed, which keeps the header empty
-  rather than holding the last-opened conversation's name.
+  Every item is a button, never a link, and every one closes the sheet: the
+  handlers reset `@row_actions_space_id`, and `ChatListHooks` resets
+  `@list_sheet` on the same events.
 
-  ## Close (task 019ffc5f stage 2)
+  ## Title
 
-  A third item, gated on `@target.closeable` (DM and group rows), rendering
-  the touch counterpart of the rail dialog's Close from the SAME resolver.
-  Its `data-role` is `row-actions-close-dm`, not `row-actions-close`: that
-  bare name already belongs to the rail dialog's dismiss button, and both
-  chromes sit in the DOM at every width, so sharing it would make the
-  selector match two nodes.
-
-  Close reads as the least of the three and is styled identically to them.
-  Nothing is deleted and the row returns on the next message in that DM, so
-  the red this sheet has never spent stays unspent.
-
-  Hide is still offered on every row this sheet opens on, including DMs where
-  it has no reverse. That predates this stage and is untouched by it.
+  The row's name, masked through the org rule like the row itself (the
+  caller passes a masked target). It renders visibly in the body because
+  `handle_close` keeps the sheet's own title for the dialog's accessible name
+  only.
 
   ## Accessible name on the pin row
 
-  This is the drawer's unpin path, the touch counterpart to the pin item in
-  the rail's `row_actions_dialog/1`, so it holds the same rule: the accessible
-  name carries the verb AND the target. The visible label stays "Unpin
-  conversation" and the `aria-label` extends it to "Unpin conversation Alex
-  Morgan". Extends rather than replaces, because WCAG 2.5.3 requires the
-  accessible name to contain the visible label, so "Unpin Alex Morgan"
-  alone would break speech input on a control reading "Unpin conversation".
-
-  The sheet title already shows the name, but a title is context a screen
-  reader announces once on open, and the buttons below it are then two
-  identical verbs. Naming the target on the control costs no width here: the
-  sheet row is full-bleed and the string is never rendered.
+  The accessible name carries the verb AND the target: the visible label
+  stays "Unpin from top" and the `aria-label` extends it to "Unpin from top
+  Alex Morgan". Extends rather than replaces, because WCAG 2.5.3 requires
+  the accessible name to contain the visible label. Close follows the same
+  rule.
   """
   attr(:target, :any,
     default: nil,
-    doc: "nil when closed, else %{space_id:, name:, pinned:} for the row that opened it"
+    doc:
+      "nil when closed, else the `row_actions_target/5` map (space_id, name, pinned, hideable, closeable)"
   )
 
   def row_actions_sheet(assigns) do
@@ -510,53 +424,65 @@ defmodule PlatformWeb.ChatLive.Partials do
       open={@target != nil}
       placement={:bottom}
       on_close="close_row_actions"
-      class="lg:hidden"
+      class="chat-list-sheet lg:hidden"
+      handle_close
+      swipe_dismiss
     >
       <:title>{@target && @target.name}</:title>
 
-      <ul class="flex flex-col" role="list">
+      <p
+        :if={@target}
+        data-role="row-actions-title"
+        class="truncate px-4 pb-2 text-[15px] font-semibold text-base-content"
+      >
+        {@target.name}
+      </p>
+
+      <ul class="flex flex-col pb-2" role="list">
         <li>
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="toggle_pinned"
             phx-value-space_id={@target && @target.space_id}
             phx-value-pinned={@target && to_string(not @target.pinned)}
             data-role="row-actions-pin"
-            aria-label={
-              @target &&
-                "#{if @target.pinned, do: "Unpin", else: "Pin"} conversation #{@target.name}"
-            }
+            aria-label={@target && "#{pin_label(@target)} #{@target.name}"}
           >
             <span class="hero-map-pin size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>
-              {if @target && @target.pinned, do: "Unpin conversation", else: "Pin conversation"}
-            </span>
+            <span>{@target && pin_label(@target)}</span>
           </button>
         </li>
-        <li class="border-t border-edge">
+        <li :if={@target && @target.hideable} class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="hide_channel"
-            phx-value-id={@target && @target.space_id}
+            phx-value-id={@target.space_id}
             data-role="row-actions-hide"
+            aria-label={"Hide channel #{@target.name}"}
           >
             <span class="hero-eye-slash size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>Hide from my rail</span>
+            <span class="min-w-0">
+              <span class="block">Hide channel</span>
+              <span class="block text-[13px] text-subtle">hidden everywhere until you unhide</span>
+            </span>
           </button>
         </li>
         <li :if={@target && @target.closeable} class="border-t border-edge">
           <button
             type="button"
-            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class={row_sheet_item_class()}
             phx-click="close_dm"
             phx-value-id={@target.space_id}
             data-role="row-actions-close-dm"
-            aria-label={"Close #{@target.name}"}
+            aria-label={"Close conversation #{@target.name}"}
           >
             <span class="hero-minus-circle size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>Close</span>
+            <span class="min-w-0">
+              <span class="block">Close conversation</span>
+              <span class="block text-[13px] text-subtle">hides it until the next message</span>
+            </span>
           </button>
         </li>
       </ul>
@@ -564,11 +490,20 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
+  # The row sheet's items: base-content on the base-100 sheet, pressed on
+  # base-200 (the More sheet's paint). No hover state anywhere on the phone.
+  defp row_sheet_item_class,
+    do:
+      "flex min-h-11 w-full items-center gap-3 rounded-field px-4 py-3 text-left text-[15px] text-base-content active:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+
+  defp pin_label(%{pinned: true}), do: "Unpin from top"
+  defp pin_label(_target), do: "Pin to top"
+
   @doc """
   Overflow trigger for one DESKTOP RAIL conversation row (task 019ff8ba stage 1).
 
-  The desktop counterpart to `row_actions_control/1`. Same event, same
-  payload, different chrome: the drawer opens a bottom sheet, the rail opens
+  The desktop row control. It began as the counterpart to the deleted drawer's
+  row control (same event, same payload); the rail opens
   `row_actions_dialog/1`.
 
   ## Why the row's controls moved behind it
@@ -667,7 +602,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   Each item is gated on what the ROW could do before this stage, so the menu
   adds no capability anywhere:
 
-    * Pin / Unpin: every conversation row.
+    * Pin or Unpin: every conversation row.
     * Hide from my rail: sub-org channel rows only. `hide_channel` writes
       `users.preferences["hidden_channel_ids"]`, and the Hidden drawer that
       reverses it lists channels, so offering it on a DM would create a state
@@ -833,8 +768,8 @@ defmodule PlatformWeb.ChatLive.Partials do
             </li>
             <%!-- Closes this dialog on the way, client-side, so the
                  destination chooser never opens on top of it. Same shape as
-                 the drawer's `new_conversation_open |> close_mobile_browser`
-                 pair; no new server event. --%>
+                 Chat list's `close_list_sheet |> new_channel_open` pair; no
+                 new server event. --%>
             <li :if={@root_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"
@@ -891,293 +826,6 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
-  @doc "Upload staging dialog — drop zone, thumb grid, agent tag chips, caption, send."
-  attr(:open, :boolean, required: true)
-  attr(:active_space, :any, default: nil)
-  attr(:uploads, :any, required: true)
-  attr(:caption, :string, default: "")
-  attr(:tagged_agents, :any, required: true)
-  # Large files (task 01a120be stage 3): staged over-the-inline-cap files and
-  # the server's limits (`LargeUploadHooks.limits/0`), so the hint and the
-  # too-large copy both name the install's real limit.
-  attr(:large_staged, :list, default: [])
-  attr(:limits, :map, default: nil)
-
-  def upload_dialog(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :has_files?,
-        assigns.uploads.attachments.entries != [] or assigns.large_staged != []
-      )
-
-    ~H"""
-    <div :if={@open} class="upload-backdrop" phx-click="upload_dialog_close">
-      <div class="upload-panel" phx-click="noop">
-        <div class="upload-header">
-          <div class="upload-header-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
-            </svg>
-          </div>
-          <div class="upload-header-text">
-            <div class="upload-title">Share Images</div>
-            <div class="upload-subtitle">
-              Upload images to <strong>{"##{(@active_space && @active_space.name) || ""}"}</strong>
-            </div>
-          </div>
-          <button type="button" class="upload-close" phx-click="upload_dialog_close">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-
-        <%!-- Native HTML semantics: a <label for={input.id}> opens the file
-             picker on click without any JS dispatch, which sidesteps:
-               (a) the `live_file_input` hardcoded `id={@upload.ref}` collision
-                   that silently dropped any user-supplied id;
-               (b) the iOS gesture-loss problem when JS.dispatch routes the
-                   click through an async boundary.
-             `phx-drop-target={@upload.ref}` is Phoenix's native drag-drop
-             registration — drops on this label register entries through the
-             same code path as the file picker. --%>
-        <label
-          :if={not @has_files?}
-          id="upload-dropzone"
-          for={@uploads.attachments.ref}
-          phx-drop-target={@uploads.attachments.ref}
-          class="upload-dropzone"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line
-              x1="12"
-              y1="3"
-              x2="12"
-              y2="15"
-            />
-          </svg>
-          <div class="upload-dropzone-title">Drag & drop images here</div>
-          <div class="upload-dropzone-or">or</div>
-          <span id="upload-browse-btn" class="upload-browse-btn">
-            Browse files
-          </span>
-          <div class="upload-dropzone-sub">You can also paste images with ⌘V</div>
-          <div :if={@limits} class="upload-dropzone-formats" data-role="upload-limit-hint">
-            Up to {@limits.label} per file
-          </div>
-          <div :if={!@limits} class="upload-dropzone-formats">
-            PNG · JPG · GIF · WebP · SVG — max 15 MB each
-          </div>
-        </label>
-
-        <.large_staged_rows :if={@large_staged != []} staged={@large_staged} limits={@limits} />
-
-        <div :if={@uploads.attachments.entries != []} class="upload-grid-area">
-          <div class="upload-grid">
-            <div :for={entry <- @uploads.attachments.entries} class="upload-thumb">
-              <%= if String.starts_with?(entry.client_type, "image/") do %>
-                <.live_img_preview
-                  entry={entry}
-                  class="upload-thumb-inner"
-                  style="width:100%;height:100%;object-fit:cover"
-                />
-              <% else %>
-                <div class="upload-thumb-inner">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <rect x="3" y="3" width="18" height="18" rx="2" /><circle
-                      cx="8.5"
-                      cy="8.5"
-                      r="1.5"
-                    /><path d="M21 15l-5-5L5 21" />
-                  </svg>
-                </div>
-              <% end %>
-              <span class="upload-thumb-name">{entry.client_name}</span>
-              <button
-                type="button"
-                class="upload-thumb-remove"
-                phx-click="upload_entry_cancel"
-                phx-value-ref={entry.ref}
-              >
-                ×
-              </button>
-              <div
-                :if={entry.progress > 0 and entry.progress < 100}
-                class="upload-thumb-progress-overlay"
-                style="position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;color:#FFF;font-size:14px;font-weight:600;pointer-events:none"
-              >
-                {entry.progress}% uploading…
-              </div>
-            </div>
-            <%!-- Same label-for trick as the dropzone (see comment above). --%>
-            <label
-              id="upload-add-more"
-              for={@uploads.attachments.ref}
-              class="upload-add-tile"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              Add more
-            </label>
-          </div>
-        </div>
-
-        <div :if={upload_errors(@uploads.attachments) != []} style="padding:0 20px">
-          <p
-            :for={error <- upload_errors(@uploads.attachments)}
-            class="text-xs"
-            style="color:var(--danger);margin-bottom:4px"
-          >
-            {upload_error_to_string(error)}
-          </p>
-        </div>
-        <div :for={entry <- @uploads.attachments.entries} style="padding:0 20px">
-          <p
-            :for={error <- upload_errors(@uploads.attachments, entry)}
-            class="text-xs"
-            style="color:var(--danger);margin-bottom:4px"
-          >
-            {entry.client_name}: {upload_error_to_string(error)}
-          </p>
-        </div>
-
-        <div :if={@uploads.attachments.entries != []} class="upload-agent-section">
-          <div class="upload-agent-label">Tag an agent</div>
-          <div class="upload-agent-chips">
-            <button
-              :for={
-                {slug, label} <- [
-                  {"beacon", "Beacon"},
-                  {"pixel", "Pixel"},
-                  {"builder", "Builder"},
-                  {"higgins", "Higgins"}
-                ]
-              }
-              type="button"
-              class={"agent-chip #{slug}#{if MapSet.member?(@tagged_agents, slug), do: " selected", else: ""}"}
-              phx-click="upload_toggle_agent"
-              phx-value-agent={slug}
-            >
-              <span class="chip-dot"></span> {label}
-            </button>
-          </div>
-        </div>
-
-        <%!-- Caption + Send. The textarea and submit button live OUTSIDE
-             #upload-send-form (which holds only the file input and is rendered
-             unconditionally in chat_live.html.heex) and target it via the
-             HTML5 `form="upload-send-form"` cross-form attribute. This avoids
-             the chicken-and-egg defect from the prior shipping attempt where
-             the form was `:if`-guarded on `entries != []` — so on first
-             paste/drop, `inputEl.form` resolved to null and LV's pushInput
-             after `LiveUploader.trackFiles` had nowhere to serialize, and
-             the entry never registered. With the form always present, paste
-             on an empty modal works on the very first attempt. --%>
-        <div :if={@has_files?}>
-          <div class="upload-comment">
-            <textarea
-              name="caption"
-              form="upload-send-form"
-              class="upload-comment-input"
-              placeholder="Add a comment about these images..."
-              phx-debounce="200"
-            >{@caption}</textarea>
-          </div>
-
-          <div class="upload-footer">
-            <div class="upload-count">
-              <%= if @large_staged == [] do %>
-                <strong>{length(@uploads.attachments.entries)}</strong>
-                {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
-              <% else %>
-                <strong>{length(@uploads.attachments.entries) + length(@large_staged)}</strong>
-                {if length(@uploads.attachments.entries) + length(@large_staged) == 1,
-                  do: "file",
-                  else: "files"} selected
-              <% end %>
-              <span :if={@limits} class="block text-xs text-base-content/60">
-                Up to {@limits.label} per file
-              </span>
-            </div>
-            <div class="upload-footer-actions">
-              <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
-                Cancel
-              </button>
-              <button
-                type="submit"
-                form="upload-send-form"
-                class="upload-btn-send"
-                disabled={
-                  Enum.any?(
-                    @uploads.attachments.entries,
-                    &(&1.progress > 0 and &1.progress < 100)
-                  ) or
-                    (@uploads.attachments.entries == [] and @large_staged != [] and
-                       Enum.all?(@large_staged, & &1.too_large?))
-                }
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-                Send to {"##{(@active_space && @active_space.name) || ""}"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  attr(:staged, :list, required: true)
-  attr(:limits, :map, required: true)
-
-  # One row per staged large file. A file over the install's limit reads
-  # "(!) <name> is 1.1 GB. This Burrow install accepts files up to 1 GB." with the
-  # error hue on the icon only (the token fails AA as small text), and never
-  # uploads. Design canvas 01a120be-f336, "TOO LARGE".
-  defp large_staged_rows(assigns) do
-    ~H"""
-    <ul class="flex flex-col gap-2 px-5 pb-2" data-role="large-staged">
-      <li
-        :for={file <- @staged}
-        id={"large-staged-#{file.ref}"}
-        data-too-large={to_string(file.too_large?)}
-        class="flex items-start gap-2 rounded-box border border-edge bg-base-200 px-3 py-2 text-sm"
-      >
-        <%= if file.too_large? do %>
-          <span class="hero-exclamation-circle size-5 shrink-0 text-error" aria-hidden="true"></span>
-          <span class="min-w-0 flex-1 text-base-content">
-            <span title={file.name}>
-              {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
-            </span>
-            is {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}. This Burrow install accepts files up to {@limits &&
-              @limits.label}.
-          </span>
-        <% else %>
-          <span class="hero-document size-5 shrink-0 text-base-content/60" aria-hidden="true"></span>
-          <span class="min-w-0 flex-1 truncate" title={file.name}>
-            {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
-          </span>
-          <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
-            {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}
-          </span>
-        <% end %>
-        <button
-          type="button"
-          class="btn btn-ghost btn-xs shrink-0"
-          phx-click="large_upload_unstage"
-          phx-value-ref={file.ref}
-        >
-          Remove
-        </button>
-      </li>
-    </ul>
-    """
-  end
-
   @doc "Active-canvas side panel (desktop) and full-screen overlay (mobile)."
   attr(:canvas, :any, default: nil)
   attr(:show_versions_panel, :boolean, default: false)
@@ -1208,7 +856,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
-            <p class="truncate text-xs text-base-content/50">
+            <p class="truncate text-xs text-subtle">
               {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
             </p>
           </div>
@@ -1244,7 +892,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
             <p class="text-sm font-semibold">Live Canvas</p>
-            <p class="truncate text-xs text-base-content/50">
+            <p class="truncate text-xs text-subtle">
               {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
             </p>
           </div>
@@ -1289,7 +937,8 @@ defmodule PlatformWeb.ChatLive.Partials do
       id={"canvas-versions-panel-#{(@mobile && "mobile") || "desktop"}-#{@canvas.id}"}
       class={[
         "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-edge bg-base-100 shadow-xl transition-transform",
-        @mobile && "fixed top-12 bottom-[var(--bottom-nav-height,0px)]"
+        @mobile &&
+          "fixed top-12 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
       ]}
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4">
@@ -1317,9 +966,9 @@ defmodule PlatformWeb.ChatLive.Partials do
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-semibold tabular-nums">v{v.revision}</span>
-                  <span class="text-xs text-base-content/50">{v.relative_time}</span>
+                  <span class="text-xs text-subtle">{v.relative_time}</span>
                 </div>
-                <p class="truncate text-xs text-base-content/70">
+                <p class="truncate text-xs text-subtle">
                   <span
                     :if={v.author_type_badge}
                     class={[
@@ -1331,7 +980,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                   </span>
                   {v.author_name}
                 </p>
-                <p class="truncate text-xs text-base-content/50 mt-0.5">{v.op_summary}</p>
+                <p class="truncate text-xs text-subtle mt-0.5">{v.op_summary}</p>
               </div>
               <div class="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -1350,7 +999,7 @@ defmodule PlatformWeb.ChatLive.Partials do
               :if={@restore_confirm_revision == v.revision}
               class="mt-3 rounded border border-warning/40 bg-warning/5 p-3"
             >
-              <p class="text-xs text-base-content/80 mb-2">
+              <p class="text-xs text-base-content mb-2">
                 Replace current canvas with revision {v.revision}? The current state stays in history as a new revision.
               </p>
               <div class="flex justify-end gap-2">
@@ -1374,7 +1023,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </li>
           <li
             :if={@versions == []}
-            class="px-4 py-6 text-center text-xs text-base-content/50"
+            class="px-4 py-6 text-center text-xs text-subtle"
           >
             No version history yet.
           </li>
@@ -1505,7 +1154,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration" class="text-xs text-base-content/50 tabular-nums">0:00</span>
+          <span id="meeting-duration" class="text-xs text-subtle tabular-nums">0:00</span>
         </div>
         <div class="flex items-center gap-1">
           <.soundboard_menu id="soundboard-menu-desktop" />
@@ -1563,7 +1212,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </button>
           <p
             data-quickmeet-screen-share-sharer
-            class="mt-1 text-xs text-base-content/50 truncate"
+            class="mt-1 text-xs text-subtle truncate"
           >
           </p>
         </div>
@@ -1681,7 +1330,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration-mobile" class="text-xs text-base-content/50 tabular-nums">
+          <span id="meeting-duration-mobile" class="text-xs text-subtle tabular-nums">
             0:00
           </span>
         </div>
@@ -1699,7 +1348,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             aria-expanded={to_string(@rail_open)}
             aria-controls="quickmeet-call-rail"
             title="Toggle call panel"
-            class="btn btn-ghost btn-xs btn-square text-base-content/60"
+            class="btn btn-ghost btn-xs btn-square text-subtle"
             data-role="quickmeet-rail-toggle"
           >
             <span class="hero-user-group size-4"></span>
@@ -1749,7 +1398,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           </button>
           <p
             data-quickmeet-screen-share-sharer
-            class="mt-1 text-xs text-base-content/50 truncate"
+            class="mt-1 text-xs text-subtle truncate"
           >
           </p>
         </div>
@@ -1915,7 +1564,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           phx-click="quickmeet_toggle_rail"
           aria-label="Close call panel"
           title="Close"
-          class="btn btn-ghost btn-xs btn-square text-base-content/60"
+          class="btn btn-ghost btn-xs btn-square text-subtle"
           data-role="quickmeet-rail-close"
         >
           <span class="hero-x-mark size-4"></span>
@@ -1998,11 +1647,11 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div id={@id} class="mb-2" data-role="meeting-roster">
       <div class="mb-1 flex items-center justify-between px-0.5">
-        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+        <span class="text-xs font-semibold uppercase tracking-wide text-base-content">
           In this meeting
         </span>
         <span
-          class="text-xs tabular-nums text-base-content/50"
+          class="text-xs tabular-nums text-subtle"
           data-role="meeting-roster-count"
         >
           {length(@participants)}
@@ -2098,7 +1747,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         <span class="hero-musical-note size-4"></span>
       </button>
       <div class="hidden group-hover:block group-focus-within:block absolute top-full right-0 mt-1 w-56 bg-base-200 border border-edge rounded-lg p-3 shadow-lg z-20">
-        <p class="text-xs font-semibold mb-2 text-base-content/70">
+        <p class="text-xs font-semibold mb-2 text-base-content">
           Press 1–7 during a call
         </p>
         <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs items-center">
@@ -2122,35 +1771,10 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
-  @doc "Full-screen image lightbox (click to dismiss)."
-  attr(:url, :string, default: nil)
-
-  def image_lightbox(assigns) do
-    ~H"""
-    <div
-      :if={@url}
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      phx-click="close_lightbox"
-    >
-      <button
-        class="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors safe-area-top"
-        phx-click="close_lightbox"
-        aria-label="Close"
-      >
-        <span class="hero-x-mark size-6"></span>
-      </button>
-      <img
-        src={@url}
-        class="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
-        phx-click="close_lightbox"
-      />
-    </div>
-    """
-  end
-
   @doc "Format an upload error atom for display (shared by the dialog and inline compose errors)."
   def upload_error_to_string(:too_large), do: "File is too large"
   def upload_error_to_string(:too_many_files), do: "Too many files selected"
   def upload_error_to_string(:not_accepted), do: "File type is not accepted"
+  def upload_error_to_string(:external_client_failure), do: "Upload failed"
   def upload_error_to_string(error), do: inspect(error)
 end

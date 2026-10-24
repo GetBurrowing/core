@@ -1,20 +1,33 @@
 <div class="relative flex h-full min-h-0">
+  <%!-- The phone Inbox (redesign rung 14). Below `lg` it replaces the
+       desktop list; the desktop pieces below carry `max-lg:hidden`. On
+       /inbox/briefing/:date (task 01a15ee1) it steps aside for the detail
+       pane, which is then the whole phone screen with its "‹ Inbox" link.
+       The wrapper is the flex item: the row below is a flex row. --%>
+  <div :if={@live_action not in [:briefing, :meeting_briefing]} class="min-w-0 flex-1 lg:hidden">
+    <PlatformWeb.Inbox.InboxList.inbox_list
+      rows={@streams.inbox_rows}
+      row_count={clearable_count(@review_count, @mention_count, @meeting_count, @briefing_count)}
+      undo={@undo}
+      mention_authors={@mention_authors}
+      mention_space_labels={@mention_space_labels}
+      source_titles={@source_titles}
+      row_sheet={@row_sheet}
+    />
+  </div>
   <%!-- Two panes at lg and up (task 01a15ee1 stage 4): the list as a 380px
-       column, the detail beside it. Below lg one pane at a time: /inbox is
-       the list, /inbox/briefing/:date the detail with a back link. The pinned
-       chrome below is position: fixed, so this flex row does not lay it out. --%>
+       column, the detail beside it. Below lg the phone list above stands in
+       for this column. The pinned chrome below is position: fixed, so this
+       flex row does not lay it out. --%>
   <div
-    class={[
-      "h-full min-w-0 flex-1 overflow-y-auto lg:w-95 lg:flex-none lg:border-r lg:border-edge lg:bg-base-100",
-      @live_action in [:briefing, :meeting_briefing] && "max-lg:hidden"
-    ]}
+    class="h-full min-w-0 flex-1 overflow-y-auto clears-tab-bar max-lg:hidden lg:w-95 lg:flex-none lg:border-r lg:border-edge lg:bg-base-100"
     data-role="inbox-surface"
   >
     <div class="mx-auto max-w-3xl p-6">
       <header class="mb-6 flex items-start justify-between gap-4">
         <div class="min-w-0">
           <h1 class="text-2xl font-bold text-base-content">Inbox</h1>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             Everything waiting on you across Burrow. Tick rows and clear them in one go, or open an item to jump to it.
           </p>
         </div>
@@ -164,7 +177,7 @@
         >
           <h2
             id="inbox-section-review"
-            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content"
           >
             Awaiting your review
           </h2>
@@ -193,7 +206,7 @@
         >
           <h2
             id="inbox-section-mentions"
-            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content"
           >
             Mentions
           </h2>
@@ -223,7 +236,7 @@
         >
           <h2
             id="inbox-section-meetings"
-            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50"
+            class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content"
           >
             Meetings
           </h2>
@@ -332,7 +345,7 @@
   <div
     :if={@selected != %{}}
     data-role="selection-bar"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] left-1/2 z-40 -translate-x-1/2"
+    class="max-lg:hidden fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-1/2 z-40 -translate-x-1/2"
   >
     <div class="flex items-center gap-3 rounded-full border border-edge bg-base-100 px-4 py-2 shadow-md">
       <span
@@ -356,7 +369,7 @@
         type="button"
         phx-click="clear_selection"
         data-role="cancel-selection"
-        class="focus-visible-ring rounded px-1 text-sm text-base-content/60 hover:text-base-content"
+        class="focus-visible-ring rounded px-1 text-sm font-medium text-base-content hover:text-base-content"
       >
         Cancel
       </button>
@@ -394,7 +407,10 @@
     data-paused={to_string(@toast[:paused] == true)}
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height)+env(safe-area-inset-bottom))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm"
+    class={[
+      "fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] left-4 right-4 z-50 sm:left-auto sm:max-w-sm",
+      @toast[:variant] != :briefing && "max-lg:hidden"
+    ]}
   >
     <div class="flex min-h-11 items-center gap-3 rounded-lg border border-edge bg-base-100 pl-4 pr-2 shadow-md">
       <p class="min-w-0 flex-1 truncate text-sm text-base-content" data-role="toast-message">
@@ -405,7 +421,7 @@
         type="button"
         phx-click={if(@toast[:variant] == :briefing, do: "undo_briefing", else: "undo_clear")}
         data-role="toast-undo"
-        class="focus-visible-ring min-h-11 shrink-0 whitespace-nowrap rounded px-2 text-sm font-medium text-base-content/70 hover:text-base-content"
+        class="focus-visible-ring min-h-11 shrink-0 whitespace-nowrap rounded px-2 text-sm font-medium text-base-content hover:text-base-content"
       >
         Undo
       </button>
@@ -417,7 +433,7 @@
     data-role="inbox-toast"
     role="status"
     aria-live="polite"
-    class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height))] right-4 z-50 max-w-sm"
+    class="max-lg:hidden fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-4 z-50 max-w-sm"
   >
     <div class="flex items-start gap-3 rounded-lg border border-edge bg-base-100 px-4 py-3 shadow-md">
       <div class="min-w-0 flex-1">
@@ -427,7 +443,7 @@
             type="button"
             phx-click="undo_clear"
             data-role="toast-undo"
-            class="focus-visible-ring rounded text-xs font-medium text-base-content/70 hover:text-base-content"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content hover:text-base-content"
           >
             Undo
           </button>

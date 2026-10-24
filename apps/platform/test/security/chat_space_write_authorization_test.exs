@@ -4,8 +4,9 @@ defmodule Platform.Security.ChatSpaceWriteAuthorizationTest do
   stage 1).
 
   `Platform.Chat.SpaceAccess.authorize_writer/2` is composed by
-  `Chat.pin_message/2`, `Chat.unpin_message/3` and
-  `Chat.remove_space_agent/3`. `space_access_test.exs` pins the predicate.
+  `Chat.pin_message/2` and `Chat.unpin_message/3` (and was by
+  `Chat.remove_space_agent/3` until task 01a1557a-8f80 stage 3 deleted it).
+  `space_access_test.exs` pins the predicate.
   This file exists to prove the composition actually protects the shipped
   surface, and it takes its discipline from
   `task_canvas_attachment_authorization_test.exs`: drive the real transport,
@@ -361,43 +362,71 @@ defmodule Platform.Security.ChatSpaceWriteAuthorizationTest do
     end
   end
 
-  # ── 3. dismiss_agent ──────────────────────────────────────────────────────
+  # ── 3. Members sheet Remove ───────────────────────────────────────────────
+  #
+  # The utility-bar `dismiss_agent` event took a `space-id` from the client and
+  # was the third surface this file guarded. It was deleted with the agents
+  # dropdown in task 01a1557a-8f80 stage 3, together with the context function
+  # it called, `Chat.remove_space_agent/3`. Removing an agent is now the Members
+  # sheet's `members_remove_agent`, which takes NO space id: the space is the
+  # component's own `:space` assign. What a forger controls is the participant
+  # id, so that is what this forges.
 
-  describe "dismiss_agent with a forged space-id" do
-    test "a non-participant cannot evict an agent from the target space; a participant can",
+  describe "members_remove_agent with a participant id from another space" do
+    test "an admin of their own space cannot evict an agent from the target space; the target's admin can",
          %{conn: conn} do
-      # Reached through `/chat`, whose `live_session :authenticated` uses
-      # `PlatformWeb.ShellLive` as its `on_mount` — the same hook chain that
-      # serves the five other live_sessions carrying this clause.
       %{space: target} = target_fixture()
 
       agent = agent!("roster-agent")
       {:ok, agent_participant} = Chat.add_agent_participant(target.id, agent)
 
+      # The attacker is an ADMIN of the space they are viewing, so
+      # `can_summon_agents?/2` passes there: only the space scoping can stop it.
       attacker = user!("attacker")
-      attacker_session = forging_session(conn, attacker)
+      %{view: view, home: home} = forging_session(conn, attacker)
 
-      forge(attacker_session, "dismiss_agent", %{
-        "agent-id" => agent.id,
-        "space-id" => target.id
-      })
+      Participant
+      |> Repo.get_by!(space_id: home.id, participant_id: attacker.id)
+      |> Ecto.Changeset.change(role: "admin")
+      |> Repo.update!()
+
+      assert Chat.can_summon_agents?(Chat.get_space(home.id), attacker.id)
+
+      forge_remove(view, agent_participant.id)
 
       assert Repo.get(Participant, agent_participant.id)
-      assert %Participant{} = Chat.get_agent_participant(target.id, agent.id)
       refute Chat.participant?(target.id, attacker.id)
 
-      # TRAP (c) POSITIVE CONTROL — same space, same agent, same forged event.
-      member = user!("member")
-      _ = join!(target, member)
-      member_session = forging_session(conn, member)
+      # POSITIVE CONTROL — same agent row, same event, sent by the target's own
+      # admin from the target space.
+      admin = user!("admin")
 
-      forge(member_session, "dismiss_agent", %{
-        "agent-id" => agent.id,
-        "space-id" => target.id
-      })
+      {:ok, _} =
+        Chat.add_participant(target.id, %{
+          participant_type: "user",
+          participant_id: admin.id,
+          display_name: admin.name,
+          role: "admin",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, admin_view, _html} =
+        conn
+        |> init_test_session(current_user_id: admin.id)
+        |> live(~p"/chat/#{target.id}")
+
+      forge_remove(admin_view, agent_participant.id)
 
       assert Repo.get(Participant, agent_participant.id) == nil
-      assert Chat.get_agent_participant(target.id, agent.id) == nil
     end
+  end
+
+  defp forge_remove(view, participant_id) do
+    view
+    |> with_target("#chat-members")
+    |> render_click("members_remove_agent", %{"participant_id" => participant_id})
+
+    _ = render(view)
+    :ok
   end
 end

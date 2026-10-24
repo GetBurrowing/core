@@ -61,8 +61,9 @@ defmodule Platform.Chat.Messages.Edit do
       (`message.participant_id == participant.id`)
     * deciding whether to short-circuit on idempotent edits
       (`content == message.content`)
-    * surfacing the removal-warning UI before calling this function
-      when the edit shortens content (Section F.4 Policy 4)
+    * asking the user before calling this function when the edit
+      removes most of the text (Section F.4 Policy 4; the chat editor
+      asks with the native confirm)
   """
   @spec apply_edit(Message.t(), Participant.t(), String.t()) :: apply_result()
   def apply_edit(%Message{} = message, %Participant{} = participant, content)

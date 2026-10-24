@@ -29,6 +29,9 @@ import {uploadManager} from "./hooks/large_upload"
 import {installReloadGuard} from "./lib/reload_guard"
 import {createReconnectEscalation, parseThresholds} from "./lib/reconnect_escalation"
 import {createConnectionStatusView, fingerprint} from "./lib/connection_status_view"
+import {installNavPending} from "./lib/nav_pending"
+import {installTopBar} from "./lib/top_bar"
+import {installPressHold} from "./hooks/button_loading"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -43,7 +46,15 @@ const liveSocket = new LiveSocket("/live", Socket, {
   // WHICH DAY COLUMN a meeting lands in is a bucketing decision the server
   // makes before any HTML exists, so the zone has to arrive with the
   // connect rather than after the render.
-  params: {_csrf_token: csrfToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
+  //
+  // `viewport_lg` (task 01a166be stage 3) is read per join, hence the
+  // function: /tasks skips the rows of its phone-only list when the join
+  // comes from an `lg`-or-wider window (`PlatformWeb.Tasks.FilterHooks`).
+  params: () => ({
+    _csrf_token: csrfToken,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    viewport_lg: window.matchMedia("(min-width: 64rem)").matches,
+  }),
   hooks: Hooks,
 })
 
@@ -55,19 +66,37 @@ const liveSocket = new LiveSocket("/live", Socket, {
 const reloadGuard = installReloadGuard(liveSocket, {isBusy: () => uploadManager.isBusy()})
 uploadManager.onIdle(() => reloadGuard.kick())
 
-// Show progress bar on live navigation and form submits
-topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
-// A dropped connection is not a page load: LiveView dispatches
+// Top progress bar (./lib/top_bar.js, task 01a166be-b5b9 stage 3, canvas
+// 01a167b0 rule 6): primary token, 3px, below the safe area, after 100ms,
+// and only for navigations no control owns (deep links, back/forward). A
+// dropped connection is not a page load: LiveView dispatches
 // page-loading-start with kind "error" on every drop and kind "initial" for
 // the rejoin, and the window-wide bar would make a quiet reconnect look like
-// an unrequested navigation (task 01a12b10). `reconnecting` is defined below.
-window.addEventListener("phx:page-loading-start", info => {
-  const kind = info.detail && info.detail.kind
-  if (kind === "error") return
-  if (kind === "initial" && reconnecting()) return
-  topbar.show(300)
+// an unrequested navigation (task 01a12b10), so topBarDelay returns no bar
+// for "error" and for "initial" while `reconnecting()` (defined below).
+installTopBar({topbar, reconnecting: () => reconnecting()})
+
+// Press-hold buttons (./hooks/button_loading.js): aria-busy after 100ms on
+// a `.press-hold` button still in its phx-click round trip.
+installPressHold()
+
+// iOS Safari (and the Capacitor WKWebView shell) only applies CSS :active
+// while a touchstart listener exists somewhere on the page. Press feedback on
+// tabs, rail tiles, sheet rows and menu items is pure CSS :active (task
+// 01a166be-b5b9), so register ONE empty, passive document-level listener.
+// Passive: it never delays scrolling.
+document.addEventListener("touchstart", () => {}, {passive: true})
+
+// Optimistic navigation (task 01a166be-b5b9 stage 2, ./lib/nav_pending.js):
+// a tapped tab, rail tile, More row or chat row looks current at once and
+// rolls back with a toast if the navigation fails or times out (8s). On
+// rollback, release LiveView's pending link so tapping again really retries:
+// LiveView ignores a click on the href it still believes is loading.
+installNavPending({
+  onRollback: () => {
+    liveSocket.pendingLink = null
+  },
 })
-window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
 // Burrow app only: forward `native_donate` (ids only) to SuiteNative.donate.
 // A no-op in a browser (task 01a111bb).
@@ -370,13 +399,13 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
 
   navigator.modelContext.registerTool({
     name: "toggle_thread",
-    description: "Open a thread panel for a specific message by clicking its thread button",
+    description: "Open the inline thread under a specific message by clicking its Reply in thread button",
     input: { type: "object", properties: { messageId: { type: "string", description: "The message ID to open the thread for" } }, required: ["messageId"] },
     async execute({ messageId }) {
       if (typeof messageId !== "string" || !SAFE_ID_RE.test(messageId)) {
         return errorResult("Error: messageId must match [a-z0-9-]{1,36}");
       }
-      const btn = document.querySelector(`[phx-click="open_thread"][phx-value-message-id="${messageId}"]`);
+      const btn = document.querySelector(`[phx-click="open_inline_thread"][phx-value-message-id="${messageId}"]`);
       if (!btn) return errorResult(`Thread button not found for message ${messageId}`);
       btn.click();
       return { content: [{ type: "text", text: `Thread opened for message ${messageId}` }] };

@@ -56,10 +56,13 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
   @btn_primary @btn <> " btn-primary"
   @btn_secondary @btn <> " border-edge bg-base-300 text-base-content"
   @btn_ghost @btn <> " btn-ghost text-subtle lg:hover:text-base-content"
-  # `placeholder:text-faint` (task 01a15ee1 stage 6): the inherited placeholder
-  # (base-content at 50%) measured 3.93:1 on base-200 in light; --faint is
-  # main's placeholder tier, 4.89:1 there.
-  @field "w-full rounded-lg border border-edge bg-base-200 px-3 py-2 text-sm text-base-content placeholder:text-faint"
+  # An explicit placeholder colour (task 01a15ee1 stage 6): the inherited
+  # placeholder (base-content at 50%) measured 3.93:1 on base-200 in light.
+  # Main painted the faint tier here; feat/redesign retired that tier (task
+  # 01a15902 stage 2), so the main -> feat/redesign sync paints `text-subtle`,
+  # the redesign's placeholder colour (a `placeholder_contrast_test.exs`
+  # template site).
+  @field "w-full rounded-lg border border-edge bg-base-200 px-3 py-2 text-sm text-base-content placeholder:text-subtle"
   # Links inside a sentence (a receipt's "Open task", the settings note):
   # inline text, under WCAG 2.5.8's inline exception, so no 44px box that
   # would pull the line apart on the phone.

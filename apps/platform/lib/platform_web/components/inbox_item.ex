@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.InboxItem do
   Styling reads only from semantic DaisyUI token slots per
   `docs/design-system/01-foundations.md`, no raw hex: `bg-primary` (unread
   dot), `text-info` + `border-info/40` (Needs-your-review tag), `base-100` +
-  `border-edge` (row ground), `text-base-content/70` (body), and `error` (the
+  `border-edge` (row ground), `text-base-content` (body), and `error` (the
   dismiss X hover). The rail count stays `badge-error` in `IconRail`; this
   component does not render it. The kind badge and the per-item space label
   give each row its taxonomy at a glance.
@@ -118,7 +118,7 @@ defmodule PlatformWeb.Components.InboxItem do
         <span class="min-w-0 flex-1">
           <span class="flex flex-wrap items-center gap-2">
             <span
-              class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-base-content/60"
+              class="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-subtle"
               data-role="inbox-item-kind"
             >
               <.icon name={kind_icon(@item.kind)} class="size-3.5" />
@@ -126,7 +126,7 @@ defmodule PlatformWeb.Components.InboxItem do
             </span>
             <span
               :if={@space_label}
-              class="inline-flex items-center rounded-full bg-base-200 px-2 py-0.5 text-[11px] font-medium text-base-content/70"
+              class="inline-flex items-center rounded-full bg-base-200 px-2 py-0.5 text-xs font-medium text-subtle"
               data-role="inbox-item-space"
             >
               {@space_label}
@@ -162,13 +162,13 @@ defmodule PlatformWeb.Components.InboxItem do
 
           <span
             :if={present?(@item.body)}
-            class="mt-0.5 block line-clamp-2 text-sm text-base-content/70"
+            class="mt-0.5 block line-clamp-2 text-sm text-base-content"
           >
             {@item.body}
           </span>
 
           <span
-            class="mt-1 block text-xs text-base-content/50"
+            class="mt-1 block text-xs text-subtle"
             title={DateTime.to_string(@item.inserted_at)}
           >
             {relative_time(@item.inserted_at)}
@@ -180,7 +180,7 @@ defmodule PlatformWeb.Components.InboxItem do
         type="button"
         phx-click="dismiss"
         phx-value-id={@item.id}
-        class="m-2 flex size-8 shrink-0 items-center justify-center self-center rounded-full text-base-content/40 opacity-100 transition hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+        class="m-2 flex size-8 shrink-0 items-center justify-center self-center rounded-full text-subtle opacity-100 transition hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
         data-role="inbox-item-dismiss"
         aria-label="Dismiss notification"
         title="Dismiss"
@@ -193,23 +193,59 @@ defmodule PlatformWeb.Components.InboxItem do
 
   # ── Kind → label / icon ────────────────────────────────────────────────
 
-  @doc false
-  def kind_label("review_request_pending"), do: "Review requested"
-  def kind_label("task_plan_review"), do: "Plan needs review"
-  def kind_label("chat_mention"), do: "Mention"
-  def kind_label("meeting_starting"), do: "Meeting starting"
-  # MUST sit above the humanizing catch-all: it would render "Meeting invited"
-  # — a one-character difference that reads as correct at a glance.
-  def kind_label("meeting_invited"), do: "Meeting invite"
+  # ONE table for every core kind's label, in both forms (redesign rung 14):
+  #
+  #   * `:long`, the desktop row's label (`kind_label/1`), unchanged;
+  #   * `:short`, the phone Inbox's kind word on the meta line (Saru, Inbox
+  #     canvas 01a15ec4 rev 2), read by `PlatformWeb.Inbox.InboxList`.
+  #
+  # "Meeting invite" is spelled out, not humanized: the humanizing fallback
+  # would render "Meeting invited", a one-character difference that reads as
+  # correct at a glance. An extension kind and an unknown kind share ONE
+  # fallback for both forms (`kind_label/2`).
+  @kind_labels %{
+    "review_request_pending" => %{long: "Review requested", short: "Review"},
+    "task_plan_review" => %{long: "Plan needs review", short: "Plan review"},
+    "chat_mention" => %{long: "Mention", short: "Mention"},
+    "meeting_starting" => %{long: "Meeting starting", short: "Starting now"},
+    "meeting_invited" => %{long: "Meeting invite", short: "Meeting invite"},
+    "task_sponsor_assigned" => %{long: "Task sponsor assigned", short: "Sponsor"},
+    "lifecycle_step_failed" => %{long: "Lifecycle step failed", short: "Step failed"},
+    # Main's daily briefing kind (task 01a15ee1). Main had no explicit label,
+    # so its desktop form is the humanized key, kept as-is.
+    "briefing" => %{long: "Briefing", short: "Briefing"},
+    # Main's meeting briefing kind (task 01a1694a). The short form is the
+    # word its own row renders (`MeetingBriefingCopy.kind_label/0`).
+    "meeting_briefing" => %{long: "Meeting briefing", short: "Meeting"}
+  }
 
-  def kind_label(other) when is_binary(other) do
-    case Platform.Extensions.inbox_kind(other) do
-      %{label: label} -> label
-      nil -> Phoenix.Naming.humanize(other)
+  @doc "The core kinds `kind_label/2` has an explicit entry for."
+  def labelled_kinds, do: Map.keys(@kind_labels)
+
+  @doc false
+  def kind_label(kind), do: kind_label(kind, :long)
+
+  @doc """
+  A kind's label in `form` `:long` (the desktop row) or `:short` (the phone
+  Inbox's kind word). Core kinds read `@kind_labels`. Any other kind falls
+  back, in both forms, to the registered extension's declared `label`, then to
+  the humanized key; a non-string kind is "Notification".
+  """
+  def kind_label(kind, form) when is_binary(kind) and form in [:long, :short] do
+    case Map.fetch(@kind_labels, kind) do
+      {:ok, labels} -> Map.fetch!(labels, form)
+      :error -> fallback_label(kind)
     end
   end
 
-  def kind_label(_), do: "Notification"
+  def kind_label(_kind, form) when form in [:long, :short], do: "Notification"
+
+  defp fallback_label(kind) do
+    case Platform.Extensions.inbox_kind(kind) do
+      %{label: label} -> label
+      nil -> Phoenix.Naming.humanize(kind)
+    end
+  end
 
   @doc false
   def kind_icon("review_request_pending"), do: "hero-clipboard-document-check"
@@ -219,6 +255,8 @@ defmodule PlatformWeb.Components.InboxItem do
   # An envelope (a message you were sent), not a camera (a call in progress).
   # MUST sit above the `hero-bell` catch-all.
   def kind_icon("meeting_invited"), do: "hero-envelope"
+  # The camera `MeetingBriefingRow` shows. Above the catch-all too.
+  def kind_icon("meeting_briefing"), do: "hero-video-camera"
 
   def kind_icon(other) do
     case Platform.Extensions.inbox_kind(other) do
@@ -236,6 +274,7 @@ defmodule PlatformWeb.Components.InboxItem do
   # A read `briefing` row stays listed (it is in `action_kinds/0`) but asks for
   # no review; the briefing has its own row renderer (task 01a15ee1 stage 4).
   defp needs_action?(%Item{kind: "briefing"}), do: false
+  defp needs_action?(%Item{kind: "meeting_briefing"}), do: false
   defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

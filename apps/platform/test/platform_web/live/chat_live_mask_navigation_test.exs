@@ -1,7 +1,8 @@
 defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   @moduledoc """
   Stage 6 regression: screen-share mask state must survive IN-SESSION
-  navigation, and must NOT survive a full page reload.
+  navigation. Since task 01a1557a-e538 stage 2 it also survives a full page
+  reload for 12 hours, and not after.
 
   The behavioural review found both halves broken in the same place. With
   masking on and one org revealed, clicking a rail channel row brought the
@@ -20,10 +21,15 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   returns `{:error, {:live_redirect, …}}` instead of patched HTML, so the
   first assertion after the click blows up.
 
-  The reload half is asserted here too, deliberately in the same file: the
-  obvious "fix" for the navigation bug is a sessionStorage-backed restore,
-  which SURVIVES a reload and would break the deliberate
-  returns-unmasked-next-morning behaviour. Anyone reaching for it trips this.
+  The reload half is asserted here too. Its rule CHANGED in task 01a1557a-e538
+  stage 2: the mask is now one person's preference with a 12-hour expiry
+  (`Platform.Accounts.mask_names?/1`, `users.preferences["mask_names_until"]`),
+  approved by the product owner on 2026-10-21 ("12 hour cross-device is fine"). So a reload
+  within 12 hours comes back MASKED, and a reload after the expiry comes back
+  UNMASKED. The second half is the old next-morning rule, kept: someone who
+  masked for one call must not return the next morning to a rail where their
+  orgs appear to be missing. Do not back the flag with sessionStorage: it would
+  outlive the expiry.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -143,15 +149,33 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   end
 
   describe "full page reload" do
-    test "returns UNMASKED — session-only is deliberate, do not persist it",
+    test "within 12 hours returns MASKED: the mount reads the person's preference",
          %{conn: conn, user: user, view: view} do
       masked = toggle_mask(view)
       assert desktop_sidebar(masked) =~ "channel-mask-strip"
 
-      # A reload is a NEW LiveView process on the same browser session. If
-      # this ever fails, someone has backed the flag with sessionStorage or a
-      # preferences row: someone who masked for one call would return next
-      # morning to a rail where their orgs appear to be missing.
+      # A reload is a NEW LiveView process on the same browser session.
+      {:ok, _reloaded, html} = live_following_redirect(authenticated_conn(conn, user), ~p"/chat")
+
+      assert desktop_sidebar(html) =~ "channel-mask-strip"
+      assert desktop_sidebar(html) =~ ~s(aria-pressed="true")
+    end
+
+    test "after the 12-hour expiry returns UNMASKED: the next-morning rule",
+         %{conn: conn, user: user, view: view} do
+      masked = toggle_mask(view)
+      assert desktop_sidebar(masked) =~ "channel-mask-strip"
+
+      # Age the stored instant past now, as the next morning would.
+      expired = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_iso8601()
+      stored = Repo.get!(User, user.id)
+
+      stored
+      |> User.changeset(%{
+        preferences: Map.put(stored.preferences || %{}, "mask_names_until", expired)
+      })
+      |> Repo.update!()
+
       {:ok, _reloaded, html} = live_following_redirect(authenticated_conn(conn, user), ~p"/chat")
 
       refute desktop_sidebar(html) =~ "channel-mask-strip"

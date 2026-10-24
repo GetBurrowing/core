@@ -2851,7 +2851,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
   end
 
-  # ── Agent roster in the prompt (task 01a05997 stage 1) ────────────────────
+  # ── Agents on the roster, in the prompt (task 01a05997 stage 1) ───────────
   #
   # The classifier has never been told which named entities are AGENTS,
   # so an utterance naming one by its proper noun ("Octavius") was

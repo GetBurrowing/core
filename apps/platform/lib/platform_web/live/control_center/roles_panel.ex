@@ -39,10 +39,10 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
     <div class="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8">
       <header class="flex items-start justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Platform Roles
           </p>
-          <p class="mt-1 text-sm text-base-content/70">
+          <p class="mt-1 text-sm text-base-content">
             Pin one agent per role. Each role bundles a fixed set of responsibilities.
           </p>
         </div>
@@ -78,13 +78,13 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
             <div class="flex flex-wrap items-center gap-1.5">
               <code
                 :for={key <- Map.get(@role_bundles, role.key, [])}
-                class="rounded bg-base-200 px-1.5 py-0.5 text-[11px] font-mono text-base-content/70"
+                class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content"
               >
                 {key}
               </code>
             </div>
 
-            <div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-base-content/40">
+            <div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-subtle">
               <span>runs —</span>
               <span>last —</span>
               <span>avg —</span>
@@ -119,11 +119,11 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           >
             <div class="flex min-w-0 flex-1 flex-col gap-1">
               <div class="flex flex-wrap items-center gap-2">
-                <code class="rounded bg-base-200 px-1.5 py-0.5 text-[11px] font-mono text-base-content/80">
+                <code class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content">
                   {row.responsibility_key}
                 </code>
                 <span class="text-xs text-subtle">
-                  from <span class="font-medium text-base-content/70">{row.role_name}</span>
+                  from <span class="font-medium text-base-content">{row.role_name}</span>
                 </span>
                 <span
                   :if={row.overridden?}
@@ -132,12 +132,12 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
                   OVERRIDE
                 </span>
               </div>
-              <div class="flex items-center gap-1.5 text-xs text-base-content/60">
+              <div class="flex items-center gap-1.5 text-xs text-subtle">
                 <%= if row.assignee do %>
                   <span class="hero-user-circle h-3.5 w-3.5" />
-                  <span class="font-medium text-base-content/80">{row.assignee.name}</span>
+                  <span class="font-medium text-base-content">{row.assignee.name}</span>
                 <% else %>
-                  <span class="text-base-content/40">unassigned</span>
+                  <span class="text-xs text-subtle">unassigned</span>
                 <% end %>
               </div>
             </div>
@@ -249,7 +249,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
         type="button"
         phx-click="clear_role_assignment"
         phx-value-role_key={@role_key}
-        class="btn btn-ghost btn-xs text-base-content/50"
+        class="btn btn-ghost btn-xs font-medium text-base-content"
         aria-label={"Clear #{@role_key} assignment"}
         data-role="clear-role-btn"
       >
@@ -269,5 +269,5 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
 
   defp kind_pill_class(_),
     do:
-      "self-start rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-base-200 text-base-content/60"
+      "self-start rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-base-200 text-subtle"
 end

@@ -107,19 +107,50 @@ defmodule Platform.Design.FocusRingCensusTest do
   #
   # Task 01a0fd62 stage 3 added the notice's "View members" button
   # to chat_message.ex (12 -> 13).
+  #
+  # Task 01a1557a-8562 stage 4 re-skinned partials.ex's phone row sheet: its
+  # three buttons (pin, hide, close), each spelling the ring inline, became
+  # four buttons sharing one `row_sheet_item_class/0` string that spells it
+  # once. Every row still carries the ring; the file's literal count drops
+  # (9 -> 7) and the total with it (37 -> 35).
+  #
+  # Task 01a1557a-8562 stage 5 deleted the phone drawer and with it
+  # partials.ex's `row_actions_control/1`, the drawer row's overflow button,
+  # which carried one ring (7 -> 6; total 35 -> 34). The same commit deleted
+  # the drawer's touch move buttons from app.css,
+  # `.channel-section-move-button--touch` and
+  # `.channel-row-move-button--touch`, one ring each (5 -> 3; total 34 -> 32).
+  #
+  # Redesign rung 9 (task 01a1557a-9406 stage 1) deleted chat_message.ex's
+  # header "Context" button and the whole hover action row (eight buttons,
+  # each with the ring: the quick emoji, add reaction, copy, reply, open
+  # thread, pin, summarise, more; the quick emoji are one `:for` site), and
+  # added the four tap-pill buttons, each with the ring (13 -> 8).
+  #
+  # Redesign rung 9 stage 2 rebuilt overlays.ex's actions sheet: its six ring
+  # sites (the context, reply, pin and edit rows, the strip's emoji `:for`
+  # site and its "+") became three: one shared `@row_class` string for every
+  # row, the emoji `:for` site and the "+" (8 -> 5).
+  #
+  # Redesign rung 9 stage 4 deleted overlays.ex's edit-removal modal and its
+  # two ringed buttons, Cancel and Edit anyway (5 -> 3), and rebuilt
+  # chat_version_history.ex as a read-only sheet and popover: its one ringed
+  # control, the centred modal's close button, is gone (the sheet's close is
+  # sheet.ex's), so the file leaves this map (1 -> 0). It gave the focusable
+  # message root its keyboard-entry ring (chat_message.ex 8 -> 9). Total
+  # 29 -> 27.
   @expected_required_sites %{
-    "assets/css/app.css" => 5,
-    "lib/platform_web/components/chat_message.ex" => 13,
+    "assets/css/app.css" => 3,
+    "lib/platform_web/components/chat_message.ex" => 9,
     "lib/platform_web/components/chat_message_editor.ex" => 3,
-    "lib/platform_web/components/chat_version_history.ex" => 1,
     "lib/platform_web/components/empty_state.ex" => 1,
     "lib/platform_web/components/inbox_item.ex" => 1,
     "lib/platform_web/components/sheet.ex" => 1,
-    "lib/platform_web/live/chat/partials.ex" => 9,
-    "lib/platform_web/live/chat/partials/overlays.ex" => 8
+    "lib/platform_web/live/chat/partials.ex" => 6,
+    "lib/platform_web/live/chat/partials/overlays.ex" => 3
   }
 
-  @expected_required_total 37
+  @expected_required_total 27
 
   # ── (a) the scan surface ──────────────────────────────────────────────────
 

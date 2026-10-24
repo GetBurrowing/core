@@ -6665,6 +6665,98 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  @doc """
+  The open tasks that are `user_id`'s: the ones they sponsor, plus the ones
+  where they are an assignee typed `"user"` in ANY phase (the flat
+  current-phase column or any `phase_assignees` slot). Task 01a1557a-b20a
+  stage 1, the phone Tasks tab's "my tasks" list.
+
+  Open means every `Task.statuses/0` member except `done` and `cancelled`.
+  It is derived from that list at call time, so a status added to `Task`
+  later is open by default (including `stack_pending` and `blocked` today).
+
+  Deliberately independent of the board's project / epic / sponsor / kind /
+  origin / search filters: the list is "mine", whatever the board shows.
+  Soft-deleted tasks are excluded. Order is insertion order, newest first;
+  callers re-sort (the board sorts it with `BoardData.sort_items/3`).
+
+  Readability is decided by the caller's `:access_scope` opt, exactly as in
+  `list_all_tasks/1`: absent, the query is unscoped; a deny on a project
+  drops that project's rows even when the user sponsors them.
+
+  Preloads `:project` and `:plans` (the plan list feeds
+  `plan_pending_review?/1` without a lazy query). A nil, non-binary or
+  non-UUID `user_id` returns `[]`.
+
+  Recorded deviation: "needs you" for a viewer is built from a pending
+  ReviewRequest or a plan in `pending_review` only. A blocker that names the
+  user is NOT a signal, because no field records whom a blocker names
+  (`blocked_reason` is free text).
+  """
+  @spec list_my_open_tasks(binary() | term(), keyword()) :: [Task.t()]
+  def list_my_open_tasks(user_id, opts \\ [])
+
+  def list_my_open_tasks(user_id, opts) when is_binary(user_id) do
+    # `Platform.UUID.valid?/1` as a boolean (a bare `Ecto.UUID.cast/1` lets a
+    # 16-byte string through and the query then raises on the cast).
+    if Platform.UUID.valid?(user_id) do
+      open = Task.statuses() -- ~w(done cancelled)
+      mine = dynamic([t], t.sponsor_user_id == ^user_id or ^assignee_dynamic(user_id, "user"))
+
+      Task
+      |> where([t], is_nil(t.deleted_at))
+      |> where([t], t.status in ^open)
+      |> where(^mine)
+      |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
+      |> order_by([t], desc: t.inserted_at, desc: t.id)
+      |> preload([:project, :plans])
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  def list_my_open_tasks(_user_id, _opts), do: []
+
+  @doc """
+  True when `task` is the user's: they sponsor it, or they are a `"user"`
+  assignee in ANY phase (the flat current-phase column or any
+  `phase_assignees` slot).
+
+  The in-memory twin of the `mine` dynamic in `list_my_open_tasks/2`
+  (`sponsor_user_id == user OR assignee_dynamic(user, "user")`), and the ONE
+  home of that rule outside SQL, so the board's in-memory narrowing
+  (`PlatformWeb.Tasks.BoardData.narrow_list/3`) never re-derives it. A parity
+  test pins it to the query. Like `assignee_dynamic/2`, a slot only counts
+  when it is a map whose `assignee_type` is `"user"`; an agent assignee with
+  the same id is not mine. A nil or non-binary `user_id` is never mine.
+  """
+  @spec mine?(Task.t() | map(), term()) :: boolean()
+  def mine?(%{} = task, user_id) when is_binary(user_id) do
+    Map.get(task, :sponsor_user_id) == user_id or
+      (Map.get(task, :assignee_id) == user_id and Map.get(task, :assignee_type) == "user") or
+      phase_slot_assigned?(Map.get(task, :phase_assignees), user_id)
+  end
+
+  def mine?(_task, _user_id), do: false
+
+  defp phase_slot_assigned?(slots, user_id) when is_map(slots) do
+    Enum.any?(slots, fn
+      {_phase, %{} = slot} ->
+        slot_value(slot, "assignee_id") == user_id and
+          slot_value(slot, "assignee_type") == "user"
+
+      _ ->
+        false
+    end)
+  end
+
+  defp phase_slot_assigned?(_slots, _user_id), do: false
+
+  # jsonb loads string keys; an unsaved struct may still carry atom keys.
+  defp slot_value(slot, key),
+    do: Map.get(slot, key) || Map.get(slot, String.to_existing_atom(key))
+
   defp maybe_filter_project(query, nil), do: query
   defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
 
@@ -6716,7 +6808,14 @@ defmodule Platform.Tasks do
   # binary_id and raises on anything else.
   defp maybe_filter_assignee(query, nil, _type), do: query
 
-  defp maybe_filter_assignee(query, id, type) when is_binary(id) do
+  defp maybe_filter_assignee(query, id, type) when is_binary(id),
+    do: where(query, ^assignee_dynamic(id, type))
+
+  # The "X is an assignee in ANY phase" dynamic behind `maybe_filter_assignee/3`
+  # and `list_my_open_tasks/2` (task 01a1557a-b20a stage 1). One copy of the
+  # `jsonb_each` fragment, so the two callers cannot disagree about what
+  # "assigned" means. `type` nil matches any assignee type.
+  defp assignee_dynamic(id, type) do
     flat =
       if is_nil(type),
         do: dynamic([t], t.assignee_id == ^id),
@@ -6744,7 +6843,7 @@ defmodule Platform.Tasks do
         )
       )
 
-    where(query, ^dynamic([t], ^flat or ^slot))
+    dynamic([t], ^flat or ^slot)
   end
 
   # Stage 2 of task 019f3f22 (ADR-0042 sponsor visibility): opt-in filter
@@ -6850,10 +6949,7 @@ defmodule Platform.Tasks do
     # Statuses we actually pull from the DB: the 7 directly-bucketed ones
     # plus any whose tasks we fold into another bucket (e.g. cancelled →
     # done). Anything outside this set is excluded from the board shape.
-    fetched_statuses =
-      (Enum.map(@kanban_status_keys, &Atom.to_string/1) ++
-         Map.keys(@status_bucket_overrides))
-      |> Enum.uniq()
+    fetched_statuses = fetched_board_statuses()
 
     tasks =
       Task
@@ -6876,6 +6972,35 @@ defmodule Platform.Tasks do
       |> preload([:project, :epic, :sponsor, plans: :stages])
       |> Repo.all()
 
+    bucket_by_status(tasks)
+  end
+
+  @doc """
+  The `list_by_status/1` shape built in memory from tasks already loaded by
+  `list_all_tasks/1` with the SAME options (task 01a166be stage 3): the board
+  loads its rows once and derives the columns, instead of querying the same
+  rows and preloads a second time.
+
+  Keeps only the statuses `list_by_status/1` fetches (`:stack_pending` and
+  any unknown status are dropped, `cancelled` folds into `:done`) and orders
+  each bucket by `updated_at` desc, as the query does.
+  """
+  @spec group_by_status([%Task{}]) :: %{atom() => [%Task{}]}
+  def group_by_status(tasks) when is_list(tasks) do
+    fetched = MapSet.new(fetched_board_statuses())
+
+    tasks
+    |> Enum.filter(&MapSet.member?(fetched, &1.status))
+    |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+    |> bucket_by_status()
+  end
+
+  defp fetched_board_statuses do
+    (Enum.map(@kanban_status_keys, &Atom.to_string/1) ++ Map.keys(@status_bucket_overrides))
+    |> Enum.uniq()
+  end
+
+  defp bucket_by_status(tasks) do
     empty = Map.new(@kanban_status_keys, &{&1, []})
 
     tasks

@@ -112,7 +112,7 @@ defmodule PlatformWeb.Components.MeetingBriefingRow do
         <span class="min-w-0 flex-1">
           <span class="flex flex-wrap items-center gap-2">
             <span
-              class="text-[11px] font-medium uppercase tracking-wide text-subtle"
+              class="text-xs font-medium uppercase tracking-wide text-subtle"
               data-role="inbox-meeting-briefing-kind"
             >
               {@row.kind}

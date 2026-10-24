@@ -1,0 +1,514 @@
+{
+  "task": "01a1557a-8f80-7000-9ee4-40b29760da18 stage 4",
+  "browser": "Chrome/155.0.8059.86",
+  "flags": "--headless=new --force-color-profile=srgb, deviceScaleFactor 1",
+  "css_bytes": 598775,
+  "classes": {
+    "switch_off": "<input type=\"checkbox\" role=\"switch\" class=\"toggle toggle-primary\">",
+    "switch_on": "<input type=\"checkbox\" role=\"switch\" checked class=\"toggle toggle-primary\">",
+    "radio_off": "<input type=\"radio\" class=\"radio radio-sm border-subtle text-base-content\">",
+    "radio_on": "<input type=\"radio\" checked class=\"radio radio-sm border-subtle text-base-content\">"
+  },
+  "readings": [
+    {
+      "variant": "burrow light",
+      "ground": "base-100",
+      "ground_painted": "#fbfaf9",
+      "switch_off": {
+        "painted": "#7d7d7c",
+        "ratio": 3.9525,
+        "modal": "#7d7d7c"
+      },
+      "switch_on": {
+        "painted": "#ad4b07",
+        "ratio": 5.3202,
+        "modal": "#ad4b07"
+      },
+      "radio_off": {
+        "painted": "#717170",
+        "ratio": 4.6867,
+        "modal": "#f3f2f1"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 20.144,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "burrow light",
+      "ground": "base-200",
+      "ground_painted": "#f6f4f1",
+      "switch_off": {
+        "painted": "#7b7a78",
+        "ratio": 3.9061,
+        "modal": "#7b7a78"
+      },
+      "switch_on": {
+        "painted": "#ad4b07",
+        "ratio": 5.0521,
+        "modal": "#fbfaf9"
+      },
+      "radio_off": {
+        "painted": "#6f6e6c",
+        "ratio": 4.6398,
+        "modal": "#767573"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 19.129,
+        "modal": "#fbfaf9"
+      }
+    },
+    {
+      "variant": "burrow dark",
+      "ground": "base-100",
+      "ground_painted": "#191b20",
+      "switch_off": {
+        "painted": "#838589",
+        "ratio": 4.6608,
+        "modal": "#838489"
+      },
+      "switch_on": {
+        "painted": "#f47721",
+        "ratio": 6.1588,
+        "modal": "#f47721"
+      },
+      "radio_off": {
+        "painted": "#8e9093",
+        "ratio": 5.3823,
+        "modal": "#888a8d"
+      },
+      "radio_on": {
+        "painted": "#eeeff1",
+        "ratio": 14.9735,
+        "modal": "#eeeff1"
+      }
+    },
+    {
+      "variant": "burrow dark",
+      "ground": "base-200",
+      "ground_painted": "#111214",
+      "switch_off": {
+        "painted": "#7f8083",
+        "ratio": 4.7461,
+        "modal": "#7f8083"
+      },
+      "switch_on": {
+        "painted": "#f47721",
+        "ratio": 6.7002,
+        "modal": "#191b20"
+      },
+      "radio_off": {
+        "painted": "#8b8c8e",
+        "ratio": 5.5688,
+        "modal": "#848587"
+      },
+      "radio_on": {
+        "painted": "#eeeff1",
+        "ratio": 16.2899,
+        "modal": "#191b20"
+      }
+    },
+    {
+      "variant": "burrow-midnight light",
+      "ground": "base-100",
+      "ground_painted": "#f8fafd",
+      "switch_off": {
+        "painted": "#7c7d81",
+        "ratio": 3.9323,
+        "modal": "#7c7d81"
+      },
+      "switch_on": {
+        "painted": "#b4470a",
+        "ratio": 5.2216,
+        "modal": "#b4470a"
+      },
+      "radio_off": {
+        "painted": "#707175",
+        "ratio": 4.6621,
+        "modal": "#f0f2f5"
+      },
+      "radio_on": {
+        "painted": "#000006",
+        "ratio": 20.0312,
+        "modal": "#000006"
+      }
+    },
+    {
+      "variant": "burrow-midnight light",
+      "ground": "base-200",
+      "ground_painted": "#eef2f8",
+      "switch_off": {
+        "painted": "#77797f",
+        "ratio": 3.8733,
+        "modal": "#77797f"
+      },
+      "switch_on": {
+        "painted": "#b4470a",
+        "ratio": 4.8596,
+        "modal": "#f8fafd"
+      },
+      "radio_off": {
+        "painted": "#6b6d73",
+        "ratio": 4.6037,
+        "modal": "#72747a"
+      },
+      "radio_on": {
+        "painted": "#000006",
+        "ratio": 18.6427,
+        "modal": "#f8fafd"
+      }
+    },
+    {
+      "variant": "burrow-midnight dark",
+      "ground": "base-100",
+      "ground_painted": "#111a2b",
+      "switch_off": {
+        "painted": "#7d8491",
+        "ratio": 4.6262,
+        "modal": "#7c8491"
+      },
+      "switch_on": {
+        "painted": "#ff8a3d",
+        "ratio": 7.4223,
+        "modal": "#ff8a3d"
+      },
+      "radio_off": {
+        "painted": "#888f9c",
+        "ratio": 5.351,
+        "modal": "#828996"
+      },
+      "radio_on": {
+        "painted": "#e9eef8",
+        "ratio": 14.9609,
+        "modal": "#e9eef8"
+      }
+    },
+    {
+      "variant": "burrow-midnight dark",
+      "ground": "base-200",
+      "ground_painted": "#0a0f1a",
+      "switch_off": {
+        "painted": "#797e89",
+        "ratio": 4.7061,
+        "modal": "#797e89"
+      },
+      "switch_on": {
+        "painted": "#ff8a3d",
+        "ratio": 8.1693,
+        "modal": "#111a2b"
+      },
+      "radio_off": {
+        "painted": "#858a94",
+        "ratio": 5.5287,
+        "modal": "#7e838e"
+      },
+      "radio_on": {
+        "painted": "#e9eef8",
+        "ratio": 16.4667,
+        "modal": "#111a2b"
+      }
+    },
+    {
+      "variant": "burrow-sand light",
+      "ground": "base-100",
+      "ground_painted": "#f8f1e6",
+      "switch_off": {
+        "painted": "#7c7873",
+        "ratio": 3.9064,
+        "modal": "#7c7873"
+      },
+      "switch_on": {
+        "painted": "#9c4306",
+        "ratio": 5.8141,
+        "modal": "#9c4306"
+      },
+      "radio_off": {
+        "painted": "#6b6863",
+        "ratio": 4.9442,
+        "modal": "#726f6a"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 18.716,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "burrow-sand light",
+      "ground": "base-200",
+      "ground_painted": "#efe9d8",
+      "switch_off": {
+        "painted": "#77746c",
+        "ratio": 3.8491,
+        "modal": "#77746c"
+      },
+      "switch_on": {
+        "painted": "#9c4306",
+        "ratio": 5.3796,
+        "modal": "#f8f1e6"
+      },
+      "radio_off": {
+        "painted": "#67645d",
+        "ratio": 4.8676,
+        "modal": "#6e6b63"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 17.3173,
+        "modal": "#f8f1e6"
+      }
+    },
+    {
+      "variant": "burrow-sand dark",
+      "ground": "base-100",
+      "ground_painted": "#211d16",
+      "switch_off": {
+        "painted": "#89847c",
+        "ratio": 4.517,
+        "modal": "#89847c"
+      },
+      "switch_on": {
+        "painted": "#e8842e",
+        "ratio": 6.207,
+        "modal": "#e8842e"
+      },
+      "radio_off": {
+        "painted": "#948f86",
+        "ratio": 5.2176,
+        "modal": "#28241d"
+      },
+      "radio_on": {
+        "painted": "#f2ece2",
+        "ratio": 14.2746,
+        "modal": "#f2ece2"
+      }
+    },
+    {
+      "variant": "burrow-sand dark",
+      "ground": "base-200",
+      "ground_painted": "#17140f",
+      "switch_off": {
+        "painted": "#848078",
+        "ratio": 4.6703,
+        "modal": "#848078"
+      },
+      "switch_on": {
+        "painted": "#e8842e",
+        "ratio": 6.7965,
+        "modal": "#211d16"
+      },
+      "radio_off": {
+        "painted": "#8f8b83",
+        "ratio": 5.4126,
+        "modal": "#89857d"
+      },
+      "radio_on": {
+        "painted": "#f2ece2",
+        "ratio": 15.6305,
+        "modal": "#211d16"
+      }
+    },
+    {
+      "variant": "burrow-forest light",
+      "ground": "base-100",
+      "ground_painted": "#f7faf7",
+      "switch_off": {
+        "painted": "#7b7d7b",
+        "ratio": 3.9458,
+        "modal": "#7b7d7b"
+      },
+      "switch_on": {
+        "painted": "#a3500a",
+        "ratio": 5.3846,
+        "modal": "#a3500a"
+      },
+      "radio_off": {
+        "painted": "#6f716f",
+        "ratio": 4.6801,
+        "modal": "#eff2ef"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 19.9722,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "burrow-forest light",
+      "ground": "base-200",
+      "ground_painted": "#eef3ef",
+      "switch_off": {
+        "painted": "#777977",
+        "ratio": 3.9079,
+        "modal": "#777977"
+      },
+      "switch_on": {
+        "painted": "#a3500a",
+        "ratio": 5.0421,
+        "modal": "#f7faf7"
+      },
+      "radio_off": {
+        "painted": "#6b6d6c",
+        "ratio": 4.6417,
+        "modal": "#727472"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 18.7021,
+        "modal": "#f7faf7"
+      }
+    },
+    {
+      "variant": "burrow-forest dark",
+      "ground": "base-100",
+      "ground_painted": "#151d19",
+      "switch_off": {
+        "painted": "#7f8782",
+        "ratio": 4.6578,
+        "modal": "#7f8782"
+      },
+      "switch_on": {
+        "painted": "#f0a040",
+        "ratio": 8.0279,
+        "modal": "#f0a040"
+      },
+      "radio_off": {
+        "painted": "#8a928d",
+        "ratio": 5.3835,
+        "modal": "#848c87"
+      },
+      "radio_on": {
+        "painted": "#eaf1ec",
+        "ratio": 14.9728,
+        "modal": "#eaf1ec"
+      }
+    },
+    {
+      "variant": "burrow-forest dark",
+      "ground": "base-200",
+      "ground_painted": "#0e1411",
+      "switch_off": {
+        "painted": "#7c837e",
+        "ratio": 4.7965,
+        "modal": "#7c837e"
+      },
+      "switch_on": {
+        "painted": "#f0a040",
+        "ratio": 8.7035,
+        "modal": "#151d19"
+      },
+      "radio_off": {
+        "painted": "#878e89",
+        "ratio": 5.556,
+        "modal": "#818783"
+      },
+      "radio_on": {
+        "painted": "#eaf1ec",
+        "ratio": 16.233,
+        "modal": "#151d19"
+      }
+    },
+    {
+      "variant": "high-contrast light",
+      "ground": "base-100",
+      "ground_painted": "#ffffff",
+      "switch_off": {
+        "painted": "#7f7f7f",
+        "ratio": 4.0041,
+        "modal": "#7f7f7f"
+      },
+      "switch_on": {
+        "painted": "#8a3300",
+        "ratio": 8.2218,
+        "modal": "#8a3300"
+      },
+      "radio_off": {
+        "painted": "#737373",
+        "ratio": 4.7417,
+        "modal": "#7a7a7a"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 21,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "high-contrast light",
+      "ground": "base-200",
+      "ground_painted": "#ffffff",
+      "switch_off": {
+        "painted": "#7f7f7f",
+        "ratio": 4.0041,
+        "modal": "#7f7f7f"
+      },
+      "switch_on": {
+        "painted": "#8a3300",
+        "ratio": 8.2218,
+        "modal": "#8a3300"
+      },
+      "radio_off": {
+        "painted": "#737373",
+        "ratio": 4.7417,
+        "modal": "#7a7a7a"
+      },
+      "radio_on": {
+        "painted": "#000000",
+        "ratio": 21,
+        "modal": "#000000"
+      }
+    },
+    {
+      "variant": "high-contrast dark",
+      "ground": "base-100",
+      "ground_painted": "#0a0a0a",
+      "switch_off": {
+        "painted": "#858485",
+        "ratio": 5.3139,
+        "modal": "#858485"
+      },
+      "switch_on": {
+        "painted": "#ff8c2a",
+        "ratio": 8.5195,
+        "modal": "#ff8c2a"
+      },
+      "radio_off": {
+        "painted": "#919191",
+        "ratio": 6.2816,
+        "modal": "#8a8a8a"
+      },
+      "radio_on": {
+        "painted": "#ffffff",
+        "ratio": 19.7981,
+        "modal": "#ffffff"
+      }
+    },
+    {
+      "variant": "high-contrast dark",
+      "ground": "base-200",
+      "ground_painted": "#000000",
+      "switch_off": {
+        "painted": "#807f80",
+        "ratio": 5.2653,
+        "modal": "#807f80"
+      },
+      "switch_on": {
+        "painted": "#ff8c2a",
+        "ratio": 9.0367,
+        "modal": "#0a0a0a"
+      },
+      "radio_off": {
+        "painted": "#8c8c8c",
+        "ratio": 6.245,
+        "modal": "#858585"
+      },
+      "radio_on": {
+        "painted": "#ffffff",
+        "ratio": 21,
+        "modal": "#0a0a0a"
+      }
+    }
+  ]
+}

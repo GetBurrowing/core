@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import PushSubscribe, { nativePlatform, nativePushPlugin } from "../../js/hooks/push_subscribe.js"
+import PushSubscribe, {
+  nativePlatform,
+  nativePushPlugin,
+  pushOptedOut
+} from "../../js/hooks/push_subscribe.js"
+import ClientState, { __resetForTests } from "../../js/client_state.js"
 
 /**
  * The `PushSubscribe` hook (task 01a10882 stage 3).
@@ -291,5 +296,132 @@ describe("android shell", () => {
       "push_permission_state",
       { state: "granted", native_platform: "android" }
     ])
+  })
+})
+
+// Task 01a1557a-e538 stage 4: "Push on this device" off, per browser. The
+// opt-out lives in ClientState (namespace "push", key "opted_out"); while it
+// is set a granted mount reports `opted_out` and never subscribes, so a
+// reload cannot quietly turn push back on.
+describe("push off (opt-out)", () => {
+  function stubStorage() {
+    const store = new Map()
+    vi.stubGlobal("localStorage", {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+      key: i => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size
+      }
+    })
+    return store
+  }
+
+  afterEach(() => {
+    __resetForTests()
+  })
+
+  it("disable_push unsubscribes, sets the opt-out and reports the endpoint", async () => {
+    const store = stubStorage()
+    const sub = {
+      endpoint: "https://push.example/e1",
+      toJSON: () => ({ endpoint: "https://push.example/e1", keys: { p256dh: "p", auth: "a" } }),
+      unsubscribe: vi.fn(async () => true)
+    }
+    const pushManager = { getSubscription: vi.fn(async () => sub), subscribe: vi.fn() }
+    stubBrowser({ permission: "granted", pushManager })
+    const { events, handlers } = mountHook()
+    await flush()
+    events.length = 0
+
+    await handlers.disable_push()
+    await flush()
+
+    expect(sub.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(pushOptedOut()).toBe(true)
+    expect(store.get("suite:push:opted_out")).toBe("true")
+    expect(events).toContainEqual(["push_unsubscribed", { endpoint: "https://push.example/e1" }])
+  })
+
+  it("an unsubscribe that rejects still sets the opt-out and reports the endpoint", async () => {
+    stubStorage()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const sub = {
+      endpoint: "https://push.example/e3",
+      toJSON: () => ({ endpoint: "https://push.example/e3", keys: { p256dh: "p", auth: "a" } }),
+      unsubscribe: vi.fn(async () => {
+        throw Object.assign(new Error("gone"), { name: "InvalidStateError" })
+      })
+    }
+    const pushManager = { getSubscription: vi.fn(async () => sub), subscribe: vi.fn() }
+    stubBrowser({ permission: "granted", pushManager })
+    const { events, handlers } = mountHook()
+    await flush()
+    events.length = 0
+
+    handlers.disable_push()
+    await flush()
+    await flush()
+
+    expect(sub.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(pushOptedOut()).toBe(true)
+    expect(events).toEqual([["push_unsubscribed", { endpoint: "https://push.example/e3" }]])
+    expect(events.some(([name]) => name === "push_subscribe_failed")).toBe(false)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it("a granted mount with the opt-out set reports opted_out and never subscribes", async () => {
+    stubStorage()
+    ClientState.set("push", "opted_out", true)
+    const pushManager = { getSubscription: vi.fn(async () => null), subscribe: vi.fn() }
+    stubBrowser({ permission: "granted", pushManager })
+    const { events } = mountHook()
+    await flush()
+    await flush()
+
+    expect(pushManager.getSubscription).not.toHaveBeenCalled()
+    expect(pushManager.subscribe).not.toHaveBeenCalled()
+    expect(events).toEqual([["push_permission_state", { state: "granted", opted_out: true }]])
+    expect(events.some(([name]) => name === "push_subscribed")).toBe(false)
+  })
+
+  it("request_push_permission clears the opt-out before asking", async () => {
+    stubStorage()
+    ClientState.set("push", "opted_out", true)
+    const fresh = {
+      toJSON: () => ({ endpoint: "https://push.example/e2", keys: { p256dh: "p", auth: "a" } })
+    }
+    const pushManager = {
+      getSubscription: vi.fn(async () => null),
+      subscribe: vi.fn(async () => fresh)
+    }
+    stubBrowser({ permission: "granted", pushManager })
+    globalThis.Notification.requestPermission = vi.fn(async () => "granted")
+    const { handlers } = mountHook()
+    expect(pushOptedOut()).toBe(true)
+
+    handlers.request_push_permission()
+    expect(pushOptedOut()).toBe(false)
+    expect(globalThis.Notification.requestPermission).toHaveBeenCalledTimes(1)
+    // Let the grant's subscribe chain settle before the stubs are removed.
+    await flush()
+    await flush()
+    expect(pushManager.subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it("the native mount is unaffected by the opt-out", async () => {
+    stubStorage()
+    ClientState.set("push", "opted_out", true)
+    const enablePush = vi.fn(async () => ({ registered: true }))
+    stubNative({ pushState: async () => ({ state: "granted" }), enablePush })
+    const { events, handlers } = mountHook()
+    await flush()
+    await flush()
+
+    expect(enablePush).toHaveBeenCalledTimes(1)
+    expect(events).toEqual([["push_permission_state", { state: "granted" }]])
+    expect(handlers.disable_push).toBeUndefined()
   })
 })

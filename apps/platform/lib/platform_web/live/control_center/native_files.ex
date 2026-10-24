@@ -77,7 +77,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <h2 class="text-lg font-semibold text-base-content">Agent files</h2>
-          <p class="mt-1 text-sm text-base-content/60">
+          <p class="mt-1 text-sm text-subtle">
             Changes apply the next time {@agent.name} starts.
           </p>
         </div>
@@ -95,7 +95,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <p
         :if={!@can_manage?}
         id="native-files-locked"
-        class="mt-4 rounded-box border border-edge bg-base-200/50 px-4 py-3 text-sm text-base-content/70"
+        class="mt-4 rounded-box border border-edge bg-base-200/50 px-4 py-3 text-sm text-base-content"
       >
         {locked_message()}
       </p>
@@ -122,7 +122,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
       <%!-- Narrow screens (375px): a select and the file, read-only. --%>
       <div :if={@can_manage?} id="native-files-narrow" class="mt-4 md:hidden">
         <form id="native-files-pick" phx-change="select_workspace_file">
-          <label for="native-files-select" class="mb-1 block text-sm text-base-content/70">
+          <label for="native-files-select" class="mb-1 block text-sm text-base-content">
             File
           </label>
           <select id="native-files-select" name="file_key" class="select select-bordered w-full">
@@ -140,7 +140,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
           id="native-files-readonly"
           class="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-box border border-edge bg-base-200/40 p-3 font-mono text-[13px] leading-5 text-base-content"
         >{@selected_workspace_file.content}</pre>
-        <p class="mt-2 text-sm text-base-content/60">Edit files on a larger screen.</p>
+        <p class="mt-2 text-sm text-subtle">Edit files on a larger screen.</p>
       </div>
 
       <div
@@ -174,7 +174,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
           </button>
           <div
             :if={@workspace_files == []}
-            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-base-content/60"
+            class="rounded-2xl border border-dashed border-edge px-3 py-4 text-sm text-subtle"
           >
             No files yet.
           </div>
@@ -189,7 +189,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
             class="flex flex-col gap-3"
           >
             <div :if={is_nil(@selected_workspace_file)}>
-              <label for="native-file-key" class="mb-1 block text-sm text-base-content/70">
+              <label for="native-file-key" class="mb-1 block text-sm text-base-content">
                 File name
               </label>
               <input
@@ -236,7 +236,7 @@ defmodule PlatformWeb.ControlCenter.NativeFiles do
             </p>
 
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p id="native-files-meta" class="text-xs text-base-content/60" role="status">
+              <p id="native-files-meta" class="text-xs text-subtle" role="status">
                 <%= cond do %>
                   <% @stopped_hint? -> %>
                     Saved. {@agent.name} will use this the next time it starts.

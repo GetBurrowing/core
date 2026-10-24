@@ -423,7 +423,7 @@ defmodule PlatformWeb.CoreComponents do
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-base-content">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -469,21 +469,21 @@ defmodule PlatformWeb.CoreComponents do
         <li :for={{seg, i} <- Enum.with_index(@segments)} class="flex items-center gap-1.5">
           <span
             :if={i > 0}
-            class="hero-chevron-right size-3 text-base-content/30"
+            class="hero-chevron-right size-3 text-subtle"
             aria-hidden="true"
           />
           <.link
             :if={seg.navigate}
             navigate={seg.navigate}
             data-role="breadcrumb-link"
-            class="font-medium uppercase tracking-wider text-base-content/50 transition-colors hover:text-primary"
+            class="font-medium uppercase tracking-wider text-subtle transition-colors hover:text-primary"
           >
             {seg.label}
           </.link>
           <span
             :if={!seg.navigate}
             data-role="breadcrumb-current"
-            class="font-medium uppercase tracking-wider text-base-content/70"
+            class="font-medium uppercase tracking-wider text-base-content"
             aria-current="page"
           >
             {seg.label}

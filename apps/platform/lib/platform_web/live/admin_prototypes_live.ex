@@ -123,14 +123,14 @@ defmodule PlatformWeb.AdminPrototypesLive do
         %{label: "Prototypes", navigate: nil}
       ]} />
       <div class="flex items-center justify-between border-b border-edge px-4 py-3">
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
           Admin · Prototypes
         </h1>
       </div>
 
-      <div class="flex-1 min-h-0 overflow-y-auto p-4">
+      <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
         <div class="mx-auto max-w-2xl space-y-4">
-          <p class="text-sm text-base-content/60">
+          <p class="text-sm text-subtle">
             Prototypes are clickable HTML bundles that agents and people publish with
             <code class="font-mono text-xs">prototype_publish</code>
             or the New canvas form, served sealed (no network, no Burrow access) to members of
@@ -147,7 +147,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
             <div class="flex items-center justify-between gap-4 p-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Publishing</p>
-                <p class="text-xs text-base-content/60">
+                <p class="text-xs text-subtle">
                   Off by default. While off, every publish is refused and the New canvas form
                   hides the Prototype choice. Published versions keep serving.
                 </p>
@@ -164,7 +164,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
             <div class="grid gap-2 p-4 sm:grid-cols-[1fr_16rem] sm:items-center sm:gap-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Who may publish</p>
-                <p class="text-xs text-base-content/60">Also governs rollback.</p>
+                <p class="text-xs text-subtle">Also governs rollback.</p>
               </div>
               <.input
                 field={@form[:who_may_publish]}
@@ -178,7 +178,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
             <div class="grid gap-2 p-4 sm:grid-cols-[1fr_16rem] sm:items-center sm:gap-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Max bundle size (MB)</p>
-                <p class="text-xs text-base-content/60">Uncompressed total of every file.</p>
+                <p class="text-xs text-subtle">Uncompressed total of every file.</p>
               </div>
               <.input
                 field={@form[:max_bundle_mb]}
@@ -193,7 +193,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
             <div class="grid gap-2 p-4 sm:grid-cols-[1fr_16rem] sm:items-center sm:gap-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Max files</p>
-                <p class="text-xs text-base-content/60">Files in one bundle.</p>
+                <p class="text-xs text-subtle">Files in one bundle.</p>
               </div>
               <.input
                 field={@form[:max_files]}
@@ -208,7 +208,7 @@ defmodule PlatformWeb.AdminPrototypesLive do
             <div class="grid gap-2 p-4 sm:grid-cols-[1fr_16rem] sm:items-center sm:gap-4">
               <div class="min-w-0">
                 <p class="text-sm font-medium text-base-content">Retention (days)</p>
-                <p class="text-xs text-base-content/60">
+                <p class="text-xs text-subtle">
                   Older versions are removed after this many days. Blank keeps every version.
                   The latest version is never removed.
                 </p>

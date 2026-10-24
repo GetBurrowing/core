@@ -71,13 +71,12 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooksTest do
 
   defp uploads_in(payload), do: payload[:uploads] || payload["uploads"]
 
-  test "a staged file over the limit is refused with the server's label and the hint names it",
+  test "a staged file over the limit is refused with the server's label in the tray",
        %{view: view} do
     html = stage(view, "r1", "quarterly-raw.mov", 1_153_433_600)
     flat = text(html)
 
     assert flat =~ "quarterly-raw.mov is 1.2 GB. This Burrow install accepts files up to 1 GB."
-    assert flat =~ "Up to 1 GB per file"
     assert html =~ ~s(data-too-large="true")
     # Error hue on the icon only; the words are base-content.
     assert html =~ ~r/hero-exclamation-circle[^"]*text-error/
@@ -167,8 +166,14 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooksTest do
        %{view: view, space: space} do
     stage(view, "r3", "a.mov", 20_000_000)
     stage(view, "r4", "b.mov", 1_153_433_600)
-    render_change(view, "upload_caption_change", %{"caption" => "the walkthrough"})
-    html = render_click(view, "upload_send")
+
+    # A too-large file staged blocks the send outright (rung 11): nothing is
+    # reserved and nothing posts until it is removed.
+    render_submit(view, "send_message", %{"compose" => %{"text" => "the walkthrough"}})
+    assert Repo.all(from(a in Attachment, where: a.space_id == ^space.id)) == []
+
+    render_click(view, "large_upload_unstage", %{"ref" => "r4"})
+    html = render_submit(view, "send_message", %{"compose" => %{"text" => "the walkthrough"}})
 
     assert_push_event(view, "large_upload:begin", payload)
 
@@ -185,7 +190,7 @@ defmodule PlatformWeb.ChatLive.LargeUploadHooksTest do
 
     assert space_id == space.id
 
-    # The too-large file was never reserved.
+    # The removed too-large file was never reserved.
     [row] = Repo.all(from(a in Attachment, where: a.space_id == ^space.id))
     assert row.filename == "a.mov"
     assert row.metadata["pending_message"]["content"] == "the walkthrough"

@@ -47,7 +47,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Agent Resources")
+     |> assign(:page_title, "Agents")
      |> assign(:current_user_id, current_user_id)
      |> assign(:agent_host_connected?, AgentHost.connected?())
      |> assign(:restarting_agent_id, nil)
@@ -849,10 +849,10 @@ defmodule PlatformWeb.ControlCenterLive do
           <div class="border-b border-edge px-4 py-4 sm:px-5">
             <div class="flex items-start justify-between gap-3">
               <div>
-                <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Agent Resources
+                <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
+                  Agents
                 </p>
-                <p class="mt-1 text-sm text-base-content/70">
+                <p class="mt-1 text-sm text-base-content">
                   Manage, federate, and monitor your agents.
                 </p>
               </div>
@@ -869,7 +869,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
           <nav
             id="agent-list"
-            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
+            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 clears-tab-bar"
           >
             <AgentCard.card
               :for={agent <- @agents}
@@ -887,7 +887,7 @@ defmodule PlatformWeb.ControlCenterLive do
               class="flex flex-col items-center gap-6 px-4 py-10 text-center"
             >
               <div>
-                <span class="hero-rectangle-stack mx-auto h-12 w-12 text-base-content/25" />
+                <span class="hero-rectangle-stack mx-auto h-12 w-12 text-subtle" />
                 <p class="mt-3 text-lg font-semibold text-base-content">Add your first agent</p>
                 <p class="mt-1 text-sm text-subtle">
                   Choose a template, federate from OpenClaw, import from a workspace, or build from scratch.
@@ -1122,7 +1122,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp assign_empty_panel(socket) do
     socket
-    |> assign(:page_title, "Agent Resources")
+    |> assign(:page_title, "Agents")
     |> assign(:selected_agent, nil)
     |> assign(:runtime, %{status: :unknown, running?: false, pid: nil, active_session_ids: []})
     |> assign(:overview_counts, %{workspace_files: 0, memories: 0, sessions: 0, vault: 0})
@@ -1191,7 +1191,7 @@ defmodule PlatformWeb.ControlCenterLive do
     runtime = AgentData.runtime_snapshot(agent)
 
     socket
-    |> assign(:page_title, "Control Center · #{agent.name}")
+    |> assign(:page_title, "Agents · #{agent.name}")
     |> assign(:selected_agent, agent)
     |> assign(:runtime, runtime)
     |> assign(:overview_counts, %{

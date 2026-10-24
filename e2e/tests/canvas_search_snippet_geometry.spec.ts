@@ -69,8 +69,8 @@
  *
  * This suite is NOT in CI (`.github/workflows/ci.yml` runs
  * `mix format --check-formatted` and `mix test` only). A green CI says nothing
- * about this file — a `#longpress-menu` assertion in chat_reactions.spec.ts
- * rotted for months for exactly that reason. It has to be run by hand, and the
+ * about this file — an assertion on a since-deleted long-press overlay in
+ * chat_reactions.spec.ts rotted for months for exactly that reason. It has to be run by hand, and the
  * reviewer of this stage has to run it too.
  *
  *   cd apps/platform && mix run priv/scripts/seed_canvas_search_snippet_fixture.exs

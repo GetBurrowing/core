@@ -1,5 +1,8 @@
 // TasksStatusFilter
 //
+// parallel-ui: tasks.mobile_status_pill
+// Kept for the old phone board only; the phone Tasks list filters by ?status=.
+//
 // Persists the active mobile-Tasks status-filter pill across page loads via
 // Suite.ClientState. The LiveView keeps the source-of-truth assign
 // (`@active_status_filter`, default `"in_progress"` on mount) — this hook just:

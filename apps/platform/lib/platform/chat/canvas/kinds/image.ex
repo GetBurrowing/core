@@ -73,7 +73,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
            canvas column, so `max-w-full` scales it down to the point of being
            unreadable — and a bare <img> offers no way back out. `target`
            opens the original at native size in a new tab, which needs no
-           JS, no lightbox dependency, and keeps working on the standalone
+           JS, no chat viewer dependency, and keeps working on the standalone
            canvas page as well as inside chat.
 
            Deliberately NOT a click-to-expand overlay: canvases render in two
@@ -96,7 +96,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
           ]}
         />
       </a>
-      <p :if={@props["caption"]} class="text-[11px] text-base-content/50 text-center mt-1">
+      <p :if={@props["caption"]} class="text-[11px] text-subtle text-center mt-1">
         {@props["caption"]}
       </p>
     </div>

@@ -227,7 +227,7 @@ defmodule PlatformWeb.Components.FilePreview do
           <.no_text_yet :if={!@text} scope={@scope} />
         <% :unknown -> %>
           <div
-            class="rounded border border-edge bg-base-200 p-4 text-sm text-base-content/70"
+            class="rounded border border-edge bg-base-200 p-4 text-sm text-base-content"
             data-role={@scope <> "-unknown"}
           >
             <p>Cannot preview this file type ({@file.content_type}) in the browser.</p>
@@ -251,7 +251,7 @@ defmodule PlatformWeb.Components.FilePreview do
 
   defp no_text_yet(assigns) do
     ~H"""
-    <p class="text-sm text-base-content/60" data-role={@scope <> "-no-text"}>
+    <p class="text-sm text-subtle" data-role={@scope <> "-no-text"}>
       No extracted text yet. The file may still be ingesting.
     </p>
     """
@@ -294,7 +294,7 @@ defmodule PlatformWeb.Components.FilePreview do
         {@file.original_filename || @file.name || "file"}
       </span>
       <span
-        class="shrink-0 whitespace-nowrap font-mono text-xs text-base-content/70"
+        class="shrink-0 whitespace-nowrap font-mono text-xs text-subtle"
         data-role={@scope <> "-html-size"}
       >
         {FilesLive.humanize_bytes(@file.byte_size)}
@@ -357,6 +357,7 @@ defmodule PlatformWeb.Components.FilePreview do
       phx-window-keydown="close_preview_fullscreen"
       phx-key="Escape"
       data-role="files-preview-fullscreen"
+      data-fullscreen-viewer
     >
       <div class="absolute inset-0 bg-black/50" phx-click="close_preview_fullscreen" />
       <div class="relative z-10 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-edge bg-base-100 shadow-2xl max-sm:h-full max-sm:max-h-none max-sm:rounded-none">
@@ -365,7 +366,7 @@ defmodule PlatformWeb.Components.FilePreview do
             <div class="truncate text-sm font-semibold">
               {@file.name || @file.original_filename || "File"}
             </div>
-            <div class="text-xs text-base-content/60">{@file.content_type}</div>
+            <div class="text-xs text-subtle">{@file.content_type}</div>
           </div>
           <button
             class="btn btn-ghost btn-sm btn-square max-sm:min-h-[44px] max-sm:min-w-[44px]"

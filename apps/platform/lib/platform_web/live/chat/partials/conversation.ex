@@ -4,7 +4,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   `<div id="chat-drop-zone">` and the message list.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
-  `ChatLive.Partials.Rail` and `ChatLive.Partials.MobileBrowser` (ADR 0035):
+  `ChatLive.Partials.Rail` and `ChatLive.Partials.ChatList` (ADR 0035):
   function components, no state, each taking a declared set of attrs.
   Extracted from `chat_live.html.heex` in task 01a0312e stage 5 as a PURE
   MOVE — every `id`, `phx-hook`, `phx-click`, `phx-value-*`, `data-*` and
@@ -15,9 +15,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     * `space_header/1` — the `<header>` space bar: the mobile and desktop
       title branches, the group promote form, the Meet button, the search
       form, the canvas/pin counters, the agent eye and settings
-    * `mobile_pinned_strip/1` — `<nav data-role="mobile-pinned-strip">`
-    * `channel_pills/1` — `<nav aria-label="Channel switcher">`, including
-      the left-anchored magnifying-glass button
     * `search_drawer/1` — the search-results drawer
     * `pins_drawer/1` — the pinned-messages drawer
     * `canvases_drawer/1` — the live-canvases drawer and its new-canvas form
@@ -50,19 +47,22 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   that FORGETS to declare them does not crash and does not render blank — it
   silently renders REAL WORKSPACE NAMES with the mask switched on, and every
   markup assertion still passes. So all three are declared on `space_header/1`
-  (both branches), `mobile_pinned_strip/1` and `channel_pills/1`.
+  (both branches). The phone's pinned strip and channel pills, which declared
+  them too, were deleted with the drawer (task 01a1557a-8562 stage 5); the
+  phone Chat list replaced all three.
 
-  ## WHY THE TWO MASK CALLS ARE WRAPPED, NOT QUALIFIED
+  ## WHY THE MASK CALL IS WRAPPED, NOT QUALIFIED
 
-  `space_mask/1` and `masked_space_name/2` live in `PlatformWeb.ChatLive`,
-  which imports this module — so they cannot be imported back. They are
-  wrapped in private functions of the SAME NAME AND ARITY rather than called
-  as `ChatLive.space_mask(...)` because two of the call sites sit inside
-  `truncate` spans on lines already close to the formatter's width: a longer
-  call reflows the interpolation onto its own line, which puts whitespace
-  INSIDE the span and changes the rendered text while every markup assertion
-  stays green (task 01a0312e stage 3 finding). Same call text, same wrapping,
-  no reflow.
+  `space_mask/1` lives in `PlatformWeb.ChatLive`, which imports this module —
+  so it cannot be imported back. It is wrapped in a private function of the
+  SAME NAME AND ARITY rather than called as `ChatLive.space_mask(...)`
+  because call sites inside `truncate` spans sit on lines already close to
+  the formatter's width: a longer call reflows the interpolation onto its own
+  line, which puts whitespace INSIDE the span and changes the rendered text
+  while every markup assertion stays green (task 01a0312e stage 3 finding).
+  Same call text, same wrapping, no reflow. The `masked_space_name/2` and
+  `space_nav_target/1` wrappers left with their only callers, the channel
+  pills and the pinned strip (task 01a1557a-8562 stage 5).
   """
 
   use Phoenix.Component
@@ -71,12 +71,9 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   import PlatformWeb.ChatLive.RenderHelpers,
     only: [
       search_headline: 1,
-      sidebar_display_name: 2,
-      space_header_name: 4,
-      unread_label: 1
+      space_header_name: 4
     ]
 
-  import PlatformWeb.ChatLive.Partials, only: [brand_new_user_empty_state: 1]
   # `relative_time/1` left this list in task 01a0740d stage 3 along with the
   # flat canvas rows that used it. The explorer's browse row is title-only by
   # design (the group header has already said where you are) and its search row
@@ -84,18 +81,19 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # would be an import for nothing.
   import PlatformWeb.Components.ChatHelpers, only: [present?: 1]
   import PlatformWeb.Components.Canvases.CanvasExplorer, only: [canvas_explorer: 1]
-  import PlatformWeb.CoreComponents, only: [input: 1]
+  import PlatformWeb.CoreComponents, only: [icon: 1, input: 1]
   import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
   import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
   import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias Phoenix.LiveView.JS
-  alias Platform.Chat.Sidebar
   alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.MembersComponent
+  alias PlatformWeb.ChatLive.Partials.AgentsSheet
   alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:active_space, :any, required: true)
@@ -127,10 +125,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:show_pins, :boolean, required: true)
   attr(:agent_presence, :map, required: true)
   attr(:has_agent_participant, :boolean, required: true)
-  attr(:active_agent_participant_id, :any, required: true)
-  attr(:active_agent_armable_id, :any, required: true)
-  attr(:active_agent_name, :any, required: true)
-  attr(:active_agent_armable_name, :any, required: true)
+  # The Agents sheet (task 01a1557a-8f80 stage 2): its open flag and
+  # `Chat.agent_attention_state/1`, for the header entry and the popover.
+  attr(:agents_sheet_open, :boolean, required: true)
+  attr(:agent_attention, :any, required: true)
+  # The Members sheet (task 01a1557a-8f80 stage 3): its open flag and the
+  # viewer whose presence union decides online/away, for the popover instance.
+  attr(:show_members, :boolean, required: true)
+  attr(:current_user_record, :any, default: nil)
   attr(:goal_panel, :any, required: true)
   attr(:goal_edit, :boolean, required: true)
   attr(:can_edit_goal?, :boolean, required: true)
@@ -148,13 +150,19 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # resolved IANA zone (nil renders UTC).
   attr(:goal_cadence_form, :map, default: nil)
   attr(:goal_time_zone, :string, default: nil)
+  # Task 01a1557a-8a6d stage 1 (rung 7): the phone title button opens the
+  # space sheet (`SpaceSheetHooks`). `@space_sheet` drives its
+  # `aria-expanded`; `@agent_status` (PresenceHooks) is the agent-DM
+  # subtitle.
+  attr(:space_sheet, :any, default: nil)
+  attr(:agent_status, :any, default: nil)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
   canvas/pin counters, the agent eye and settings.
 
   The `@active_space && !@embedded` gate travelled INTO the component with
-  the markup (same convention as `Rail.rail/1` and `MobileBrowser.mobile_browser/1`),
+  the markup (same convention as `Rail.rail/1` and `ChatList.chat_list/1`),
   so the call site states no render condition of its own.
   """
   def space_header(assigns) do
@@ -171,78 +179,68 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            Applied to BOTH breakpoint branches below — the mobile and desktop
            titles are separate nodes, and a mask applied to one of them is the
            shape of bug this stage exists to find. --%>
-      <div class="flex items-center gap-2 overflow-hidden">
-        <%!-- Mobile: static channel name. Channel switching now happens via the
-             pills strip below the header (Refined Option A — design approval
-             2026-05-10). The previous tap-channel-name-to-open-browser flow
-             was confusing with the shell's hamburger menu — both opened
-             drawers, so users could tap one when they meant the other. The
-             pills strip makes channel switching 1-tap and removes the
-             dual-affordance ambiguity. The overflow magnifying-glass icon at
-             the right of the strip still opens the full channel browser
-             (this template's @mobile_browser_open overlay) for the long-tail
-             jump-to-channel case. --%>
-        <div class="flex items-center gap-2 overflow-hidden lg:hidden">
-          <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
-          <span class="truncate font-semibold">
-            {space_header_name(
-              @active_space,
-              @space_participants,
-              @user_id,
-              space_mask(assigns)
-            )}
-          </span>
-          <%!-- Compact scope-pill on the mobile chat header (chat sidebar
-               mobile Stage 2, Decision #6). Mirrors the desktop header pill
-               (the `hidden lg:flex` block just below) but uses the foundation
-               task's `:compact` size variant for the tight mobile bar. Only
-               rendered for channels — `@active_space_scope` is nil for
-               DMs/groups (no org-scope), so the pill is suppressed there. The
-               `.chat-header-scope-pill-mobile` wrapper enlarges the compact
-               pill's tap target to >=44x44px (app.css): the shared
-               `.scope-pill-hit-expand` overlay only clears the 24px WCAG floor
-               and would be clipped by this row's overflow-hidden. --%>
-          <% mobile_header_scope = !@external? && @active_space_scope %>
-          <span
-            :if={mobile_header_scope}
-            class="chat-header-scope-pill-mobile flex-shrink-0"
+      <%!-- `max-lg:` only (task 01a1557a-8a6d stage 1): on the phone the
+           title takes the row's spare width, so the name truncates last.
+           At lg the row lays out exactly as before. --%>
+      <div class="flex items-center gap-2 overflow-hidden max-lg:min-w-0 max-lg:flex-1">
+        <%!-- Mobile: static channel name. Channel switching on the phone is the
+             Chat list (task 01a1557a-8562), reached through the back chevron
+             below or the tab bar's Chat tab; the pills strip and the drawer
+             it opened were deleted in that task's stage 5. --%>
+        <div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden lg:hidden">
+          <%!-- Back to the phone Chat list (task 01a1557a-8562 stage 2,
+               coverage row 64). A plain patch link with NO phx-click: a bare
+               `phx-click` on a patch link throws in the client, and anything
+               that must reset on the way back resets in `handle_params/3`.
+               An external user follows it too: their /chat has no active
+               space, so it lands on `#external-mobile-switcher`, their own
+               list. Rung 7 restyles the rest of this header. --%>
+          <.link
+            patch={~p"/chat"}
+            class="-ml-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-base-content lg:hidden focus-visible-ring"
+            aria-label="Back to chat list"
+            data-role="chat-back"
           >
-            <%!-- Masked like the rail (task 01a00c66 stage 3): this pill sits
-                 in the chat header at the top of the phone screen, which is
-                 the MOST visible surface in a mirrored window. The label
-                 override reaches the pill's `aria-label` too. --%>
-            <%!-- `surface` is declared, not inherited (task 01a09333-d374):
-                 the `<header>` sets no fill, so this sits on the shell's
-                 `bg-base-100`. --%>
-            <.scope_pill
-              scope={mobile_header_scope}
-              surface={:base_100}
-              size={:compact}
-              clickable={true}
-              active={@scope_filter == mobile_header_scope}
-              label={
-                if @mask_names?,
-                  do:
-                    Platform.Chat.SidebarMask.label_for_bucket(
-                      Platform.Chat.SidebarMask.context(
-                        @sidebar_sections,
-                        @mask_names?,
-                        @revealed_section_ids
-                      ),
-                      @sidebar_sections,
-                      @active_space_org && @active_space_org.name
-                    ),
-                  else: @active_space_org && @active_space_org.name
-              }
-              value={if !@mask_names? && @active_space_org, do: @active_space_org.slug}
-            />
-          </span>
+            <span class="hero-chevron-left size-5" aria-hidden="true"></span>
+          </.link>
+          <%!-- The title IS the way into the space sheet (task 01a1557a-8a6d
+               stage 1): one button holding the name, a chevron and a
+               subtitle. The name goes through `space_header_name/4` +
+               `space_mask/1` like every other title node, and so does the
+               accessible name, so masking covers what a screen reader says
+               too. Focus comes back here when the sheet closes: the Sheet
+               hook stores the element focused when it opened (this button,
+               which the tap focused) and restores it on close. --%>
+          <% title =
+            title_prefix(@active_space) <>
+              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns)) %>
+          <button
+            type="button"
+            phx-click="open_space_sheet"
+            data-role="space-title"
+            aria-haspopup="dialog"
+            aria-controls="space-sheet"
+            aria-expanded={to_string(@space_sheet != nil)}
+            aria-label={"Space details, " <> title}
+            class="flex min-h-11 min-w-0 flex-col justify-center rounded-lg text-left text-base-content focus-visible-ring"
+          >
+            <span class="flex min-w-0 items-center gap-1">
+              <span class="min-w-0 truncate font-semibold">{title}</span>
+              <span class="hero-chevron-down size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+            </span>
+            <span class="truncate text-xs text-subtle" data-role="space-title-subtitle">
+              {space_subtitle(@active_space, @space_participants, @user_id, @agent_status)}
+            </span>
+          </button>
+          <%!-- The compact mobile scope pill that sat here moved to the space
+               sheet's Scope row (task 01a1557a-8a6d stage 3), with the same
+               masked label and the same `scope_filter` event. --%>
         </div>
         <%!-- Desktop: static title --%>
         <span class="hidden lg:flex items-center gap-2 overflow-hidden">
           <span
             :if={@active_space.kind == "channel"}
-            class="text-base-content/50 text-lg font-bold"
+            class="text-subtle text-lg font-bold"
           >
             #
           </span>
@@ -311,13 +309,13 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                silently. --%>
           <span
             :if={@active_space.kind == "channel" && @active_space.topic && is_nil(@goal_panel)}
-            class="truncate text-xs text-base-content/40"
+            class="truncate text-xs text-subtle"
           >
             — {@active_space.topic}
           </span>
           <span
             :if={@active_space.kind == "group"}
-            class="text-xs text-base-content/40"
+            class="text-xs text-subtle"
           >
             — {length(@space_participants)} members
           </span>
@@ -354,24 +352,27 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          SERVER REFUSAL IS THE GATE; this is cosmetics over it. Removing
          the condition here re-exposes a dead button, not a hole. A
          button that does nothing when clicked is quiet degradation, and
-         that is the whole reason this line exists. --%>
+         that is the whole reason this line exists.
+
+         Desktop only since task 01a1557a-8a6d stage 1: below lg the Call
+         button at the end of the header carries the same gate and event. --%>
       <button
         :if={@meetings_enabled && !@in_meeting && !@external?}
         phx-click="meeting_join"
-        class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content/60 hover:text-primary hover:bg-primary/10 transition-colors"
+        class="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content hover:text-primary hover:bg-primary/10 transition-colors"
         title="Start or join a meeting in this space"
       >
         <span class="hero-video-camera size-4"></span>
         <span class="hidden md:inline">Meet</span>
       </button>
 
-      <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
+      <div class="flex flex-shrink-0 items-center gap-3 text-xs text-subtle">
         <.form
           for={@search_form}
           id="chat-search-form"
           phx-change="search_submit"
           phx-submit="search_submit"
-          class="hidden md:block"
+          class="hidden lg:block"
         >
           <div class="flex items-center gap-2">
             <.input
@@ -399,7 +400,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@canvases != []}
           phx-click="canvas_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_canvases && "!bg-base-300 !text-primary"
           ]}
         >
@@ -411,7 +412,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :if={@pins != []}
           phx-click="pin_panel_toggle"
           class={[
-            "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
             @show_pins && "!bg-base-300 !text-primary"
           ]}
         >
@@ -419,103 +420,94 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           <span>{length(@pins)} pinned</span>
         </button>
 
-        <%!-- Agent eye — the ONE control for the agent mutex (task 019f9790
-             stage 4). It replaces three competing header controls that used
-             to sit here: the "Talking to {name}" pill with its own x-mark
-             sub-button, the dimmed "{primary} listening" hint, and the
-             `watch_enabled` toggle. Those three could disagree with each
-             other and none of them was the thing that actually routes
-             messages. This button IS the mutex (`ActiveAgentStore`):
-
-               open   — a mutex is held; the next message goes to that agent.
-                        Click closes it (`active_agent_clear`).
-               closed — no mutex, but `ActiveAgentHooks.resolve_armable/2`
-                        found a defensible target. Click opens it
-                        (`active_agent_arm`).
-               inert  — no mutex and no defensible target (several agents, no
-                        history). Rendered `disabled` rather than hidden so
-                        the header never reflows as agents join or leave.
-
-             DM spaces render nothing: `attention_router.ex:343` makes DMs
-             unconditionally `:directed`, so there is nothing here to toggle
-             and offering the control would be a lie.
-
-             `data-role` / `data-eye-state` exist so tests assert on state
-             rather than on Tailwind classes. `min-h-11 min-w-11` gives the
-             iOS-HIG 44px touch target on mobile (measured: 20px tall without
-             it); released at `md` so the desktop hover surface still matches
-             the sibling pin/settings buttons. --%>
-        <% eye_state =
-          cond do
-            @active_agent_participant_id != nil -> "open"
-            @active_agent_armable_id != nil -> "closed"
-            true -> "inert"
-          end %>
-        <button
-          :if={(@agent_presence[:joined?] || @has_agent_participant) && @active_space.kind != "dm"}
-          data-role="agent-eye"
-          data-eye-state={eye_state}
-          disabled={eye_state == "inert"}
-          phx-click={
-            case eye_state do
-              "open" -> "active_agent_clear"
-              "closed" -> "active_agent_arm"
-              _inert -> nil
-            end
-          }
-          class={[
-            "flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs transition-colors md:min-h-0 md:min-w-0",
-            eye_state == "open" && "text-success hover:bg-base-300",
-            eye_state == "closed" &&
-              "text-base-content/50 hover:text-base-content hover:bg-base-300",
-            eye_state == "inert" && "text-base-content/50 opacity-50"
-          ]}
-          title={
-            case eye_state do
-              "open" ->
-                "Your next message goes to #{@active_agent_name || "Agent"} — click to talk to people only"
-
-              "closed" ->
-                "Click to resume with #{@active_agent_armable_name || "the agent"}"
-
-              _inert ->
-                "No agent is listening — @mention an agent to open the eye"
-            end
-          }
+        <%!-- The Agents entry (task 01a1557a-8f80 stage 2). It replaces the
+             header agent eye: the eye toggled the ephemeral mutex, which a
+             mention re-armed, so it could not hold "agents off". The Agents
+             popover anchored here (the phone sheet is opened from the space
+             sheet's Agents row) writes the persisted master switch, policy and
+             per-agent silence. Rendered under `agents_entry?/3`: an agent is
+             present and the space is not a DM (`attention_router.ex` makes
+             DMs unconditionally `:directed`). `min-h-11 min-w-11` is the
+             44px touch target, released at `md`. --%>
+        <div
+          :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
+          class="relative hidden lg:block"
         >
-          <span class={[
-            "size-4",
-            if(eye_state == "open", do: "hero-eye", else: "hero-eye-slash")
-          ]}>
-          </span>
-          <span :if={eye_state == "open"} class="hidden md:inline">
-            {@active_agent_name || "Agent"}
-          </span>
-        </button>
+          <button
+            type="button"
+            phx-click="agents_open"
+            data-role="agents-open"
+            aria-label="Agents"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@agents_sheet_open)}
+            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
+          >
+            <.icon name="hero-cpu-chip" class="size-4" />
+            <span class="hidden md:inline">{AgentsSheet.awake_label(@agent_attention)}</span>
+          </button>
+          <AgentsSheet.agents_sheet
+            surface={:popover}
+            open={@agents_sheet_open}
+            state={@agent_attention}
+            active_space={@active_space}
+          />
+        </div>
 
-        <%!-- Channel members panel (task 01a0fd62 stage 3). Channels only:
-             a DM or group has no admin who could bring an agent in from it.
-             `min-h-11 min-w-11` is the agent-eye touch-target pattern above. --%>
-        <button
-          :if={@active_space.kind == "channel"}
-          phx-click="members_open"
-          data-role="members-open"
-          class="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
-          title="Channel members"
-        >
-          <span class="hero-users size-4"></span>
-          <span class="hidden md:inline">members</span>
-        </button>
+        <%!-- The Members entry (task 01a1557a-8f80 stage 3): every space but a
+             DM. The popover instance of `MembersComponent` is anchored under
+             it; the phone opens the sheet instance from the space sheet's
+             Members row. `min-h-11 min-w-11` is the Agents entry's touch
+             target, released at `md`. --%>
+        <div :if={@active_space.kind != "dm"} class="relative hidden lg:block">
+          <button
+            type="button"
+            phx-click="members_open"
+            data-role="members-open"
+            aria-label="Members"
+            aria-haspopup="dialog"
+            aria-expanded={to_string(@show_members)}
+            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
+          >
+            <.icon name="hero-users" class="size-4" />
+            <span class="hidden md:inline">{MembersComponent.people_label(@space_participants)}</span>
+          </button>
+          <.live_component
+            module={MembersComponent}
+            id="chat-members-popover"
+            surface={:popover}
+            open={@show_members}
+            space={@active_space}
+            space_name={
+              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns))
+            }
+            current_user_id={@user_id}
+            viewer={@current_user_record}
+          />
+        </div>
 
         <button
           phx-click="settings_open"
-          class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
+          class="hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300"
           title="Space settings"
         >
           <span class="hero-cog-6-tooth size-4"></span>
           <span class="hidden md:inline">settings</span>
         </button>
       </div>
+
+      <%!-- Phone Call (task 01a1557a-8a6d stage 1): the Meet button's gate
+           and event, as the header's one coloured control. The server
+           refusal in `Meetings.join_for_user/3` is still the gate. --%>
+      <button
+        :if={@meetings_enabled && !@in_meeting && !@external?}
+        type="button"
+        phx-click="meeting_join"
+        data-role="space-call"
+        aria-label="Start a call"
+        class="flex size-11 shrink-0 items-center justify-center rounded-lg lg:hidden focus-visible-ring"
+      >
+        <span class="hero-phone size-5 text-primary" aria-hidden="true"></span>
+      </button>
     </header>
     <%!-- The agents goal strip (task 01a0b491, stage 4).
 
@@ -536,248 +528,291 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
          a failed count) — and nowhere else, not on the delta, not on a
          falling count, and not on an uncounted goal, which is a normal
          state the heartbeat fires for (task 01a0ca9f stage 3). --%>
+    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 3): below lg the goal
+         lives on the space sheet's Goal page, which renders the SAME
+         `goal_panel/1`. Desktop is unchanged. --%>
     <div
       :if={(@goal_panel || @goal_invite?) && !@embedded}
-      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2"
+      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2 max-lg:hidden"
       data-role="agents-goal-strip"
     >
-      <%!-- The same leader face as the rail row, once. Swapping the leader
-           through `role_assignments` broadcasts on `Roles.assignments_topic/0`
-           and repaints both with no reload — the change is legible across
-           the room because it is a different face, not a different word. --%>
-      <%!-- No placeholder face: in the invitation state there is no panel,
-           so there is no leader to claim and nothing renders here. --%>
-      <.agent_avatar
-        :if={@goal_panel && @goal_panel.leader}
-        name={@goal_panel.leader.name}
-        avatar_url={@goal_panel.leader.avatar_url}
-        size="xs"
-        class="ring-2 ring-primary mt-0.5"
-        title={"#{@goal_panel.leader.name} leads"}
+      <.goal_panel
+        active_space={@active_space}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
       />
-      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span
-          :if={@goal_panel && @goal_panel.leader}
-          class="text-xs text-base-content/60"
-          data-role="agents-goal-leader"
+    </div>
+    """
+  end
+
+  attr(:active_space, :any, required: true)
+  attr(:goal_panel, :any, required: true)
+  attr(:goal_edit, :boolean, required: true)
+  attr(:can_edit_goal?, :boolean, required: true)
+  attr(:goal_invite?, :boolean, default: false)
+  attr(:goal_scope_options, :list, default: [])
+  attr(:goal_scope_error, :atom, default: nil)
+  attr(:goal_cadence_form, :map, default: nil)
+  attr(:goal_time_zone, :string, default: nil)
+  # DOM ids inside (the cadence selects and their labels) are prefixed by
+  # this, so the space sheet's copy does not duplicate the strip's. The
+  # strip passes nothing: its ids are exactly what they were.
+  attr(:id_prefix, :string, default: "")
+
+  @doc """
+  The goal's body: leader face, sentence and measurement, the pencil, and the
+  edit form with its project select and Check progress controls. Moved
+  verbatim out of the agents goal strip (task 01a1557a-8a6d stage 3) so the
+  strip and the phone space sheet's Goal page render ONE goal UI, not two.
+  Every `data-role` and `phx-*` attribute is on the element it was on; the
+  only change is the `id_prefix` on the two cadence ids.
+  """
+  def goal_panel(assigns) do
+    ~H"""
+    <%!-- The same leader face as the rail row, once. Swapping the leader
+         through `role_assignments` broadcasts on `Roles.assignments_topic/0`
+         and repaints both with no reload — the change is legible across
+         the room because it is a different face, not a different word. --%>
+    <%!-- No placeholder face: in the invitation state there is no panel,
+         so there is no leader to claim and nothing renders here. --%>
+    <.agent_avatar
+      :if={@goal_panel && @goal_panel.leader}
+      name={@goal_panel.leader.name}
+      avatar_url={@goal_panel.leader.avatar_url}
+      size="xs"
+      class="ring-2 ring-primary mt-0.5"
+      title={"#{@goal_panel.leader.name} leads"}
+    />
+    <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span
+        :if={@goal_panel && @goal_panel.leader}
+        class="text-xs text-subtle"
+        data-role="agents-goal-leader"
+      >
+        {@goal_panel.leader.name} leads
+      </span>
+      <%= if @goal_edit do %>
+        <%!-- ONE form, ONE write. The invitation and the pencil both open
+             THIS form, and it always submits `save_goal`, which always
+             runs `Chat.update_space/2` through the stage-1 changeset.
+             The handler's only `goal in [nil, ""]` branch is the
+             install-level first-goal scope gate (task 01a0ca99), not a
+             second write path. --%>
+        <%!-- THE PROJECT SELECT (task 01a0cef1, Saru's canvas "Design
+             direction: choosing the project a goal counts") sits on the
+             goal's own line: input, select, Save, Cancel on ONE row from
+             `sm:` up. Below `sm` the form wraps and the input takes the
+             full width (`max-sm:basis-full`), so the select drops to its
+             own line with the pencil's `max-sm:min-h-11` tap target. No
+             label beyond `aria-label`; base tokens only, `--color-primary`
+             stays on Save. The scope's READING state is the existing
+             "open tasks in <name>" measurement clause, not new markup. --%>
+        <%!-- CHECK PROGRESS (task 01a0e882 stage 3, Saru's canvas "Design
+             direction: goal check cadence"). The cadence controls are a
+             SECOND LINE inside the SAME form, so Save and Cancel commit or
+             discard both. The first line keeps the one-row classes it had
+             on its own `<form>` (now on the inner row), so from `sm:` up
+             the goal row lays out exactly as before. `phx-change` only
+             re-assigns the preview selection; nothing is written until
+             Save. No cron text anywhere: options and preview are words
+             and wall-clock times from `GoalCadenceForm`. --%>
+        <form
+          phx-submit="save_goal"
+          phx-change="goal_form_change"
+          class="flex flex-col gap-2"
+          data-role="agents-goal-form"
         >
-          {@goal_panel.leader.name} leads
-        </span>
-        <%= if @goal_edit do %>
-          <%!-- ONE form, ONE write. The invitation and the pencil both open
-               THIS form, and it always submits `save_goal`, which always
-               runs `Chat.update_space/2` through the stage-1 changeset.
-               The handler's only `goal in [nil, ""]` branch is the
-               install-level first-goal scope gate (task 01a0ca99), not a
-               second write path. --%>
-          <%!-- THE PROJECT SELECT (task 01a0cef1, Saru's canvas "Design
-               direction: choosing the project a goal counts") sits on the
-               goal's own line: input, select, Save, Cancel on ONE row from
-               `sm:` up. Below `sm` the form wraps and the input takes the
-               full width (`max-sm:basis-full`), so the select drops to its
-               own line with the pencil's `max-sm:min-h-11` tap target. No
-               label beyond `aria-label`; base tokens only, `--color-primary`
-               stays on Save. The scope's READING state is the existing
-               "open tasks in <name>" measurement clause, not new markup. --%>
-          <%!-- CHECK PROGRESS (task 01a0e882 stage 3, Saru's canvas "Design
-               direction: goal check cadence"). The cadence controls are a
-               SECOND LINE inside the SAME form, so Save and Cancel commit or
-               discard both. The first line keeps the one-row classes it had
-               on its own `<form>` (now on the inner row), so from `sm:` up
-               the goal row lays out exactly as before. `phx-change` only
-               re-assigns the preview selection; nothing is written until
-               Save. No cron text anywhere: options and preview are words
-               and wall-clock times from `GoalCadenceForm`. --%>
-          <form
-            phx-submit="save_goal"
-            phx-change="goal_form_change"
-            class="flex flex-col gap-2"
-            data-role="agents-goal-form"
-          >
-            <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-              <input
-                type="text"
-                name="goal"
-                value={@goal_panel && @goal_panel.goal}
-                maxlength="500"
-                aria-label="Goal"
-                placeholder="Close backlog items"
-                phx-mounted={JS.focus()}
-                class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
-              />
-              <select
-                name="goal_project_id"
-                aria-label="Project"
-                class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
-                data-role="agents-goal-scope"
-              >
-                <option value="" selected={goal_scope_value(@active_space) == ""}>
-                  All projects
-                </option>
-                <option
-                  :for={{label, value} <- @goal_scope_options}
-                  value={value}
-                  selected={goal_scope_value(@active_space) == value}
-                >
-                  {label}
-                </option>
-              </select>
-              <button type="submit" class="btn btn-sm btn-primary">Save</button>
-              <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
-                Cancel
-              </button>
-            </div>
-            <.goal_cadence_controls
-              :if={@can_edit_goal? && @goal_cadence_form}
-              selection={@goal_cadence_form}
-              time_zone={@goal_time_zone}
+          <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+            <input
+              type="text"
+              name="goal"
+              value={@goal_panel && @goal_panel.goal}
+              maxlength="500"
+              aria-label="Goal"
+              placeholder="Close backlog items"
+              phx-mounted={JS.focus()}
+              class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
             />
-          </form>
-          <%!-- The refusal renders INLINE under the form, in `--color-error`,
-               and nowhere else: not a flash, not a warning. --%>
-          <span
-            :if={@goal_scope_error == :unknown_project}
-            class="text-xs text-error"
-            data-role="agents-goal-scope-error"
-          >
-            That project is not available in this channel's org.
-          </span>
-        <% else %>
-          <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
-               line the goal will occupy, at the goal sentence's `text-sm`,
-               inside the strip's existing padding and border, so nothing
-               moves between wanting a goal, typing it and having it. Ghost,
-               `/60` (the measured AA floor; `/40` fails), and no warning,
-               error or info token: a goal-less channel is not a fault. The
-               tap target matches the pencil's `max-sm:` treatment, and
-               `max-sm:-my-2` hands the extra height back to the strip's own
-               `py-2`. MEASURED at 375x812 without it: the 44px box grew the
-               strip to 61px while the editing form's strip is 45px, so the
-               page jumped 16px on click. With it the box stays 44px tall and
-               the strip is the same height in both states. --%>
-          <button
-            :if={!@goal_panel}
-            type="button"
-            phx-click="edit_goal"
-            class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content/60 max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
-            data-role="agents-goal-invite"
-          >
-            Set a goal for this channel
-          </button>
-          <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
-               375x812 before this change, against goals of growing length:
-               the measurement clause reached 0px at 38 characters and the
-               strip overflowed the viewport (scrollWidth 382 > clientWidth
-               375) at 40, while the goal input allows `maxlength="500"`.
-               The desktop rule below — sentence `shrink-0`, clause
-               `min-w-0 truncate` — is correct at 1280px where there is
-               slack, and at 375px it spends the entire deficit on the one
-               fragment that carries the heartbeat's payload. So: let the
-               row become two lines below `sm` instead of truncating the
-               numeral away. `sm:flex-nowrap` and `sm:shrink-0` restore the
-               desktop rule exactly — at >=640px the computed layout is
-               identical to what shipped in v1, which is why v1's existing
-               assertions in `chat_live_agents_goal_surface_test.exs` must
-               stay green. --%>
-          <div
-            :if={@goal_panel}
-            class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
-            data-role="agents-goal-row"
-          >
-            <%!-- The goal sentence at FULL `--color-base-content`: it is
-                 the most meaningful string on the surface, and the
-                 truncation rule says the most meaningful fragment is the
-                 last thing allowed to truncate. `sm:shrink-0` here,
-                 `min-w-0 truncate` on the clause beside it. Below `sm` the
-                 sentence is NOT `shrink-0`: it wraps onto a second line and
-                 the clause keeps its own line at full width. --%>
-            <span class="text-sm text-base-content sm:shrink-0" data-role="agents-goal-sentence">
-              {@goal_panel.goal}
-            </span>
-            <%!-- The measurement clause at `/60`, which is the measured
-                 contrast FLOOR and not a preference: composited, `/40`
-                 (the treatment `topic` uses two lines up) is 2.85:1 light
-                 and 3.53:1 dark and fails AA in both themes; `/60` is
-                 5.74:1 and 6.26:1. --%>
-            <%!-- An UNCOUNTED goal (task 01a0ca9f stage 3, Saru's canvas
-                 "Design direction: the goal strip when a goal has no
-                 count"). The heartbeat fires for it, so this is a normal
-                 state and not a fault: `/60`, the same tier as the measured
-                 clause, NOT `text-warning` and NOT `text-info`. No mono span,
-                 no rule, no icon — there is no numeral to set in mono, and a
-                 glyph would read as a status. Same slot, size and
-                 truncation as the other two branches. This branch sits
-                 BEFORE the `missing?` one because an uncounted slot is
-                 `missing?: true` too (every no-number consumer keeps
-                 treating it as no-number); it matches on `kind` only, so a
-                 counted slot (`missing?: false`, no `kind`) never reaches it. --%>
-            <%= cond do %>
-              <% @goal_panel.measurement[:kind] == :uncounted -> %>
-                <span
-                  class="min-w-0 truncate text-xs text-base-content/60"
-                  data-role="agents-goal-measurement-uncounted"
-                >
-                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-              <% @goal_panel.measurement[:missing?] -> %>
-                <%!-- The warning is reserved for a genuine fault:
-                     `:unknown_scope` (the goal's project scope names no
-                     project that exists), `:count_failed`, and the unkinded
-                     missing slots. --%>
-                <span
-                  class="min-w-0 truncate text-xs text-warning"
-                  data-role="agents-goal-measurement-missing"
-                >
-                  {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-              <% true -> %>
-                <span
-                  class="min-w-0 truncate text-xs text-base-content/60"
-                  data-role="agents-goal-measurement"
-                >
-                  <%!-- The number, and ONLY the number, in JetBrains Mono
-                       inline in the sentence. A changing digit is legible
-                       at a glance in mono without building a tile around
-                       it. --%>
-                  <span class="font-mono" data-role="agents-goal-number">
-                    {@goal_panel.measurement.value}
-                  </span>
-                  {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
-                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
-                </span>
-            <% end %>
-            <%!-- TAP TARGET, and this is independent of the reflow above:
-                 MEASURED at 375x812 BEFORE any change, the control's box was
-                 32 x 21 px — under 44px in BOTH dimensions, and it was that
-                 size before this stage existed. `max-sm:` raises the target
-                 with PADDING below `sm` and leaves the glyph at `size-3.5`,
-                 because a bigger pencil is a louder surface and the
-                 no-chrome contract above forbids that. `max-sm:` rather than
-                 a `sm:` reset is deliberate: it adds no class that is live
-                 at >=640px, so the desktop computed box stays 32 x 21 with
-                 nothing to restore. Matches the drawer's own `min-h-11
-                 min-w-11` treatment (`mobile_browser.ex:178`). --%>
-            <button
-              :if={@can_edit_goal?}
-              type="button"
-              phx-click="edit_goal"
-              class="btn btn-ghost btn-xs shrink-0 max-sm:min-h-11 max-sm:min-w-11"
-              aria-label="Edit goal"
-              title="Edit goal"
+            <select
+              name="goal_project_id"
+              aria-label="Project"
+              class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
+              data-role="agents-goal-scope"
             >
-              <span class="hero-pencil-square size-3.5"></span>
+              <option value="" selected={goal_scope_value(@active_space) == ""}>
+                All projects
+              </option>
+              <option
+                :for={{label, value} <- @goal_scope_options}
+                value={value}
+                selected={goal_scope_value(@active_space) == value}
+              >
+                {label}
+              </option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
+              Cancel
             </button>
           </div>
-        <% end %>
-      </div>
+          <.goal_cadence_controls
+            :if={@can_edit_goal? && @goal_cadence_form}
+            selection={@goal_cadence_form}
+            time_zone={@goal_time_zone}
+            id_prefix={@id_prefix}
+          />
+        </form>
+        <%!-- The refusal renders INLINE under the form, in `--color-error`,
+             and nowhere else: not a flash, not a warning. --%>
+        <span
+          :if={@goal_scope_error == :unknown_project}
+          class="text-xs text-error"
+          data-role="agents-goal-scope-error"
+        >
+          That project is not available in this channel's org.
+        </span>
+      <% else %>
+        <%!-- EMPTY + ADMIN (task 01a0ca99): the invitation occupies the
+             line the goal will occupy, at the goal sentence's `text-sm`,
+             inside the strip's existing padding and border, so nothing
+             moves between wanting a goal, typing it and having it. Ghost,
+             `/60` (the measured AA floor; `/40` fails), and no warning,
+             error or info token: a goal-less channel is not a fault. The
+             tap target matches the pencil's `max-sm:` treatment, and
+             `max-sm:-my-2` hands the extra height back to the strip's own
+             `py-2`. MEASURED at 375x812 without it: the 44px box grew the
+             strip to 61px while the editing form's strip is 45px, so the
+             page jumped 16px on click. With it the box stays 44px tall and
+             the strip is the same height in both states. --%>
+        <button
+          :if={!@goal_panel}
+          type="button"
+          phx-click="edit_goal"
+          class="btn btn-ghost btn-sm self-start px-0 text-sm font-normal text-base-content max-sm:-my-2 max-sm:min-h-11 max-sm:min-w-11"
+          data-role="agents-goal-invite"
+        >
+          Set a goal for this channel
+        </button>
+        <%!-- WRAPS BELOW `sm`, single row from `sm:` upward. MEASURED at
+             375x812 before this change, against goals of growing length:
+             the measurement clause reached 0px at 38 characters and the
+             strip overflowed the viewport (scrollWidth 382 > clientWidth
+             375) at 40, while the goal input allows `maxlength="500"`.
+             The desktop rule below — sentence `shrink-0`, clause
+             `min-w-0 truncate` — is correct at 1280px where there is
+             slack, and at 375px it spends the entire deficit on the one
+             fragment that carries the heartbeat's payload. So: let the
+             row become two lines below `sm` instead of truncating the
+             numeral away. `sm:flex-nowrap` and `sm:shrink-0` restore the
+             desktop rule exactly — at >=640px the computed layout is
+             identical to what shipped in v1, which is why v1's existing
+             assertions in `chat_live_agents_goal_surface_test.exs` must
+             stay green. --%>
+        <div
+          :if={@goal_panel}
+          class="flex min-w-0 flex-wrap items-baseline gap-2 sm:flex-nowrap"
+          data-role="agents-goal-row"
+        >
+          <%!-- The goal sentence at FULL `--color-base-content`: it is
+               the most meaningful string on the surface, and the
+               truncation rule says the most meaningful fragment is the
+               last thing allowed to truncate. `sm:shrink-0` here,
+               `min-w-0 truncate` on the clause beside it. Below `sm` the
+               sentence is NOT `shrink-0`: it wraps onto a second line and
+               the clause keeps its own line at full width. --%>
+          <span class="text-sm text-base-content sm:shrink-0" data-role="agents-goal-sentence">
+            {@goal_panel.goal}
+          </span>
+          <%!-- The measurement clause at `/60`, which is the measured
+               contrast FLOOR and not a preference: composited, `/40`
+               (the treatment `topic` uses two lines up) is 2.85:1 light
+               and 3.53:1 dark and fails AA in both themes; `/60` is
+               5.74:1 and 6.26:1. --%>
+          <%!-- An UNCOUNTED goal (task 01a0ca9f stage 3, Saru's canvas
+               "Design direction: the goal strip when a goal has no
+               count"). The heartbeat fires for it, so this is a normal
+               state and not a fault: `/60`, the same tier as the measured
+               clause, NOT `text-warning` and NOT `text-info`. No mono span,
+               no rule, no icon — there is no numeral to set in mono, and a
+               glyph would read as a status. Same slot, size and
+               truncation as the other two branches. This branch sits
+               BEFORE the `missing?` one because an uncounted slot is
+               `missing?: true` too (every no-number consumer keeps
+               treating it as no-number); it matches on `kind` only, so a
+               counted slot (`missing?: false`, no `kind`) never reaches it. --%>
+          <%= cond do %>
+            <% @goal_panel.measurement[:kind] == :uncounted -> %>
+              <span
+                class="min-w-0 truncate text-xs text-subtle"
+                data-role="agents-goal-measurement-uncounted"
+              >
+                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+            <% @goal_panel.measurement[:missing?] -> %>
+              <%!-- The warning is reserved for a genuine fault:
+                   `:unknown_scope` (the goal's project scope names no
+                   project that exists), `:count_failed`, and the unkinded
+                   missing slots. --%>
+              <span
+                class="min-w-0 truncate text-xs text-warning"
+                data-role="agents-goal-measurement-missing"
+              >
+                {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+            <% true -> %>
+              <span
+                class="min-w-0 truncate text-xs text-subtle"
+                data-role="agents-goal-measurement"
+              >
+                <%!-- The number, and ONLY the number, in JetBrains Mono
+                     inline in the sentence. A changing digit is legible
+                     at a glance in mono without building a tile around
+                     it. --%>
+                <span class="font-mono" data-role="agents-goal-number">
+                  {@goal_panel.measurement.value}
+                </span>
+                {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
+                <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
+              </span>
+          <% end %>
+          <%!-- TAP TARGET, and this is independent of the reflow above:
+               MEASURED at 375x812 BEFORE any change, the control's box was
+               32 x 21 px — under 44px in BOTH dimensions, and it was that
+               size before this stage existed. `max-sm:` raises the target
+               with PADDING below `sm` and leaves the glyph at `size-3.5`,
+               because a bigger pencil is a louder surface and the
+               no-chrome contract above forbids that. `max-sm:` rather than
+               a `sm:` reset is deliberate: it adds no class that is live
+               at >=640px, so the desktop computed box stays 32 x 21 with
+               nothing to restore. Matches the 44px touch floor every phone
+               control here keeps (`min-h-11 min-w-11`). --%>
+          <button
+            :if={@can_edit_goal?}
+            type="button"
+            phx-click="edit_goal"
+            class="btn btn-ghost btn-xs shrink-0 max-sm:min-h-11 max-sm:min-w-11"
+            aria-label="Edit goal"
+            title="Edit goal"
+          >
+            <span class="hero-pencil-square size-3.5"></span>
+          </button>
+        </div>
+      <% end %>
     </div>
     """
   end
 
   attr(:selection, :map, required: true)
   attr(:time_zone, :string, default: nil)
+  attr(:id_prefix, :string, default: "")
 
   # The Check progress line: a cadence select, an "at" hour select for
   # Once a day only (option VALUE is the UTC hour, label the viewer's local
@@ -797,11 +832,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <div class="flex flex-col gap-1" data-role="agents-goal-cadence-line">
       <div class="flex flex-wrap items-center gap-2">
-        <label class="text-xs text-base-content/60" for="agents-goal-cadence">
+        <label class="text-xs font-medium text-base-content" for={@id_prefix <> "agents-goal-cadence"}>
           Check progress
         </label>
         <select
-          id="agents-goal-cadence"
+          id={@id_prefix <> "agents-goal-cadence"}
           name="goal_cadence"
           class="select select-bordered select-sm max-sm:min-h-11"
           data-role="agents-goal-cadence"
@@ -815,9 +850,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </option>
         </select>
         <%= if @selection.cadence == :daily do %>
-          <label class="text-xs text-base-content/60" for="agents-goal-cadence-hour">at</label>
+          <label
+            class="text-xs font-medium text-base-content"
+            for={@id_prefix <> "agents-goal-cadence-hour"}
+          >
+            at
+          </label>
           <select
-            id="agents-goal-cadence-hour"
+            id={@id_prefix <> "agents-goal-cadence-hour"}
             name="goal_cadence_hour"
             class="select select-bordered select-sm max-sm:min-h-11"
             data-role="agents-goal-cadence-hour"
@@ -832,7 +872,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </select>
         <% end %>
       </div>
-      <span class="text-xs text-base-content/60" data-role="agents-goal-cadence-preview">
+      <span class="text-xs text-subtle" data-role="agents-goal-cadence-preview">
         {@preview}
       </span>
     </div>
@@ -849,7 +889,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     assigns = assign(assigns, :tail, GoalCadenceForm.tail(cadence_of(assigns.cadence)))
 
     ~H"""
-    <span :if={@tail} class="text-base-content/60" data-role="agents-goal-cadence-tail">
+    <span :if={@tail} class="text-subtle" data-role="agents-goal-cadence-tail">
       {@tail}
     </span>
     """
@@ -857,409 +897,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   defp cadence_of(%{cadence: cadence}), do: cadence
   defp cadence_of(_), do: nil
-
-  attr(:active_space, :any, required: true)
-  attr(:embedded, :boolean, required: true)
-  attr(:pinned_task_spaces, :list, required: true)
-  attr(:channel_sections, :map, required: true)
-  attr(:agents_block, :any, required: true)
-  attr(:unread_counts, :map, required: true)
-  attr(:user_id, :any, required: true)
-  # Masking attrs: the channel-chip branch calls `masked_space_name/2`.
-  attr(:mask_names?, :boolean, required: true)
-  attr(:revealed_section_ids, :any, required: true)
-  attr(:sidebar_sections, :list, required: true)
-
-  @doc """
-  The mobile Pinned strip — `<nav data-role="mobile-pinned-strip">`.
-  """
-  def mobile_pinned_strip(assigns) do
-    ~H"""
-    <%!-- Mobile Pinned strip (task 019f923b Stage 1). `lg:hidden` mirrors the
-         `hidden lg:flex` gate on <aside id="chat-sidebar">: without this
-         strip, pinned spaces (both task-exec pins from `@pinned_task_spaces`
-         and channel pins from `@channel_sections.pinned`) are unreachable
-         on <lg viewports because the desktop rail is hidden.
-
-         Renders horizontally-scrollable chips that mirror the desktop
-         rail's mental model — `hero-clipboard-document-list-mini` for
-         task-exec pins and, for pinned conversations, the desktop Pinned
-         block's row identity: a bare name for a person, `#` for a channel.
-         Chips carry the unread badge from `unread_label/1` when the space
-         has unread messages, using the same visual language as the
-         channel-pills strip immediately below.
-
-         Auto-hides when BOTH lists are empty — no permanent header. The
-         `:if` OR-guard means a user with only pinned tasks (or only pinned
-         channels, once channel-pinning ships) still gets the strip; the
-         strip only disappears when the user has no pins at all.
-
-         Sits ABOVE the channel-pills strip so pinned spaces are the first
-         navigation surface a user sees when landing in a channel on mobile.
-         Pinned channels intentionally re-appear in the channel-pills strip
-         below (via `Sidebar.flatten_sections/1`) — that duplication is
-         deliberate visual emphasis on pinned items, not a bug to
-         deduplicate.
-
-         Conversation pinning IS wired as of task 019fd80f stage 2: every
-         `channel_sections/4` call site passes the user's real pin list, so
-         the conversation-chip branch below is live. It was dead before
-         that, which is why it rendered `{space.name}` for every kind and
-         produced a blank chip for a pinned DM. Render coverage for both
-         kinds is in `chat_live_pinned_block_test.exs`. --%>
-    <nav
-      :if={
-        @active_space && !@embedded &&
-          (@agents_block != nil || @pinned_task_spaces != [] ||
-             @channel_sections.pinned != [])
-      }
-      class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10 bg-base-200/40"
-      style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-      aria-label="Pinned"
-      data-role="mobile-pinned-strip"
-    >
-      <%!-- The Agents chip (task 01a0b491 v2 stage 2). FIRST child, mirroring
-           the rail order where `agents_block/1` sits above `pinned_block/1`.
-
-           The strip's `:if` above was widened for a non-nil `@agents_block`:
-           it previously fired only when the user had pins, so a user with no
-           pins never got the strip at all and an Agents chip inside the old
-           guard would have been invisible to exactly the people with nothing
-           else on this surface.
-
-           NO GLYPH SLOT when no leader resolves — not an empty span. That is
-           this strip's own recorded rule (see the comment on the channel
-           chips below): a blank 20px inside a pill reads as broken padding
-           rather than as an absent glyph. It is deliberately the OPPOSITE of
-           the rail and drawer rows, which keep their empty `w-5` column to
-           hold the name column straight. Both are right on their own surface
-           and must not be harmonised. --%>
-      <%= if @agents_block do %>
-        <% agents_space = @agents_block.space %>
-        <% agents_leader = @agents_block.leader %>
-        <.link
-          patch={~p"/chat/#{space_nav_target(agents_space)}"}
-          data-role="agents-pinned-strip-chip"
-          data-space-id={agents_space.id}
-          class={[
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-            if(@active_space.id == agents_space.id,
-              do: "bg-primary text-primary-content",
-              else: "bg-base-100 text-base-content/80 border border-base-content/10"
-            )
-          ]}
-        >
-          <.agent_avatar
-            :if={agents_leader}
-            name={agents_leader.name}
-            avatar_url={agents_leader.avatar_url}
-            size="xs"
-            class="ring-2 ring-focus-ring"
-            title={"#{agents_leader.name} leads"}
-          />
-          <span class="truncate max-w-[10rem]">{agents_space.name}</span>
-          <span
-            :if={unread_label(Map.get(@unread_counts, agents_space.id, 0))}
-            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-          >
-            {unread_label(Map.get(@unread_counts, agents_space.id, 0))}
-          </span>
-        </.link>
-      <% end %>
-      <.link
-        :for={space <- @pinned_task_spaces}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        data-role="mobile-pinned-task-chip"
-        data-space-id={space.id}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-          if(@active_space.id == space.id,
-            do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content/80 border border-base-content/10"
-          )
-        ]}
-      >
-        <%!-- The task marker, and the SAME glyph the two rail surfaces use
-             for a task row. It was `hero-map-pin-mini` here until
-             2026-08-11: one concept carried two glyphs depending on which
-             surface a person happened to be looking at, and the glyph is
-             the only thing distinguishing the three kinds, so the two had
-             to converge. `hero-clipboard-document-list-mini` is what Saru's
-             design canvas for 019feec6-73d9 specifies. --%>
-        <span class={[
-          "hero-clipboard-document-list-mini size-3.5",
-          if(@active_space.id == space.id,
-            do: "text-primary-content/80",
-            else: "text-base-content/40"
-          )
-        ]}>
-        </span>
-        <span class="truncate max-w-[10rem]">
-          {Platform.Tasks.ChatPins.display_name_for_space(space)}
-        </span>
-        <span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >
-          {unread_label(Map.get(@unread_counts, space.id, 0))}
-        </span>
-      </.link>
-      <.link
-        :for={space <- @channel_sections.pinned}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        data-role="mobile-pinned-channel-chip"
-        data-space-id={space.id}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0",
-          if(@active_space.id == space.id,
-            do: "bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content/80 border border-base-content/10"
-          )
-        ]}
-      >
-        <%!-- Same identity rule as the two rail surfaces: `#` plus a name
-             for a channel, a bare name for a person.
-
-             No `hero-bookmark-solid`: every chip in this strip is a pin, so
-             a pin marker on all of them never varied and carried nothing.
-             The task chips above carry `hero-clipboard-document-list-mini`,
-             which does vary, since it separates a task from a
-             conversation — and it is the same glyph the rail uses, so one
-             concept has one mark on every surface.
-
-             No empty indent slot on the person chips either, unlike the two
-             rail surfaces. Chips sit in a horizontal scroller, so there is
-             no name column to keep straight, and a blank 20px inside a pill
-             would read as broken padding rather than as an absent glyph. --%>
-        <%= if space.kind in ["dm", "group"] do %>
-          <span class="truncate max-w-[10rem]">{sidebar_display_name(space, @user_id)}</span>
-        <% else %>
-          <span
-            class={[
-              "shrink-0",
-              if(@active_space.id == space.id,
-                do: "text-primary-content/80",
-                else: "text-base-content/40"
-              )
-            ]}
-            data-role="pinned-row-hash"
-          >
-            #
-          </span>
-          <span class="truncate max-w-[10rem]">{masked_space_name(assigns, space.name)}</span>
-        <% end %>
-        <span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >
-          {unread_label(Map.get(@unread_counts, space.id, 0))}
-        </span>
-      </.link>
-    </nav>
-    """
-  end
-
-  attr(:active_space, :any, required: true)
-  attr(:embedded, :boolean, required: true)
-  attr(:external?, :boolean, required: true)
-  attr(:channels, :list, required: true)
-  attr(:dm_conversations, :list, required: true)
-  attr(:unread_counts, :map, required: true)
-  attr(:user_id, :any, required: true)
-  # Masking attrs: the channel pills call `masked_space_name/2`, and
-  # `@sidebar_sections` is also the pill ORDER source for internal users.
-  attr(:mask_names?, :boolean, required: true)
-  attr(:revealed_section_ids, :any, required: true)
-  attr(:sidebar_sections, :list, required: true)
-  attr(:restricted_channel_ids, :any, required: true)
-
-  @doc """
-  The mobile channel-pills strip — `<nav aria-label="Channel switcher">`.
-
-  Its left-anchored magnifying-glass button is the ONLY mobile entry that
-  carries `phx-value-intent="search"`, i.e. the one opener that asks
-  `MobileBrowser.mobile_browser/1` for a search-focused drawer rather than a
-  browse-first one. Losing that attribute silently downgrades the drawer.
-  """
-  def channel_pills(assigns) do
-    ~H"""
-    <%!-- Mobile-only channel pills strip — Refined Option A nav (design approval 2026-05-10).
-         Replaces the previous tap-channel-name-to-open-browser flow. Horizontally
-         scrollable pills with the active channel highlighted; the magnifying-glass
-         icon at the LEFT opens the @mobile_browser_open drawer (search + full
-         channel/DM list). 1-tap switching for the pills shown; 2-tap
-         (magnifying glass → search) for the long tail.
-
-         ORDERING CONTRACT (design decision 2026-07-05, this task's Stage 3):
-         pills render `Sidebar.flatten_sections(@sidebar_sections)` — the user's
-         curated drawer arrangement flattened left-to-right — NOT the raw
-         @channels list. Consequences, both deliberate: (1) dragging sections
-         in the drawer reorders the pills identically (one mental model,
-         stable muscle memory — the unread badge signals activity without
-         moving pills); (2) hidden channels/sections are absent here too —
-         hidden means hidden everywhere. Historical note: the raw @channels
-         order this replaced was channel CREATION order (Chat.list_spaces
-         sorts by inserted_at), not "alphabetical" as previously claimed
-         here. The old Stage 1B localStorage-pinning idea is superseded by
-         the server-side section order. --%>
-    <nav
-      :if={@active_space && !@embedded}
-      class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10"
-      style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-      aria-label="Channel switcher"
-    >
-      <%!-- Search/jump button anchored at the LEFT of the pills strip
-           (operator request, design approval 2026-05-11). Sticks to the left
-           edge so it stays in reach even as the channel pills overflow
-           horizontally and scroll. phx-value-intent="search" (Stage 2):
-           this entry declares search intent, so the drawer opens with the
-           search field focused — other openers get a browse-first drawer. --%>
-      <button
-        phx-click="toggle_mobile_browser"
-        phx-value-intent="search"
-        class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
-        aria-label="Search channels and direct messages"
-        title="Search channels and DMs"
-      >
-        <span class="hero-magnifying-glass size-4"></span>
-      </button>
-
-      <%!-- Channel pill source (task 019f9257-a83e): internal users get their
-           curated flattened section order; external users have no
-           `@sidebar_sections` (that resolver-driven org tree is empty for
-           them), so their pills come from the flat granted-channel list
-           `@channels` — the same set the external rail + switcher render.
-           Without this branch the external pills strip showed only DMs and
-           none of the user's channels. --%>
-      <% switcher_channel_pills =
-        if @external?, do: @channels, else: Sidebar.flatten_sections(@sidebar_sections) %>
-      <%= for space <- switcher_channel_pills do %>
-        <.link
-          :if={not MapSet.member?(@restricted_channel_ids, space.id)}
-          patch={~p"/chat/#{space_nav_target(space)}"}
-          data-role="channel-pill"
-          data-space-id={space.id}
-          class={[
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-            if @active_space.id == space.id do
-              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-            else
-              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
-            end
-          ]}
-        >
-          <span class={[
-            if(@active_space.id == space.id,
-              do: "text-primary-content/80",
-              else: "text-base-content/40"
-            )
-          ]}>#</span>{masked_space_name(assigns, space.name)}<span
-            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-          >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
-        </.link>
-
-        <div
-          :if={MapSet.member?(@restricted_channel_ids, space.id)}
-          data-role="restricted-channel-pill"
-          data-space-id={space.id}
-          aria-disabled="true"
-          title="Restricted, ask an admin"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-base-content/40 border border-base-content/10"
-        >
-          <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
-        </div>
-      <% end %>
-
-      <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
-      <.link
-        :for={space <- @dm_conversations}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-          "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-          if @active_space.id == space.id do
-            "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-          else
-            "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
-          end
-        ]}
-      >
-        {sidebar_display_name(space, @user_id)}<span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
-      </.link>
-    </nav>
-    """
-  end
-
-  attr(:embedded, :boolean, required: true)
-  attr(:external?, :boolean, required: true)
-  attr(:active_space, :any, default: nil)
-  attr(:channels, :list, required: true)
-  attr(:dm_conversations, :list, required: true)
-  attr(:archived_channels, :list, required: true)
-
-  @doc """
-  The brand-new-user pane for the MOBILE content region — the only
-  create/join affordance a user with zero spaces gets below `lg`.
-
-  ## The defect this exists to close (task 01a0312e stage 8)
-
-  At 390px, a user whose `Chat.list_spaces/0`, `list_archived_spaces/0` and
-  `list_user_conversations/1` are all empty rendered a content pane whose
-  `innerText` was literally zero characters. Everything in the pane is gated
-  on `@active_space`, and they have none. The two empty states that should
-  have covered them could not:
-
-    * `Rail.rail/1`'s §5.1 state IS in the DOM, but it is inside
-      `#chat-sidebar`, which is `display: none` below `lg`.
-    * `MobileBrowser.mobile_browser/1`'s §5.1 state is unreachable: the
-      overlay opens on `toggle_mobile_browser`, whose only trigger is the
-      magnifying glass in `channel_pills/1` — and that `<nav>` is gated on
-      `@active_space && !@embedded`. Zero spaces means no active space means
-      no trigger. The empty state sat behind a door with no handle.
-
-  Fixing it by rendering the trigger unconditionally was the alternative
-  considered and rejected: it changes what a user WITH channels sees on
-  every route where no space is active, and it hands them a search box for a
-  list they cannot see from there. Rendering the state directly in the
-  content region touches exactly one population.
-
-  ## Why the condition is this exact conjunction
-
-    * `@active_space == nil` — with a space entered, the pane is the
-      conversation and `Composer.message_scroller/1` owns its own empty
-      state (§5.2).
-    * `@channels == [] and @dm_conversations == []` — anyone with either has
-      somewhere to go; showing them "no spaces yet" would be a lie.
-    * `@archived_channels == []` — same test the rail applies, for the same
-      reason (task 019f4eaa): archived channels are proof you are NOT new,
-      and org-archive empties every channel of an org at once.
-    * `!@embedded and !@external?` — the embedded surface is scoped to one
-      space and has no new-channel affordance to offer, and external users
-      never get one at all (`NewChannelComponent` is gated off their
-      surface, so the chip would open nothing).
-
-  `lg:hidden` keeps the desktop render untouched: above `lg` the rail's copy
-  is the visible one and this node contributes no visible text.
-  """
-  def mobile_no_spaces_pane(assigns) do
-    ~H"""
-    <div
-      :if={
-        !@embedded and !@external? and is_nil(@active_space) and @channels == [] and
-          @dm_conversations == [] and @archived_channels == []
-      }
-      id="chat-mobile-no-spaces"
-      class="lg:hidden flex-1 min-h-0 overflow-y-auto px-4 py-6"
-    >
-      <.brand_new_user_empty_state />
-    </div>
-    """
-  end
 
   attr(:search_query, :any, required: true)
   attr(:search_results, :list, required: true)
@@ -1270,16 +907,19 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   """
   def search_drawer(assigns) do
     ~H"""
+    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 2): below lg the space
+         sheet's Search page lists the results, so a phone search must not
+         also paint this drawer above the messages. Desktop is unchanged. --%>
     <div
       :if={present?(@search_query)}
-      class="border-b border-edge bg-base-200 px-5 py-3"
+      class="border-b border-edge bg-base-200 px-5 py-3 max-lg:hidden"
     >
       <div class="flex items-center justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Search Results
           </p>
-          <p class="text-sm text-base-content/70">
+          <p class="text-sm text-base-content">
             “{@search_query}” · {length(@search_results)} match{if length(@search_results) == 1,
               do: "",
               else: "es"}
@@ -1299,7 +939,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           phx-value-message-id={result.id}
           class="block w-full rounded-xl border border-edge bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
         >
-          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-subtle">
             <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
             <.local_time
               id={"search-time-#{result.id}"}
@@ -1313,7 +953,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             </span>
             <span
               :if={result.search_rank}
-              class="font-mono normal-case tracking-normal text-[10px] text-base-content/40"
+              class="font-mono normal-case tracking-normal text-[10px] text-subtle"
             >
               rank {Float.round(result.search_rank, 3)}
             </span>
@@ -1361,7 +1001,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       :if={@show_pins && @pins != []}
       class="border-b border-edge bg-base-200 px-5 py-2"
     >
-      <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+      <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
         Pinned Messages
       </p>
       <div class="flex flex-col gap-1 max-h-40 overflow-y-auto">
@@ -1369,10 +1009,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           :for={pin <- @pins}
           class="flex items-center justify-between rounded bg-base-100 px-3 py-1.5 text-sm"
         >
-          <span class="truncate text-base-content/70 text-xs">
+          <span class="truncate text-base-content text-xs">
             <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
             pinned message
-            <span class="font-mono text-base-content/40 text-[10px]">
+            <span class="font-mono text-subtle text-[10px]">
               {String.slice(pin.message_id, 0, 8)}…
             </span>
           </span>
@@ -1381,7 +1021,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             phx-click="pin_toggle"
             phx-value-message-id={pin.message_id}
             phx-value-space-id={pin.space_id}
-            class="ml-2 text-xs text-base-content/40 hover:text-error"
+            class="ml-2 text-xs font-medium text-base-content hover:text-error"
           >
             Unpin
           </button>
@@ -1472,7 +1112,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
              text. The `xl` track above already says `minmax(0,1fr)` for the
              same reason, which is why only the mobile width broke. --%>
         <div class="min-w-0 space-y-2">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Live Canvases
           </p>
 
@@ -1606,7 +1246,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             phx-change="canvas_sort"
             class="flex items-center gap-2"
           >
-            <label for="canvas-sort" class="text-[11px] text-base-content/50">Sort</label>
+            <label for="canvas-sort" class="text-[11px] font-medium text-base-content">Sort</label>
             <select
               id="canvas-sort"
               name="order"
@@ -1664,7 +1304,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         >
           <div>
             <p class="text-sm font-semibold text-base-content">New canvas</p>
-            <p class="text-xs text-base-content/50">
+            <p class="text-xs text-subtle">
               Creates a canvas and posts a linked canvas message.
             </p>
           </div>
@@ -1682,7 +1322,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                 "flex min-h-9 cursor-pointer items-center justify-center rounded-field text-sm",
                 new_canvas_kind(@new_canvas_form) == value &&
                   "bg-base-200 font-semibold text-base-content",
-                new_canvas_kind(@new_canvas_form) != value && "text-base-content/60"
+                new_canvas_kind(@new_canvas_form) != value && "text-subtle"
               ]}
             >
               <input
@@ -1711,7 +1351,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             >
               <span class="hero-arrow-up-tray size-5 text-neutral" aria-hidden="true"></span>
               <span class="text-sm text-base-content">Drop a zip of the prototype</span>
-              <span class="text-xs text-base-content/50">
+              <span class="text-xs text-subtle">
                 index.html at the top, with its CSS, JS and images beside it
               </span>
               <.live_file_input upload={@prototype_upload} class="sr-only" />
@@ -1784,15 +1424,51 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # `split_marked_snippet/1` left this module's import list with it; they had
   # no other caller here.
 
-  # Wrappers, not qualified calls — see "WHY THE TWO MASK CALLS ARE WRAPPED"
-  # in the moduledoc. Same name, same arity, same call text at the call site,
-  # so no line grows and no interpolation reflows into a `truncate` span.
   # The goal space's stored scope as the select's value: "" (All projects)
   # when the key is absent.
   defp goal_scope_value(%{metadata: %{"goal_project_id" => id}}) when is_binary(id), do: id
   defp goal_scope_value(_space), do: ""
 
+  # A wrapper, not a qualified call — see "WHY THE MASK CALL IS WRAPPED" in
+  # the moduledoc.
   defp space_mask(assigns), do: ChatLive.space_mask(assigns)
-  defp masked_space_name(assigns, name), do: ChatLive.masked_space_name(assigns, name)
-  defp space_nav_target(space), do: ChatLive.space_nav_target(space)
+
+  @doc """
+  Whether the Agents entry renders: an agent is joined or seated, and the
+  space is not a DM (`attention_router.ex` makes DMs unconditionally
+  `:directed`). The header `agents-open` button and the space sheet's Agents
+  row (task 01a1557a-8a6d) both read this, so they render under one condition.
+  """
+  def agents_entry?(agent_presence, has_agent_participant, space) do
+    (agent_presence[:joined?] || has_agent_participant) && space.kind != "dm"
+  end
+
+  @doc "The `#` a channel's title carries; nothing for any other kind."
+  def title_prefix(%{kind: "channel"}), do: "#"
+  def title_prefix(_space), do: ""
+
+  @doc """
+  The phone title button's subtitle (task 01a1557a-8a6d stage 1). A direct
+  message with an agent shows the agent status, one with a person shows
+  "Direct message", and every other kind counts its people.
+  """
+  def space_subtitle(%{kind: "dm"}, participants, user_id, agent_status) do
+    other = Enum.find(participants, &(&1.participant_id != user_id))
+
+    case other do
+      %{participant_type: "agent"} -> agent_status_label(agent_status)
+      _ -> "Direct message"
+    end
+  end
+
+  def space_subtitle(_space, participants, _user_id, _agent_status),
+    do: people_count(length(participants))
+
+  defp people_count(1), do: "1 person"
+  defp people_count(n), do: "#{n} people"
+
+  defp agent_status_label(:online), do: "Online"
+  defp agent_status_label(:offline), do: "Offline"
+  defp agent_status_label(:thinking), do: "Thinking"
+  defp agent_status_label(_status), do: "Agent"
 end

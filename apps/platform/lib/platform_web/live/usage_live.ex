@@ -173,7 +173,7 @@ defmodule PlatformWeb.UsageLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6">
+    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6 clears-tab-bar">
       <h1 class="text-xl font-bold">Usage Analytics</h1>
 
       <%!-- Filters --%>
@@ -210,13 +210,13 @@ defmodule PlatformWeb.UsageLive do
       <%!-- Summary cards --%>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider">Requests</div>
+          <div class="text-xs text-subtle uppercase tracking-wider">Requests</div>
           <div class="text-2xl font-bold mt-1">{@summary.total_requests}</div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider">Tokens</div>
+          <div class="text-xs text-subtle uppercase tracking-wider">Tokens</div>
           <div class="text-2xl font-bold mt-1">{format_tokens(@summary.total_tokens)}</div>
-          <div class="flex flex-wrap gap-x-3 mt-1 text-xs text-base-content/60">
+          <div class="flex flex-wrap gap-x-3 mt-1 text-xs text-subtle">
             <span title="Total input (fresh + cached)">
               ⬆ {format_tokens(@total_prompt_tokens)} input
             </span>
@@ -224,7 +224,7 @@ defmodule PlatformWeb.UsageLive do
           </div>
           <div
             :if={@summary.total_cache_read_tokens > 0}
-            class="mt-1 text-xs text-base-content/60"
+            class="mt-1 text-xs text-subtle"
           >
             <span title="Cache efficiency breakdown">
               ⚡ {format_percent(@cache_hit_rate)} cached ({format_tokens(
@@ -236,11 +236,11 @@ defmodule PlatformWeb.UsageLive do
           </div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider">Cost</div>
+          <div class="text-xs text-subtle uppercase tracking-wider">Cost</div>
           <div class="text-2xl font-bold mt-1">{format_cost(@summary.total_cost)}</div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider">Avg Latency</div>
+          <div class="text-xs text-subtle uppercase tracking-wider">Avg Latency</div>
           <div class="text-2xl font-bold mt-1">{format_latency(@summary.avg_latency_ms)}</div>
         </div>
       </div>
@@ -291,7 +291,7 @@ defmodule PlatformWeb.UsageLive do
       <div class="bg-base-200 rounded-lg overflow-x-auto">
         <table class="table table-sm w-full">
           <thead>
-            <tr class="text-xs text-base-content/50 uppercase">
+            <tr class="text-xs text-base-content uppercase">
               <th>Time</th>
               <th class="hidden md:table-cell">Agent</th>
               <th>Model</th>
@@ -307,7 +307,7 @@ defmodule PlatformWeb.UsageLive do
           <tbody>
             <%= if @events == [] do %>
               <tr>
-                <td colspan="10" class="text-center py-8 text-base-content/40">
+                <td colspan="10" class="text-center py-8 text-subtle">
                   No usage events recorded yet
                 </td>
               </tr>
@@ -325,14 +325,14 @@ defmodule PlatformWeb.UsageLive do
                     event.input_tokens + event.cache_read_tokens + event.cache_write_tokens
                   )}
                 </td>
-                <td class="hidden md:table-cell text-xs text-base-content/60">
+                <td class="hidden md:table-cell text-xs text-subtle">
                   {format_tokens(event.cache_read_tokens)} / {format_tokens(event.cache_write_tokens)}
                 </td>
                 <td class="text-xs">{format_tokens(event.output_tokens)}</td>
                 <td class="text-xs">{format_tokens(event.total_tokens)}</td>
                 <td class="text-xs">{format_cost(event.cost_usd)}</td>
                 <td class="hidden md:table-cell text-xs">{format_latency(event.latency_ms)}</td>
-                <td class="hidden lg:table-cell text-xs text-base-content/50">
+                <td class="hidden lg:table-cell text-xs text-subtle">
                   {event.task_id || "-"}
                 </td>
               </tr>

@@ -3,34 +3,92 @@ defmodule PlatformWeb.FilesLive do
   Files surface — the user-facing UI for the project-scoped document
   store introduced by ADR 0042.
 
-  ## Layout
+  ## Layout: the Files & Canvases browser (rung 16, task 01a1557a-b5f9 stage 2)
 
-    * LEFT — org-grouped project picker (sidebar; hidden on mobile).
-      Reuses `Platform.Projects.group_by_active_org/2` so the Files and
-      Tasks sidebars stay in lock-step: every active org keeps its header
-      even at zero projects (archiving an org's last project can't erase
-      it). Header order, scope colours, and "Unassigned" bucket all share
-      the Tasks-sidebar treatment.
-    * CENTER — file list for the selected project. Sortable columns
-      (date / name / size / type), client-side substring filter, and a
-      semantic-search box that hits `Platform.Memory.search/2` with
-      `memory_type: "document"` + `project_id`.
-    * RIGHT — file-detail pane (desktop) / full-screen drawer (mobile).
-      Renders images inline (`<img>`), PDFs in an `<iframe>`, markdown
-      through the chat content renderer, plain/CSV/JSON in a `<pre>`,
-      DOCX-class documents in a prose `<div>` rendered from the
-      cached extracted text, and any unsupported type as a download
-      link. Every mode always exposes a "Download" button + a
-      "Copy link" action at the top of the pane.
+  The page is a Finder-style browser over project files AND canvases, built
+  from the masters prototype 01a137f2 (`master-mobile.html` v3 :641-646,
+  :361-412, :1119-1192; `master-desktop.html` :942-955) and Saru's direction
+  canvas 01a161fc-d30b. Data comes from `Platform.Files.Browser`; markup lives
+  in `PlatformWeb.Files.BrowserComponents`.
 
-  ## Drag-drop + mobile FAB
+    * Phone (below `lg`), ground base-200: a header (44px back to More, the
+      h1, search, an empty slot for stage 3's ＋ New), the chips row
+      (Recents / Browse, then All / Canvases / Games / Docs / Images), the
+      breadcrumbs in Browse, the toolbar (count, sort cycle, list/grid) and
+      the scroller (`clears-tab-bar`).
+    * Desktop (`lg+`): a left tree (Recents, then each org expandable to its
+      projects and spaces) beside the same breadcrumbs, chips, toolbar and
+      list or grid. The tree's expand state is per-LiveView, not persisted.
+    * The project node keeps everything this page did before the browser:
+      the detail pane (desktop) / full-screen drawer (mobile), delete with
+      the undo toast, restore, the agent-context toggle, interactive marking,
+      supersession rulings, per-file Retry, the failed-ingest summary, the
+      upload form and dropzone, semantic search and the PubSub refresh.
 
-  The CENTER region carries the namespaced `data-role="file-dropzone"`
-  marker so end-to-end tests and any future drag-drop hook can find it
-  without colliding with the chat-attachment dropzone. The mobile FAB
-  (`data-role="file-upload-fab"`) sits at the canonical position used
-  by the Tasks "+" button — same `bottom-[calc(...)]` math so it clears
-  the safe-area inset and the bottom-nav height on every device.
+  ## The URL is the state
+
+  Every view is a URL, read in `handle_params/3`:
+
+    * `/files` Recents (changed in the last 3 days, D4);
+    * `/files?tab=browse` All; `&org=<id>` one org; `&org=other` the spaces
+      and projects with no org;
+    * `/files/:project_id` a project node; `/files?space=<id>` a space node
+      (its canvases and its shared chat files);
+    * `type=canvas|game|doc|image`, `sort=recent|name|type`, `q=<query>`
+      (search: project file names and canvas titles and text, D3) and
+      `file=<id>` (opens the detail pane in a project node).
+
+  Every id from params is checked against the viewer's own tree
+  (`Browser.tree/1`) or `Browser.in_space/2`; an unknown or foreign id
+  patches to `/files` and no flash names it. Rows and chips are plain
+  `<.link patch|navigate|href>` with NO `phx-click` (rung 5's measurement).
+
+  ## Design decisions (planner, recorded in `Platform.Files.Browser`)
+
+    * D1 the tree is org-rooted: All > Org > { Project | #space }.
+    * D2 no folders: the data model has none.
+    * D3 search covers project file names and canvas titles and text.
+    * D4 Recents is "changed in the last 3 days".
+    * D5 names mask (below).
+    * D6 the Games chip renders only when the `game_stream` kind is
+      registered (`Browser.games_enabled?/0`).
+
+  ## Name masking
+
+  `:mask_names?` is seeded on mount from `Platform.Accounts.mask_names?/1`
+  (the value ShellLive seeds too). The label map is built at RENDER time from
+  `@mask_names?` (`PlatformWeb.Files.BrowserView.browser_labels/3`), never cached on mount, so a
+  shell-driven `toggle_mask_names` that reassigns `:mask_names?` relabels the
+  page. This LiveView defines NO `toggle_mask_names` handler, so ShellLive's
+  `@mask_page_views` guard list stays correct.
+
+    * Orgs: `SidebarMask.context/3` over `Platform.Chat.Sidebar.resolve_for_user/2`,
+      re-keyed by org id, so an org carries the SAME "Workspace X" letter as
+      in the Chat rail. An org with no chat section falls back through
+      `SidebarMask.label/5` to the bare "Workspace", never its real name.
+    * Channels: `SidebarMask.space_label/3` (project-code channels like
+      `#atlas` stay verbatim; SidebarMask's named limitation).
+    * Projects: `SidebarMask.placeholders(projects, "Project")` in tree order.
+    * Applied to the tree, breadcrumbs, location lines and empty-state copy.
+      The h1 and the page title never carry a name.
+
+  Uncovered while masked (SidebarMask's rule: titles and file names are out of
+  scope): canvas titles, file names, and the slugs and ids in `href`s and
+  `data-*` attributes. No per-item reveal in this rung.
+
+  ## Drag-drop and the ＋ New control
+
+  The scroller carries the namespaced `data-role="file-dropzone"` marker so
+  end-to-end tests and any future drag-drop hook can find it without
+  colliding with the chat-attachment dropzone.
+
+  The header ＋ (`data-role="files-new"`, stage 3) replaced the old upload
+  FAB. On phone it opens `#files-new-sheet`; on desktop the same items in a
+  menu under the button. New canvas creates an "Untitled canvas" in the
+  current space (or a picked one) with the viewer's own participant and
+  redirects to it; Upload opens the existing upload flow in a project node
+  (or a project picker first). Every space and project id an event carries is
+  re-checked against the viewer's tree.
 
   ## PubSub
 
@@ -101,14 +159,17 @@ defmodule PlatformWeb.FilesLive do
   use PlatformWeb, :live_view
 
   alias Platform.Accounts
+  alias Platform.Chat
   alias Platform.Chat.ContentRenderer
+  alias Platform.Chat.Sidebar
   alias Platform.Files
+  alias Platform.Files.Browser
   alias Platform.Files.Storage
   alias Platform.Files.Supersession
   alias Platform.Memory
-  alias Platform.Projects
   alias Platform.Tasks
-  alias Platform.Tenancy
+  alias PlatformWeb.Files.BrowserComponents
+  alias PlatformWeb.Files.BrowserView
 
   @max_upload_size 50_000_000
   @max_upload_entries 10
@@ -122,28 +183,29 @@ defmodule PlatformWeb.FilesLive do
 
   @impl true
   def mount(_params, session, socket) do
-    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
+    user = socket.assigns[:current_user_record]
     current_user_id = session["current_user_id"]
+    viewer = %{user: user, access_scope: socket.assigns[:access_scope]}
 
     {:ok,
      socket
      |> assign(:page_title, "Files")
      |> assign(:current_path, "/files")
      |> assign(:current_user_id, current_user_id)
-     |> assign(:projects, projects)
-     # Navigation source: every active org THE VIEWER BELONGS TO keeps a section
-     # (and count) even at zero projects, so archiving an org's last project
-     # can't erase its header. Foreign orgs get no header at all — an empty
-     # header naming an org the viewer isn't in is still an existence leak
-     # — matches the Tasks sidebar and Chat. Files has no <select> consuming
-     # this grouping, so there's no project-derived variant to keep alongside.
-     |> assign(
-       :project_sections,
-       Projects.group_by_active_org(
-         projects,
-         Tenancy.list_active_tenants_for_user(socket.assigns[:current_user_record])
-       )
-     )
+     |> assign(:viewer, viewer)
+     # The viewer's orgs, projects and spaces: every id from params is
+     # checked against this (see the moduledoc).
+     |> assign(:tree, Browser.tree(viewer))
+     # The Chat rail's resolved sections, for the org letters. Read once;
+     # the label map itself is built at render from @mask_names?.
+     |> assign(:sidebar_sections, Sidebar.resolve_for_user(current_user_id, []))
+     |> assign(:mask_names?, user != nil and Accounts.mask_names?(user))
+     |> assign(:games?, Browser.games_enabled?())
+     |> assign(:layout_pref, stored_layout(user))
+     |> assign(:collapsed_orgs, MapSet.new())
+     # nil | :menu | :spaces | :projects (the ＋ New sheet and menu).
+     |> assign(:new_sheet, nil)
+     |> assign(:browser, empty_browser())
      |> assign(:selected_project_id, nil)
      |> assign(:selected_project, nil)
      |> assign(:files, [])
@@ -160,8 +222,6 @@ defmodule PlatformWeb.FilesLive do
      # ClientState, no hook — and guarded on `@selected_file` at render so
      # it cannot outlive the row it is showing.
      |> assign(:preview_fullscreen, false)
-     |> assign(:filter, "")
-     |> assign(:sort, "date_desc")
      |> assign(:semantic_query, "")
      |> assign(:semantic_results, [])
      |> assign(:semantic_search_state, :idle)
@@ -184,62 +244,91 @@ defmodule PlatformWeb.FilesLive do
   end
 
   @impl true
-  def handle_params(%{"project_id" => project_id}, _url, socket) do
-    {:noreply, load_project(socket, project_id)}
-  end
-
-  def handle_params(_params, _url, socket) do
-    # Index view — no selection. Drop any prior subscription so we don't
-    # keep getting PubSub events for a project the user moved away from.
-    {:noreply,
-     socket
-     |> maybe_unsubscribe()
-     |> assign(:selected_project_id, nil)
-     |> assign(:selected_project, nil)
-     |> assign(:files, [])
-     |> assign(:supersession_claims, %{})
-     |> assign(:selected_file, nil)
-     |> assign(:selected_file_text, nil)
-     |> assign(:failed_summary, nil)
-     |> assign(:semantic_results, [])
-     |> assign(:semantic_search_state, :idle)
-     |> assign(:filter, "")}
+  def handle_params(params, _url, socket) do
+    {:noreply, apply_browser_params(socket, params)}
   end
 
   # ── Events ──────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("select_project", %{"id" => project_id}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/files/#{project_id}")}
+  def handle_event("browser_search", %{"q" => q}, socket) when is_binary(q) do
+    params = Map.put(socket.assigns.browser.params, "q", q)
+    {:noreply, push_patch(socket, to: BrowserView.browser_path(params, %{}), replace: true)}
   end
 
-  def handle_event("clear_selection", _params, socket) do
-    {:noreply, push_patch(socket, to: ~p"/files")}
+  def handle_event("browser_search", _params, socket), do: {:noreply, socket}
+
+  # The list/grid toggle stores the viewer's choice (`files_layout`).
+  def handle_event("set_layout", %{"layout" => layout}, socket) when layout in ["list", "grid"] do
+    if user_id = socket.assigns.current_user_id do
+      _ = Accounts.update_user_preference(user_id, "files_layout", layout)
+    end
+
+    {:noreply, assign(socket, :layout_pref, String.to_existing_atom(layout))}
   end
 
-  def handle_event("filter", %{"value" => value}, socket) do
-    {:noreply, assign(socket, :filter, value)}
+  def handle_event("set_layout", _params, socket), do: {:noreply, socket}
+
+  # Desktop tree: per-LiveView expand state, never persisted.
+  def handle_event("toggle_tree_org", %{"id" => org_id}, socket) when is_binary(org_id) do
+    collapsed = socket.assigns.collapsed_orgs
+
+    collapsed =
+      if MapSet.member?(collapsed, org_id),
+        do: MapSet.delete(collapsed, org_id),
+        else: MapSet.put(collapsed, org_id)
+
+    {:noreply, assign(socket, :collapsed_orgs, collapsed)}
   end
 
-  def handle_event("filter", %{"filter" => value}, socket) do
-    {:noreply, assign(socket, :filter, value)}
+  # ── ＋ New (stage 3) ────────────────────────────────────────────────────
+
+  def handle_event("toggle_new_sheet", _params, socket) do
+    next = if socket.assigns.new_sheet, do: nil, else: :menu
+    {:noreply, assign(socket, :new_sheet, next)}
   end
 
-  def handle_event("sort", %{"sort" => sort}, socket) when is_binary(sort) do
-    {:noreply, assign(socket, :sort, sort)}
+  def handle_event("close_new_sheet", _params, socket),
+    do: {:noreply, assign(socket, :new_sheet, nil)}
+
+  def handle_event("new_sheet_back", _params, socket),
+    do: {:noreply, assign(socket, :new_sheet, :menu)}
+
+  # A picked space (from the picker), re-checked against the viewer's tree.
+  def handle_event("new_canvas", %{"space-id" => space_id}, socket) when is_binary(space_id),
+    do: {:noreply, create_canvas_in(socket, space_id)}
+
+  # In a space node, create right there; anywhere else ask for the space.
+  def handle_event("new_canvas", _params, socket) do
+    case socket.assigns.browser.node do
+      {:space, space} -> {:noreply, create_canvas_in(socket, space.id)}
+      _ -> {:noreply, assign(socket, :new_sheet, :spaces)}
+    end
   end
 
-  def handle_event("select_file", %{"id" => file_id}, socket) do
-    case Enum.find(socket.assigns.files, &(&1.id == file_id)) do
+  # In a project node, today's upload sheet; anywhere else pick the project.
+  def handle_event("new_upload", _params, socket) do
+    case socket.assigns.browser.node do
+      {:project, _} ->
+        {:noreply, socket |> assign(:new_sheet, nil) |> assign(:show_upload_sheet, true)}
+
+      _ ->
+        {:noreply, assign(socket, :new_sheet, :projects)}
+    end
+  end
+
+  def handle_event("upload_to_project", %{"project-id" => project_id}, socket)
+      when is_binary(project_id) do
+    case find_project(socket.assigns.tree, project_id) do
       nil ->
-        {:noreply, socket}
+        {:noreply, assign(socket, :new_sheet, nil)}
 
-      file ->
+      project ->
         {:noreply,
          socket
-         |> assign(:selected_file, file)
-         |> assign(:selected_file_text, load_text_excerpt(file))
-         |> assign(:preview_fullscreen, false)}
+         |> assign(:new_sheet, nil)
+         |> assign(:show_upload_sheet, true)
+         |> push_patch(to: ~p"/files/#{project.id}")}
     end
   end
 
@@ -248,7 +337,8 @@ defmodule PlatformWeb.FilesLive do
      socket
      |> assign(:selected_file, nil)
      |> assign(:selected_file_text, nil)
-     |> assign(:preview_fullscreen, false)}
+     |> assign(:preview_fullscreen, false)
+     |> drop_file_param()}
   end
 
   def handle_event("open_preview_fullscreen", _params, socket) do
@@ -837,6 +927,415 @@ defmodule PlatformWeb.FilesLive do
 
   defp empty_upload_batch, do: %{created: [], dedup: [], errors: []}
 
+  # ── Browser state: the URL is the state ─────────────────────────────────
+
+  @types %{"canvas" => :canvas, "game" => :game, "doc" => :doc, "image" => :image}
+  @sorts %{"recent" => :recent, "name" => :name, "type" => :type}
+
+  defp empty_browser do
+    %{
+      mode: :recents,
+      node: nil,
+      type: nil,
+      sort: :recent,
+      q: nil,
+      params: %{},
+      items: [],
+      nodes: [],
+      capped?: false
+    }
+  end
+
+  defp apply_browser_params(socket, params) do
+    type = parse_type(params["type"], socket.assigns.games?)
+    sort = Map.get(@sorts, params["sort"], :recent)
+    base = %{empty_browser() | type: type, sort: sort, params: clean_params(params, type, sort)}
+
+    socket =
+      socket
+      |> assign(:page_title, page_title(params, type))
+      |> assign(:new_sheet, nil)
+      |> assign(:current_path, current_path(params, type))
+
+    cond do
+      is_binary(params["project_id"]) ->
+        project_node(socket, params["project_id"], params["file"], %{base | mode: :browse})
+
+      is_binary(params["space"]) ->
+        space_node(socket, params["space"], %{base | mode: :browse})
+
+      is_binary(params["q"]) ->
+        search_view(socket, params["q"], %{base | mode: :search, q: params["q"]})
+
+      params["tab"] == "browse" ->
+        browse_view(socket, params["org"], %{base | mode: :browse})
+
+      true ->
+        recents_view(socket, base)
+    end
+  end
+
+  defp parse_type(value, games?) do
+    case Map.get(@types, value) do
+      :game -> if games?, do: :game, else: nil
+      type -> type
+    end
+  end
+
+  # Only the keys and values this page understands survive into the links
+  # it builds; anything else in the URL is dropped.
+  defp clean_params(params, type, sort) do
+    params
+    |> Map.take(BrowserView.url_keys() -- ["type", "sort"])
+    |> Map.filter(fn {_key, value} -> is_binary(value) end)
+    |> maybe_put("type", type && Atom.to_string(type))
+    |> maybe_put("sort", if(sort == :recent, do: nil, else: Atom.to_string(sort)))
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # The shell's `:track_path` hook sets `:current_path` to the bare URI path
+  # on every navigation. The More sheet lights Canvases only on the browser's
+  # All-canvases view, so that view passes its query through in ONE canonical
+  # form (`/files?tab=browse&type=canvas`, whatever the sort); every other
+  # view keeps the bare path and lights Files.
+  defp current_path(%{"tab" => "browse"} = params, :canvas) do
+    if Map.has_key?(params, "org") or Map.has_key?(params, "project_id") or
+         Map.has_key?(params, "space"),
+       do: "/files",
+       else: "/files?tab=browse&type=canvas"
+  end
+
+  defp current_path(%{"project_id" => id}, _type) when is_binary(id), do: "/files/" <> id
+  defp current_path(_params, _type), do: "/files"
+
+  # The page title never carries an org, project or channel name, so it
+  # needs no masking.
+  defp page_title(%{"tab" => "browse"} = params, type) when not is_nil(type) do
+    if Map.has_key?(params, "org"), do: "Files", else: BrowserComponents.type_word(type)
+  end
+
+  defp page_title(_params, _type), do: "Files"
+
+  defp recents_view(socket, browser) do
+    %{items: items, capped?: capped?} = Browser.recents(socket.assigns.viewer)
+
+    socket
+    |> leave_project()
+    |> assign(:browser, %{browser | items: Browser.filter(items, browser.type), capped?: capped?})
+  end
+
+  defp search_view(socket, q, browser) do
+    items =
+      if String.trim(q) == "",
+        do: [],
+        else: socket.assigns.viewer |> Browser.search(q) |> Browser.filter(browser.type)
+
+    socket
+    |> leave_project()
+    |> assign(:browser, %{browser | items: items})
+  end
+
+  defp browse_view(socket, nil, browser) do
+    tree = socket.assigns.tree
+
+    browser =
+      if browser.type do
+        %{items: items, capped?: capped?} = Browser.of_type(socket.assigns.viewer, browser.type)
+        %{browser | node: :all, items: items, capped?: capped?}
+      else
+        nodes =
+          Enum.map(tree.orgs, fn %{org: org} ->
+            %{
+              kind: :org,
+              id: org.id,
+              href: BrowserView.browser_path(%{"tab" => "browse", "org" => org.id}, %{})
+            }
+          end) ++
+            if(tree.other.projects != [] or tree.other.spaces != [],
+              do: [
+                %{
+                  kind: :other,
+                  id: "other",
+                  href: BrowserView.browser_path(%{"tab" => "browse", "org" => "other"}, %{})
+                }
+              ],
+              else: []
+            )
+
+        %{browser | node: :all, nodes: nodes}
+      end
+
+    socket
+    |> leave_project()
+    |> assign(:browser, browser)
+  end
+
+  defp browse_view(socket, org_param, browser) do
+    tree = socket.assigns.tree
+
+    found =
+      if org_param == "other" do
+        {:other, nil, tree.other}
+      else
+        case Enum.find(tree.orgs, &(&1.org.id == org_param)) do
+          nil -> nil
+          entry -> {:org, entry.org, entry}
+        end
+      end
+
+    case found do
+      nil ->
+        reject_node(socket)
+
+      {kind, org, entry} ->
+        node = if kind == :other, do: :other, else: {:org, org}
+        org_id = org && org.id
+
+        browser =
+          if browser.type do
+            %{items: items, capped?: capped?} =
+              Browser.of_type(socket.assigns.viewer, browser.type)
+
+            %{
+              browser
+              | node: node,
+                items: Enum.filter(items, &(&1.org_id == org_id)),
+                capped?: capped?
+            }
+          else
+            nodes =
+              Enum.map(entry.projects, &%{kind: :project, id: &1.id, href: ~p"/files/#{&1.id}"}) ++
+                Enum.map(
+                  entry.spaces,
+                  &%{
+                    kind: :space,
+                    id: &1.id,
+                    href: BrowserView.browser_path(%{"space" => &1.id}, %{})
+                  }
+                )
+
+            %{browser | node: node, nodes: nodes}
+          end
+
+        socket
+        |> leave_project()
+        |> assign(:browser, browser)
+    end
+  end
+
+  defp space_node(socket, space_id, browser) do
+    with %{} = space <- find_space(socket.assigns.tree, space_id),
+         {:ok, items} <- Browser.in_space(socket.assigns.viewer, space.id) do
+      socket
+      |> leave_project()
+      |> assign(:browser, %{
+        browser
+        | node: {:space, space},
+          items: Browser.filter(items, browser.type)
+      })
+    else
+      _ -> reject_node(socket)
+    end
+  end
+
+  defp project_node(socket, project_id, file_id, browser) do
+    case find_project(socket.assigns.tree, project_id) do
+      nil ->
+        reject_node(socket)
+
+      project ->
+        socket =
+          if socket.assigns.selected_project_id == project.id,
+            do: socket,
+            else: load_project(socket, project.id)
+
+        if socket.assigns.selected_project_id == project.id do
+          socket
+          |> assign(:browser, %{browser | node: {:project, socket.assigns.selected_project}})
+          |> select_file_param(file_id)
+        else
+          socket
+        end
+    end
+  end
+
+  defp select_file_param(socket, nil) do
+    socket
+    |> assign(:selected_file, nil)
+    |> assign(:selected_file_text, nil)
+    |> assign(:preview_fullscreen, false)
+  end
+
+  defp select_file_param(%{assigns: %{selected_file: %Files.File{id: id}}} = socket, id),
+    do: socket
+
+  defp select_file_param(socket, file_id) do
+    project_id = socket.assigns.selected_project_id
+
+    case Enum.find(socket.assigns.files, &(&1.id == file_id)) || readable_file(socket, file_id) do
+      %Files.File{project_id: ^project_id, deleted_at: nil} = file ->
+        socket
+        |> assign(:selected_file, file)
+        |> assign(:selected_file_text, load_text_excerpt(file))
+        |> assign(:preview_fullscreen, false)
+        |> put_claims()
+
+      _ ->
+        reject_node(socket)
+    end
+  end
+
+  # Create "Untitled canvas" in one of the viewer's spaces and redirect to
+  # it. The space id is checked against the viewer's tree, and the canvas is
+  # authored by the viewer's OWN participant in that space; a forged or
+  # foreign id creates nothing.
+  defp create_canvas_in(socket, space_id) do
+    with %{} = space <- find_space(socket.assigns.tree, space_id),
+         %{} = participant <- viewer_participant(socket, space.id),
+         {:ok, canvas, _message} <-
+           Chat.create_canvas_with_message(space.id, participant.id, %{
+             "title" => "Untitled canvas"
+           }) do
+      push_navigate(socket, to: ~p"/canvases/#{canvas.id}")
+    else
+      _ ->
+        socket
+        |> assign(:new_sheet, nil)
+        |> put_flash(:error, "Couldn't create a canvas there.")
+    end
+  end
+
+  defp viewer_participant(%{assigns: %{current_user_id: user_id}}, space_id)
+       when is_binary(user_id) do
+    space_id
+    |> Chat.list_participants(participant_type: "user")
+    |> Enum.find(&(&1.participant_id == user_id))
+  end
+
+  defp viewer_participant(_socket, _space_id), do: nil
+
+  # An unknown or foreign id: back to /files, and no flash names it.
+  defp reject_node(socket) do
+    socket
+    |> leave_project()
+    |> assign(:browser, empty_browser())
+    |> push_patch(to: ~p"/files")
+  end
+
+  defp leave_project(%{assigns: %{selected_project_id: nil}} = socket), do: socket
+
+  defp leave_project(socket) do
+    # Drop the subscription so PubSub events for a project the viewer left
+    # stop arriving.
+    socket
+    |> maybe_unsubscribe()
+    |> assign(:selected_project_id, nil)
+    |> assign(:selected_project, nil)
+    |> assign(:files, [])
+    |> assign(:supersession_claims, %{})
+    |> assign(:selected_file, nil)
+    |> assign(:selected_file_text, nil)
+    |> assign(:failed_summary, nil)
+    |> assign(:semantic_results, [])
+    |> assign(:semantic_search_state, :idle)
+  end
+
+  # The detail pane closed or its file went away: take `file=` out of the
+  # URL so a later patch or a reload does not reopen it.
+  defp drop_file_param(%{assigns: %{browser: %{params: %{"file" => _} = params}}} = socket) do
+    params = Map.delete(params, "file")
+
+    socket
+    |> assign(:browser, %{socket.assigns.browser | params: params})
+    |> push_patch(to: BrowserView.browser_path(params, %{}), replace: true)
+  end
+
+  defp drop_file_param(socket), do: socket
+
+  defp find_project(tree, id) do
+    tree.orgs
+    |> Enum.flat_map(& &1.projects)
+    |> Kernel.++(tree.other.projects)
+    |> Enum.find(&(&1.id == id))
+  end
+
+  defp find_space(tree, id) do
+    tree.orgs
+    |> Enum.flat_map(& &1.spaces)
+    |> Kernel.++(tree.other.spaces)
+    |> Enum.find(&(&1.id == id))
+  end
+
+  defp stored_layout(%{preferences: %{"files_layout" => "grid"}}), do: :grid
+  defp stored_layout(%{preferences: %{"files_layout" => "list"}}), do: :list
+  defp stored_layout(_user), do: nil
+
+  attr :browser, :map, required: true
+  attr :files, :list, required: true
+  attr :labels, :map, required: true
+  attr :layout, :atom, required: true
+  attr :claims, :map, required: true
+
+  # The toolbar and the rows. A project node builds its rows from `@files`
+  # (which PubSub keeps current), so a badge flip re-renders here; every
+  # other view reads the items `handle_params/3` loaded.
+  defp browser_view(assigns) do
+    {items, file_rows} =
+      case assigns.browser.node do
+        {:project, project} ->
+          files = assigns.files
+
+          {files
+           |> Enum.map(&Browser.item_for_file(&1, project.org_id))
+           |> Browser.filter(assigns.browser.type), Map.new(files, &{&1.id, &1})}
+
+        _ ->
+          {assigns.browser.items, %{}}
+      end
+
+    browser = %{assigns.browser | items: Browser.sort(items, assigns.browser.sort)}
+
+    nodes =
+      Enum.map(browser.nodes, fn node ->
+        Map.put(node, :label, BrowserView.node_label(node, assigns.labels))
+      end)
+
+    assigns =
+      assign(assigns,
+        browser: browser,
+        nodes: nodes,
+        file_rows: file_rows,
+        show_location: not match?({kind, _} when kind in [:project, :space], browser.node)
+      )
+
+    ~H"""
+    <BrowserComponents.toolbar browser={@browser} layout={@layout} />
+    <%= cond do %>
+      <% @browser.items == [] and @nodes != [] -> %>
+        <BrowserComponents.node_list nodes={@nodes} />
+      <% @browser.items == [] -> %>
+        <BrowserComponents.empty_state browser={@browser} labels={@labels} />
+      <% @layout == :grid -> %>
+        <BrowserComponents.item_grid
+          items={@browser.items}
+          labels={@labels}
+          show_location={@show_location}
+        />
+      <% true -> %>
+        <BrowserComponents.item_list
+          items={@browser.items}
+          labels={@labels}
+          show_location={@show_location}
+          file_rows={@file_rows}
+          claims={@claims}
+        />
+    <% end %>
+    <BrowserComponents.capped_note browser={@browser} />
+    """
+  end
+
   # ── Internals ───────────────────────────────────────────────────────────
 
   defp load_project(socket, project_id) do
@@ -849,9 +1348,7 @@ defmodule PlatformWeb.FilesLive do
     # `files.read` deny covers behaves exactly like a missing one.
     if is_nil(project) or Platform.Projects.archived?(project) or
          not project_readable?(socket, project.id) do
-      socket
-      |> put_flash(:error, "Project not found.")
-      |> push_patch(to: ~p"/files")
+      reject_node(socket)
     else
       # Preload :org so the breadcrumb can render the scope label/color.
       # `Tasks.get_project/1` doesn't preload by default — the sidebar
@@ -869,7 +1366,6 @@ defmodule PlatformWeb.FilesLive do
       |> assign_failed_summary()
       |> assign(:semantic_results, [])
       |> assign(:semantic_search_state, :idle)
-      |> assign(:filter, "")
       |> put_claims()
     end
   end
@@ -1109,6 +1605,7 @@ defmodule PlatformWeb.FilesLive do
         |> assign(:selected_file, nil)
         |> assign(:selected_file_text, nil)
         |> assign(:highlight_snippet, nil)
+        |> drop_file_param()
       else
         socket
       end
@@ -1186,7 +1683,7 @@ defmodule PlatformWeb.FilesLive do
   end
 
   # Insert-or-replace a single row in local state; sort order is applied
-  # at render time by filtered_and_sorted/3, so list position is
+  # at render time by `Browser.sort/2`, so list position is
   # irrelevant. Ignores rows for projects other than the selected one
   # (an undo can fire after the user navigated away).
   defp insert_file_row(socket, %Files.File{} = file) do
@@ -1303,43 +1800,6 @@ defmodule PlatformWeb.FilesLive do
   end
 
   # ── Template helpers exposed via assigns ───────────────────────────────
-
-  @doc false
-  def filtered_and_sorted(files, filter, sort) do
-    files
-    |> apply_filter(filter)
-    |> apply_sort(sort)
-  end
-
-  defp apply_filter(files, nil), do: files
-  defp apply_filter(files, ""), do: files
-
-  defp apply_filter(files, query) when is_binary(query) do
-    needle = String.downcase(query)
-
-    Enum.filter(files, fn file ->
-      String.contains?(String.downcase(file.name || ""), needle) or
-        String.contains?(String.downcase(file.original_filename || ""), needle) or
-        String.contains?(String.downcase(file.content_type || ""), needle)
-    end)
-  end
-
-  defp apply_sort(files, "date_desc"),
-    do: Enum.sort_by(files, & &1.inserted_at, {:desc, DateTime})
-
-  defp apply_sort(files, "date_asc"),
-    do: Enum.sort_by(files, & &1.inserted_at, {:asc, DateTime})
-
-  defp apply_sort(files, "name_asc"),
-    do: Enum.sort_by(files, &String.downcase(&1.name || &1.original_filename || ""))
-
-  defp apply_sort(files, "name_desc"),
-    do: Enum.sort_by(files, &String.downcase(&1.name || &1.original_filename || ""), :desc)
-
-  defp apply_sort(files, "size_desc"), do: Enum.sort_by(files, & &1.byte_size, :desc)
-  defp apply_sort(files, "size_asc"), do: Enum.sort_by(files, & &1.byte_size, :asc)
-  defp apply_sort(files, "type_asc"), do: Enum.sort_by(files, & &1.content_type)
-  defp apply_sort(files, _), do: apply_sort(files, "date_desc")
 
   @doc """
   Whether the current viewer may delete (and restore) files. Mirrors the
@@ -1807,18 +2267,6 @@ defmodule PlatformWeb.FilesLive do
 
   defp pluralize_unit(word, 1), do: word
   defp pluralize_unit(word, _count), do: word <> "s"
-
-  # The selected project's org, named and coloured from its row (task
-  # 01a14dd9 stage 2 retired the compiled `Tenancy.scope_label/1` /
-  # `scope_color/1` maps): the label is the org's `name`, and the colour
-  # reaches the text through `data-scope` and `.scope-fill-text`.
-  @doc false
-  def org_label_for(%{org: %Tenancy.Org{name: name}}) when is_binary(name), do: name
-  def org_label_for(_), do: ""
-
-  @doc false
-  def org_scope_for(%{org: %Tenancy.Org{slug: slug}}) when is_binary(slug), do: slug
-  def org_scope_for(_), do: nil
 
   # ── Semantic-result accessors (tolerate both atom + string keys) ───────
 

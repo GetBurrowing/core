@@ -84,7 +84,41 @@ defmodule Platform.ParallelUI do
 
   @id_regex ~r/\A[a-z0-9][a-z0-9_.-]*\z/
 
-  @entries []
+  @entries [
+    %{
+      id: "tasks.kind_filter_single",
+      kind: :field,
+      legacy:
+        "`@kind_filter`, a single task kind kept for the old kind select and the DB `:kind` opt. Derived from `@kind_filters`: the one kind when exactly one is set, otherwise `:all`.",
+      replacement:
+        "`@kind_filters`, the multi-value `?kind=` list narrowed in memory by `BoardData.narrow_list/3`.",
+      introduced_by: "01a161fd-3a14-7000-9816-ed8afd806653",
+      cutover:
+        "Delete the :kind_filter assign, decode_kind_param/1's single-value path and the old kind select; read :kind_filters everywhere."
+    },
+    %{
+      id: "tasks.last_project_client_state",
+      kind: :dual_write,
+      legacy:
+        "The per-device client-state (localStorage) copy of the selected /tasks project, written and replayed by the LastProject hook (`assets/js/hooks/last_project.js`). It no longer replays over a `?project=` URL or a server-applied preference.",
+      replacement:
+        "`users.preferences[\"tasks_project\"]`, written by `PlatformWeb.Tasks.FilterPrefs.sync/1` through `Platform.Accounts.put_tasks_project_pref/3` and read on mount.",
+      introduced_by: "01a161fd-3a14-7000-9816-ed8afd806653",
+      cutover:
+        "Delete assets/js/hooks/last_project.js, its registration, the data-selected-project-id/data-project-source attributes and the selected_project_changed push_event."
+    },
+    %{
+      id: "tasks.mobile_status_pill",
+      kind: :event,
+      legacy:
+        "`filter_by_status`, the `@active_status_filter` assign and `assets/js/hooks/tasks_status_filter.js`, kept for the old phone board's single-status pill nav.",
+      replacement:
+        "`?status=`, the multi-value Status section of the phone Tasks filter sheet (`PlatformWeb.Tasks.FilterSheets`), narrowed by `BoardData.narrow_list/3`.",
+      introduced_by: "01a161fd-3a14-7000-9816-ed8afd806653",
+      cutover:
+        "Delete the filter_by_status handler, the active_status_filter assign, the status pill nav and tasks_status_filter.js with the old phone board."
+    }
+  ]
 
   @type kind :: :event | :field | :column | :dual_write | :route
   @type entry :: %{required(atom()) => term()}

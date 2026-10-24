@@ -38,7 +38,6 @@ defmodule PlatformWeb.Components.ChatMessageVideoTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={MapSet.new()}
-      agent_colors_map={%{}}
       participants_map={%{"p-1" => %{name: "Alex", avatar_url: nil, avatar_seed: nil}}}
       quick_emojis={[]}
       pinned_message_ids={MapSet.new()}
@@ -158,11 +157,16 @@ defmodule PlatformWeb.Components.ChatMessageVideoTest do
     assert LazyHTML.attribute(video, "src") == ["/chat/attachments/#{attachment_id}#t=0.1"]
   end
 
-  test "a non-video file keeps the paperclip link" do
+  # Rung 13 stage 3: the paperclip chip became a file card that opens the
+  # in-app viewer (no new tab).
+  test "a non-video file renders the file card" do
     html = row_html([%{@video | content_type: "application/pdf", filename: "spec.pdf"}])
     refute html =~ "<video"
-    assert html =~ "hero-paper-clip"
-    assert html =~ "spec.pdf"
+    refute html =~ "hero-paper-clip"
+    refute html =~ ~s(target="_blank")
+    assert html =~ ~s(data-role="file-card")
+    assert html =~ "spec"
+    assert html =~ ".pdf"
   end
 
   # ── Task 01a1655c stage 4: canvas fidelity ──────────────────────────────

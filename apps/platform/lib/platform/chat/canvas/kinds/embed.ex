@@ -275,7 +275,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
         aria-label="Expand canvas to full screen"
         title="Expand"
         class={
-          "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
+          "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content shadow-md " <>
             "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
             "hover:bg-base-100 hover:text-base-content"
         }
@@ -325,7 +325,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
       :if={is_nil(@src)}
       id={@wrapper_id}
       data-role="embed-scripted-unavailable"
-      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-base-content/60"
+      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-subtle"
     >
       Scripted embed unavailable
     </div>
@@ -357,7 +357,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
           aria-label="Expand canvas to full screen"
           title="Expand"
           class={
-            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
+            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content shadow-md " <>
               "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
               "hover:bg-base-100 hover:text-base-content"
           }

@@ -448,7 +448,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
       <h3 id="social-voice-label" class="text-sm font-semibold text-base-content">
         Voice and timing
       </h3>
-      <p class="mt-0.5 text-sm text-base-content/70">
+      <p class="mt-0.5 text-sm text-base-content">
         Drafting agents copy the samples and never use a banned phrase.
       </p>
 
@@ -481,11 +481,11 @@ defmodule PlatformWeb.SocialVoiceSettings do
         <fieldset class="space-y-2" data-role="social-voice-samples">
           <legend class="text-sm font-medium text-base-content">
             Sample posts
-            <span class="font-normal text-base-content/70">
+            <span class="font-normal text-base-content">
               ({length(@draft["samples"])} of {@limits.samples})
             </span>
           </legend>
-          <p :if={@draft["samples"] == []} class="text-sm text-base-content/70">
+          <p :if={@draft["samples"] == []} class="text-sm text-base-content">
             No samples yet. Paste two or three posts that sound like this brand.
           </p>
           <div
@@ -525,7 +525,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
 
         <fieldset class="space-y-2" data-role="social-voice-banned">
           <legend class="text-sm font-medium text-base-content">Banned phrases</legend>
-          <p class="text-sm text-base-content/70">
+          <p class="text-sm text-base-content">
             Agents cannot use these. People see a warning.
           </p>
           <ul :if={@draft["banned"] != []} class="flex flex-wrap gap-1.5">
@@ -537,7 +537,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
               <span class="max-w-48 truncate">{phrase}</span>
               <button
                 type="button"
-                class="cursor-pointer text-base-content/70 hover:text-base-content"
+                class="cursor-pointer text-base-content hover:text-base-content"
                 phx-click="voice_remove_banned"
                 phx-value-index={i}
                 aria-label={"Remove #{phrase}"}
@@ -593,7 +593,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
 
       <div class="mt-5 space-y-2" data-role="social-voice-learnings">
         <h4 class="text-sm font-medium text-base-content">Learnings</h4>
-        <p :if={@learnings == []} class="text-sm text-base-content/70">
+        <p :if={@learnings == []} class="text-sm text-base-content">
           None yet. Accepted notes from the weekly review land here.
         </p>
         <ul :if={@learnings != []} class="space-y-1.5">
@@ -623,9 +623,9 @@ defmodule PlatformWeb.SocialVoiceSettings do
       data-role="social-slots"
     >
       <h3 id="social-slots-label" class="text-sm font-semibold text-base-content">
-        Posting slots <span class="font-normal text-base-content/70">({@draft["timezone"]})</span>
+        Posting slots <span class="font-normal text-base-content">({@draft["timezone"]})</span>
       </h3>
-      <p :if={@cards == []} class="text-sm text-base-content/70" data-role="social-slots-no-accounts">
+      <p :if={@cards == []} class="text-sm text-base-content" data-role="social-slots-no-accounts">
         Connect an account to add posting slots.
       </p>
       <.slot_card :for={card <- @cards} card={card} />
@@ -648,18 +648,18 @@ defmodule PlatformWeb.SocialVoiceSettings do
       <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p class="text-sm font-semibold text-base-content">
           {platform_label(@card.account.platform)}
-          <span :if={@card.account.handle} class="font-normal text-base-content/70">
+          <span :if={@card.account.handle} class="font-normal text-base-content">
             @{@card.account.handle}
           </span>
         </p>
-        <p :if={@card.next_free} class="text-sm text-base-content/70" data-role="social-slot-next">
+        <p :if={@card.next_free} class="text-sm text-base-content" data-role="social-slot-next">
           Next free: {@card.next_free}
         </p>
       </div>
 
       <p
         :if={@card.slots == []}
-        class="mt-2 text-sm text-base-content/70"
+        class="mt-2 text-sm text-base-content"
         data-role="social-slots-empty"
       >
         {empty_slots_text()}
@@ -674,7 +674,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
           {slot_label(slot)}
           <button
             type="button"
-            class="cursor-pointer text-base-content/70 hover:text-base-content"
+            class="cursor-pointer text-base-content hover:text-base-content"
             phx-click="slot_remove"
             phx-value-account_id={@id}
             phx-value-index={i}
@@ -768,24 +768,24 @@ defmodule PlatformWeb.SocialVoiceSettings do
     ~H"""
     <dl class="mt-6 max-w-xl space-y-3 text-sm" data-role="social-voice-readonly">
       <div>
-        <dt class="text-base-content/70">Timezone</dt>
+        <dt class="text-base-content">Timezone</dt>
         <dd>{@profile.timezone}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Sample posts</dt>
+        <dt class="text-base-content">Sample posts</dt>
         <dd :if={@voice.samples == []}>None</dd>
         <dd :for={sample <- @voice.samples} class="mt-1 whitespace-pre-wrap">{sample}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Banned phrases</dt>
+        <dt class="text-base-content">Banned phrases</dt>
         <dd>{if @voice.banned == [], do: "None", else: Enum.join(@voice.banned, ", ")}</dd>
       </div>
       <div :if={@voice.learnings != []}>
-        <dt class="text-base-content/70">Learnings</dt>
+        <dt class="text-base-content">Learnings</dt>
         <dd :for={learning <- @voice.learnings} class="mt-1">{learning.text}</dd>
       </div>
       <div :for={card <- @cards} data-role="social-slot-card" data-account-id={card.account.id}>
-        <dt class="text-base-content/70">
+        <dt class="text-base-content">
           Slots for {platform_label(card.account.platform)}
           <span :if={card.account.handle}>@{card.account.handle}</span>
         </dt>

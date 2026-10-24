@@ -318,7 +318,7 @@ defmodule PlatformWeb.SocialCalendarTab do
         <button type="button" class="btn btn-ghost btn-sm" phx-click="week_next" data-role="week-next">
           next week <.icon name="hero-chevron-right-micro" class="size-4" />
         </button>
-        <span class="text-sm text-base-content/70" data-role="social-week-label">
+        <span class="text-sm text-base-content" data-role="social-week-label">
           Week of {Calendar.strftime(@week_start, "%-d %b %Y")}, times in
           <span class="font-semibold" data-role="social-week-zone" data-zone={@calendar_zone}>
             {@zone_label}
@@ -355,7 +355,7 @@ defmodule PlatformWeb.SocialCalendarTab do
         class="flex flex-wrap items-center gap-2"
         data-role="social-calendar-brands"
       >
-        <span class="text-xs text-base-content/70">Brands:</span>
+        <span class="text-xs text-base-content">Brands:</span>
         <button
           :for={brand <- @calendar_brands}
           type="button"
@@ -374,12 +374,12 @@ defmodule PlatformWeb.SocialCalendarTab do
           {brand.name}
           <span class="sr-only">{if brand.hidden?, do: "(hidden)", else: "(shown)"}</span>
         </button>
-        <span :if={!@calendar_shading?} class="text-xs text-base-content/70">
+        <span :if={!@calendar_shading?} class="text-xs text-base-content">
           Show one brand to see its posting slots.
         </span>
       </div>
 
-      <p :if={@calendar_empty?} class="text-base-content/70" data-role="social-empty">
+      <p :if={@calendar_empty?} class="text-base-content" data-role="social-empty">
         <%= if @all? do %>
           Nothing scheduled in any brand this week.
         <% else %>
@@ -390,12 +390,12 @@ defmodule PlatformWeb.SocialCalendarTab do
       <%!-- Desktop: time rows by seven day columns. --%>
       <div class="hidden overflow-x-auto lg:block">
         <div class="grid min-w-[56rem] grid-cols-[4.5rem_repeat(7,minmax(0,1fr))] gap-px rounded-t-lg border border-base-300 bg-base-300">
-          <div class="bg-base-100 p-2 text-xs text-base-content/70" title={@calendar_zone}>
+          <div class="bg-base-100 p-2 text-xs text-base-content" title={@calendar_zone}>
             {Clock.abbreviation(@week_start, @calendar_zone)}
           </div>
           <div
             :for={day <- @days}
-            class="bg-base-100 p-2 text-xs font-semibold text-base-content/70"
+            class="bg-base-100 p-2 text-xs font-semibold text-base-content"
             data-role="social-day-head"
           >
             {Cal.day_name(day)} {day.day}
@@ -414,7 +414,7 @@ defmodule PlatformWeb.SocialCalendarTab do
             data-role="social-calendar-row"
             data-hour={row.label}
           >
-            <div class="bg-base-100 p-2 font-mono text-xs text-base-content/70">{row.label}</div>
+            <div class="bg-base-100 p-2 font-mono text-xs text-base-content">{row.label}</div>
             <div
               :for={cell <- row.days}
               class={[
@@ -428,7 +428,7 @@ defmodule PlatformWeb.SocialCalendarTab do
             >
               <p
                 :for={slot <- cell.slots}
-                class="flex items-center gap-1 text-xs text-base-content/80"
+                class="flex items-center gap-1 text-xs text-base-content"
                 data-role="social-slot"
                 data-time={slot.time}
               >
@@ -481,7 +481,7 @@ defmodule PlatformWeb.SocialCalendarTab do
         <div class="flex items-start justify-between gap-2">
           <div class="min-w-0">
             <p class="font-mono text-xs uppercase">{@detail.account.platform}</p>
-            <p class="truncate text-sm text-base-content/70">{@detail.account.handle}</p>
+            <p class="truncate text-sm text-base-content">{@detail.account.handle}</p>
           </div>
           <button
             type="button"

@@ -56,7 +56,7 @@ export function partitionFiles(files, inlineMax) {
   return { small, large }
 }
 
-function inlineMaxFromDom() {
+export function inlineMaxFromDom() {
   const root = document.getElementById("large-upload-root")
   const n = root ? parseInt(root.dataset.inlineMax, 10) : NaN
   return Number.isFinite(n) ? n : NaN
@@ -630,7 +630,7 @@ function buildRow(u, manager) {
 
   const wrap = el("div", "mt-1 flex flex-col gap-2")
   let card
-  const counter = el("span", "shrink-0 font-mono text-[11px] tabular-nums text-base-content/60")
+  const counter = el("span", "shrink-0 font-mono text-[11px] tabular-nums text-subtle")
   counter.setAttribute("data-role", "large-upload-counter")
   if (isVideo(u)) {
     card = el("div", "relative w-full max-w-md overflow-hidden rounded-box border border-edge bg-base-200")
@@ -663,7 +663,7 @@ function buildRow(u, manager) {
     )
     card.appendChild(el("span", "hero-paper-clip size-4"))
     card.appendChild(el("span", null, u.filename))
-    card.appendChild(el("span", "text-xs text-base-content/40", `(${formatBytes(u.byteSize)})`))
+    card.appendChild(el("span", "text-xs text-subtle", `(${formatBytes(u.byteSize)})`))
   }
   card.setAttribute("data-role", "large-upload-card")
   const track = el("div", "absolute inset-x-0 bottom-0 h-[3px] bg-base-300")
@@ -689,7 +689,7 @@ function buildRow(u, manager) {
 
 function statusLine(u, manager) {
   const frag = document.createDocumentFragment()
-  const line = el("div", "mt-1 flex items-center gap-2 text-xs text-base-content/60")
+  const line = el("div", "mt-1 flex items-center gap-2 text-xs text-subtle")
   line.setAttribute("data-role", "large-upload-status")
   if (u.status === "failed") {
     const icon = el("span", "hero-exclamation-circle size-4 shrink-0 text-error")
@@ -714,7 +714,7 @@ function statusLine(u, manager) {
     line.appendChild(el("span", "min-w-0 flex-1", words.join(" ")))
     frag.appendChild(line)
   }
-  frag.appendChild(el("p", "mt-1 text-xs text-base-content/60", "Keep this tab open until it finishes."))
+  frag.appendChild(el("p", "mt-1 text-xs text-subtle", "Keep this tab open until it finishes."))
   return frag
 }
 
@@ -846,7 +846,7 @@ function daySeparator() {
   const sep = el("div", "js-date-separator flex items-center gap-3 my-4 -mx-2")
   sep.setAttribute("data-role", "large-upload-day")
   sep.appendChild(el("div", "flex-1 border-t border-edge"))
-  sep.appendChild(el("span", "text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2", "Today"))
+  sep.appendChild(el("span", "text-[11px] uppercase tracking-widest text-subtle font-semibold px-2", "Today"))
   sep.appendChild(el("div", "flex-1 border-t border-edge"))
   return sep
 }
@@ -927,8 +927,8 @@ export const LargeUploadTimeline = {
   },
 }
 
-// On `#large-upload-root` in the composer: takes large files out of the file
-// input and the dialog drop zone, and starts the uploads the server reserved.
+// On `#large-upload-root` in the composer: takes large files out of the
+// composer's file input, and starts the uploads the server reserved.
 const LargeUpload = {
   mounted() {
     installWindowListeners()
@@ -941,14 +941,15 @@ const LargeUpload = {
       stagedFiles.delete(ref)
     })
 
-    // Files picked through the dialog's file input (desktop label and the
-    // mobile + button alike) and dropped on the dialog's drop zone reach
+    // Files picked through the composer's file input (the ＋) reach
     // LiveView's own window listeners in the bubble phase; these
     // capture-phase listeners run first and take the large files out.
+    // Pasted and dropped files are routed before they reach the input
+    // (../attach_stage.js `stageFiles`).
     this._onFileInput = (e) => {
       const input = e.target
       if (!(input instanceof HTMLInputElement) || input.type !== "file") return
-      if (!input.closest("#upload-send-form")) return
+      if (!input.closest("#compose-form")) return
       const files = Array.from(input.files || [])
       const small = routeFiles(this, files)
       if (small.length === files.length) return
@@ -957,28 +958,15 @@ const LargeUpload = {
       input.files = dt.files
       if (small.length === 0) e.stopImmediatePropagation()
     }
-    this._onDrop = (e) => {
-      const target = e.target instanceof Element ? e.target.closest("[phx-drop-target]") : null
-      if (!target || !e.dataTransfer) return
-      const files = Array.from(e.dataTransfer.files || [])
-      const { large } = partitionFiles(files, inlineMaxFromDom())
-      if (large.length === 0) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      const small = routeFiles(this, files)
-      if (small.length > 0) this.uploadTo(this.el, "attachments", small)
-    }
 
     window.addEventListener("change", this._onFileInput, true)
     window.addEventListener("input", this._onFileInput, true)
-    window.addEventListener("drop", this._onDrop, true)
   },
 
   destroyed() {
     // The uploads are NOT stopped: they live in `uploadManager`, not here.
     window.removeEventListener("change", this._onFileInput, true)
     window.removeEventListener("input", this._onFileInput, true)
-    window.removeEventListener("drop", this._onDrop, true)
     uploadManager.detachHook(this)
   },
 }

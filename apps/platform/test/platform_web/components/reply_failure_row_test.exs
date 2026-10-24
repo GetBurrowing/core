@@ -119,7 +119,7 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
       assert LazyHTML.text(doc) =~ "Ada couldn't reply to this message."
 
       assert LazyHTML.text(doc) =~
-               "Someone who manages Ada can fix this in Agent Resources."
+               "Someone who manages Ada can fix this in Agents."
 
       assert doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.empty?()
     end
@@ -152,7 +152,6 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={MapSet.new()}
-        agent_colors_map={%{}}
         participants_map={%{}}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}

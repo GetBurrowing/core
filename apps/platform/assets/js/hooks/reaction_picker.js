@@ -75,7 +75,9 @@
  * is empty and the result count while it is not. `aria-live` MUST NOT go on
  * that row: swapping its contents destroys and recreates nodes, and a live
  * region created at the moment its text changes announces nothing. The
- * codebase documents that at `live/chat/partials/mobile_browser.ex:280-284`.
+ * codebase documented that on the deleted mobile drawer's reorder announcer
+ * (task 01a1557a-8562 removed the drawer; the Chat list's announcer keeps the
+ * same rule).
  * The live region here is a separate visually-hidden element created in
  * `mounted()`, present and empty from mount, and the visible count is
  * `aria-hidden`.
@@ -209,7 +211,7 @@ const ReactionPicker = {
     // THE LIVE REGION IS CREATED HERE, NOT AT PAINT TIME. `aria-live` only
     // announces CHANGES to a region that was already in the DOM; one created
     // in the same operation that fills it announces nothing. Same reasoning,
-    // and the same markup, as `mobile_browser.ex:284`.
+    // and the same markup, as the Chat list's reorder announcer.
     this.liveEl = document.createElement("div")
     this.liveEl.className = "reaction-picker-sr"
     this.liveEl.setAttribute("aria-live", "polite")
@@ -238,7 +240,7 @@ const ReactionPicker = {
 
     this.onViewportResize = () => this._scheduleKeyboardSync()
 
-    // ONE SWIPE DROPS THE KEYBOARD. Adopted from `drawer_search_focus.js:26-33`,
+    // ONE SWIPE DROPS THE KEYBOARD. Adopted from `search_focus.js (its blur-on-scroll)`,
     // which pairs it with focus-on-entry for the same reason: a field that can
     // raise the keyboard needs a gesture that puts it away, or the user is
     // trapped typing on a surface they came to browse. Passive because nothing
@@ -317,18 +319,27 @@ const ReactionPicker = {
     // different message reads as a bug.
     this._resetSearch()
 
-    // Initial focus. Desktop puts it in the field: the picker is nearly always
-    // opened with an emoji already in mind and the keyboard is right there.
-    // Mobile MUST NOT — raising the soft keyboard unbidden collapses the grid
-    // to two rows before the user has decided they need to search — so it
-    // anchors on the panel, which carries `tabindex="-1"` and the dialog's
-    // `aria-label`.
+    // Initial focus goes to the search field on every device (direction
+    // canvas 01a1666e node m3 rule 5, redesign rung 9 stage 2). It used to
+    // anchor on the panel on a phone, so the soft keyboard would not collapse
+    // the grid unbidden; the designer ruled search-first instead. The panel
+    // (`tabindex="-1"`) stays the fallback before the field is built.
     this._focusOnOpen()
   },
 
+  // The field is built with the inventory, which on a first open arrives
+  // AFTER `_onOpen` (the emoji island is fetched lazily), so open focus fell
+  // back to the panel. Move it to the field once it exists, unless the user
+  // has already moved focus somewhere else.
+  _focusFieldOnceBuilt() {
+    if (this.searchInput && this.panel && document.activeElement === this.panel) {
+      this.searchInput.focus({ preventScroll: true })
+    }
+  },
+
   _focusOnOpen() {
-    if (this._isDesktop() && this.searchInput) {
-      // NOT the HTML `autofocus` attribute. `drawer_search_focus.js:8-14`
+    if (this.searchInput) {
+      // NOT the HTML `autofocus` attribute. `search_focus.js (its focus-on-mount)`
       // records that it no-ops on iOS Safari when the element renders after a
       // LiveView round trip, outside the original tap's gesture chain.
       // preventScroll so focusing never yanks the freshly-opened panel.
@@ -420,11 +431,9 @@ const ReactionPicker = {
     requestAnimationFrame(restore)
   },
 
-  // Body scroll lock for the picker's own lifetime. `message_lift.js` also
-  // locks, but its lock is GONE by the time we need one: the longpress "more"
-  // button pushes `open_reaction_picker` and then `close_longpress_menu`, so
-  // MessageLift is destroyed — restoring `body.style.overflow` — in the same
-  // patch that opens the picker.
+  // Body scroll lock for the picker's own lifetime. The picker opens from
+  // the actions sheet, which closes in the same patch, so no other overlay's
+  // lock can be relied on to still be held.
   _takeScrollLock() {
     if (this.scrollLock !== null) return
     this.scrollLock = document.body.style.overflow
@@ -454,8 +463,8 @@ const ReactionPicker = {
    * Safari ignores that hint. ANDROID CHROME WILL SHOW YOU A WORKING SHEET.
    *
    * This is the FIRST `visualViewport` usage in this codebase — a grep of
-   * assets/ before this returned one comment (`message_lift.js:96`) and zero
-   * usages — so it is written long rather than clever.
+   * assets/ before this returned one comment (in the since-deleted lift
+   * hook) and zero usages — so it is written long rather than clever.
    *
    * The measured height lands on `<html>` as a custom property rather than as
    * an inline style on the panel. The panel is LIVEVIEW-OWNED: morphdom
@@ -535,6 +544,7 @@ const ReactionPicker = {
       case "ready":
         this._renderInventory(this.api)
         this.painted = true
+        this._focusFieldOnceBuilt()
         return
       case "error":
         this._renderError()

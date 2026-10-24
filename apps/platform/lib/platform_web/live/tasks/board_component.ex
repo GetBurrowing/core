@@ -299,7 +299,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       <%!-- Epics above board --%>
       <div :if={@selected_project_id && @epics != []} class="px-4 pt-3" id="epics-section">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          <span class="text-xs font-semibold uppercase tracking-widest text-base-content">
             Epics
           </span>
           <button
@@ -337,10 +337,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 </h3>
                 <span class={epic_status_badge_class(epic.status)}>{epic.status}</span>
               </div>
-              <p :if={epic.description} class="text-xs text-base-content/60 line-clamp-2">
+              <p :if={epic.description} class="text-xs text-subtle line-clamp-2">
                 {epic.description}
               </p>
-              <div class="flex items-center gap-2 mt-1 text-xs text-base-content/50">
+              <div class="flex items-center gap-2 mt-1 text-xs text-subtle">
                 <span>{epic.task_count} tasks</span>
                 <span class="text-success">{epic.done_count} done</span>
               </div>
@@ -362,7 +362,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          unchanged.
 
          Status-filter pill bar (design review, 2026-05-12) reuses the chat
-         channel-pill pattern. Default-active = "in_progress" so users land
+         pills pattern of the time. Default-active = "in_progress" so users land
          on actionable work; previously the section iteration began at
          "Backlog" which buried in-progress work below the scroll fold. The
          @mobile_columns order (in_progress first) controls both the pill
@@ -420,7 +420,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 if @active_status_filter == col_key do
                   "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
                 else
-                  "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+                  "bg-base-200 text-base-content border border-base-content/10 hover:bg-base-300"
                 end
               ]}
             >
@@ -433,7 +433,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
                   if(@active_status_filter == col_key,
                     do: "bg-primary-content/20 text-primary-content",
-                    else: "bg-base-300 text-base-content/70"
+                    else: "bg-base-300 text-base-content"
                   )
                 ]}
               >
@@ -450,6 +450,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             scope_filter={@scope_filter}
             kind_filter={@kind_filter}
             origin_filter={@origin_filter}
+            selected_project_id={@selected_project_id}
+            selected_epic_id={@selected_epic_id}
+            status_filters={@status_filters}
+            kind_filters={@kind_filters}
+            mine_filter={@mine_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />
@@ -464,13 +469,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
            card stay in `stack_position` (dependency) order. Stack cards include the stage-3
            expansion contract (`stack-member-mobile-#{id}` rows + dep
            annotations). Empty-state checks also use `@board_items`. --%>
-        <div class="flex-1 overflow-y-auto px-3 pb-24">
+        <div class="flex-1 overflow-y-auto px-3 pb-24 clears-tab-bar">
           <div
             :for={{col_key, col_label} <- @mobile_columns}
             :if={@active_status_filter == col_key && Map.get(@board_items, col_key, []) != []}
             class="mt-4 first:mt-2"
           >
-            <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1 tabular-nums">
+            <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content mb-2 px-1 tabular-nums">
               {col_label} · {format_count(length(Map.get(@board_items, col_key, [])))}
             </h2>
             <div class="flex flex-col gap-2">
@@ -765,6 +770,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
               member_review_counts={member_review_counts(@stack_board_data, item, @review_counts)}
               expanded?={MapSet.member?(@expanded_stacks, item.id)}
               myself={@myself}
+              mask_labels={@mask_labels}
+              mask_names?={@mask_names?}
             />
             <.done_more_button
               :if={col_key == "done" and done_open?(@done_expanded?, @task_search_query)}
@@ -958,6 +965,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   attr :member_review_counts, :map, default: %{}
   attr :expanded?, :boolean, default: false
   attr :myself, :any, required: true
+  attr :mask_labels, :map, default: %{}
+  attr :mask_names?, :boolean, default: false
 
   defp desktop_board_item(%{item: %Stack{}} = assigns) do
     ~H"""
@@ -980,6 +989,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       assignee_name={@assignee_name}
       sponsor={@sponsor}
       myself={@myself}
+      mask_labels={@mask_labels}
+      mask_names?={@mask_names?}
     />
     """
   end
@@ -1038,14 +1049,14 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
               Stack
             </span>
-            <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+            <span class="ml-auto text-[10px] text-subtle font-medium whitespace-nowrap shrink-0">
               {@data.ready_count}/{@data.member_count} ready
             </span>
           </div>
           <h3 class="text-sm font-medium leading-snug truncate min-w-0">
             {@stack.name}
           </h3>
-          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-subtle">
             <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
               {@data.member_count} tasks
             </span>
@@ -1243,7 +1254,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       <div
         :if={@dep_text}
         data-role="dep-annotation"
-        class="mt-1 text-[10px] text-base-content/50"
+        class="mt-1 text-[10px] text-subtle"
       >
         <span class="text-violet-400" aria-hidden="true">↑</span>
         {@dep_text}
@@ -1262,7 +1273,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       <div
         :if={@parked_text}
         data-role="stack-member-parked-reason"
-        class="mt-1 text-[10px] text-base-content/50"
+        class="mt-1 text-[10px] text-subtle"
       >
         <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
         {@parked_text}
@@ -1333,7 +1344,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           </span>
           <span class="text-sm font-medium leading-snug flex-1">{@task.title}</span>
         </div>
-        <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
+        <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-subtle">
           <%= if @assignee do %>
             <%= if @assignee.type == :user do %>
               <.human_avatar
@@ -1486,7 +1497,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
               Stack
             </span>
-            <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+            <span class="ml-auto text-[10px] text-subtle font-medium whitespace-nowrap shrink-0">
               {@data.ready_count}/{@data.member_count} ready
             </span>
           </div>
@@ -1502,7 +1513,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
              sponsor chip: absent sponsor renders nothing.
              No own-sponsorship ring affordance — the operator
              rejected it as always wrong (stage 4 rework). --%>
-          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-subtle">
             <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
               {@data.member_count} tasks
             </span>
@@ -1664,7 +1675,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       <div
         :if={@dep_text}
         data-role="dep-annotation"
-        class="mt-1 text-[10px] text-base-content/50"
+        class="mt-1 text-[10px] text-subtle"
       >
         <span class="text-violet-400" aria-hidden="true">↑</span> {@dep_text}
       </div>
@@ -1673,7 +1684,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       <div
         :if={@parked_text}
         data-role="stack-member-parked-reason"
-        class="mt-1 text-[10px] text-base-content/50"
+        class="mt-1 text-[10px] text-subtle"
       >
         <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
         {@parked_text}
@@ -1688,6 +1699,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   attr :assignee_name, :string, default: nil
   attr :sponsor, :any, default: nil
   attr :myself, :any, required: true
+  attr :mask_labels, :map, default: %{}
+  attr :mask_names?, :boolean, default: false
 
   defp desktop_task_card(assigns) do
     reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)
@@ -1735,9 +1748,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           <%!-- Project name --%>
           <p
             :if={@task.project}
-            class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
+            class="text-[10px] font-medium uppercase tracking-wider text-subtle"
           >
-            {@task.project.name}
+            {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, @task.project.id},
+              real: @task.project.name
+            )}
           </p>
 
           <%!-- Title row --%>
@@ -1823,7 +1838,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
               @task.reported_by || @assignee_name ||
                 @task.inserted_at
             }
-            class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
+            class="mt-1 flex items-center gap-1.5 text-[10px] text-subtle"
           >
             <span
               :if={@task.reported_by}
@@ -1926,7 +1941,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 value={elem(@progress, 0)}
                 max={elem(@progress, 1)}
               />
-              <span class="text-[10px] text-base-content/40">
+              <span class="text-[10px] text-subtle">
                 {elem(@progress, 0)}/{elem(@progress, 1)}
               </span>
             </div>
@@ -1948,18 +1963,18 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp epic_status_badge_class("closed"), do: "badge badge-success badge-xs"
   defp epic_status_badge_class(_), do: "badge badge-ghost badge-xs"
 
-  defp column_header_class("backlog"), do: "text-base-content/60"
+  defp column_header_class("backlog"), do: "text-subtle"
   # Planning + blocked split out from Backlog in Stage 2 of Tasks v2.
   # Planning leans on the neutral accent (work that hasn't started yet);
   # blocked uses the error accent so it visually stands out — the whole
   # point of the dedicated column is to surface things needing unblock.
-  defp column_header_class("planning"), do: "text-base-content/60"
+  defp column_header_class("planning"), do: "text-subtle"
   defp column_header_class("in_progress"), do: "text-info"
   defp column_header_class("blocked"), do: "text-error"
   defp column_header_class("in_review"), do: "text-warning"
   defp column_header_class("deploying"), do: "text-secondary"
   defp column_header_class("done"), do: "text-success"
-  defp column_header_class(_), do: "text-base-content/60"
+  defp column_header_class(_), do: "text-subtle"
 
   # Used by the mobile task list — color-coded dots mirror the column header
   # colors so the visual cue is consistent across mobile (dot per card) and

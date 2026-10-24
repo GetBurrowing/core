@@ -740,7 +740,7 @@ defmodule PlatformWeb.SocialClipsReview do
       >
         Undo
         <small
-          class="font-mono text-xs font-normal text-base-content/60"
+          class="font-mono text-xs font-normal text-subtle"
           data-role="clip-toast-secs"
         >
           {@secs}s
@@ -780,7 +780,7 @@ defmodule PlatformWeb.SocialClipsReview do
             "h-[30px] rounded-full px-4 text-sm",
             if(@view == key,
               do: "bg-base-300 font-semibold text-base-content",
-              else: "text-base-content/70"
+              else: "text-base-content"
             )
           ]}
           aria-selected={to_string(@view == key)}
@@ -793,13 +793,13 @@ defmodule PlatformWeb.SocialClipsReview do
           {label}
         </button>
       </div>
-      <span class="text-sm text-base-content/70 max-[760px]:hidden" data-role="clips-count">
+      <span class="text-sm text-base-content max-[760px]:hidden" data-role="clips-count">
         <b class="font-semibold text-base-content">{@count} to review</b> · one approval publishes
       </span>
       <a
         :if={@jobs != []}
         href="#rq"
-        class="inline-flex items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1 text-xs text-base-content/70"
+        class="inline-flex items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1 text-xs text-base-content"
         data-role="clips-rendering-pill"
       >
         <span class="loading loading-spinner loading-xs text-info"></span>
@@ -825,12 +825,12 @@ defmodule PlatformWeb.SocialClipsReview do
       aria-label="Clips to review"
       data-role="clips-queue"
     >
-      <div class="flex items-center justify-between px-1.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wider text-base-content/60">
+      <div class="flex items-center justify-between px-1.5 pb-1 pt-0.5 text-xs font-semibold uppercase tracking-wider text-subtle">
         <span>Review</span>
         <span data-role="clips-queue-count">{length(@queue)}</span>
       </div>
 
-      <p :if={@queue == []} class="px-1.5 py-2 text-xs text-base-content/60">
+      <p :if={@queue == []} class="px-1.5 py-2 text-xs text-subtle">
         Nothing left to review.
       </p>
 
@@ -871,14 +871,14 @@ defmodule PlatformWeb.SocialClipsReview do
           <span class="mt-0.5 line-clamp-2 text-[13px] font-semibold leading-[1.3] text-base-content">
             {item.title || "Untitled clip"}
           </span>
-          <span class="mt-0.5 block truncate font-mono text-[11px] text-base-content/60">
+          <span class="mt-0.5 block truncate font-mono text-xs text-subtle">
             {join_dot([item.episode_code, mmss(item.duration_s)])}
           </span>
         </span>
       </button>
 
       <div :if={@jobs != []} id="rq" class="mt-3 flex flex-col gap-1" data-role="clips-render-queue">
-        <div class="flex items-center justify-between px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-base-content/60">
+        <div class="flex items-center justify-between px-1.5 pb-1 text-xs font-semibold uppercase tracking-wider text-subtle">
           <span>Rendering on clip tool</span>
           <span>{length(@jobs)}</span>
         </div>
@@ -895,7 +895,7 @@ defmodule PlatformWeb.SocialClipsReview do
                 {job.title || "New clip"}
               </span>
               <span
-                class="block truncate text-[11px] text-base-content/60"
+                class="block truncate text-xs text-subtle"
                 data-role="clips-render-eta"
               >
                 {join_dot([job.episode_code, eta_left(job.eta_s)])}
@@ -912,7 +912,7 @@ defmodule PlatformWeb.SocialClipsReview do
           <progress :if={!is_number(job.progress)} class="progress progress-info h-1 w-full">
           </progress>
         </div>
-        <p class="px-1.5 pt-1 text-[11px] text-base-content/60">Finished renders land in Review.</p>
+        <p class="px-1.5 pt-1 text-xs text-subtle">Finished renders land in Review.</p>
       </div>
     </nav>
     """
@@ -933,7 +933,7 @@ defmodule PlatformWeb.SocialClipsReview do
       data-role="clips-stage"
     >
       <div class="flex w-full max-w-[420px] items-center justify-between max-[760px]:hidden">
-        <span class="font-mono text-sm text-base-content/70" data-role="clips-position">
+        <span class="font-mono text-sm text-base-content" data-role="clips-position">
           {if @position, do: "#{@position + 1} of #{@total}", else: "#{@total} to review"}
         </span>
         <div class="flex items-center gap-1">
@@ -1025,14 +1025,14 @@ defmodule PlatformWeb.SocialClipsReview do
               <.icon name="hero-pause" class="size-4" />
             </span>
           </button>
-          <span class="w-8 text-[11px] tabular-nums text-base-content/60" data-role="clip-time">
+          <span class="w-8 text-xs tabular-nums text-subtle" data-role="clip-time">
             0:00
           </span>
           <span class="relative h-1 flex-1 overflow-hidden rounded-full bg-base-300">
             <span class="absolute inset-y-0 left-0 w-0 bg-primary" data-role="clip-scrub-fill"></span>
           </span>
           <span
-            class="w-8 text-right text-[11px] tabular-nums text-base-content/60"
+            class="w-8 text-right text-xs tabular-nums text-subtle"
             data-role="clip-scrub-duration"
           >
             {mmss(@clip.duration_s) || "0:00"}
@@ -1041,7 +1041,7 @@ defmodule PlatformWeb.SocialClipsReview do
       </div>
 
       <p
-        class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content/60 max-[760px]:hidden"
+        class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-subtle max-[760px]:hidden"
         data-role="clips-kbd-hint"
       >
         <span><kbd class="kbd kbd-sm">J</kbd> next</span>
@@ -1073,7 +1073,7 @@ defmodule PlatformWeb.SocialClipsReview do
 
     ~H"""
     <div class="hidden w-[68px] flex-none flex-col gap-1.5 max-[760px]:flex" data-role="clips-upnext">
-      <span class="text-[9px] font-bold tracking-wider text-base-content/60">UP NEXT</span>
+      <span class="text-xs font-bold tracking-wider text-subtle">UP NEXT</span>
       <button
         :for={item <- @shown}
         type="button"
@@ -1101,10 +1101,10 @@ defmodule PlatformWeb.SocialClipsReview do
           {mmss(item.duration_s)}
         </span>
       </button>
-      <span :if={@more > 0} class="text-xs text-base-content/50" data-role="clips-upnext-more">
+      <span :if={@more > 0} class="text-xs text-subtle" data-role="clips-upnext-more">
         +{@more} more
       </span>
-      <span :if={@none?} class="text-xs text-base-content/50" data-role="clips-upnext-more">
+      <span :if={@none?} class="text-xs text-subtle" data-role="clips-upnext-more">
         last one
       </span>
     </div>
@@ -1167,10 +1167,10 @@ defmodule PlatformWeb.SocialClipsReview do
           <.icon
             :if={@can_decide?}
             name="hero-pencil-square"
-            class="mt-0.5 size-4 shrink-0 text-base-content/60"
+            class="mt-0.5 size-4 shrink-0 text-subtle"
           />
         </button>
-        <p class="mt-2 font-mono text-xs text-base-content/60" data-role="clip-meta">
+        <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
           {join_dot([
             @clip.episode_code,
             mmss(@clip.duration_s),
@@ -1178,7 +1178,7 @@ defmodule PlatformWeb.SocialClipsReview do
             "v#{@clip.rev}"
           ])}
         </p>
-        <p class="mt-2 flex items-center gap-2 text-xs text-base-content/70" data-role="clip-byline">
+        <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
           <span
             :if={@agent}
             class="flex size-5 shrink-0 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content"
@@ -1217,7 +1217,7 @@ defmodule PlatformWeb.SocialClipsReview do
       <form phx-change="save_caption" phx-target={@myself}>
         <div class="mb-1 flex items-center justify-between text-xs">
           <label for="clip-caption" class="font-semibold text-base-content">Caption</label>
-          <span class="tabular-nums text-base-content/60" data-role="clip-caption-count">
+          <span class="tabular-nums text-subtle" data-role="clip-caption-count">
             {String.length(@caption)}/2200
           </span>
         </div>
@@ -1236,7 +1236,7 @@ defmodule PlatformWeb.SocialClipsReview do
       <div class="max-[760px]:hidden" data-role="clip-post-to">
         <div class="mb-1 flex items-center justify-between text-xs">
           <span class="font-semibold text-base-content">Post to</span>
-          <span class="text-base-content/60">publishes on approve</span>
+          <span class="text-subtle">publishes on approve</span>
         </div>
         <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
           <li
@@ -1246,12 +1246,12 @@ defmodule PlatformWeb.SocialClipsReview do
             data-platform={account.platform}
           >
             <span class="flex size-6 shrink-0 items-center justify-center rounded-md border border-base-300">
-              <.icon name="hero-globe-alt" class="size-3.5 text-base-content/70" />
+              <.icon name="hero-globe-alt" class="size-3.5 text-base-content" />
             </span>
             <span class="text-sm font-semibold text-base-content">
               {Approvals.platform_label(account.platform)}
             </span>
-            <span class="min-w-0 flex-1 truncate text-xs text-base-content/60">{account.handle}</span>
+            <span class="min-w-0 flex-1 truncate text-xs text-subtle">{account.handle}</span>
             <input
               type="checkbox"
               class="toggle toggle-primary toggle-sm"
@@ -1271,7 +1271,7 @@ defmodule PlatformWeb.SocialClipsReview do
       <form phx-change="note" phx-target={@myself}>
         <div class="mb-1 flex items-center justify-between text-xs">
           <label for="clip-note" class="font-semibold text-base-content">Note</label>
-          <span class="text-base-content/60" data-role="clip-note-hint">needed to reject</span>
+          <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
         </div>
         <textarea
           id="clip-note"
@@ -1318,7 +1318,7 @@ defmodule PlatformWeb.SocialClipsReview do
             {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
           </button>
         </div>
-        <p class="text-center text-[11px] text-base-content/60" data-role="clip-why">
+        <p class="text-center text-xs text-subtle" data-role="clip-why">
           {why_line(@ticked)}
         </p>
       </div>
@@ -1336,9 +1336,9 @@ defmodule PlatformWeb.SocialClipsReview do
       class="flex flex-col items-center justify-center gap-2 p-10 text-center"
       data-role="clips-empty"
     >
-      <.icon name="hero-check-badge" class="size-10 text-base-content/60" />
+      <.icon name="hero-check-badge" class="size-10 text-subtle" />
       <h3 class="text-base font-semibold text-base-content">All caught up</h3>
-      <p class="text-sm text-base-content/70">
+      <p class="text-sm text-base-content">
         Approved clips are publishing.<span :if={@jobs != []}> More are rendering on the clip tool.</span>
       </p>
       <button

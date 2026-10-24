@@ -584,8 +584,10 @@ defmodule PlatformWeb.TasksLiveTest do
     _t4 = create_task(project, %{title: "Delta Done", status: "done"})
 
     conn = authenticated_conn(conn)
-    {:ok, view, html} = live(conn, ~p"/tasks")
-    refute html =~ "Delta Done"
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+    # Scoped to the board (task 01a161fd stage 3): the phone list beside it
+    # shows every status, done included, by default.
+    refute view |> element("#tasks-main") |> render() =~ "Delta Done"
     # Done renders collapsed by default (task 01a13884 stage 3); open it so
     # the done card is in the render.
     html =
@@ -1258,8 +1260,9 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Description"
   end
 
-  # Mobile bottom-nav clearance regression: the persistent .bottom-nav
-  # (56px on phones, see app.css `--bottom-nav-height`) is rendered after
+  # Mobile bottom-nav clearance regression: the floating .bottom-nav
+  # (76px of clearance on phones since task 01a1557a-7a71 stage 3, see
+  # app.css `--bottom-nav-height`) is rendered after
   # the fixed detail panel in the shell layout. Without bounding the
   # panel's bottom edge to the nav height, the bottom-most panel content
   # (review-request approve/reject buttons, status transition pills) sits
@@ -2139,15 +2142,18 @@ defmodule PlatformWeb.TasksLiveTest do
          %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # `--bottom-nav-height` is 56px below lg; pb-24 (= 6rem = 96px)
-      # comfortably clears it plus iOS safe-area-inset-bottom. The
+      # Since task 01a1557a-7a71 stage 3 the bar floats and
+      # `clears-tab-bar` (app.css, below lg) pads the end by
+      # `1rem + --bottom-nav-clearance` (bar + gap + safe area), which a
+      # flat pb-24 cannot do once an iOS inset is added. pb-24 stays as the
+      # base the clearance rule overrides below lg. The
       # padding lives on the inner `overflow-y-auto` scroller. The
       # outer `tasks-mobile-list` wrapper used to also carry pb-24
       # (pre-PR #334, when the shell wasn't properly bounded); that
       # copy was removed because it shows up as dead space below the
       # scroller now that the shell is correctly 100dvh-rooted.
-      assert html =~ ~r/<div class="flex-1 overflow-y-auto px-3 pb-24"/,
-             "mobile list scroller must keep pb-24 to clear the bottom-tab nav (~56px + safe-area)"
+      assert html =~ ~r/<div class="flex-1 overflow-y-auto px-3 pb-24 clears-tab-bar"/,
+             "mobile list scroller must pad its end past the floating tab bar (clears-tab-bar)"
     end
   end
 
@@ -5597,7 +5603,10 @@ defmodule PlatformWeb.TasksLiveTest do
     # B's card as origin/main (cdc9dfed) rendered it for this exact fixture,
     # captured by running e2e_card_html/2 on a throwaway branch off main
     # BEFORE the marker existed. Pasted, never regenerated from the new code.
-    @unamended_card_on_main "<div data-role=\"e2e-behavior-validation\" data-validation-id=\"B_ID\" class=\"space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs\"><div class=\"flex items-center gap-2\"><span class=\"size-3 hero-clock text-base-content/40\"></span><span class=\"badge badge-xs badge-ghost\">pending</span></div><div data-role=\"e2e-setup\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Setup\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Seed case B fixture.</pre></div><div data-role=\"e2e-actions\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Actions\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Open task B and click the dependency badge.</pre></div><div data-role=\"e2e-expected\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Expected\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">The dependency badge renders the linked task title.</pre></div></div>"
+    # One deliberate edit since: task 01a15907 stage 2 moved the three field
+    # values from `text-[11px] ... text-base-content/80` to `text-xs ...
+    # text-base-content` (secondary-text part 2), by hand in the string.
+    @unamended_card_on_main "<div data-role=\"e2e-behavior-validation\" data-validation-id=\"B_ID\" class=\"space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs\"><div class=\"flex items-center gap-2\"><span class=\"size-3 hero-clock text-subtle\"></span><span class=\"badge badge-xs badge-ghost\">pending</span></div><div data-role=\"e2e-setup\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Setup\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-xs leading-snug text-base-content\">Seed case B fixture.</pre></div><div data-role=\"e2e-actions\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Actions\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-xs leading-snug text-base-content\">Open task B and click the dependency badge.</pre></div><div data-role=\"e2e-expected\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content\">\n            Expected\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-xs leading-snug text-base-content\">The dependency badge renders the linked task title.</pre></div></div>"
 
     defp e2e_card_nodes(view, validation_id, selector) do
       view
@@ -8542,7 +8551,7 @@ defmodule PlatformWeb.TasksLiveTest do
         {"in_progress", "text-info"},
         {"done", "text-success"},
         {"deploying", "text-secondary"},
-        {"forming", "text-base-content/50"}
+        {"forming", "text-subtle"}
       ]
 
       for {raw_status, expected_class} <- cases do
@@ -9208,7 +9217,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Semantic-token regression guard — no hard-coded color literals,
       # only the muted-foreground token + hover elevation.
-      assert button_tag =~ "text-base-content/60",
+      assert button_tag =~ "text-subtle",
              "expected muted-foreground semantic token on expand button: #{button_tag}"
 
       assert button_tag =~ "hover:bg-base-content/10",
@@ -9611,8 +9620,8 @@ defmodule PlatformWeb.TasksLiveTest do
         Regex.run(~r/<button[^>]*data-role="stack-detail-dag-expand"[^>]*>/, html)
 
       # Semantic-token positive: muted-foreground token present.
-      assert button_tag =~ "text-base-content/60",
-             "expected expand button to use text-base-content/60 semantic token; got: #{button_tag}"
+      assert button_tag =~ "text-subtle",
+             "expected expand button to use text-subtle semantic token; got: #{button_tag}"
 
       # No hard-coded hex color literal (matches Alex's directive that
       # the button chrome stays purely semantic — the only surviving hex

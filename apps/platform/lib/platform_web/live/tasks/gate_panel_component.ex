@@ -137,7 +137,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
       <%!-- Pending Review --%>
       <div :if={@pending_reviews != []} class="space-y-2">
         <div class="flex items-center gap-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content">
             Pending Review
           </h3>
           <span class="badge badge-warning badge-xs">{length(@pending_reviews)}</span>
@@ -147,7 +147,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
           :for={review <- @pending_reviews}
           class="rounded-box border border-warning bg-warning/5 p-3 space-y-3"
         >
-          <div class="flex items-center justify-between text-xs text-base-content/50">
+          <div class="flex items-center justify-between text-xs text-subtle">
             <span :if={review.submitted_by}>
               Submitted by {review.submitted_by}
             </span>
@@ -172,7 +172,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
               <% end %>
             </div>
 
-            <p :if={item.content} class="text-xs text-base-content/70 whitespace-pre-wrap">
+            <p :if={item.content} class="text-xs text-base-content whitespace-pre-wrap">
               {item.content}
             </p>
 
@@ -280,7 +280,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
               <div class="truncate text-sm font-semibold">
                 {@gate_canvas.title || "Review canvas"}
               </div>
-              <div class="text-xs text-base-content/60">
+              <div class="text-xs text-subtle">
                 {Platform.Chat.CanvasDocument.root_kind(@gate_canvas.document) || "canvas"}
               </div>
             </div>

@@ -58,6 +58,60 @@ defmodule Platform.Prototypes do
     if Platform.UUID.valid?(id), do: Repo.get(Prototype, id), else: nil
   end
 
+  @doc """
+  May `user` open `prototype`? The one check the serve routes
+  (`PlatformWeb.PrototypeController`) and the chat prototype card
+  (`Platform.Chat.LinkCards`) share, so a card and the route cannot drift.
+
+  Membership of the prototype's org, then RBAC v2 (task 01a1386e-45a5 stage
+  1): `canvas.read` on the prototype's canvas and, when set, `chat.read` on
+  its space, through `Platform.Access.check/3`. With no grants the access
+  half is `:ok`. A nil user is refused.
+  """
+  @spec readable_by?(struct() | map() | nil, Prototype.t()) :: boolean()
+  def readable_by?(%{id: user_id} = user, %Prototype{org_id: org_id} = prototype)
+      when is_binary(user_id) and is_binary(org_id) do
+    Tenancy.member_of?(user, org_id) and access_check(user, prototype) == :ok
+  end
+
+  def readable_by?(_user, _prototype), do: false
+
+  @doc """
+  The prototypes `user` may open, in one query: rows whose id is in `:ids`
+  or whose `canvas_id` is in `:canvas_ids` (exactly one of the two), each
+  passed through `readable_by?/2`. Unreadable and missing rows are omitted.
+  Used by `Platform.Chat.LinkCards` to resolve a page of chat cards at once.
+  """
+  @spec list_readable(struct() | map() | nil, keyword()) :: [Prototype.t()]
+  def list_readable(user, opts) do
+    ids = opts |> Keyword.get(:ids, []) |> Enum.filter(&Platform.UUID.valid?/1)
+    canvas_ids = opts |> Keyword.get(:canvas_ids, []) |> Enum.filter(&Platform.UUID.valid?/1)
+
+    query =
+      cond do
+        ids != [] -> from(p in Prototype, where: p.id in ^ids)
+        canvas_ids != [] -> from(p in Prototype, where: p.canvas_id in ^canvas_ids)
+        true -> nil
+      end
+
+    case query do
+      nil -> []
+      q -> q |> Repo.all() |> Enum.filter(&readable_by?(user, &1))
+    end
+  end
+
+  defp access_check(user, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
+    scope = Platform.Access.Scope.for_user(user)
+
+    with :ok <- access_check(scope, "canvas.read", :canvas, canvas_id),
+         do: access_check(scope, "chat.read", :space, space_id)
+  end
+
+  defp access_check(_scope, _permission, _type, nil), do: :ok
+
+  defp access_check(scope, permission, type, id),
+    do: Platform.Access.check(scope, permission, {type, id})
+
   @doc "A version that has not been removed by retention, or nil."
   @spec get_live_version(binary(), integer()) :: Version.t() | nil
   def get_live_version(prototype_id, version) when is_integer(version) do

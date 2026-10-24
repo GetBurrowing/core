@@ -1660,7 +1660,7 @@ defmodule Platform.Meetings.IntentClassifier do
       format_correction_exemplars([])
   end
 
-  # ── Agent roster (task 01a05997 stage 1) ──────────────────────────────────
+  # ── Agents on the meeting roster (task 01a05997 stage 1) ──────────────────
 
   # The classifier's one missing fact: which named entities are AGENTS.
   # Keyed by ROLE, not by meeting participants, because the dispatcher

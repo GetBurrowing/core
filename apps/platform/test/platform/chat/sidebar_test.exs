@@ -527,6 +527,41 @@ defmodule Platform.Chat.SidebarTest do
     end
   end
 
+  # ── The phone list shares the store (task 01a166bf stage 3) ─────────────
+
+  describe "phone list fold keys" do
+    test "phone fold keys leave every desktop section uncollapsed" do
+      {sections, channels} = resolve_fixture()
+      phone = Map.values(PlatformWeb.ChatLive.Partials.ChatList.fold_keys())
+      assert length(phone) == 4
+
+      resolved = Sidebar.resolve(sections, channels, %{"chat_collapsed_sections" => phone})
+      assert [%{section: %{id: "sA"}}, %{section: %{id: "sB"}}] = resolved
+      assert Enum.all?(resolved, &(&1.collapsed? == false))
+      # Channels are untouched too.
+      assert resolved |> Sidebar.flatten_sections() |> Enum.map(& &1.id) == ["c1", "c2", "c3"]
+
+      # Positive control: the same pref with a desktop id beside them folds it.
+      assert [%{collapsed?: true}, %{collapsed?: false}] =
+               Sidebar.resolve(sections, channels, %{"chat_collapsed_sections" => ["sA" | phone]})
+    end
+
+    test "collapsed_section_ids reads the store as a MapSet; anonymous reads empty" do
+      user = create_user!()
+      assert Sidebar.collapsed_section_ids(user.id) == MapSet.new()
+      {:ok, _} = Sidebar.set_section_collapsed(user.id, "chat-list:direct", true)
+      assert Sidebar.collapsed_section_ids(user.id) == MapSet.new(["chat-list:direct"])
+      assert Sidebar.collapsed_section_ids(nil) == MapSet.new()
+
+      # A loaded `%User{}` is read from its own preferences (the chat mount's
+      # seed), matching the by-id read of the same row.
+      assert Sidebar.collapsed_section_ids(Repo.get!(User, user.id)) ==
+               MapSet.new(["chat-list:direct"])
+
+      assert Sidebar.collapsed_section_ids(%User{preferences: nil}) == MapSet.new()
+    end
+  end
+
   # ── Stage 3: preference writes ───────────────────────────────────────────
 
   describe "preference writes + reset" do

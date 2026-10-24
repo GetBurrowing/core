@@ -9,8 +9,8 @@
  * and resize so it travels with the row.
  *
  * Non-modal: no focus trap, no scrim. It closes on Escape (the element's
- * `phx-window-keydown`) and on a click outside it. A click on a Context or
- * Summarise control is not "outside": that click opens a panel itself, and
+ * `phx-window-keydown`) and on a click outside it. A click on the actions
+ * sheet's context row is not "outside": that click opens a panel itself, and
  * closing first would race it.
  */
 const GAP = 4
@@ -22,8 +22,6 @@ const MessageContextPopover = {
 
     this.onOutside = (e) => {
       if (this.el.contains(e.target)) return
-      if (e.target.closest('[data-role="message-context-trigger"]')) return
-      if (e.target.closest('[data-role="message-context-summarise"]')) return
       if (e.target.closest('[data-role="message-actions-context"]')) return
       this.pushEvent("close_message_context", {})
     }

@@ -14,12 +14,14 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       through to Burrow's values, so the contrast half below measures exactly
       what each block paints.
     * CONTRAST. Every text pair the Burrow guard checks
-      (`burrow_palette_guard_test.exs`), plus muted and faint on all three
-      grounds, faint on the thread composer's literal `#252c3d` fill in dark,
+      (`burrow_palette_guard_test.exs`), plus muted on all three grounds,
       `--subtle` (text-subtle, base-content at the block's own strength) and
       base-content at 60% (text-base-content/60, daisyUI .label), both painted,
-      clears 4.5:1, or 7:1 for High contrast's full-strength text. Faint stays
-      more than 0.5:1 dimmer than muted on each of the three grounds.
+      clears 4.5:1, or 7:1 for High contrast's full-strength text. Placeholders
+      on the composers' literal fills are `placeholder_contrast_test.exs`.
+    * TWO TEXT LEVELS. The faint tier is retired (task 01a15902 stage 2,
+      direction canvas 01a15902-e3b2 Rulings 1): no block declares `--faint`,
+      and app.css neither declares nor maps it.
     * PAINTED, UNDER EVERY MEASURED BROWSER. The reduced-strength pairs are
       composited, and Chrome 147 and 151 paint them up to a byte apart per
       channel. Each is measured on the worst pixel any formula in
@@ -30,7 +32,10 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       `--subtle` to 57% instead (stage 5 r2). A test fails if an exemption
       comment or a sub-4.5 floor reappears.
     * DEVIATIONS. Every value that differs from the masters' theme.js names the
-      master value in a comment, beside its own recomputed ratio.
+      master value in a comment, beside its own recomputed ratio. For
+      `--glass-alpha` (task 01a1557a-7a71 stage 1) that ratio is the worst tab
+      label on the PAINTED glass (`Platform.Design.PaintedGlass`); the bar's own
+      guard is `bottom_nav_glass_guard_test.exs`.
     * SPECIFICITY. Each preset selector beats every selector
       `Platform.Branding.ThemeCss` emits, which comes after app.css, so a named
       preset is a complete palette and install colours style Burrow only.
@@ -47,8 +52,8 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   sand light `--subtle` back to 55%; (i) re-add a per-pair floor below 4.5.
   Each turns this file red.
 
-  Named mutations (task 01a1557a stage 2 commit): (a) sand dark `--faint` back
-  to `#7f7462`; (b) forest dark `--color-primary-content` to white; (c) delete
+  Named mutations, task 01a15902 stage 2: `--faint` restored in one preset
+  block. Named mutations (task 01a1557a stage 2 commit): (b) forest dark `--color-primary-content` to white; (c) delete
   midnight's light block; (d) a selector back to `[data-preset][data-theme]`
   at (0,2,0); (e) body back to the literal "Public Sans". Each turns this file
   red.
@@ -59,7 +64,19 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   alias Platform.Branding.InstallBranding
   alias Platform.Branding.ThemeCss
   alias Platform.Design.PaintedComposite
+  alias Platform.Design.PaintedGlass
   alias Platform.Design.WcagContrast, as: W
+
+  import Platform.Design.ThemeBlocks,
+    only: [
+      preset_blocks: 1,
+      burrow_block: 2,
+      resolve!: 2,
+      declaration: 2,
+      strip_comments: 1,
+      rule_selectors: 1,
+      blocks_after: 2
+    ]
 
   @presets_path Path.expand("../../../assets/css/theme_presets.css", __DIR__)
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -69,12 +86,6 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   @aa_text 4.5
   @aaa_text 7.0
   @non_text 3.0
-  @tier_gap 0.5
-
-  # The thread composer's background (app.css `.thread-input`) is a literal,
-  # not a token, so it paints under every preset. Rung 1 raised Burrow's dark
-  # faint to clear it; the presets' dark faints do the same.
-  @composer_fill "#252c3d"
 
   @canonical ~r/^\[data-preset="([a-z0-9-]+)"\]\[data-theme="(dark|light)"\]:not\(\[data-theme-preview\]\)$/
 
@@ -86,8 +97,9 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     "--color-base-content",
     "--color-secondary",
     "--color-secondary-content",
-    "--faint",
     "--subtle",
+    "--disabled",
+    "--decorative",
     "--color-primary",
     "--color-primary-content",
     "--color-accent",
@@ -142,21 +154,24 @@ defmodule Platform.Design.ThemePresetsGuardTest do
 
   # Every value that differs from the masters' theme.js, with the master value.
   @deviations %{
-    {"burrow-midnight", "dark", "--faint"} => "#687a99",
     {"burrow-midnight", "dark", "--color-primary-content"} => "#ffffff",
     {"burrow-midnight", "light", "--color-base-content"} => "#15202f",
-    {"burrow-midnight", "light", "--faint"} => "#8794a8",
-    {"burrow-sand", "dark", "--faint"} => "#7f7462",
     {"burrow-sand", "dark", "--color-primary-content"} => "#ffffff",
     {"burrow-sand", "light", "--color-base-content"} => "#2a2219",
     {"burrow-sand", "light", "--color-secondary"} => "#6b5a46",
-    {"burrow-sand", "light", "--faint"} => "#a08f78",
-    {"burrow-forest", "dark", "--faint"} => "#6b7c72",
     {"burrow-forest", "dark", "--color-primary-content"} => "#ffffff",
     {"burrow-forest", "light", "--color-base-content"} => "#1a241e",
-    {"burrow-forest", "light", "--faint"} => "#88978e",
-    {"high-contrast", "dark", "--faint"} => "#9a9a9a",
-    {"high-contrast", "light", "--faint"} => "#555555"
+    # Glass tab bar (task 01a1557a-7a71 stage 1): each alpha is the painted
+    # floor (Platform.Design.PaintedGlass); High contrast is opaque by Saru's
+    # rule 2. The ratio is the worst tab label over #000 and #fff, both builds.
+    {"burrow-midnight", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-midnight", "light", "--glass-alpha"} => "0.72",
+    {"burrow-sand", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-sand", "light", "--glass-alpha"} => "0.72",
+    {"burrow-forest", "dark", "--glass-alpha"} => "0.72",
+    {"burrow-forest", "light", "--glass-alpha"} => "0.72",
+    {"high-contrast", "dark", "--glass-alpha"} => "0.95",
+    {"high-contrast", "light", "--glass-alpha"} => "0.95"
   }
 
   setup_all do
@@ -236,30 +251,27 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       assert failures == [], Enum.join(failures, "\n")
     end
 
-    test "dark faint clears 4.5:1 on the thread composer fill #{@composer_fill}", %{
-      blocks: blocks
+    test "the faint tier is retired: no block declares --faint", %{
+      blocks: blocks,
+      app_css: app_css
     } do
-      failures =
-        for b <- blocks,
-            b.mode == "dark",
-            r = W.contrast(resolve!(b, "--faint"), W.hex(@composer_fill)),
-            r < @aa_text,
-            do: "#{b.id}: #{fixed4(r)}:1"
+      app = strip_comments(app_css)
 
-      assert failures == [], Enum.join(failures, "\n")
-    end
+      found =
+        for(b <- blocks, declaration(b.decls, "--faint") != nil, do: "#{b.id} #{b.mode}") ++
+          for(
+            {label, re} <- [
+              {"app.css declares --faint", ~r/--faint\s*:/},
+              {"app.css maps or reads --color-faint", ~r/--color-faint\b/},
+              {"app.css reads var(--faint)", ~r/var\(--faint\)/}
+            ],
+            Regex.match?(re, app),
+            do: label
+          )
 
-    test "faint is dimmer than muted by more than #{@tier_gap}:1 on each ground", %{
-      blocks: blocks
-    } do
-      failures =
-        for b <- blocks,
-            ground <- @grounds,
-            gap = ratio(b, "--color-secondary", ground) - ratio(b, "--faint", ground),
-            gap <= @tier_gap,
-            do: "#{b.id} #{b.mode} on #{ground}: #{fixed4(gap)}"
-
-      assert failures == [], "faint and muted merge:\n" <> Enum.join(failures, "\n")
+      assert found == [],
+             "--faint is back in #{inspect(found)}. Text has two levels, body and " <>
+               "subtle (task 01a15902 stage 2); placeholders paint --subtle."
     end
 
     test "--subtle is base-content at 55%, or at the block's recorded override", %{
@@ -268,6 +280,23 @@ defmodule Platform.Design.ThemePresetsGuardTest do
       got = for b <- blocks, into: %{}, do: {{b.id, b.mode}, subtle_strength(b)}
       want = for b <- blocks, into: %{}, do: {{b.id, b.mode}, expected_subtle(b)}
       assert got == want
+    end
+
+    # The two WCAG-exempt text colours (task 01a15902 stage 1): one form in
+    # every block, no contrast floor; text_exemption_guard_test.exs holds
+    # where each may be used.
+    test "--disabled and --decorative are base-content at 40% in every block", %{
+      blocks: blocks
+    } do
+      want = "color-mix(in oklab, var(--color-base-content) 40%, transparent)"
+
+      failures =
+        for b <- blocks,
+            token <- ["--disabled", "--decorative"],
+            declaration(b.decls, token) != want,
+            do: "#{b.id} #{b.mode} #{token}: #{inspect(declaration(b.decls, token))}"
+
+      assert failures == [], "not #{want}:\n" <> Enum.join(failures, "\n")
     end
 
     test "--subtle clears 4.5:1 on all three grounds, painted, with no exemption", %{
@@ -434,37 +463,30 @@ defmodule Platform.Design.ThemePresetsGuardTest do
         cells = [
           min_over(b, "--color-base-content"),
           min_over(b, "--color-secondary"),
-          min_over(b, "--faint"),
           min_over(b, "--color-interactive"),
           ratio(b, "--color-primary-content", "--color-primary"),
           subtle_min,
           sixty_min
         ]
 
-        composer =
-          if b.mode == "dark",
-            do: fixed2(W.contrast(resolve!(b, "--faint"), W.hex(@composer_fill))),
-            else: "n/a"
-
         "| #{label} | " <>
           Enum.map_join(cells, " | ", &fixed2/1) <>
           " | #{subtle_strength(b)}% (min on #{String.replace_prefix(subtle_ground, "--color-", "")})" <>
-          " | #{composer} | #{fixed2(target(b))} | pass |"
+          " | #{fixed2(target(b))} | pass |"
       end
 
     IO.puts(
       "\nTheme preset AA table (min ratio over base-100/200/300 unless noted; " <>
         "subtle and ink@60% are painted, on the worst pixel PaintedComposite allows):\n" <>
-        "| Variant | ink | muted | faint | interactive | on-accent | subtle | ink@60% | subtle strength | faint on #252c3d | target | verdict |\n" <>
-        "|---|---|---|---|---|---|---|---|---|---|---|---|\n" <> Enum.join(lines, "\n")
+        "| Variant | ink | muted | interactive | on-accent | subtle | ink@60% | subtle strength | target | verdict |\n" <>
+        "|---|---|---|---|---|---|---|---|---|---|\n" <> Enum.join(lines, "\n")
     )
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────
 
   defp text_pairs do
-    @text_pairs ++
-      for(g <- @grounds, do: {"--color-secondary", g}) ++ for(g <- @grounds, do: {"--faint", g})
+    @text_pairs ++ for(g <- @grounds, do: {"--color-secondary", g})
   end
 
   defp target(%{id: "high-contrast"}), do: @aaa_text
@@ -532,85 +554,28 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     do: ratio(b, "--color-primary-content", "--color-primary")
 
   defp measure(b, "--color-base-content"), do: @grounds |> Enum.map(&subtle(b, &1)) |> Enum.min()
+
+  # The worst tab label (inactive or active) on the painted glass at the
+  # block's declared alpha, over both backdrops, on both builds.
+  defp measure(b, "--glass-alpha") do
+    alpha = declaration(b.decls, "--glass-alpha")
+
+    for build <- PaintedGlass.builds(),
+        bd <- PaintedGlass.backdrops(),
+        layer <- [:inactive_label, :active_label] do
+      PaintedGlass.contrast(build, "#{b.id} #{b.mode}", bd, alpha, layer)
+    end
+    |> Enum.min()
+  end
+
   defp measure(b, token), do: min_over(b, token)
 
   defp fixed4(r), do: :erlang.float_to_binary(r / 1, decimals: 4)
   defp fixed2(r), do: :erlang.float_to_binary(r / 1, decimals: 2)
 
-  # Blocks in theme_presets.css, keyed by the canonical selector.
-  defp preset_blocks(css) do
-    Regex.scan(~r/^(\[data-preset[^\n{]*)\{(.*?)\n\}/ms, css, capture: :all_but_first)
-    |> Enum.flat_map(fn [sel, body] ->
-      case Regex.run(@canonical, String.trim(sel)) do
-        [_, id, mode] -> [%{id: id, mode: mode, raw: body, decls: strip_comments(body)}]
-        nil -> []
-      end
-    end)
-  end
-
-  # Burrow's two variants, built from app.css the way the Burrow guard resolves
-  # them: the daisyUI theme block, then the theme-scoped selectors, then :root.
-  defp burrow_block(app_css, mode) do
-    theme =
-      app_css
-      |> blocks_after(@plugin_open)
-      |> Enum.find(&Regex.match?(~r/^\s*name:\s*"#{mode}";/m, &1))
-
-    scoped =
-      if mode == "dark", do: blocks_after(app_css, ~s(\n[data-theme="dark"] {)), else: []
-
-    decls =
-      Enum.map_join(
-        [theme | scoped] ++ blocks_after(app_css, "\n:root {"),
-        "\n",
-        &strip_comments/1
-      )
-
-    %{id: "burrow", mode: mode, raw: "", decls: decls}
-  end
-
-  defp resolve!(b, var, depth \\ 0)
-  defp resolve!(b, var, depth) when depth > 8, do: flunk("#{b.id} #{b.mode}: #{var} loops")
-
-  defp resolve!(b, var, depth) do
-    value = declaration(b.decls, var) || flunk("#{b.id} #{b.mode}: no #{var} declared")
-
-    case Regex.run(~r/^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/, value) do
-      [_, next] -> resolve!(b, next, depth + 1)
-      nil -> W.parse!(value)
-    end
-  end
-
-  defp strip_comments(text), do: Regex.replace(~r{/\*.*?\*/}s, text, "")
-
-  defp rule_selectors(css) do
-    css
-    |> strip_comments()
-    |> then(&Regex.scan(~r/^([^\s{}][^{}]*)\{/m, &1, capture: :all_but_first))
-    |> Enum.map(fn [s] -> String.trim(s) end)
-  end
-
-  defp blocks_after(css, open) do
-    css
-    |> :binary.matches(open)
-    |> Enum.map(fn {at, len} ->
-      start = at + len
-      rest = binary_part(css, start, byte_size(css) - start)
-
-      case Regex.run(~r/\n\s*\}/, rest, return: :index) do
-        [{close, _}] -> binary_part(rest, 0, close)
-        nil -> flunk("a block opened by #{inspect(open)} is never closed")
-      end
-    end)
-  end
-
-  # First match wins, as the Burrow guard reads it.
-  defp declaration(block, var) do
-    case Regex.run(~r/^\s*#{Regex.escape(var)}\s*:\s*([^;]+);/m, block) do
-      [_, value] -> String.trim(value)
-      nil -> nil
-    end
-  end
+  # Block parsing (preset_blocks/1, burrow_block/2, resolve!/2, declaration/2,
+  # strip_comments/1, rule_selectors/1, blocks_after/2) lives in
+  # Platform.Design.ThemeBlocks, shared with agent_slot_tokens_guard_test.exs.
 
   # CSS Selectors 4 specificity {ids, classes/attributes/pseudo-classes, types}
   # for the compound selectors this file and ThemeCss use. :not() and :is()

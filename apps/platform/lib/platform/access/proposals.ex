@@ -436,7 +436,7 @@ defmodule Platform.Access.Proposals do
         omitted =
           case table do
             "chat_participants" ->
-              ~w(last_read_message_id attention_mode attention_config avatar_url)
+              ~w(last_read_message_id attention_mode attention_config avatar_url silenced)
 
             "agent_runtimes" ->
               ~w(last_connected_at updated_at)

@@ -33,7 +33,6 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={MapSet.new()}
-      agent_colors_map={%{}}
       participants_map={
         %{"p-email" => %{name: "Email (external)", avatar_url: nil, avatar_seed: nil}}
       }
@@ -65,7 +64,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
     assert text =~ "Email to support@acme.test, from Mallory <mallory@evil.test>"
     assert LazyHTML.attribute(line, "class") |> hd() =~ "text-xs"
-    assert LazyHTML.attribute(line, "class") |> hd() =~ "text-base-content/60"
+    assert LazyHTML.attribute(line, "class") |> hd() =~ "text-subtle"
     assert line |> LazyHTML.query(".hero-envelope") |> Enum.count() == 1
 
     [id] = doc |> LazyHTML.query(~s([data-role="mail-inbound-message-id"])) |> Enum.to_list()
@@ -128,7 +127,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
     assert html =~ "&lt;img src=x"
   end
 
-  # ── The "Context" trigger (task 01a0d8de stage 3) ───────────────────
+  # ── The message pill (redesign rung 9, task 01a1557a-9406) ──────────
 
   defp agent_row_html(metadata, opts) do
     agent? = Keyword.get(opts, :agent?, true)
@@ -149,7 +148,10 @@ defmodule PlatformWeb.Components.ChatMessageTest do
         metadata: metadata
       },
       agent_ids: if(agent?, do: MapSet.new(["p-agent"]), else: MapSet.new()),
-      read_only: Keyword.get(opts, :read_only, false)
+      slots: Keyword.get(opts, :slots, %{}),
+      highlighted: Keyword.get(opts, :highlighted),
+      read_only: Keyword.get(opts, :read_only, false),
+      quick_emojis: Keyword.get(opts, :quick_emojis, [])
     }
 
     rendered_to_string(~H"""
@@ -158,9 +160,10 @@ defmodule PlatformWeb.Components.ChatMessageTest do
       msg={@msg}
       current_participant={nil}
       agent_participant_ids={@agent_ids}
-      agent_colors_map={%{}}
+      agent_slots_map={@slots}
+      highlighted_message_id={@highlighted}
       participants_map={%{"p-agent" => %{name: "Octavius", avatar_url: nil, avatar_seed: nil}}}
-      quick_emojis={[]}
+      quick_emojis={@quick_emojis}
       pinned_message_ids={MapSet.new()}
       canvases_by_id={%{}}
       attachments_map={%{}}
@@ -181,67 +184,103 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
   @with_context %{"reply_context" => "Six tasks await approval", "reply_to_message_id" => "q-1"}
 
-  test "the Context trigger renders after the time on an agent message with context" do
-    html = agent_row_html(@with_context, [])
-    assert count_role(html, "message-context-trigger") == 1
+  @pill_labels ["React with thumbs up", "Reply in thread", "Copy", "More actions"]
 
-    [trigger] =
-      html
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query(~s([data-role="message-context-trigger"]))
-      |> Enum.to_list()
-
-    assert LazyHTML.text(trigger) =~ "Context"
-    classes = trigger |> LazyHTML.attribute("class") |> hd()
-    assert classes =~ "text-[10px]"
-    assert classes =~ "text-base-content/40"
-    assert classes =~ "shrink-0"
-    assert LazyHTML.attribute(trigger, "phx-click") == ["open_message_context"]
-    # The row, not the trigger, carries data-message-id.
-    assert LazyHTML.attribute(trigger, "data-message-id") == []
-
-    {time_at, _} = :binary.match(html, "message-time-msg-a")
-    {trigger_at, _} = :binary.match(html, "message-context-trigger")
-    assert time_at < trigger_at
+  defp pill(html) do
+    html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="message-pill"]))
   end
 
-  test "the trigger renders for reply_to_message_id alone, the key built-in agents write" do
-    html = agent_row_html(%{"reply_to_message_id" => "q-1"}, [])
-    assert count_role(html, "message-context-trigger") == 1
+  defp pill_buttons(html), do: html |> pill() |> LazyHTML.query("button") |> Enum.to_list()
+
+  defp classes_in(node) do
+    [node | node |> LazyHTML.query("*") |> Enum.to_list()]
+    |> Enum.flat_map(&LazyHTML.attribute(&1, "class"))
+    |> Enum.flat_map(&String.split/1)
   end
 
-  test "no trigger on an agent message without context, nor on any human message" do
-    for metadata <- [nil, %{}, %{"reply_context" => "   "}, %{"source" => "runtime"}] do
-      assert count_role(agent_row_html(metadata, []), "message-context-trigger") == 0
+  test "every non-read-only message renders the pill with the four actions, in order" do
+    for {metadata, opts} <- [
+          {@with_context, []},
+          {%{}, []},
+          {nil, [agent?: false]}
+        ] do
+      html = agent_row_html(metadata, opts)
+      assert count_role(html, "message-pill") == 1
+
+      [p] = html |> pill() |> Enum.to_list()
+      assert LazyHTML.attribute(p, "role") == ["toolbar"]
+      assert LazyHTML.attribute(p, "aria-label") == ["Message actions"]
+
+      labels = for b <- pill_buttons(html), do: b |> LazyHTML.attribute("aria-label") |> hd()
+      assert labels == @pill_labels
     end
-
-    assert count_role(agent_row_html(@with_context, agent?: false), "message-context-trigger") ==
-             0
   end
 
-  test "the trigger stays on a read-only snapshot, where the hover row does not" do
+  test "the pill is neutral: no primary class anywhere in it, and no hover: utility" do
+    [p] = agent_row_html(@with_context, []) |> pill() |> Enum.to_list()
+    classes = classes_in(p)
+
+    assert "bg-base-300" in classes
+    assert "border-edge" in classes
+    assert "text-subtle" in classes
+    refute Enum.any?(classes, &String.contains?(&1, "primary")), inspect(classes)
+    refute Enum.any?(classes, &String.contains?(&1, "hover:")), inspect(classes)
+  end
+
+  test "the pill's buttons do what their labels say" do
+    quick = Platform.Chat.Emoji.quick_defaults()
+    html = agent_row_html(@with_context, quick_emojis: quick)
+    [thumbs, reply, copy, more] = pill_buttons(html)
+
+    assert LazyHTML.attribute(thumbs, "phx-click") == ["react"]
+    assert LazyHTML.attribute(thumbs, "phx-value-emoji") == [hd(quick)]
+    assert LazyHTML.attribute(thumbs, "phx-value-message-id") == ["msg-a"]
+
+    assert LazyHTML.attribute(reply, "phx-click") == ["open_inline_thread"]
+    assert LazyHTML.attribute(reply, "phx-value-message-id") == ["msg-a"]
+
+    # Copy is client-side (MessageGestures): no server event.
+    assert LazyHTML.attribute(copy, "phx-click") == []
+    assert LazyHTML.attribute(copy, "data-role") == ["message-pill-copy"]
+    assert LazyHTML.attribute(copy, "data-clipboard-text") == ["you need to take action on 6"]
+
+    assert LazyHTML.attribute(more, "phx-click") == ["open_message_actions"]
+    assert LazyHTML.attribute(more, "phx-value-id") == ["msg-a"]
+  end
+
+  test "the row carries the MessageGestures hook and is focusable" do
+    html = agent_row_html(@with_context, [])
+    assert row_attr(html, "phx-hook") == ["MessageGestures"]
+    assert row_attr(html, "tabindex") == ["0"]
+  end
+
+  test "an agent message with context renders no header Context button and no Summarise" do
+    for metadata <- [@with_context, %{"reply_to_message_id" => "q-1"}, %{}, nil] do
+      html = agent_row_html(metadata, [])
+      assert count_role(html, "message-context-trigger") == 0
+      assert count_role(html, "message-context-summarise") == 0
+      refute html =~ ">Context<"
+    end
+  end
+
+  test "there is no hover action row and no left-gutter reply" do
+    for opts <- [[], [agent?: false], [read_only: true]] do
+      html = agent_row_html(@with_context, opts)
+      refute html =~ "message-action-row"
+      refute html =~ "msg-reply-gutter"
+    end
+  end
+
+  test "a read-only snapshot renders no pill, no hook and no tab stop" do
     html = agent_row_html(@with_context, read_only: true)
-    assert count_role(html, "message-context-trigger") == 1
-    refute html =~ "message-action-row"
+    assert count_role(html, "message-pill") == 0
+    assert row_attr(html, "phx-hook") == []
+    assert row_attr(html, "tabindex") == []
+    refute html =~ "MessageGestures"
   end
 
-  test "Summarise what led here appears only on agent messages with no context" do
-    html = agent_row_html(%{}, [])
-    assert count_role(html, "message-context-summarise") == 1
-    assert html =~ ~s(aria-label="Summarise what led here")
-
-    assert count_role(agent_row_html(@with_context, []), "message-context-summarise") == 0
-    assert count_role(agent_row_html(%{}, agent?: false), "message-context-summarise") == 0
-    assert count_role(agent_row_html(%{}, read_only: true), "message-context-summarise") == 0
-  end
-
-  # ── Touch: the tap on Context must reach Context (task 01a0d8de stage 5) ──
-  #
-  # A LiveView render cannot hit-test, so these pin the two CSS rules the
-  # browser measurement depends on, against the classes the row actually
-  # renders. The measurement itself (tap at 375px opens the sheet,
-  # `elementFromPoint` returns the trigger, 45px hit box) is the proof; these
-  # go red when either rule is deleted, renamed or detached from the markup.
+  # A LiveView render cannot hit-test or apply a stylesheet, so these pin the
+  # CSS the pill depends on against the classes the row actually renders.
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
 
   defp css_rules, do: @css_path |> File.read!() |> Platform.Design.CssRules.rules()
@@ -257,63 +296,90 @@ defmodule PlatformWeb.Components.ChatMessageTest do
     String.to_integer(n)
   end
 
-  test "on hover: none the rendered hover strip is hidden and inert, so a tap's focus cannot raise it" do
-    strip = rendered_element(agent_row_html(@with_context, []), ".message-action-row")
+  test "the pill is hidden at rest and shown by data-pill-open" do
+    p = rendered_element(agent_row_html(@with_context, []), ~s([data-role="message-pill"]))
 
-    hidden =
+    [rest] =
       Enum.filter(css_rules(), fn r ->
-        r.at == ["@media (hover: none)"] and not String.contains?(r.selector, ":") and
-          Platform.Design.CssRules.matches?(r.selector, strip)
+        r.at == [] and r.selector == ".message-pill"
       end)
 
-    assert [%{body: body}] = hidden,
-           "expected exactly one unconditional `(hover: none)` rule hiding the strip; " <>
-             "without it a tap that focuses the Context trigger reveals the strip over it " <>
-             "and swallows the tap (reviewer measurement, 375px, 2 of 2)"
+    assert rest.body =~ ~r/display:\s*none/
+    assert Platform.Design.CssRules.matches?(rest.selector, p)
 
-    assert body =~ ~r/(^|;|\s)opacity:\s*0\s*;/
-    assert body =~ ~r/(^|;|\s)pointer-events:\s*none\s*;/
-
-    # The only way back on a touch screen is KEYBOARD focus inside the strip.
-    # A bare `:focus-within` / `:focus` re-reveal would reinstate the defect,
-    # because a tap gives the trigger `:focus`.
-    reveals =
-      Enum.filter(css_rules(), fn r ->
-        r.at == ["@media (hover: none)"] and String.contains?(r.selector, "message-action-row") and
-          r.body =~ ~r/opacity:\s*1/
-      end)
-
-    assert reveals != []
-    for r <- reveals, do: assert(r.selector =~ ":focus-visible", r.selector)
-    for r <- reveals, do: refute(r.selector =~ ~r/:focus(-within)?(?!-visible)/, r.selector)
+    assert Enum.any?(css_rules(), fn r ->
+             r.at == [] and r.selector =~ "[data-pill-open]" and
+               String.ends_with?(r.selector, ".message-pill") and r.body =~ ~r/display:\s*flex/
+           end)
   end
 
-  test "below lg the rendered Context trigger carries a hit area of at least 44px tall" do
-    trigger =
-      rendered_element(
-        agent_row_html(@with_context, []),
-        ~s([data-role="message-context-trigger"])
-      )
+  test "below lg each pill button carries a hit area 44px tall" do
+    [btn | _] = agent_row_html(@with_context, []) |> pill_buttons()
+    [{tag, attrs, _}] = LazyHTML.to_tree(btn)
+    el = Platform.Design.CssRules.element(tag, attrs)
 
     [hit] =
       Enum.filter(css_rules(), fn r ->
         r.at == ["@media (width < 64rem)"] and String.ends_with?(r.selector, "::after") and
-          Platform.Design.CssRules.matches?(r.selector, trigger)
+          Platform.Design.CssRules.matches?(r.selector, el)
       end)
 
     assert hit.body =~ ~r/position:\s*absolute/
     assert hit.body =~ ~r/content:\s*""/
+    # The button is a 28px circle (`size-7`) below lg.
+    assert "size-7" in (attrs |> Map.new() |> Map.fetch!("class") |> String.split())
+    assert 28 - px(hit.body, "top") - px(hit.body, "bottom") >= 44
+  end
 
-    # 15px is the trigger's own box at 10px text (measured, 375px). The
-    # pseudo-element extends it by -top and -bottom.
-    assert 15 - px(hit.body, "top") - px(hit.body, "bottom") >= 44
+  # ── Agent identity slot (task 01a1557a rung 3 stage 2) ──────────────
 
-    [anchor] =
-      Enum.filter(css_rules(), fn r ->
-        r.at == [] and r.selector == ".message-context-trigger"
-      end)
+  defp row_attr(html, attr) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#row-a")
+    |> LazyHTML.attribute(attr)
+  end
 
-    assert anchor.body =~ ~r/position:\s*relative/
-    assert Platform.Design.CssRules.matches?(anchor.selector, trigger)
+  test "an agent row carries data-agent-slot for its stored slot" do
+    for id <- Platform.Agents.ColorPalette.ids() do
+      html = agent_row_html(nil, slots: %{"p-agent" => id})
+      assert row_attr(html, "data-agent-slot") == [id]
+    end
+  end
+
+  test "an agent missing from the slot map, or with an unknown id, is the blue slot" do
+    assert row_attr(agent_row_html(nil, []), "data-agent-slot") == ["blue"]
+
+    for stored <- [nil, "", "magenta"] do
+      html = agent_row_html(nil, slots: %{"p-agent" => stored})
+      assert row_attr(html, "data-agent-slot") == ["blue"], inspect(stored)
+    end
+  end
+
+  test "a human row carries no slot, and no row carries an inline accent" do
+    human = agent_row_html(nil, agent?: false, slots: %{"p-agent" => "teal"})
+    assert row_attr(human, "data-agent-slot") == []
+
+    for html <- [human, agent_row_html(nil, slots: %{"p-agent" => "teal"})] do
+      refute html =~ "agent-accent"
+      assert row_attr(html, "style") == []
+    end
+  end
+
+  test "the agent name is msg-agent-name alone, and the pill is the uppercase AI badge" do
+    doc = agent_row_html(nil, []) |> LazyHTML.from_fragment()
+    [name] = doc |> LazyHTML.query(".msg-agent-name") |> Enum.to_list()
+    # No Tailwind size or weight competing with the slot rule's own.
+    assert LazyHTML.attribute(name, "class") == ["msg-agent-name"]
+    [badge] = doc |> LazyHTML.query(".msg-agent-badge") |> Enum.to_list()
+    assert LazyHTML.text(badge) |> String.trim() == "AI"
+  end
+
+  test "a highlighted agent row keeps its slot and the primary ring" do
+    html = agent_row_html(nil, slots: %{"p-agent" => "rose"}, highlighted: "msg-a")
+    assert row_attr(html, "data-agent-slot") == ["rose"]
+    [class] = row_attr(html, "class")
+    assert class =~ "msg-agent"
+    assert class =~ "ring-primary/20"
   end
 end

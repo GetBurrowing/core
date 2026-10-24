@@ -88,7 +88,7 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
     ]}>
       <p
         :if={@props["label"]}
-        class="w-full text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-0.5"
+        class="w-full text-xs font-semibold uppercase tracking-widest text-base-content mb-0.5"
       >
         {@props["label"]}
       </p>

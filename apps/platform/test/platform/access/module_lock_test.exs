@@ -207,7 +207,9 @@ defmodule Platform.Access.ModuleLockTest do
       assert changed != []
 
       files_answer? = fn
-        {:rail, key} -> key == :files
+        # `:canvases` (task 01a1557a-b5f9 stage 3) is the More sheet row that
+        # opens the Files browser, gated by the same files.read.
+        {:rail, key} -> key in [:files, :canvases]
         {:anywhere, p} -> p in files
         {p, _resource} -> p in files
       end

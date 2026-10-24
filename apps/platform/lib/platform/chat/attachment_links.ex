@@ -13,6 +13,11 @@ defmodule Platform.Chat.AttachmentLinks do
 
   Any other host, and anything that is not a valid UUID, is ignored.
 
+  Parsing is `Platform.Chat.LinkTargets` (redesign rung 13): these links are
+  its `:attachment` kind, and the bare-line rule that drops a link the player
+  replaces is `ContentRenderer.render_message/2`'s `:cards` option. This
+  module only authorizes.
+
   Authorization is exactly `Platform.Chat.get_visible_attachment_for_principal/2`,
   the check the download route uses: the deleted-message gate, space
   membership (external principals refused on space-less rows), then the RBAC
@@ -28,9 +33,8 @@ defmodule Platform.Chat.AttachmentLinks do
 
   alias Platform.Chat
   alias Platform.Chat.{Attachment, Message, Participant}
+  alias Platform.Chat.LinkTargets
   alias Platform.Repo
-
-  @link_regex ~r/(?:(?<scheme>https?):\/\/(?<authority>[^\s\/?#<>()\[\]"'`]+)|(?<![^\s(<\["'>]))\/chat\/attachments\/(?<id>[0-9a-fA-F-]{36})(?![0-9A-Za-z_-])/
 
   @media_prefixes ["video/", "image/"]
 
@@ -43,16 +47,10 @@ defmodule Platform.Chat.AttachmentLinks do
   """
   @spec ids_in(String.t() | nil) :: [binary()]
   def ids_in(content) when is_binary(content) do
-    if String.contains?(content, "/chat/attachments/") do
-      @link_regex
-      |> Regex.scan(content, capture: ["scheme", "authority", "id"])
-      |> Enum.flat_map(fn [scheme, authority, id] ->
-        if local_link?(scheme, authority), do: cast_id(id), else: []
-      end)
-      |> Enum.uniq()
-    else
-      []
-    end
+    if String.contains?(content, "/chat/attachments/"),
+      do:
+        content |> Platform.Chat.ContentRenderer.sanitized_html() |> LinkTargets.attachment_ids(),
+      else: []
   end
 
   def ids_in(_content), do: []
@@ -104,63 +102,7 @@ defmodule Platform.Chat.AttachmentLinks do
     end)
   end
 
-  @doc """
-  Remove lines of `content` that consist only of a link to one of `ids`
-  (a bare URL, `<URL>`, or `[text](URL)`). The player replaces such a line;
-  a link mid-sentence stays as written.
-  """
-  @spec strip_standalone(String.t() | nil, [binary()]) :: String.t() | nil
-  def strip_standalone(content, []), do: content
-
-  def strip_standalone(content, ids) when is_binary(content) do
-    wanted = MapSet.new(ids, &String.downcase/1)
-
-    content
-    |> String.split("\n")
-    |> Enum.reject(&standalone_link_line?(&1, wanted))
-    |> Enum.join("\n")
-    |> String.trim()
-  end
-
-  def strip_standalone(content, _ids), do: content
-
   # ── internals ────────────────────────────────────────────────────────
-
-  defp standalone_link_line?(line, wanted) do
-    trimmed = String.trim(line)
-
-    with [id] <- ids_in(trimmed),
-         true <- MapSet.member?(wanted, id),
-         [url] <- Regex.run(@link_regex, trimmed, capture: :first) do
-      trimmed in [url, "<" <> url <> ">"] or
-        Regex.match?(~r/\A\[[^\]\n]*\]\(#{Regex.escape(url)}\)\z/, trimmed)
-    else
-      _ -> false
-    end
-  end
-
-  defp cast_id(id) do
-    case Platform.UUID.cast(id) do
-      {:ok, uuid} -> [String.downcase(uuid)]
-      :error -> []
-    end
-  end
-
-  defp local_link?("", ""), do: true
-
-  defp local_link?(scheme, authority) do
-    # Plain host[:port] only. URI.parse is lenient ("host:4002.evil.com"
-    # parses as host+port), so anything else is another host.
-    if Regex.match?(~r/\A[A-Za-z0-9.-]+(:[0-9]{1,5})?\z/, authority) do
-      %URI{host: host, port: port} = URI.parse(scheme <> "://" <> authority)
-      endpoint = PlatformWeb.Endpoint.struct_url()
-
-      is_binary(host) and String.downcase(host) == String.downcase(endpoint.host || "") and
-        port == endpoint.port
-    else
-      false
-    end
-  end
 
   # Batch form of `Chat.get_visible_attachment_for_principal/2`, restricted
   # to video/* and image/* rows. Returns %{id => Attachment}.

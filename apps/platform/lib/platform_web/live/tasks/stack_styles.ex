@@ -143,14 +143,14 @@ defmodule PlatformWeb.Tasks.StackStyles do
 
   # Repointed. Ring intended, see the @doc above.
   def member_node_class("stack_pending"),
-    do: "bg-base-300 text-base-content/40 border border-edge border-dashed"
+    do: "bg-base-300 text-subtle border border-edge border-dashed"
 
   # Repointed. Ring intended, see the @doc above.
   def member_node_class("backlog"),
-    do: "bg-base-300 text-base-content/40 border border-edge border-dashed"
+    do: "bg-base-300 text-subtle border border-edge border-dashed"
 
   def member_node_class(_),
-    do: "bg-base-200 text-base-content/70 border border-edge"
+    do: "bg-base-200 text-base-content border border-edge"
 
   @doc """
   Colour tone for the stack status meta-cell value text.
@@ -164,7 +164,7 @@ defmodule PlatformWeb.Tasks.StackStyles do
   def stack_status_text_class("done"), do: "text-success"
   def stack_status_text_class("deploying"), do: "text-secondary"
   def stack_status_text_class("blocked"), do: "text-error"
-  def stack_status_text_class(_), do: "text-base-content/50"
+  def stack_status_text_class(_), do: "text-subtle"
 
   @doc """
   Status pill `{label, class}` for a stack member row in the linear list.
@@ -185,11 +185,10 @@ defmodule PlatformWeb.Tasks.StackStyles do
     do: {"Deploying", "bg-secondary/20 text-secondary"}
 
   def member_status_pill(status) when status in ["stack_pending", "backlog"],
-    do:
-      {"Waiting", "bg-base-300 text-base-content/50 border border-dashed border-base-content/20"}
+    do: {"Waiting", "bg-base-300 text-subtle border border-dashed border-base-content/20"}
 
   def member_status_pill(other),
-    do: {status_label(other), "bg-base-300 text-base-content/70"}
+    do: {status_label(other), "bg-base-300 text-base-content"}
 
   @doc """
   Reason line for a stack member parked behind the stack's CLOSED

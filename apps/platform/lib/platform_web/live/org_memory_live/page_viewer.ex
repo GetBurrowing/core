@@ -108,7 +108,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
                 <p class="text-sm font-medium mb-3">
                   Delete {@page.file_key}?
                 </p>
-                <p class="text-xs text-base-content/50 mb-3">
+                <p class="text-xs text-subtle mb-3">
                   This action cannot be undone.
                 </p>
                 <div class="flex justify-end gap-2">
@@ -137,7 +137,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       </div>
 
       <%!-- Content stats footer (version / dates live in the right pane) --%>
-      <div class="flex items-center gap-4 border-t border-edge px-6 py-2 text-xs text-base-content/40">
+      <div class="flex items-center gap-4 border-t border-edge px-6 py-2 text-xs text-subtle">
         <span class="flex items-center gap-1">
           <span class="hero-document size-3.5"></span>
           {byte_size(@page.content)} bytes
@@ -207,7 +207,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
             <h1 class="text-lg font-bold">
               Editing {@page.file_key}
             </h1>
-            <p class="text-xs text-base-content/40">
+            <p class="text-xs text-subtle">
               Markdown supported · Changes are not saved until you click Save
             </p>
           </div>
@@ -243,7 +243,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
         phx-submit="save_page"
         class="border-b border-edge bg-base-200/40 px-6 py-3"
       >
-        <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
+        <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content">
           Frontmatter
         </h2>
         <div class="grid grid-cols-2 gap-x-6 gap-y-1">
@@ -259,14 +259,14 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
 
       <%!-- Complex frontmatter fallback: read-only, edit YAML in body --%>
       <div :if={@fm_complex} class="border-b border-edge bg-base-200/40 px-6 py-3">
-        <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content/40">
+        <h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-base-content">
           Frontmatter
         </h2>
         <pre
-          class="rounded-lg bg-base-100 p-3 font-mono text-xs text-base-content/70 overflow-x-auto"
+          class="rounded-lg bg-base-100 p-3 font-mono text-xs text-base-content overflow-x-auto"
           data-role="complex-frontmatter"
         >{@fm_complex}</pre>
-        <p class="mt-1 text-xs text-base-content/40">
+        <p class="mt-1 text-xs text-subtle">
           complex frontmatter — edit YAML directly in body
         </p>
       </div>
@@ -275,7 +275,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       <div class="flex flex-1 overflow-hidden">
         <%!-- Editor pane --%>
         <div class="flex flex-1 flex-col border-r border-edge">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-edge">
+          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content border-b border-edge">
             Markdown
           </div>
           <textarea
@@ -289,7 +289,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
 
         <%!-- Preview pane --%>
         <div class="flex flex-1 flex-col">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-edge">
+          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content border-b border-edge">
             Preview
           </div>
           <div class="flex-1 overflow-y-auto px-6 py-4">
@@ -309,9 +309,9 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
     ~H"""
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">
-        <span class="hero-document-text mb-3 size-16 text-base-content/20 mx-auto block"></span>
-        <h3 class="text-lg font-medium text-base-content/50">Org Memory</h3>
-        <p class="mt-1 text-sm text-base-content/40">
+        <span class="hero-document-text mb-3 size-16 text-subtle mx-auto block"></span>
+        <h3 class="text-lg font-medium text-base-content">Org memory</h3>
+        <p class="mt-1 text-sm text-subtle">
           Select a page from the namespace tree to view or edit organizational memory.
         </p>
       </div>

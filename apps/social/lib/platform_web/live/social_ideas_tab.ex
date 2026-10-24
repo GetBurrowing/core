@@ -485,7 +485,7 @@ defmodule PlatformWeb.SocialIdeasTab do
     <div data-role="social-ideas" class="mx-auto w-full max-w-[96rem] space-y-4 pb-8">
       <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 class="text-xl font-semibold" data-role="ideas-heading">Ideas</h2>
-        <p class="text-sm text-base-content/70">
+        <p class="text-sm text-base-content">
           Each idea moves along on its own as its posts are drafted, approved and published.
         </p>
       </div>
@@ -519,7 +519,7 @@ defmodule PlatformWeb.SocialIdeasTab do
             "flex min-h-11 flex-col items-center justify-center rounded-md px-1 text-xs leading-tight",
             if(@ideas_lane == item.key,
               do: "bg-base-100 font-semibold text-base-content shadow-sm",
-              else: "text-base-content/70"
+              else: "text-base-content"
             )
           ]}
         >
@@ -568,7 +568,7 @@ defmodule PlatformWeb.SocialIdeasTab do
                   <.icon name="hero-plus-mini" class="size-4" /> Idea
                 </button>
               <% @all? -> %>
-                <p class="px-1 text-xs text-base-content/70" data-role="ideas-quick-pick-brand">
+                <p class="px-1 text-xs text-base-content" data-role="ideas-quick-pick-brand">
                   Pick a brand to add an idea.
                 </p>
               <% true -> %>
@@ -579,7 +579,7 @@ defmodule PlatformWeb.SocialIdeasTab do
           <p
             :if={@ideas_counts[item.key] == 0}
             data-role="ideas-lane-empty"
-            class="rounded-xl border border-dashed border-base-300 px-3 py-4 text-center text-sm text-base-content/70"
+            class="rounded-xl border border-dashed border-base-300 px-3 py-4 text-center text-sm text-base-content"
           >
             {@empty_copy[item.key]}
           </p>
@@ -696,7 +696,7 @@ defmodule PlatformWeb.SocialIdeasTab do
           <span
             :if={@card.failed?}
             data-role="idea-card-failed"
-            class="ml-auto inline-flex items-center gap-1 text-base-content/60"
+            class="ml-auto inline-flex items-center gap-1 text-subtle"
           >
             <.icon name="hero-exclamation-triangle-micro" class="size-3.5" /> Failed
           </span>
@@ -704,7 +704,7 @@ defmodule PlatformWeb.SocialIdeasTab do
 
         <p class="font-semibold leading-snug" data-role="idea-card-title">{@card.idea.title}</p>
 
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content/70">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-base-content">
           <span
             :if={@card.platforms != []}
             class="inline-flex items-center gap-1"

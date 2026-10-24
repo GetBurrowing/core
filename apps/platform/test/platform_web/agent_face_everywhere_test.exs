@@ -254,7 +254,7 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={@agent_participant_ids}
-        agent_colors_map={%{"p-agent" => "#7c3aed"}}
+        agent_slots_map={%{"p-agent" => "purple"}}
         participants_map={@participants_map}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}
@@ -275,8 +275,8 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
 
       assert letters(plain) == "H"
 
-      # `.msg-agent-avatar` IS the accent ring — a box-shadow keyed off
-      # `--agent-accent`. It lands on the outer wrapper, so that wrapper must
+      # `.msg-agent-avatar` IS the slot ring — a box-shadow keyed off
+      # `--ag`, from the row's `data-agent-slot`. It lands on the outer wrapper, so that wrapper must
       # stay round or a box-shadow ring draws as a rectangle. Both modes.
       for el <- [imaged, plain] do
         assert wrapper_class(el) =~ "msg-agent-avatar"
@@ -340,7 +340,6 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@root}
         current_participant={nil}
         agent_participant_ids={MapSet.new(["p-agent"])}
-        agent_colors_map={%{}}
         participants_map={@participants_map}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}
@@ -423,88 +422,9 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
     end
   end
 
-  # ── Surface 4: the activity feed ─────────────────────────────────────────
-
-  describe "surface: activity feed" do
-    defp activity_html(conn) do
-      user = user!() |> Platform.TenancyFixtures.member_of_all_orgs!()
-      space = space!()
-      join_user(space, user)
-
-      for {name, avatar_url} <- [{"Pictured Agent", @image}, {"Faceless Agent", nil}] do
-        participant = join_agent(space, agent!(name, avatar_url))
-
-        {:ok, _msg} =
-          Chat.post_message(%{
-            space_id: space.id,
-            participant_id: participant.id,
-            content_type: "text",
-            content: "#{name} did something worth logging"
-          })
-
-        # The feed merges TWO streams and they resolve the agent differently: a
-        # message carries `author_agent_id` outright, a canvas carries only
-        # `created_by` (the participant row) and has to be joined one hop
-        # further out. Seed both or half the seam is unexercised.
-        {:ok, _canvas, _canvas_msg} =
-          Chat.create_canvas_with_message(space.id, participant.id, %{
-            title: "#{name} board"
-          })
-      end
-
-      conn = init_test_session(conn, current_user_id: user.id)
-      {:ok, _view, html} = live(conn, ~p"/activity")
-      html
-    end
-
-    test "the acting agent's row shows its face", %{conn: conn} do
-      # The feed used its OWN `avatar_initial/1` over a bare name string — not
-      # `PresenceHooks.avatar_initial/2` — and had no avatar source at all until
-      # `Chat.list_recent_agent_actions/1` grew `:agent_avatar_url`.
-      #
-      # Both halves live in ONE render (the sandbox is shared, so a second
-      # render would still carry the first's rows) and are told apart by MODE.
-      # An unconverted feed satisfies neither selector, because the hand-rolled
-      # span it used to draw stamps no `data-avatar-kind` at all.
-      html = activity_html(conn)
-
-      imaged = within(html, ~s(li [data-avatar-kind="agent"][data-avatar-mode="image"]))
-      plain = within(html, ~s(li [data-avatar-kind="agent"][data-avatar-mode="fallback"]))
-
-      assert imaged != [], "the agent WITH an avatar must render its stored image"
-      assert plain != [], "the agent WITHOUT one must render the initial circle"
-
-      assert imaged |> Floki.find("img") |> Floki.attribute("src") |> Enum.uniq() == [@image]
-
-      assert imaged |> Floki.find("img") |> Floki.attribute("alt") |> Enum.uniq() ==
-               ["Pictured Agent"]
-
-      assert plain
-             |> Floki.find(~s(span[aria-hidden="true"]))
-             |> Enum.map(&(Floki.text([&1]) |> String.trim()))
-             |> Enum.uniq() == ["F"]
-
-      # The canvas half of the feed's two-stream merge resolves its agent
-      # through the participant row rather than through `author_agent_id`. It is
-      # a DIFFERENT query, so assert a canvas row specifically carries a face.
-      canvas_rows =
-        html
-        |> Floki.parse_fragment!()
-        |> Floki.find("li")
-        |> Enum.filter(&(Floki.text([&1]) =~ "Canvas"))
-
-      assert canvas_rows != [], "expected the feed to contain agent-created canvas rows"
-
-      assert canvas_rows
-             |> Floki.find(~s([data-avatar-kind="agent"][data-avatar-mode="image"]))
-             |> Floki.find("img")
-             |> Floki.attribute("src")
-             |> Enum.uniq() == [@image],
-             "a canvas row's agent must resolve its avatar through the participant hop"
-    end
-  end
-
-  # ── Surface 5: the meeting participant rail ──────────────────────────────
+  # ── Surface 4 was the Activity feed, retired with its page by task
+  # 01a1557a-7a71 stage 4. Its case went with it; the other surfaces below
+  # still hold the property. ─────────────────────────────────────────────
 
   describe "surface: meeting participant rail" do
     defp rail_html(avatar_url) do
@@ -753,7 +673,6 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
         msg={@msg}
         current_participant={nil}
         agent_participant_ids={MapSet.new()}
-        agent_colors_map={%{}}
         participants_map={%{"p-human" => %{name: "Dana Reed", avatar_url: nil, avatar_seed: "s"}}}
         quick_emojis={[]}
         pinned_message_ids={MapSet.new()}
@@ -784,14 +703,16 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
     test "the human and broadcast rows beside it keep their own treatments" do
       html = mention_dropdown_html(nil)
 
-      human = within(html, ~s(button [data-avatar-kind="human"]))
+      # The rows are the shared MentionList's (rung 10, stage 4): option
+      # rows, not buttons.
+      human = within(html, ~s([data-mention-suggestion] [data-avatar-kind="human"]))
       assert length(human) == 1
       assert letters(human) == "DR"
 
       # `@here` is a broadcast sentinel, not a principal — it keeps the
       # megaphone the main compose dropdown gives it rather than borrowing a
       # person's avatar treatment.
-      assert within(html, ~s(button .hero-megaphone)) != []
+      assert within(html, ~s([data-mention-suggestion] .hero-megaphone)) != []
     end
   end
 

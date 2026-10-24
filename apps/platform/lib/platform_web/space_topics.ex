@@ -13,18 +13,20 @@ defmodule PlatformWeb.SpaceTopics do
   problem: **subscribe adds ONE registration, unsubscribe removes ALL of that
   pid's registrations for the topic.**
 
-  Four independent code sites subscribe `chat:space:<id>` *from the same pid*,
+  Three independent code sites subscribe `chat:space:<id>` *from the same pid*,
   because `PlatformWeb.ShellLive` is an `on_mount` hook (see `router.ex`,
   `live_session :authenticated`, `on_mount: [PlatformWeb.ShellLive,
   {PlatformWeb.LiveAuth, :default}]`) and therefore runs inside the LiveView
   process rather than beside it:
 
-    1. `shell_live.ex` — roster branch (`{:roster_resolved, sid}`)
-    2. `shell_live.ex` — presence branch (`{:presence_spaces_resolved, ids}`)
-    3. `chat_live.ex` — `subscribe_space/2` / `unsubscribe_space/2`
-    4. `tasks_live.ex` — `resubscribe_execution_space/2`
+    1. `shell_live.ex` — presence branch (`{:presence_spaces_resolved, ids}`)
+    2. `chat_live.ex` — `subscribe_space/2` / `unsubscribe_space/2`
+    3. `tasks_live.ex` — `resubscribe_execution_space/2`
 
-  Each keeps its own bookkeeping (`:roster_space_id`, `:shell_chat_space_ids`,
+  (A fourth, the shell's agent-meter branch, was deleted with the meter in
+  task 01a1557a-8f80 stage 3.)
+
+  Each keeps its own bookkeeping (`:shell_chat_space_ids`,
   `:subscribed_space_ids`, `:subscribed_execution_space_id`) and each issues raw
   subscribe/unsubscribe calls. Two registrations on one pid mean every broadcast
   is delivered twice.
@@ -61,12 +63,12 @@ defmodule PlatformWeb.SpaceTopics do
   registry is never interrogated on the hot path.
 
       socket = SpaceTopics.ensure_holders(socket)
-      socket = SpaceTopics.hold(socket, space_id, :roster)
+      socket = SpaceTopics.hold(socket, space_id, :presence)
       socket = SpaceTopics.hold(socket, space_id, :chat_active)
       # exactly one registration; both surfaces believe they hold it
       socket = SpaceTopics.release(socket, space_id, :chat_active)
-      # still exactly one registration — :roster still holds
-      socket = SpaceTopics.release(socket, space_id, :roster)
+      # still exactly one registration — :presence still holds
+      socket = SpaceTopics.release(socket, space_id, :presence)
       # now zero
   """
 
@@ -76,7 +78,7 @@ defmodule PlatformWeb.SpaceTopics do
 
   @assign :chat_space_holders
 
-  @owners [:roster, :presence, :chat_rail, :chat_active, :tasks_exec, :meeting]
+  @owners [:presence, :chat_rail, :chat_active, :tasks_exec, :meeting]
 
   # ── The second topic family: `space_agents:<id>` (task 01a0691d stage 3) ──
   #
@@ -104,7 +106,7 @@ defmodule PlatformWeb.SpaceTopics do
   # space_agents:<id>". Releasing one would then unsubscribe the other.
   @agents_assign :agent_topic_holders
 
-  @agents_owners [:roster, :meeting, :quickmeet]
+  @agents_owners [:meeting, :quickmeet]
 
   @typedoc """
   Closed set of surfaces permitted to hold a `chat:space:<id>` subscription on a
@@ -124,16 +126,16 @@ defmodule PlatformWeb.SpaceTopics do
   distinguishable or the map buys nothing.
   """
   @type owner ::
-          :roster | :presence | :chat_rail | :chat_active | :tasks_exec | :meeting
+          :presence | :chat_rail | :chat_active | :tasks_exec | :meeting
 
   @typedoc """
   Closed set of surfaces permitted to hold a `space_agents:<id>` subscription.
   Same discipline as `t:owner/0`, spelled in the same three places
   (`@agents_owners`, this union, this prose), and a deliberately SHORTER list:
-  only three surfaces want roster changes.
+  only two surfaces want roster changes. (The shell's `:roster` tag went with
+  the utility bar's agents meter, the surface that held it, in task
+  01a1557a-8f80.)
 
-    * `:roster` — `PlatformWeb.ShellLive`'s `{:roster_resolved, _}` branch,
-      which drives the global Agents meter.
     * `:meeting` — `PlatformWeb.MeetingLive`, member and guest mounts, for the
       People tab's invite rows.
     * `:quickmeet` — `PlatformWeb.ChatLive.MeetingHooks`, the same rows on the
@@ -142,7 +144,7 @@ defmodule PlatformWeb.SpaceTopics do
       atom would mean the quickmeet's leave teardown released the hold
       `MeetingLive` still needs for a page that is still open.
   """
-  @type agents_owner :: :roster | :meeting | :quickmeet
+  @type agents_owner :: :meeting | :quickmeet
 
   @typedoc "Space id => the set of owners currently holding its subscription."
   @type holders :: %{optional(binary()) => MapSet.t(owner())}

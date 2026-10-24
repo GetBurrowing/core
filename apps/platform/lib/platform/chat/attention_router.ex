@@ -10,14 +10,44 @@ defmodule Platform.Chat.AttentionRouter do
      every rule below. See `untrusted_inbound?/1`.
   1. **Execution spaces** — `log_only` messages are silently skipped.
   2. **DM spaces** — always route to the single agent participant (`:directed`).
-  3. **Single @mention** — set mentioned agent as active (mutex) and route.
+  3. **Single @mention** — route (`:mention`) and set the mentioned agent as
+     active (mutex), unless it is SILENCED or the space's agents are not
+     awake: a mention of a silenced agent routes but never arms the mutex.
   4. **Multi @mention** — route to all mentioned agents, clear the mutex.
-  5. **No mention + active agent** — route to the mutex holder, refresh timeout.
-  6. **Execution spaces + no active** — route to the assigned task agent.
-  7. **No mention + no active** — silence (empty list). The mutex is the only
-     thing that can arm an agent for un-addressed messages; there is no
-     `watch_enabled`/`primary_agent_id` fallback (removed — it silently
-     reopened the eye the user had just closed).
+     Silenced agents still receive mentions (rules 3 and 4).
+  5. **No mention + agents not awake** (`chat_spaces.agents_awake == false`,
+     the space's master switch) — no agent decision at all.
+  6. **No mention + active agent** — route to the mutex holder, refresh
+     timeout, unless the holder is silenced.
+  7. **Execution spaces + no active** — route to the assigned task agent
+     (`:watch`), unless that agent is silenced.
+  8. **No mention, nobody routed yet, channel or group** — the space's
+     attention policy (`chat_spaces.agent_attention_policy`, NULL = the kind
+     default from `resolve_attention_mode/2`) decides, and only for a message
+     whose AUTHOR IS A HUMAN (agent-authored messages never fan out, so two
+     agents cannot loop):
+       * `on_mention` — silence (empty list). Today's behaviour: the mutex is
+         the only thing that arms an agent for un-addressed messages; there
+         is no `primary_agent_id` fallback (removed — it silently reopened
+         the eye the user had just closed).
+       * `directed` — the roster principal if eligible, else the only eligible
+         roster agent if there is exactly one, else nobody (`:directed`, arms
+         the mutex).
+       * `collaborative` — every eligible roster agent (`:collaborative`, does
+         not arm the mutex).
+     Eligible = a participant of the space, on the roster (role principal or
+     member), passing the wake gate, and not silenced.
+
+  The migration that added the policy backfilled `on_mention` on every
+  existing channel and group, so only spaces created after it see the group
+  default, `collaborative`.
+
+  Every routed non-DM message logs ONE debug line, in exactly this format:
+
+      [AttentionRouter] agent_route space=<id> message=<id> policy=<effective> awake=<bool> decisions=<participant_id>:<reason>,... silenced_skipped=<participant_id>,...
+
+  `silenced_skipped` lists the silenced agents an un-mentioned message did
+  not reach. Empty lists render as nothing after `=`.
 
   ## Human participant routing
 
@@ -25,6 +55,40 @@ defmodule Platform.Chat.AttentionRouter do
     * `"active"` / `"all"` — always notified.
     * `"mention"` — notified only when @mentioned.
     * `"heartbeat"` — queued in ETS; drain with `flush/1`.
+
+  ## Notification level (task 01a1557a-e538 stage 1)
+
+  Each person also holds ONE notification level
+  (`Platform.Accounts.notification_level/1`, stored in `users.preferences`):
+
+  | level | label | effect |
+  |---|---|---|
+  | `"all"` | All messages | every channel message also yields `:all` for you, which pushes while you are not present in that space |
+  | `"mentions"` (default) | Mentions and direct messages | today's routing, unchanged |
+  | `"direct"` | Only direct mentions | only `chat_mention` pushes. DMs, at-here, task, review, meeting and admission alerts are suppressed. VoIP calls still ring. Inbox rows are unaffected |
+
+  ### Gate order for a human recipient
+
+  Every gate that decides whether a person is interrupted runs in this order.
+  A new gate EXTENDS this list at its slot; it is never added beside it.
+
+  1. **The per-space `attention_mode`**, applied by `decide_human_in_space/3`
+     (`"all"`, `"active"`, `"mention"`, `"heartbeat"`, plus the DM rule).
+  2. **The user notification level.** Its "all" floor runs here, right after
+     step 1: a recipient step 1 left undecided whose level is `"all"` gets
+     `:all` (levels are read once per message, `Accounts.notification_levels/1`).
+     Its "direct" gate runs at delivery, in `Platform.Push.permitted?/2`,
+     because it must also cover the alerts that never pass through this
+     router (task, review, meeting and admission pushes).
+  3. **Mute**: the reserved slot for per-channel Off/mute (task 01a14a91).
+     No mute state exists yet. When it lands it goes HERE, after the level,
+     so a muted space silences even an `"all"`-level person, and it extends
+     this order rather than adding a separate gate.
+
+  The `@[here]` branch below bypasses step 1 and the "all" floor (it already
+  notifies everyone); the "direct" gate in `Platform.Push` still applies to
+  its `chat_message` pushes. Presence (`send_push?/2`) is applied after all
+  three, per decision.
 
   ## @[here] broadcast (ADR 0037 + Stage 2 of @here notifications)
 
@@ -41,8 +105,8 @@ defmodule Platform.Chat.AttentionRouter do
 
   ## Decision reasons (free atoms — extend as new flows land)
 
-    * `:directed`, `:mention`, `:multi_mention`, `:active_agent`, `:watch`
-      — agent routing outcomes.
+    * `:directed`, `:mention`, `:multi_mention`, `:active_agent`, `:watch`,
+      `:collaborative` — agent routing outcomes.
     * `:all`, `:active`, `:mention`, `:heartbeat` — per-participant human
       routing outcomes from `decide_human/2`.
     * `:here` — channel-wide broadcast from `@[here]` fan-out.
@@ -110,11 +174,19 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   @doc """
-  Resolve the effective attention mode for an agent in a space.
+  Resolve the effective agent attention policy of a space.
 
-  ADR 0027: always returns the kind-based default.
+  For a channel or group, the stored `chat_spaces.agent_attention_policy`;
+  NULL (and every other kind) falls back to the kind default: channel
+  `on_mention`, group `collaborative`, DM and execution `directed`. The
+  policy is a property of the SPACE (task 01a1557a-8f80 stage 1), so the
+  participant argument is not read.
   """
-  @spec resolve_attention_mode(Space.t(), Participant.t()) :: String.t()
+  @spec resolve_attention_mode(Space.t(), Participant.t() | nil) :: String.t()
+  def resolve_attention_mode(%Space{kind: kind, agent_attention_policy: policy}, _participant)
+      when kind in ["channel", "group"] and is_binary(policy),
+      do: policy
+
   def resolve_attention_mode(%Space{} = space, _participant) do
     default_for_kind(space.kind)
   end
@@ -313,7 +385,18 @@ defmodule Platform.Chat.AttentionRouter do
 
     # ── Agent routing (mutex-based) ──────────────────────────────────────────
 
-    agent_decisions = route_agents(space, message, agent_recipients, wake)
+    # Agent-authored un-mentioned messages never fan out under the directed
+    # or collaborative policy (rule 8): it would let two agents loop.
+    wake =
+      Map.put(
+        wake,
+        :human_author?,
+        Enum.any?(participants, &(&1.id == author_id and &1.participant_type == "user"))
+      )
+
+    {agent_decisions, silenced_skipped} = route_agents(space, message, agent_recipients, wake)
+
+    log_agent_route(space, message, agent_decisions, silenced_skipped)
 
     # ── Human participant routing ────────────────────────────────────────────
     #
@@ -351,8 +434,15 @@ defmodule Platform.Chat.AttentionRouter do
 
         here_decisions ++ named_mention_decisions
       else
+        # Gate 2 of the order in the moduledoc: the per-user notification
+        # level, read ONCE per message for every human recipient.
+        levels = human_notification_levels(human_recipients)
+
         Enum.flat_map(human_recipients, fn participant ->
-          case decide_human_in_space(space, participant, message) do
+          space
+          |> decide_human_in_space(participant, message)
+          |> apply_level_floor(participant, levels)
+          |> case do
             nil -> []
             reason -> [%{participant_id: participant.id, reason: reason}]
           end
@@ -434,13 +524,16 @@ defmodule Platform.Chat.AttentionRouter do
   # A later step may emit its own reason for addressed mail (e.g.
   # `:email_addressed`); it must be a deliberate new branch here, not a
   # fall-through into activity routing. Human routing is unchanged.
+  #
+  # Returns `{decisions, silenced_skipped}`; only the un-mentioned branch of
+  # `route_agents_by_activity/4` ever skips an agent for being silenced.
   defp route_agents(%Space{} = space, %Message{} = message, agent_recipients, wake) do
     cond do
       untrusted_inbound?(message) ->
-        []
+        {[], []}
 
       role_key = role_scoped_dispatch_role(message) ->
-        route_role_scoped(space, message, agent_recipients, role_key)
+        {route_role_scoped(space, message, agent_recipients, role_key), []}
 
       true ->
         route_agents_by_activity(space, message, agent_recipients, wake)
@@ -557,9 +650,9 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp route_agents_by_activity(%Space{kind: "dm"}, _message, agent_recipients, _wake) do
     # DM spaces: always route to the agent participant directly
-    Enum.map(agent_recipients, fn p ->
-      %{participant_id: p.id, reason: :directed}
-    end)
+    {Enum.map(agent_recipients, fn p ->
+       %{participant_id: p.id, reason: :directed}
+     end), []}
   end
 
   defp route_agents_by_activity(%Space{} = space, %Message{} = message, agent_recipients, wake) do
@@ -590,33 +683,59 @@ defmodule Platform.Chat.AttentionRouter do
 
     case length(mentioned_agents) do
       0 ->
-        route_no_mention(space, message, agent_recipients, wake)
+        route_no_mention(space, message, agent_recipients, wake, roster_by_agent_id)
 
       1 ->
-        # Single @mention → set as active agent (mutex)
+        # Single @mention → set as active agent (mutex), unless the agent is
+        # silenced (mention-only: it answers this mention, and the next
+        # un-mentioned message must not reach it) or the master switch is off.
         [agent_p] = mentioned_agents
-        ActiveAgentStore.set_active(space.id, agent_p.id)
-        [%{participant_id: agent_p.id, reason: :mention}]
+
+        if space.agents_awake and not agent_p.silenced do
+          ActiveAgentStore.set_active(space.id, agent_p.id)
+        end
+
+        {[%{participant_id: agent_p.id, reason: :mention}], []}
 
       _multi ->
         # Multi @mention → route to all, clear mutex
         ActiveAgentStore.clear_active(space.id)
 
-        Enum.map(mentioned_agents, fn p ->
-          %{participant_id: p.id, reason: :multi_mention}
-        end)
+        {Enum.map(mentioned_agents, fn p ->
+           %{participant_id: p.id, reason: :multi_mention}
+         end), []}
     end
   end
 
-  # No @mention — check mutex, then the execution task-assignee fallback,
-  # then silence
-  defp route_no_mention(
+  # No @mention. Silenced agents are dropped first, so no branch below can
+  # reach one; the master switch then decides whether anyone is reached.
+  defp route_no_mention(%Space{} = space, message, agent_recipients, wake, roster_by_agent_id) do
+    {silenced, awake_recipients} = Enum.split_with(agent_recipients, & &1.silenced)
+
+    decisions =
+      if space.agents_awake do
+        route_awake_no_mention(space, message, awake_recipients, wake, roster_by_agent_id)
+      else
+        []
+      end
+
+    {decisions, Enum.map(silenced, & &1.id)}
+  end
+
+  # Execution: the mutex holder, then the task-assignee fallback.
+  defp route_awake_no_mention(
          %Space{kind: "execution"} = space,
          %Message{participant_id: author_id},
          agent_recipients,
-         wake
+         wake,
+         _roster_by_agent_id
        ) do
     case execution_assignee_participant(space, wake) do
+      # A silenced assignee gets no `:watch`; the mutex branch still runs
+      # over the non-silenced recipients.
+      {:ok, %Participant{silenced: true}} ->
+        route_execution_active_agent(space, agent_recipients)
+
       {:ok, %Participant{id: assignee_participant_id}}
       when assignee_participant_id == author_id ->
         ActiveAgentStore.set_active(space.id, assignee_participant_id)
@@ -639,12 +758,68 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  defp route_no_mention(%Space{} = space, _message, agent_recipients, _wake) do
+  # Channel / group (and any other non-DM kind): the mutex holder, then the
+  # space's attention policy (moduledoc rule 8).
+  defp route_awake_no_mention(%Space{} = space, message, agent_recipients, wake, roster) do
+    case route_mutex_holder(space, agent_recipients) do
+      [] -> route_by_policy(space, message, agent_recipients, wake, roster)
+      decisions -> decisions
+    end
+  end
+
+  defp route_by_policy(%Space{kind: kind} = space, _message, agent_recipients, wake, roster)
+       when kind in ["channel", "group"] do
+    if wake.human_author? do
+      eligible =
+        Enum.filter(agent_recipients, fn p ->
+          match?(%{role: role} when role in ["principal", "member"], roster[p.participant_id])
+        end)
+
+      case resolve_attention_mode(space, nil) do
+        "collaborative" ->
+          Enum.map(eligible, &%{participant_id: &1.id, reason: :collaborative})
+
+        "directed" ->
+          route_directed(space, eligible, roster)
+
+        _on_mention ->
+          # The eye is closed, so nobody hears this (ADR 0027). There is
+          # deliberately no fallback: arming an agent here would reopen the
+          # eye the user just closed.
+          []
+      end
+    else
+      []
+    end
+  end
+
+  defp route_by_policy(_space, _message, _agent_recipients, _wake, _roster), do: []
+
+  defp route_directed(%Space{} = space, eligible, roster) do
+    principal =
+      Enum.find(eligible, &match?(%{role: "principal"}, roster[&1.participant_id]))
+
+    target =
+      case {principal, eligible} do
+        {%Participant{} = p, _} -> p
+        {nil, [only]} -> only
+        _ -> nil
+      end
+
+    if target do
+      ActiveAgentStore.set_active(space.id, target.id)
+      [%{participant_id: target.id, reason: :directed}]
+    else
+      []
+    end
+  end
+
+  # The mutex holder, when it is among the (non-silenced) recipients. `[]`
+  # when nobody holds it, when the holder is the author or silenced, or when
+  # the holder's row is gone (the stale mutex is cleared).
+  defp route_mutex_holder(%Space{} = space, agent_recipients) do
     case ActiveAgentStore.get_active(space.id) do
       nil ->
-        # No active agent — the eye is closed, so nobody hears this (ADR 0027).
-        # There is deliberately no fallback: arming an agent here would reopen
-        # the eye the user just closed.
         []
 
       active_participant_id ->
@@ -659,17 +834,17 @@ defmodule Platform.Chat.AttentionRouter do
           # Active agent not in recipients — check whether they're still a
           # participant in the space (post-ADR-0038 the row either exists or
           # has been hard-deleted). If they are, they're the message author
-          # and we skip routing. If the row is gone, the mutex is stale —
-          # clear it and fall silent.
+          # (or silenced) and the holder is skipped. If the row is gone, the
+          # mutex is stale — clear it. Either way the policy decides next.
           still_active =
             Repo.exists?(from(p in Participant, where: p.id == ^active_participant_id))
 
           if still_active do
-            # Author is still present — skip routing for this message.
+            # Author (or a silenced holder) is still present — skip routing
+            # for this message.
             []
           else
-            # Stale mutex — clear it. Nobody is armed now, so nobody hears
-            # this message.
+            # Stale mutex — clear it. Nobody is armed now.
             ActiveAgentStore.clear_active(space.id)
             []
           end
@@ -719,6 +894,18 @@ defmodule Platform.Chat.AttentionRouter do
   defp execution_space_task_id(_space), do: nil
 
   defp return_empty, do: []
+
+  defp log_agent_route(%Space{kind: "dm"}, _message, _decisions, _skipped), do: :ok
+
+  defp log_agent_route(%Space{} = space, %Message{} = message, decisions, silenced_skipped) do
+    Logger.debug(fn ->
+      decided = Enum.map_join(decisions, ",", &"#{&1.participant_id}:#{&1.reason}")
+
+      "[AttentionRouter] agent_route space=#{space.id} message=#{message.id} " <>
+        "policy=#{resolve_attention_mode(space, nil)} awake=#{space.agents_awake} " <>
+        "decisions=#{decided} silenced_skipped=#{Enum.join(silenced_skipped, ",")}"
+    end)
+  end
 
   # `recipient` is the `%Participant{}` row when the caller resolved one (it
   # already holds `participant_by_id`, so this costs no query), otherwise the
@@ -1082,6 +1269,28 @@ defmodule Platform.Chat.AttentionRouter do
   @spec notification_title(String.t(), atom(), String.t() | nil) :: String.t()
   def notification_title(sender_name, reason, app_name \\ Platform.Branding.app_name()),
     do: Platform.Push.Notification.chat_title(sender_name, nil, reason, app_name)
+
+  # ── Notification level floor (task 01a1557a-e538 stage 1) ─────────────────
+
+  # `%{user_id => level}` for the human recipients that stored one, in ONE
+  # query (`Accounts.notification_levels/1`). Everyone absent is at the
+  # default, "mentions", which changes nothing here.
+  defp human_notification_levels(human_recipients) do
+    human_recipients
+    |> Enum.map(& &1.participant_id)
+    |> Platform.Accounts.notification_levels()
+  end
+
+  # A human the per-space mode left undecided gets `:all` when their level is
+  # "all": the reason `attention_mode "all"` already produces, so every
+  # downstream branch (PubSub, `send_push?/2`'s presence gate, the push) is
+  # existing code. Any decided reason passes through untouched. "direct" is
+  # not applied here: it is a delivery gate in `Platform.Push`.
+  defp apply_level_floor(nil, %Participant{participant_id: user_id}, levels) do
+    if Map.get(levels, user_id) == "all", do: :all, else: nil
+  end
+
+  defp apply_level_floor(reason, _participant, _levels), do: reason
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 

@@ -241,7 +241,7 @@ defmodule PlatformWeb.SocialCardComponent do
       <p
         :if={@view[:posts_as]}
         data-role="social-card-posts-as"
-        class="-mt-2 text-sm text-base-content/60"
+        class="-mt-2 text-sm text-subtle"
       >
         {@view.posts_as}
       </p>
@@ -271,17 +271,17 @@ defmodule PlatformWeb.SocialCardComponent do
         <p
           :if={@view.provenance}
           data-role="social-card-provenance"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           {@view.provenance}
         </p>
-        <p :if={@view.edited_by} data-role="social-card-edited" class="text-sm text-base-content/60">
+        <p :if={@view.edited_by} data-role="social-card-edited" class="text-sm text-subtle">
           Edited by {@view.edited_by}
         </p>
         <p
           :if={@view.draft_only? and @view.actions != []}
           data-role="social-card-by-hand"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           Post this by hand on {@view.platform_label}
         </p>
@@ -352,11 +352,11 @@ defmodule PlatformWeb.SocialCardComponent do
         <% end %>
       <% end %>
       <span :if={@view[:profile_name]} class="text-sm font-semibold">{@view.profile_name}</span>
-      <span :if={@view[:handle]} class="text-sm text-base-content/60">{@view.handle}</span>
+      <span :if={@view[:handle]} class="text-sm text-subtle">{@view.handle}</span>
       <span
         :if={@view[:found]}
         data-role="social-card-time"
-        class="ml-auto font-mono text-xs text-base-content/60"
+        class="ml-auto font-mono text-xs text-subtle"
       >
         {schedule(@view)}
       </span>
@@ -404,7 +404,7 @@ defmodule PlatformWeb.SocialCardComponent do
         <span :if={!@refusal.clock}>{@refusal.reason}</span>
       </p>
       <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span data-role="social-card-refused-at" class="text-[13px] text-base-content/70">
+        <span data-role="social-card-refused-at" class="text-[13px] text-base-content">
           Refused {hhmm(@refusal.refused_at)}
         </span>
         <%= case @refusal.action do %>
@@ -433,7 +433,7 @@ defmodule PlatformWeb.SocialCardComponent do
             <span
               aria-hidden="true"
               data-role="social-card-retry-spinner"
-              class="hidden text-base-content/70 peer-[.phx-click-loading]:inline-flex"
+              class="hidden text-base-content peer-[.phx-click-loading]:inline-flex"
             >
               <.icon name="hero-arrow-path-mini" class="size-4 animate-spin" />
             </span>
@@ -466,7 +466,7 @@ defmodule PlatformWeb.SocialCardComponent do
             "rounded border px-2 py-0.5 font-mono text-xs uppercase tracking-wide",
             if(@view.over_limit?,
               do: "border-warning text-warning",
-              else: "border-edge text-base-content/60"
+              else: "border-edge font-medium text-base-content"
             )
           ]}
         >
@@ -538,7 +538,7 @@ defmodule PlatformWeb.SocialCardComponent do
         <p
           :if={@view.hashtags != []}
           data-role="social-card-hashtags"
-          class="text-sm text-base-content/60"
+          class="text-sm text-subtle"
         >
           {Enum.join(@view.hashtags, " ")}
         </p>
@@ -553,7 +553,7 @@ defmodule PlatformWeb.SocialCardComponent do
           data-over-limit={to_string(@view.over_limit?)}
           class={[
             "text-right font-mono text-xs",
-            if(@view.over_limit?, do: "text-warning", else: "text-base-content/60")
+            if(@view.over_limit?, do: "text-warning", else: "text-base-content")
           ]}
         >
           {@view.char_count} / {@view.char_limit}
@@ -716,7 +716,7 @@ defmodule PlatformWeb.SocialCardComponent do
 
   defp tone_class(:success), do: "text-success"
   defp tone_class(:error), do: "text-error"
-  defp tone_class(_), do: "text-base-content/60"
+  defp tone_class(_), do: "text-subtle"
 
   defp schedule(%{scheduled_at: %DateTime{} = at}), do: Approvals.when_text(at)
   defp schedule(_), do: "not scheduled"

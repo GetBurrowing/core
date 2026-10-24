@@ -22,7 +22,8 @@ defmodule Platform.Design.CssRules do
       `:where()` by evaluation. Everything it cannot evaluate against a
       single element and its ancestors is resolved TOWARDS MATCHING:
       pseudo-classes and pseudo-elements (`:hover`, `:focus-visible`,
-      `::before`) match, structural pseudos (`:nth-child()`, `:has()`)
+      `::before`) match, except `::placeholder`, which matches only an
+      `input` or `textarea` (only a text control has one), structural pseudos (`:nth-child()`, `:has()`)
       match, and the sibling combinators `+` / `~` place no constraint on
       the left-hand side. `.x:hover { opacity: .5 }` therefore still fades
       `.x`, and an over-match is a LOUD false positive naming the rule,
@@ -397,8 +398,13 @@ defmodule Platform.Design.CssRules do
   defp compound!("*" <> rest, sel, terms), do: compound!(rest, sel, [:universal | terms])
 
   defp compound!("::" <> rest, sel, terms) do
-    {_name, rest} = ident!(rest, sel)
-    compound!(rest, sel, [:matches | terms])
+    {name, rest} = ident!(rest, sel)
+
+    # `::placeholder` is the one pseudo-element that CAN be evaluated here:
+    # only a text control has a placeholder (task 01a15902 stage 2, whose
+    # global `::placeholder` rule otherwise "coloured" every element).
+    term = if name == "placeholder", do: :placeholder_host, else: :matches
+    compound!(rest, sel, [term | terms])
   end
 
   defp compound!(":" <> rest, sel, terms) do
@@ -527,6 +533,7 @@ defmodule Platform.Design.CssRules do
     Enum.all?(terms, fn
       :universal -> true
       :matches -> true
+      :placeholder_host -> element.tag in ["input", "textarea"]
       {:type, tag} -> element.tag == tag
       {:class, c} -> MapSet.member?(element.classes, c)
       {:attr, name} -> Map.has_key?(element.attrs, name)

@@ -129,7 +129,7 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
       </h3>
 
       <div
-        class="flex items-center gap-2 text-sm text-base-content/70"
+        class="flex items-center gap-2 text-sm text-subtle"
         data-role="meeting-detail-when"
       >
         <span class="hero-clock size-4 flex-shrink-0" aria-hidden="true"></span>

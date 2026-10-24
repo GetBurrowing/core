@@ -8,7 +8,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
   does not read as a behaviour regression. The two exceptions are
   deliberate and are the two visual claims the stage is actually making:
 
-    * the measurement clause carries `text-base-content/60` and NOT
+    * the measurement clause carries `text-subtle` (was the 60% utility,
+      task 01a15902 stage 3) and NOT
       `/40` — `/40` is the treatment `topic` uses and it was measured at
       2.85:1 light / 3.53:1 dark, which fails AA in both themes;
     * `text-warning` appears on the FAULT no-measurement clause (a goal
@@ -16,7 +17,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       NOWHERE else on either surface. An uncounted goal (`kind:
       :uncounted`, task `01a0ca9f` stage 3) is a normal state the heartbeat
       fires for: it renders "no count for this goal" at
-      `text-base-content/60`, with no warning and no numeral.
+      `text-subtle`, with no warning and no numeral.
 
   Every absence is paired with the presence that proves the absence was
   the condition under test and not a broken render.
@@ -170,7 +171,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
   end
 
   describe "contrast and the single warning" do
-    test "the measurement clause uses /60 and not the /40 topic tier", %{conn: conn} do
+    test "the measurement clause uses text-subtle and not the /40 topic tier", %{conn: conn} do
       {conn, user} = authenticated_conn(conn)
       enable_flag()
 
@@ -182,7 +183,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       [_, clause] = String.split(html, ~s(data-role="agents-goal-measurement"), parts: 2)
       measurement_tag = String.slice(clause, 0, 200)
 
-      assert html =~ "text-base-content/60"
+      assert html =~ "text-subtle"
       refute measurement_tag =~ "text-base-content/40"
       # The numeral, and only the numeral, is in the monospace face.
       assert html =~ ~s(data-role="agents-goal-number")
@@ -221,7 +222,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert html =~ "no count for this goal"
 
       class = class_of(html, "agents-goal-measurement-uncounted")
-      assert "text-base-content/60" in split_classes(class)
+      assert "text-subtle" in split_classes(class)
       refute "font-mono" in split_classes(class)
 
       refute html =~ "text-warning"
@@ -529,7 +530,10 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       refute strip =~ @fault_token
 
       [invite_class] = html |> role_nodes("agents-goal-invite") |> Floki.attribute("class")
-      assert "text-base-content/60" in split_classes(invite_class)
+      # The invitation is a control's label, so it is body text (task 01a15902
+      # stage 3, canvas rule 4), not the subtle tier.
+      assert "text-base-content" in split_classes(invite_class)
+      refute "text-subtle" in split_classes(invite_class)
       refute invite_class =~ "text-base-content/40"
       # Tap target below sm, the pencil's treatment.
       assert "min-h-11" in mobile_live(invite_class)
@@ -725,7 +729,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       # the desktop truncation rule.
       assert "truncate" in desktop_live(class)
       assert "min-w-0" in desktop_live(class)
-      assert "text-base-content/60" in desktop_live(class)
+      assert "text-subtle" in desktop_live(class)
       refute class =~ "text-base-content/40"
 
       assert class_of(html, "agents-goal-number") =~ "font-mono"
@@ -1075,7 +1079,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       [tail] = tail_nodes(html)
       assert Floki.text(tail) |> String.trim() == "· not checked automatically"
       class = tail |> Floki.attribute("class") |> Enum.join(" ")
-      assert class =~ "text-base-content/60"
+      assert class =~ "text-subtle"
       refute class =~ "text-warning"
     end
 

@@ -134,7 +134,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         toggle_event="taskcreate_toggle_fab"
         toggle_target={@myself}
         label="Create"
-        class={["md:hidden", @selected_task && "max-md:hidden"]}
+        class={["md:hidden max-lg:hidden", @selected_task && "max-md:hidden"]}
         data-role="fab-create"
       >
         <button
@@ -258,7 +258,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
                 {String.capitalize(kind)}
               </option>
             </select>
-            <p class="mt-1 text-[11px] text-base-content/50">
+            <p class="mt-1 text-[11px] text-subtle">
               Feature · Chore · Bug · Research · Ops
             </p>
           </div>
@@ -519,7 +519,7 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
               class="mt-2 flex items-center gap-2 text-xs"
             >
               <span class="flex-1 truncate">{entry.client_name}</span>
-              <span class="text-base-content/40">
+              <span class="text-subtle">
                 {Float.round(entry.client_size / 1_000, 1)} KB
               </span>
               <button

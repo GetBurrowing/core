@@ -15,12 +15,11 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
 
   Setup mirrors `chat_live_agents_goal_surface_test.exs`.
 
-  Stage 2 extends the same rule to the two mobile surfaces that read
-  `@sidebar_sections`: the drawer's org sections and the channel-pills strip.
-  The filter is applied once, at `resolve_sidebar_sections/4`, so these cases
-  prove that one filter reaches both, and each absence is again paired in the
-  same render with the presence that makes it meaningful: the drawer's Agents
-  block row, and the Agents chip in the mobile pinned strip.
+  Stage 2 extended the same rule to two mobile surfaces (the phone drawer's
+  org sections and the strip of channel pills); both were deleted in task
+  01a1557a-8562 stage 5, and their cases (e) and (f) with them. The phone
+  Chat list's Agents row is covered in `chat_live_chat_list_test.exs`
+  ("PINNED leads with the Agents row, then the pinned conversations").
 
   `async: false` — the feature flag is application env, global to the node.
   """
@@ -146,49 +145,6 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     |> Kernel.!=([])
   end
 
-  defp open_drawer(view) do
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
-    |> render_click()
-  end
-
-  defp find(html, selector) do
-    html
-    |> Floki.parse_document!()
-    |> Floki.find(selector)
-  end
-
-  defp drawer_rows(html, space),
-    do:
-      find(
-        html,
-        ~s(#mobile-channel-browser [data-role="drawer-row-wrap"][data-space-id="#{space.id}"])
-      )
-
-  defp drawer_block_rows(html, space),
-    do:
-      find(
-        html,
-        ~s(#mobile-channel-browser [data-role="agents-drawer-block"] [data-role="drawer-row-wrap"][data-space-id="#{space.id}"])
-      )
-
-  defp in_drawer_org_section?(html, section, space) do
-    find(
-      html,
-      ~s(#mobile-channel-browser section[data-section-id="#{section.id}"] [data-role="drawer-row-wrap"][data-space-id="#{space.id}"])
-    ) != []
-  end
-
-  defp pills(html, space),
-    do: find(html, ~s(a[data-role="channel-pill"][data-space-id="#{space.id}"]))
-
-  defp agents_chip(html, space),
-    do:
-      find(
-        html,
-        ~s([data-role="mobile-pinned-strip"] [data-role="agents-pinned-strip-chip"][data-space-id="#{space.id}"])
-      )
-
   test "(a) flag on + goal: the space leaves its org list and shows in the block, in one render",
        %{conn: conn} do
     enable_flag()
@@ -274,67 +230,5 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
            "a cleared goal left the space missing from both the block and its org"
 
     assert in_org_section?(html, section, sibling)
-  end
-
-  test "(e) flag on + goal: both mobile surfaces drop the space and keep it reachable, in one render",
-       %{conn: conn} do
-    enable_flag()
-
-    %{conn: conn, agents: agents, sibling: sibling, section: section} =
-      seed(conn, goal: "Close backlog items in Suite")
-
-    {:ok, view, _html} = live_at(conn, "/chat/#{sibling.slug}")
-
-    # ONE render carries the drawer, the pinned strip and the pills strip.
-    html = open_drawer(view)
-
-    # Positive controls for every selector below: the sibling lists in the
-    # drawer's org section and as a pill. Without these, each `refute`
-    # passes vacuously on a drawer that did not open or a strip that did
-    # not render.
-    assert in_drawer_org_section?(html, section, sibling),
-           "the no-goal sibling is not in the drawer's org section"
-
-    assert [_] = pills(html, sibling),
-           "the no-goal sibling is not a channel pill"
-
-    # Drawer: exactly one row for the space, and it is the Agents block's.
-    assert [_] = drawer_block_rows(html, agents),
-           "the agents space is not in the drawer's Agents block"
-
-    assert length(drawer_rows(html, agents)) == 1,
-           "the agents space renders #{length(drawer_rows(html, agents))} drawer rows; " <>
-             "every row outside the Agents block is its twin"
-
-    refute in_drawer_org_section?(html, section, agents),
-           "the agents space is listed under its org in the drawer AND in the block"
-
-    # Pills strip: no pill for the space, and the Agents chip is present.
-    assert pills(html, agents) == [],
-           "the agents space is a channel pill AND the Agents chip"
-
-    assert [_] = agents_chip(html, agents),
-           "the Agents chip is missing from the mobile pinned strip — the space " <>
-             "is reachable nowhere on mobile"
-  end
-
-  test "(f) flag off: the space is back as a pill and in the drawer's org section",
-       %{conn: conn} do
-    disable_flag()
-
-    %{conn: conn, agents: agents, sibling: sibling, section: section} =
-      seed(conn, goal: "Close backlog items in Suite")
-
-    {:ok, view, _html} = live_at(conn, "/chat/#{sibling.slug}")
-    html = open_drawer(view)
-
-    assert in_drawer_org_section?(html, section, agents)
-    assert in_drawer_org_section?(html, section, sibling)
-    assert [_] = pills(html, agents)
-    assert [_] = pills(html, sibling)
-
-    assert drawer_block_rows(html, agents) == []
-    assert find(html, ~s([data-role="agents-drawer-block"])) == []
-    assert agents_chip(html, agents) == []
   end
 end

@@ -588,7 +588,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       class="rounded-2xl border border-edge bg-base-100 text-base-content shadow-sm"
     >
       <header class="space-y-1.5 px-4 pt-4 sm:px-5">
-        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-base-content/70">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-base-content">
           <span
             data-role="queue-source"
             data-source={@header.source_kind}
@@ -622,7 +622,7 @@ defmodule PlatformWeb.SocialIdeaCard do
             <.icon name="hero-check-mini" class="size-4" /> Approve all {length(@approvable)}
           </button>
         </div>
-        <p class="text-[13px] text-base-content/60" data-role="queue-count">
+        <p class="text-[13px] text-subtle" data-role="queue-count">
           {versions_line(@versions)}
         </p>
       </header>
@@ -709,8 +709,8 @@ defmodule PlatformWeb.SocialIdeaCard do
         <li :for={v <- @approvable} class="flex items-center gap-2" data-role="queue-approve-all-item">
           <SocialPreview.glyph platform={v.account.platform} class="size-4 shrink-0" />
           <span class="font-medium">{v.label}</span>
-          <span class="truncate text-base-content/70">{v.account.handle}</span>
-          <span class="ml-auto shrink-0 font-mono text-xs text-base-content/70">
+          <span class="truncate text-base-content">{v.account.handle}</span>
+          <span class="ml-auto shrink-0 font-mono text-xs text-base-content">
             {if v.post.scheduled_at, do: when_text(v.post.scheduled_at, v.tz), else: "Now"}
           </span>
         </li>
@@ -764,7 +764,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       <p
         :if={not @v.content?}
         data-role="queue-status-only"
-        class="rounded-lg border border-edge px-3 py-2 text-sm text-base-content/70"
+        class="rounded-lg border border-edge px-3 py-2 text-sm text-base-content"
       >
         {@v.label} · {(@v.status && @v.status.text) || "Needs approval"}
       </p>
@@ -783,13 +783,13 @@ defmodule PlatformWeb.SocialIdeaCard do
 
       <.cover_control :if={@cover_controls and @v.cover} v={@v} />
 
-      <p :if={@v.alt != []} data-role="queue-alt-note" class="text-xs text-base-content/60">
+      <p :if={@v.alt != []} data-role="queue-alt-note" class="text-xs text-subtle">
         {Enum.join(@v.alt, ", ")} (alt text comes later)
       </p>
 
       <div data-role="queue-when" class="rounded-lg bg-base-200 px-3 py-2 text-sm">
         <p class="flex items-center gap-1.5 font-medium">
-          <.icon name="hero-clock-mini" class="size-4 shrink-0 text-base-content/70" />
+          <.icon name="hero-clock-mini" class="size-4 shrink-0 text-base-content" />
           <span :if={@v.post.scheduled_at} data-role="queue-suggested">
             {when_text(@v.post.scheduled_at, @v.tz)}
           </span>
@@ -800,7 +800,7 @@ defmodule PlatformWeb.SocialIdeaCard do
         <p
           :if={present?(@v.post.schedule_reason)}
           data-role="queue-reason"
-          class="mt-0.5 pl-[22px] text-[13px] text-base-content/70"
+          class="mt-0.5 pl-[22px] text-[13px] text-base-content"
         >
           {@v.post.schedule_reason}
         </p>
@@ -823,7 +823,7 @@ defmodule PlatformWeb.SocialIdeaCard do
           View post
         </a>
       </p>
-      <p :if={@v.edited_by} data-role="queue-edited" class="text-[13px] text-base-content/60">
+      <p :if={@v.edited_by} data-role="queue-edited" class="text-[13px] text-subtle">
         Edited by {@v.edited_by}
       </p>
 
@@ -1089,7 +1089,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       data-post={@v.post.id}
       class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 border-t border-edge bg-base-100/95 px-3 pt-2 pb-3 shadow-lg backdrop-blur sm:hidden"
     >
-      <p class="mb-2 flex items-center gap-1.5 text-[13px] text-base-content/70">
+      <p class="mb-2 flex items-center gap-1.5 text-[13px] text-base-content">
         <SocialPreview.glyph platform={@v.account.platform} class="size-3.5" />
         <span class="font-medium text-base-content">{@v.label}</span>
         <span :if={@count > 1}>· {@index + 1} of {@count}</span>
@@ -1159,7 +1159,7 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp tone_class(:success), do: "text-success"
   defp tone_class(:error), do: "text-error"
   defp tone_class(:warning), do: "text-base-content"
-  defp tone_class(_), do: "text-base-content/70"
+  defp tone_class(_), do: "text-base-content"
 
   defp present?(s), do: is_binary(s) and String.trim(s) != ""
 end

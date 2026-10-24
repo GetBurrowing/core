@@ -114,6 +114,26 @@ defmodule PlatformWeb.ChatLive.MentionsHooksExternalTest do
       assert suggestions == []
     end
 
+    test "never offers addable (not-in-space) agents" do
+      addable = [%{id: "agent-addable", name: "Aaron Atlas", avatar_url: nil}]
+
+      internal = MentionsHooks.build_suggestions("aaron", participants(), addable_agents: addable)
+
+      # Positive control: the same opts on the internal surface DO offer it.
+      assert "Aaron Atlas" in names(internal)
+
+      suggestions =
+        MentionsHooks.build_suggestions("aaron", participants(),
+          external?: true,
+          user_id: "external-actor",
+          permit_fn: permit_fn(),
+          addable_agents: addable
+        )
+
+      assert names(suggestions) == ["Aaron Allowed"]
+      refute Enum.any?(suggestions, &(&1[:not_in_space] == true))
+    end
+
     test "a participant with no principal id is dropped closed" do
       participants = %{
         "p-nil" => %{participant_type: "user", display_name: "No Id", archived: false}

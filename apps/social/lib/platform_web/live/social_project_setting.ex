@@ -93,7 +93,7 @@ defmodule PlatformWeb.SocialProjectSetting do
           </label>
           <span
             :if={@setting.saved?}
-            class="text-[13px] text-base-content/70"
+            class="text-[13px] text-base-content"
             data-role="social-project-saved"
           >
             Saved
@@ -118,21 +118,21 @@ defmodule PlatformWeb.SocialProjectSetting do
       </form>
       <p
         :if={@setting.options == []}
-        class="text-[13px] text-base-content/70"
+        class="text-[13px] text-base-content"
         data-role="social-project-none"
       >
         <.link navigate={@projects_path} class="link">Create a project first</.link>
       </p>
       <p
         :if={@setting.current}
-        class="text-[13px] text-base-content/70"
+        class="text-[13px] text-base-content"
         data-role="social-project-helper"
       >
         Clip renders and uploaded covers are stored as files in this project.
       </p>
       <p
         :if={is_nil(@setting.current)}
-        class="text-[13px] text-base-content/70"
+        class="text-[13px] text-base-content"
         data-role="social-project-unset"
       >
         Clips can't render until a project is chosen.

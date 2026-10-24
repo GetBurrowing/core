@@ -172,6 +172,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.ColorPalette
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.AgentDelayReason
@@ -526,6 +527,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :for={{p, info, aid} <- @agents_with_info}
             class="row"
+            data-agent-slot={agent_slot(@agents_by_id, aid)}
             data-participant-id={p.id}
             data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="agent"
@@ -888,6 +890,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           <li
             :if={@agent_removal_undo}
             class="row"
+            data-agent-slot={ColorPalette.slot_for(Map.get(@agent_removal_undo, :slot))}
             data-kick="gone"
             data-role="meeting-agent-left"
           >
@@ -976,8 +979,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
              clears both themes (5.53:1 light, 6.44:1 dark) and is the same
              tone the sub-line and the delay-reason text already use. --%>
         <div class="flex items-center gap-1.5 px-2 pb-1.5" data-role="humans-heading">
-          <span class="hero-users size-3.5 text-base-content/50"></span>
-          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/60">
+          <span class="hero-users size-3.5 text-subtle"></span>
+          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content">
             In this call
           </span>
         </div>
@@ -1000,7 +1003,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             />
             <div class="min-w-0 flex-1">
               <div
-                class="truncate text-xs font-medium text-base-content/90"
+                class="truncate text-xs font-medium text-base-content"
                 data-role="participant-name"
               >
                 {p.display_name || "Unknown participant"}
@@ -1019,7 +1022,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    above for how this was measured. --%>
               <div
                 :if={MeetingLive.via_guest_link?(p)}
-                class="truncate text-[11px] text-base-content/60"
+                class="truncate text-[11px] text-subtle"
                 data-role="participant-via-guest-link"
               >
                 via guest link
@@ -1045,7 +1048,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
 
           <li
             :if={@humans == []}
-            class="px-2 py-1.5 text-xs text-base-content/40"
+            class="px-2 py-1.5 text-xs text-subtle"
           >
             No people yet.
           </li>
@@ -1169,6 +1172,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     </div>
     """
   end
+
+  # The row's identity slot (task 01a1557a rung 3 stage 3): the agent's stored
+  # `color` through `ColorPalette.slot_for/1`, the same resolution
+  # `Chat.agent_slot_map_for_participants/1` gives the chat row and the gallery
+  # tile, so all three surfaces carry one `data-agent-slot`. nil, blank,
+  # unknown or an unresolved agent is "blue".
+  defp agent_slot(agents_by_id, aid) when is_binary(aid) and is_map(agents_by_id) do
+    case Map.get(agents_by_id, aid) do
+      %{color: color} -> ColorPalette.slot_for(color)
+      _ -> ColorPalette.slot_for(nil)
+    end
+  end
+
+  defp agent_slot(_agents_by_id, _aid), do: ColorPalette.slot_for(nil)
 
   # The face at an agent row's avatar position: the voice waveform for an
   # agent in the call by voice, the mockup's initials otherwise (task
@@ -1344,7 +1361,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       title={mute_button_label(@mute_target, @muted_by_host?, @name)}
       data-role="meeting-agent-mute"
       data-mute-state={mute_button_data_state(@mute_target, @muted_by_host?)}
-      class="btn btn-ghost btn-square btn-xs size-6 min-h-0 rounded-full p-0 text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11 disabled:opacity-100"
+      class="btn btn-ghost btn-square btn-xs size-6 min-h-0 rounded-full p-0 text-subtle hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11 disabled:opacity-100"
     >
       <span
         :if={not is_nil(@mute_target)}
@@ -1360,7 +1377,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       </span>
       <span
         :if={is_nil(@mute_target) and !@muted_by_host?}
-        class="hero-microphone size-3.5 text-base-content/60"
+        class="hero-microphone size-3.5 text-subtle"
         aria-hidden="true"
       >
       </span>
@@ -1460,8 +1477,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   # `text-warning` for OFF, which on this screen means "a human is being
   # asked for something". Being muted asks nothing of anyone.
   defp glyph_tone(:off), do: "text-error"
-  defp glyph_tone(:unavailable), do: "text-base-content/25"
-  defp glyph_tone(_state), do: "text-base-content/60"
+  defp glyph_tone(:unavailable), do: "text-subtle"
+  defp glyph_tone(_state), do: "text-subtle"
 
   # `hero-microphone-slash` resolves and paints, as of FE-19
   # (`01a07486-7985-7001-87ce-277681791f52`), against the vendored

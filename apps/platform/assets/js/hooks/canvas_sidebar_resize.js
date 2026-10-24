@@ -69,7 +69,7 @@ const DESKTOP_QUERY = "(min-width: 1024px)";
 
 // Pure clamp — exported so the vitest suite can exercise the bounds math
 // without spinning up a full mock DOM. Same discipline as
-// `message_editor.js` exporting `shortenedOrRemoved`.
+// `message_editor.js` exporting `removesMost`.
 export function clampWidth(startWidth, delta, innerWidth) {
   const max = Math.floor(innerWidth * 0.5);
   const candidate = startWidth + delta;

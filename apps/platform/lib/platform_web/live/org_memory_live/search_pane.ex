@@ -62,7 +62,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
       <%!-- Header --%>
       <div class="border-b border-edge px-6 py-3">
         <h1 class="text-lg font-bold">Search</h1>
-        <p class="text-xs text-base-content/40">
+        <p class="text-xs text-subtle">
           Hybrid search across pages, journal entries, and messages
         </p>
       </div>
@@ -74,7 +74,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
         class="flex flex-wrap items-end gap-3 border-b border-edge px-6 py-4"
       >
         <div class="min-w-48 flex-1">
-          <label class="mb-1 block text-xs text-base-content/50">Query</label>
+          <label class="mb-1 block text-xs font-medium text-base-content">Query</label>
           <input
             type="text"
             name="query"
@@ -85,13 +85,13 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
           />
         </div>
         <div>
-          <label class="mb-1 block text-xs text-base-content/50">Corpus</label>
+          <label class="mb-1 block text-xs font-medium text-base-content">Corpus</label>
           <select name="corpus" class="select select-bordered select-sm">
             <option :for={c <- @corpora} value={c} selected={@corpus == c}>{c}</option>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs text-base-content/50">Namespace</label>
+          <label class="mb-1 block text-xs font-medium text-base-content">Namespace</label>
           <select name="namespace" class="select select-bordered select-sm">
             <option value="all" selected={@namespace == "all"}>all</option>
             <option :for={ns <- @namespaces} value={ns} selected={@namespace == ns}>
@@ -115,8 +115,8 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
         <%= cond do %>
           <% not @performed -> %>
             <div class="flex flex-col items-center justify-center py-16">
-              <span class="hero-magnifying-glass mb-3 size-12 text-base-content/20 block"></span>
-              <p class="text-sm text-base-content/40">
+              <span class="hero-magnifying-glass mb-3 size-12 text-subtle block"></span>
+              <p class="text-sm text-subtle">
                 Type a query to search the org's memory.
               </p>
             </div>
@@ -133,11 +133,11 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
             </ul>
           <% @results == [] -> %>
             <div class="flex flex-col items-center justify-center py-16">
-              <span class="hero-inbox mb-3 size-12 text-base-content/20 block"></span>
-              <p class="text-sm text-base-content/40">No results.</p>
+              <span class="hero-inbox mb-3 size-12 text-subtle block"></span>
+              <p class="text-sm text-subtle">No results.</p>
             </div>
           <% true -> %>
-            <p :if={@truncated} class="mb-3 text-xs text-base-content/40">
+            <p :if={@truncated} class="mb-3 text-xs text-subtle">
               Some channels hit their result cap — a higher limit may surface more hits.
             </p>
             <ul class="space-y-3">
@@ -270,18 +270,19 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   attr(:channel, :string, required: true)
   attr(:down, :boolean, required: true)
 
-  # Live-chip text is `text-base-content/70`, and the tier was CHOSEN BY
+  # Live-chip text is body `text-base-content` (task 01a15907 stage 3; it
+  # shipped at 70% strength, below). The 70% tier was CHOSEN BY
   # SAMPLING, not derived from tokens. Measured with Chrome's own rasterised
   # pixels on the dev server (task 01a0941e stage 4), on the base-200 ground:
   #
-  #   text-base-content/30  light 2.10:1  dark 2.32:1  <- the per-hit rank
+  #   text-subtle  light 2.10:1  dark 2.32:1  <- the per-hit rank
   #                                                        tier; fails both
   #   text-neutral          light 6.69:1  dark 2.25:1  <- PRESCRIBED, and it
   #                                                        fails dark
-  #   text-base-content/70  light 8.17:1  dark 8.68:1  <- shipped, passes both
+  #   base-content at 70%   light 8.17:1  dark 8.68:1  <- shipped, passes both
   #
   # Alpha tiers are composited over the ground before the ratio is taken;
-  # comparing the un-composited colour reports base-content/70 as 18.8:1.
+  # comparing the un-composited colour reports base-content at 70% as 18.8:1.
   #
   # `--color-neutral` was the prescribed quiet slot on the strength of a
   # token-derived 2.2:1 figure for base-content/30 in LIGHT. That figure is
@@ -315,7 +316,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   defp channel_chip(assigns) do
     ~H"""
     <span
-      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-base-content/70"
+      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-base-content"
       data-role="channel-chip"
       data-channel={@channel}
       data-state="live"
@@ -357,10 +358,10 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
       <span class="block min-w-0 flex-1">
         <.result_meta hit={@hit} />
         <span class="mt-1 block truncate font-sans text-sm font-medium">{@doc.title}</span>
-        <span class="mt-0.5 block text-xs text-base-content/60" data-role="burrow-hit-source">
+        <span class="mt-0.5 block text-xs text-subtle" data-role="burrow-hit-source">
           Burrow Docs<span :if={@doc.verified_at}> · <span class="whitespace-nowrap font-mono">{@doc.verified_at}</span></span>
         </span>
-        <span class="mt-1 line-clamp-3 text-xs text-base-content/60">
+        <span class="mt-1 line-clamp-3 text-xs text-subtle">
           {snippet(ProductDocs.snippet_text(@hit.content, @doc.title))}
         </span>
       </span>
@@ -377,7 +378,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     >
       <.result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
-      <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
+      <p class="mt-1 line-clamp-3 text-xs text-subtle">{snippet(@hit.content)}</p>
     </button>
     """
   end
@@ -391,7 +392,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     >
       <.result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
-      <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
+      <p class="mt-1 line-clamp-3 text-xs text-subtle">{snippet(@hit.content)}</p>
     </button>
     """
   end
@@ -403,7 +404,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
       class="block w-full rounded-lg border border-edge bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
     >
       <.result_meta hit={@hit} />
-      <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
+      <p class="mt-1 line-clamp-3 text-xs text-subtle">{snippet(@hit.content)}</p>
     </a>
     """
   end
@@ -413,7 +414,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     ~H"""
     <div class="w-full rounded-lg border border-edge bg-base-100 p-4">
       <.result_meta hit={@hit} />
-      <p class="mt-1 line-clamp-3 text-xs text-base-content/60">{snippet(@hit.content)}</p>
+      <p class="mt-1 line-clamp-3 text-xs text-subtle">{snippet(@hit.content)}</p>
     </div>
     """
   end
@@ -426,10 +427,10 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
       <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
         {badge_label(@hit)}
       </span>
-      <span class="font-mono text-base-content/40">score {format_score(@hit.score)}</span>
-      <span :if={@hit.semantic_rank} class="text-base-content/30">sem #{@hit.semantic_rank}</span>
-      <span :if={@hit.lexical_rank} class="text-base-content/30">lex #{@hit.lexical_rank}</span>
-      <span class="ml-auto text-base-content/30">{@hit.date_or_inserted_at}</span>
+      <span class="font-mono text-subtle">score {format_score(@hit.score)}</span>
+      <span :if={@hit.semantic_rank} class="text-subtle">sem #{@hit.semantic_rank}</span>
+      <span :if={@hit.lexical_rank} class="text-subtle">lex #{@hit.lexical_rank}</span>
+      <span class="ml-auto text-subtle">{@hit.date_or_inserted_at}</span>
     </div>
     """
   end

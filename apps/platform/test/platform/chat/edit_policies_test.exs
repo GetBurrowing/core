@@ -4,7 +4,7 @@ defmodule Platform.Chat.EditPoliciesTest do
   Policies 1, 3 and 4. Companion to `EditPermissionsTest` (Policies 2 + 3
   on the permission side); this file covers the trust-defining policies
   that affect what agents see (Policy 1, notification scoping), what the
-  user is warned about (Policy 4, removal warning), and how agent
+  user is warned about (Policy 4, the removal guard), and how agent
   corrections render (Policy 3, the `corrects_message_id` flow).
 
   Policy 3 has two distinct surfaces: (a) "agents can't self-edit" — the
@@ -142,47 +142,37 @@ defmodule Platform.Chat.EditPoliciesTest do
     end
   end
 
-  # ── Policy 4: removal warning modal (Section f.4) ───────────────────────
+  # ── Policy 4: the removal guard (Section f.4) ──────────────────────────
+  #
+  # Redesign rung 9 stage 4: the warning is the NATIVE confirm the
+  # MessageEditor hook raises on submit when the edit removes more than half
+  # the text (assets/test/hooks/message_editor.test.js). A declined confirm
+  # never reaches the server, so `save_edit` applies whatever it receives,
+  # and no custom modal exists to render.
 
-  describe "Policy 4 — removal warning modal" do
-    test "save_edit with removes_content=true stashes pending edit and renders the modal",
+  describe "Policy 4 — save_edit applies directly" do
+    test "a large removal applies at once: the content changes, a version is added, no modal",
          %{conn: conn} do
       user = insert_user!()
       space = create_space!()
       participant = add_user_participant!(space.id, user.id, "Alice")
       msg = post_message!(space.id, participant.id, "please contact support@example.com for help")
+      versions_before = Platform.Chat.MessageVersions.count_versions(msg.id)
 
       conn = authenticated_conn(conn, user)
       {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
 
-      # Open the editor
       render_hook(view, "edit_message_clicked", %{"message-id" => msg.id})
+      render_hook(view, "save_edit", %{"message_id" => msg.id, "body" => "help"})
 
-      # Drive save_edit with removes_content="true" — simulating the JS hook
-      # having detected a substring removal.
-      html =
-        view
-        |> render_hook("save_edit", %{
-          "message_id" => msg.id,
-          "body" => "please contact for help",
-          "removes_content" => "true"
-        })
-
-      assert html =~ ~s(id="edit-removal-warning"),
-             "removal-warning modal should be in the DOM when removes_content=true"
-
-      assert html =~ "Edit removes text.",
-             "removal-warning modal title copy missing"
-
-      # The original content should still be in the DB — no PATCH fired yet
-      reloaded = Repo.get(Platform.Chat.Message, msg.id)
-
-      assert reloaded.content == "please contact support@example.com for help",
-             "DB content must not have changed before the user confirms the modal"
+      assert Repo.get(Platform.Chat.Message, msg.id).content == "help"
+      assert Platform.Chat.MessageVersions.count_versions(msg.id) == versions_before + 1
+      refute has_element?(view, "#edit-removal-warning")
+      # The editor closed: the edit was applied, not parked.
+      refute has_element?(view, "#msg-editor-#{msg.id}")
     end
 
-    test "save_edit with removes_content=false fires the edit immediately — no modal rendered",
-         %{conn: conn} do
+    test "an additive edit applies at once too", %{conn: conn} do
       user = insert_user!()
       space = create_space!()
       participant = add_user_participant!(space.id, user.id, "Alice")
@@ -193,49 +183,13 @@ defmodule Platform.Chat.EditPoliciesTest do
 
       render_hook(view, "edit_message_clicked", %{"message-id" => msg.id})
 
-      html =
-        view
-        |> render_hook("save_edit", %{
-          "message_id" => msg.id,
-          "body" => "original content plus additions",
-          "removes_content" => "false"
-        })
-
-      refute html =~ ~s(id="edit-removal-warning"),
-             "removal-warning modal must NOT render when removes_content=false"
-
-      reloaded = Repo.get(Platform.Chat.Message, msg.id)
-
-      assert reloaded.content == "original content plus additions",
-             "additive edit should commit immediately"
-    end
-
-    test "confirm_save_edit on a stashed pending edit applies it and closes the modal",
-         %{conn: conn} do
-      user = insert_user!()
-      space = create_space!()
-      participant = add_user_participant!(space.id, user.id, "Alice")
-      msg = post_message!(space.id, participant.id, "leaked secret token here")
-
-      conn = authenticated_conn(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
-
-      render_hook(view, "edit_message_clicked", %{"message-id" => msg.id})
-
       render_hook(view, "save_edit", %{
         "message_id" => msg.id,
-        "body" => "here",
-        "removes_content" => "true"
+        "body" => "original content plus additions"
       })
 
-      # User clicks Continue / Edit anyway — the modal's confirm path
-      html = render_hook(view, "confirm_save_edit", %{})
-
-      refute html =~ ~s(id="edit-removal-warning"),
-             "modal should be gone after confirm_save_edit"
-
-      reloaded = Repo.get(Platform.Chat.Message, msg.id)
-      assert reloaded.content == "here", "DB content should now reflect the confirmed edit"
+      assert Repo.get(Platform.Chat.Message, msg.id).content == "original content plus additions"
+      refute has_element?(view, "#edit-removal-warning")
     end
   end
 

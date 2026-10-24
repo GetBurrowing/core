@@ -75,7 +75,7 @@ defmodule PlatformWeb.TasksLive do
   @impl true
   def mount(_params, session, socket) do
     if connected?(socket) do
-      Tasks.subscribe_board()
+      # Board topic: ShellLive's on_mount subscribed this pid (01a166be).
       # Pin-to-Chat stage 4 (task 019f62a1): the global space-lifecycle topic
       # carries the pin add/remove broadcasts; PinHooks reacts to them.
       ChatPubSub.subscribe_spaces()
@@ -144,7 +144,7 @@ defmodule PlatformWeb.TasksLive do
      |> LifecycleHooks.refresh_containers()
      |> BoardHooks.attach()
      |> PlatformWeb.Extensions.attach_live_hooks()
-     |> BoardHooks.refresh_board()}
+     |> BoardHooks.defer_board()}
   end
 
   @impl true

@@ -26,6 +26,24 @@
 //     mount-time `persistFromDom`) as a belt-and-braces fallback for any
 //     state-change path that doesn't go through the two handlers above.
 //
+// Task 01a161fd stage 2: the server now remembers the project per USER in
+// `users.preferences["tasks_project"]`. The restore push is skipped when the
+// URL names a project (`?project=`) or when the server applied a stored
+// preference (`data-project-source="pref"` on this wrapper), so a device's
+// copy never overrides either. The ClientState writes stay: a device with no
+// server preference still restores.
+//
+// Stage 5: the server now rewrites a bare /tasks entry in place to an explicit
+// `?project=`, so every history entry carries its own selection. With nothing
+// remembered it writes `?project=all` and marks the wrapper
+// `data-project-source="default"`: that `project` is the server's default, not
+// a choice, so the device copy is still replayed, through
+// `tasks_restore_device_project`, which the server answers with a REPLACE
+// patch to `?project=<id>` so the entry keeps naming what it shows. Not a
+// client-side patch: the join applies its own replace AFTER hooks mount, and
+// would overwrite it.
+// parallel-ui: tasks.last_project_client_state
+//
 // Task 019f3e9a stage 3: migrated off ad-hoc direct-store calls onto
 // `Suite.ClientState`. The legacy un-namespaced key
 // `"suite:tasks-last-project-id"` is read once, ported into the store,
@@ -37,6 +55,19 @@ const NAMESPACE = "tasks_ui";
 const KEY = "last_project_id";
 const LEGACY_KEY = "suite:tasks-last-project-id";
 const ALL_PROJECTS_SENTINEL = "__all__";
+
+// True when the server's choice must win over this device's stored copy.
+function serverOwnsSelection(el) {
+  const source = el?.dataset?.projectSource;
+  if (source === "pref") return true;
+  if (source === "default") return false;
+  try {
+    const search = globalThis.window?.location?.search || "";
+    return new URLSearchParams(search).has("project");
+  } catch (_e) {
+    return false;
+  }
+}
 
 function readStored() {
   let stored = ClientState.get(NAMESPACE, KEY, null);
@@ -62,6 +93,12 @@ const LastProject = {
       ClientState.set(NAMESPACE, KEY, value);
     });
 
+    if (serverOwnsSelection(this.el)) {
+      // The URL or the per-user preference decided; record it, push nothing.
+      this.persistFromDom();
+      return;
+    }
+
     const stored = readStored();
     if (stored == null) {
       // First visit — record current state without pushing anything.
@@ -72,6 +109,15 @@ const LastProject = {
     const current = this.el.dataset.selectedProjectId || ALL_PROJECTS_SENTINEL;
     if (stored === current) {
       // Already in the desired state; nothing to do.
+      return;
+    }
+
+    if (this.el.dataset.projectSource === "default") {
+      // `?project=all` is already the screen; the server names the device's
+      // project in place of it and selects it through handle_params.
+      if (stored !== ALL_PROJECTS_SENTINEL) {
+        this.pushEvent("tasks_restore_device_project", { id: stored });
+      }
       return;
     }
 
@@ -95,5 +141,5 @@ const LastProject = {
   },
 };
 
-export { ALL_PROJECTS_SENTINEL };
+export { ALL_PROJECTS_SENTINEL, serverOwnsSelection };
 export default LastProject;

@@ -874,7 +874,6 @@ defmodule PlatformWeb.Router do
       live("/access/:type/:id", AccessLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
-      live("/activity", ActivityLive, :index)
       live("/inbox", InboxLive, :index)
       # The day's briefing, opened from its Inbox row (task 01a15ee1 stage 4).
       live("/inbox/briefing/:date", InboxLive, :briefing)
@@ -903,6 +902,10 @@ defmodule PlatformWeb.Router do
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)
+      # Task 01a1557a-807f stage 1: the viewer's own account (profile, theme,
+      # links to Usage / Admin / Prompts, sign out). Ungated in ModuleGate;
+      # each row checks its own destination.
+      live("/settings", SettingsLive, :index)
       # Prompts is a module-admin view. It retains its stable URL and rail
       # destination, but belongs to this module-gated session instead of the
       # install-admin session.

@@ -50,7 +50,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
       s = socket()
       assert registrations(alpha) == 0
 
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
       s = SpaceTopics.hold(s, alpha, :chat_active)
 
       assert registrations(alpha) == 1
@@ -62,9 +62,9 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
     test "a repeated hold by the same owner is idempotent", %{alpha: alpha, beta: beta} do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
-      s = SpaceTopics.hold(s, alpha, :roster)
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
 
       assert registrations(alpha) == 1
 
@@ -86,9 +86,9 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
       # Positive control in the same body: the correctly spelled owner works,
       # so the raise above is about the atom and not about the arguments.
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
       assert registrations(alpha) == 1
-      assert SpaceTopics.held_by?(s, alpha, :roster)
+      assert SpaceTopics.held_by?(s, alpha, :chat_rail)
     end
   end
 
@@ -96,14 +96,14 @@ defmodule PlatformWeb.SpaceTopicsTest do
     test "release by the first of two owners keeps the registration; the second drops it",
          %{alpha: alpha, beta: beta} do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
       s = SpaceTopics.hold(s, alpha, :chat_active)
       # Held throughout as the positive control for every count below.
       s = SpaceTopics.hold(s, beta, :tasks_exec)
 
       assert registrations(alpha) == 1
 
-      s = SpaceTopics.release(s, alpha, :roster)
+      s = SpaceTopics.release(s, alpha, :chat_rail)
       assert registrations(alpha) == 1
       assert registrations(beta) == 1
 
@@ -118,21 +118,21 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
     test "release by a never-holder does not unsubscribe", %{alpha: alpha, beta: beta} do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
       s = SpaceTopics.hold(s, beta, :presence)
 
       assert registrations(alpha) == 1
 
       # :chat_active never held alpha. An unguarded decrement would unsubscribe
-      # here and silently kill delivery for :roster.
+      # here and silently kill delivery for :chat_rail.
       s = SpaceTopics.release(s, alpha, :chat_active)
 
       assert registrations(alpha) == 1
-      assert SpaceTopics.held_by?(s, alpha, :roster)
+      assert SpaceTopics.held_by?(s, alpha, :chat_rail)
 
       # And the release really is a no-op rather than a swallowed error: the
       # genuine holder can still release it to 0, with beta as the control.
-      s = SpaceTopics.release(s, alpha, :roster)
+      s = SpaceTopics.release(s, alpha, :chat_rail)
       assert registrations(alpha) == 0
       assert registrations(beta) == 1
 
@@ -150,7 +150,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
     test "release for an unheld space does not destroy a registration taken outside the module",
          %{alpha: alpha, beta: beta} do
       s = socket()
-      s = SpaceTopics.hold(s, beta, :roster)
+      s = SpaceTopics.hold(s, beta, :chat_rail)
 
       # A not-yet-adopted surface subscribes alpha raw, exactly as shell_live
       # and tasks_live still do on main.
@@ -178,9 +178,9 @@ defmodule PlatformWeb.SpaceTopicsTest do
       gamma: gamma
     } do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
 
-      s = SpaceTopics.release(s, gamma, :roster)
+      s = SpaceTopics.release(s, gamma, :chat_rail)
 
       assert registrations(gamma) == 0
       # Positive control: alpha is held in the same body, so the 0 above is
@@ -201,7 +201,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
       s = SpaceTopics.hold(s, beta, :presence)
       s = SpaceTopics.hold(s, beta, :chat_active)
       # gamma: :presence never held it -> must survive untouched.
-      s = SpaceTopics.hold(s, gamma, :roster)
+      s = SpaceTopics.hold(s, gamma, :chat_rail)
 
       assert registrations(alpha) == 1
       assert registrations(beta) == 1
@@ -216,7 +216,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
       refute SpaceTopics.held_by?(s, beta, :presence)
       assert SpaceTopics.held_by?(s, beta, :chat_active)
-      assert SpaceTopics.held_by?(s, gamma, :roster)
+      assert SpaceTopics.held_by?(s, gamma, :chat_rail)
 
       _ = s
     end
@@ -226,7 +226,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
       beta: beta
     } do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
       s = SpaceTopics.hold(s, beta, :chat_active)
 
       s = SpaceTopics.release_all(s, :tasks_exec)
@@ -236,7 +236,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
       # And the same call really can reach 0 when the owner does hold, so the
       # unchanged counts above are not vacuous.
-      s = SpaceTopics.release_all(s, :roster)
+      s = SpaceTopics.release_all(s, :chat_rail)
       assert registrations(alpha) == 0
       assert registrations(beta) == 1
 
@@ -247,19 +247,19 @@ defmodule PlatformWeb.SpaceTopicsTest do
   describe "ensure_holders/1" do
     test "is idempotent and does not discard live holders", %{alpha: alpha, beta: beta} do
       s = socket()
-      s = SpaceTopics.hold(s, alpha, :roster)
+      s = SpaceTopics.hold(s, alpha, :chat_rail)
 
       # ShellLive's on_mount seeds, then the view's own mount/3 calls it again.
       s = SpaceTopics.ensure_holders(s)
       s = SpaceTopics.ensure_holders(s)
 
-      assert SpaceTopics.held_by?(s, alpha, :roster)
+      assert SpaceTopics.held_by?(s, alpha, :chat_rail)
       assert registrations(alpha) == 1
       assert registrations(beta) == 0
 
       # If re-seeding had wiped the map, this release would look like a
       # never-holder no-op and alpha would stay at 1.
-      s = SpaceTopics.release(s, alpha, :roster)
+      s = SpaceTopics.release(s, alpha, :chat_rail)
       assert registrations(alpha) == 0
 
       _ = s
@@ -273,7 +273,6 @@ defmodule PlatformWeb.SpaceTopicsTest do
 
   test "owners/0 is the closed set the guards enforce" do
     assert SpaceTopics.owners() == [
-             :roster,
              :presence,
              :chat_rail,
              :chat_active,
@@ -312,7 +311,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
       s = socket()
       s = SpaceTopics.hold(s, alpha, :presence)
       s = SpaceTopics.hold(s, alpha, :meeting)
-      s = SpaceTopics.hold(s, beta, :roster)
+      s = SpaceTopics.hold(s, beta, :chat_rail)
 
       s = SpaceTopics.release(s, alpha, :meeting)
 
@@ -347,7 +346,7 @@ defmodule PlatformWeb.SpaceTopicsTest do
          %{alpha: alpha, beta: beta} do
       s = socket()
       s = SpaceTopics.hold(s, alpha, :presence)
-      s = SpaceTopics.hold(s, beta, :roster)
+      s = SpaceTopics.hold(s, beta, :chat_rail)
 
       # :meeting never held alpha. An unguarded decrement would compute an
       # empty remainder and unsubscribe, silently killing :presence delivery.

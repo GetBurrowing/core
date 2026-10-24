@@ -12,10 +12,11 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     * `"reply_context"` — one line from the agent, already normalised and
       mention-escaped at write time.
 
-  When a message carries either, its header shows a "Context" button. When
-  it carries neither, the hover row and the actions sheet offer "Summarise
-  what led here", which runs `Platform.Chat.ContextSummary.summarize/3`
-  (stage 1) for THIS viewer.
+  The panel opens from the actions sheet's 'What this is answering' row (the
+  header "Context" button and the hover row were deleted in redesign rung
+  9). When a message carries neither annotation, opening it runs
+  `Platform.Chat.ContextSummary.summarize/3` (stage 1) for THIS viewer, and
+  'Retry summary' runs it again.
 
   ## Assigns owned
 
@@ -77,6 +78,8 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
 
   @type state :: %{
           message_id: binary(),
+          agent_name: String.t(),
+          agent_slot: String.t(),
           agent_context: String.t() | nil,
           reply_to: reply_to(),
           summary: nil | :loading | {:ok, map()} | {:error, term()},
@@ -91,16 +94,6 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
     |> assign(:message_context_mobile?, false)
     |> attach_hook(:message_context_events, :handle_event, &handle_event/3)
     |> attach_hook(:message_context_info, :handle_info, &handle_info/2)
-  end
-
-  @doc """
-  True when an agent message carries something the Context panel can show
-  without generating it: a `reply_context` line or a `reply_to_message_id`.
-  Read by the message header to decide whether the "Context" button renders.
-  """
-  @spec has_context?(map()) :: boolean()
-  def has_context?(msg) do
-    agent_context(msg) != nil or reply_to_id(msg) != nil
   end
 
   defp agent_context(msg) do
@@ -203,6 +196,11 @@ defmodule PlatformWeb.ChatLive.MessageContextHooks do
 
       state = %{
         message_id: msg.id,
+        agent_name: PresenceHooks.sender_name(socket.assigns[:participants_map] || %{}, msg),
+        agent_slot:
+          Platform.Agents.ColorPalette.slot_for(
+            Map.get(socket.assigns[:agent_slots_map] || %{}, msg.participant_id)
+          ),
         agent_context: agent_context,
         reply_to: reply_to,
         summary: nil,

@@ -54,7 +54,7 @@ defmodule PlatformWeb.Components.ThemePicker do
     assigns = assign(assigns, :pref, Accounts.theme_preference(assigns.user))
 
     ~H"""
-    <div id="theme-picker" class="relative">
+    <div id="theme-picker" class="relative max-lg:hidden">
       <%!-- While the popover is open the trigger pushes nothing: the
             popover's click-away closes it, and a toggle here would reopen it
             in the same click. Below lg the sheet's backdrop covers the
@@ -63,7 +63,7 @@ defmodule PlatformWeb.Components.ThemePicker do
         id="theme-picker-trigger"
         type="button"
         phx-click={!@open && "toggle_theme_picker"}
-        class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content transition-colors"
+        class="rounded-lg p-1 text-subtle hover:bg-base-300 hover:text-base-content transition-colors"
         aria-label="Theme"
         title="Theme"
         aria-haspopup="dialog"
@@ -129,7 +129,7 @@ defmodule PlatformWeb.Components.ThemePicker do
     ~H"""
     <div id={@id} phx-hook="ThemePicker" phx-update="ignore" class="theme-picker flex flex-col gap-4">
       <div class="flex flex-col gap-1.5">
-        <p id={"#{@id}-mode-label"} class="text-xs font-medium text-base-content/70">Mode</p>
+        <p id={"#{@id}-mode-label"} class="text-xs font-medium text-base-content">Mode</p>
         <div
           role="radiogroup"
           aria-labelledby={"#{@id}-mode-label"}
@@ -144,7 +144,7 @@ defmodule PlatformWeb.Components.ThemePicker do
             data-value={mode}
             aria-checked={to_string(mode == @pref["mode"])}
             tabindex={if mode == @pref["mode"], do: "0", else: "-1"}
-            class="rounded-field px-2 py-1 text-sm text-base-content/70 hover:text-base-content aria-checked:bg-base-100 aria-checked:text-base-content aria-checked:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-field px-2 py-1 text-sm text-base-content hover:text-base-content aria-checked:bg-base-100 aria-checked:text-base-content aria-checked:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {Map.fetch!(@mode_labels, mode)}
           </button>
@@ -152,7 +152,7 @@ defmodule PlatformWeb.Components.ThemePicker do
       </div>
 
       <div class="flex flex-col gap-1.5">
-        <p id={"#{@id}-preset-label"} class="text-xs font-medium text-base-content/70">Theme</p>
+        <p id={"#{@id}-preset-label"} class="text-xs font-medium text-base-content">Theme</p>
         <div
           role="radiogroup"
           aria-labelledby={"#{@id}-preset-label"}

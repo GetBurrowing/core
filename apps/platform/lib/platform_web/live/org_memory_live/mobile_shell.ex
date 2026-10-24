@@ -124,7 +124,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       >
         <button
           phx-click="open_tree_drawer"
-          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-300"
+          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content transition-colors hover:bg-base-300"
           aria-label="Open namespace tree"
           data-role="mobile-menu-button"
         >
@@ -133,7 +133,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <button
           :if={@view_mode == :pages}
           phx-click="show_create"
-          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/70 transition-colors hover:bg-base-300"
+          class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content transition-colors hover:bg-base-300"
           aria-label="New page"
           data-role="mobile-app-bar-action"
         >
@@ -188,9 +188,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
           :for={{seg, idx} <- Enum.with_index(segments)}
           phx-click="open_tree_drawer"
           data-chip-segment={seg}
-          class="flex min-h-11 shrink-0 items-center gap-1 whitespace-nowrap px-1.5 text-base-content/60 transition-colors hover:text-base-content"
+          class="flex min-h-11 shrink-0 items-center gap-1 whitespace-nowrap px-1.5 text-subtle transition-colors hover:text-base-content"
         >
-          <span :if={idx > 0} class="hero-chevron-right size-3 shrink-0 text-base-content/30"></span>
+          <span :if={idx > 0} class="hero-chevron-right size-3 shrink-0 text-subtle"></span>
           <span
             class={idx == length(segments) - 1 && "text-[var(--color-interactive)]"}
             data-chip-last={idx == length(segments) - 1 && "true"}
@@ -334,7 +334,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             </h1>
             <button
               phx-click="start_edit"
-              class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-300 hover:text-primary"
+              class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-primary"
               aria-label="Edit page"
             >
               <.icon name="hero-pencil-square" class="size-5" />
@@ -343,7 +343,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               <button
                 phx-click="confirm_delete"
                 phx-value-key={@page.file_key}
-                class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-base-content/60 transition-colors hover:bg-base-300 hover:text-error"
+                class="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-subtle transition-colors hover:bg-base-300 hover:text-error"
                 aria-label="Delete page"
               >
                 <.icon name="hero-trash" class="size-5" />
@@ -353,7 +353,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                 class="absolute right-0 top-full z-50 mt-1 w-60 rounded-lg border border-edge bg-base-100 p-3 shadow-lg"
               >
                 <p class="mb-1 text-sm font-medium">Delete {@page.file_key}?</p>
-                <p class="mb-3 text-xs text-base-content/50">This action cannot be undone.</p>
+                <p class="mb-3 text-xs text-subtle">This action cannot be undone.</p>
                 <div class="flex justify-end gap-2">
                   <button phx-click="cancel_delete" class="btn btn-ghost btn-sm min-h-11">
                     Cancel
@@ -385,9 +385,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <% true -> %>
         <div class="flex flex-1 items-center justify-center px-6 py-16">
           <div class="text-center">
-            <span class="hero-document-text mx-auto mb-3 block size-14 text-base-content/20"></span>
-            <h3 class="text-base font-medium text-base-content/50">Org Memory</h3>
-            <p class="mt-1 text-sm text-base-content/40">
+            <span class="hero-document-text mx-auto mb-3 block size-14 text-subtle"></span>
+            <h3 class="text-base font-medium text-base-content">Org memory</h3>
+            <p class="mt-1 text-sm text-subtle">
               Tap the menu to open the namespace tree and pick a page.
             </p>
           </div>
@@ -455,21 +455,21 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   defp mobile_details(assigns) do
     ~H"""
     <details class="group border-t border-edge" data-role="mobile-details">
-      <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-base-content/70 marker:content-none [&::-webkit-details-marker]:hidden">
+      <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-sm font-medium text-base-content marker:content-none [&::-webkit-details-marker]:hidden">
         <.icon
           name="hero-chevron-right"
-          class="size-4 text-base-content/40 transition-transform group-open:rotate-90"
+          class="size-4 text-subtle transition-transform group-open:rotate-90"
         /> Details
       </summary>
 
       <div class="space-y-4 px-4 pb-4">
         <%!-- Backlinks --%>
         <div data-role="mobile-backlinks">
-          <h3 class="mb-1 text-xs font-semibold uppercase tracking-wider text-base-content/40">
+          <h3 class="mb-1 text-xs font-semibold uppercase tracking-wider text-base-content">
             Backlinks
           </h3>
           <%= if @backlinks == [] do %>
-            <p class="text-xs text-base-content/40">No backlinks yet</p>
+            <p class="text-xs text-subtle">No backlinks yet</p>
           <% else %>
             <ul class="flex flex-col">
               <li :for={source <- @backlinks}>
@@ -480,7 +480,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                   title={source.file_key}
                   class="flex min-h-11 w-full items-center gap-2 rounded-lg px-2 text-left text-xs transition-colors hover:bg-base-300/60"
                 >
-                  <span class={[file_icon(source.file_key), "shrink-0 text-base-content/40"]}></span>
+                  <span class={[file_icon(source.file_key), "shrink-0 text-subtle"]}></span>
                   <span class="min-w-0 flex-1 truncate font-mono">{source.file_key}</span>
                 </button>
               </li>
@@ -492,16 +492,16 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <dl class="flex flex-col gap-1.5 text-xs" data-role="mobile-page-meta">
           <%= if @doc do %>
             <div class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/60">Source</dt>
+              <dt class="text-subtle">Source</dt>
               <dd>Product docs</dd>
             </div>
             <div :if={@doc.verified_at} class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/60">Verified at</dt>
+              <dt class="text-subtle">Verified at</dt>
               <dd class="whitespace-nowrap font-mono">{@doc.verified_at}</dd>
             </div>
           <% else %>
             <div class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/40">Version</dt>
+              <dt class="text-subtle">Version</dt>
               <dd class="font-mono">v{@page.version}</dd>
             </div>
           <% end %>
@@ -509,15 +509,15 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             :if={is_nil(@doc) && @page.updated_by && @updated_by_display}
             class="flex items-center justify-between gap-2"
           >
-            <dt class="text-base-content/40">Updated by</dt>
+            <dt class="text-subtle">Updated by</dt>
             <dd class="min-w-0 truncate" title={@updated_by_display}>{@updated_by_display}</dd>
           </div>
           <div :if={@page.inserted_at} class="flex items-center justify-between gap-2">
-            <dt class="text-base-content/40">Created</dt>
+            <dt class="text-subtle">Created</dt>
             <dd class="font-mono">{format_relative(@page.inserted_at)}</dd>
           </div>
           <div :if={@page.updated_at} class="flex items-center justify-between gap-2">
-            <dt class="text-base-content/40">Updated</dt>
+            <dt class="text-subtle">Updated</dt>
             <dd class="font-mono">{format_relative(@page.updated_at)}</dd>
           </div>
         </dl>
@@ -582,9 +582,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <div class="flex-1 px-3 py-3">
         <%= if @groups == [] do %>
           <div class="flex flex-col items-center justify-center py-16 text-center">
-            <span class="hero-book-open mb-3 size-12 text-base-content/20"></span>
-            <h3 class="text-base font-medium text-base-content/50">No journal entries yet</h3>
-            <p class="mt-1 max-w-xs text-sm text-base-content/40">
+            <span class="hero-book-open mb-3 size-12 text-subtle"></span>
+            <h3 class="text-base font-medium text-base-content">No journal entries yet</h3>
+            <p class="mt-1 max-w-xs text-sm text-subtle">
               Notes appended here (or by agents via <code>memory_create</code>)
               show up grouped by day.
             </p>
@@ -595,12 +595,12 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               <div class="mb-2 flex items-center gap-2">
                 <span class={[
                   "text-sm font-semibold",
-                  if(@focus_date == date, do: "text-primary", else: "text-base-content/70")
+                  if(@focus_date == date, do: "text-primary", else: "text-base-content")
                 ]}>
                   {format_journal_date(date)}
                 </span>
                 <div class="flex-1 border-t border-edge"></div>
-                <span class="font-mono text-xs text-base-content/30">
+                <span class="font-mono text-xs text-subtle">
                   {length(entries)} {pluralize(length(entries), "entry", "entries")}
                 </span>
               </div>
@@ -621,7 +621,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                       title="New"
                     >
                     </span>
-                    <span class="ml-auto font-mono text-xs text-base-content/30">
+                    <span class="ml-auto font-mono text-xs text-subtle">
                       {Calendar.strftime(entry.inserted_at, "%H:%M")}
                     </span>
                   </div>
@@ -678,7 +678,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <input type="hidden" name="namespace" value={@namespace} />
         <div class="flex items-center gap-2">
           <div class="relative flex-1">
-            <span class="hero-magnifying-glass pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-base-content/40">
+            <span class="hero-magnifying-glass pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-subtle">
             </span>
             <input
               type="text"
@@ -741,8 +741,8 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
         <%= cond do %>
           <% not @performed -> %>
             <div class="flex flex-col items-center justify-center py-16 text-center">
-              <span class="hero-magnifying-glass mb-3 size-12 text-base-content/20"></span>
-              <p class="text-sm text-base-content/40">Type a query to search the org's memory.</p>
+              <span class="hero-magnifying-glass mb-3 size-12 text-subtle"></span>
+              <p class="text-sm text-subtle">Type a query to search the org's memory.</p>
             </div>
           <% @degraded -> %>
             <%!-- Gating the mobile list too. A desktop-only gate would ship
@@ -757,11 +757,11 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             </ul>
           <% @results == [] -> %>
             <div class="flex flex-col items-center justify-center py-16 text-center">
-              <span class="hero-inbox mb-3 size-12 text-base-content/20"></span>
-              <p class="text-sm text-base-content/40">No results.</p>
+              <span class="hero-inbox mb-3 size-12 text-subtle"></span>
+              <p class="text-sm text-subtle">No results.</p>
             </div>
           <% true -> %>
-            <p :if={@truncated} class="mb-3 text-xs text-base-content/40">
+            <p :if={@truncated} class="mb-3 text-xs text-subtle">
               Some channels hit their result cap — a higher limit may surface more hits.
             </p>
             <ul class="space-y-2">
@@ -791,7 +791,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <ProductDocs.spine />
       <span class="block min-w-0 flex-1">
         <span class="block break-words font-sans text-sm font-medium">{@doc.title}</span>
-        <span class="mt-0.5 flex items-center gap-1.5 text-xs text-base-content/60">
+        <span class="mt-0.5 flex items-center gap-1.5 text-xs text-subtle">
           <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
             {SearchPane.badge_label(@hit)}
           </span>
@@ -799,7 +799,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             Burrow Docs<span :if={@doc.verified_at}> · <span class="whitespace-nowrap font-mono">{@doc.verified_at}</span></span>
           </span>
         </span>
-        <span class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+        <span class="mt-1 line-clamp-3 break-words text-xs text-subtle">
           {snippet(ProductDocs.snippet_text(@hit.content, @doc.title))}
         </span>
       </span>
@@ -816,7 +816,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     >
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
-      <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+      <p class="mt-1 line-clamp-3 break-words text-xs text-subtle">
         {snippet(@hit.content)}
       </p>
     </button>
@@ -832,7 +832,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     >
       <.mobile_result_meta hit={@hit} />
       <p class="mt-1 truncate font-mono text-sm font-medium">{@hit.path}</p>
-      <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+      <p class="mt-1 line-clamp-3 break-words text-xs text-subtle">
         {snippet(@hit.content)}
       </p>
     </button>
@@ -846,7 +846,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       class="block w-full rounded-lg border border-edge bg-base-100 p-3 text-left transition-colors hover:border-primary"
     >
       <.mobile_result_meta hit={@hit} />
-      <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+      <p class="mt-1 line-clamp-3 break-words text-xs text-subtle">
         {snippet(@hit.content)}
       </p>
     </a>
@@ -857,7 +857,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     ~H"""
     <div class="w-full rounded-lg border border-edge bg-base-100 p-3">
       <.mobile_result_meta hit={@hit} />
-      <p class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+      <p class="mt-1 line-clamp-3 break-words text-xs text-subtle">
         {snippet(@hit.content)}
       </p>
     </div>
@@ -872,7 +872,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
       <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
         {SearchPane.badge_label(@hit)}
       </span>
-      <span class="ml-auto font-mono text-base-content/30">{@hit.date_or_inserted_at}</span>
+      <span class="ml-auto font-mono text-subtle">{@hit.date_or_inserted_at}</span>
     </div>
     """
   end

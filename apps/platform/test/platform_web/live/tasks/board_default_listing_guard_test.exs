@@ -208,7 +208,10 @@ defmodule PlatformWeb.Tasks.BoardDefaultListingGuardTest do
       # test's job.
       refute has_element?(view, ~s([data-task-id="#{orphan.id}"]))
       refute has_element?(view, ~s([data-task-id="#{member.id}"]))
-      refute html =~ "Guard orphan parked ticket"
+      # The board region only (task 01a161fd stage 3): the phone list beside
+      # it shows every status by default, so a parked task is a 'Waiting' row
+      # there, which is not a board card.
+      refute view |> element("#tasks-main") |> render() =~ "Guard orphan parked ticket"
     end
 
     test "on the mobile Backlog pill with no query, a stack_pending task is no card there",
@@ -259,7 +262,8 @@ defmodule PlatformWeb.Tasks.BoardDefaultListingGuardTest do
              )
 
       refute has_element?(view, ~s([data-task-id="#{orphan.id}"]))
-      refute html =~ "Guard orphan parked ticket"
+      # The board region only (task 01a161fd stage 3), as above.
+      refute view |> element("#tasks-main") |> render() =~ "Guard orphan parked ticket"
     end
   end
 

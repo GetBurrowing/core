@@ -84,6 +84,10 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
       get_messages_by_ids: Chat.get_messages_by_ids(message_ids, scope: scope) |> ids(),
       search_messages:
         Map.new(space_ids, &{&1, Chat.search_messages(&1, "quarterly", scope: scope) |> ids()}),
+      search_messages_in_spaces:
+        Chat.search_messages_in_spaces(space_ids, "quarterly", scope: scope) |> ids(),
+      last_message_excerpts:
+        Chat.last_message_excerpts(space_ids, scope: scope) |> Map.keys() |> Enum.sort(),
       get_attachment:
         Map.new(w.attachments, &{&1.id, id_of(Chat.get_attachment(&1.id, scope: scope))}),
       list_attachments:
@@ -123,7 +127,13 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
       {k, ids} when k in [:channels, :conversations] ->
         {k, Enum.filter(ids, inside?)}
 
-      {k, ids} when k in [:get_messages_by_ids, :list_attachments_for_messages] ->
+      {k, ids}
+      when k in [
+             :get_messages_by_ids,
+             :list_attachments_for_messages,
+             :search_messages_in_spaces,
+             :last_message_excerpts
+           ] ->
         {k, Enum.filter(ids, keep_key?)}
 
       {:visible_space_id?, map} ->
@@ -173,6 +183,9 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
       assert via_scope.channels == [w.a.id]
       assert via_scope.visible_space_id?[w.b.id] == false
       assert via_scope.list_messages[w.b.id] == []
+      refute w.b.id in via_scope.last_message_excerpts
+      assert w.a.id in via_scope.last_message_excerpts
+      assert via_scope.search_messages_in_spaces == [Enum.at(w.messages, 0).id]
       assert via_scope.get_canvas[Enum.at(w.canvases, 1).id] == nil
     end
 

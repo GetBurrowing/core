@@ -92,7 +92,7 @@ defmodule PlatformWeb.SocialClipsTab do
   @impl true
   def tab_badge(assigns) do
     ~H"""
-    <span class="ml-1 text-base-content/70" data-role="social-clips-count">
+    <span class="ml-1 text-base-content" data-role="social-clips-count">
       {if @clips_count > 0, do: @clips_count}
     </span>
     """

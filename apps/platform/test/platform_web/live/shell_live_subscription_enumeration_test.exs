@@ -297,12 +297,10 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
     forward
   end
 
-  # Settle the LV: `render_async/1` waits for both `assign_async` loaders to
-  # resolve. Because `async_load_roster/3` and `async_load_presence/2` each
-  # `send/2` their resolution message BEFORE returning `{:ok, _}`
-  # (`shell_live.ex:971`, `:994`), and both messages travel the same mailbox in
-  # order, a completed `render_async` implies the LV has already processed
-  # `{:roster_resolved, _}` and `{:presence_spaces_resolved, _}`. The trailing
+  # Settle the LV: `render_async/1` waits for the shell's `start_async` Task.
+  # `resolve_chat_space_ids/2` `send/2`s its resolution message BEFORE
+  # returning, so a completed `render_async` implies the LV has already
+  # processed `{:presence_spaces_resolved, _}`. The trailing
   # `render/1` is a second round-trip for the handlers those messages queued.
   defp settle(view) do
     _ = render_async(view)
@@ -338,17 +336,14 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
 
       pid = view.pid
 
-      # ANTI-VACUITY (the #791 fence): if the roster came back empty the
-      # roster branch would never fire and the positive count below would be
-      # low for a reason that has nothing to do with subscription hygiene.
-      roster_agent_ids =
-        :sys.get_state(pid).socket.assigns.roster_items.result
-        |> Kernel.||([])
-        |> Enum.map(fn {entry, _status} -> entry.agent_id end)
-
-      assert agent.id in roster_agent_ids,
-             "anti-vacuity failed: the seeded agent is not in the roster, so the " <>
-               "roster subscribe branch never ran and the census below is meaningless"
+      # ANTI-VACUITY: the overlap space is in the presence branch's INPUT, so
+      # the positive count below is that branch's. The roster branch that also
+      # reached it (and that this case was written to catch doubling it) was
+      # deleted with the agents meter in task 01a1557a-8f80 stage 3; the agent
+      # stays on the fixture so the space is still the shape it used to pick.
+      assert overlap.id in Chat.list_member_space_ids(viewer.id),
+             "anti-vacuity failed: the overlap space is not in the shell's subscribe " <>
+               "set, so the presence branch never reached it and the census is meaningless"
 
       # ── METHOD 1: forward map, exact counts ─────────────────────────────
       overlap_count = registration_count(pid, overlap.id)
@@ -376,10 +371,13 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
       # lifecycle assertions live in
       # `shell_live_space_topics_test.exs`; this line stays as the census
       # record that the headline 2 is gone.
+      # Since task 01a1557a-8f80 stage 3 the roster holder is gone outright, so
+      # the 1 is the presence branch alone.
       assert overlap_count == 1,
              "MEASURED HEADLINE moved: expected 1 registration for one pid on the " <>
-               "overlap space (roster + presence sharing a SpaceTopics hold since stage " <>
-               "2; it was 2 before), observed #{overlap_count}"
+               "overlap space (presence alone since the roster branch was deleted; " <>
+               "roster + presence shared one hold from stage 2; it was 2 before), " <>
+               "observed #{overlap_count}"
 
       # NEGATIVE: on /tasks, a space the viewer never joined draws no
       # chat:space subscription. This is a claim about SUBSCRIPTION only, not
@@ -485,9 +483,9 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
       # land on top of the collapsed single registration and the guarantee
       # the comment describes does not survive mount. That comment is
       # accurate about ChatLive in isolation and false about the pid.
-      # MOVED BY TASK 01a01a1b STAGE 3: 3 -> 2 -> 1. Four holders now — the
-      # sidebar loop's `:chat_rail`, `handle_params`'s `:chat_active`, the
-      # shell's `:roster` and its `:presence` — and ONE registration, which is
+      # MOVED BY TASK 01a01a1b STAGE 3: 3 -> 2 -> 1. Three holders now — the
+      # sidebar loop's `:chat_rail`, `handle_params`'s `:chat_active` and the
+      # shell's `:presence` — and ONE registration, which is
       # the invariant `PlatformWeb.SpaceTopics` was written to enforce. The
       # `handle_params` comment quoted above claimed exactly this guarantee and
       # was false about the pid; it is now true, and has been rewritten to
@@ -581,7 +579,7 @@ defmodule PlatformWeb.ShellLiveSubscriptionEnumerationTest do
       #
       # STAGE 3 CLOSES IT. `handle_params/3` now releases only its own
       # `:chat_active` hold, so the registration is not destroyed at all: the
-      # `:chat_rail`, `:roster` and `:presence` holders keep it, and the
+      # `:chat_rail` and `:presence` holders keep it, and the
       # conditional re-subscribe that used to paper over the damage is deleted.
       # The number below is unchanged at 1 and now means the opposite thing —
       # not "three were destroyed and one restored" but "the one there was

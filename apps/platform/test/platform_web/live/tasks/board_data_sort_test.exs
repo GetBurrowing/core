@@ -312,7 +312,52 @@ defmodule PlatformWeb.Tasks.BoardDataSortTest do
     end
   end
 
+  # Task 01a161fd stage 1. M1 (Jan 31 23:00) and H1 (Feb 1 01:00) straddle a
+  # month boundary, where term order on `%DateTime{}` (day 31 > day 1) is
+  # wrong; the exact lists below only hold when timestamps compare as
+  # integers.
+  describe "sort_items/3 :newest and :oldest" do
+    test "exact inserted_at-desc list for :newest" do
+      expected = ids([u1(), n1(), c2(), l2(), h1(), m1(), c1(), l1()])
+      assert ids(BoardData.sort_items(seeded(), :newest)) == expected
+    end
+
+    test "exact inserted_at-asc list for :oldest" do
+      expected = ids([l1(), c1(), m1(), h1(), l2(), c2(), n1(), u1()])
+      assert ids(BoardData.sort_items(seeded(), :oldest)) == expected
+    end
+
+    test "ties on inserted_at resolve by id desc for both input orders (a total order)" do
+      a =
+        task(
+          "0a000000-0000-7000-8000-00000000000a",
+          "low",
+          "2026-01-01T00:00:00.000000Z",
+          "2026-03-01T00:00:00.000000Z"
+        )
+
+      b =
+        task(
+          "0a000000-0000-7000-8000-00000000000b",
+          "high",
+          "2026-01-01T00:00:00.000000Z",
+          "2026-03-02T00:00:00.000000Z"
+        )
+
+      for mode <- [:newest, :oldest] do
+        assert ids(BoardData.sort_items([a, b], mode)) == [b.id, a.id]
+        assert ids(BoardData.sort_items([b, a], mode)) == [b.id, a.id]
+      end
+    end
+  end
+
   describe "decode_sort/1" do
+    test "\"newest\" and \"oldest\" select their modes" do
+      assert BoardData.decode_sort("newest") == :newest
+      assert BoardData.decode_sort("oldest") == :oldest
+      assert BoardData.decode_sort("Newest") == :priority
+    end
+
     test "only \"updated\" selects :updated" do
       assert BoardData.decode_sort("updated") == :updated
       assert BoardData.decode_sort("priority") == :priority

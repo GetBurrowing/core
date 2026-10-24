@@ -167,12 +167,12 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
       assert row_text(view, crashed.slug) =~ "Crashed"
       assert has_element?(view, "#agent-row-#{crashed.slug} [data-role=row-action]", "Restart")
 
-      # Stopped: grey text, Start.
+      # Stopped: a status, so body text (task 01a15902 stage 3), and Start.
       assert row_state(html, stopped.slug) == "stopped"
 
       assert has_element?(
                view,
-               "#agent-row-#{stopped.slug} [data-role=row-tag].text-base-content\\/60",
+               "#agent-row-#{stopped.slug} [data-role=row-tag].text-base-content",
                "Stopped"
              )
 

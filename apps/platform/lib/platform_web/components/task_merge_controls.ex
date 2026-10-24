@@ -92,7 +92,7 @@ defmodule PlatformWeb.Components.TaskMergeControls do
            this is going, so a layout that truncates it has dropped the
            most consequential word on the screen. --%>
       <div
-        class="flex items-center gap-1 px-4 pt-2 font-mono text-sm text-base-content/70"
+        class="flex items-center gap-1 px-4 pt-2 font-mono text-sm text-base-content"
         data-role="merge-branch-pair"
       >
         <span class="min-w-0 truncate" data-role="merge-source-ref">{@control.branch}</span>

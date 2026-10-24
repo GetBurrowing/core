@@ -924,14 +924,18 @@ defmodule Platform.ExtensionsTest do
       :chat,
       :tasks,
       :inbox,
-      :activity,
       :agents,
       :skills,
       :files,
+      # The More sheet's Canvases row into the Files browser
+      # (task 01a1557a-b5f9 stage 3).
+      :canvases,
       :context,
       :prompts,
       :experiments,
       :meetings,
+      # The More-sheet-only Changelog (task 01a1557a-807f stage 2, `:sheet`).
+      :changelog,
       :admin
     ]
     # main's lists minus exactly Play's two metric slugs and two surface keys,

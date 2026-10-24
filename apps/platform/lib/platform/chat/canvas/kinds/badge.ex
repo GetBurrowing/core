@@ -52,5 +52,5 @@ defmodule Platform.Chat.Canvas.Kinds.Badge do
   defp tone_class("info"), do: "bg-info/20 text-info"
   defp tone_class("warning"), do: "bg-warning/20 text-warning"
   defp tone_class("critical"), do: "bg-error/20 text-error"
-  defp tone_class(_), do: "bg-base-300 text-base-content/60"
+  defp tone_class(_), do: "bg-base-300 text-subtle"
 end

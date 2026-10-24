@@ -8,7 +8,7 @@
        for the single CTA. No raw hex anywhere on this surface. --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Admin · Orgs
       </h1>
       <span class="badge badge-ghost badge-sm">{length(@orgs)}</span>
@@ -25,16 +25,16 @@
     </div>
   </div>
 
-  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+  <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
     <div class="mx-auto max-w-3xl space-y-4">
-      <div :if={@orgs == []} class="text-sm text-base-content/40">
+      <div :if={@orgs == []} class="text-sm text-subtle">
         No orgs yet.
       </div>
 
       <div :if={@orgs != []} class="overflow-x-auto">
         <table class="table table-sm" data-role="org-list">
           <thead>
-            <tr class="text-base-content/60">
+            <tr class="text-base-content">
               <th>Name</th>
               <th>Slug</th>
               <th>Tier</th>
@@ -70,8 +70,8 @@
                   <span class="min-w-0 truncate">{org.name}</span>
                 </div>
               </td>
-              <td class="font-mono text-xs text-base-content/60">{org.slug}</td>
-              <td class="text-xs text-base-content/60">
+              <td class="font-mono text-xs text-subtle">{org.slug}</td>
+              <td class="text-xs text-subtle">
                 {if root_org?(org), do: "Root", else: "Tenant"}
               </td>
               <td>
@@ -183,7 +183,7 @@
         >
           {msg}
         </p>
-        <p class="mt-1 text-xs text-base-content/60" data-role="org-slug-hint">
+        <p class="mt-1 text-xs text-subtle" data-role="org-slug-hint">
           Lowercase, starts with a letter, then letters, digits, hyphens or underscores
           (<span class="font-mono">^[a-z][a-z0-9_-]*$</span>). Must be unique.
         </p>
@@ -234,7 +234,7 @@
               stroke="currentColor"
               stroke-width="2"
               stroke-linecap="round"
-              class="text-base-content/50"
+              class="text-subtle"
               data-role="hue-notch"
               data-org-slug={org.slug}
               data-hue={org.color_hue}
@@ -271,7 +271,7 @@
                 class="input input-bordered w-28 font-mono"
                 data-role="org-color-hue-input"
               />
-              <span class="text-xs text-base-content/60">degrees, 0–359</span>
+              <span class="text-xs text-subtle">degrees, 0–359</span>
               <button
                 :if={@picked_hue}
                 type="button"
@@ -291,7 +291,7 @@
               {msg}
             </p>
 
-            <p :if={is_nil(@picked_hue)} class="text-xs text-base-content/60">
+            <p :if={is_nil(@picked_hue)} class="text-xs text-subtle">
               Optional. With no colour the org still gets a scope-rail chip — it just
               renders unstyled until a hue is set.
             </p>
@@ -308,7 +308,7 @@
                 <span class="hero-exclamation-triangle size-4 text-warning"></span>
                 Close to a colour already in use
               </p>
-              <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content/70">
+              <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content">
                 {conflict.org.name} is at hue {conflict.org.color_hue},
                 <span class="font-mono">{conflict.distance}°</span>
                 away. You can still create this org.
@@ -335,7 +335,7 @@
            own 12% tint over white, and only the second is the surface the
            text actually sits on. A bare number here is not interpretable. --%>
       <div :if={@preview} class="space-y-2" data-role="org-color-preview">
-        <p class="text-xs font-medium text-base-content/60">Preview</p>
+        <p class="text-xs font-medium text-subtle">Preview</p>
 
         <div class="grid gap-2 sm:grid-cols-2">
           <div
@@ -421,7 +421,7 @@
              The six shipped orgs are NOT solved through this path yet: they
              keep their hand-authored `app.css` tokens until the retrofit in
              task 01a09333-d374. --%>
-        <p class="text-[11px] text-base-content/60" data-role="preview-worst-cell-note">
+        <p class="text-[11px] text-subtle" data-role="preview-worst-cell-note">
           Each theme shows the chip on the chat pane (base-100) and on the scope rail
           (base-200). Each surface gets its own solid tint and its own label, solved
           against that tint with margin for a one-byte rounding difference, and the
@@ -433,7 +433,7 @@
              operator may paste into a bug report. `fill` stays first: it is
              what the ring's hue test reads out of this block. --%>
         <div
-          class="rounded-lg bg-base-200 p-3 font-mono text-[11px] leading-relaxed text-base-content/60"
+          class="rounded-lg bg-base-200 p-3 font-mono text-[11px] leading-relaxed text-subtle"
           data-role="org-color-derived"
         >
           <div>fill {@preview.ramp.fill}</div>
@@ -447,7 +447,7 @@
 
       <%!-- Parentage is derived, not asked for — see the moduledoc. Say so,
            so its absence reads as a decision rather than a missing field. --%>
-      <p class="text-xs text-base-content/60" data-role="org-parent-note">
+      <p class="text-xs text-subtle" data-role="org-parent-note">
         New orgs are created as tenants of the root org. There is exactly one root org and it
         already exists, so there is nothing to choose here.
       </p>

@@ -5,13 +5,17 @@
 // configured modules. Core never imports a module's hook by name.
 import extensionHooks from "@extensions"
 import AppBadge from "./app_badge"
+import AttachSheet from "./attach_sheet"
+import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
+import ChatDock from "./chat_dock"
 import ChatClip from "./chat_clip"
+import ChatViewer from "./chat_viewer"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
@@ -19,7 +23,7 @@ import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
-import DrawerSearchFocus from "./drawer_search_focus"
+import SearchFocus from "./search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import PrototypeFullscreen from "./prototype_fullscreen"
 import ExecutionLogScroll from "./execution_log_scroll"
@@ -33,12 +37,14 @@ import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
 import LastProject from "./last_project"
-import LongpressMenu from "./longpress_menu"
+import TasksMyListRows from "./tasks_my_list_rows"
+import MessageGestures from "./message_gestures"
+import MessageActionsCopy from "./message_actions_copy"
+import MessageActionsPopover from "./message_actions_popover"
 import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingAskFloorVeil from "./meeting_ask_floor_veil"
 import MeetingBar from "./meeting_bar"
-import MessageLift from "./message_lift"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingLobbyPreview from "./meeting_lobby_preview"
@@ -61,29 +67,33 @@ import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
-import RowReorderTouch from "./row_reorder_touch"
+import RowLongPress from "./row_long_press"
+import ChatListSettle from "./chat_list_settle"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
-import SectionReorderTouch from "./section_reorder_touch"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
+import TabPill from "./tab_pill"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
-import UploadButton from "./upload_button"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
 export default {
   // First, so a core hook of the same name wins over a module's.
   ...extensionHooks,
   AppBadge,
+  AttachFailedPreview,
+  AttachSheet,
   ButtonLoading,
   CandidateClock,
   CanvasRoomBridge,
   ChatClip,
+  ChatViewer,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,
+  ChatDock,
   ChatScrollToMessage,
   MessageContextPopover,
   CodeBlock,
@@ -91,7 +101,7 @@ export default {
   CopyToClipboard,
   DoneColumnState,
   DragDropUpload,
-  DrawerSearchFocus,
+  SearchFocus,
   EmbedCanvasScale,
   PrototypeFullscreen,
   ExecutionLogScroll,
@@ -106,8 +116,11 @@ export default {
   InlineThread,
   KanbanDragDrop,
   LastProject,
+  TasksMyListRows,
   LocalTime,
-  LongpressMenu,
+  MessageGestures,
+  MessageActionsCopy,
+  MessageActionsPopover,
   MarkdownEditor,
   MeetingAskFloorVeil,
   MeetingBar,
@@ -128,23 +141,22 @@ export default {
   MeetingWhiteboard,
   MermaidDiagram,
   MessageEditor,
-  MessageLift,
   NativeInstallSwitch,
   PushSubscribe,
   ReactionPicker,
   ReactorPopover,
   ResizableSidebar,
   RouteResume,
-  RowReorderTouch,
+  RowLongPress,
+  ChatListSettle,
   ScrollToBottom,
   SectionReorder,
-  SectionReorderTouch,
   Sheet,
   SheetHandleClock,
   SidebarCollapse,
+  TabPill,
   TasksStatusFilter,
   ThemePicker,
   ToastPause,
-  UploadButton,
   ViewportBreakpoint,
 }

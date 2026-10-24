@@ -62,6 +62,12 @@ defmodule PlatformWeb.InboxLiveTest do
 
   defp row_selector(%Item{id: id}), do: ~s([data-item-id="#{id}"])
 
+  # The filter chips are desktop-only: the phone list (redesign rung 14) has
+  # no chips and lists every kind, so a filter's refutes read the desktop
+  # surface (main -> feat/redesign sync).
+  defp desktop_row_selector(%Item{id: id}),
+    do: ~s([data-role="inbox-surface"] [data-item-id="#{id}"])
+
   # Toggle one row's select checkbox.
   defp tick(lv, %Item{} = item) do
     lv
@@ -161,6 +167,16 @@ defmodule PlatformWeb.InboxLiveTest do
 
       # dom ids follow the stream contract exactly.
       assert has_element?(lv, "#inbox-item-#{review.id}")
+    end
+
+    test "the inbox scroller pads its end past the floating tab bar (task 01a1557a-7a71 stage 5)",
+         %{conn: conn} do
+      # Review case 4: the last row sat 86px under the bar and in the safe band.
+      user = insert_user()
+      _ = emit!(user, kind: "chat_mention", title: "@you in #general", url: "/chat/general")
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert has_element?(lv, ~s([data-role="inbox-surface"].clears-tab-bar))
     end
 
     test "a task_sponsor_assigned item renders in the review section (not dropped)",
@@ -1924,8 +1940,8 @@ defmodule PlatformWeb.InboxLiveTest do
       review = emit!(user, kind: "task_plan_review", source_type: "task", url: "/tasks/x")
 
       {:ok, lv, _html} = live(auth(conn, user), "/inbox")
-      assert has_element?(lv, row_selector(mention))
-      assert has_element?(lv, row_selector(review))
+      assert has_element?(lv, desktop_row_selector(mention))
+      assert has_element?(lv, desktop_row_selector(review))
       assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
 
       lv
@@ -1934,8 +1950,8 @@ defmodule PlatformWeb.InboxLiveTest do
 
       assert_patch(lv, "/inbox?f=briefing")
       assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
-      refute has_element?(lv, row_selector(mention))
-      refute has_element?(lv, row_selector(review))
+      refute has_element?(lv, desktop_row_selector(mention))
+      refute has_element?(lv, desktop_row_selector(review))
 
       assert has_element?(
                lv,
@@ -1944,17 +1960,17 @@ defmodule PlatformWeb.InboxLiveTest do
 
       # Mentions and Tasks map onto their sections; All brings everything back.
       {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=mentions")
-      assert has_element?(lv, row_selector(mention))
-      refute has_element?(lv, row_selector(review))
+      assert has_element?(lv, desktop_row_selector(mention))
+      refute has_element?(lv, desktop_row_selector(review))
       refute has_element?(lv, ~s([data-role="inbox-briefing-row"]))
 
       {:ok, lv, _html} = live(auth(conn, user), "/inbox?f=tasks")
-      assert has_element?(lv, row_selector(review))
-      refute has_element?(lv, row_selector(mention))
+      assert has_element?(lv, desktop_row_selector(review))
+      refute has_element?(lv, desktop_row_selector(mention))
 
       lv |> element(~s([data-role="inbox-filter-chip"][data-filter="all"])) |> render_click()
       assert_patch(lv, "/inbox")
-      assert has_element?(lv, row_selector(mention))
+      assert has_element?(lv, desktop_row_selector(mention))
       assert has_element?(lv, ~s([data-role="inbox-briefing-row"]))
     end
 

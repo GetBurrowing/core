@@ -123,7 +123,7 @@ const STALL_CONFIRM_MS = 5000
 //
 // It has already gone wrong exactly that way once. The host div in
 // `meeting_live.html.heex` carries `text-white`, but `_render` used to
-// write `text-base-content` / `text-base-content/90` on the CHILD
+// write `text-base-content`, at full and at 90% strength, on the CHILD
 // spans, and a colour declared on a child always beats one inherited
 // from a parent — so the host's `text-white` was dead. In the light
 // theme (`default: true` in app.css) `--color-base-content` is

@@ -12,9 +12,10 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
   and 0042 is a duplicated ADR number besides (01a04a5e-c28f), so it was
   ambiguous as well as dangling.
 
-  Verifies the rendered DOM contract: avatar centered on accent-color background
-  (or bg-base-200 fallback), activity dot toggles based on activity_state,
-  role chip falls back to 'agent' when role is missing, hero icons only.
+  Verifies the rendered DOM contract: the tile carries the agent's identity
+  slot (`data-agent-slot`, task 01a1557a rung 3 stage 3) and no inline colour,
+  activity dot toggles based on activity_state, the chip shows `<name> · <role>`
+  with the role falling back to 'agent', hero icons only.
   Visual end-to-end is covered by the task-level e2e_behavior validations.
   """
 
@@ -52,43 +53,54 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
     end
   end
 
-  describe "agent_tile/1 — accent background" do
-    test "falls back to bg-base-200 when accent_color is nil" do
-      assigns = %{a: agent()}
+  # Task 01a1557a rung 3 stage 3: the dead free-form hex `accent_color` path is
+  # gone (no caller ever passed it); the tile reads only its slot.
+  describe "agent_tile/1 — identity slot" do
+    test "carries data-agent-slot for every stored ColorPalette colour" do
+      for id <- Platform.Agents.ColorPalette.ids() do
+        assigns = %{a: agent(), slot: id}
 
-      html =
-        rendered_to_string(~H"""
-        <.agent_tile agent_participant={@a} accent_color={nil} />
-        """)
+        html =
+          rendered_to_string(~H"""
+          <.agent_tile agent_participant={@a} slot={@slot} />
+          """)
 
-      assert html =~ "bg-base-200"
-      # No inline style when no accent.
-      refute html =~ ~r/style="background-color/
+        assert [tile] = html |> Floki.parse_fragment!() |> Floki.find("[data-agent-tile]")
+        assert Floki.attribute(tile, "data-agent-slot") == [id]
+      end
     end
 
-    test "applies the accent_color as an inline background style and drops bg-base-200" do
-      assigns = %{a: agent()}
+    test "nil, blank or unknown colour is the blue slot" do
+      for slot <- [nil, "", "chartreuse"] do
+        assigns = %{a: agent(), slot: slot}
 
-      html =
-        rendered_to_string(~H"""
-        <.agent_tile agent_participant={@a} accent_color="#7c3aed" />
-        """)
+        html =
+          rendered_to_string(~H"""
+          <.agent_tile agent_participant={@a} slot={@slot} />
+          """)
 
-      assert html =~ ~s(style="background-color: #7c3aed;")
-      # Outer tile no longer carries the bg-base-200 fallback class.
-      refute html =~ ~r/meeting-agent-tile[^"]*bg-base-200/
+        assert html =~ ~s(data-agent-slot="blue"), inspect(slot)
+      end
     end
 
-    test "ignores invalid accent_color values and keeps the bg-base-200 fallback" do
+    test "no inline colour and no bg-base-200: the ground is the slot tint from app.css" do
       assigns = %{a: agent()}
 
       html =
         rendered_to_string(~H"""
-        <.agent_tile agent_participant={@a} accent_color="not-a-color" />
+        <.agent_tile agent_participant={@a} slot="rose" />
         """)
 
-      assert html =~ "bg-base-200"
-      refute html =~ ~r/style="background-color/
+      refute html =~ "style=\"background"
+      refute html =~ "bg-base-200"
+      refute Regex.match?(~r/(class|style)="[^"]*#[0-9a-fA-F]{3,6}/, html)
+    end
+
+    test "accent_color is no longer an attribute" do
+      refute Enum.any?(
+               PlatformWeb.Components.Meeting.AgentTile.__components__().agent_tile.attrs,
+               &(&1.name == :accent_color)
+             )
     end
   end
 
@@ -218,6 +230,35 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       assert html =~ "hero-cpu-chip"
     end
 
+    test "the chip shows the agent's NAME before the role, the name truncating last" do
+      assigns = %{a: agent()}
+
+      html =
+        rendered_to_string(~H"""
+        <.agent_tile agent_participant={@a} role="designer" />
+        """)
+
+      doc = Floki.parse_fragment!(html)
+      assert [name] = Floki.find(doc, "[data-name-chip]")
+      assert Floki.text(name) == "Helga"
+      assert Floki.attribute(name, "class") |> hd() =~ "truncate"
+      assert [role] = Floki.find(doc, "[data-role-chip]")
+      assert Floki.text(role) == "designer"
+      # Name first, then "· role".
+      chip_text = doc |> Floki.find(".agent-tile-chip") |> Floki.text() |> String.trim()
+      assert chip_text =~ ~r/^Helga\s*· designer$/
+
+      # The role's wrapper shrinks 999x faster than the name, so it truncates
+      # first; the name keeps the default shrink of 1.
+      role_wrap =
+        doc
+        |> Floki.find(".agent-tile-chip span")
+        |> Enum.find(&(Floki.attribute(&1, "class") |> List.first("") =~ "shrink-[999]"))
+
+      assert role_wrap && Floki.find(role_wrap, "[data-role-chip]") != []
+      refute Floki.attribute(name, "class") |> hd() =~ "shrink-["
+    end
+
     test "falls back to 'agent' when role is nil or blank" do
       assigns = %{a: agent()}
 
@@ -291,7 +332,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       <.agent_tile
         id_prefix="gallery-agent-tile"
         agent_participant={@a}
-        accent_color="#7c3aed"
+        slot="purple"
         voice?={@voice?}
       />
       """)
@@ -323,13 +364,12 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       refute html =~ "<img"
     end
 
-    test "the voice tile keeps bg-base-200 even with an accent colour, and carries no raw hex" do
+    test "the voice tile takes the slot like an avatar tile, and carries no raw hex" do
       html = voice_tile(true)
 
-      assert html =~ "bg-base-200"
+      assert html =~ ~s(data-agent-slot="purple")
+      refute html =~ "bg-base-200"
       refute html =~ "background-color:"
-      # No raw `#` hex in any rendered class or style (the accent passed in
-      # is `#7c3aed`; it must not reach the voice tile at all).
       refute Regex.match?(~r/(class|style)="[^"]*#[0-9a-fA-F]{3,6}/, html)
     end
 
@@ -348,8 +388,8 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
 
       assert waveforms(html) == []
       assert html =~ ~s(data-avatar-kind="agent")
-      # And the non-voice tile still honours the accent colour, as before.
-      assert html =~ "background-color: #7c3aed;"
+      # Same slot as the voice tile: voice changes the face, never the colour.
+      assert html =~ ~s(data-agent-slot="purple")
     end
   end
 end

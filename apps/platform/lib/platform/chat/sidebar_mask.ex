@@ -4,12 +4,22 @@ defmodule Platform.Chat.SidebarMask do
   sharing their screen — "Workspace A", "Workspace B", ... in place of the real
   org names.
 
-  PURE VIEW STATE. Every function here is a pure function of its arguments.
+  PURE FUNCTIONS. Every function here is a pure function of its arguments.
   This module must never touch `chat_spaces`, `channel_sections`, org records,
   or any other row; it performs no Ecto query, no write, and no PubSub
-  broadcast. Masking is one viewer's presentation mode for the duration of one
-  LiveView session — it is not a preference, not shared state, and must never
-  become visible to another session.
+  broadcast.
+
+  Whether masking is ON is one person's own preference with a 12-hour expiry
+  (`Platform.Accounts.mask_names?/1` / `put_mask_names/2`, task 01a1557a-e538
+  stage 2): on stores `now + 12h` in `users.preferences["mask_names_until"]`,
+  off deletes it, and every masking LiveView seeds from it on mount. The product owner
+  approved the 12-hour cross-device scope on 2026-10-21: "12 hour
+  cross-device is fine". It is per user (another user is never affected),
+  nothing is broadcast, the per-item reveals stay per-LiveView and start
+  empty on every mount, and the state follows the person across their own
+  devices: a LiveView already open elsewhere picks a change up at its next
+  mount. The expiry keeps task 01a00c66's next-morning rule: a mask set for
+  one call is gone by the next morning.
 
   THIS IS A COSMETIC PRESENTATION AID, NOT A SECURITY CONTROL. Message bodies,
   canvases, task titles and uploaded file names all still carry real names, and

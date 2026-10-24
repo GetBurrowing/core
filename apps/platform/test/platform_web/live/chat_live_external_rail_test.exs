@@ -318,10 +318,10 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
   # ~288px beside the message pane and the conversation collapsed to a sliver;
   # every internal mobile affordance was `!@external?`-gated, so external users
   # had NO mobile channel switcher. These cases pin the fix: the rail is now
-  # `hidden lg:flex` (desktop-only), the `lg:hidden` pills strip is fed the
-  # external user's granted `@channels` (not the empty `@sidebar_sections`), and
-  # a FLAT `#external-mobile-switcher` overlay mirrors the internal drawer shell
-  # WITHOUT its org-tree / new-channel / scope-pill discovery chrome.
+  # `hidden lg:flex` (desktop-only), and a FLAT `#external-mobile-switcher`
+  # lists the external user's granted channels WITHOUT the org-tree /
+  # new-channel / scope-pill discovery chrome. Since task 01a1557a-8562 it is
+  # the external user's /chat landing on the phone.
   describe "mobile-responsive external surface (task 019f9257-a83e)" do
     setup %{conn: conn} do
       org = tenant_org!()
@@ -343,30 +343,25 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       assert rail =~ "hidden lg:flex"
     end
 
-    test "mobile pills strip enumerates ONLY the external user's granted channels",
-         %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits} do
-      {:ok, view, _html} =
-        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
-
-      pills = view |> element(~s(nav[aria-label="Channel switcher"])) |> render()
-      # Fed by @channels (not the empty external @sidebar_sections) — before the
-      # fix external channels never appeared in the pills at all.
-      assert pills =~ chan_a.name
-      assert pills =~ chan_b.name
-      refute pills =~ off_limits.name
-    end
-
-    test "search button opens the FLAT external switcher — brand/identity kept, no discovery chrome",
+    # Task 01a1557a-8562 stage 5 deleted the pills strip and the search button
+    # that opened this switcher over an open conversation. The phone route to
+    # it is now the conversation's back chevron: an external user's /chat has
+    # no active space, so the switcher IS the landing.
+    test "the back chevron lands on the FLAT external switcher — brand/identity kept, no discovery chrome",
          %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits} do
       {:ok, view, html} =
         conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
 
-      # Closed by default while a space is active.
+      # Not rendered while a space is active.
       refute html =~ ~s(data-role="external-mobile-switcher")
+      assert html =~ ~s(data-role="chat-back")
 
       view
-      |> element(~s(button[aria-label="Search channels and direct messages"]))
+      |> element(~s(a[data-role="chat-back"]))
       |> render_click()
+
+      assert_patch(view, "/chat")
+      assert has_element?(view, "#external-mobile-switcher")
 
       overlay = view |> element(~s([data-role="external-mobile-switcher"])) |> render()
 
@@ -385,10 +380,11 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       assert overlay =~ ~p"/auth/logout"
       assert overlay =~ "New conversation"
 
-      # NONE of the internal drawer's discovery chrome.
-      refute overlay =~ ~s(id="mobile-channel-browser")
+      # NONE of the internal discovery chrome, and no close control: the
+      # switcher is a landing, not an overlay over a conversation.
       refute overlay =~ "channel-section-header"
       refute overlay =~ "New channel"
+      refute overlay =~ ~s(aria-label="Close")
     end
 
     test "no-space landing shows the switcher by default — the list IS the landing",
@@ -413,12 +409,13 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
       refute html =~ ~s(data-role="external-mobile-switcher")
 
-      # The internal search button opens the INTERNAL browser, never the external one.
+      # The internal back chevron lands on the INTERNAL Chat list, never the
+      # external switcher.
       view
-      |> element(~s(button[aria-label="Search channels and direct messages"]))
+      |> element(~s(a[data-role="chat-back"]))
       |> render_click()
 
-      assert render(view) =~ ~s(id="mobile-channel-browser")
+      assert has_element?(view, "#chat-list")
       refute render(view) =~ ~s(data-role="external-mobile-switcher")
     end
   end

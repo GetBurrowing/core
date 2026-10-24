@@ -131,7 +131,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   # only: hovering the selected row must not repaint it base-300 and bring
   # the 3.27:1 pair back.
   @selected_leaf_class "bg-base-100 font-medium text-[var(--color-interactive)] ring-1 ring-inset ring-edge"
-  @unselected_leaf_class "text-base-content/70 hover:bg-base-300"
+  @unselected_leaf_class "text-base-content hover:bg-base-300"
 
   @doc false
   @spec selected_leaf_class() :: String.t()
@@ -163,12 +163,12 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
       />
 
       <div class="flex items-center justify-between px-4 py-3" data-role="pages-tree-header">
-        <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content">
           Pages
         </h2>
         <button
           phx-click="show_create"
-          class="rounded-lg p-1 text-base-content/50 hover:bg-base-300 hover:text-base-content transition-colors"
+          class="rounded-lg p-1 text-subtle hover:bg-base-300 hover:text-base-content transition-colors"
           title="New page"
         >
           <span class="hero-plus size-4"></span>
@@ -178,8 +178,8 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
       <div class="flex-1 overflow-y-auto py-2">
         <%= if @tree.folders == %{} and @tree.pages == [] do %>
           <div class="px-4 py-8 text-center">
-            <span class="hero-document-text mb-2 size-8 text-base-content/30 mx-auto block"></span>
-            <p class="text-sm text-base-content/40 mb-3">No pages yet</p>
+            <span class="hero-document-text mb-2 size-8 text-subtle mx-auto block"></span>
+            <p class="text-sm text-subtle mb-3">No pages yet</p>
             <button phx-click="seed_defaults" class="btn btn-primary btn-xs">
               Create defaults
             </button>
@@ -204,7 +204,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
       <div class="border-t border-edge px-4 py-3">
         <button
           phx-click="seed_defaults"
-          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content/60 transition-colors"
+          class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-base-content hover:bg-base-300 hover:text-subtle transition-colors"
         >
           <span class="hero-arrow-path size-3.5"></span> Seed missing defaults
         </button>
@@ -234,14 +234,14 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
         phx-value-prefix={@node.prefix}
         data-namespace-prefix={@node.prefix}
         style={indent(@depth)}
-        class="flex w-full items-center gap-1.5 py-1.5 pr-4 text-left text-sm text-base-content/70 transition-colors hover:bg-base-300"
+        class="flex w-full items-center gap-1.5 py-1.5 pr-4 text-left text-sm text-base-content transition-colors hover:bg-base-300"
       >
         <span class={[
           if(@expanded?, do: "hero-chevron-down", else: "hero-chevron-right"),
-          "size-3 shrink-0 text-base-content/40"
+          "size-3 shrink-0 text-subtle"
         ]}>
         </span>
-        <span class="hero-folder size-4 shrink-0 text-base-content/40"></span>
+        <span class="hero-folder size-4 shrink-0 text-subtle"></span>
         <span class="truncate">{@node.name}</span>
       </button>
 
@@ -285,7 +285,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
     >
       <span class={[file_icon(@page.file_key), "shrink-0"]}></span>
       <span class="truncate">{leaf_label(@page.file_key)}</span>
-      <span class="ml-auto text-xs text-base-content/30">v{@page.version}</span>
+      <span class="ml-auto text-xs text-subtle">v{@page.version}</span>
     </button>
     """
   end
@@ -332,7 +332,7 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
           <span>Burrow Docs</span>
           <span class={[
             if(@open, do: "hero-chevron-down", else: "hero-chevron-right"),
-            "size-3.5 shrink-0 text-base-content/60"
+            "size-3.5 shrink-0 text-subtle"
           ]}>
           </span>
         </button>

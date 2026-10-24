@@ -44,10 +44,17 @@ defmodule PlatformWeb.Tasks.SortControl do
   alias Phoenix.LiveView.JS
   alias PlatformWeb.Tasks.BoardData
 
-  @labels %{priority: "Sort: Priority", updated: "Sort: Updated"}
+  # One label per `BoardData.sort_modes/0` member: `label/1` is a
+  # `Map.fetch!`, so a mode without a label crashes the control.
+  @labels %{
+    priority: "Sort: Priority",
+    updated: "Sort: Updated",
+    newest: "Sort: Newest",
+    oldest: "Sort: Oldest"
+  }
 
   @doc "The visible label for a sort mode."
-  @spec label(:priority | :updated) :: String.t()
+  @spec label(BoardData.sort_mode()) :: String.t()
   def label(mode), do: Map.fetch!(@labels, mode)
 
   attr :id, :string, required: true
@@ -61,6 +68,13 @@ defmodule PlatformWeb.Tasks.SortControl do
   attr :scope_filter, :any, default: :all
   attr :kind_filter, :any, default: :all
   attr :origin_filter, :any, default: :all
+  # Task 01a161fd stage 1: the new URL params, threaded through so a sort
+  # click's patch preserves them too.
+  attr :selected_project_id, :any, default: nil
+  attr :selected_epic_id, :any, default: nil
+  attr :status_filters, :list, default: []
+  attr :kind_filters, :list, default: []
+  attr :mine_filter, :boolean, default: false
   attr :mobile?, :boolean, default: false, doc: "44px touch target"
   attr :class, :string, default: nil
 
@@ -105,7 +119,7 @@ defmodule PlatformWeb.Tasks.SortControl do
             |> JS.toggle_attribute({"aria-expanded", "true", "false"})
           }
           class={[
-            "inline-flex items-center gap-1 whitespace-nowrap rounded-field border border-edge bg-base-200 text-xs font-medium text-base-content/60 transition-colors hover:bg-base-300 focus-visible-ring",
+            "inline-flex items-center gap-1 whitespace-nowrap rounded-field border border-edge bg-base-200 text-xs font-medium text-base-content transition-colors hover:bg-base-300 focus-visible-ring",
             if(@mobile?, do: "min-h-11 min-w-11 px-3", else: "h-7 px-2.5")
           ]}
         >
@@ -127,7 +141,12 @@ defmodule PlatformWeb.Tasks.SortControl do
                 task_search_query: @task_search_query,
                 scope_filter: @scope_filter,
                 kind_filter: @kind_filter,
-                origin_filter: @origin_filter
+                origin_filter: @origin_filter,
+                selected_project_id: @selected_project_id,
+                selected_epic_id: @selected_epic_id,
+                status_filters: @status_filters,
+                kind_filters: @kind_filters,
+                mine_filter: @mine_filter
               })
             }
             role="menuitemradio"
@@ -135,7 +154,7 @@ defmodule PlatformWeb.Tasks.SortControl do
             data-role="board-sort-option"
             data-sort={mode}
             class={[
-              "flex items-center justify-between gap-3 rounded-field px-2.5 text-xs text-base-content/80 hover:bg-base-200",
+              "flex items-center justify-between gap-3 rounded-field px-2.5 text-xs text-base-content hover:bg-base-200",
               if(@mobile?, do: "min-h-11", else: "min-h-8"),
               mode == @board_sort && "font-semibold text-base-content"
             ]}

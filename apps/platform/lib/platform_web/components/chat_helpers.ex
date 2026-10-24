@@ -84,6 +84,13 @@ defmodule PlatformWeb.Components.ChatHelpers do
   def present?(value) when is_binary(value), do: String.trim(value) != ""
   def present?(_value), do: false
 
+  # Rung 13 stage 1: rendered message html is shown only when something is
+  # left after a card replaced its bare link line.
+  def rendered_present?({:safe, _} = safe),
+    do: safe |> Phoenix.HTML.safe_to_string() |> present?()
+
+  def rendered_present?(_value), do: false
+
   def reactor_aria_label(%{emoji: emoji, reactors: reactors, extra_count: extra}) do
     names = reactors |> Enum.map(& &1.name) |> Enum.reject(&(&1 in [nil, ""]))
 

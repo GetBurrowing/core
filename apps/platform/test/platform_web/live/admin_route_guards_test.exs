@@ -58,7 +58,7 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       refute html =~
                ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} Operations/i
 
-      assert html =~ "Agent Resources"
+      assert html =~ ">Agents</h2>"
       assert html =~ "Agent Federation"
       assert html =~ "Usage / Cost Metering"
       assert html =~ "User Access"

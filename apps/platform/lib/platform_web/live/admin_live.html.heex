@@ -2,14 +2,14 @@
   <%!-- Header --%>
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
         Admin · Operations
       </h1>
     </div>
   </div>
 
   <%!-- Section cards --%>
-  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+  <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
     <div class="mx-auto max-w-3xl space-y-3">
       <.link
         :if={Platform.Access.module_access?(@access_scope, :admin)}
@@ -25,15 +25,15 @@
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-cog-6-tooth size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-cog-6-tooth size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Agent Resources</h2>
+              <h2 class="text-base font-semibold text-base-content">Agents</h2>
               <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Connect, manage, and federate agents across Burrow runtimes.
             </p>
           </div>
@@ -45,7 +45,7 @@
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-link size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-link size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Agent Federation</h2>
@@ -53,7 +53,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Federation health dashboard — runtime connections, dead-letter buffer, manual ping.
             </p>
           </div>
@@ -65,7 +65,7 @@
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-chart-bar size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-chart-bar size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Usage / Cost Metering</h2>
@@ -73,7 +73,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Per-task and per-agent usage events, latency, and cost rollups.
             </p>
           </div>
@@ -85,7 +85,7 @@
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-user-group size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-user-group size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">User Access</h2>
@@ -93,7 +93,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Manage Burrow users — archive and unarchive root-org membership.
             </p>
           </div>
@@ -107,7 +107,7 @@
         data-role="admin-sign-in-users-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Users</h2>
@@ -115,7 +115,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Invite people, send sign-in links, and disable or remove sign-in.
             </p>
           </div>
@@ -128,8 +128,7 @@
         data-role="admin-orgs-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-building-office-2 size-6 mt-0.5 flex-shrink-0 text-base-content/60">
-          </span>
+          <span class="hero-building-office-2 size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Orgs</h2>
@@ -137,7 +136,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Onboard a tenant org without a migration. Scope colour and scope-rail visibility still need a follow-up code change.
             </p>
           </div>
@@ -150,7 +149,7 @@
         data-role="admin-vault-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Vault</h2>
@@ -158,7 +157,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Paste a secret once and grant it to agents. They fetch it with vault_fetch; it never enters chat.
             </p>
           </div>
@@ -171,7 +170,7 @@
         data-role="admin-branding-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-swatch size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-swatch size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Branding</h2>
@@ -179,7 +178,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               This install's app name, manifest colours, and home-screen icons — derived from one square upload.
             </p>
           </div>
@@ -192,8 +191,7 @@
         data-role="admin-prototypes-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-cube-transparent size-6 mt-0.5 flex-shrink-0 text-base-content/60">
-          </span>
+          <span class="hero-cube-transparent size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Prototypes</h2>
@@ -201,7 +199,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Turn prototype publishing on or off, choose who may publish, and set size, file and retention limits.
             </p>
           </div>
@@ -214,7 +212,7 @@
         data-role="admin-insights-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-light-bulb size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-light-bulb size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Insights</h2>
@@ -222,8 +220,8 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
-              Choose whether dreaming insights are sent beyond the Org Memory Insights tab, and which kinds.
+            <p class="mt-1 text-sm text-subtle">
+              Choose whether dreaming insights are sent beyond the Org memory Insights tab, and which kinds.
             </p>
           </div>
         </div>
@@ -235,8 +233,7 @@
         data-role="admin-external-logins-link"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-inbox-arrow-down size-6 mt-0.5 flex-shrink-0 text-base-content/60">
-          </span>
+          <span class="hero-inbox-arrow-down size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">External Logins</h2>
@@ -244,7 +241,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Recover external users awaiting setup — one-click grant of org, channels, and DM allowlist.
             </p>
           </div>
@@ -256,7 +253,7 @@
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >
         <div class="flex items-start gap-3">
-          <span class="hero-archive-box size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <span class="hero-archive-box size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
           <div class="flex-1 min-w-0">
             <div class="flex items-center justify-between gap-3">
               <h2 class="text-base font-semibold text-base-content">Recovery</h2>
@@ -264,7 +261,7 @@
                 Open →
               </span>
             </div>
-            <p class="mt-1 text-sm text-base-content/60">
+            <p class="mt-1 text-sm text-subtle">
               Restore archived orgs and projects, or cancel a scheduled deletion before the retention window closes.
             </p>
           </div>

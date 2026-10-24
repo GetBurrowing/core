@@ -2470,7 +2470,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       :ok
     end
 
-    test "shell surface: no inset below lg, inset ADDED to the height at lg",
+    test "shell surface: bar clearance ADDED below lg, inset ADDED to the height at lg",
          %{conn: conn} do
       {meeting, _space} = create_meeting(%{slug: "strip-safe-area-shell"})
       {conn, _user} = authenticated_conn(conn)
@@ -2492,17 +2492,21 @@ defmodule PlatformWeb.MeetingLiveTest do
       class = bottom_strip_class(html)
       tokens = String.split(class)
 
-      # Below lg the shell's own `<.bottom_rail>` is the bottom-most
-      # element and `.bottom-nav` already carries the inset as padding
-      # (`app.css:3441`). Reserving it here as well would double it.
-      assert "pb-2" in tokens, "expected an un-inset pb-2 below lg; class was: #{class}"
-      assert "h-[96px]" in tokens, "expected a flat h-[96px] below lg; class was: #{class}"
+      # Below lg the tab bar floats over content (task 01a1557a-7a71 stage
+      # 3), so this footer is bottom-most and ADDS the bar's clearance
+      # (bar + gap + safe area) to its padding and height. The old "NO inset
+      # here" branch (flat pb-2 / h-[96px]) would sit under the glass.
+      assert "pb-[calc(0.5rem+var(--bottom-nav-clearance))]" in tokens,
+             "expected the bar clearance in the padding below lg; class was: #{class}"
 
-      refute "pb-[calc(0.5rem+env(safe-area-inset-bottom))]" in tokens,
-             "unprefixed inset padding on the shell is the defect being fixed; class was: #{class}"
+      assert "h-[calc(96px+var(--bottom-nav-clearance))]" in tokens,
+             "expected the bar clearance ADDED to the height below lg; class was: #{class}"
 
-      refute "h-[calc(96px+env(safe-area-inset-bottom))]" in tokens,
-             "the shell footer must not grow below lg, where the rail owns the inset; class was: #{class}"
+      refute "pb-2" in tokens,
+             "the un-inset pb-2 sits under the floating bar; class was: #{class}"
+
+      refute "h-[96px]" in tokens,
+             "a flat h-[96px] sits under the floating bar; class was: #{class}"
 
       # At lg the rail is `display:none` (`app.css:3448-3452`), so the
       # footer is bottom-most and the inset extends it.
@@ -3116,6 +3120,21 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute empty =~ "text-center"
       refute empty =~ "items-center"
       refute empty =~ "justify-center"
+    end
+
+    test "the calendar scroller pads its end past the floating tab bar (task 01a1557a-7a71 stage 5)",
+         %{conn: conn} do
+      # Review case 4: with a 34px safe area the day grid ended 16.5px under the
+      # bar. `clears-tab-bar` pads the end by 1rem + --bottom-nav-clearance.
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      [class] =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s([data-region="meetings-list"]))
+        |> LazyHTML.attribute("class")
+
+      assert "clears-tab-bar" in String.split(class)
     end
 
     test "index renders without forcing a local data-theme override (inherits shell theme)",
@@ -5176,8 +5195,9 @@ defmodule PlatformWeb.MeetingLiveTest do
              |> LazyHTML.query(~s([data-role="meeting-detail-sheet-handle"]))
              |> Enum.count() == 1
 
-      # Out of flow, so the safe-area inset is the right clearance and the
-      # in-flow bottom-nav reservation is not.
+      # A z-50 overlay paints over the floating tab bar (z-30, task
+      # 01a1557a-7a71 stage 3), so the safe-area inset is the right clearance
+      # and the bar reservation is not.
       panel_class =
         doc |> LazyHTML.query(~s([data-role="meeting-detail-sheet"] > div.relative)) |> class_of()
 
@@ -6906,9 +6926,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert wrapper =~ "fixed inset-0"
       assert wrapper =~ "items-end sm:items-center"
 
-      # Out of flow, so the safe-area inset is the whole clearance — the
-      # bottom-nav reservation applies to in-flow scroll regions, which
-      # already end above a sticky nav.
+      # A z-50 overlay paints over the floating tab bar (z-30), so the
+      # safe-area inset is the whole clearance — the bar reservation
+      # (`--bottom-nav-clearance`) is for scrollers the bar floats over.
       assert doc
              |> LazyHTML.query(~s([data-role="start-meeting-sheet"] > div.relative))
              |> LazyHTML.attribute("class")
@@ -7356,6 +7376,30 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html_after =~ ~s(data-role="meeting-leave")
       # …and the leave-meeting event landed on the JS-hook channel.
       assert_push_event(view, "leave-meeting", %{})
+    end
+
+    test "data-in-call renders only while @in_meeting, the tab bar's in-call hide hook (task 01a1557a-7a71 stage 3)",
+         %{conn: conn, meeting: meeting} do
+      # The mobile tab bar hides under `:root:has([data-in-call])` (app.css).
+      # In the call: present. After leaving: gone, so the bar returns.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      _ = render(view)
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting == true
+      assert render(view) =~ ~s(data-in-call="true")
+
+      html_after =
+        view
+        |> element(~s([data-role="meeting-leave"]))
+        |> render_click()
+
+      refute html_after =~ "data-in-call"
+    end
+
+    test "no data-in-call before joining (?no_autojoin=true)", %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      assert :sys.get_state(view.pid).socket.assigns.in_meeting == false
+      refute html =~ "data-in-call"
+      refute render(view) =~ "data-in-call"
     end
   end
 
@@ -9011,7 +9055,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     # `LazyHTML.query/2` returns a truthy `%LazyHTML{}` even with zero
     # matched nodes (and `length/1` raises on it), so a `refute` against
     # the struct would pass on an element that is not there at all.
-    test "CC toggle: off is base-content/70, on is a base-300 pressed ground", %{
+    test "CC toggle: off is body on no ground, on is a base-300 pressed ground", %{
       conn: conn,
       meeting: meeting
     } do
@@ -9024,8 +9068,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       # someone reverted the OFF token onto it.
       off = captions_toggle_classes(render(view))
 
-      # Positive: off is /70, the "available and off" treatment.
-      assert "text-base-content/70" in off
+      # Positive: off is body on no ground, the "available and off"
+      # treatment (task 01a15907 stage 1 moved it from 70% to body; the
+      # pressed ground is what tells ON from OFF, so OFF must not wear it).
+      assert "text-base-content" in off
+      refute "bg-base-300" in off
 
       # Negative, and the point of the change: `/40` is the treatment a
       # DISABLED control gets. While the off state wore it, "captions
@@ -9182,7 +9229,7 @@ defmodule PlatformWeb.MeetingLiveTest do
   #      default `false`. Verified by the presence of
   #      `#meeting-captions-persist-host` on mount before any toggle.
   #   2. Caption bar z-index bumped from `z-30` to `z-40` so it paints
-  #      above the sticky mobile bottom-nav (which sits at `z-30`).
+  #      above the floating mobile bottom-nav (which sits at `z-30`).
   #
   describe "closed captions (no per-tile overlays)" do
     setup %{conn: conn} do
@@ -9254,7 +9301,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(id="meeting-captions")
     end
 
-    test "caption bar paints at z-40 (above the sticky mobile bottom-nav at z-30)", %{
+    test "caption bar paints at z-40 (above the floating mobile bottom-nav at z-30)", %{
       conn: conn,
       meeting: meeting
     } do
@@ -13271,6 +13318,42 @@ defmodule PlatformWeb.MeetingLiveTest do
       silent = render_hook(view, "active_speakers", %{"identities" => []})
       assert count(silent, ~s([data-gallery-grid] [data-agent-tile])) == 0
       assert count(silent, ~s([data-agent-tile])) == 0
+    end
+
+    # Task 01a1557a rung 3 stage 3: the promoted tile and the agent's Ask row
+    # carry the slot of the agent's stored colour, through the page's own
+    # `:agent_slots` / `:agents_by_id` assigns.
+    test "the promoted agent tile and its Ask row carry the agent's slot",
+         %{conn: conn, meeting: meeting, space: space} do
+      seed_meeting_presence(space, "user", "Ada Speaker")
+      {_participant, agent_id} = seed_meeting_presence(space, "agent", "Rose Agent")
+
+      Platform.Agents.Agent
+      |> Repo.get!(agent_id)
+      |> Ecto.Changeset.change(color: "rose")
+      |> Repo.update!()
+
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      agent_identity =
+        :sys.get_state(view.pid).socket.assigns.participants
+        |> Enum.find(&(&1.participant_type == "agent"))
+        |> PlatformWeb.MeetingLive.agent_gallery_identity()
+
+      ask_slots =
+        html
+        |> frag()
+        |> LazyHTML.query(~s(li.row[data-participant-type="agent"]))
+        |> LazyHTML.attribute("data-agent-slot")
+
+      assert ask_slots != [] and Enum.uniq(ask_slots) == ["rose"]
+
+      promoted = render_hook(view, "active_speakers", %{"identities" => [agent_identity]})
+
+      assert promoted
+             |> frag()
+             |> LazyHTML.query(~s([data-gallery-grid] [data-agent-tile]))
+             |> LazyHTML.attribute("data-agent-slot") == ["rose"]
     end
 
     test "a malformed payload is ignored rather than crashing the LV",

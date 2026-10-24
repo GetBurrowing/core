@@ -56,11 +56,19 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
-<.notification_banner
-  :if={!@embedded}
-  push_permission={@push_permission}
-  dismissed={@notification_banner_dismissed}
-/>
+<%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
+     and goes inside it is never a new sibling ahead of a composer field's
+     ancestors. LiveView's DOM patch re-appends every sibling AFTER an
+     inserted node, and a moved contenteditable loses focus (it is not a
+     textual input, so LiveView does not restore it). See
+     `Partials.Composer.typing_indicator/1`. --%>
+<div id="chat-notification-banner-slot" class="contents">
+  <.notification_banner
+    :if={!@embedded}
+    push_permission={@push_permission}
+    dismissed={@notification_banner_dismissed}
+  />
+</div>
 
 <%!-- Chat root must claim the full height of <main> AND set min-h-0 so its
      descendant flex columns (chat-drop-zone, #message-list) can correctly
@@ -74,8 +82,8 @@
   <%!-- Desktop sidebar — sectioned channel rail (chat plan v2 Stage 2).
 
        The `hidden lg:flex` responsive gate keeps this whole rail invisible
-       on mobile; the mobile flat-list path lives in the `mobile_browser_open`
-       overlay below and is intentionally untouched. Same pattern as the
+       on mobile; the phone's surface is the Chat list (`chat_list/1`, task
+       01a1557a-8562), which replaced the drawer overlay. Same pattern as the
        icon-rail / bottom-rail split in shell.html.heex.
 
        Section order:
@@ -137,16 +145,36 @@
     move_toast={@move_toast}
   />
 
-  <%!-- Mobile channel browser overlay — markup lives in
-       `ChatLive.Partials.MobileBrowser.mobile_browser/1` (task 01a0312e
-       stage 4). The `@mobile_browser_open and !@embedded and !@external?`
-       gate moved INSIDE the component with it. --%>
-  <.mobile_browser
-    restricted_channel_ids={@restricted_channel_ids}
-    mobile_browser_open={@mobile_browser_open}
+  <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
+       `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
+       01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
+       INSIDE the component with it. --%>
+  <.external_mobile_switcher
+    external?={@external?}
+    embedded={@embedded}
+    external_user={@external_user}
+    channels={@channels}
+    dm_conversations={@dm_conversations}
+    active_space={@active_space}
+    unread_counts={@unread_counts}
+    user_id={@user_id}
+    drawer_query={@drawer_query}
+    sidebar_sections={@sidebar_sections}
+    mask_names?={@mask_names?}
+    revealed_section_ids={@revealed_section_ids}
+  />
+
+  <%!-- The phone Chat tab: the conversation list at /chat (task 01a1557a-8562
+       stage 2). Markup and its gate (`:index`, not embedded, not external)
+       live in `ChatLive.Partials.ChatList.chat_list/1`; it is `lg:hidden`. --%>
+  <%!-- `:if` short-circuits attribute evaluation, which is what keeps the
+       embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
+       (ShellLive's on_mount seeds it on routed mounts only). --%>
+  <.chat_list
+    :if={!@embedded}
+    live_action={@live_action}
     embedded={@embedded}
     external?={@external?}
-    sidebar_edit={@sidebar_edit}
     mask_names?={@mask_names?}
     revealed_section_ids={@revealed_section_ids}
     sidebar_sections={@sidebar_sections}
@@ -157,36 +185,44 @@
     dm_conversations={@dm_conversations}
     archived_channels={@archived_channels}
     archived_open={@archived_open}
-    active_space={@active_space}
+    restricted_channel_ids={@restricted_channel_ids}
     unread_counts={@unread_counts}
-    user_id={@user_id}
-    drawer_query={@drawer_query}
-    drawer_search_intent={@drawer_search_intent}
-    drawer_reorder_announcement={@drawer_reorder_announcement}
+    list_excerpts={@list_excerpts}
+    list_identities={@list_identities}
+    list_private_ids={@list_private_ids}
+    list_collapsed={@list_collapsed}
+    list_order_hold={@list_order_hold}
+    push_permission={@push_permission}
+    notification_banner_dismissed={@notification_banner_dismissed}
+    list_sheet={@list_sheet}
+    list_search_query={@list_search_query}
+    list_search_results={@list_search_results}
   />
 
-  <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
-       `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
-       01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
-       INSIDE the component with it. --%>
-  <.external_mobile_switcher
-    external?={@external?}
-    embedded={@embedded}
-    mobile_browser_open={@mobile_browser_open}
-    external_user={@external_user}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    active_space={@active_space}
-    unread_counts={@unread_counts}
-    user_id={@user_id}
-    drawer_query={@drawer_query}
-    drawer_search_intent={@drawer_search_intent}
-    sidebar_sections={@sidebar_sections}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-  />
+  <%!-- Desktop still lands in a channel from /chat: this reports which side
+       of `lg` the viewport is on, and `handle_event("chat_viewport", ...)`
+       patches into the first channel when it is not below it. --%>
+  <div
+    :if={!@embedded and @live_action == :index}
+    id="chat-viewport-breakpoint"
+    phx-hook="ViewportBreakpoint"
+    data-breakpoint="1024"
+    data-event="chat_viewport"
+    class="hidden"
+  >
+  </div>
 
-  <div class="flex flex-1 overflow-hidden min-w-0 min-h-0">
+  <%!-- At /chat a phone sees only the list: the conversation column is
+       `max-lg:hidden` there (the stage text's `hidden lg:flex`, written as
+       one variant so the column's own `flex` keeps its literal class string
+       on every other route; chat_live_test.exs pins that string). Desktop is
+       unchanged. --%>
+  <div class={
+    if(!@embedded and !@external? and @live_action == :index,
+      do: "flex flex-1 overflow-hidden min-w-0 min-h-0 max-lg:hidden",
+      else: "flex flex-1 overflow-hidden min-w-0 min-h-0"
+    )
+  }>
     <div
       id="chat-drop-zone"
       phx-hook="DragDropUpload"
@@ -198,6 +234,8 @@
         external?={@external?}
         space_participants={@space_participants}
         user_id={@user_id}
+        space_sheet={@space_sheet}
+        agent_status={@agent_status}
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
@@ -214,10 +252,10 @@
         show_pins={@show_pins}
         agent_presence={@agent_presence}
         has_agent_participant={@has_agent_participant}
-        active_agent_participant_id={@active_agent_participant_id}
-        active_agent_armable_id={@active_agent_armable_id}
-        active_agent_name={@active_agent_name}
-        active_agent_armable_name={@active_agent_armable_name}
+        agents_sheet_open={@agents_sheet_open}
+        agent_attention={@agent_attention}
+        show_members={@show_members}
+        current_user_record={assigns[:current_user_record]}
         goal_panel={@goal_panel}
         goal_edit={@goal_edit}
         can_edit_goal?={@can_edit_goal?}
@@ -228,74 +266,88 @@
         goal_time_zone={@goal_time_zone}
       />
 
-      <.mobile_pinned_strip
+      <%!-- The three drawers open and close (and the pins drawer appears
+           when someone pins while it is shown) inside one always-rendered,
+           box-less slot, so they are never new siblings ahead of #chat-dock
+           (rung 10 stage 5; see the slot note at the top of this file). --%>
+      <div id="chat-drawers-slot" class="contents">
+        <.search_drawer
+          search_query={@search_query}
+          search_results={@search_results}
+          participants_map={@participants_map}
+        />
+
+        <.pins_drawer active_space={@active_space} pins={@pins} show_pins={@show_pins} />
+
+        <.canvases_drawer
+          active_canvas={@active_canvas}
+          current_participant={@current_participant}
+          new_canvas_form={@new_canvas_form}
+          show_canvases={@show_canvases}
+          canvas_sort={@canvas_sort}
+          canvas_search_query={@canvas_search_query}
+          canvas_unindexed_count={@canvas_unindexed_count}
+          canvas_groups={@canvas_groups}
+          canvas_pinned_groups={@canvas_pinned_groups}
+          canvas_parent_titles={@canvas_parent_titles}
+          canvas_expanded_keys={@canvas_expanded_keys}
+          canvas_explorer_collapsed={@canvas_explorer_collapsed}
+          canvas_archive_count={@canvas_archive_count}
+          canvas_search_focus={@canvas_search_focus}
+          prototype_upload={@uploads[PrototypeUpload.upload_name()]}
+          can_publish_prototype?={@can_publish_prototype?}
+        />
+      </div>
+
+      <%!-- The phone space sheet (task 01a1557a-8a6d, rung 7), opened by the
+           header's title button. `lg:hidden`; `SpaceSheetHooks` owns it. --%>
+      <.space_sheet
+        :if={@active_space && !@embedded}
+        space_sheet={@space_sheet}
         active_space={@active_space}
-        embedded={@embedded}
-        pinned_task_spaces={@pinned_task_spaces}
-        channel_sections={@channel_sections}
-        agents_block={@agents_block}
-        unread_counts={@unread_counts}
+        space_participants={@space_participants}
         user_id={@user_id}
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
-      />
-
-      <.channel_pills
-        active_space={@active_space}
-        embedded={@embedded}
         external?={@external?}
-        channels={@channels}
-        dm_conversations={@dm_conversations}
-        unread_counts={@unread_counts}
-        user_id={@user_id}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        restricted_channel_ids={@restricted_channel_ids}
-      />
-
-      <%!-- Brand-new-user pane for the mobile content region (stage 8). Below
-           `lg` the rail is `display: none` and the mobile browser's own
-           zero-state is unreachable (its `toggle_mobile_browser` trigger
-           lives in `.channel_pills`, which needs an `@active_space`), so a
-           user with no spaces at all had no create/join affordance on screen
-           at any point. `lg:hidden` inside the component keeps desktop as it
-           was. --%>
-      <.mobile_no_spaces_pane
-        embedded={@embedded}
-        external?={@external?}
-        active_space={@active_space}
-        channels={@channels}
-        dm_conversations={@dm_conversations}
-        archived_channels={@archived_channels}
-      />
-
-      <.search_drawer
+        canvases={@canvases}
+        show_canvases={@show_canvases}
+        meetings_enabled={@meetings_enabled}
+        in_meeting={@in_meeting}
+        agent_presence={@agent_presence}
+        has_agent_participant={@has_agent_participant}
+        agent_attention={@agent_attention}
         search_query={@search_query}
         search_results={@search_results}
         participants_map={@participants_map}
+        pins={@pins}
+        space_sheet_pins={@space_sheet_pins}
+        space_sheet_threads={@space_sheet_threads}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
+        active_space_scope={@active_space_scope}
+        active_space_org={@active_space_org}
+        scope_filter={@scope_filter}
+        space_sheet_files={@space_sheet_files}
+        space_sheet_links={@space_sheet_links}
       />
 
-      <.pins_drawer active_space={@active_space} pins={@pins} show_pins={@show_pins} />
-
-      <.canvases_drawer
-        active_canvas={@active_canvas}
-        current_participant={@current_participant}
-        new_canvas_form={@new_canvas_form}
-        show_canvases={@show_canvases}
-        canvas_sort={@canvas_sort}
-        canvas_search_query={@canvas_search_query}
-        canvas_unindexed_count={@canvas_unindexed_count}
-        canvas_groups={@canvas_groups}
-        canvas_pinned_groups={@canvas_pinned_groups}
-        canvas_parent_titles={@canvas_parent_titles}
-        canvas_expanded_keys={@canvas_expanded_keys}
-        canvas_explorer_collapsed={@canvas_explorer_collapsed}
-        canvas_archive_count={@canvas_archive_count}
-        canvas_search_focus={@canvas_search_focus}
-        prototype_upload={@uploads[PrototypeUpload.upload_name()]}
-        can_publish_prototype?={@can_publish_prototype?}
+      <%!-- The phone Agents sheet (task 01a1557a-8f80 stage 2), opened from
+           the space sheet's Agents row; the desktop popover renders under the
+           header's `agents-open` button. `AgentsSheetHooks` owns both. --%>
+      <PlatformWeb.ChatLive.Partials.AgentsSheet.agents_sheet
+        :if={@active_space && !@embedded}
+        surface={:sheet}
+        open={@agents_sheet_open}
+        state={@agent_attention}
+        active_space={@active_space}
       />
 
       <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
@@ -315,7 +367,7 @@
         active_space={@active_space}
         current_participant={@current_participant}
         agent_participant_ids={@agent_participant_ids}
-        agent_colors_map={@agent_colors_map}
+        agent_slots_map={@agent_slots_map}
         participants_map={@participants_map}
         quick_emojis={@quick_emojis}
         pinned_message_ids={@pinned_message_ids}
@@ -327,6 +379,7 @@
         inline_thread_messages={@inline_thread_messages}
         mention_suggestions={@mention_suggestions}
         mention_source={@mention_source}
+        mention_query={@mention_query}
         editing_message_id={@editing_message_id}
         rendered_message_ids={@rendered_message_ids}
         refused_summons={@refused_summons}
@@ -336,148 +389,187 @@
         viewer_user_id={@user_id}
       />
 
-      <.streaming_replies
-        streaming_replies={@streaming_replies}
-        agent_colors_map={@agent_colors_map}
-        participants_map={@participants_map}
-      />
-
-      <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
-           overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
-           by task 01a0419a v3 stage 1, per design canvas revision 37).
-
-           This is a floating overlay at all viewport widths. The two
-           wrappers below are unconditional boxes — there is no breakpoint
-           and no `display: contents` state any more, and there is no
-           in-flow chip at any width. `.chat-jump-anchor` is a
-           zero-height positioned box and `.chat-jump-anchor-row` is an
-           absolutely-positioned full-width centring row sitting 8px above
-           the composer (above the typing indicator when one is showing,
-           because the anchor sits ahead of it in the flow). Zero height
-           means ZERO LAYOUT SHIFT: the composer does not move when the
-           control appears, and the message pane keeps its full height,
-           which is worth one extra visible message.
-
-           There is no bar, strip or full-width background behind it. The
-           centring row is transparent and `pointer-events: none`, so the
-           only thing that takes a tap is the control itself; the message
-           text either side of it stays clickable.
-
-           DESKTOP now gets the same overlay. The `self-start ml-5 mb-1`
-           gutter classes that positioned the old in-flow chip are GONE from
-           the button: the promoted `margin: 0` overrides them at every
-           width, so leaving them would describe a layout this file no
-           longer has. Centring is PANE-RELATIVE, not viewport-relative —
-           `.chat-jump-anchor` is an in-flow block inside the chat column,
-           so it is the row's containing block and `left: 0; right: 0` track
-           the message pane in both sidebar states.
-
-           Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
-           The old in-flow row made "nothing clipped or unreachable at 390px"
-           true by construction; an overlay gives that guarantee up as the
-           accepted cost of zero layout shift. Nothing in this template
-           proves it any more — it is asserted by the stage-5 measurements,
-           which hit-test the composer input, the send control and every
-           bottom-nav tab with the control present, at 390px and at 1440x900.
-
-           It stays in `chat_live.html.heex` rather than moving into
-           `Partials.Composer` (task 01a0312e's extraction): the desktop
-           path still depends on being a SIBLING of the scroller and the
-           composer, so pushing it inside either one is the one move that
-           could silently break it.
-
-           The `:if` is the whole visibility story: when the reader does not
-           need a way back, this node LEAVES THE DOM. Not transparent, not
-           zero-width, no aria-hidden shell and no exit animation — an exit
-           animation needs the node to outlive its own removal, which is the
-           unreachable-but-present state the acceptance criteria forbid.
-
-           WHAT THE `:if` NOW ASKS (task 01a0419a stage 4). It is no longer
-           the distance predicate alone. `MessagesHooks.jump_chip_visible?/3`
-           composes the reader's position with the unread count into five
-           bands, and the rule lives THERE, in one testable function, not
-           spelled out in this attribute — a boolean expression inline here
-           is a rule nothing can call and nothing can mutate.
-
-           The band that matters: scrolled up a little with NOTHING new, the
-           control is absent. Scrolling up to re-read three messages used to
-           raise a pill nobody asked for. Deep in history it appears
-           unprompted, because there the way back is worth offering.
-
-           The count badge sits to the RIGHT of the label so its arrival
-           grows the chip into empty space and the label never shifts. It is
-           aria-hidden because the accessible name below already says the
-           number in a sentence.
-
-           Both strings come from `MessagesHooks` (stage 4). The cap lives
-           there as a single module attribute, so the unresolved 99+ / 9+
-           question resolves in one integer rather than in this template. --%>
+      <%!-- THE DOCK (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
+           "the conversation fills the whole screen"). One wrapper around the
+           four contiguous siblings below the scroller: streaming replies, the
+           jump-to-latest anchor, the typing indicator and the composer.
+           `.chat-dock` is `display: contents` at EVERY width, so on desktop and
+           in embedded chat these four stay flex items of #chat-drop-zone
+           exactly as before (the jump anchor's sibling relationship above
+           included). Only `.chat-dock--glass` below lg becomes a box: an
+           absolute overlay at the bottom of #chat-drop-zone, so the timeline
+           runs under the glass composer and bar instead of being cropped
+           above them. The ChatDock hook writes its height to
+           `--chat-dock-h` on <html> for the timeline's end padding. --%>
       <div
-        :if={
-          MessagesHooks.jump_chip_visible?(
-            @jump_deep_in_history,
-            @jump_away_from_bottom,
-            @jump_new_message_count
-          )
-        }
-        class="chat-jump-anchor"
+        id="chat-dock"
+        phx-hook="ChatDock"
+        class={["chat-dock", !@embedded && "chat-dock--glass"]}
       >
-        <div class="chat-jump-anchor-row">
-          <button
-            type="button"
-            phx-click="jump_to_latest"
-            aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-            class="chat-jump-chip focus-visible-ring flex-shrink-0"
+        <.streaming_replies
+          streaming_replies={@streaming_replies}
+          agent_slots_map={@agent_slots_map}
+          participants_map={@participants_map}
+        />
+
+        <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
+             overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
+             by task 01a0419a v3 stage 1, per design canvas revision 37).
+
+             This is a floating overlay at all viewport widths. The two
+             wrappers below are unconditional boxes — there is no breakpoint
+             and no `display: contents` state any more, and there is no
+             in-flow chip at any width. `.chat-jump-anchor` is a
+             zero-height positioned box and `.chat-jump-anchor-row` is an
+             absolutely-positioned full-width centring row sitting 8px above
+             the composer (above the typing indicator when one is showing,
+             because the anchor sits ahead of it in the flow). Zero height
+             means ZERO LAYOUT SHIFT: the composer does not move when the
+             control appears, and the message pane keeps its full height,
+             which is worth one extra visible message.
+
+             There is no bar, strip or full-width background behind it. The
+             centring row is transparent and `pointer-events: none`, so the
+             only thing that takes a tap is the control itself; the message
+             text either side of it stays clickable.
+
+             DESKTOP now gets the same overlay. The `self-start ml-5 mb-1`
+             gutter classes that positioned the old in-flow chip are GONE from
+             the button: the promoted `margin: 0` overrides them at every
+             width, so leaving them would describe a layout this file no
+             longer has. Centring is PANE-RELATIVE, not viewport-relative —
+             `.chat-jump-anchor` is an in-flow block inside the chat column,
+             so it is the row's containing block and `left: 0; right: 0` track
+             the message pane in both sidebar states.
+
+             Because it now floats, REACHABILITY IS EMPIRICAL, NOT STRUCTURAL.
+             The old in-flow row made "nothing clipped or unreachable at 390px"
+             true by construction; an overlay gives that guarantee up as the
+             accepted cost of zero layout shift. Nothing in this template
+             proves it any more — it is asserted by the stage-5 measurements,
+             which hit-test the composer input, the send control and every
+             bottom-nav tab with the control present, at 390px and at 1440x900.
+
+             It stays in `chat_live.html.heex` rather than moving into
+             `Partials.Composer` (task 01a0312e's extraction): the desktop
+             path still depends on being a SIBLING of the scroller and the
+             composer, so pushing it inside either one is the one move that
+             could silently break it.
+
+             The `:if` is the whole visibility story: when the reader does not
+             need a way back, this node LEAVES THE DOM. Not transparent, not
+             zero-width, no aria-hidden shell and no exit animation — an exit
+             animation needs the node to outlive its own removal, which is the
+             unreachable-but-present state the acceptance criteria forbid.
+
+             WHAT THE `:if` NOW ASKS (task 01a0419a stage 4). It is no longer
+             the distance predicate alone. `MessagesHooks.jump_chip_visible?/3`
+             composes the reader's position with the unread count into five
+             bands, and the rule lives THERE, in one testable function, not
+             spelled out in this attribute — a boolean expression inline here
+             is a rule nothing can call and nothing can mutate.
+
+             The band that matters: scrolled up a little with NOTHING new, the
+             control is absent. Scrolling up to re-read three messages used to
+             raise a pill nobody asked for. Deep in history it appears
+             unprompted, because there the way back is worth offering.
+
+             The count badge sits to the RIGHT of the label so its arrival
+             grows the chip into empty space and the label never shifts. It is
+             aria-hidden because the accessible name below already says the
+             number in a sentence.
+
+             Both strings come from `MessagesHooks` (stage 4). The cap lives
+             there as a single module attribute, so the unresolved 99+ / 9+
+             question resolves in one integer rather than in this template. --%>
+        <%!-- The anchor still LEAVES THE DOM when hidden (above), but
+             inside `#chat-jump-slot`, an always-rendered, box-less
+             (`contents`) slot: so it is never a new sibling ahead of the
+             typing indicator and the composer area, which the DOM patch
+             would then re-append after it, blurring the focused field
+             (gate case 7007, rung 10 stage 5). Layout is unchanged: a
+             `contents` box generates nothing, so the anchor is still an
+             in-flow item of the chat column. --%>
+        <div id="chat-jump-slot" class="contents">
+          <div
+            :if={
+              MessagesHooks.jump_chip_visible?(
+                @jump_deep_in_history,
+                @jump_away_from_bottom,
+                @jump_new_message_count
+              )
+            }
+            class="chat-jump-anchor"
           >
-            <%!-- The button is the 44px HIT AREA and paints nothing; this span
-                 is the 28px painted pill. They are two elements on purpose, so
-                 both boxes have a bounding rect and the e2e measurement can
-                 assert 28-painted-inside-44-tappable without reading a
-                 pseudo-element. Collapsing them back into one is the defect
-                 this split exists to prevent: it looks finished either way,
-                 and the only symptom is people missing the button. --%>
-            <span class="chat-jump-chip-pill">
-              <span class="min-w-0 truncate">Jump to latest</span>
-              <span
-                :if={@jump_new_message_count > 0}
-                aria-hidden="true"
-                class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+            <div class="chat-jump-anchor-row">
+              <button
+                type="button"
+                phx-click="jump_to_latest"
+                aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+                class="chat-jump-chip focus-visible-ring flex-shrink-0"
               >
-                {MessagesHooks.jump_count_label(@jump_new_message_count)}
-              </span>
-            </span>
-          </button>
+                <%!-- The button is the 44px HIT AREA and paints nothing; this span
+                   is the 28px painted pill. They are two elements on purpose, so
+                   both boxes have a bounding rect and the e2e measurement can
+                   assert 28-painted-inside-44-tappable without reading a
+                   pseudo-element. Collapsing them back into one is the defect
+                   this split exists to prevent: it looks finished either way,
+                   and the only symptom is people missing the button. --%>
+                <span class="chat-jump-chip-pill">
+                  <span class="min-w-0 truncate">Jump to latest</span>
+                  <span
+                    :if={@jump_new_message_count > 0}
+                    aria-hidden="true"
+                    class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+                  >
+                    {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                  </span>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
+
+        <.typing_indicator
+          agent_typing_pids={@agent_typing_pids}
+          streaming_replies={@streaming_replies}
+          participants_map={@participants_map}
+        />
+
+        <.composer
+          active_space={@active_space}
+          compose_form={@compose_form}
+          current_participant={@current_participant}
+          uploads={@uploads}
+          mention_suggestions={@mention_suggestions}
+          mention_source={@mention_source}
+          mention_query={@mention_query}
+          mask_names?={@mask_names?}
+          revealed_section_ids={@revealed_section_ids}
+          sidebar_sections={@sidebar_sections}
+          limits={@large_upload_limits}
+          large_staged={@large_upload_staged}
+          attach_menu_open={@attach_menu_open}
+          canvases={@canvases}
+          attach_canvas={@attach_canvas_id && Map.get(@canvases_by_id, @attach_canvas_id)}
+          attach_failed={@attach_failed}
+        />
       </div>
 
-      <.typing_indicator
-        agent_typing_pids={@agent_typing_pids}
-        streaming_replies={@streaming_replies}
-        participants_map={@participants_map}
+      <%!-- The phone ＋ sheet (rung 11). Outside the glass dock so the fixed
+           sheet stacks above the tab bar. Not when embedded: the meeting
+           rail is itself a sheet, and a second sheet nested in it doubles
+           its backdrop and handle. --%>
+      <PlatformWeb.ChatLive.Partials.Attach.attach_sheet
+        :if={!@embedded && @active_space && is_nil(@active_space.archived_at)}
+        open={@attach_menu_open}
+        canvases={@canvases}
       />
-
-      <.composer
-        active_space={@active_space}
-        compose_form={@compose_form}
-        current_participant={@current_participant}
-        uploads={@uploads}
-        mention_suggestions={@mention_suggestions}
-        mention_source={@mention_source}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        limits={@large_upload_limits}
-      />
-
-      <.upload_dialog
-        open={@upload_dialog_open}
-        active_space={@active_space}
-        uploads={@uploads}
-        caption={@upload_caption}
-        tagged_agents={@upload_tagged_agents}
-        large_staged={@large_upload_staged}
-        limits={@large_upload_limits}
-      />
+      <%!-- The desktop drop target (rung 11), shown by the DragDropUpload
+           hook on this element. --%>
+      <PlatformWeb.ChatLive.Partials.Attach.drop_target :if={
+        @active_space && is_nil(@active_space.archived_at)
+      } />
     </div>
 
     <.canvas_overlay
@@ -533,15 +625,22 @@
   current_user_id={@user_id}
 />
 
-<%!-- Channel members panel (task 01a0fd62 stage 3). Opened by the header
-     "members" button (channels only) and the refused-summon notice. --%>
+<%!-- The phone Members sheet (task 01a1557a-8f80 stage 3), opened from the
+     space sheet's Members row; the desktop popover is the second instance,
+     rendered under the header's `members-open` button. --%>
 <.live_component
   :if={!@embedded}
   module={MembersComponent}
   id="chat-members"
+  surface={:sheet}
   open={@show_members}
   space={@active_space}
+  space_name={
+    @active_space &&
+      space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns))
+  }
   current_user_id={@user_id}
+  viewer={assigns[:current_user_record]}
 />
 
 <%!-- New-channel creation is internal-only chrome — external users never see a
@@ -569,31 +668,24 @@
   external?={@external?}
 />
 
-<%!-- Mobile drawer row-actions sheet (task 019fe998). Pin / unpin / hide for
-     one drawer conversation row, opened by that row's overflow control.
-
-     Rendered HERE, at the template root, and NOT inside
-     `#mobile-channel-browser`: `.sheet` is `position: fixed`, and a CSS
-     `transform` on any ancestor becomes the containing block for fixed
-     descendants, which centres the panel on the rail instead of the
-     viewport. Same reason the guest-invite sheet sits at its LiveView's root.
-
-     Gated to the internal, non-embedded surface, matching the drawer it
-     serves. Always rendered (not `:if`-gated on the target) so the panel can
-     transition in — `.sheet` is `visibility: hidden` until `.sheet-open`, and
-     an element inserted already-open has no starting frame to animate from.
-     `row_actions_target/5` returns nil while closed, which keeps the header
-     empty rather than holding the last-opened conversation's name. --%>
+<%!-- The row sheet (task 019fe998; the phone Chat list's since task
+     01a1557a-8562). Rendered HERE, at the template root: `.sheet` is
+     `position: fixed`, and a CSS `transform` on any ancestor becomes the
+     containing block for fixed descendants, which would centre the panel on
+     that ancestor instead of the viewport. Same reason the guest-invite sheet
+     sits at its LiveView's root. Always rendered (not `:if`-gated on the
+     target) so the panel can transition in; `row_actions_target/5` returns
+     nil while closed, which keeps the header empty. --%>
+<%!-- The phone row sheet. A Chat list row's long-press opens it through
+     `@list_sheet == {:row, id}` (task 01a1557a-8562 stage 4). The desktop
+     rail's `@row_actions_space_id` drives `row_actions_dialog/1` only. The
+     name is masked like the row it came from. --%>
 <.row_actions_sheet
   :if={!@embedded and !@external?}
   target={
-    row_actions_target(
-      @row_actions_space_id,
-      @channels,
-      @dm_conversations,
-      @pinned_space_ids,
-      @user_id
-    )
+    ChatListHooks.row_sheet_space_id(@list_sheet)
+    |> row_actions_target(@channels, @dm_conversations, @pinned_space_ids, @user_id)
+    |> mask_row_target(assigns)
   }
 />
 
@@ -633,37 +725,32 @@
 
 <.reaction_picker reaction_picker_for={@reaction_picker_for} />
 
-<.longpress_pill
-  longpress_menu_for={@longpress_menu_for}
-  quick_emojis={@quick_emojis}
-/>
-
-<.image_lightbox url={@lightbox_url} />
+<PlatformWeb.Components.ChatViewer.chat_viewer viewer={@viewer} />
 
 <%!-- Listener for scroll-to-message events from the correction header
      (task 019e0f29 Stage 6, contract Section D.4). Hidden div; the
      ChatScrollToMessage hook drives smooth scroll + brief pulse. --%>
 <div id="chat-scroll-to-message-listener" phx-hook="ChatScrollToMessage" class="hidden"></div>
 
-<%!-- Version history popover (task 019e0f29 Stage 6, contract Section D.2).
-     Surfaces when @version_history is set (clicking the `(edited)` affix on
-     a message bubble). --%>
-<PlatformWeb.Components.ChatVersionHistory.chat_version_history
-  open={@version_history != nil}
-  versions={(@version_history && @version_history.versions) || []}
-/>
-
-<.edit_removal_warning pending_save_edit={@pending_save_edit} />
+<%!-- Version history (task 019e0f29 Stage 6; redesign rung 9 stage 4):
+     a phone sheet and a desktop popover from the one @version_history
+     assign, set by clicking the `(edited)` affix on a message. --%>
+<PlatformWeb.Components.ChatVersionHistory.chat_version_history version_history={@version_history} />
 
 <.message_actions_sheet
   open_message_actions_id={@open_message_actions_id}
   open_message_actions_msg={@open_message_actions_msg}
+  open_message_actions_mine={@open_message_actions_mine}
   current_participant={@current_participant}
   quick_emojis={@quick_emojis}
   agent_participant_ids={@agent_participant_ids}
+  pinned_message_ids={@pinned_message_ids}
+  active_space={@active_space}
 />
 
-<%!-- "What this message is answering" (task 01a0d8de stage 3): popover on
+<.reactors_sheet open_reactors={@open_reactors} current_participant={@current_participant} />
+
+<%!-- The 'Answering' context panel (task 01a0d8de stage 3): popover on
      desktop, bottom sheet on mobile; state in MessageContextHooks. --%>
 <.message_context_overlay
   message_context={@message_context}

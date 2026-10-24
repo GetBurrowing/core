@@ -53,7 +53,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
   @btn_primary @btn <> " btn-primary"
   @btn_secondary @btn <> " border-edge bg-base-300 text-base-content"
   @btn_ghost @btn <> " btn-ghost text-subtle lg:hover:text-base-content"
-  @field "w-full rounded-lg border border-edge bg-base-200 px-3 py-2 text-sm text-base-content placeholder:text-faint"
+  @field "w-full rounded-lg border border-edge bg-base-200 px-3 py-2 text-sm text-base-content placeholder:text-subtle"
   @link "focus-visible-ring rounded font-semibold text-interactive"
 
   # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
     ~H"""
     <div id={@id} data-role="meeting-briefing-detail" data-meeting-id={@view.meeting.id}>
       <header>
-        <p class="text-[11px] font-medium uppercase tracking-wide text-subtle">
+        <p class="text-xs font-medium uppercase tracking-wide text-subtle">
           {Copy.kind_label()}
         </p>
         <h2 class="mt-1 text-2xl font-bold text-base-content" data-role="meeting-briefing-title">
@@ -276,7 +276,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       data-key={@item.key}
       data-kind={@item.kind}
     >
-      <p class="mb-1 text-[11px] font-bold uppercase tracking-wide text-subtle">
+      <p class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle">
         {Copy.kind_tag(@item.kind)}
       </p>
       <h4 class="text-base font-semibold text-base-content" data-role="meeting-briefing-card-title">
@@ -373,7 +373,7 @@ defmodule PlatformWeb.InboxLive.MeetingBriefingComponent do
       data-key={@item.key}
       data-kind={@item.kind}
     >
-      <p class="mb-1 text-[11px] font-bold uppercase tracking-wide text-subtle">
+      <p class="mb-1 text-xs font-bold uppercase tracking-wide text-subtle">
         {Copy.kind_tag(@item.kind)}
       </p>
       <p class="text-sm font-semibold text-base-content">{@item.title}</p>

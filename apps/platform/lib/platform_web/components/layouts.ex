@@ -11,6 +11,7 @@ defmodule PlatformWeb.Layouts do
   import PlatformWeb.Components.IconRail
   import PlatformWeb.Components.MoreSheet
   import PlatformWeb.Components.ThemePicker
+  import PlatformWeb.Components.MaskNamesChip
 
   # Server-rendered <style> block carrying each active org's scope colour as
   # CSS custom properties — the runtime replacement for build-time per-slug
@@ -315,24 +316,6 @@ defmodule PlatformWeb.Layouts do
     """
   end
 
-  @doc "Returns a Tailwind color class for the agent status indicator."
-  def agent_status_color(:online), do: "bg-success"
-  def agent_status_color(:thinking), do: "bg-sky-400"
-  def agent_status_color(:offline), do: "bg-warning"
-  def agent_status_color(:idle), do: "bg-warning"
-  def agent_status_color(:paused), do: "bg-warning"
-  def agent_status_color(:error), do: "bg-error"
-  def agent_status_color(_), do: "bg-base-content/30"
-
-  @doc "Returns a compact text label for the shell agent indicator."
-  def agent_status_label(:online), do: "Agent"
-  def agent_status_label(:thinking), do: "Agent"
-  def agent_status_label(:offline), do: "Agent"
-  def agent_status_label(:idle), do: "Agent"
-  def agent_status_label(:paused), do: "Agent"
-  def agent_status_label(:error), do: "Agent"
-  def agent_status_label(_), do: "Agent"
-
   @doc """
   Shows the flash group with standard titles and content.
 
@@ -437,7 +420,7 @@ defmodule PlatformWeb.Layouts do
       <div class="reconnect-pill-wrap flex justify-center pt-2">
         <span class="reconnect-pill inline-flex items-center gap-1.5 rounded-full bg-base-300 text-base-content px-3 py-1 text-xs font-medium shadow-sm">
           <span
-            class="reconnect-spinner hero-arrow-path size-3 text-base-content/60 motion-safe:animate-spin"
+            class="reconnect-spinner hero-arrow-path size-3 text-subtle motion-safe:animate-spin"
             aria-hidden="true"
           >
           </span>

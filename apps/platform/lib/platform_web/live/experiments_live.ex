@@ -1059,7 +1059,7 @@ defmodule PlatformWeb.ExperimentsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6">
+    <div class="flex flex-col h-full overflow-y-auto p-4 md:p-6 space-y-6 clears-tab-bar">
       <%= if @experiment do %>
         {detail(assigns)}
       <% else %>
@@ -1145,7 +1145,7 @@ defmodule PlatformWeb.ExperimentsLive do
             >
               {experiment.name}
             </.link>
-            <div class="text-xs text-base-content/70 break-all">
+            <div class="text-xs text-subtle break-all">
               {experiment.surface_key || "dispatch.prompt"} · {experiment.slug}
             </div>
           </div>
@@ -1192,7 +1192,7 @@ defmodule PlatformWeb.ExperimentsLive do
     >
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-sm font-semibold">Guardrails</h2>
-        <span class="text-xs text-base-content/70" data-role="guardrails-source">
+        <span class="text-xs text-base-content" data-role="guardrails-source">
           {if @guard_stored?, do: "Stored for this scope", else: "Inherited; saving stores a row"}
         </span>
       </div>
@@ -1202,7 +1202,7 @@ defmodule PlatformWeb.ExperimentsLive do
       </p>
 
       <form phx-change="guardrails_scope" data-role="guardrails-scope-form">
-        <label class="text-xs font-semibold text-base-content/70" for="guardrails-scope">
+        <label class="text-xs font-semibold text-base-content" for="guardrails-scope">
           Scope
         </label>
         <select
@@ -1271,7 +1271,7 @@ defmodule PlatformWeb.ExperimentsLive do
             data-role="mail-send-row"
           >
             <dt>Mail send path</dt>
-            <dd class="font-mono text-base-content/70">— not available —</dd>
+            <dd class="font-mono text-base-content">— not available —</dd>
           </div>
 
           <div class="py-2 flex items-center justify-between gap-2">
@@ -1319,7 +1319,7 @@ defmodule PlatformWeb.ExperimentsLive do
             Save guardrails
           </button>
         </div>
-        <p :if={not @root_admin?} class="text-xs text-base-content/70">
+        <p :if={not @root_admin?} class="text-xs text-base-content">
           Only root-org admins can change guardrails.
         </p>
       </form>
@@ -1353,7 +1353,7 @@ defmodule PlatformWeb.ExperimentsLive do
         class="space-y-4"
       >
         <div>
-          <label class="text-xs font-semibold text-base-content/70" for="create-name">Name</label>
+          <label class="text-xs font-semibold text-base-content" for="create-name">Name</label>
           <input
             id="create-name"
             name="name"
@@ -1365,7 +1365,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </div>
 
         <div>
-          <label class="text-xs font-semibold text-base-content/70" for="create-slug">Slug</label>
+          <label class="text-xs font-semibold text-base-content" for="create-slug">Slug</label>
           <input
             id="create-slug"
             name="slug"
@@ -1378,7 +1378,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </div>
 
         <div>
-          <label class="text-xs font-semibold text-base-content/70" for="create-hypothesis">
+          <label class="text-xs font-semibold text-base-content" for="create-hypothesis">
             Hypothesis
           </label>
           <textarea
@@ -1395,7 +1395,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </div>
 
         <div>
-          <label class="text-xs font-semibold text-base-content/70" for="create-surface">
+          <label class="text-xs font-semibold text-base-content" for="create-surface">
             Surface
           </label>
           <select
@@ -1420,7 +1420,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
         <div class="grid gap-4 sm:grid-cols-2">
           <div>
-            <label class="text-xs font-semibold text-base-content/70" for="create-org">Org</label>
+            <label class="text-xs font-semibold text-base-content" for="create-org">Org</label>
             <select
               id="create-org"
               name="org_id"
@@ -1434,7 +1434,7 @@ defmodule PlatformWeb.ExperimentsLive do
             </select>
           </div>
           <div>
-            <label class="text-xs font-semibold text-base-content/70" for="create-project">
+            <label class="text-xs font-semibold text-base-content" for="create-project">
               Project
             </label>
             <select
@@ -1457,7 +1457,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
         <div class="grid gap-4 sm:grid-cols-2">
           <div>
-            <label class="text-xs font-semibold text-base-content/70" for="create-metric">
+            <label class="text-xs font-semibold text-base-content" for="create-metric">
               Primary metric
             </label>
             <%!-- A PICKER, not free text. An unrecognised string resolves to
@@ -1496,7 +1496,7 @@ defmodule PlatformWeb.ExperimentsLive do
           </div>
 
           <div>
-            <label class="text-xs font-semibold text-base-content/70" for="create-stop-rule">
+            <label class="text-xs font-semibold text-base-content" for="create-stop-rule">
               Stop rule
             </label>
             <div class="flex items-center gap-2">
@@ -1553,7 +1553,7 @@ defmodule PlatformWeb.ExperimentsLive do
         <p :if={@experiment.hypothesis} class="text-sm text-base-content max-w-2xl">
           {@experiment.hypothesis}
         </p>
-        <p class="text-sm text-base-content/80 flex flex-wrap gap-x-4 gap-y-1">
+        <p class="text-sm text-subtle flex flex-wrap gap-x-4 gap-y-1">
           <span class="font-mono break-all" data-role="header-surface">
             {@experiment.surface_key || "dispatch.prompt"}
           </span>
@@ -1612,7 +1612,7 @@ defmodule PlatformWeb.ExperimentsLive do
           class="textarea textarea-sm textarea-bordered w-full"
           placeholder="What you saw and what should happen next. The Scientist reads this."
         ></textarea>
-        <p class="text-xs text-base-content/70">
+        <p class="text-xs text-base-content">
           Stopping is not concluding: the question stays open, and subjects already assigned keep
           their arm.
         </p>
@@ -1641,7 +1641,7 @@ defmodule PlatformWeb.ExperimentsLive do
           data-role="stop-feedback"
           class="font-sans text-sm whitespace-pre-wrap break-words"
         >{@experiment.stop_feedback}</pre>
-        <p :if={is_nil(@experiment.stop_feedback)} class="text-sm text-base-content/70">
+        <p :if={is_nil(@experiment.stop_feedback)} class="text-sm text-base-content">
           No feedback was recorded.
         </p>
       </section>
@@ -1743,25 +1743,25 @@ defmodule PlatformWeb.ExperimentsLive do
       <section :if={@tab == "design"} class="space-y-4">
         <dl class="grid gap-3 sm:grid-cols-2 text-sm">
           <div>
-            <dt class="text-xs text-base-content/70">Surface</dt>
+            <dt class="text-xs text-base-content">Surface</dt>
             <dd data-role="design-surface" class="font-mono break-all">
               {@experiment.surface_key || "dispatch.prompt (not bound yet)"}
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Target</dt>
+            <dt class="text-xs text-base-content">Target</dt>
             <dd data-role="design-target" class="font-mono break-all">
               {@experiment.surface_target || @experiment.target_template_slug || "not bound yet"}
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Org</dt>
+            <dt class="text-xs text-base-content">Org</dt>
             <dd data-role="design-org">
               {if @experiment.org_id, do: @org_name || "an org", else: "Install-wide"}
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Project</dt>
+            <dt class="text-xs text-base-content">Project</dt>
             <dd data-role="design-project">
               {if @experiment.project_id,
                 do: @project_name || "a project",
@@ -1769,15 +1769,15 @@ defmodule PlatformWeb.ExperimentsLive do
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Metric</dt>
+            <dt class="text-xs text-base-content">Metric</dt>
             <dd data-role="design-metric">{metric_words(@experiment, @metric_catalog)}</dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Stop rule</dt>
+            <dt class="text-xs text-base-content">Stop rule</dt>
             <dd data-role="design-stop-rule">{ExperimentResults.stop_rule_label(@experiment)}</dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Observation window</dt>
+            <dt class="text-xs text-base-content">Observation window</dt>
             <dd data-role="design-window">
               {if window_days(@experiment),
                 do: "#{window_days(@experiment)} days",
@@ -1785,13 +1785,13 @@ defmodule PlatformWeb.ExperimentsLive do
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-base-content/70">Signal source</dt>
+            <dt class="text-xs text-base-content">Signal source</dt>
             <dd data-role="design-signal-source" class="break-words">
               {signal_words(@experiment.signal_source)}
             </dd>
           </div>
           <div class="sm:col-span-2">
-            <dt class="text-xs text-base-content/70">Assignment policy</dt>
+            <dt class="text-xs text-base-content">Assignment policy</dt>
             <dd>
               <pre
                 data-role="design-policy"
@@ -1854,7 +1854,7 @@ defmodule PlatformWeb.ExperimentsLive do
           <h2 class="text-sm font-semibold">Add a variant</h2>
           <div class="grid gap-3 sm:grid-cols-3">
             <div class="sm:col-span-2">
-              <label class="text-xs text-base-content/70" for="variant-slug">Slug</label>
+              <label class="text-xs text-base-content" for="variant-slug">Slug</label>
               <input
                 id="variant-slug"
                 name="slug"
@@ -1863,7 +1863,7 @@ defmodule PlatformWeb.ExperimentsLive do
               />
             </div>
             <div>
-              <label class="text-xs text-base-content/70" for="variant-weight">Weight</label>
+              <label class="text-xs text-base-content" for="variant-weight">Weight</label>
               <input
                 id="variant-weight"
                 name="weight"
@@ -1875,7 +1875,7 @@ defmodule PlatformWeb.ExperimentsLive do
             </div>
           </div>
           <div>
-            <label class="text-xs text-base-content/70" for="variant-payload">Payload (JSON)</label>
+            <label class="text-xs text-base-content" for="variant-payload">Payload (JSON)</label>
             <textarea
               id="variant-payload"
               name="payload"
@@ -1883,7 +1883,7 @@ defmodule PlatformWeb.ExperimentsLive do
               required
               class="textarea textarea-sm textarea-bordered w-full font-mono"
             >{"{}"}</textarea>
-            <p class="text-xs text-base-content/70">
+            <p class="text-xs text-base-content">
               Validated by the surface; its errors are shown as written.
             </p>
           </div>
@@ -1938,7 +1938,7 @@ defmodule PlatformWeb.ExperimentsLive do
               <span class="text-sm font-medium break-all">{variant.slug}</span>
               <span class="text-xs text-neutral">weight {variant.weight}</span>
             </div>
-            <pre class="text-xs whitespace-pre-wrap break-all text-base-content/80 max-h-40 overflow-y-auto">{variant_body(@experiment, variant)}</pre>
+            <pre class="text-xs whitespace-pre-wrap break-all text-base-content max-h-40 overflow-y-auto">{variant_body(@experiment, variant)}</pre>
           </div>
         </div>
       </section>
@@ -2039,7 +2039,7 @@ defmodule PlatformWeb.ExperimentsLive do
         </details>
       </div>
 
-      <div data-role="result-basis" class="text-xs text-base-content/70 space-y-0.5">
+      <div data-role="result-basis" class="text-xs text-subtle space-y-0.5">
         <div>
           {@row.subjects} subjects assigned · {ExperimentResults.stop_rule_label(@experiment)}
         </div>

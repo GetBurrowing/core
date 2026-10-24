@@ -96,7 +96,7 @@ defmodule PlatformWeb.Components.ChatInlineCanvas do
         data-role="inline-canvas-placeholder"
         data-reserved-height={reserved_height(@canvas)}
         style={"height: #{reserved_height(@canvas)}px;"}
-        class="flex items-start justify-center gap-2 rounded-xl border border-edge bg-base-200 px-4 pt-6 text-sm text-base-content/70"
+        class="flex items-start justify-center gap-2 rounded-xl border border-edge bg-base-200 px-4 pt-6 text-sm text-base-content"
       >
         <span class={[kind_icon(@canvas), "size-4 shrink-0"]} aria-hidden="true"></span>
         <span class="truncate">{@title}</span>

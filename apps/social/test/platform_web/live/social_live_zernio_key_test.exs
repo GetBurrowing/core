@@ -74,11 +74,12 @@ defmodule PlatformWeb.SocialLiveZernioKeyTest do
              "input[data-role='social-zernio-key-input'][type='password'][autocomplete='off'][placeholder='paste key']"
            )
 
-    # The placeholder paints on the semantic /70 slot, not daisy's /50 default,
-    # which measured 3.95:1 on the row's base-100 in light theme (stage 5).
+    # The placeholder paints text-subtle (direction canvas rule 1; task
+    # 01a15907 stage 3, was the 70% slot), not daisy's /50 default, which
+    # measured 3.95:1 on the row's base-100 in light theme (stage 5).
     assert has_element?(
              child,
-             "input[data-role='social-zernio-key-input'][class~='placeholder:text-base-content/70']"
+             "input[data-role='social-zernio-key-input'][class~='placeholder:text-subtle']"
            )
 
     refute has_element?(child, "[data-role='social-zernio-key-form'][phx-change]")

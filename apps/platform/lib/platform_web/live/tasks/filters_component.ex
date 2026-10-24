@@ -113,7 +113,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
       <div
         :if={@selected_project_id}
         data-role="tasks-breadcrumb"
-        class="flex items-center gap-1 px-4 pb-2 text-xs text-base-content/60"
+        class="flex items-center gap-1 px-4 pb-2 text-xs text-subtle"
       >
         <span
           :for={p <- @projects}
@@ -127,7 +127,9 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
           >
             {TaskDisplay.label_for(@mask_labels, @mask_names?, {:org, p.org.slug}, real: p.org.name)}
           </span>
-          <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
+          <span :if={match?(%Tenancy.Org{}, p.org)} aria-hidden="true" class="text-decorative">
+            /
+          </span>
           <span>
             {TaskDisplay.label_for(@mask_labels, @mask_names?, {:project, p.id}, real: p.name)}
           </span>
@@ -182,7 +184,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             if(@scope_filter == :all,
               do:
                 "bg-base-content text-base-100 border-base-content shadow-[0_0_0_2px_oklch(70%_0_0/30%)]",
-              else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              else: "bg-base-200 text-base-content border-base-content/15 hover:bg-base-300"
             )
           ]}
         >
@@ -191,7 +193,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
             if(@scope_filter == :all,
               do: "bg-base-100/20 text-base-100",
-              else: "bg-base-300 text-base-content/70"
+              else: "bg-base-300 text-base-content"
             )
           ]}>
             {scope_count_total(@scope_counts)}
@@ -248,7 +250,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
             if(@scope_filter == entry.slug,
               do: "bg-base-content/15 text-base-content",
-              else: "bg-base-200 text-base-content/60"
+              else: "bg-base-200 text-subtle"
             )
           ]}>
             {Map.get(@scope_counts, entry.slug, 0)}
@@ -275,7 +277,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             if(@sponsor_filter == :mine,
               do:
                 "bg-primary text-primary-content border-primary shadow-[0_0_0_2px_oklch(70%_0.15_260/30%)]",
-              else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              else: "bg-base-200 text-base-content border-base-content/15 hover:bg-base-300"
             )
           ]}
         >
@@ -296,14 +298,19 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         <.link
           :for={{lane, label, icon} <- origin_lanes()}
           patch={
-            BoardData.tasks_path(
-              @sponsor_filter,
-              @board_sort,
-              @task_search_query,
-              @scope_filter,
-              @kind_filter,
-              lane
-            )
+            BoardData.tasks_path(%{
+              sponsor_filter: @sponsor_filter,
+              board_sort: @board_sort,
+              task_search_query: @task_search_query,
+              scope_filter: @scope_filter,
+              kind_filter: @kind_filter,
+              origin_filter: lane,
+              selected_project_id: @selected_project_id,
+              selected_epic_id: @selected_epic_id,
+              status_filters: @status_filters,
+              kind_filters: @kind_filters,
+              mine_filter: @mine_filter
+            })
           }
           data-role="origin-lane-tab"
           data-lane={to_string(lane)}
@@ -312,7 +319,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
             "inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium leading-none whitespace-nowrap transition-colors focus-visible-ring max-sm:h-9",
             if(lane_active?(@origin_filter, lane),
               do: "bg-primary text-primary-content",
-              else: "text-base-content/70 hover:bg-base-300"
+              else: "text-base-content hover:bg-base-300"
             )
           ]}
         >
@@ -353,6 +360,11 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         scope_filter={@scope_filter}
         kind_filter={@kind_filter}
         origin_filter={@origin_filter}
+        selected_project_id={@selected_project_id}
+        selected_epic_id={@selected_epic_id}
+        status_filters={@status_filters}
+        kind_filters={@kind_filters}
+        mine_filter={@mine_filter}
         class="hidden lg:inline-flex shrink-0"
       />
     </div>
@@ -443,6 +455,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # Validates the incoming status against the mobile columns to ignore
   # garbage — a stale ClientState value replayed by `tasks_status_filter.js`
   # is the realistic source.
+  # parallel-ui: tasks.mobile_status_pill
   def handle_event("filter_by_status", %{"status" => status}, socket) do
     if Enum.any?(socket.assigns.mobile_columns, fn {key, _label} -> key == status end) do
       {:noreply, announce(socket, %{active_status_filter: status})}
@@ -490,8 +503,18 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   def handle_event("filter_kind", %{"kind" => kind}, socket) do
     parsed = if kind in Task.kinds(), do: kind, else: :all
 
-    {:noreply,
-     push_patch(socket, to: BoardData.tasks_path(%{socket.assigns | kind_filter: parsed}))}
+    # The old single select writes the list too (task 01a161fd stage 1):
+    # `tasks_path/1` emits `:kind_filters` when non-empty, so leaving a
+    # stale multi-kind list here would override the pick.
+    # parallel-ui: tasks.kind_filter_single
+    kind_filters = if parsed == :all, do: [], else: [parsed]
+
+    path =
+      socket.assigns
+      |> Map.merge(%{kind_filter: parsed, kind_filters: kind_filters})
+      |> BoardData.tasks_path()
+
+    {:noreply, push_patch(socket, to: path)}
   end
 
   # Thin push_patch shim: `handle_params/3` in the shell owns the decode, so

@@ -46,7 +46,7 @@ defmodule Platform.Chat.Canvas.Kinds.Card do
     ]}>
       <p
         :if={@props["title"]}
-        class="text-xs font-semibold uppercase tracking-widest text-base-content/50"
+        class="text-xs font-semibold uppercase tracking-widest text-base-content"
       >
         {@props["title"]}
       </p>

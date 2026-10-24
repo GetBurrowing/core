@@ -1,47 +1,62 @@
 defmodule Platform.Agents.ColorPalette do
   @moduledoc """
-  Predefined color families for agent identity.
+  The ten agent identity slots.
 
-  Each color is an OKLCH accent string that fans out to:
-  - Chat bubble border and background
-  - Avatar ring
-  - Agent name text
-  - AI badge border/text
+  An agent stores a slot id (`agents.color`, e.g. `"purple"`). The id resolves
+  to THEME TOKENS, not to a colour: every theme block (app.css's two Burrow
+  daisyUI blocks and each preset block in `assets/css/theme_presets.css`)
+  declares, per slot,
 
-  The accent color is stored on the agent record as a color id (e.g. "purple").
-  At render time, it resolves to an OKLCH string and is injected as a CSS custom
-  property (`--agent-accent`) on each message row. The `.msg-agent*` CSS classes
-  read this variable to apply per-agent color identity.
+    * `--ag-<id>`: the full-strength hue, for the rail, the avatar ring and the
+      AI pill's border (non-text, 3:1);
+    * `--ag-<id>-text`: the name and AI-pill text colour, chosen so it clears
+      4.5:1 (7:1 in high contrast) on the painted tint;
+
+  and app.css derives the opaque `--ag-<id>-tint` from the block's
+  `--ag-tint-pct` (there is no hover tint). So one stored id paints a
+  different, separately measured value under each preset and mode, and no
+  colour value lives in Elixir. `token/1` names the base token; the guard in
+  `test/platform/design/agent_slot_tokens_guard_test.exs` holds the values.
+
+  `slot_for/1` is the resolver: a nil, blank or unknown stored id is the blue
+  slot. A surface renders `data-agent-slot="<id>"`, and app.css's ten pointer
+  rules (`[data-agent-slot="<id>"]`) point `--ag`, `--ag-text` and `--ag-tint`
+  at that slot's tokens; the colour pickers read `var(<token>)` directly.
+  The pre-token OKLCH accent strings (`accent_for/1`, `default_accent/0`,
+  `:accent`) were removed in task 01a1557a rung 3 stage 2 with their last
+  consumer.
   """
 
+  @default_slot "blue"
+
   @colors [
-    %{id: "blue", label: "Blue", accent: "oklch(82% 0.12 207)"},
-    %{id: "purple", label: "Purple", accent: "oklch(78% 0.16 300)"},
-    %{id: "orange", label: "Orange", accent: "oklch(80% 0.17 55)"},
-    %{id: "brick", label: "Brick Red", accent: "oklch(72% 0.14 30)"},
-    %{id: "green", label: "Green", accent: "oklch(78% 0.15 160)"},
-    %{id: "rose", label: "Rose", accent: "oklch(78% 0.14 355)"},
-    %{id: "amber", label: "Amber", accent: "oklch(84% 0.18 85)"},
-    %{id: "teal", label: "Teal", accent: "oklch(78% 0.13 185)"},
-    %{id: "indigo", label: "Indigo", accent: "oklch(74% 0.15 270)"},
-    %{id: "lime", label: "Lime", accent: "oklch(82% 0.17 130)"}
+    %{id: "blue", label: "Blue", token: "--ag-blue"},
+    %{id: "purple", label: "Purple", token: "--ag-purple"},
+    %{id: "orange", label: "Orange", token: "--ag-orange"},
+    %{id: "brick", label: "Brick Red", token: "--ag-brick"},
+    %{id: "green", label: "Green", token: "--ag-green"},
+    %{id: "rose", label: "Rose", token: "--ag-rose"},
+    %{id: "amber", label: "Amber", token: "--ag-amber"},
+    %{id: "teal", label: "Teal", token: "--ag-teal"},
+    %{id: "indigo", label: "Indigo", token: "--ag-indigo"},
+    %{id: "lime", label: "Lime", token: "--ag-lime"}
   ]
 
-  @default_accent "oklch(82% 0.12 207)"
+  @ids Enum.map(@colors, & &1.id)
 
-  @doc "All available color families."
+  @doc "All available slots."
   def all, do: @colors
 
-  @doc "The default accent color (blue) used as fallback when no color is set."
-  def default_accent, do: @default_accent
+  @doc "Every slot id, in palette order."
+  @spec ids() :: [String.t()]
+  def ids, do: @ids
 
-  @doc "Get the accent color string for a color id, falling back to the default blue."
-  def accent_for(nil), do: @default_accent
+  @doc "The slot a stored colour id paints: nil, blank or unknown is \"#{@default_slot}\"."
+  @spec slot_for(String.t() | nil) :: String.t()
+  def slot_for(color_id) when is_binary(color_id) and color_id in @ids, do: color_id
+  def slot_for(_), do: @default_slot
 
-  def accent_for(color_id) when is_binary(color_id) do
-    case Enum.find(@colors, &(&1.id == color_id)) do
-      %{accent: accent} -> accent
-      nil -> @default_accent
-    end
-  end
+  @doc "The base token of a slot, `\"--ag-<id>\"`; nil, blank or unknown is blue's."
+  @spec token(String.t() | nil) :: String.t()
+  def token(color_id), do: "--ag-" <> slot_for(color_id)
 end

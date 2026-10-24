@@ -104,12 +104,12 @@ defmodule PlatformWeb.Components.SupersessionRuling do
     >
       <p class={[
         "text-xs",
-        if(Supersession.unruled?(@claim), do: "text-base-content/60", else: "text-base-content")
+        if(Supersession.unruled?(@claim), do: "text-subtle", else: "text-base-content")
       ]}>
         <span data-role={"files-supersession-claim" <> @suffix}>{claim_sentence(@claim)}</span>
       </p>
 
-      <p :if={Supersession.unruled?(@claim)} class="mt-1 text-[11px] text-base-content/50">
+      <p :if={Supersession.unruled?(@claim)} class="mt-1 text-[11px] text-subtle">
         Recorded automatically. Both documents stay published and searchable either way —
         a ruling only decides whether the claim is authoritative.
       </p>
@@ -155,7 +155,7 @@ defmodule PlatformWeb.Components.SupersessionRuling do
     do: "badge badge-outline badge-sm text-base-content border-base-content/50"
 
   def badge_class(_unruled),
-    do: "badge badge-outline badge-sm font-normal text-base-content/60 border-base-content/25"
+    do: "badge badge-outline badge-sm font-normal text-subtle border-base-content/25"
 
   @doc false
   def badge_label(%{claimant_filename: name, ruling: "confirmed"}),

@@ -361,7 +361,7 @@ defmodule PlatformWeb.SocialSettingsTab do
           <span class="size-2 rounded-full bg-success" aria-hidden="true"></span> Set
         </span>
       </div>
-      <p class="mt-0.5 text-sm text-base-content/70" data-role="social-zernio-scope">
+      <p class="mt-0.5 text-sm text-base-content" data-role="social-zernio-scope">
         One key for the whole org. Used by every profile.
       </p>
 
@@ -369,7 +369,7 @@ defmodule PlatformWeb.SocialSettingsTab do
         :if={match?({:set, _}, @status) and @mode != :edit}
         class="mt-3 flex flex-wrap items-center justify-between gap-2"
       >
-        <p class="text-sm text-base-content/70" data-role="social-zernio-changed">
+        <p class="text-sm text-subtle" data-role="social-zernio-changed">
           {last_changed(@status)}
         </p>
         <button
@@ -403,7 +403,7 @@ defmodule PlatformWeb.SocialSettingsTab do
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
-            class="peer input min-w-0 flex-1 border-edge bg-base-100 font-mono placeholder:text-base-content/70"
+            class="peer input min-w-0 flex-1 border-edge bg-base-100 font-mono placeholder:text-subtle"
             data-role="social-zernio-key-input"
           />
           <button
@@ -417,7 +417,7 @@ defmodule PlatformWeb.SocialSettingsTab do
       </.form>
       <p
         :if={@input? and @status == :not_set}
-        class="mt-2 text-sm text-base-content/70"
+        class="mt-2 text-sm text-base-content"
         data-role="social-zernio-helper"
       >
         Find it in Zernio > Settings > API.
@@ -465,15 +465,15 @@ defmodule PlatformWeb.SocialSettingsTab do
     ~H"""
     <dl class="space-y-3 text-sm" data-role="social-settings-readonly">
       <div>
-        <dt class="text-base-content/70">Home URL</dt>
+        <dt class="text-base-content">Home URL</dt>
         <dd>{@profile.home_url || "Not set"}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Voice notes</dt>
+        <dt class="text-base-content">Voice notes</dt>
         <dd class="whitespace-pre-wrap">{@profile.voice_notes || "Not set"}</dd>
       </div>
       <div>
-        <dt class="text-base-content/70">Hashtags</dt>
+        <dt class="text-base-content">Hashtags</dt>
         <dd>{Enum.join(@profile.default_hashtags || [], " ")}</dd>
       </div>
       <SocialProjectSetting.readonly :if={@project_setting} setting={@project_setting} />

@@ -170,7 +170,7 @@ defmodule PlatformWeb.SocialTopBar do
         </span>
         <span
           :if={@scope_count == 0}
-          class="whitespace-nowrap text-sm text-base-content/70"
+          class="whitespace-nowrap text-sm text-base-content"
           data-role="social-needs-approval"
         >
           0 need approval
@@ -178,7 +178,7 @@ defmodule PlatformWeb.SocialTopBar do
         <button
           :if={@scope != :all and length(@profiles) > 1}
           type="button"
-          class="btn btn-ghost btn-xs whitespace-nowrap text-base-content/70"
+          class="btn btn-ghost btn-xs whitespace-nowrap text-base-content"
           phx-click="switch_profile"
           phx-value-profile_id="all"
           data-role="social-waiting-count"
@@ -223,7 +223,7 @@ defmodule PlatformWeb.SocialTopBar do
           role="tab"
           class={[
             "tab shrink-0",
-            if(@tab == item.key, do: "tab-active", else: "text-base-content/70!")
+            @tab == item.key && "tab-active"
           ]}
           aria-selected={to_string(@tab == item.key)}
           phx-click="select_tab"
@@ -269,7 +269,7 @@ defmodule PlatformWeb.SocialTopBar do
   def pick_brand(assigns) do
     ~H"""
     <div class="max-w-md space-y-3" data-role="social-pick-brand">
-      <p class="text-base-content/70">Pick a brand to see {@label}</p>
+      <p class="text-base-content">Pick a brand to see {@label}</p>
       <ul class="divide-y divide-base-300 rounded-lg border border-base-300 bg-base-100">
         <li :for={profile <- @profiles}>
           <button
@@ -281,7 +281,7 @@ defmodule PlatformWeb.SocialTopBar do
             data-profile-id={profile.id}
           >
             <span class="min-w-0 truncate">{profile.name}</span>
-            <span class="text-sm text-base-content/70">
+            <span class="text-sm text-base-content">
               {SocialScope.count(@counts, profile)} need approval
             </span>
           </button>

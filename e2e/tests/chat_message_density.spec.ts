@@ -40,6 +40,15 @@
  *     is the double-tap actions sheet, and that is what it now asserts. Read
  *     the note on that test before touching it: the path was reported as a
  *     FAILED gate at stage 2 and does not reproduce as failing.
+ *
+ * UPDATED BY REDESIGN RUNG 9 (task 01a1557a-9406 stage 1). The header action
+ * row is deleted. A message's quick actions are the 4-glyph tap pill
+ * (`[data-role="message-pill"]`), absolutely positioned inside
+ * `.message-row-inner` and `display: none` until a tap (`data-pill-open`),
+ * a desktop hover or a row focus reveals it. It costs no layout in either
+ * state, so every height and line-box guard here is unchanged; the guards
+ * that read the action row now read the pill. Add-reaction on every device
+ * is the pill's More, then the actions sheet's "+".
  */
 
 import { test, expect, devices, Browser, BrowserContext, Page } from "@playwright/test"
@@ -119,12 +128,13 @@ const ROW_HEIGHT_TOL_PX = 3
  *  is the whole mechanism; touch is not involved. */
 const NARROW_WIDTHS = [320, 375, 414]
 
-/** Shift+Tab presses from the compose box to the add-reaction control on a
- *  grouped continuation row. Stage 4 measured 8 and recorded that the same
- *  walk did not reach it at all in 60 presses beforehand. The ceiling is set
- *  a little above the measurement so a genuinely reachable control does not
- *  go red over one extra button landing in the row, while the "it is not in
- *  the tab order at all" regression — which is unbounded — still fails. */
+/** Shift+Tab presses from the compose box to a grouped continuation row
+ *  (the row itself is the tab stop since rung 9; its pill follows it).
+ *  Stage 4 measured 8 to the old add-reaction control and recorded that the
+ *  same walk did not reach it at all in 60 presses beforehand. The ceiling
+ *  is set a little above that so a genuinely reachable row does not go red
+ *  over one extra control, while the "it is not in the tab order at all"
+ *  regression — which is unbounded — still fails. */
 const ADD_REACTION_MAX_TABS = 14
 
 interface Peer {
@@ -151,7 +161,7 @@ async function login(
   // Same mount discipline as sidebar_scroll_stability.spec.ts: let the
   // ComposeInput hook finish mounting before any keystroke lands, or the
   // first sync eats the prefix.
-  await expect(page.locator('#compose-form textarea[name="compose[text]"]')).toBeVisible()
+  await expect(page.locator("#compose-form .compose-field")).toBeVisible()
   // Every assertion in this file is a pixel measurement, and a row measured
   // before the webfont swaps is measured with fallback metrics — on the first
   // cold load against a fresh dev DB that was observed as a 67px row reading
@@ -163,14 +173,17 @@ async function login(
 }
 
 async function compose(peer: Peer, body: string) {
-  const textarea = peer.page.locator('#compose-form textarea[name="compose[text]"]')
-  await expect(textarea).toBeVisible()
+  // Since rung 10 the field is a contenteditable (`.compose-field`) that
+  // ComposeInput mirrors into the hidden `compose[text]` input.
+  const field = peer.page.locator("#compose-form .compose-field")
+  const value = peer.page.locator('#compose-form input[name="compose[text]"]')
+  await expect(field).toBeVisible()
   for (let attempt = 0; attempt < 2; attempt++) {
-    await textarea.fill("")
-    await textarea.click()
-    await textarea.pressSequentially(body, { delay: 3 })
+    await field.fill("")
+    await field.click()
+    await field.pressSequentially(body, { delay: 3 })
     try {
-      await expect(textarea).toHaveValue(body, { timeout: 3_000 })
+      await expect(value).toHaveValue(body, { timeout: 3_000 })
       break
     } catch (err) {
       if (attempt === 1) throw err
@@ -196,7 +209,7 @@ async function unhover(page: Page) {
   await page.waitForTimeout(250) // 140ms opacity transition + settle
 }
 
-/** Same gesture the LongpressMenu hook listens for, driven the same way
+/** Same double-tap the MessageGestures hook listens for, driven the same way
  *  chat_reactions.spec.ts drives it: two real touchscreen taps at the
  *  bubble's centre. `locator.tap()` twice is not equivalent — it re-resolves
  *  and re-scrolls between taps, which can move the point out from under the
@@ -221,7 +234,8 @@ interface RowGeometry {
    *  message nobody has reacted to (task 01a000c0 stage 4). */
   reactionRowHeight: number
   reactionRowPresent: boolean
-  addReactionInHeader: boolean
+  /** The tap pill is rendered in the row (hidden at rest). */
+  pillPresent: boolean
   /** Pills, i.e. actual reactions. Distinct from `reactionRowPresent`, which
    *  is about the BOX: whether an empty one is rendered is a separate
    *  property owned by the ceiling test above. */
@@ -262,11 +276,11 @@ async function rowGeometry(page: Page, tag: string): Promise<RowGeometry[]> {
             ? reactionRow.getBoundingClientRect().height
             : -1,
           reactionRowPresent: !!reactionRow,
-          // The "+" lives in the header action row now. On a continuation
-          // row that header is stripped to nothing but this — so finding it
-          // here is what proves the strip did not take it with it.
-          addReactionInHeader: !!row.querySelector(
-            '.message-header .message-action-row [aria-label="Add reaction"]',
+          // The quick actions live in the tap pill (rung 9), outside the
+          // header, so stripping a continuation row's header cannot take
+          // them with it. Finding it here is what proves that.
+          pillPresent: !!row.querySelector(
+            '.message-row-inner > [data-role="message-pill"] [aria-label="More actions"]',
           ),
           // A wrapped row is legitimately taller than 34px, so the ceiling
           // only means anything if we confirm we measured a ONE-LINE row.
@@ -357,13 +371,12 @@ test.describe("chat message density", () => {
         // collapse rule had come back.
         expect(row.reactionRowPresent).toBe(false)
         expect(row.reactionRowHeight).toBe(-1)
-        // …and the control it used to hold is still reachable, in its new
-        // home. Without this the assertion above is satisfied by having
-        // deleted add-reaction from continuation rows entirely, which is
-        // exactly the regression stage 4 was fixing.
+        // …and the actions are still reachable, in the pill. Without this the
+        // assertion above is satisfied by having deleted them from
+        // continuation rows entirely, which is the regression stage 4 fixed.
         expect(
-          row.addReactionInHeader,
-          `no add-reaction control in the action row of a grouped row: ${row.text}`,
+          row.pillPresent,
+          `no message pill on a grouped row: ${row.text}`,
         ).toBe(true)
         // The property this whole stage exists to protect.
         expect(
@@ -450,21 +463,27 @@ test.describe("chat message density", () => {
       await expect(bobRow).toBeVisible({ timeout: 10_000 })
       await bobRow.scrollIntoViewIfNeeded()
 
-      // The desktop reveal is hover/focus-driven, so on a coarse pointer the
-      // action row is present in the DOM but never revealed. Asserting that
-      // is what makes the sheet load-bearing rather than a second option.
-      const opacity = await bobRow
-        .locator(".message-action-row")
-        .evaluate((el) => getComputedStyle(el).opacity)
-      console.log(`[measure] touch action-row opacity: ${opacity}`)
-      expect(
-        opacity,
-        "the hover action row is visible on a coarse pointer — if this is how " +
-          "touch users reach add-reaction, it was not designed, it leaked",
-      ).toBe("0")
+      // At rest the pill is in the DOM but not shown: on a coarse pointer
+      // only a tap reveals it (rung 9), never a hover or a stray focus.
+      const pill = bobRow.locator('[data-role="message-pill"]')
+      await expect(pill).toHaveCSS("display", "none")
 
-      // So the sheet is the path, and this is the assertion stage 2 reported
-      // as failing. It passes — see the note above the test.
+      // One tap shows the pill with no wait: read straight after the tap,
+      // in the same evaluate turn as nothing else.
+      const box = await bobRow.boundingBox()
+      if (!box) throw new Error("row has no bounding box")
+      await bob.page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
+      const shown = await bobRow.evaluate(
+        (row) =>
+          row.getAttribute("data-pill-open") === "true" &&
+          getComputedStyle(row.querySelector('[data-role="message-pill"]')!).display === "flex",
+      )
+      expect(shown, "a single tap did not reveal the pill synchronously").toBe(true)
+
+      // Let the first tap age out of the double-tap window, then double-tap:
+      // the sheet is the path to every reaction, and this is the assertion
+      // stage 2 reported as failing. It passes — see the note above.
+      await bob.page.waitForTimeout(400)
       await doubleTap(bob.page, bobRow)
       const sheet = bob.page.locator("#message-actions-sheet")
       await expect(sheet).toBeVisible({ timeout: 5_000 })
@@ -579,15 +598,15 @@ test.describe("chat message density", () => {
 
       // ANTI-VACUITY. If the hover never landed, both measurements are of
       // the resting state and the equality below is a tautology that stays
-      // green through any regression. The action row's opacity is the
-      // cheapest proof that `.group:hover` actually matched.
-      const hoveredOpacity = await row
-        .locator(".message-action-row")
-        .evaluate((el) => getComputedStyle(el).opacity)
+      // green through any regression. The pill showing is the cheapest proof
+      // that the desktop `:hover` rule actually matched.
+      const hoveredDisplay = await row
+        .locator('[data-role="message-pill"]')
+        .evaluate((el) => getComputedStyle(el).display)
       expect(
-        hoveredOpacity,
+        hoveredDisplay,
         "hover did not take effect, so the equality below proves nothing",
-      ).toBe("1")
+      ).toBe("flex")
 
       const hoverEmpty = await heightOf(row)
       console.log(
@@ -601,8 +620,9 @@ test.describe("chat message density", () => {
       ).toBe(restEmpty)
 
       // ── Already has reactions ──────────────────────────────────────
-      // Click from the hovered state: the action row is `pointer-events-none`
-      // until `.group:hover`, so a cold click fails its hit test.
+      // Click from the hovered state: the pill is `display: none` until the
+      // row is hovered, so a cold click has nothing to hit. This is the
+      // pill's thumbs-up.
       await row.locator('button[phx-click="react"][phx-value-emoji="👍"]').first().click()
       await expect(row.locator('.reaction-pill[data-emoji="👍"]')).toBeVisible({
         timeout: 5_000,
@@ -721,18 +741,20 @@ test.describe("chat message density", () => {
   // which put the control out of reach on the MAJORITY of rows in a real
   // conversation while a test on a run-opening row stayed green.
   //
-  // So this walks to it on a GROUPED row, with the mouse parked away from the
-  // list. Focus-within has to be what reveals the row; if the walk succeeds
-  // only because the cursor is sitting on the message, this guard is testing
-  // hover a second time and nothing is testing the keyboard.
+  // UPDATED BY REDESIGN RUNG 9. The hover row is gone; the row itself is now
+  // a tab stop (`tabindex="0"`) and its keyboard focus reveals the tap pill,
+  // which Tab then walks into. The pill IS `display: none` at rest, so this is
+  // the same trap in a new shape: if the reveal ever stops following the
+  // row's own keyboard focus, Tab skips the pill and nothing here is
+  // reachable. So this walks to the row by Shift+Tab, then into the pill by
+  // Tab, on a GROUPED row, with the mouse parked away from the list.
   //
-  // "Visible and clickable when focused" is checked as three separate things
-  // because they fail separately: opacity (can it be seen), pointer-events
+  // "Visible and clickable when focused" is checked as separate things
+  // because they fail separately: display (can it be seen), pointer-events
   // (would a click reach it), and hit-testing at its own centre (is something
-  // else on top). Then it is actually activated, by keyboard, and the picker
-  // has to open — the only check that proves the whole path works rather than
-  // that the pixels look right.
-  test("Tab reaches add-reaction on a grouped row, visible and clickable", async ({
+  // else on top). Then More is activated by keyboard and the actions sheet,
+  // which holds add-reaction, has to open.
+  test("Tab reaches the message pill on a grouped row, visible and clickable", async ({
     browser,
   }) => {
     const tag = `kbd-${Date.now().toString(36)}`
@@ -762,65 +784,59 @@ test.describe("chat message density", () => {
       // Park the cursor before touching the keyboard, and keep it parked.
       // Everything below has to be produced by focus alone.
       await unhover(peer.page)
-      await expect(
-        groupedRow.locator(".message-action-row"),
-        "the action row is already revealed before any key is pressed",
-      ).toHaveCSS("opacity", "0")
+      const pill = groupedRow.locator('[data-role="message-pill"]')
+      await expect(pill, "the pill is already revealed before any key is pressed").toHaveCSS(
+        "display",
+        "none",
+      )
 
-      await peer.page.locator('#compose-form textarea[name="compose[text]"]').focus()
+      await peer.page.locator("#compose-form .compose-field").focus()
 
-      const addBtn = groupedRow.locator('[aria-label="Add reaction"]')
       let presses = 0
       let reached = false
       while (presses < 60 && !reached) {
         await peer.page.keyboard.press("Shift+Tab")
         presses++
-        reached = await groupedRow.evaluate((row) => {
-          const active = document.activeElement
-          return (
-            !!active &&
-            row.contains(active) &&
-            active.getAttribute("aria-label") === "Add reaction"
-          )
-        })
+        reached = await groupedRow.evaluate((row) => document.activeElement === row)
       }
-      console.log(`[measure] add-reaction reached in ${presses} Shift+Tab presses`)
+      console.log(`[measure] grouped row reached in ${presses} Shift+Tab presses`)
       expect(
         reached,
-        "60 Shift+Tab presses back from the compose box never landed on " +
-          "add-reaction inside a grouped row — it is not in the tab order",
+        "60 Shift+Tab presses back from the compose box never landed on the " +
+          "grouped row — it is not in the tab order",
       ).toBe(true)
       expect(
         presses,
-        `add-reaction took ${presses} Shift+Tab presses; ceiling is ` +
-          `${ADD_REACTION_MAX_TABS}`,
+        `the row took ${presses} Shift+Tab presses; ceiling is ${ADD_REACTION_MAX_TABS}`,
       ).toBeLessThanOrEqual(ADD_REACTION_MAX_TABS)
 
-      // Visible — by focus, with the cursor still parked at the origin.
-      await expect(groupedRow.locator(".message-action-row")).toHaveCSS("opacity", "1")
-      await expect(addBtn).toBeVisible()
+      // Visible — by the row's keyboard focus, with the cursor still parked.
+      await expect(pill).toHaveCSS("display", "flex")
 
-      // Clickable — a real click at its centre would reach IT, not the
-      // message text underneath it. The action row floats over the body on a
-      // continuation row, so "on top of the right thing" is a live question
-      // here rather than a formality.
-      const clickable = await addBtn.evaluate((el) => {
+      // Into the pill: thumbs-up, reply, copy, more.
+      const labels: string[] = []
+      for (let i = 0; i < 4; i++) {
+        await peer.page.keyboard.press("Tab")
+        labels.push(
+          await peer.page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? ""),
+        )
+      }
+      expect(labels).toEqual(["React with thumbs up", "Reply in thread", "Copy", "More actions"])
+      await expect(pill, "focus inside the pill must keep it shown").toHaveCSS("display", "flex")
+
+      const more = pill.locator('[aria-label="More actions"]')
+      const clickable = await more.evaluate((el) => {
         const cs = getComputedStyle(el)
-        const rowCs = getComputedStyle(el.closest(".message-action-row")!)
         const r = el.getBoundingClientRect()
         const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
         return {
           pointerEvents: cs.pointerEvents,
-          rowPointerEvents: rowCs.pointerEvents,
-          rowDisplay: rowCs.display,
           width: r.width,
           height: r.height,
           hitsSelf: !!hit && (el === hit || el.contains(hit)),
         }
       })
-      console.log(`[measure] focused add-reaction: ${JSON.stringify(clickable)}`)
-      expect(clickable.rowDisplay).not.toBe("none")
-      expect(clickable.rowPointerEvents).not.toBe("none")
+      console.log(`[measure] focused More: ${JSON.stringify(clickable)}`)
       expect(clickable.pointerEvents).not.toBe("none")
       expect(clickable.width).toBeGreaterThan(0)
       expect(clickable.height).toBeGreaterThan(0)
@@ -832,9 +848,10 @@ test.describe("chat message density", () => {
 
       // …and it works. Activated from the keyboard, still unhovered.
       await peer.page.keyboard.press("Enter")
-      await expect(peer.page.locator("#reaction-picker")).toBeVisible({
+      await expect(peer.page.locator("#message-actions-sheet")).toBeVisible({
         timeout: 5_000,
       })
+      await expect(peer.page.locator("#message-actions-more-reactions")).toBeVisible()
     } finally {
       await peer.context.close()
       await warm.context.close()
@@ -875,7 +892,7 @@ test.describe("chat message density", () => {
    * EACH MESSAGE CARRIES BOTH SHAPES. The seed composes two consecutive
    * messages from one author: the first opens the run (ungrouped, has its
    * own header) and the second is a same-author continuation (grouped,
-   * header stripped to just the action row). The assertion is only about
+   * header stripped to nothing). The assertion is only about
    * the ungrouped row's name — the grouped row's name span is not rendered
    * at all (`display: none`, task 01a000c0 stage 4) — but seeding both
    * confirms this stage's fix did not have to trade one shape for the
@@ -942,18 +959,17 @@ test.describe("chat message density", () => {
           .first()
         await expect(openerRow).toBeVisible()
 
-        // Confirmed unhovered: a hovered action row's `--color-base-100`
-        // backing is a separate, already-flagged finding at 375px (task
-        // 01a000c0 stage 1) and out of scope here — this asserts the resting
-        // state only.
-        const actionRowOpacity = await openerRow
-          .locator(".message-action-row")
-          .evaluate((el) => getComputedStyle(el).opacity)
+        // Confirmed at rest: the pill is not showing, so this measures the
+        // resting state only (the pill is absolutely positioned and could
+        // not reserve header width anyway, but the guard is about rest).
+        const pillDisplay = await openerRow
+          .locator('[data-role="message-pill"]')
+          .evaluate((el) => getComputedStyle(el).display)
         expect(
-          actionRowOpacity,
-          "the action row is already revealed — this would measure the hovered " +
-            "state, which is explicitly out of scope for this guard",
-        ).toBe("0")
+          pillDisplay,
+          "the message pill is already revealed — this would measure a " +
+            "revealed state, which is out of scope for this guard",
+        ).toBe("none")
 
         const nameSpan = openerRow.locator(".message-header > span").first()
         await expect(nameSpan).toBeVisible()

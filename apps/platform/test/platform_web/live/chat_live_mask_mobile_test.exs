@@ -1,17 +1,14 @@
 defmodule PlatformWeb.ChatLiveMaskMobileTest do
   @moduledoc """
   Render-level tests for screen-share name masking on the MOBILE surfaces
-  (task 01a00c66 stage 3): the `#mobile-channel-browser` drawer, the drawer's
-  search box, both chat-header scope pills, and the hidden-channels drawer's
-  org groupings.
+  (task 01a00c66 stage 3): both chat-header scope pills, the hidden-channels
+  drawer's org groupings, and the copy of the phone Chat list.
 
-  ## Why this file exists at all
-
-  The rail renders at two breakpoints and they have diverged before. Masking
-  the desktop rail and leaving the drawer unmasked is the most likely way this
-  whole feature ships broken — and it is invisible to every desktop test,
-  because the drawer is a separate element with its own loop and its own
-  derived strings.
+  The phone's conversation drawer this file was written for was deleted in
+  task 01a1557a-8562 stage 5. The phone list that replaced it carries its own
+  mask tests in `chat_live_chat_list_test.exs` ("mask names", and the search
+  sheet's "masked: no org-derived name and no snippet text ..."), which cover
+  the list rows and the search oracle the drawer tests here used to.
 
   ## The absence assertions are three-form and case-insensitive
 
@@ -71,26 +68,17 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
 
   defp live_following_redirect(conn) do
     case live(conn, ~p"/chat") do
-      {:error, {:live_redirect, %{to: path}}} -> live(conn, path)
-      ok -> ok
+      {:error, {:live_redirect, %{to: path}}} ->
+        live(conn, path)
+
+      # Since task 01a1557a-8562 stage 2, /chat is the phone Chat list and
+      # does not redirect. Land in the first channel the way a desktop
+      # viewport does: the ViewportBreakpoint hook's `below: false` report.
+      {:ok, view, _html} ->
+        render_hook(view, "chat_viewport", %{"below" => false})
+        {:ok, view, render(view)}
     end
   end
-
-  defp open_drawer(conn) do
-    {:ok, view, _html} = live_following_redirect(conn)
-
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
-    |> render_click()
-
-    view
-  end
-
-  # `LazyHTML.query/2`, not a regex: the drawer is a `<div>` full of nested
-  # `<div>`s, so any regex that "ends at the closing tag" actually runs to the
-  # end of the document and drags the chat header and message list in with it.
-  # A leak assertion over THAT slice is not an assertion about the drawer.
-  defp drawer(html), do: extract(html, "#mobile-channel-browser")
 
   defp extract(html, selector) do
     html
@@ -99,160 +87,12 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     |> LazyHTML.to_html()
   end
 
-  # The drawer carries its own toggle; target it inside the overlay so the
-  # rail's identical control (same event, same value) can't answer instead.
-  defp toggle_mask(view) do
-    view
-    |> element(~s(#mobile-channel-browser button[phx-click="toggle_mask_names"]))
-    |> render_click()
-  end
-
-  defp search(view, query) do
-    view
-    |> element(~s(#mobile-channel-browser form[phx-change="drawer_search"]))
-    |> render_change(%{"value" => query})
-  end
-
-  describe "the drawer masks like the rail" do
-    test "the drawer carries the SAME eye control and the SAME strip", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("acme")
-      view = open_drawer(conn)
-
-      before = view |> render() |> drawer()
-      refute before =~ "channel-mask-strip"
-      assert before =~ ~s(phx-click="toggle_mask_names")
-
-      masked = view |> toggle_mask() |> drawer()
-
-      # Not a reduced variant: the full strip, the same copy, the same
-      # re-mask action the rail offers.
-      assert masked =~ "channel-mask-strip"
-      assert masked =~ "Names hidden for sharing"
-      assert masked =~ "channel-mask-strip-action"
-      assert masked =~ ~s(phx-click="remask_all")
-      assert masked =~ ~s(aria-pressed="true")
-    end
-
-    test "section headers, their aria-labels and the slug attribute all mask together",
-         %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("acme")
-      view = open_drawer(conn)
-
-      assert_name_anywhere(view |> render() |> drawer(), @canary)
-
-      masked = view |> toggle_mask() |> drawer()
-
-      assert masked =~ "Workspace A"
-      assert masked =~ "Workspace B"
-      refute masked =~ "Client A"
-
-      # The strong form: the real name is gone from the drawer in every
-      # spelling, attributes included.
-      refute_name_anywhere(masked, @canary)
-      refute_name_anywhere(masked, "Initech")
-      refute_name_anywhere(masked, "Hooli")
-    end
-
-    test "the per-item reveal is a real focusable control, not a hover treatment",
-         %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("acme")
-      view = open_drawer(conn)
-      toggle_mask(view)
-
-      # `@media (hover: hover)` never matches on a touch device, so a
-      # hover-gated reveal would leave the drawer unable to reveal anything.
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser button[phx-click="reveal_section"][aria-label="Show this workspace name"])
-             )
-    end
-
-    test "revealing one section in the drawer shows only that org", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("acme")
-      view = open_drawer(conn)
-      masked = toggle_mask(view)
-
-      [_, section_id] = Regex.run(~r/data-section-id="([^"]+)"/, drawer(masked))
-
-      revealed =
-        view
-        |> element(
-          ~s(#mobile-channel-browser button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"])
-        )
-        |> render_click()
-        |> drawer()
-
-      assert revealed =~ "Names hidden · 1 showing"
-      # Every other section keeps its placeholder.
-      assert revealed =~ "Workspace B"
-    end
-
-    test "a channel named after its own org masks to the section placeholder",
-         %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("vandelay_ind", @canary)
-      view = open_drawer(conn)
-
-      assert_name_anywhere(view |> render() |> drawer(), @canary)
-
-      masked = view |> toggle_mask() |> drawer()
-
-      # Masking the header and leaving `#vandelay-ind` under it is the same leak
-      # with an extra step.
-      refute_name_anywhere(masked, @canary)
-      assert masked =~ "workspace-"
-    end
-  end
-
-  describe "drawer search must not become an oracle" do
-    test "typing a real org name while masked surfaces nothing", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("vandelay_ind", @canary)
-      view = open_drawer(conn)
-
-      # Unmasked, the search finds it — otherwise the masked assertion below
-      # would pass on a search box that never worked.
-      assert_name_anywhere(view |> search(@canary) |> drawer(), @canary)
-
-      search(view, "")
-      toggle_mask(view)
-
-      masked = view |> search(@canary) |> drawer()
-
-      # The assertion is about the LIST, not the whole drawer: the search
-      # input's `value` and the "No matches for “…”" line both echo what the
-      # user typed, and no mask can un-type a query. What must not happen is
-      # a ROW surfacing — a match there confirms the client list to everyone
-      # watching the share.
-      refute_name_anywhere(extract(masked, "#mobile-channel-browser section"), @canary)
-
-      refute has_element?(view, ~s(#mobile-channel-browser [data-role="drawer-row-wrap"])),
-             "A masked row must not be reachable by the string it is hiding"
-
-      # And the drawer says so rather than rendering a blank list — the
-      # difference between "blank" and "No matches" is itself an oracle.
-      assert masked =~ "No matches for"
-    end
-
-    test "searching the placeholder still finds the masked row", %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-      create_channel("vandelay_ind", @canary)
-      view = open_drawer(conn)
-      toggle_mask(view)
-
-      masked = view |> search("workspace") |> drawer()
-
-      refute masked =~ "No matches for"
-      assert masked =~ "workspace-"
-    end
-  end
-
   describe "scope pills" do
-    test "both the compact mobile pill and the prominent header pill mask text AND aria-label",
+    # The compact MOBILE header pill was deleted in task 01a1557a-8a6d stage 3;
+    # the phone's scope control is the space sheet's Scope row and its switch.
+    # Its masking assertions moved there, with the same placeholder and the
+    # same three-form refutation, rather than being dropped.
+    test "the header pill and the sheet's Scope row and switch mask text AND aria-label",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
       create_channel("vandelay_ind")
@@ -260,33 +100,54 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       {:ok, view, html} = live(conn, ~p"/chat/vandelay_ind")
 
       assert html =~ "chat-header-scope-pill"
-      assert html =~ "chat-header-scope-pill-mobile"
+      refute html =~ "chat-header-scope-pill-mobile"
       assert html =~ ~s(aria-label="Filter by #{@canary} scope")
+
+      {row, switch} = sheet_scope_nodes(view)
+      assert_name_anywhere(row, @canary)
+      assert_name_anywhere(switch, @canary)
 
       masked =
         view
         |> element(~s(button[phx-click="toggle_mask_names"]))
         |> render_click()
 
-      # Both wrappers still render — masking changes the NAME, never whether
-      # the affordance exists.
+      # The header pill still renders — masking changes the NAME, never
+      # whether the affordance exists.
       assert masked =~ "chat-header-scope-pill"
-      assert masked =~ "chat-header-scope-pill-mobile"
 
       # A masked pill whose screen-reader name still says the real org has not
       # been masked.
       assert masked =~ ~s(aria-label="Filter by Workspace)
       refute masked =~ ~s(aria-label="Filter by #{@canary} scope")
 
-      # Scoped to the pill wrappers themselves — a `<header>`-shaped regex
-      # matches the FIRST header in the document, which is a different element
+      # Scoped to the pill wrapper itself — a `<header>`-shaped regex matches
+      # the FIRST header in the document, which is a different element
       # entirely, and the assertion would pass without ever seeing a pill.
-      for selector <- [".chat-header-scope-pill", ".chat-header-scope-pill-mobile"] do
-        pill = extract(masked, selector)
-        assert pill =~ "Workspace", "expected #{selector} to render a placeholder"
-        refute_name_anywhere(pill, @canary)
+      pill = extract(masked, ".chat-header-scope-pill")
+      assert pill =~ "Workspace", "expected the header pill to render a placeholder"
+      refute_name_anywhere(pill, @canary)
+
+      {row, switch} = sheet_scope_nodes(view)
+
+      for {node, name} <- [{row, "Scope row"}, {switch, "Scope switch"}] do
+        assert node =~ "Workspace", "expected the #{name} to render a placeholder"
+        refute_name_anywhere(node, @canary)
       end
     end
+  end
+
+  # The sheet's Scope row (Space page) and its switch (Scope page), read
+  # through the title button and the row, as a person on a phone reaches them.
+  defp sheet_scope_nodes(view) do
+    view |> element(~s(button[data-role="space-title"])) |> render_click()
+    # The title opens on the All segment; the Scope row is on Space.
+    view |> element(~s(#space-sheet button[data-seg="space"])) |> render_click()
+    row = view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render()
+    view |> element(~s(#space-sheet button[data-role="space-sheet-scope"])) |> render_click()
+    switch = view |> element(~s(#space-sheet [data-page="scope"])) |> render()
+    render_click(view, "close_space_sheet", %{})
+    {row, switch}
   end
 
   describe "hidden-channels drawer groupings" do
@@ -325,10 +186,11 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     # `refute_name_anywhere(pill, "Newclient")` would pass on a pill that
     # still says `data-scope="new_client"`.
     @runtime_names ["Newclient", "new_client"]
+    # The compact mobile header pill left in task 01a1557a-8a6d stage 3; its
+    # place is the space sheet's Scope row and switch, asserted below.
     @runtime_pills [
       ".channel-hidden-drawer-group-label",
-      ".chat-header-scope-pill",
-      ".chat-header-scope-pill-mobile"
+      ".chat-header-scope-pill"
     ]
 
     # An Acme member, so the viewer can see the runtime org (the shell's colour
@@ -373,7 +235,8 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       {init_test_session(conn, current_user_id: user.id), visible}
     end
 
-    test "the drawer group label and both header pills mask every spelling", %{conn: conn} do
+    test "the drawer group label, the header pill and the sheet's Scope row mask every spelling",
+         %{conn: conn} do
       {conn, visible} = runtime_org_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
 
@@ -382,6 +245,13 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       for selector <- @runtime_pills, name <- @runtime_names do
         assert_name_anywhere(extract(html, selector), name)
       end
+
+      # The sheet's row and switch carry the org NAME. Their slug is only in
+      # `phx-value-scope`, the attribute the assertions name as the filter's
+      # argument, so only the name is asserted present here.
+      {row, switch} = sheet_scope_nodes(view)
+      assert_name_anywhere(row, "Newclient")
+      assert_name_anywhere(switch, "Newclient")
 
       masked =
         view
@@ -397,6 +267,17 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
           refute_name_anywhere(pill, name)
         end
       end
+
+      {row, switch} = sheet_scope_nodes(view)
+
+      for node <- [row, switch] do
+        assert node =~ "Workspace"
+        refute node =~ "data-scope="
+
+        for name <- @runtime_names do
+          refute_name_anywhere(node, name)
+        end
+      end
     end
   end
 
@@ -405,8 +286,10 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
       create_channel("acme")
-      view = open_drawer(conn)
-      html = toggle_mask(view)
+      # /chat with no viewport report renders the phone Chat list.
+      {:ok, view, _html} = live(conn, ~p"/chat")
+      assert has_element?(view, "#chat-list")
+      html = render_click(view, "toggle_mask_names", %{})
 
       for forbidden <- ~w(privacy Privacy secure Secure encrypted protected padlock) do
         refute html =~ forbidden,

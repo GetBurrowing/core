@@ -127,7 +127,8 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert :admin in desktop_keys(%{access_scope: root})
       assert :prompts in desktop_keys(%{access_scope: root})
-      assert :admin in more_sheet_keys(%{access_scope: root})
+      # Admin left the More sheet for /settings (task 01a1557a-807f stage 2).
+      refute :admin in more_sheet_keys(%{access_scope: root})
 
       refute :admin in desktop_keys(%{access_scope: sub})
       refute :prompts in desktop_keys(%{access_scope: sub})
@@ -171,9 +172,9 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert diffs == []
 
-      # The More sheet lists only the Working and Admin clusters; Chat is in
-      # the Live cluster, so a guest's sheet is empty, with no section label
-      # over nothing (the member's sheet carries the label: control).
+      # The More sheet lists no Chat row (Chat is a bar tab), so a guest's
+      # sheet has no module row at all; the member's has some (control). The
+      # sheet carries no headings since task 01a1557a-807f stage 2.
       for {row, user} <- ctx.guests do
         assert more_sheet_keys(%{access_scope: scope_of(user), root_user: true}) == [],
                "#{row} sees More-sheet tiles"
@@ -182,7 +183,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
                  "more-sheet-section-label"
       end
 
-      assert more_sheet_html(%{access_scope: member}) =~ ">Working</p>"
+      assert more_sheet_keys(%{access_scope: member}) != []
 
       # Desktop: no Working eyebrow over an empty cluster for a guest; the
       # member's rail carries it (control).
@@ -191,6 +192,18 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       for {row, user} <- ctx.guests do
         refute desktop_html(%{access_scope: scope_of(user)}) =~ ">Working<",
                "#{row}'s rail renders an empty Working eyebrow"
+      end
+    end
+
+    test "a guest without meetings.join gets no Meetings tab in the bar", ctx do
+      # Control: a member's bar carries Meetings, in its place.
+      member = scope_of(ctx.internal[:sub_member])
+      assert mobile_keys(%{access_scope: member}) == [:chat, :tasks, :meetings]
+
+      for {row, user} <- ctx.guests do
+        scope = scope_of(user)
+        refute Access.module_access?(scope, :meetings), "#{row} holds meetings.join"
+        refute :meetings in mobile_keys(%{access_scope: scope}), "#{row} sees a Meetings tab"
       end
     end
 
@@ -320,8 +333,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert Enum.sort(scope_destination_keys(locked)) == [:chat, :meetings, :tasks]
       assert Enum.sort(desktop_keys(%{access_scope: locked})) == [:chat, :meetings, :tasks]
-      assert mobile_keys(%{access_scope: locked}) == [:chat, :tasks]
-      assert more_sheet_keys(%{access_scope: locked}) == [:meetings]
+      # Meetings is a bar tab since task 01a1557a-7a71 stage 2, so it left the
+      # sheet; Inbox, the sheet's first row, is locked here.
+      assert mobile_keys(%{access_scope: locked}) == [:chat, :tasks, :meetings]
+      assert more_sheet_keys(%{access_scope: locked}) == []
 
       sheet = more_sheet_html(%{access_scope: locked})
       refute sheet =~ ">Admin</p>"
@@ -336,8 +351,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       locked = surfaces(scope_of(ctx.locked))
 
       assert :files in ctx.before.destinations
-      assert locked.destinations == ctx.before.destinations -- [:files]
-      assert locked.more == ctx.before.more -- [:files]
+      # Canvases (task 01a1557a-b5f9 stage 3) opens the Files browser and is
+      # gated by the same files.read, so the files lock drops it too.
+      assert locked.destinations == ctx.before.destinations -- [:files, :canvases]
+      assert locked.more == ctx.before.more -- [:files, :canvases]
       assert locked.mobile == ctx.before.mobile
     end
   end

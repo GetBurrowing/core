@@ -6,15 +6,14 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
 
   Mounted by `chat_message.ex` when `@editing_message_id == @msg.id`.
   Hooked to the `MessageEditor` JS module (assets/js/hooks/
-  message_editor.js) which handles Cmd/Ctrl+Enter to submit, Escape to
-  cancel, and live detection of shortened-or-removed content so the
-  LV's `save_edit` handler can decide whether to surface the removal
-  warning modal before firing the PATCH.
+  message_editor.js) which handles Enter (and Cmd/Ctrl+Enter) to submit,
+  Shift+Enter for a newline and Escape to cancel. An edit that removes
+  more than half the text asks with the native confirm on submit
+  (redesign rung 9 stage 4); a declined confirm never reaches the server.
 
-  The form fires `phx-submit="save_edit"` with the message id, the new
-  body text, and a `removes_content` flag the JS hook keeps in sync.
-  Cancel buttons fire `phx-click="cancel_edit"` which restores the
-  bubble.
+  The form fires `phx-submit="save_edit"` with the message id and the new
+  body text. Cancel buttons fire `phx-click="cancel_edit"` which restores
+  the bubble.
   """
 
   use Phoenix.Component
@@ -31,7 +30,6 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
       class="flex flex-col gap-2 rounded-2xl border border-primary/40 bg-base-100 p-3 shadow-md"
     >
       <input type="hidden" name="message_id" value={@msg.id} />
-      <input type="hidden" name="removes_content" value="false" />
 
       <textarea
         name="body"
@@ -42,8 +40,7 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
       ><%= @msg.content || "" %></textarea>
 
       <div class="flex items-center justify-between gap-2">
-        <p class="text-xs text-base-content/40">
-          <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⌘</kbd>
+        <p class="text-xs text-subtle">
           <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">⏎</kbd>
           to save · <kbd class="rounded bg-base-300 px-1.5 py-0.5 font-mono text-[10px]">Esc</kbd>
           to cancel
@@ -52,13 +49,13 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
           <button
             type="button"
             phx-click="cancel_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-md px-3 py-1.5 text-sm text-base-content lg:hover:bg-base-300 lg:hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Cancel
           </button>
           <button
             type="submit"
-            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content lg:hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             Save
           </button>

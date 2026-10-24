@@ -16,17 +16,42 @@ defmodule Platform.Chat.ContentRenderer do
   Returns a `Phoenix.HTML.safe()` tuple via `raw/1`.
   """
   @spec render_message(String.t() | nil) :: Phoenix.HTML.safe()
-  def render_message(nil), do: raw("")
-  def render_message(""), do: raw("")
+  def render_message(content), do: render_message(content, [])
 
-  def render_message(content) when is_binary(content) do
+  @doc """
+  `render_message/1` with options (redesign rung 13, stage 1).
+
+    * `:cards` - URLs (or `Platform.Chat.LinkTargets.key/2` keys) that got a
+      card or a player. A line holding only one of those links is removed:
+      the card replaces it (rule 1 of the rung 13 direction canvas). A link
+      inside a sentence keeps the sender's words.
+  """
+  @spec render_message(String.t() | nil, keyword()) :: Phoenix.HTML.safe()
+  def render_message(nil, _opts), do: raw("")
+  def render_message("", _opts), do: raw("")
+
+  def render_message(content, opts) when is_binary(content) do
     content
-    |> parse_markdown()
-    |> sanitize_html()
+    |> sanitized_html()
+    |> Platform.Chat.LinkTargets.strip_bare_lines(Keyword.get(opts, :cards, []), [])
     |> decorate_mentions()
     |> wrap_code_blocks()
     |> raw()
   end
+
+  @doc """
+  Markdown -> sanitized html, before mentions and code wrapping. This is the
+  html `Platform.Chat.LinkTargets` classifies, so a dangerous href is already
+  `#blocked:` by the time any link is looked at.
+  """
+  @spec sanitized_html(String.t() | nil) :: String.t()
+  def sanitized_html(content) when is_binary(content) and content != "" do
+    content
+    |> parse_markdown()
+    |> sanitize_html()
+  end
+
+  def sanitized_html(_content), do: ""
 
   # ── Markdown Parsing ────────────────────────────────────────────────
 
@@ -55,6 +80,7 @@ defmodule Platform.Chat.ContentRenderer do
     |> strip_dangerous_attributes()
     |> neutralize_dangerous_urls()
     |> add_link_attributes()
+    |> mark_raw_urls()
   end
 
   # Cap headings at h3 — no h1/h2 in chat
@@ -93,10 +119,79 @@ defmodule Platform.Chat.ContentRenderer do
     end)
   end
 
+  # Rung 13 stage 1: a link to a canvas or prototype on this install is an
+  # in-app link: no target, and `data-in-app-link` so a click is intercepted
+  # and opened inside the app. Every other link (external, other paths, and
+  # the `#blocked:` hrefs `neutralize_dangerous_urls/1` left) keeps
+  # target="_blank" rel="noopener noreferrer" exactly as before.
   defp add_link_attributes(html) do
-    # Add target="_blank" rel="noopener noreferrer" to links that don't already have target
-    String.replace(html, ~r/<a\s+href=/i, ~s(<a target="_blank" rel="noopener noreferrer" href=))
+    Regex.replace(
+      ~r/<a\s+href=("[^"]*"|'[^']*'|[^\s>]*)/i,
+      html,
+      fn _whole, quoted ->
+        href = quoted |> String.trim("\"") |> String.trim("'")
+
+        case Platform.Chat.LinkTargets.classify(href) do
+          {kind, _id, _version} when kind in [:canvas, :prototype] ->
+            ~s(<a data-in-app-link="#{kind}" href=#{relative_if_alias(href, quoted)})
+
+          _ ->
+            ~s(<a target="_blank" rel="noopener noreferrer" href=#{quoted})
+        end
+      end
+    )
   end
+
+  # An in-app link written with one of this install's alias hosts
+  # (`LinkTargets.alias_host?/2`) becomes path-relative, so the in-app
+  # viewer and any frame src resolve against the current origin rather than
+  # a host the endpoint is not configured as.
+  defp relative_if_alias(href, quoted) do
+    uri = href |> unescape() |> String.trim() |> URI.parse()
+
+    if Platform.Chat.LinkTargets.alias_host?(uri) do
+      relative =
+        %URI{path: uri.path, query: uri.query, fragment: uri.fragment}
+        |> URI.to_string()
+
+      ~s("#{Phoenix.HTML.html_escape(relative) |> Phoenix.HTML.safe_to_string()}")
+    else
+      quoted
+    end
+  end
+
+  # Rung 13 stage 1: a raw URL that stays as text (the anchor's text IS its
+  # href, the Earmark autolink shape) is set in the mono face. A link whose
+  # text is the sender's own words keeps the body face.
+  defp mark_raw_urls(html) do
+    Regex.replace(~r/<a ([^>]*)>([^<]*)<\/a>/, html, fn whole, attrs, text ->
+      href =
+        case Regex.run(~r/\bhref="([^"]*)"/, attrs) do
+          [_, href] -> href
+          _ -> nil
+        end
+
+      if (href && not String.contains?(attrs, "class=")) and
+           (raw_text?(text, href) or rewritten_alias?(attrs, text, href)) do
+        ~s(<a class="font-mono" #{attrs}>#{text}</a>)
+      else
+        whole
+      end
+    end)
+  end
+
+  defp raw_text?(text, href),
+    do: unescape(text) == unescape(href) and String.starts_with?(href, "http")
+
+  # An alias-host in-app link was made path-relative above; its text is
+  # still the raw URL the sender typed.
+  defp rewritten_alias?(attrs, text, href) do
+    String.contains?(attrs, "data-in-app-link=") and String.starts_with?(href, "/") and
+      String.starts_with?(unescape(text), "http") and
+      String.ends_with?(unescape(text), unescape(href))
+  end
+
+  defp unescape(s), do: s |> String.replace("&amp;", "&") |> String.trim()
 
   # ── @-mention decoration ───────────────────────────────────────────
   #

@@ -83,33 +83,26 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
   # doesn't matter which slug we land on.
   defp live_following_redirect(conn) do
     case live(conn, ~p"/chat") do
-      {:error, {:live_redirect, %{to: path}}} -> live(conn, path)
-      ok -> ok
+      {:error, {:live_redirect, %{to: path}}} ->
+        live(conn, path)
+
+      # Since task 01a1557a-8562 stage 2, /chat is the phone Chat list and
+      # does not redirect. Land in the first channel the way a desktop
+      # viewport does: the ViewportBreakpoint hook's `below: false` report.
+      {:ok, view, _html} ->
+        render_hook(view, "chat_viewport", %{"below" => false})
+        {:ok, view, render(view)}
     end
   end
 
   # Extract the desktop-sidebar `<aside id="chat-sidebar">` substring from a
-  # rendered HTML blob so assertions can ignore the mobile flat-list
-  # overlay (which intentionally still references @channels/@dm_conversations).
+  # rendered HTML blob so assertions can ignore every other surface that
+  # lists the same conversations.
   defp desktop_sidebar(html) do
     case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
       [match] -> match
       _ -> ""
     end
-  end
-
-  # Open the `#mobile-channel-browser` overlay. It's toggled open by the
-  # `toggle_mobile_browser` search button on the mobile pills strip (which only
-  # renders once an active space is present). Landing on a channel first gives
-  # us that button, then a render_click flips the overlay open.
-  defp open_mobile_browser(conn) do
-    {:ok, view, _html} = live_following_redirect(conn)
-
-    view
-    |> element(~s(button[phx-click="toggle_mobile_browser"]))
-    |> render_click()
-
-    view
   end
 
   describe "section render order" do
@@ -351,413 +344,18 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       {:ok, _view, html} = live_following_redirect(conn)
 
       # The sectioned-rail aside MUST start with `hidden lg:flex` so it
-      # collapses to display:none below the `lg` breakpoint. The mobile
-      # flat-list overlay (toggled by mobile_browser_open) is a separate
-      # element gated by `lg:hidden` and is left untouched by Stage 2.
+      # collapses to display:none below the `lg` breakpoint; the phone lists
+      # conversations in the Chat list at /chat instead (task 01a1557a-8562).
       assert html =~ ~r/<aside[^>]*id="chat-sidebar"[^>]*class="[^"]*hidden lg:flex/,
              "Expected `<aside id=\"chat-sidebar\">` to carry the `hidden lg:flex` class so the sectioned rail is invisible on mobile"
-    end
-  end
-
-  describe "mobile channel browser overlay (chat sidebar mobile Stage 1)" do
-    test "overlay renders the sectioned rail (DMs + reorderable sub-org sections), not a flat list",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      # Direct Messages section is present and locked (not reorderable),
-      # mirroring the desktop rail's Pinned/DMs lock.
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Direct Messages"][data-section-reorderable="false"])
-             ),
-             "Mobile overlay should render a locked Direct Messages section"
-
-      # Sub-org sections render, keyed by data-section-id and marked
-      # reorderable for the later touch-reorder stage — the same
-      # @sidebar_sections data the desktop rail iterates.
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-reorderable="true"][data-section-id])
-             ),
-             "Mobile overlay should render reorderable sub-org sections keyed by data-section-id"
-
-      # The org-default sub-org section labels surface in the overlay markup.
-      assert has_element?(view, "#mobile-channel-browser", "Hooli")
-      assert has_element?(view, "#mobile-channel-browser", "Acme")
-    end
-
-    test "Pinned section is suppressed in the overlay when there are no pinned channels",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      # This user has pinned nothing, so the section must not render, matching
-      # the desktop rail's conditional. The old comment here said pinning
-      # "isn't wired yet"; it has been wired since stage 1 of 019fd80f. The
-      # test still holds because this fixture pins nothing, not because the
-      # feature is absent.
-      #
-      # The selector tracks the section's accessible name, which is the bare
-      # "Pinned" again now that one block holds pinned channels, DMs and task
-      # conversations together (task 019feec6-73d9). A selector left pointing
-      # at a name the section no longer carries would go on passing forever.
-      # The POSITIVE case proving this selector fires when a pin does exist is
-      # "the mobile drawer's section carries the same label" in
-      # chat_live_pinned_block_test.exs.
-      refute has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Pinned"])
-             ),
-             "Empty Pinned section should be suppressed in the mobile overlay"
-    end
-  end
-
-  # Drive the rail into personal-edit mode (`@sidebar_edit`) via the ONLY entry
-  # point — the desktop-aside kebab menu → "Edit my layout". Toggling edit does
-  # not close the mobile browser overlay (see ChatLive.handle_event/3), so tests
-  # can hold both open at once. NOTE: this menu is desktop-only chrome; there is
-  # no mobile edit entry today — see the Stage 2 report's flagged gap.
-  defp enter_sidebar_edit(view) do
-    view
-    |> element(~s(button[phx-click="toggle_sidebar_menu"]))
-    |> render_click()
-
-    view
-    |> element(~s(.channel-sidebar-menu-item[phx-click="toggle_sidebar_edit"]))
-    |> render_click()
-
-    view
-  end
-
-  describe "mobile locked-section lock affordance (chat sidebar mobile Stage 2, Decision #5)" do
-    # The locked DMs section carries an explicit `hero-lock-closed` icon in
-    # edit mode so touch users (no hover) can see it isn't reorderable. It is
-    # gated on `@sidebar_edit` — the same personal-edit mode that gates desktop
-    # section reorder.
-
-    test "lock icon is absent in the overlay outside edit mode", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      refute has_element?(view, ~s(#mobile-channel-browser .channel-section-lock)),
-             "Lock affordance should not render when not in edit mode"
-    end
-
-    test "DMs section shows the lock affordance once edit mode is entered", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-      enter_sidebar_edit(view)
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Direct Messages"] .channel-section-lock.hero-lock-closed)
-             ),
-             "Locked Direct Messages section should render the hero-lock-closed affordance in edit mode"
-    end
-  end
-
-  describe "mobile touch drag-reorder (chat sidebar mobile Stage 3)" do
-    # The gesture itself (long-press timing, slop cancel, pointer capture) is
-    # JS-only and can't run under LiveViewTest — it's covered by the Stage 4
-    # manual_approval checklist on a real touch surface. What CAN regress
-    # server-side is asserted here: the hook element + its wiring, the
-    # edit-gated handle markup, the mobile edit-mode entry point, and the
-    # hook's `section_reordered` push reordering + persisting via the same
-    # pipeline desktop uses.
-
-    test "mobile rail nav carries the SectionReorderTouch hook", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser nav[id="mobile-section-list"][phx-hook="SectionReorderTouch"])
-             ),
-             "Mobile overlay nav should mount the SectionReorderTouch hook"
-    end
-
-    test "touch drag handle is edit-gated and renders only on reorderable sections",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      refute has_element?(
-               view,
-               ~s(#mobile-channel-browser .channel-section-drag-handle--touch)
-             ),
-             "Touch drag handle should not render outside edit mode"
-
-      enter_sidebar_edit(view)
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-reorderable="true"] .channel-section-drag-handle--touch)
-             ),
-             "Sub-org sections should render the touch drag handle in edit mode"
-
-      refute has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Direct Messages"] .channel-section-drag-handle--touch)
-             ),
-             "Locked Direct Messages section must never render a drag handle"
-    end
-
-    test "drawer-header Edit button is a working mobile entry into edit mode", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      # Stage 2 flagged that edit mode was only reachable through the
-      # desktop kebab menu (hidden on phones); the drawer-header button is
-      # the mobile entry point. Clicking it must reveal the edit-gated
-      # affordances (Stage 2 locks + Stage 3 handles) without leaving the
-      # overlay.
-      view
-      |> element(~s(#mobile-channel-browser header button[phx-click="toggle_sidebar_edit"]))
-      |> render_click()
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Direct Messages"] .channel-section-lock)
-             ),
-             "Edit button in the drawer header should enter edit mode (lock affordances visible)"
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser .channel-section-drag-handle--touch)
-             ),
-             "Edit button in the drawer header should enter edit mode (drag handles visible)"
-    end
-
-    test "section_reordered pushed from the mobile hook element reorders and persists",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      # Resolver default is alphabetical (Acme, Hooli, Initech, ...).
-      # Reorder semantics are "insert ABOVE the drop target" (mirroring the
-      # border-top drop indicator), so dropping the first section onto the
-      # SECOND is a no-op — drop it onto the THIRD to move it down one slot.
-      # The hook pushes the SAME `section_reordered {from, to}` event desktop
-      # sends; drive it from the mobile nav element to prove the mobile
-      # wiring reaches the shared server pipeline
-      # (put_section_order -> chat_section_order pref).
-      [hooli_id, initech_id, acme_id | _] = rendered_section_ids(render(view))
-
-      view
-      |> element("#mobile-section-list")
-      |> render_hook("section_reordered", %{"from" => hooli_id, "to" => acme_id})
-
-      assert [^initech_id, ^hooli_id, ^acme_id | _] = rendered_section_ids(render(view)),
-             "Dropping Hooli onto Acme should re-slot it between Initech and Acme"
-
-      # Persistence: a fresh mount must come back in the saved order, not
-      # the alphabetical default.
-      {:ok, _view, html} = live_following_redirect(conn)
-
-      assert [^initech_id, ^hooli_id, ^acme_id | _] = rendered_section_ids(html),
-             "Reordered layout should persist across a remount via chat_section_order"
-    end
-  end
-
-  describe "mobile up/down section move buttons (chat sidebar mobile Stage 4, WCAG 2.5.7)" do
-    # The coupled non-drag alternative to the Stage 3 long-press drag. Buttons
-    # fire the SAME `section_reordered {from, to}` server event via
-    # phx-value bindings — no new handler — so these tests drive the buttons
-    # exactly as a tap would and assert against the shared pipeline.
-
-    test "move buttons are edit-gated and absent on locked sections", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-
-      refute has_element?(view, ~s(#mobile-channel-browser .channel-section-move-controls)),
-             "Move buttons should not render outside edit mode"
-
-      enter_sidebar_edit(view)
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-reorderable="true"] .channel-section-move-controls)
-             ),
-             "Sub-org sections should render up/down move controls in edit mode"
-
-      refute has_element?(
-               view,
-               ~s(#mobile-channel-browser section[aria-label="Direct Messages"] .channel-section-move-controls)
-             ),
-             "Locked Direct Messages section must never render move controls"
-    end
-
-    test "boundary buttons are disabled: first section's Up, last section's Down",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-      enter_sidebar_edit(view)
-
-      [first_id | _] = ids = rendered_section_ids(render(view))
-      last_id = List.last(ids)
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-id="#{first_id}"] button[title="Move section up"][disabled])
-             ),
-             "First section's Up button should be disabled"
-
-      assert has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-id="#{last_id}"] button[title="Move section down"][disabled])
-             ),
-             "Last section's Down button should be disabled"
-
-      refute has_element?(
-               view,
-               ~s(#mobile-channel-browser section[data-section-id="#{first_id}"] button[title="Move section down"][disabled])
-             ),
-             "First section's Down button should be enabled"
-    end
-
-    test "Down button swaps with the next section and persists, sharing the drag pipeline",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-      enter_sidebar_edit(view)
-
-      [first_id, second_id | rest] = rendered_section_ids(render(view))
-
-      # Tap "Move section down" on the FIRST section. Under the event's
-      # insert-above semantics this is encoded as from=second, to=first —
-      # the template owns that mapping; the test just clicks the button.
-      view
-      |> element(
-        ~s(#mobile-channel-browser section[data-section-id="#{first_id}"] button[title="Move section down"])
-      )
-      |> render_click()
-
-      assert [^second_id, ^first_id | ^rest] = rendered_section_ids(render(view)),
-             "Down on the first section should swap it with the second"
-
-      # Same persistence contract as the drag: fresh mount keeps the order.
-      {:ok, _view, html} = live_following_redirect(conn)
-
-      assert [^second_id, ^first_id | ^rest] = rendered_section_ids(html),
-             "Button reorder should persist across a remount via chat_section_order"
-    end
-
-    test "Up button on the second section swaps it back to first", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      create_channel("general")
-
-      view = open_mobile_browser(conn)
-      enter_sidebar_edit(view)
-
-      [first_id, second_id | _] = rendered_section_ids(render(view))
-
-      view
-      |> element(
-        ~s(#mobile-channel-browser section[data-section-id="#{second_id}"] button[title="Move section up"])
-      )
-      |> render_click()
-
-      assert [^second_id, ^first_id | _] = rendered_section_ids(render(view)),
-             "Up on the second section should move it above the first"
-    end
-  end
-
-  describe "pills follow the drawer order (mobile channel search Stage 3)" do
-    # The pills strip renders Sidebar.flatten_sections(@sidebar_sections) —
-    # the user's curated (hidden-filtered) drawer arrangement — instead of
-    # the raw @channels list. Robin's decision 2026-07-05.
-
-    test "pill order tracks a section reorder made in the drawer", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {s1, s2, _ch1, _ch2} = seed_two_sectioned_channels()
-
-      view = open_mobile_browser(conn)
-
-      pills = pills_strip(render(view))
-      one = :binary.match(pills, "Pillone") |> elem(0)
-      two = :binary.match(pills, "Pilltwo") |> elem(0)
-      assert one < two, "Baseline: section 1's channel should pill before section 2's"
-
-      # Drag section 2 above section 1 (insert-above semantics) via the SAME
-      # mobile hook event the touch drag sends.
-      view
-      |> element("#mobile-section-list")
-      |> render_hook("section_reordered", %{"from" => s2.id, "to" => s1.id})
-
-      pills = pills_strip(render(view))
-      one = :binary.match(pills, "Pillone") |> elem(0)
-      two = :binary.match(pills, "Pilltwo") |> elem(0)
-      assert two < one, "Pills should re-order to match the dragged section order"
-    end
-
-    test "hidden channels stop rendering as pills (hidden means hidden everywhere)",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {_s1, _s2, ch1, _ch2} = seed_two_sectioned_channels()
-
-      {:ok, view, html} = live_following_redirect(conn)
-      assert pills_strip(html) =~ "Pillone"
-
-      render_click(view, "hide_channel", %{"id" => ch1.id})
-
-      pills = pills_strip(render(view))
-      refute pills =~ "Pillone", "A hidden channel must not render as a pill"
-      assert pills =~ "Pilltwo", "Non-hidden channels keep their pills"
-    end
-  end
-
-  # Two channels seeded into the two lowest-position org sections via
-  # org_id, so section-level operations provably change PILL order.
-  defp seed_two_sectioned_channels do
-    [s1, s2 | _] =
-      Platform.Chat.Section |> Repo.all() |> Enum.sort_by(& &1.position)
-
-    {:ok, ch1} =
-      Chat.create_space(%{name: "Pillone", slug: "pillone", kind: "channel", org_id: s1.org_id})
-
-    {:ok, ch2} =
-      Chat.create_space(%{name: "Pilltwo", slug: "pilltwo", kind: "channel", org_id: s2.org_id})
-
-    {s1, s2, ch1, ch2}
-  end
-
-  # The pills strip's markup, isolated so pill assertions can't accidentally
-  # match drawer/desktop-rail rows for the same channels.
-  defp pills_strip(html) do
-    case Regex.run(~r/<nav[^>]*aria-label="Channel switcher".*?<\/nav>/s, html) do
-      [match] -> match
-      _ -> ""
     end
   end
 
   describe "section collapse toggle (019fd80f stage 2)" do
     # The header-mounted accordion. Collapse is NOT hide: the section, its
     # header and its toggle all stay on screen — only the channel rows fold
-    # away. Every assertion below is scoped to the DESKTOP rail so the mobile
-    # overlay, which renders the same sections, can't satisfy one by accident.
+    # away. Every assertion below is scoped to the DESKTOP rail so no other
+    # surface listing the same conversations can satisfy one by accident.
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
       {section, channel} = seed_channel_in_first_section()
@@ -955,8 +553,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
   # {channel name, unread pill text} for every row rendered inside ONE section
   # of the DESKTOP rail, in DOM order. Scoped to the section element on purpose:
-  # a channel name also appears in the mobile overlay and can appear in another
-  # section, so a whole-blob match would satisfy a presence assertion without
+  # a channel name can appear in another surface and in another section, so a whole-blob match would satisfy a presence assertion without
   # the row being anywhere near the section under test. The pill text rides
   # along so a row can't be counted as "peeked" while showing no count.
   defp section_rows(html, section_id) do
@@ -1067,16 +664,6 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       })
 
     {section, channel}
-  end
-
-  # Ordered, de-duplicated sub-org section ids from a rendered HTML blob.
-  # Desktop rail + mobile overlay render the SAME resolver order, so the
-  # de-duplicated first-occurrence order reflects both surfaces.
-  defp rendered_section_ids(html) do
-    ~r/data-section-id="([^"]+)"/
-    |> Regex.scan(html)
-    |> Enum.map(fn [_, id] -> id end)
-    |> Enum.uniq()
   end
 
   # ── The colourless case (task 01a00910 stage 4) ─────────────────────────

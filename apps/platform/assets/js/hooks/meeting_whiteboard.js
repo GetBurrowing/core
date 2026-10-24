@@ -547,7 +547,7 @@ const MeetingWhiteboard = {
   // `node` environment against a hand-built fake `el`).
   _renderSpinner() {
     this.el.innerHTML =
-      '<div data-whiteboard-state="loading" class="flex h-full w-full items-center justify-center text-base-content/50">' +
+      '<div data-whiteboard-state="loading" class="flex h-full w-full items-center justify-center text-subtle">' +
       '<span class="loading loading-spinner loading-lg"></span>' +
       "</div>"
   },

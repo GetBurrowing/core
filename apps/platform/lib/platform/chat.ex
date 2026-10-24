@@ -1729,16 +1729,18 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Build a map of `participant.id → accent_color_string` for agent participants in a space.
+  Build a map of `participant.id → agent slot id` for agent participants in a
+  space, the slot whose `--ag-<id>*` theme tokens paint the agent's identity.
 
-  Used to supply per-agent color identity to chat rendering. Agents without a color
-  fall back to the default blue accent via `ColorPalette.accent_for/1`.
+  Agents with a nil, blank or unknown colour resolve to the blue slot via
+  `ColorPalette.slot_for/1`. Used to give every agent surface its
+  `data-agent-slot` (task 01a1557a rung 3; it replaced the OKLCH accent map
+  in stage 2).
   """
-  @spec agent_color_map_for_participants([Participant.t()]) :: %{binary() => binary()}
-  def agent_color_map_for_participants(participants) do
+  @spec agent_slot_map_for_participants([Participant.t()]) :: %{binary() => binary()}
+  def agent_slot_map_for_participants(participants) do
     alias Platform.Agents.ColorPalette
 
-    # Build map: agent_id → participant.id (for agent participants only)
     agent_participant_ids =
       participants
       |> Enum.filter(&(&1.participant_type == "agent"))
@@ -1758,7 +1760,7 @@ defmodule Platform.Chat do
         |> Repo.all()
         |> Map.new(fn {agent_id, color} ->
           participant_id = Map.fetch!(agent_participant_ids, agent_id)
-          {participant_id, ColorPalette.accent_for(color)}
+          {participant_id, ColorPalette.slot_for(color)}
         end)
     end
   end
@@ -1771,7 +1773,7 @@ defmodule Platform.Chat do
   inserts no avatar), and it deliberately stays that way: an avatar is one
   mutable fact about the agent, so copying it onto every participant row in
   every space would mean rewriting all of them whenever the agent's avatar
-  changes. This mirrors `agent_color_map_for_participants/1`, which resolves
+  changes. This mirrors `agent_slot_map_for_participants/1`, which resolves
   `agent.color` the same way and for the same reason.
 
   Agents with no avatar (or a blank one) are ABSENT from the map rather than
@@ -1807,6 +1809,25 @@ defmodule Platform.Chat do
         end
       end)
     end
+  end
+
+  @doc """
+  `%{space_id => [Participant.t()]}` for many spaces in ONE query, each
+  space's rows ordered by `joined_at` (the order `list_participants/2` uses).
+  A space with no participants is absent from the map.
+
+  Decides nothing about access: the caller passes only spaces already on the
+  user's own list (the phone Chat list passes its DMs and group
+  conversations). A caller passing an arbitrary id gets that space's
+  participant rows.
+  """
+  @spec participants_by_space([binary()]) :: %{binary() => [Participant.t()]}
+  def participants_by_space([]), do: %{}
+
+  def participants_by_space(space_ids) when is_list(space_ids) do
+    from(p in Participant, where: p.space_id in ^space_ids, order_by: [asc: p.joined_at])
+    |> Repo.all()
+    |> Enum.group_by(& &1.space_id)
   end
 
   @doc """
@@ -3211,52 +3232,107 @@ defmodule Platform.Chat do
   def search_messages(_space_id, query, _opts) when not is_binary(query) or query == "", do: []
 
   def search_messages(space_id, query, opts) do
-    limit = Keyword.get(opts, :limit, 20)
-    scope = Keyword.get(opts, :scope)
     trimmed_query = String.trim(query)
 
     if trimmed_query == "" do
       []
     else
-      # Apply the external scope to the row filter FIRST — an out-of-scope
-      # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
-      # ever runs, so no highlighted fragment of an off-limits message is
-      # produced (design canvas §9).
-      base =
-        from(m in Message,
-          where:
-            m.space_id == ^space_id and
-              is_nil(m.deleted_at) and
-              fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
-        )
-        |> ExternalScope.scope_by_space_id(scope)
-
-      from(m in base,
-        select_merge: %{
-          search_rank:
-            fragment(
-              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
-              ^trimmed_query
-            ),
-          search_headline:
-            fragment(
-              "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=5')",
-              m.content,
-              ^trimmed_query
-            )
-        },
-        order_by: [
-          desc:
-            fragment(
-              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
-              ^trimmed_query
-            ),
-          desc: m.inserted_at
-        ],
-        limit: ^limit
-      )
-      |> Repo.all()
+      from(m in Message, where: m.space_id == ^space_id)
+      |> ranked_message_search(trimmed_query, opts)
     end
+  end
+
+  @doc """
+  Full-text search messages across several spaces at once. The cross-space
+  sibling of `search_messages/3`, with the same parse, rank, headline and
+  external-scope ordering.
+
+  Returns up to `:limit` (default 20) `%Message{}` hits ordered by search rank
+  (highest first), then newest first, each carrying the virtual
+  `search_rank` and `search_headline` fields. Top-level messages AND thread
+  replies match; every hit carries its own `space_id` (and `thread_id`), so a
+  caller can link `?message=<id>` into the right space.
+
+  Returns `[]` for an empty `space_ids` list, a blank query, or a query that
+  parses to no lexemes (see `searchable_query?/1`).
+
+  **This function does not decide which spaces a user may read.** The caller
+  passes only the spaces already on that user's list (the Chat list passes
+  channels ++ DMs minus restricted channels). A caller that passes an
+  arbitrary space id gets that space's rows, exactly as `search_messages/3`
+  does today. `:scope` (an `ExternalScope` or `Access.Scope`) narrows the
+  rows further and is applied BEFORE `ts_headline` runs.
+
+  Naming the author: a hit is a full `%Message{}`, so the existing
+  `PlatformWeb.ChatLive.PresenceHooks.sender_name/2` message clause resolves
+  it (the live participant name when the caller has it in its participants
+  map, else the `author_display_name` snapshot). Naming the space is the
+  caller's job, from the same list it took `space_ids` from.
+  """
+  @spec search_messages_in_spaces([binary()], String.t(), keyword()) :: [Message.t()]
+  def search_messages_in_spaces(space_ids, query, opts \\ [])
+  def search_messages_in_spaces([], _query, _opts), do: []
+
+  def search_messages_in_spaces(_space_ids, query, _opts)
+      when not is_binary(query) or query == "",
+      do: []
+
+  def search_messages_in_spaces(space_ids, query, opts) when is_list(space_ids) do
+    trimmed_query = String.trim(query)
+
+    if searchable_query?(trimmed_query) do
+      from(m in Message, where: m.space_id in ^space_ids)
+      |> ranked_message_search(trimmed_query, opts)
+    else
+      []
+    end
+  end
+
+  # The shared body of `search_messages/3` and `search_messages_in_spaces/3`.
+  # `base` carries the caller's space filter; everything else (deleted rows
+  # out, the tsquery match, the external scope, rank, headline, order, limit)
+  # is defined once here so the two searches cannot drift.
+  defp ranked_message_search(base, trimmed_query, opts) do
+    limit = Keyword.get(opts, :limit, 20)
+    scope = Keyword.get(opts, :scope)
+
+    # Apply the external scope to the row filter FIRST — an out-of-scope
+    # `space_id` (the M6-bypassed case) yields zero rows BEFORE `ts_headline`
+    # ever runs, so no highlighted fragment of an off-limits message is
+    # produced (design canvas §9).
+    filtered =
+      from(m in base,
+        where:
+          is_nil(m.deleted_at) and
+            fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query)
+      )
+      |> ExternalScope.scope_by_space_id(scope)
+
+    from(m in filtered,
+      select_merge: %{
+        search_rank:
+          fragment(
+            "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+            ^trimmed_query
+          ),
+        search_headline:
+          fragment(
+            "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=5')",
+            m.content,
+            ^trimmed_query
+          )
+      },
+      order_by: [
+        desc:
+          fragment(
+            "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+            ^trimmed_query
+          ),
+        desc: m.inserted_at
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
   end
 
   @typedoc """
@@ -3731,6 +3807,58 @@ defmodule Platform.Chat do
   @spec list_threads(binary()) :: [Thread.t()]
   def list_threads(space_id) do
     from(t in Thread, where: t.space_id == ^space_id, order_by: [asc: t.inserted_at])
+    |> Repo.all()
+  end
+
+  @doc """
+  The space's threads that have at least one non-deleted reply, for the phone
+  space sheet's Threads page (task 01a1557a-8a6d stage 2). Most recent reply
+  first, at most 50, each as
+  `%{thread_id, parent_message_id, excerpt, author, reply_count, last_reply_at}`.
+
+  The reply aggregate is `thread_previews_for_messages/1`'s: non-deleted
+  replies only, counted and their latest `inserted_at` taken. `excerpt` and
+  `author` come from the parent message, and are nil when that message is
+  deleted, so a deleted parent's text is never shown.
+
+  The optional `:scope` drops threads in spaces outside an external caller's
+  participant set (`ExternalScope.scope_by_space_id/2`).
+  """
+  @spec list_thread_summaries(binary(), keyword()) :: [map()]
+  def list_thread_summaries(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    replies =
+      from(r in Message,
+        where: r.space_id == ^space_id and not is_nil(r.thread_id) and is_nil(r.deleted_at),
+        group_by: r.thread_id,
+        select: %{
+          thread_id: r.thread_id,
+          reply_count: count(r.id),
+          last_reply_at: max(r.inserted_at)
+        }
+      )
+
+    from(t in Thread,
+      join: r in subquery(replies),
+      on: r.thread_id == t.id,
+      left_join: pm in Message,
+      on: pm.id == t.parent_message_id and is_nil(pm.deleted_at),
+      left_join: a in Participant,
+      on: a.id == pm.participant_id,
+      where: t.space_id == ^space_id,
+      order_by: [desc: r.last_reply_at, desc: t.id],
+      limit: 50,
+      select: %{
+        thread_id: t.id,
+        parent_message_id: t.parent_message_id,
+        excerpt: pm.content,
+        author: a.display_name,
+        reply_count: r.reply_count,
+        last_reply_at: r.last_reply_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
     |> Repo.all()
   end
 
@@ -4265,6 +4393,42 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc """
+  The space's pins joined to their messages, for the phone space sheet's
+  Pinned page (task 01a1557a-8a6d stage 2): newest pin first, each as
+  `%{pin_id, message_id, space_id, content, author, inserted_at, pinned_at}`.
+  `inserted_at` is the message's. A pin whose message is deleted is left
+  out: its content is gone, and a row with nothing to show is a dead row.
+
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or
+  `%Platform.Access.Scope{}`) drops pins in spaces outside an external
+  caller's participant set, as `list_attachments_for_messages/2` does.
+  """
+  @spec list_pins_with_messages(binary(), keyword()) :: [map()]
+  def list_pins_with_messages(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(p in Pin,
+      join: m in Message,
+      on: m.id == p.message_id and m.space_id == p.space_id and is_nil(m.deleted_at),
+      left_join: a in Participant,
+      on: a.id == m.participant_id,
+      where: p.space_id == ^space_id,
+      order_by: [desc: p.inserted_at, desc: p.id],
+      select: %{
+        pin_id: p.id,
+        message_id: m.id,
+        space_id: p.space_id,
+        content: m.content,
+        author: a.display_name,
+        inserted_at: m.inserted_at,
+        pinned_at: p.inserted_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+  end
+
   # ── Canvases ─────────────────────────────────────────────────────────────────
   #
   # First-class space-scoped canvases (ADR 0036). A canvas owns a canonical
@@ -4608,6 +4772,99 @@ defmodule Platform.Chat do
       # The picker renders a title and a meta line; the document stays behind.
       select: struct(c, [:id, :title, :space_id, :updated_at, :inserted_at])
     )
+    |> canvas_order(:updated_desc)
+    |> maybe_scope_canvases(canvas_access_scope(opts))
+    |> Repo.all()
+  end
+
+  @doc """
+  The canvas listing behind the Files & Canvases browser
+  (`Platform.Files.Browser`, task 01a1557a-b5f9 stage 1): live canvases
+  across `space_ids`, most recently edited first, as plain maps WITHOUT
+  `document`: `id`, `title`, `space_id`, `created_by_display_name`,
+  `cloned_from`, `updated_at`, `inserted_at` and `game?`.
+
+  `game?` is computed in SQL: true when the document holds a node of type
+  `game_stream` anywhere in its tree (`jsonb_path_exists`), so a caller
+  learns an item's type without loading a document. `game_stream` is an
+  extension kind; core names only the string, never the extension's modules.
+
+  Like `list_recent_canvases/2` it is NOT cast-safe on `space_ids`: every
+  id must be DB-derived. `:access_scope` drops every canvas a `canvas.read`
+  deny covers (`scope_by/3`), exactly as in `list_canvases/2`.
+
+  ## Options
+
+    * `:since` — only canvases with `updated_at` at or after this instant.
+    * `:limit` — cap (default 50; `nil` disables it).
+    * `:type` — `:canvas` (not a game) or `:game`; absent means both.
+    * `:ids` — narrow to these canvas ids (DB-derived, e.g. search hits
+      being classified); absent means no narrowing.
+  """
+  @spec list_browser_canvases([binary()], keyword()) :: [map()]
+  def list_browser_canvases(space_ids, opts \\ [])
+
+  def list_browser_canvases([], _opts), do: []
+
+  def list_browser_canvases(space_ids, opts) when is_list(space_ids) do
+    # Bound as TEXT and cast in SQL: a bare `?::jsonpath` makes Postgres type
+    # the parameter as jsonpath, which Postgrex cannot encode.
+    game_path = ~s|$.** ? (@.type == "game_stream")|
+
+    query =
+      from(c in Canvas,
+        where: c.space_id in ^space_ids and is_nil(c.deleted_at),
+        select: %{
+          id: c.id,
+          title: c.title,
+          space_id: c.space_id,
+          created_by_display_name: c.created_by_display_name,
+          cloned_from: c.cloned_from,
+          updated_at: c.updated_at,
+          inserted_at: c.inserted_at,
+          game?: fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+        }
+      )
+
+    query =
+      case Keyword.get(opts, :since) do
+        nil -> query
+        since -> where(query, [c], c.updated_at >= ^since)
+      end
+
+    query =
+      case Keyword.get(opts, :ids) do
+        nil -> query
+        ids when is_list(ids) -> where(query, [c], c.id in ^ids)
+      end
+
+    query =
+      case Keyword.get(opts, :type) do
+        :canvas ->
+          where(
+            query,
+            [c],
+            not fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+          )
+
+        :game ->
+          where(
+            query,
+            [c],
+            fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+          )
+
+        nil ->
+          query
+      end
+
+    query =
+      case Keyword.get(opts, :limit, 50) do
+        nil -> query
+        n when is_integer(n) and n > 0 -> limit(query, ^n)
+      end
+
+    query
     |> canvas_order(:updated_desc)
     |> maybe_scope_canvases(canvas_access_scope(opts))
     |> Repo.all()
@@ -5370,6 +5627,133 @@ defmodule Platform.Chat do
     |> Enum.group_by(& &1.message_id)
   end
 
+  @doc """
+  The space's shared files, for the phone space sheet's Files and Videos
+  segments (task 01a1557a-8a6d stage 4). `state == "ready"` attachments whose
+  message is not deleted, newest first, at most 50, each as
+  `%{id, filename, content_type, byte_size, message_id, author, inserted_at}`.
+  A pending upload, a canvas-only attachment (no message) and an attachment
+  on a deleted message are all left out.
+
+  The optional `:scope` drops attachments in spaces outside an external
+  caller's participant set (`ExternalScope.scope_by_space_id/2`).
+  """
+  @spec list_space_attachments(binary(), keyword()) :: [map()]
+  def list_space_attachments(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(a in Attachment,
+      join: m in Message,
+      on: m.id == a.message_id and m.space_id == a.space_id and is_nil(m.deleted_at),
+      left_join: p in Participant,
+      on: p.id == m.participant_id,
+      where: a.space_id == ^space_id and a.state == "ready",
+      order_by: [desc: a.inserted_at, desc: a.id],
+      limit: 50,
+      select: %{
+        id: a.id,
+        filename: a.filename,
+        content_type: a.content_type,
+        byte_size: a.byte_size,
+        message_id: m.id,
+        author: p.display_name,
+        inserted_at: a.inserted_at
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+  end
+
+  # How many recent messages `list_space_links/2` reads, and how many links
+  # it returns. A bounded scan: no link table, no migration.
+  @space_links_window 300
+  @space_links_limit 50
+
+  @doc """
+  The http(s) links shared in a space, for the phone space sheet's Sites and
+  Videos segments (task 01a1557a-8a6d stage 4).
+
+  A link is exactly what the timeline turns into a clickable link: each of
+  the space's #{@space_links_window} most recent non-deleted messages is
+  rendered through `ContentRenderer.render_message/1`, the renderer the
+  message list uses, and the http(s) `href`s of its `<a>` tags are taken. So
+  a bare URL Earmark autolinks, a markdown `[text](url)` link and nothing
+  else count, and the Links list cannot disagree with the timeline. There is
+  no URL regex here to drift from the renderer's.
+
+  Deduplicated by URL keeping the newest, newest first, at most
+  #{@space_links_limit}, each as
+  `%{url, host, kind, message_id, author, inserted_at}` where `kind` is
+  `:video` for a youtube.com / youtu.be / vimeo.com / loom.com host (and
+  their subdomains) and `:site` otherwise. `:scope` as
+  `list_space_attachments/2`.
+  """
+  @spec list_space_links(binary(), keyword()) :: [map()]
+  def list_space_links(space_id, opts \\ []) do
+    scope = Keyword.get(opts, :scope)
+
+    from(m in Message,
+      left_join: p in Participant,
+      on: p.id == m.participant_id,
+      where: m.space_id == ^space_id and is_nil(m.deleted_at),
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: @space_links_window,
+      select: %{
+        message_id: m.id,
+        content: m.content,
+        author: p.display_name,
+        inserted_at: m.inserted_at,
+        space_id: m.space_id
+      }
+    )
+    |> ExternalScope.scope_by_space_id(scope)
+    |> Repo.all()
+    |> Enum.flat_map(fn msg ->
+      msg.content
+      |> rendered_link_urls()
+      |> Enum.map(fn url ->
+        host = URI.parse(url).host |> to_string() |> String.downcase()
+
+        %{
+          url: url,
+          host: host,
+          kind: link_kind(host),
+          message_id: msg.message_id,
+          author: msg.author,
+          inserted_at: msg.inserted_at
+        }
+      end)
+    end)
+    |> Enum.uniq_by(& &1.url)
+    |> Enum.take(@space_links_limit)
+  end
+
+  @doc """
+  The http(s) URLs the message renderer turns into links in `content`, in
+  order. Public so the test that holds `list_space_links/2` to the timeline
+  can ask the same question of the same renderer.
+  """
+  @spec rendered_link_urls(String.t() | nil) :: [String.t()]
+  def rendered_link_urls(content) when is_binary(content) and content != "" do
+    content
+    |> Platform.Chat.ContentRenderer.render_message()
+    |> Phoenix.HTML.safe_to_string()
+    |> Floki.parse_fragment!()
+    |> Floki.attribute("a", "href")
+    |> Enum.filter(&String.match?(&1, ~r{\Ahttps?://}i))
+    |> Enum.uniq()
+  end
+
+  def rendered_link_urls(_content), do: []
+
+  @video_hosts ~w(youtube.com youtu.be vimeo.com loom.com)
+
+  defp link_kind(host) do
+    if Enum.any?(@video_hosts, &(host == &1 or String.ends_with?(host, "." <> &1))),
+      do: :video,
+      else: :site
+  end
+
   defp publish_canvas_created(canvas) do
     :telemetry.execute(
       [:platform, :chat, :canvas_created],
@@ -5916,6 +6300,10 @@ defmodule Platform.Chat do
          true <- participant.participant_type == "agent" || {:error, :not_an_agent},
          {:ok, removed} <- remove_participant(participant) do
       Platform.Chat.ActiveAgentStore.clear_if_match(space.id, removed.id)
+      # The roster signal the deleted utility-bar Remove sent
+      # (`remove_space_agent/3`, task 01a1557a-8f80 stage 3): the quickmeet's
+      # People tab follows `{:roster_changed, _}`, not `{:participant_left, _}`.
+      broadcast_roster_changed(space.id, removed.participant_id, :removed)
       {:ok, removed}
     end
   end
@@ -6173,40 +6561,253 @@ defmodule Platform.Chat do
     end
   end
 
+  # ── Agent attention controls (task 01a1557a-8f80 stage 1) ─────────────────
+  #
+  # Three choices any USER participant of a space may make about its agents:
+  # silence one agent, switch every agent off with the master switch, and
+  # pick the attention policy. `Platform.Chat.AttentionRouter` obeys all
+  # three. Each writer composes `SpaceAccess.authorize_writer/2` in its own
+  # body, takes the space id from the caller (a LiveView passes
+  # `socket.assigns.active_space`, never a param), refuses an agent actor so
+  # an agent cannot unsilence itself, and broadcasts
+  # `{:agent_attention_changed, space_id}` on the space topic.
+  #
+  # Not `can_summon_agents?/2`: that rule governs adding and removing agents.
+  # The header eye these controls replace had no rule beyond membership.
+
   @doc """
-  Remove an agent from a space entirely (hard delete, ADR 0038).
+  Silence (`true`) or wake (`false`) one agent participant of a space.
 
-  Actor-first (task 01a01ce0, stage 1). `actor` must hold a
-  `chat_participants` row in `space_id`; the sole caller,
-  `PlatformWeb.ShellLive`'s `"dismiss_agent"` clause, previously passed a
-  client-supplied `space_id` with no membership check of any kind.
+  A silenced agent is mention-only: it never receives an un-mentioned message
+  (as mutex holder, by policy fan-out, or as the execution assignee fallback),
+  but an @mention still routes to it. Silencing the agent that currently holds
+  the space's active-agent mutex clears the mutex.
 
-  The archived check is new here too, and deliberate: `ensure_space_writable/1`
-  is the guard every other public write path already carries, and an archived
-  channel is a read-only snapshot for human and agent alike (task 019e95ea).
-  Execution spaces stay exempt, so orchestration teardown is unaffected. See
-  `pin_message/2` for why authorization runs first.
+  `participant_id` is the `chat_participants.id` of an AGENT participant of
+  `space_id`; anything else (a user row, another space's agent, a malformed
+  id) is `{:error, :not_found}`.
   """
-  @spec remove_space_agent(SpaceAccess.actor(), binary(), binary()) ::
-          :ok | {:error, :forbidden | :space_archived | :not_found}
-  def remove_space_agent(actor, space_id, agent_id) do
-    with {:ok, _participant} <- SpaceAccess.authorize_writer(space_id, actor),
-         :ok <- ensure_space_writable(space_id) do
-      do_remove_space_agent(space_id, agent_id)
+  @spec set_agent_silenced(SpaceAccess.actor(), binary(), binary(), boolean()) ::
+          {:ok, Participant.t()}
+          | {:error, :forbidden | :space_archived | :not_found | Ecto.Changeset.t()}
+  def set_agent_silenced(actor, space_id, participant_id, silenced)
+      when is_boolean(silenced) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Participant{} = agent <- space_agent_participant(space_id, participant_id) do
+      with {:ok, updated} <-
+             agent |> Participant.changeset(%{silenced: silenced}) |> Repo.update() do
+        if silenced, do: Platform.Chat.ActiveAgentStore.clear_if_match(space_id, updated.id)
+        broadcast_agent_attention_changed(space_id)
+        {:ok, updated}
+      end
+    else
+      nil -> {:error, :not_found}
+      error -> error
     end
   end
 
-  defp do_remove_space_agent(space_id, agent_id) do
-    case get_agent_participant(space_id, agent_id) do
-      nil ->
-        {:error, :not_found}
+  @doc """
+  Set the space's master switch, `chat_spaces.agents_awake`.
 
-      %Participant{} = participant ->
-        {:ok, _} = Repo.delete(participant)
-        broadcast_roster_changed(space_id, agent_id, :removed)
-        :ok
+  Off: no un-mentioned message reaches any agent in the space and the
+  active-agent mutex is cleared; @mentions still route. Per-agent `silenced`
+  values are never touched. Arming an agent when the switch goes back on is
+  the caller's (the Agents sheet's hook arms
+  `PlatformWeb.ChatLive.AgentsSheetHooks.resolve_armable/2`'s target); this
+  writer only persists.
+  """
+  @spec set_agents_awake(SpaceAccess.actor(), binary(), boolean()) ::
+          {:ok, Space.t()}
+          | {:error, :forbidden | :space_archived | :not_found | Ecto.Changeset.t()}
+  def set_agents_awake(actor, space_id, awake) when is_boolean(awake) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         {:ok, updated} <-
+           space |> Space.agent_attention_changeset(%{agents_awake: awake}) |> Repo.update() do
+      unless awake, do: Platform.Chat.ActiveAgentStore.clear_active(space_id)
+      broadcast_agent_attention_changed(space_id)
+      {:ok, updated}
+    else
+      nil -> {:error, :not_found}
+      error -> error
     end
   end
+
+  @doc """
+  Set the space's agent attention policy, `chat_spaces.agent_attention_policy`
+  (`"on_mention" | "directed" | "collaborative"`).
+
+  Applies to channel and group spaces only: any other kind (a DM is always
+  directed, an execution space keeps its assignee fallback) is
+  `{:error, :not_applicable}`. An unknown value is a changeset error.
+  """
+  @spec set_agent_attention_policy(SpaceAccess.actor(), binary(), String.t()) ::
+          {:ok, Space.t()}
+          | {:error, :forbidden | :space_archived | :not_found | :not_applicable}
+          | {:error, Ecto.Changeset.t()}
+  def set_agent_attention_policy(actor, space_id, policy) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         :ok <- ensure_policy_applicable(space),
+         {:ok, updated} <-
+           space
+           |> Space.agent_attention_changeset(%{agent_attention_policy: policy})
+           |> Repo.update() do
+      broadcast_agent_attention_changed(space_id)
+      {:ok, updated}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc """
+  The agent attention state of a space, for the Agents sheet:
+
+      %{
+        agents_awake: boolean,
+        policy: stored value or nil,
+        effective_policy: what the router applies (nil -> the kind default),
+        agents: [%{participant_id, agent_id, name, slot, silenced}]
+      }
+
+  `agents` holds every agent participant, sorted by name; `slot` is the
+  rung-3 accent slot from `agent_slot_map_for_participants/1`. A space that
+  does not exist is `nil`.
+  """
+  @spec agent_attention_state(binary()) ::
+          %{
+            agents_awake: boolean(),
+            policy: String.t() | nil,
+            effective_policy: String.t(),
+            agents: [map()]
+          }
+          | nil
+  def agent_attention_state(space_id) when is_binary(space_id) do
+    with true <- Platform.UUID.valid?(space_id),
+         %Space{} = space <- Repo.get(Space, space_id) do
+      agents =
+        from(p in Participant,
+          where: p.space_id == ^space_id and p.participant_type == "agent"
+        )
+        |> Repo.all()
+
+      slots = agent_slot_map_for_participants(agents)
+      names = agent_names_by_id(agents)
+
+      %{
+        agents_awake: space.agents_awake,
+        policy: space.agent_attention_policy,
+        effective_policy: Platform.Chat.AttentionRouter.resolve_attention_mode(space, nil),
+        agents:
+          agents
+          |> Enum.map(fn p ->
+            %{
+              participant_id: p.id,
+              agent_id: p.participant_id,
+              name: attention_agent_name(p, names),
+              slot: Map.get(slots, p.id),
+              silenced: p.silenced
+            }
+          end)
+          |> Enum.sort_by(&{String.downcase(&1.name), &1.participant_id})
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp agent_names_by_id([]), do: %{}
+
+  defp agent_names_by_id(agents) do
+    agent_ids = Enum.map(agents, & &1.participant_id)
+
+    from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.name})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp attention_agent_name(%Participant{display_name: name}, _names)
+       when is_binary(name) and name != "",
+       do: name
+
+  defp attention_agent_name(%Participant{participant_id: agent_id}, names),
+    do: Map.get(names, agent_id) || "Agent"
+
+  @doc """
+  The Members sheet's People section (task 01a1557a-8f80 stage 3): the space's
+  user participants split into `online` and `away`.
+
+  ONLINE means the user appears in `Platform.Chat.Presence.list_online_for_viewer/1`
+  (online anywhere in Burrow the viewer can see, because ChatLive tracks a
+  user only in the space on screen) or IS the viewer. AWAY is every other
+  user participant of the space. The viewer leads `online` with `you?: true`;
+  otherwise each list is sorted by name. Agents are never listed here.
+
+  A failed presence read is `{:error, reason}`. It is never turned into a
+  list with everybody away: "we could not ask" and "nobody is here" are
+  different facts, the distinction `list_online_for_viewer/1` exists to keep.
+  """
+  @spec space_member_presence(binary(), map()) ::
+          {:ok, %{online: [map()], away: [map()]}} | {:error, term()}
+  def space_member_presence(space_id, %{id: viewer_id} = viewer) when is_binary(space_id) do
+    case Platform.Chat.Presence.list_online_for_viewer(viewer) do
+      {:ok, online} ->
+        online_ids = MapSet.new(online, & &1.user_id)
+
+        {here, away} =
+          space_id
+          |> list_participants(participant_type: "user")
+          |> Enum.map(&member_row(&1, viewer_id))
+          |> Enum.split_with(&(&1.you? or MapSet.member?(online_ids, &1.user_id)))
+
+        {:ok, %{online: sort_members(here), away: sort_members(away)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc "A user participant as a Members sheet row: `%{participant_id, user_id, name, you?}`."
+  @spec member_row(%Participant{}, binary() | nil) :: map()
+  def member_row(%Participant{} = participant, viewer_id) do
+    %{
+      participant_id: participant.id,
+      user_id: participant.participant_id,
+      name: participant.display_name || "Unknown",
+      you?: participant.participant_id == viewer_id
+    }
+  end
+
+  @doc "Members sheet order: the viewer first, then by name."
+  @spec sort_members([map()]) :: [map()]
+  def sort_members(rows),
+    do: Enum.sort_by(rows, &{!&1.you?, String.downcase(&1.name), &1.participant_id})
+
+  # An agent holds a participant row too, so `authorize_writer/2` alone would
+  # let an agent unsilence itself or wake a space a member switched off.
+  defp ensure_user_writer(%Participant{participant_type: "user"}), do: :ok
+  defp ensure_user_writer(_participant), do: {:error, :forbidden}
+
+  defp ensure_policy_applicable(%Space{kind: kind}) when kind in ["channel", "group"], do: :ok
+  defp ensure_policy_applicable(_space), do: {:error, :not_applicable}
+
+  defp space_agent_participant(space_id, participant_id) when is_binary(participant_id) do
+    if Platform.UUID.valid?(participant_id) do
+      Repo.get_by(Participant, id: participant_id, space_id: space_id, participant_type: "agent")
+    end
+  end
+
+  defp space_agent_participant(_space_id, _participant_id), do: nil
+
+  defp broadcast_agent_attention_changed(space_id),
+    do: ChatPubSub.broadcast(space_id, {:agent_attention_changed, space_id})
 
   @doc """
   Ensure an agent is on a space's roster. Idempotent.
@@ -6328,26 +6929,7 @@ defmodule Platform.Chat do
       "space_agents:#{space_id}",
       {:roster_changed, space_id}
     )
-
-    # Additive global fan-out. The shell's agents meter is viewer-scoped
-    # across every visible space, so it cannot subscribe to N per-space
-    # topics without unbounded fan-out; it subscribes to this one topic
-    # instead and recomputes its union on receipt. The per-space topic
-    # above and all of its subscribers are untouched.
-    Phoenix.PubSub.broadcast(
-      Platform.PubSub,
-      global_roster_topic(),
-      {:roster_changed_any, space_id}
-    )
   end
-
-  @doc """
-  Single global topic carrying `{:roster_changed_any, space_id}` for every
-  roster mutation in the install. Subscribers must re-scope for themselves —
-  the message is a "something changed" ping, not an authorization.
-  """
-  @spec global_roster_topic() :: String.t()
-  def global_roster_topic, do: "space_agents:*"
 
   # ── Unread counts ──────────────────────────────────────────────────────────
 
@@ -6562,6 +7144,69 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @excerpt_max_graphemes 140
+
+  @doc """
+  The newest top-level message of each space, as a one-line excerpt for the
+  Chat conversation list.
+
+  Returns `%{space_id => %{content: String.t(), author_name: String.t() | nil,
+  inserted_at: DateTime.t()}}`. "Newest" is the newest non-deleted TOP-LEVEL
+  message: thread replies are excluded, so a reply buried in a thread does not
+  become a channel's headline. A space with no such message is absent from
+  the map. `content` has its whitespace (newlines included) collapsed to
+  single spaces and is truncated to #{@excerpt_max_graphemes} graphemes.
+  `author_name` is the message's `author_display_name` snapshot, the same
+  fallback `PresenceHooks.sender_name/2` uses, and may be `nil`.
+
+  One query for all spaces, and the SAME query `mark_all_chat_spaces_read/1`
+  takes its per-space tip from (ordered by the UUIDv7 id), so the excerpt and
+  the unread watermark can never disagree about which message is newest.
+
+  **This function does not decide which spaces a user may read.** The caller
+  passes only the spaces already on that user's list. A caller that passes an
+  arbitrary space id gets that space's newest message. `:scope` (an
+  `ExternalScope` or `Access.Scope`) narrows the rows further.
+  """
+  @spec last_message_excerpts([binary()], keyword()) :: %{
+          optional(binary()) => %{
+            content: String.t(),
+            author_name: String.t() | nil,
+            inserted_at: DateTime.t()
+          }
+        }
+  def last_message_excerpts(space_ids, opts \\ [])
+  def last_message_excerpts([], _opts), do: %{}
+
+  def last_message_excerpts(space_ids, opts) when is_list(space_ids) do
+    space_ids
+    |> newest_top_level_messages_query()
+    |> ExternalScope.scope_by_space_id(Keyword.get(opts, :scope))
+    |> select([m], {m.space_id, m.content, m.author_display_name, m.inserted_at})
+    |> Repo.all()
+    |> Map.new(fn {space_id, content, author_name, inserted_at} ->
+      {space_id,
+       %{content: message_excerpt(content), author_name: author_name, inserted_at: inserted_at}}
+    end)
+  end
+
+  @doc """
+  One message body as a list excerpt: whitespace (newlines included) collapsed
+  to single spaces, truncated to #{@excerpt_max_graphemes} graphemes. `nil`
+  gives `""`. The SAME shaping `last_message_excerpts/2` applies, exposed so
+  a LiveView that patches one entry from an arriving message cannot shape it
+  differently from the query that loaded the rest.
+  """
+  @spec message_excerpt(String.t() | nil) :: String.t()
+  def message_excerpt(nil), do: ""
+
+  def message_excerpt(content) when is_binary(content) do
+    content
+    |> String.split()
+    |> Enum.join(" ")
+    |> String.slice(0, @excerpt_max_graphemes)
+  end
+
   # `%{space_id => newest top-level, non-deleted message id}`, one row per
   # space via `DISTINCT ON`, so each space gets its own tip out of a single
   # query rather than N.
@@ -6573,14 +7218,25 @@ defmodule Platform.Chat do
   defp newest_top_level_message_ids([]), do: %{}
 
   defp newest_top_level_message_ids(space_ids) do
+    space_ids
+    |> newest_top_level_messages_query()
+    |> select([m], {m.space_id, m.id})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # THE NEWEST-MESSAGE QUERY, defined once. One row per space (`DISTINCT ON
+  # space_id`): its newest top-level, non-deleted message, newest by the
+  # UUIDv7 id. Both the read-cursor tip (`newest_top_level_message_ids/1`) and
+  # the list excerpt (`last_message_excerpts/2`) read it, so the unread
+  # watermark and the excerpt cannot name different messages. Do not give
+  # either one its own predicate or its own ordering.
+  defp newest_top_level_messages_query(space_ids) do
     from(m in Message,
       where: m.space_id in ^space_ids and is_nil(m.thread_id) and is_nil(m.deleted_at),
       distinct: [asc: m.space_id],
-      order_by: [asc: m.space_id, desc: m.id],
-      select: {m.space_id, m.id}
+      order_by: [asc: m.space_id, desc: m.id]
     )
-    |> Repo.all()
-    |> Map.new()
   end
 
   # Forward-only cursor write. The clause below skips the space entirely when
@@ -6643,109 +7299,10 @@ defmodule Platform.Chat do
     end
   end
 
-  # ── AI Activity (Activity panel — list + undo agent-driven actions) ────────
-
-  @doc """
-  Count of agent-driven actions visible to `list_recent_agent_actions/1` under
-  the same filter options. Used by the Activity panel for numbered-page
-  pagination (total page count = ceil(count / page_size)).
-
-  Accepts the same `:since` and `:include_deleted` options as the list
-  function. `:limit` is ignored (this is a count, not a slice).
-  """
-  @spec count_recent_agent_actions(keyword()) :: non_neg_integer()
-  def count_recent_agent_actions(opts \\ []) do
-    since = Keyword.get(opts, :since)
-    include_deleted = Keyword.get(opts, :include_deleted, false)
-
-    space_ids = list_accessible_space_ids()
-
-    if space_ids == [] do
-      0
-    else
-      msg_count = count_recent_agent_messages(space_ids, since, include_deleted)
-      canvas_count = count_recent_agent_canvases(space_ids, since, include_deleted)
-      msg_count + canvas_count
-    end
-  end
-
-  defp count_recent_agent_messages(space_ids, since, include_deleted) do
-    base =
-      Message
-      |> where([m], m.space_id in ^space_ids)
-      |> where([m], m.author_participant_type == "agent")
-
-    base = if include_deleted, do: base, else: where(base, [m], is_nil(m.deleted_at))
-    base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
-
-    Repo.aggregate(base, :count, :id)
-  end
-
-  defp count_recent_agent_canvases(space_ids, since, include_deleted) do
-    base =
-      Canvas
-      |> where([c], c.space_id in ^space_ids)
-      |> where([c], c.created_by_participant_type == "agent")
-
-    base = if include_deleted, do: base, else: where(base, [c], is_nil(c.deleted_at))
-    base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
-
-    Repo.aggregate(base, :count, :id)
-  end
-
-  @doc """
-  List recent AI-agent-driven actions (messages, canvases) in spaces the given
-  user participates in. Used by the Activity LiveView. Returns currently-active
-  items (not soft-deleted), sorted chronologically newest first.
-
-  Each result is a map: `%{kind: :message | :canvas, item: t, agent_name: name,
-  agent_avatar_url: url | nil, space_id: id, inserted_at: dt}`.
-
-  `agent_avatar_url` is resolved from the `agents` table at read time, not from
-  the author snapshot: the snapshot columns freeze the acting agent's NAME so a
-  historical row keeps saying who acted, but an avatar is a mutable fact about
-  the agent and the feed should show the face the agent has now.
-
-  Options:
-    * `:since` (`DateTime`) — only items with `inserted_at >= since`. If omitted,
-      all-time history is returned.
-    * `:limit` (`integer`) — cap on combined results. Default `200`.
-  """
-  @spec list_recent_agent_actions(keyword()) :: [map()]
-  def list_recent_agent_actions(opts \\ []) do
-    since = Keyword.get(opts, :since)
-    limit = Keyword.get(opts, :limit, 200)
-    include_deleted = Keyword.get(opts, :include_deleted, false)
-
-    # Scope to every non-archived, non-execution space. Single-tenant
-    # assumption — when workspace partitioning ships, this should re-scope
-    # to spaces in the user's workspace(s).
-    space_ids = list_accessible_space_ids()
-
-    if space_ids == [] do
-      []
-    else
-      messages = list_recent_agent_messages(space_ids, since, limit, include_deleted)
-      canvases = list_recent_agent_canvases(space_ids, since, limit, include_deleted)
-
-      (messages ++ canvases)
-      |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
-      |> Enum.take(limit)
-    end
-  end
-
-  defp list_accessible_space_ids do
-    from(s in Space,
-      where: is_nil(s.archived_at) and s.kind != "execution",
-      select: s.id
-    )
-    |> Repo.all()
-  end
-
   @doc """
   Returns `true` if the given `space_id` exists, is not archived, and is not an
-  execution space. Used as the access gate for cross-space surfaces like the
-  Activity panel's undo. Single-tenant — extend with workspace scoping when
+  execution space. Used as the access gate for cross-space surfaces (the canvas
+  `:org_reader` grant). Single-tenant — extend with workspace scoping when
   multi-tenancy ships.
   """
   @spec space_accessible?(binary()) :: boolean()
@@ -6888,110 +7445,6 @@ defmodule Platform.Chat do
       )
 
     Repo.one(query) != nil
-  end
-
-  defp list_recent_agent_messages(space_ids, since, limit, include_deleted) do
-    base =
-      Message
-      |> where([m], m.space_id in ^space_ids)
-      |> where([m], m.author_participant_type == "agent")
-      |> order_by([m], desc: m.inserted_at)
-      |> limit(^limit)
-
-    base =
-      if include_deleted, do: base, else: where(base, [m], is_nil(m.deleted_at))
-
-    base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
-
-    rows = Repo.all(base)
-
-    avatars =
-      rows
-      |> Enum.map(& &1.author_agent_id)
-      |> agent_avatar_map_for_agent_ids()
-
-    Enum.map(rows, fn m ->
-      %{
-        kind: :message,
-        item: m,
-        agent_name: m.author_display_name || "Agent",
-        agent_avatar_url: Map.get(avatars, m.author_agent_id),
-        space_id: m.space_id,
-        inserted_at: m.inserted_at,
-        state: if(is_nil(m.deleted_at), do: :active, else: :undone)
-      }
-    end)
-  end
-
-  defp list_recent_agent_canvases(space_ids, since, limit, include_deleted) do
-    base =
-      Canvas
-      |> where([c], c.space_id in ^space_ids)
-      |> where([c], c.created_by_participant_type == "agent")
-      |> order_by([c], desc: c.inserted_at)
-      |> limit(^limit)
-
-    base =
-      if include_deleted, do: base, else: where(base, [c], is_nil(c.deleted_at))
-
-    base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
-
-    # A canvas snapshots its creator's NAME but carries no agent id (see the
-    # Canvas schema) — only `created_by`, the participant row id. Messages have
-    # `author_agent_id` directly. So the agent behind a canvas is reached one
-    # hop further out, through the participant row, and a hard-deleted
-    # participant (ADR 0038) simply yields no avatar rather than breaking the row.
-    rows =
-      base
-      |> join(:left, [c], p in Participant, on: p.id == c.created_by)
-      |> select([c, p], {c, p.participant_id})
-      |> Repo.all()
-
-    avatars =
-      rows
-      |> Enum.map(fn {_c, agent_id} -> agent_id end)
-      |> agent_avatar_map_for_agent_ids()
-
-    Enum.map(rows, fn {c, agent_id} ->
-      %{
-        kind: :canvas,
-        item: c,
-        agent_name: c.created_by_display_name || "Agent",
-        agent_avatar_url: Map.get(avatars, agent_id),
-        space_id: c.space_id,
-        inserted_at: c.inserted_at,
-        state: if(is_nil(c.deleted_at), do: :active, else: :undone)
-      }
-    end)
-  end
-
-  # `agent.id → avatar_url` for a list of (possibly nil, possibly repeated)
-  # agent ids. Mirrors `agent_avatar_map_for_participants/1`: agents with no
-  # avatar — or a blank one — are ABSENT from the map rather than present with
-  # an empty value, so a plain `Map.get/2` yields nil and the render layer is
-  # never handed "". The `?v=` cache token on the stored URL is passed through
-  # verbatim.
-  defp agent_avatar_map_for_agent_ids(agent_ids) do
-    agent_ids =
-      agent_ids
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    if agent_ids == [] do
-      %{}
-    else
-      from(a in Agent,
-        where: a.id in ^agent_ids and not is_nil(a.avatar_url),
-        select: {a.id, a.avatar_url}
-      )
-      |> Repo.all()
-      |> Enum.reduce(%{}, fn {agent_id, avatar_url}, acc ->
-        case String.trim(avatar_url) do
-          "" -> acc
-          url -> Map.put(acc, agent_id, url)
-        end
-      end)
-    end
   end
 
   @doc """

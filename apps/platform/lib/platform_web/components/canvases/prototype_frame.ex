@@ -165,7 +165,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     <div
       id={@id}
       data-role="prototype-unavailable"
-      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-base-content/60"
+      class="rounded-xl border border-edge bg-base-200 px-4 py-6 text-center text-sm text-subtle"
     >
       This prototype is not available.
     </div>
@@ -208,6 +208,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       }
       data-role="prototype-canvas"
       data-fullscreen={to_string(@fullscreen)}
+      data-fullscreen-viewer={@fullscreen && "true"}
     >
       <%!-- The bar is its own size container (`@container`): every width
            rule below is keyed to the BAR, not the viewport. The inline
@@ -304,7 +305,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
       <%= if @view.state == :removed do %>
         <div
-          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content/70"
+          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content"
           data-role="prototype-removed"
         >
           <span>
@@ -419,7 +420,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         ]}
       >
         <%= if @open == :versions do %>
-          <p class="px-1 pb-2 text-xs font-semibold text-base-content/70">Versions</p>
+          <p class="px-1 pb-2 text-xs font-semibold text-base-content">Versions</p>
           <ul class="max-h-72 space-y-0.5 overflow-y-auto">
             <li
               :for={v <- @view.versions}
@@ -433,10 +434,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
               <span class="w-8 shrink-0 text-base-content">v{v.version}</span>
               <span class="shrink-0 whitespace-nowrap text-neutral">{short_time(v.inserted_at)}</span>
               <span class="min-w-0 flex-1 truncate font-sans text-neutral">{v.publisher}</span>
-              <span :if={v.removed?} class="shrink-0 font-sans text-base-content/50">removed</span>
+              <span :if={v.removed?} class="shrink-0 font-sans text-subtle">removed</span>
               <span
                 :if={not v.removed? and v.version == @view.latest}
-                class="shrink-0 font-sans text-base-content/50"
+                class="shrink-0 font-sans text-subtle"
               >
                 latest
               </span>
@@ -455,7 +456,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </ul>
           <p :if={@pin_error} class="px-1 pt-2 text-xs text-error" role="alert">{@pin_error}</p>
         <% else %>
-          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content/80">
+          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content">
             <span class="hero-lock-closed size-4 shrink-0 text-neutral" aria-hidden="true"></span>
             Sealed: no network, no Burrow access
           </p>

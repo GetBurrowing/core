@@ -328,7 +328,7 @@ defmodule PlatformWeb.Components.ScopePill do
             target: @target,
             label: @label
           })}
-          <.icon name="hero-arrow-right" class="size-3 text-base-content/60" />
+          <.icon name="hero-arrow-right" class="size-3 text-subtle" />
           {render_chip(%{
             scope: @propagated_to,
             clickable: @clickable,

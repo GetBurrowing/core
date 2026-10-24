@@ -130,7 +130,7 @@ defmodule PlatformWeb.NativeDonationTest do
         })
 
       {:ok, view, _html} = live(login(conn, me), ~p"/chat/#{channel.slug}")
-      render_click(view, "open_thread", %{"message-id" => root.id})
+      render_click(view, "open_inline_thread", %{"message-id" => root.id})
       sentinel = "zq-thread-#{u()}"
 
       render_submit(view, "send_inline_thread_message", %{
@@ -159,7 +159,7 @@ defmodule PlatformWeb.NativeDonationTest do
 
       view |> form("#compose-form", compose: %{text: ""}) |> render_submit()
       view |> form("#compose-form", compose: %{text: "   "}) |> render_submit()
-      render_click(view, "open_thread", %{"message-id" => root.id})
+      render_click(view, "open_inline_thread", %{"message-id" => root.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{"text" => "  ", "message_id" => root.id}

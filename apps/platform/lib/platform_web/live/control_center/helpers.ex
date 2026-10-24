@@ -13,31 +13,31 @@ defmodule PlatformWeb.ControlCenter.Helpers do
     do: "rounded-full bg-warning/15 px-2 py-1 text-[11px] font-semibold text-warning"
 
   def agent_badge_class("archived"),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-subtle"
 
   def agent_badge_class(_status),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-subtle"
 
   def source_badge_class(:workspace),
     do: "rounded-full bg-info/15 px-2 py-1 text-[11px] font-semibold text-info"
 
   def source_badge_class(:database),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-subtle"
 
   def source_badge_class(_source),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-subtle"
 
   def runtime_badge_class(:working),
     do: "rounded-full bg-success/15 px-3 py-1 text-xs font-semibold text-success"
 
   def runtime_badge_class(:idle),
-    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content/65"
+    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content"
 
   def runtime_badge_class(:paused),
     do: "rounded-full bg-warning/15 px-3 py-1 text-xs font-semibold text-warning"
 
   def runtime_badge_class(_status),
-    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content/65"
+    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content"
 
   def session_badge_class("running"),
     do: "rounded-full bg-info/15 px-2 py-1 text-[11px] font-semibold text-info"
@@ -52,7 +52,7 @@ defmodule PlatformWeb.ControlCenter.Helpers do
     do: "rounded-full bg-warning/15 px-2 py-1 text-[11px] font-semibold text-warning"
 
   def session_badge_class(_status),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-subtle"
 
   def humanize_memory_type(type), do: humanize_value(type)
 

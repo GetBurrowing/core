@@ -296,6 +296,30 @@ const ScrollToBottom = {
     };
     this.scrollEl.addEventListener("scroll", this._onScroll, { passive: true });
 
+    // The phone chat dock (task 01a15f2e stage 3, `hooks/chat_dock.js`). Below
+    // lg the composer, typing and streaming rows float OVER the timeline, so
+    // their growth changes #message-list's end padding (scrollHeight), not
+    // this scroller's clientHeight, and the viewport observer above never
+    // sees it. ChatDock reports each change here instead of writing scrollTop
+    // itself. This runs the EXISTING follow rule, `scrollToBottom`, fed the
+    // reader's position from BEFORE the change: the hook's own reported
+    // `away` latch when there is one (a fresh measurement now reads "not at
+    // the bottom" by exactly the growth), else the live distance less the
+    // growth.
+    this._onDockResized = (event) => {
+      if (!this._hasMeasurableBox()) return;
+      const delta = (event && event.detail && event.detail.delta) || 0;
+      let preDistance;
+      if (this._lastAway === false) preDistance = 0;
+      else if (this._lastAway === true) preDistance = Infinity;
+      else preDistance = this.distanceFromBottom() - delta;
+      this.scrollToBottom(preDistance);
+      this._reportDistance();
+    };
+    if (typeof window !== "undefined" && window.addEventListener) {
+      window.addEventListener("chat:dock-resized", this._onDockResized);
+    }
+
     // Defined so the first `updated()` and every non-patch caller
     // (ResizeObserver, settle timer, mount) read a defined value. `null`
     // means "no pre-patch capture" and selects the live measurement.
@@ -924,6 +948,12 @@ const ScrollToBottom = {
     });
   },
   destroyed() {
+    if (this._onDockResized) {
+      if (typeof window !== "undefined" && window.removeEventListener) {
+        window.removeEventListener("chat:dock-resized", this._onDockResized);
+      }
+      this._onDockResized = null;
+    }
     if (this._onUserIntent) {
       for (const evt of ["wheel", "touchmove", "keydown"]) {
         this.scrollEl.removeEventListener(evt, this._onUserIntent);
@@ -1156,16 +1186,9 @@ const ScrollToBottom = {
     const rows = Array.from(this.el.querySelectorAll("[data-participant-id]"));
     let prevParticipantId = null;
 
-    // A row carrying the "Context" header button (task 01a0d8de stage 3)
-    // always OPENS a run. A continuation row hides every header child but the
-    // action row, so grouping it would hide the one control the design says
-    // is always visible; opening a run keeps name, time and Context together.
-    const opensRun = (row) =>
-      Boolean(row && row.querySelector('[data-role="message-context-trigger"]'));
-
     rows.forEach((row, i) => {
       const pid = row.dataset.participantId;
-      const grouped = Boolean(pid) && pid === prevParticipantId && !opensRun(row);
+      const grouped = Boolean(pid) && pid === prevParticipantId;
 
       // Look one row ahead rather than back-patching the previous row, so
       // this stays a single forward pass. A row with no participant id is
@@ -1173,7 +1196,7 @@ const ScrollToBottom = {
       // continues it, so it always ends a run.
       const next = rows[i + 1];
       const nextPid = next?.dataset.participantId;
-      const runEnd = !(Boolean(pid) && nextPid === pid && !opensRun(next));
+      const runEnd = !(Boolean(pid) && nextPid === pid);
 
       row.classList.toggle("message-row--grouped", grouped);
       row.classList.toggle("message-row--run-end", runEnd);

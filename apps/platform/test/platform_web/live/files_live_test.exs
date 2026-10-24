@@ -75,7 +75,7 @@ defmodule PlatformWeb.FilesLiveTest do
   # ── Tests ──────────────────────────────────────────────────────────────
 
   describe "mount" do
-    test "renders project picker grouped by org (ADR 0042 shape)", %{conn: conn} do
+    test "renders the desktop tree grouped by org (ADR 0042 shape)", %{conn: conn} do
       conn = authenticated_conn(conn)
 
       _acme = seed_project("acme", "Files Mount Acme")
@@ -83,8 +83,8 @@ defmodule PlatformWeb.FilesLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
-      assert html =~ ~s(data-role="files-project-group" data-org-slug="acme")
-      assert html =~ ~s(data-role="files-project-group" data-org-slug="initech")
+      assert html =~ ~s(data-role="files-tree-org" data-org-slug="acme")
+      assert html =~ ~s(data-role="files-tree-org" data-org-slug="initech")
       assert html =~ "Files Mount Acme"
       assert html =~ "Files Mount Gen"
     end
@@ -121,7 +121,7 @@ defmodule PlatformWeb.FilesLiveTest do
     defp picker_text(html) do
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("[data-role=files-project-picker]")
+      |> LazyHTML.query("[data-role=files-tree]")
       |> LazyHTML.text()
     end
 
@@ -164,7 +164,7 @@ defmodule PlatformWeb.FilesLiveTest do
     defp files_section_slugs(html) do
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("[data-role=files-project-group]")
+      |> LazyHTML.query("[data-role=files-tree-org]")
       |> LazyHTML.attribute("data-org-slug")
       |> Enum.uniq()
       |> Enum.sort()
@@ -220,6 +220,25 @@ defmodule PlatformWeb.FilesLiveTest do
   end
 
   describe "select project" do
+    test "the file list scroller pads its end past the floating tab bar (task 01a1557a-7a71 stage 5)",
+         %{conn: conn} do
+      # Review case 4: the last file row ended under the bar (and, in
+      # landscape, could not be reached at all).
+      conn = authenticated_conn(conn)
+      project = seed_project("acme", "Project Scroll End")
+      _file = seed_file(project, %{name: "scroll-end.txt"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      [class] =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s([data-role="file-dropzone"]))
+        |> LazyHTML.attribute("class")
+
+      assert "clears-tab-bar" in String.split(class)
+    end
+
     test "loading a project URL renders its file list", %{conn: conn} do
       conn = authenticated_conn(conn)
       project = seed_project("acme", "Project Alpha")
@@ -230,19 +249,19 @@ defmodule PlatformWeb.FilesLiveTest do
       assert html =~ "alpha-readme.txt"
       # The pending-status badge label is "Ingesting…" (Phase-2 copy).
       assert html =~ "Ingesting"
-      assert html =~ ~s(data-role="files-table")
+      assert html =~ ~s(data-role="files-list")
       # Selected file row carries the stable file-id selector so the
       # PubSub-refresh test below can target it.
       assert html =~ "data-file-id=\"#{file.id}\""
     end
 
-    test "without a selected project the dropzone shows the empty state", %{conn: conn} do
+    test "without a selected project the dropzone shows the Recents empty state", %{conn: conn} do
       conn = authenticated_conn(conn)
       _project = seed_project("acme", "Project Empty Picker")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
-      assert html =~ "Pick a project"
+      assert html =~ "Nothing changed in the last 3 days"
       assert html =~ ~s(data-role="file-dropzone")
     end
 
@@ -259,7 +278,7 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
 
       # The file table is showing (non-empty branch)…
-      assert html =~ ~s(data-role="files-table")
+      assert html =~ ~s(data-role="files-list")
       # …and the upload control is STILL present (the bug being fixed).
       assert html =~ ~s(data-role="files-upload-form")
       assert html =~ ~s(id="files-upload-form")
@@ -273,7 +292,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
 
-      assert html =~ "No files yet"
+      assert html =~ "No files or canvases here"
       assert html =~ ~s(data-role="files-upload-form")
       assert html =~ ~s(id="files-upload-form")
     end
@@ -334,17 +353,15 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
-  describe "FAB + dropzone markers" do
-    test "mobile FAB carries the canonical data-role marker", %{conn: conn} do
+  describe "New control + dropzone markers" do
+    test "the header + New replaced the upload FAB (task 01a1557a-b5f9 stage 3)", %{conn: conn} do
       conn = authenticated_conn(conn)
       _ = seed_project("acme", "FAB Project")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
-      assert html =~ ~s(data-role="file-upload-fab")
-
-      assert html =~
-               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+      assert html =~ ~s(data-role="files-new")
+      refute html =~ ~s(data-role="file-upload-fab")
     end
 
     test "dropzone carries the namespaced marker (not chat's)", %{conn: conn} do
@@ -383,7 +400,13 @@ defmodule PlatformWeb.FilesLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-image")
       assert html =~ ~s(src="/files/blob/#{file.id}")
@@ -400,7 +423,13 @@ defmodule PlatformWeb.FilesLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-pdf")
       assert html =~ "<iframe"
@@ -420,7 +449,13 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, _text} = Files.upsert_extracted_text(file.id, "Plain body content")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-text")
       assert html =~ "Plain body content"
@@ -440,7 +475,13 @@ defmodule PlatformWeb.FilesLiveTest do
         Files.upsert_extracted_text(file.id, "# Heading\n\nParagraph **bold** here.")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-markdown")
       # Markdown pipeline downgrades h1 to h3 + emits <strong> for **bold**.
@@ -460,7 +501,13 @@ defmodule PlatformWeb.FilesLiveTest do
       {:ok, _text} = Files.upsert_extracted_text(file.id, "DOCX body text")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-document")
       assert html =~ "DOCX body text"
@@ -477,7 +524,13 @@ defmodule PlatformWeb.FilesLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-unknown")
       assert html =~ "/files/blob/#{file.id}?download=1"
@@ -494,7 +547,13 @@ defmodule PlatformWeb.FilesLiveTest do
         })
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      html = view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      html =
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
       assert html =~ ~s(data-role="files-detail-download")
       assert html =~ "/files/blob/#{file.id}?download=1"
@@ -825,7 +884,12 @@ defmodule PlatformWeb.FilesLiveTest do
     end
 
     defp select(view, file),
-      do: view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+      do:
+        view
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
+        |> render_click()
 
     test "text/html classifies as :html, and text/plain still does not", %{project: _project} do
       assert PlatformWeb.FilesLive.preview_mode(%Files.File{content_type: "text/html"}) == :html
@@ -1298,26 +1362,6 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
-  describe "filtered_and_sorted helper" do
-    test "filter narrows by case-insensitive substring", %{conn: _conn} do
-      project = seed_project("acme", "Filter Helper Project")
-      a = seed_file(project, %{name: "Alpha.txt"})
-      b = seed_file(project, %{name: "Beta.txt"})
-
-      result = PlatformWeb.FilesLive.filtered_and_sorted([a, b], "alpha", "date_desc")
-      assert result == [a]
-    end
-
-    test "name_asc sorts alphabetically case-insensitively", %{conn: _conn} do
-      project = seed_project("acme", "Sort Helper Project")
-      a = seed_file(project, %{name: "zeta.txt"})
-      b = seed_file(project, %{name: "Alpha.txt"})
-
-      result = PlatformWeb.FilesLive.filtered_and_sorted([a, b], "", "name_asc")
-      assert result == [b, a]
-    end
-  end
-
   describe "delete + undo (stage 5)" do
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
@@ -1330,7 +1374,12 @@ defmodule PlatformWeb.FilesLiveTest do
       file = seed_file(project, %{name: "keeper.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
 
       # Extract each button, then assert attributes individually —
       # Phoenix attr order is non-deterministic, never regex across it.
@@ -1357,7 +1406,12 @@ defmodule PlatformWeb.FilesLiveTest do
       file = seed_file(project, %{name: "doomed.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
 
       html = view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
@@ -1381,7 +1435,13 @@ defmodule PlatformWeb.FilesLiveTest do
       file = seed_file(project, %{name: "phoenix.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
+
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
       html = view |> element("[data-role='files-undo-button']") |> render_click()
@@ -1398,7 +1458,13 @@ defmodule PlatformWeb.FilesLiveTest do
       file = seed_file(project, %{name: "expired.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
+
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
       # Drive the LV-side timer message directly instead of sleeping 8s.
@@ -1418,9 +1484,20 @@ defmodule PlatformWeb.FilesLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
-      view |> element("tr[data-file-id='#{file_a.id}']") |> render_click()
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file_a.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
+
       view |> element("#files-detail-delete-#{file_a.id}") |> render_click()
-      view |> element("tr[data-file-id='#{file_b.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file_b.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
+
       html = view |> element("#files-detail-delete-#{file_b.id}") |> render_click()
 
       # One toast at a time — newest delete wins.
@@ -1458,7 +1535,13 @@ defmodule PlatformWeb.FilesLiveTest do
       file = seed_file(project, %{name: "purged.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
-      view |> element("tr[data-file-id='#{file.id}']") |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+      )
+      |> render_click()
+
       view |> element("#files-detail-delete-#{file.id}") |> render_click()
 
       # Simulate the 30-day sweeper purging the row mid-undo —
@@ -1544,7 +1627,9 @@ defmodule PlatformWeb.FilesLiveTest do
 
     defp select_row(view, file_id) do
       view
-      |> element(~s([data-role="files-row"][data-file-id="#{file_id}"]))
+      |> element(
+        ~s([data-role="files-row"][data-file-id="#{file_id}"] [data-role="files-item-link"])
+      )
       |> render_click()
     end
 
@@ -1564,7 +1649,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     defp row_intent(html, file_id) do
       case Regex.run(
-             ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>/,
+             ~r/<li[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>/,
              html
            ) do
         [tag] ->
@@ -1800,7 +1885,7 @@ defmodule PlatformWeb.FilesLiveTest do
       # real copy is HTML-escaped, so match the escape-free tail.)
       refute html =~ "be read by agents"
       # The table still starts at the top exactly as before.
-      assert html =~ ~s(data-role="files-table")
+      assert html =~ ~s(data-role="files-list")
     end
 
     # A `human_only` / `not_attempted` file was never attempted and never
@@ -2009,7 +2094,9 @@ defmodule PlatformWeb.FilesLiveTest do
 
       html =
         view
-        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
         |> render_click()
 
       assert html =~ ~s(data-role="files-detail-retry")
@@ -2030,7 +2117,9 @@ defmodule PlatformWeb.FilesLiveTest do
 
       html =
         view
-        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
         |> render_click()
 
       # The panel is open (the agent toggle proves it) and the retry is
@@ -2061,7 +2150,9 @@ defmodule PlatformWeb.FilesLiveTest do
 
       html =
         view
-        |> element(~s([data-role="files-row"][data-file-id="#{file.id}"]))
+        |> element(
+          ~s([data-role="files-row"][data-file-id="#{file.id}"] [data-role="files-item-link"])
+        )
         |> render_click()
 
       assert html =~ ~s(data-role="files-detail-retry")
@@ -2493,7 +2584,7 @@ defmodule PlatformWeb.FilesLiveTest do
   # whole-body `=~` would pass on a string another row supplied.
   defp assert_in_row(html, file_id, needle) do
     case Regex.run(
-           ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/tr>/s,
+           ~r/<li[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/li>/s,
            html
          ) do
       [_, row_body] ->
@@ -2505,7 +2596,7 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
-  # Scan the rendered HTML for a `<tr data-file-id="...">…</tr>` block and
+  # Scan the rendered HTML for a `<li data-file-id="...">…</li>` row block and
   # assert it does NOT contain the given needle. Helps the live-refresh
   # test pin "Ingesting" specifically to the row that flipped, not just
   # to the document as a whole (other rows may still be pending in a
@@ -2522,7 +2613,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
   defp refute_in_row(html, file_id, needle) do
     case Regex.run(
-           ~r/<tr[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/tr>/s,
+           ~r/<li[^>]*data-file-id="#{Regex.escape(file_id)}"[^>]*>(.*?)<\/li>/s,
            html
          ) do
       [_, row_body] ->
