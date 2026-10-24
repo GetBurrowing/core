@@ -34,6 +34,15 @@ defmodule PlatformWeb.Components.MoreSheet do
       the rails' own longest-prefix matcher) carries `aria-current="page"`,
       `more-sheet-row--current` and a check.
 
+  ## Fit and the scroll cue
+
+  Rows are 44px, the touch-target floor, so every row a root admin with
+  Mail on sees fits above the bar, with Settings pinned, in Safari's visible
+  390x664 and at 375x667. On a shorter screen the list scrolls, and a fade
+  with a chevron (`data-role="more-sheet-cue"`, just before the last row)
+  pins to the bottom of the list until the last row scrolls over it. CSS
+  only (app.css `.more-sheet-cue`).
+
   ## Settings, pinned
 
   After a divider (the footer's top border), in the sheet's `:actions` footer (outside the scrolling
@@ -102,6 +111,7 @@ defmodule PlatformWeb.Components.MoreSheet do
     assigns =
       assigns
       |> assign(:rows, rows)
+      |> assign(:last_index, length(rows) - 1)
       |> assign(:current_key, IconRail.more_sheet_current_key(rows, assigns[:current_path]))
       |> assign(:inbox_badge, IconRail.badge_text(assigns[:inbox_unread_count]))
       |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
@@ -121,40 +131,51 @@ defmodule PlatformWeb.Components.MoreSheet do
       <:title>More</:title>
 
       <nav class="more-sheet-list" aria-label="More destinations">
-        <.link
-          :for={dest <- @rows}
-          navigate={dest.path}
-          class={[
-            "more-sheet-row focus-visible-ring",
-            dest.key == @current_key && "more-sheet-row--current"
-          ]}
-          data-destination={dest.key}
-          data-nav-label={dest.label}
-          aria-current={if dest.key == @current_key, do: "page"}
-          aria-label={
-            if dest.key == :inbox and @inbox_badge,
-              do: "#{dest.label}, #{@inbox_unread_count} unread",
-              else: dest.label
-          }
-        >
-          <.icon
-            name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
-            class="more-sheet-icon size-5"
-          />
-          <span class="min-w-0 truncate">{dest.label}</span>
-          <span
-            :if={dest.key == :inbox and @inbox_badge}
-            class="badge badge-primary badge-sm shrink-0 text-xs font-medium tabular-nums"
-            data-role="more-sheet-inbox-badge"
+        <%= for {dest, index} <- Enum.with_index(@rows) do %>
+          <%!-- The scroll cue sits just before the last row, which covers it
+               once it is in view (app.css `.more-sheet-cue`). --%>
+          <div
+            :if={index == @last_index}
+            class="more-sheet-cue flex items-end justify-center bg-gradient-to-t from-base-100 pb-1 text-subtle"
+            data-role="more-sheet-cue"
+            aria-hidden="true"
           >
-            {@inbox_badge}
-          </span>
-          <.icon
-            :if={dest.key == @current_key}
-            name="hero-check"
-            class="more-sheet-check ml-auto size-5 shrink-0"
-          />
-        </.link>
+            <.icon name="hero-chevron-down" class="size-4" />
+          </div>
+          <.link
+            navigate={dest.path}
+            class={[
+              "more-sheet-row focus-visible-ring",
+              dest.key == @current_key && "more-sheet-row--current"
+            ]}
+            data-destination={dest.key}
+            data-nav-label={dest.label}
+            aria-current={if dest.key == @current_key, do: "page"}
+            aria-label={
+              if dest.key == :inbox and @inbox_badge,
+                do: "#{dest.label}, #{@inbox_unread_count} unread",
+                else: dest.label
+            }
+          >
+            <.icon
+              name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
+              class="more-sheet-icon size-5"
+            />
+            <span class="min-w-0 truncate">{dest.label}</span>
+            <span
+              :if={dest.key == :inbox and @inbox_badge}
+              class="badge badge-primary badge-sm shrink-0 text-xs font-medium tabular-nums"
+              data-role="more-sheet-inbox-badge"
+            >
+              {@inbox_badge}
+            </span>
+            <.icon
+              :if={dest.key == @current_key}
+              name="hero-check"
+              class="more-sheet-check ml-auto size-5 shrink-0"
+            />
+          </.link>
+        <% end %>
       </nav>
 
       <:actions>

@@ -5499,13 +5499,24 @@ body, .font-suite {
   flex-direction: column;
 }
 
+/* Fit (an iPhone's visible area). The visible sheet is 100dvh - 48px -
+   var(--bottom-nav-clearance): 544px in Safari's 390x664 on a 390x844
+   phone, 547px at 375x667 (iPhone SE). The 44px handle, ten 44px rows and
+   the 53px Settings footer (44px row, 4px padding each side, 1px divider)
+   need 541px, so the body pads only 4px below the list and nothing above it
+   (the handle's own 44px already spaces the first row from the top). */
+.more-sheet .sheet-body {
+  padding: 0 1.5rem 4px;
+}
+
 .more-sheet-row,
 .more-sheet-settings {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  min-height: 52px;
+  /* The 44px touch-target floor, and no taller, so every row fits (above). */
+  min-height: 44px;
   border-radius: var(--radius-field);
   font-size: 15px;
   font-weight: 400;
@@ -5515,6 +5526,31 @@ body, .font-suite {
   position: relative;
   /* Release eases out over 120ms; press-in is instant (:active below). */
   transition: background-color 120ms ease-out;
+}
+
+/* Scroll cue, for a screen too short for every row (375x553 and below). A
+   `[data-role=more-sheet-cue]` strip sits in the list just before the last
+   row: sticky to the bottom of the scrolling body, a fade from transparent
+   to base-100 with a chevron, zero layout height (a negative bottom margin
+   as tall as itself). Rows are positioned, so they paint in DOM order: the
+   cue covers every row above it, and the last row, opaque base-100, covers
+   the cue. While the list overflows the cue pins to the visible bottom; once
+   the last row scrolls into view (the end), or when every row fits, the
+   last row sits over it and it is gone. CSS only, no scroll listener, and
+   no `animation-timeline` (iOS Safari 26 and up only): sticky positioning
+   works on every iOS Safari. The cue is 32px, shorter than a row, so the
+   last row covers all of it. The last-row fill sits before the hover and
+   pressed rules so those still win on it. */
+.more-sheet-cue {
+  position: sticky;
+  bottom: 0;
+  height: 32px;
+  margin-bottom: -32px;
+  pointer-events: none;
+}
+
+.more-sheet-row:last-child {
+  background-color: var(--color-base-100);
 }
 
 /* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0;
@@ -5786,7 +5822,7 @@ body, .font-suite {
    divider (1px base-300); only its padding is the More sheet's own, so the
    Settings row lines up with the list rows above it. */
 .more-sheet .sheet-actions {
-  padding: 0.5rem 1.5rem;
+  padding: 4px 1.5rem;
 }
 
 /* Drag handle. Saru names base-300, a border token: it measures under 3:1 on
