@@ -90,15 +90,25 @@ defmodule Platform.Social.Post do
     # post that is its own one-post group.
     belongs_to(:idea, Platform.Social.Idea)
 
+    # Social authoring 5/11 (task 01a16c50): why this time was suggested,
+    # shown under the suggested time on the Queue's idea card.
+    field(:schedule_reason, :string)
+
     timestamps()
   end
 
   @editable ~w(body media_file_ids link_url scheduled_at status external_url external_id error
                task_id meeting_id segment_ids episode_url start_s end_s
-               cover_file_id cover_offset_ms cover_error)a
+               cover_file_id cover_offset_ms cover_error schedule_reason)a
 
   # Social 2/7: the AI-disclosure flags and per-file media facts.
   @publisher_fields ~w(is_aigc ai_disclosure generated_by_agent_id media_meta)a
+
+  @max_schedule_reason 280
+
+  @doc "The longest accepted `schedule_reason` (Social authoring 5/11)."
+  @spec max_schedule_reason() :: pos_integer()
+  def max_schedule_reason, do: @max_schedule_reason
 
   @refused_reasons ~w(media_rejected rate_limited account_archived publisher_not_configured)
 
@@ -127,6 +137,7 @@ defmodule Platform.Social.Post do
     |> force_aigc_for_agent_media()
     |> validate_required([:status])
     |> validate_inclusion(:status, @statuses)
+    |> validate_length(:schedule_reason, max: @max_schedule_reason)
     |> validate_approved_has_approver()
     |> Platform.Social.Cover.validate(attrs)
     |> db_constraints()

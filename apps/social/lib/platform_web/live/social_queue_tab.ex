@@ -1,19 +1,31 @@
 defmodule PlatformWeb.SocialQueueTab do
   @moduledoc """
-  The Queue tab (extracted from `PlatformWeb.SocialLive` by Social authoring
-  1/11, no behaviour change): the profile's needs_approval posts, each with
-  its live approval card (`PlatformWeb.SocialCardComponent`, read only),
-  then approved posts whose publish was refused before the vendor (task
-  01a165f1), with the two status filter chips, and the cover picker (task
-  01a165ec stage 4).
+  The Queue tab, "Needs you" (Social authoring 5/11, task 01a16c50): the
+  home screen of Social.
 
-  All brands: the same rows across every visible profile, read through
-  `Platform.Social.list_posts_for_profiles/3`. Cover controls are offered
-  only for one brand, because the picker re-checks the approver on the
-  CURRENT profile.
+    * One card per idea (`PlatformWeb.SocialIdeaCard`) for the scope's
+      `needs_approval` posts, grouped by idea (a post with no idea is its
+      own card) and sorted by the earliest suggested time
+      (`Platform.Social.QueueFeed.needs_you/2`). Each card shows every
+      account's real preview and offers approve (at the suggested time or
+      into the next slot), edit, ask to revise, reject, and approve all.
+    * Below the cards: a "N clips waiting in Clips" row (Clip approval
+      stays in the Clips tab's Review bay), Scheduled in the next 7 days
+      (grouped by idea), Failed and refused (each the existing approval card,
+      `PlatformWeb.SocialCardComponent`, with its retry and reconnect
+      actions), and Published in the last 24 hours with the link out.
+    * Phone (< sm): one idea per screen with Previous / Next, swipe between
+      versions, and the card's sticky bottom bar. `?tab=queue&idea=<id>`
+      (what an approval inbox row and its push notification open, see
+      `Platform.Social.Approvals.queue_url/2`) opens straight onto the idea.
 
-  Its events land on the parent LiveView (function components, not a
-  LiveComponent), so every `phx-click` and `data-role` is what it was.
+  All brands: the same sections across every visible profile, each card
+  naming its brand. Cover controls (task 01a165ec stage 4) are offered only
+  for one brand, because the picker re-checks the approver on the CURRENT
+  profile.
+
+  Nothing auto-publishes: a human approves on a card and the platform
+  publishes. Every click is re-checked server-side in the card.
   """
 
   use PlatformWeb.SocialTab
@@ -21,16 +33,13 @@ defmodule PlatformWeb.SocialQueueTab do
   alias Phoenix.LiveView.JS
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Social
-  alias Platform.Social.{Account, Approvals}
-  alias PlatformWeb.SocialScope
-
-  # The queue's status filter chips (task 01a165f1), in display order.
-  @queue_filters ~w(needs_approval not_published)
+  alias Platform.Social.{Account, Approvals, QueueFeed}
+  alias PlatformWeb.{SocialIdeaCard, SocialPreview, SocialScope}
 
   # An uploaded cover's size cap (task 01a165ec stage 4).
   @cover_max_bytes 15_000_000
 
-  @events ~w(queue_filter cover_open cover_close cover_tab cover_frame cover_reset
+  @events ~w(queue_focus cover_open cover_close cover_tab cover_frame cover_reset
              cover_upload_validate cover_upload_save)
 
   @impl true
@@ -53,8 +62,22 @@ defmodule PlatformWeb.SocialQueueTab do
   def init(socket) do
     socket
     |> assign(:queue_canvas_ids, [])
-    |> assign(:queue_filter, nil)
+    |> assign(:queue_canvases, %{})
+    |> assign(:queue_keys, [])
+    |> assign(:queue_focus, nil)
+    |> assign(:queue_deep_link, nil)
+    |> assign(:queue_profiles, %{})
+    |> assign(:queue_empty?, true)
+    |> assign(:queue_post_count, 0)
+    |> assign(:queue_scheduled_empty?, true)
+    |> assign(:queue_failed_empty?, true)
+    |> assign(:queue_published_empty?, true)
+    |> assign(:queue_clips_waiting, 0)
     |> assign(:cover_picker, nil)
+    |> Phoenix.LiveView.stream_configure(:queue, dom_id: &"queue-idea-#{&1.key}")
+    |> Phoenix.LiveView.stream_configure(:queue_scheduled, dom_id: &"queue-scheduled-#{&1.key}")
+    |> Phoenix.LiveView.stream_configure(:queue_failed, dom_id: &"queue-#{&1.id}")
+    |> Phoenix.LiveView.stream_configure(:queue_published, dom_id: &"queue-published-#{&1.id}")
     |> allow_upload(:cover,
       accept: ~w(.jpg .jpeg .png),
       max_entries: 1,
@@ -64,13 +87,57 @@ defmodule PlatformWeb.SocialQueueTab do
     )
   end
 
-  # The queue stream for the current scope and filter, with `reset: true`.
-  # `queue_refused?` (any refused post, whatever the filter) shows the chips.
+  # Every section for the current scope, re-read and re-streamed with
+  # `reset: true`. The cards re-read their own posts on every update.
   @impl true
   def load(socket) do
-    all = queue_rows(socket.assigns)
-    rows = filter_queue(all, socket.assigns.queue_filter)
-    canvas_ids = for %{card: %{canvas_id: id}} <- rows, do: id
+    %{user: user, scope: scope} = socket.assigns
+    scope = queue_scope(scope, socket.assigns[:profile])
+    now = DateTime.utc_now()
+
+    groups = QueueFeed.needs_you(user, scope)
+    scheduled = QueueFeed.scheduled(user, scope, now)
+    failed = QueueFeed.failed(user, scope, now)
+    published = QueueFeed.published(user, scope, now)
+
+    all_posts =
+      Enum.flat_map(groups, & &1.posts) ++
+        Enum.flat_map(scheduled, & &1.posts) ++ failed ++ published
+
+    accounts = QueueFeed.accounts(all_posts)
+    profiles = QueueFeed.profiles(accounts)
+
+    keys = Enum.map(groups, & &1.key)
+
+    focus =
+      if socket.assigns.queue_focus in keys,
+        do: socket.assigns.queue_focus,
+        else: List.first(keys)
+
+    idea_rows =
+      Enum.map(groups, fn g -> %{key: g.key, group: g, focused?: g.key == focus} end)
+
+    failed_rows =
+      Enum.map(failed, fn post ->
+        card = Approvals.latest_card(post.id)
+        %{id: post.id, post: post, card: card, rev: card && card_rev(card)}
+      end)
+
+    canvases =
+      Map.merge(
+        Map.new(
+          for g <- groups,
+              post <- g.posts,
+              %{canvas_id: canvas_id} <- [Approvals.live_card(post.id)],
+              do: {canvas_id, {:idea, "queue-card-idea-" <> g.key}}
+        ),
+        Map.new(
+          for %{card: %{canvas_id: canvas_id, id: card_id}} <- failed_rows,
+              do: {canvas_id, {:card, "queue-card-" <> card_id}}
+        )
+      )
+
+    canvas_ids = Map.keys(canvases)
 
     if connected?(socket) do
       Enum.each(socket.assigns.queue_canvas_ids -- canvas_ids, &ChatPubSub.unsubscribe_canvas/1)
@@ -79,19 +146,63 @@ defmodule PlatformWeb.SocialQueueTab do
 
     socket
     |> assign(:queue_canvas_ids, canvas_ids)
-    |> assign(:queue_cards, Map.new(for %{card: %{} = c} <- rows, do: {c.canvas_id, c.id}))
-    |> assign(:queue_empty?, rows == [])
-    |> assign(:queue_refused?, Enum.any?(all, & &1.refused?))
-    |> stream(:queue, rows, reset: true)
+    |> assign(:queue_canvases, canvases)
+    |> assign(:queue_keys, keys)
+    |> assign(:queue_focus, focus)
+    |> assign(:queue_profiles, profiles)
+    |> assign(:queue_accounts, accounts)
+    |> assign(:queue_empty?, groups == [])
+    |> assign(:queue_post_count, groups |> Enum.map(&length(&1.posts)) |> Enum.sum())
+    |> assign(:queue_scheduled_empty?, scheduled == [])
+    |> assign(:queue_failed_empty?, failed == [])
+    |> assign(:queue_published_empty?, published == [])
+    |> assign(:queue_clips_waiting, QueueFeed.clips_waiting(user, scope))
+    |> stream(:queue, idea_rows, reset: true)
+    |> stream(:queue_scheduled, scheduled, reset: true)
+    |> stream(:queue_failed, failed_rows, reset: true)
+    |> stream(:queue_published, published, reset: true)
   end
 
-  # Task 01a165f1: the queue's status filter. Pressing the active chip
-  # clears it; the stream is re-read and re-streamed with `reset: true`.
+  defp queue_scope(:all, _profile), do: :all
+  defp queue_scope(_scope, profile), do: {:profile, profile}
+
+  # Coming back to the Queue re-reads it, so a draft that arrived while
+  # another tab was open is there.
   @impl true
-  def handle_event("queue_filter", %{"filter" => filter}, socket)
-      when filter in @queue_filters do
-    filter = if socket.assigns.queue_filter == filter, do: nil, else: filter
-    {:noreply, socket |> assign(:queue_filter, filter) |> load()}
+  def on_select(%{assigns: %{tab: "queue"}} = socket), do: load(socket)
+  def on_select(socket), do: socket
+
+  # `?tab=queue&idea=<idea id, or a lone post's id>`: that idea is the one
+  # on screen (the phone shows one idea at a time). An id that is not in
+  # the queue changes nothing.
+  @impl true
+  def from_query(socket, %{"idea" => key}) when is_binary(key) do
+    if key in socket.assigns.queue_keys do
+      socket |> assign(:queue_focus, key) |> assign(:queue_deep_link, key) |> load()
+    else
+      socket
+    end
+  end
+
+  def from_query(socket, _query), do: socket
+
+  # Phone: Previous / Next idea, or a key.
+  @impl true
+  def handle_event("queue_focus", params, socket) do
+    keys = socket.assigns.queue_keys
+    index = Enum.find_index(keys, &(&1 == socket.assigns.queue_focus)) || 0
+
+    key =
+      case params do
+        %{"dir" => "next"} -> Enum.at(keys, min(index + 1, length(keys) - 1))
+        %{"dir" => "prev"} -> Enum.at(keys, max(index - 1, 0))
+        %{"key" => key} -> if key in keys, do: key
+        _ -> nil
+      end
+
+    if key && key != socket.assigns.queue_focus,
+      do: {:noreply, socket |> assign(:queue_focus, key) |> load()},
+      else: {:noreply, socket}
   end
 
   # ── Cover picker (task 01a165ec stage 4) ─────────────────────────────
@@ -145,73 +256,32 @@ defmodule PlatformWeb.SocialQueueTab do
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   # A queued card's canvas changed (a decision here, in chat, or anywhere):
-  # the card re-renders from `card_view/2` and the counts are re-read. The
-  # row stays in the stream showing the card's decided status until the
-  # next profile load.
+  # the owning idea card (or Failed row) re-reads, and the counts are
+  # re-read. A decided version stays on its card, showing its decided
+  # status, until the next load.
   @impl true
   def handle_info({:canvas_updated, %{id: canvas_id} = canvas}, socket) do
-    if canvas_id in socket.assigns.queue_canvas_ids do
-      case Map.get(socket.assigns.queue_cards, canvas_id) do
-        nil ->
-          :ok
+    case Map.get(socket.assigns.queue_canvases, canvas_id) do
+      nil ->
+        if canvas_id in socket.assigns.queue_canvas_ids,
+          do: {:noreply, socket},
+          else: :unhandled
 
-        card_id ->
-          send_update(PlatformWeb.SocialCardComponent,
-            id: "queue-card-" <> card_id,
-            rev: rev_of(canvas.document)
-          )
-      end
+      {:idea, component_id} ->
+        send_update(SocialIdeaCard, id: component_id, rev: rev_of(canvas.document))
+        {:noreply, SocialScope.assign_profiles(socket, SocialScope.visible_profiles(socket))}
 
-      {:noreply, SocialScope.assign_profiles(socket, SocialScope.visible_profiles(socket))}
-    else
-      {:noreply, socket}
+      {:card, component_id} ->
+        send_update(PlatformWeb.SocialCardComponent,
+          id: component_id,
+          rev: rev_of(canvas.document)
+        )
+
+        {:noreply, SocialScope.assign_profiles(socket, SocialScope.visible_profiles(socket))}
     end
   end
 
   def handle_info(_message, _socket), do: :unhandled
-
-  defp filter_queue(rows, "needs_approval"), do: Enum.reject(rows, & &1.refused?)
-  defp filter_queue(rows, "not_published"), do: Enum.filter(rows, & &1.refused?)
-  defp filter_queue(rows, _none), do: rows
-
-  # The profile's needs_approval posts, each with its live approval card
-  # (read only) and that card's canvas revision. The rows carry no decision
-  # state of their own: the embedded component asks `card_view/2`.
-  #
-  # Task 01a165f1: then its approved posts whose publish was refused before
-  # the vendor (`refused: true`), each with its newest (decided) card.
-  defp queue_rows(%{scope: :all, user: user}) do
-    pending =
-      user
-      |> Social.list_posts_for_profiles(:all, status: "needs_approval")
-      |> Enum.map(&queue_row(&1, Approvals.live_card(&1.id), false))
-
-    refused =
-      user
-      |> Social.list_posts_for_profiles(:all, refused: true)
-      |> Enum.map(&queue_row(&1, Approvals.latest_card(&1.id), true))
-
-    pending ++ refused
-  end
-
-  defp queue_rows(%{profile: nil}), do: []
-
-  defp queue_rows(%{profile: profile}) do
-    pending =
-      profile.org_id
-      |> Social.list_posts(profile_id: profile.id, status: "needs_approval")
-      |> Enum.map(&queue_row(&1, Approvals.live_card(&1.id), false))
-
-    refused =
-      profile.org_id
-      |> Social.list_posts(profile_id: profile.id, refused: true)
-      |> Enum.map(&queue_row(&1, Approvals.latest_card(&1.id), true))
-
-    pending ++ refused
-  end
-
-  defp queue_row(post, card, refused?),
-    do: %{id: post.id, post: post, card: card, rev: card && card_rev(card), refused?: refused?}
 
   defp card_rev(card) do
     case Platform.Chat.get_canvas(card.canvas_id) do
@@ -269,12 +339,9 @@ defmodule PlatformWeb.SocialQueueTab do
   defp apply_cover(socket, post_id, attrs) do
     with {:ok, profile, user_id} <- authorize(socket),
          {:ok, post} <- Social.set_cover(profile.org_id, user_id, post_id, attrs) do
-      case Approvals.live_card(post.id) do
-        %{id: card_id} ->
-          send_update(PlatformWeb.SocialCardComponent, id: "queue-card-" <> card_id)
-
-        nil ->
-          :ok
+      with %{canvas_id: canvas_id} <- Approvals.live_card(post.id),
+           {:idea, component_id} <- Map.get(socket.assigns.queue_canvases, canvas_id) do
+        send_update(SocialIdeaCard, id: component_id)
       end
 
       close_cover_picker(socket)
@@ -375,94 +442,282 @@ defmodule PlatformWeb.SocialQueueTab do
   defp cover_upload_error(:too_many_files), do: "choose one image"
   defp cover_upload_error(_), do: "That image could not be uploaded."
 
-  # A profile with no accounts can do nothing, so its empty queue points at
-  # Connections.
-  defp empty_queue_copy(:all, _profile, _accounts_empty?, "not_published"),
-    do: "Every approved post in every brand went out."
-
-  defp empty_queue_copy(:all, _profile, _accounts_empty?, _filter),
-    do: "Nothing waiting for approval in any brand."
-
-  defp empty_queue_copy(_scope, profile, _accounts_empty?, "not_published"),
-    do: "Every approved post on #{profile.name} went out."
-
-  defp empty_queue_copy(_scope, profile, true, _filter),
-    do: "Nothing waiting for approval on #{profile.name}. Connect an account to start."
-
-  defp empty_queue_copy(_scope, profile, _accounts_empty?, _filter),
-    do: "Nothing waiting for approval on #{profile.name}."
-
-  defp queue_filter_labels,
-    do: [{"needs_approval", "Needs approval"}, {"not_published", "Not published"}]
+  # ── Pane ─────────────────────────────────────────────────────────────
 
   @impl true
   def pane(assigns) do
+    assigns =
+      assign(assigns,
+        focus_index: Enum.find_index(assigns.queue_keys, &(&1 == assigns.queue_focus)) || 0,
+        connect?: assigns.scope != :all and assigns[:accounts_empty?] == true
+      )
+
     ~H"""
-    <div
-      :if={@queue_refused? or @queue_filter}
-      role="group"
-      aria-label="Filter the queue"
-      class="mb-3 flex flex-wrap gap-2"
-      data-role="social-queue-filter"
-    >
-      <button
-        :for={{key, label} <- queue_filter_labels()}
-        type="button"
-        phx-click="queue_filter"
-        phx-value-filter={key}
-        aria-pressed={to_string(@queue_filter == key)}
-        data-role="social-queue-chip"
-        data-filter={key}
-        class={[
-          "btn btn-sm rounded-full text-base-content",
-          if(@queue_filter == key,
-            do: "btn-active border-base-content",
-            else: "btn-outline border-edge"
-          )
-        ]}
-      >
-        {label}
-      </button>
-    </div>
-    <div :if={@queue_empty?} class="space-y-3">
-      <p class="text-base-content/70" data-role="social-empty">
-        {empty_queue_copy(@scope, @profile, @accounts_empty?, @queue_filter)}
-      </p>
-      <button
-        :if={@scope != :all and @accounts_empty? and @queue_filter != "not_published"}
-        type="button"
-        class="btn btn-outline btn-sm"
-        phx-click="select_tab"
-        phx-value-tab="connections"
-        data-role="social-go-connections"
-      >
-        Go to Connections
-      </button>
-    </div>
-    <ul id="social-queue" phx-update="stream" class="space-y-3" data-role="social-queue">
-      <li :for={{dom_id, row} <- @streams.queue} id={dom_id} data-role="social-queue-row">
-        <%= if row.card do %>
-          <.live_component
-            module={PlatformWeb.SocialCardComponent}
-            id={"queue-card-" <> row.card.id}
-            card_id={row.card.id}
-            rev={row.rev}
-            canvas_id={row.card.canvas_id}
-            viewer={{:user, @user.id}}
-            cover_controls={@scope != :all}
-          />
-        <% else %>
-          <p
-            class="rounded-xl border border-base-300 bg-base-100 p-3 text-sm text-base-content/70"
-            data-role="social-queue-waiting"
+    <div data-role="social-queue-pane" class="mx-auto w-full max-w-6xl space-y-8 pb-56 sm:pb-8">
+      <section aria-labelledby="queue-needs-you" class="space-y-3">
+        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 id="queue-needs-you" class="text-xl font-semibold" data-role="queue-heading">
+            Needs you
+          </h2>
+          <span
+            :if={not @queue_empty?}
+            class="text-sm text-base-content/70"
+            data-role="queue-summary"
           >
-            Waiting for its approval card.
-          </p>
-        <% end %>
-      </li>
-    </ul>
+            {plural(length(@queue_keys), "idea")} · {plural(@queue_post_count, "post")}
+          </span>
+        </div>
+
+        <nav
+          :if={length(@queue_keys) > 1}
+          aria-label="Ideas"
+          data-role="queue-idea-nav"
+          class="flex items-center justify-between gap-2 sm:hidden"
+        >
+          <button
+            type="button"
+            phx-click="queue_focus"
+            phx-value-dir="prev"
+            disabled={@focus_index == 0}
+            data-role="queue-prev-idea"
+            class="btn btn-ghost btn-sm"
+          >
+            <.icon name="hero-chevron-left-mini" class="size-4" /> Previous
+          </button>
+          <span class="text-sm font-medium tabular-nums" data-role="queue-idea-position">
+            Idea {@focus_index + 1} of {length(@queue_keys)}
+          </span>
+          <button
+            type="button"
+            phx-click="queue_focus"
+            phx-value-dir="next"
+            disabled={@focus_index >= length(@queue_keys) - 1}
+            data-role="queue-next-idea"
+            class="btn btn-ghost btn-sm"
+          >
+            Next <.icon name="hero-chevron-right-mini" class="size-4" />
+          </button>
+        </nav>
+
+        <div
+          :if={@queue_empty?}
+          data-role="social-empty"
+          class="rounded-2xl border border-dashed border-edge px-4 py-8 text-center"
+        >
+          <%= if @connect? do %>
+            <p class="font-medium">Connect an account to start.</p>
+            <p class="mt-1 text-sm text-base-content/70">
+              Agents draft posts for {@profile.name} once it has somewhere to post.
+            </p>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm mt-4"
+              phx-click="select_tab"
+              phx-value-tab="connections"
+              data-role="social-go-connections"
+            >
+              Go to Connections
+            </button>
+          <% else %>
+            <.icon name="hero-check-circle" class="mx-auto size-8 text-success" />
+            <p class="mt-2 text-lg font-medium">Nothing needs you.</p>
+            <p class="mt-1 text-sm text-base-content/70">
+              {if @scope == :all,
+                do: "Every brand is caught up.",
+                else: "#{@profile && @profile.name} is caught up."}
+            </p>
+          <% end %>
+        </div>
+
+        <ul id="social-queue" phx-update="stream" class="space-y-4" data-role="social-queue">
+          <li
+            :for={{dom_id, row} <- @streams.queue}
+            id={dom_id}
+            data-role="social-queue-row"
+            class={[not row.focused? && "max-sm:hidden"]}
+          >
+            <.live_component
+              module={SocialIdeaCard}
+              id={"queue-card-idea-" <> row.key}
+              group={row.group}
+              viewer={{:user, @user.id}}
+              profiles={@queue_profiles}
+              show_brand?={@scope == :all}
+              focused?={row.focused?}
+              deep_link?={@queue_deep_link == row.key}
+              cover_controls={@scope != :all}
+            />
+          </li>
+        </ul>
+      </section>
+
+      <button
+        :if={@queue_clips_waiting > 0}
+        type="button"
+        phx-click="select_tab"
+        phx-value-tab="clips"
+        data-role="queue-clips-waiting"
+        data-href="?tab=clips"
+        class="flex w-full items-center gap-3 rounded-xl border border-edge bg-base-100 px-4 py-3 text-left hover:bg-base-200"
+      >
+        <.icon name="hero-film" class="size-5 shrink-0 text-base-content/70" />
+        <span class="flex-1 text-sm font-medium">
+          {plural(@queue_clips_waiting, "clip")} waiting in Clips
+        </span>
+        <.icon name="hero-chevron-right-mini" class="size-4 text-base-content/70" />
+      </button>
+
+      <section aria-labelledby="queue-scheduled" class="space-y-2" data-role="queue-scheduled">
+        <h2 id="queue-scheduled" class="text-base font-semibold">Scheduled · next 7 days</h2>
+        <p :if={@queue_scheduled_empty?} class="text-sm text-base-content/70">
+          Nothing scheduled in the next 7 days.
+        </p>
+        <ul
+          id="social-queue-scheduled"
+          phx-update="stream"
+          class="divide-y divide-edge overflow-hidden rounded-xl border border-edge bg-base-100"
+        >
+          <li
+            :for={{dom_id, g} <- @streams.queue_scheduled}
+            id={dom_id}
+            data-role="queue-scheduled-row"
+            class="space-y-1.5 px-4 py-3"
+          >
+            <p class="text-sm font-medium">{group_title(g, @queue_accounts)}</p>
+            <ul class="flex flex-wrap gap-x-4 gap-y-1">
+              <li
+                :for={p <- g.posts}
+                data-role="queue-scheduled-post"
+                class="flex items-center gap-1.5 text-[13px] text-base-content/70"
+              >
+                <SocialPreview.glyph
+                  platform={account_platform(@queue_accounts, p)}
+                  class="size-3.5 shrink-0"
+                />
+                <span>{account_handle(@queue_accounts, p)}</span>
+                <span class="font-mono tabular-nums text-base-content">
+                  {SocialIdeaCard.when_text(
+                    p.scheduled_at,
+                    post_tz(p, @queue_accounts, @queue_profiles)
+                  )}
+                </span>
+              </li>
+            </ul>
+          </li>
+        </ul>
+      </section>
+
+      <section
+        :if={not @queue_failed_empty?}
+        aria-labelledby="queue-failed"
+        class="space-y-2"
+        data-role="queue-failed"
+      >
+        <h2 id="queue-failed" class="text-base font-semibold">Failed and refused</h2>
+        <ul id="social-queue-failed" phx-update="stream" class="space-y-3">
+          <li :for={{dom_id, row} <- @streams.queue_failed} id={dom_id} data-role="queue-failed-row">
+            <%= if row.card do %>
+              <.live_component
+                module={PlatformWeb.SocialCardComponent}
+                id={"queue-card-" <> row.card.id}
+                card_id={row.card.id}
+                rev={row.rev}
+                canvas_id={row.card.canvas_id}
+                viewer={{:user, @user.id}}
+                cover_controls={false}
+              />
+            <% else %>
+              <p class="rounded-xl border border-edge bg-base-100 p-3 text-sm text-base-content/70">
+                {account_label(@queue_accounts, row.post)}: {row.post.error || "did not publish."}
+              </p>
+            <% end %>
+          </li>
+        </ul>
+      </section>
+
+      <section
+        :if={not @queue_published_empty?}
+        aria-labelledby="queue-published"
+        class="space-y-2"
+        data-role="queue-published"
+      >
+        <h2 id="queue-published" class="text-base font-semibold">Published · last 24 hours</h2>
+        <ul
+          id="social-queue-published"
+          phx-update="stream"
+          class="divide-y divide-edge overflow-hidden rounded-xl border border-edge bg-base-100"
+        >
+          <li
+            :for={{dom_id, p} <- @streams.queue_published}
+            id={dom_id}
+            data-role="queue-published-row"
+            class="flex items-center gap-2 px-4 py-3 text-sm"
+          >
+            <SocialPreview.glyph
+              platform={account_platform(@queue_accounts, p)}
+              class="size-4 shrink-0"
+            />
+            <span class="min-w-0 flex-1 truncate">
+              <span class="font-medium">{account_label(@queue_accounts, p)}</span>
+              <span class="text-base-content/70">
+                · {SocialIdeaCard.clock(
+                  QueueFeed.published_at(p),
+                  post_tz(p, @queue_accounts, @queue_profiles)
+                )}
+              </span>
+            </span>
+            <a
+              :if={p.external_url}
+              href={p.external_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-role="queue-published-link"
+              class="link shrink-0 text-sm"
+            >
+              View post <.icon name="hero-arrow-top-right-on-square-mini" class="size-3.5" />
+            </a>
+          </li>
+        </ul>
+      </section>
+    </div>
     <.cover_picker :if={@cover_picker} picker={@cover_picker} upload={@uploads.cover} />
     """
+  end
+
+  defp plural(1, word), do: "1 #{word}"
+  defp plural(n, word), do: "#{n} #{word}s"
+
+  defp group_title(%{idea: %{title: title}}, _accounts) when is_binary(title), do: title
+
+  defp group_title(%{posts: [p | _]}, accounts),
+    do: "#{Approvals.platform_label(account_platform(accounts, p))} post"
+
+  defp account_platform(accounts, %{account_id: id}),
+    do: (Map.get(accounts, id) || %{platform: nil}).platform
+
+  defp account_handle(accounts, %{account_id: id}) do
+    case Map.get(accounts, id) do
+      %Account{handle: h} when is_binary(h) -> h
+      %Account{platform: p} -> Approvals.platform_label(p)
+      _ -> ""
+    end
+  end
+
+  defp account_label(accounts, post) do
+    label = Approvals.platform_label(account_platform(accounts, post))
+
+    case account_handle(accounts, post) do
+      ^label -> label
+      handle -> "#{label} #{handle}"
+    end
+  end
+
+  defp post_tz(post, accounts, profiles) do
+    with %Account{profile_id: pid} <- Map.get(accounts, post.account_id) do
+      SocialIdeaCard.profile_tz(Map.get(profiles, pid))
+    else
+      _ -> "Etc/UTC"
+    end
   end
 
   attr :picker, :map, required: true

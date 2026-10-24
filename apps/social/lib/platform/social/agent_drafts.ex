@@ -70,7 +70,8 @@ defmodule Platform.Social.AgentDrafts do
   }
 
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
-               segment_ids episode_url start_s end_s cover_file_id cover_offset_ms)a
+               segment_ids episode_url start_s end_s cover_file_id cover_offset_ms
+               schedule_reason)a
   @forbidden ~w(approved_by_user_id approved_at external_url external_id error
                 rejection_reason rejected_at cover_error)
   @agent_statuses ~w(draft needs_approval)
@@ -692,6 +693,7 @@ defmodule Platform.Social.AgentDrafts do
     |> Changeset.validate_required([:status])
     |> Changeset.validate_inclusion(:status, @agent_statuses)
     |> validate_future(:scheduled_at)
+    |> Changeset.validate_length(:schedule_reason, max: Post.max_schedule_reason())
     |> validate_ref(:task_id, org_id, &task_org/1)
     |> validate_ref(:meeting_id, org_id, &meeting_org/1)
     |> validate_media(org_id)

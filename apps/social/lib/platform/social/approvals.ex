@@ -8,7 +8,8 @@ defmodule Platform.Social.Approvals do
   Inbox items cannot carry actions on core main (`Platform.Inbox.Item` has
   no action field), so the inbox row is a POINTER: one
   `social_post_approval` row per reachable approver, deep-linking to the
-  card's message, carrying no post text and no media. Approve, Edit and
+  post's idea on the Social Queue (`queue_url/2`, Social authoring 5/11),
+  carrying no post text and no media. Approve, Edit and
   Reject live on the card (a `social_post_card` canvas in the profile's
   channel), handled in the clicking human's own LiveView process by
   `PlatformWeb.SocialCardHooks`, which calls the `decide_*` functions here.
@@ -238,9 +239,8 @@ defmodule Platform.Social.Approvals do
 
   defp approval_candidates(%Account{owner_user_id: owner_id}, _profile), do: [owner_id]
 
-  defp fan_out(post, profile, account, card, canvas, message) do
-    space = Chat.get_space(message.space_id)
-    url = "/chat/#{Chat.space_path_segment(space)}?message=#{message.id}"
+  defp fan_out(post, profile, account, card, canvas, _message) do
+    url = queue_url(post, profile)
 
     {reachable, unreachable} =
       account
@@ -274,6 +274,22 @@ defmodule Platform.Social.Approvals do
     end
 
     unreachable
+  end
+
+  @doc """
+  Where an approval inbox row (and so its push notification) opens
+  (Social authoring 5/11): the Queue, on this post's idea
+  (`/m/social?profile=<id>&tab=queue&idea=<idea id, or the post id for a
+  post with no idea>`). Clicks there go through the same `decide_*`.
+  """
+  @spec queue_url(Post.t(), Social.Profile.t()) :: String.t()
+  def queue_url(%Post{} = post, profile) do
+    "/m/social?" <>
+      URI.encode_query([
+        {"profile", profile.id},
+        {"tab", "queue"},
+        {"idea", post.idea_id || post.id}
+      ])
   end
 
   # ── Where the card goes (task 01a14ce1, stage 3) ──────────────────────
@@ -507,12 +523,33 @@ defmodule Platform.Social.Approvals do
     end
   end
 
-  def decide_approve(canvas_id, clicker, shown_fingerprint) do
+  def decide_approve(canvas_id, clicker, shown_fingerprint),
+    do: do_approve(canvas_id, clicker, shown_fingerprint, nil)
+
+  @doc """
+  `decide_approve/3`, but the post goes out at `at` instead of its own
+  `scheduled_at` (Social authoring 5/11: the Queue's "Approve into next
+  slot"). Every check of `decide_approve/3` runs first, including the
+  fingerprint the human was shown, then `scheduled_at` is set to `at` in the
+  same transaction, before the approval. `at` must be in the future, else
+  `{:error, :slot_passed}`. The `approved` event's note names the slot.
+  """
+  @spec decide_approve_at(Ecto.UUID.t(), map(), String.t() | nil, DateTime.t()) ::
+          {:ok, map()} | {:error, refusal() | :slot_passed | term()}
+  def decide_approve_at(canvas_id, clicker, shown_fingerprint, %DateTime{} = at) do
+    if DateTime.compare(at, DateTime.utc_now()) == :gt,
+      do: do_approve(canvas_id, clicker, shown_fingerprint, at),
+      else: {:error, :slot_passed}
+  end
+
+  defp do_approve(canvas_id, clicker, shown_fingerprint, at) do
     approve = fn card, post, account, profile, user_id ->
       with :ok <- refuse_draft_only(account),
            :ok <- claim(card),
+           {:ok, _} <- put_slot(post, at),
            {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
-           _event = PostEvents.record!(approved, "approved", {:human, user_id}),
+           _event =
+             PostEvents.record!(approved, "approved", {:human, user_id}, note: slot_note(at)),
            {:ok, card} <-
              card |> ApprovalCard.decided_changeset("approve", user_id) |> Repo.update() do
         {card, approved, profile}
@@ -527,6 +564,14 @@ defmodule Platform.Social.Approvals do
       {:ok, %{post: Repo.get!(Post, approved.id), publish: publish, card: card}}
     end
   end
+
+  defp put_slot(post, nil), do: {:ok, post}
+
+  defp put_slot(post, %DateTime{} = at),
+    do: post |> Changeset.change(scheduled_at: at) |> Repo.update()
+
+  defp slot_note(nil), do: nil
+  defp slot_note(%DateTime{} = at), do: "Into the next slot, " <> DateTime.to_iso8601(at)
 
   @doc """
   A human approver edits the post's text from the card. Only `body`

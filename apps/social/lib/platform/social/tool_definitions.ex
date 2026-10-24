@@ -64,6 +64,12 @@ defmodule Platform.Social.ToolDefinitions do
       description:
         "ISO-8601 time to publish at, in the future. It only takes effect once a human approves."
     },
+    schedule_reason: %{
+      type: "string",
+      required: false,
+      description:
+        "Why you suggest scheduled_at, in one plain sentence (at most 280 characters), e.g. \"Tuesday mornings get the most replies on this account.\" Shown to the approver under the time."
+    },
     status: %{
       type: "string",
       required: false,
@@ -124,7 +130,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   @privacy_null "title, caption, speaker and episode_code may be null (the clip tool's [privacy] mode = \"local\" sends nothing transcript-derived)."
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, idea_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, schedule_reason, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, idea_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]

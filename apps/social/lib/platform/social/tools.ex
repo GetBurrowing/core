@@ -903,6 +903,7 @@ defmodule Platform.Social.Tools do
       :link_url,
       :media_file_ids,
       :scheduled_at,
+      :schedule_reason,
       :error,
       :rejection_reason,
       :rejected_at,
