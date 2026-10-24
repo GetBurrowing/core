@@ -7,6 +7,10 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
   ONE assign below, so the two frames cannot disagree about which message
   is open.
 
+  `attach/1` also attaches `MessageAttentionHooks` ("Get someone's
+  attention", redesign rung 12), the picker the sheet's second row opens,
+  so that hook needs no line in the ratcheted `chat_live.ex`.
+
   `open_message_actions` / `close_message_actions` were moved here from
   `ChatLive` in place; `delete_message` is new. Stage 3 added the reactors
   sheet and `open_inline_thread`.
@@ -54,6 +58,7 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
 
   alias Platform.Chat
   alias Platform.Chat.Message
+  alias PlatformWeb.ChatLive.MessageAttentionHooks
   alias PlatformWeb.ChatLive.MessagesHooks
 
   @doc "Attach the message-actions handlers. Call from `ChatLive.mount/3`."
@@ -63,6 +68,7 @@ defmodule PlatformWeb.ChatLive.MessageActionsHooks do
     |> close()
     |> assign(:open_reactors, nil)
     |> attach_hook(:message_actions_events, :handle_event, &handle_event/3)
+    |> MessageAttentionHooks.attach()
   end
 
   defp handle_event("open_message_actions", %{"id" => msg_id}, socket) when is_binary(msg_id) do

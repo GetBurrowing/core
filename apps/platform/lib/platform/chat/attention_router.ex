@@ -161,6 +161,35 @@ defmodule Platform.Chat.AttentionRouter do
     GenServer.call(__MODULE__, {:route, message})
   end
 
+  @doc """
+  Route attention a member ADDED to an already-sent message ("Get someone's
+  attention", task 01a1557a-a30a stage 1, called by
+  `Platform.Chat.add_message_attention/4` after its rows commit).
+
+  The same early exits as `route/1` and the same `route_in_space` machinery,
+  with the recipients restricted to `added_participant_ids`
+  (`chat_participants.id`s): the wake gate applies, an added agent is treated
+  as @mentioned (so one added agent is `:mention` and arms the mutex only when
+  `agents_awake` and not silenced, several are `:multi_mention`), and an added
+  human gets `:mention` whatever their attention mode. Nobody else is
+  re-routed: the mutex holder, mode-all humans and the content's own mentions
+  get nothing new. An added agent the roster does not admit gets nothing; an
+  un-mentioned fallback is never taken.
+
+  Each signal keeps the original `message_id` and carries
+  `attention_added_by` (the adder's display name), which the agent dispatch
+  payload forwards so the agent can see who asked it to look.
+  """
+  @spec route_attention(Message.t(), [binary()], Participant.t() | nil) ::
+          {:ok, [%{participant_id: binary(), reason: atom()}]}
+  def route_attention(%Message{} = message, added_participant_ids, adder)
+      when is_list(added_participant_ids) do
+    GenServer.call(
+      __MODULE__,
+      {:route_attention, message, %{ids: MapSet.new(added_participant_ids), adder: adder}}
+    )
+  end
+
   @doc "Return pending heartbeat signals for `participant_id` without clearing them."
   @spec pending(binary()) :: [map()]
   def pending(participant_id) do
@@ -209,7 +238,13 @@ defmodule Platform.Chat.AttentionRouter do
 
   @impl true
   def handle_call({:route, message}, _from, state) do
-    decisions = do_route(message)
+    decisions = do_route(message, nil)
+    {:reply, {:ok, decisions}, state}
+  end
+
+  @impl true
+  def handle_call({:route_attention, message, attention}, _from, state) do
+    decisions = do_route(message, attention)
     {:reply, {:ok, decisions}, state}
   end
 
@@ -242,7 +277,7 @@ defmodule Platform.Chat.AttentionRouter do
   def handle_info({:telemetry_message_posted, %{message_id: message_id}}, state) do
     try do
       case Repo.get(Message, message_id) do
-        %Message{} = msg -> do_route(msg)
+        %Message{} = msg -> do_route(msg, nil)
         nil -> Logger.warning("[AttentionRouter] message not found: #{message_id}")
       end
     rescue
@@ -319,7 +354,9 @@ defmodule Platform.Chat.AttentionRouter do
   #     whose `%Space{}` head raised `FunctionClauseError`.
   #
   # Both are pinned in `attention_router_test.exs` ("execution spaces").
-  defp do_route(%Message{space_id: space_id} = message) do
+  # `attention` is nil for a posted message, or `%{ids: MapSet, adder:
+  # participant}` for attention added to it (`route_attention/3`).
+  defp do_route(%Message{space_id: space_id} = message, attention) do
     space = Repo.get(Space, space_id)
 
     cond do
@@ -339,18 +376,24 @@ defmodule Platform.Chat.AttentionRouter do
         return_empty()
 
       true ->
-        route_in_space(space, message)
+        route_in_space(space, message, attention)
     end
   end
 
   defp route_in_space(
          %Space{} = space,
-         %Message{space_id: space_id, id: message_id, participant_id: author_id} = message
+         %Message{space_id: space_id, id: message_id, participant_id: author_id} = message,
+         attention
        ) do
     participants = active_participants(space_id)
 
-    # Exclude the message author
-    recipients = Enum.reject(participants, &(&1.id == author_id))
+    # Exclude the message author. Added attention (`route_attention/3`) then
+    # narrows the recipients to the participants just added, so nobody the
+    # message already reached is routed a second time.
+    recipients =
+      participants
+      |> Enum.reject(&(&1.id == author_id))
+      |> restrict_to_added(attention)
 
     # Task 01a1386e-45a5 stage 2 (RBAC stack member 7): an agent ALREADY a
     # participant of a space its owner, or its own grants, may not read is
@@ -388,11 +431,12 @@ defmodule Platform.Chat.AttentionRouter do
     # Agent-authored un-mentioned messages never fan out under the directed
     # or collaborative policy (rule 8): it would let two agents loop.
     wake =
-      Map.put(
-        wake,
+      wake
+      |> Map.put(
         :human_author?,
         Enum.any?(participants, &(&1.id == author_id and &1.participant_type == "user"))
       )
+      |> Map.put(:attention?, not is_nil(attention))
 
     {agent_decisions, silenced_skipped} = route_agents(space, message, agent_recipients, wake)
 
@@ -417,36 +461,43 @@ defmodule Platform.Chat.AttentionRouter do
     # for those modes (no double-ping, no ETS heartbeat queue entry).
 
     human_decisions =
-      if mention_scan_enabled?(message) and here_mention?(message.content) do
-        here_decisions =
-          Enum.map(human_recipients, fn p ->
-            %{participant_id: p.id, reason: :here}
-          end)
+      cond do
+        # Added attention is a direct ping, like a named mention under
+        # @[here]: `:mention` whatever the recipient's attention mode.
+        attention ->
+          Enum.map(human_recipients, &%{participant_id: &1.id, reason: :mention})
 
-        named_mention_decisions =
+        mention_scan_enabled?(message) and here_mention?(message.content) ->
+          here_decisions =
+            Enum.map(human_recipients, fn p ->
+              %{participant_id: p.id, reason: :here}
+            end)
+
+          named_mention_decisions =
+            Enum.flat_map(human_recipients, fn participant ->
+              if mentioned?(participant, message) do
+                [%{participant_id: participant.id, reason: :mention}]
+              else
+                []
+              end
+            end)
+
+          here_decisions ++ named_mention_decisions
+
+        true ->
+          # Gate 2 of the order in the moduledoc: the per-user notification
+          # level, read ONCE per message for every human recipient.
+          levels = human_notification_levels(human_recipients)
+
           Enum.flat_map(human_recipients, fn participant ->
-            if mentioned?(participant, message) do
-              [%{participant_id: participant.id, reason: :mention}]
-            else
-              []
+            space
+            |> decide_human_in_space(participant, message)
+            |> apply_level_floor(participant, levels)
+            |> case do
+              nil -> []
+              reason -> [%{participant_id: participant.id, reason: reason}]
             end
           end)
-
-        here_decisions ++ named_mention_decisions
-      else
-        # Gate 2 of the order in the moduledoc: the per-user notification
-        # level, read ONCE per message for every human recipient.
-        levels = human_notification_levels(human_recipients)
-
-        Enum.flat_map(human_recipients, fn participant ->
-          space
-          |> decide_human_in_space(participant, message)
-          |> apply_level_floor(participant, levels)
-          |> case do
-            nil -> []
-            reason -> [%{participant_id: participant.id, reason: reason}]
-          end
-        end)
       end
 
     decisions = human_decisions ++ agent_decisions
@@ -459,18 +510,24 @@ defmodule Platform.Chat.AttentionRouter do
     # display name AND its participant type/id, so the iOS Notification
     # Service Extension can name the sender. "Someone" when unresolved.
     author = Enum.find(participants, &(&1.id == author_id))
-    sender = author || "Someone"
+
+    # Added attention is sent BY the adder: the push names who asked.
+    sender = attention_adder(attention) || author || "Someone"
 
     # Build a lookup from participant record ID → participant for online checks
     participant_by_id = Map.new(participants, fn p -> {p.id, p} end)
 
     Enum.each(decisions, fn %{participant_id: pid, reason: reason} ->
-      signal = %{
-        participant_id: pid,
-        reason: reason,
-        message_id: message_id,
-        space_id: space_id
-      }
+      signal =
+        put_attention_added_by(
+          %{
+            participant_id: pid,
+            reason: reason,
+            message_id: message_id,
+            space_id: space_id
+          },
+          attention
+        )
 
       case reason do
         :heartbeat ->
@@ -494,6 +551,20 @@ defmodule Platform.Chat.AttentionRouter do
 
     decisions
   end
+
+  defp restrict_to_added(recipients, nil), do: recipients
+
+  defp restrict_to_added(recipients, %{ids: ids}),
+    do: Enum.filter(recipients, &MapSet.member?(ids, &1.id))
+
+  defp attention_adder(%{adder: %Participant{} = adder}), do: adder
+  defp attention_adder(_attention), do: nil
+
+  defp put_attention_added_by(signal, %{adder: %Participant{display_name: name}})
+       when is_binary(name) and name != "",
+       do: Map.put(signal, :attention_added_by, name)
+
+  defp put_attention_added_by(signal, _attention), do: signal
 
   # ── Mutex-based agent routing (ADR 0027) ────────────────────────────────────
 
@@ -667,7 +738,10 @@ defmodule Platform.Chat.AttentionRouter do
         # (`Chat.list_space_agents/1`), so slug matching adds no query here.
         roster_entry = Map.get(roster_by_agent_id, participant.participant_id)
 
-        mentioned?(participant, message, agent: roster_entry && roster_entry.agent) and
+        # Added attention (`route_attention/3`): every recipient left IS an
+        # added agent, so it counts as mentioned. The roster rule still holds.
+        (wake.attention? or
+           mentioned?(participant, message, agent: roster_entry && roster_entry.agent)) and
           case roster_entry do
             %{role: role} when role in ["principal", "member"] -> true
             # Agent is a participant but NOT on the space roster — never
@@ -682,6 +756,11 @@ defmodule Platform.Chat.AttentionRouter do
       end)
 
     case length(mentioned_agents) do
+      # Added attention never takes the un-mentioned fallback: that would
+      # re-route the mutex holder or the policy's fan-out.
+      0 when wake.attention? ->
+        {[], []}
+
       0 ->
         route_no_mention(space, message, agent_recipients, wake, roster_by_agent_id)
 

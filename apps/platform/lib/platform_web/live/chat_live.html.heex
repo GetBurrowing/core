@@ -750,6 +750,10 @@
 
 <.reactors_sheet open_reactors={@open_reactors} current_participant={@current_participant} />
 
+<%!-- "Get someone's attention" (redesign rung 12): the picker, a phone sheet
+     and a desktop popover from one assign (MessageAttentionHooks). --%>
+<.message_attention_sheet open_message_attention={@open_message_attention} />
+
 <%!-- The 'Answering' context panel (task 01a0d8de stage 3): popover on
      desktop, bottom sheet on mobile; state in MessageContextHooks. --%>
 <.message_context_overlay

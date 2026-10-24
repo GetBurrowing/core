@@ -49,6 +49,7 @@ defmodule Platform.Chat do
     Attachment,
     Canvas,
     Message,
+    MessageAttention,
     Participant,
     Pin,
     Reaction,
@@ -5881,7 +5882,7 @@ defmodule Platform.Chat do
             refused_unreadable = Enum.filter(matched, &MapSet.member?(unreadable, &1.id))
 
             result =
-              if mention_summon_authorized?(space, msg) do
+              if mention_summon_authorized?(space, msg.author_user_id) do
                 Enum.each(readable, &reinstate_on_mention(space_id, &1))
                 refused_result(refused_unreadable)
               else
@@ -6054,28 +6055,11 @@ defmodule Platform.Chat do
       |> Enum.filter(&(&1.participant_type == "user"))
       |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, msg))
       |> Enum.reject(&(&1.participant_id == msg.author_user_id))
-      |> Enum.uniq_by(& &1.participant_id)
-      |> Enum.filter(fn p ->
-        user = Repo.get(Platform.Accounts.User, p.participant_id)
-
-        is_nil(user) or
-          Platform.Access.check(
-            Platform.Access.Scope.for_user(user),
-            "chat.read",
-            {:space, space_id}
-          ) == :ok
-      end)
-      |> Enum.each(fn p ->
-        Platform.Inbox.emit(%{
-          user_id: p.participant_id,
-          kind: "chat_mention",
-          source_type: "chat_message",
-          source_id: msg.id,
-          title: mention_inbox_title(msg, space),
-          body: String.slice(content, 0, 200),
-          url: "/chat/#{space_path_segment(space)}?message=#{msg.id}"
-        })
-      end)
+      |> emit_chat_mention_inbox(
+        msg,
+        space,
+        mention_inbox_title(msg.author_display_name, msg, space)
+      )
     end
 
     :ok
@@ -6093,12 +6077,44 @@ defmodule Platform.Chat do
 
   defp emit_inbox_for_mentions(_), do: :ok
 
+  # One `chat_mention` Inbox row per USER participant in `participants` who
+  # may read the space. Shared by the post path's mentions and added
+  # attention (task 01a1557a-a30a stage 1), so the `chat.read` check, the body
+  # and the deep link cannot drift between the two.
+  defp emit_chat_mention_inbox(participants, %Message{} = msg, %Space{} = space, title) do
+    participants
+    |> Enum.uniq_by(& &1.participant_id)
+    |> Enum.filter(fn p ->
+      user = Repo.get(Platform.Accounts.User, p.participant_id)
+
+      is_nil(user) or
+        Platform.Access.check(
+          Platform.Access.Scope.for_user(user),
+          "chat.read",
+          {:space, space.id}
+        ) == :ok
+    end)
+    |> Enum.each(fn p ->
+      Platform.Inbox.emit(%{
+        user_id: p.participant_id,
+        kind: "chat_mention",
+        source_type: "chat_message",
+        source_id: msg.id,
+        title: title,
+        body: String.slice(msg.content || "", 0, 200),
+        url: "/chat/#{space_path_segment(space)}?message=#{msg.id}"
+      })
+    end)
+  end
+
   # Inbox title for a chat mention. For DM spaces the space has no meaningful
   # `name`, so the label is the DM PEER's display name — in a 2-party DM the
   # peer relative to any recipient is the author (recipients exclude the
   # author), so `author_display_name` is exactly the peer name.
-  defp mention_inbox_title(%Message{} = msg, %Space{} = space),
-    do: "@Mention from #{msg.author_display_name} in ##{space_label(space, msg)}"
+  # `sender` is the author for a posted mention and the adder for added
+  # attention; the space label rule is the same for both.
+  defp mention_inbox_title(sender, %Message{} = msg, %Space{} = space),
+    do: "@Mention from #{sender} in ##{space_label(space, msg)}"
 
   defp space_label(%Space{kind: "dm"}, %Message{author_display_name: peer}), do: peer
 
@@ -6214,10 +6230,11 @@ defmodule Platform.Chat do
   #
   # Anything else (agent authors, ordinary members, observers, a message with
   # no snapshotted author user) is unauthorized.
-  defp mention_summon_authorized?(%Space{} = space, %Message{author_user_id: author_id}),
-    do: can_summon_agents?(space, author_id)
-
-  defp mention_summon_authorized?(_space, _msg), do: false
+  #
+  # Keyed on the ACTOR's user id (task 01a1557a-a30a stage 1): for a mention
+  # the actor is the message author; for added attention it is whoever adds.
+  defp mention_summon_authorized?(%Space{} = space, actor_user_id),
+    do: can_summon_agents?(space, actor_user_id)
 
   @doc """
   Whether `user_id` may bring agents into `space` (task 01a0ac64's rule,
@@ -6665,6 +6682,272 @@ defmodule Platform.Chat do
       nil -> {:error, :not_found}
       error -> error
     end
+  end
+
+  # ── Get someone's attention (task 01a1557a-a30a stage 1) ───────────────────
+  #
+  # A member asks one or more participants to look at an ALREADY-SENT message.
+  # The ask is a row in `chat_message_attentions`; the message row is never
+  # updated and no `chat_message_versions` row is written, so it can never
+  # render "(edited)" (that affix gates on `versions_count > 1`).
+
+  @doc """
+  Ask `principal_ids` to look at the message `message_id` in `space_id`.
+
+  `principal_ids` are principal ids, as the mention picker's suggestions carry
+  them (`principal_id`: a user id or an agent id). Any USER writer of the space
+  may add attention to ANY message, not only their own (the redesign masters
+  show the row on every message). Refused, changing nothing:
+
+    * a non-member or nil actor, and an agent actor: `{:error, :forbidden}`
+    * an archived space: `{:error, :space_archived}`
+    * a message that is missing, deleted, or not in `space_id` (a forged
+      event; a LiveView passes `socket.assigns.active_space.id`, never a
+      param): `{:error, :not_found}`
+    * nothing left to add: `{:error, :invalid}`
+
+  The message author, the actor, the `@[here]` sentinel and anyone who is
+  neither a participant nor a summonable agent are dropped. An agent that is
+  not in the space is summoned only when the actor may summon
+  (`can_summon_agents?/2`, the rule an `@[…]` mention's author meets), never
+  into a DM, and never when the agent may not read the space; otherwise it
+  comes back under `refused` and gets no row. A present agent that may not
+  read the space is refused too, as for a mention.
+
+  Idempotent: a principal already added is returned under `unchanged` and is
+  not routed or notified again (`on_conflict: :nothing` on the unique
+  `(message_id, participant_id)` index). After the insert the newly added are
+  routed (`AttentionRouter.route_attention/3`), each added human gets one
+  `chat_mention` Inbox row, and `{:message_attention_changed, message}` is
+  broadcast on the space topic.
+  """
+  @spec add_message_attention(SpaceAccess.actor(), binary(), binary(), [binary()]) ::
+          {:ok,
+           %{
+             added: [MessageAttention.t()],
+             unchanged: [MessageAttention.t()],
+             refused: [Agent.t()]
+           }}
+          | {:error, :forbidden | :space_archived | :not_found | :invalid}
+  def add_message_attention(actor, space_id, message_id, principal_ids)
+      when is_list(principal_ids) do
+    with {:ok, writer} <- SpaceAccess.authorize_writer(space_id, actor),
+         :ok <- ensure_user_writer(writer),
+         :ok <- ensure_space_writable(space_id),
+         %Message{} = message <- attention_target_message(space_id, message_id),
+         %Space{} = space <- Repo.get(Space, space_id),
+         {:ok, targets, refused} <-
+           resolve_attention_targets(space, message, writer, principal_ids) do
+      {added, unchanged} = insert_attention_rows(message, writer, targets)
+
+      if added != [] do
+        after_attention_added(space, message, writer, added, targets)
+      end
+
+      {:ok, %{added: added, unchanged: unchanged, refused: refused}}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  def add_message_attention(_actor, _space_id, _message_id, _principal_ids),
+    do: {:error, :invalid}
+
+  @doc "The attention rows on one message, oldest first, as `MessageAttention.to_view/1`."
+  @spec list_message_attention(binary()) :: [map()]
+  def list_message_attention(message_id) when is_binary(message_id) do
+    message_id |> List.wrap() |> attention_by_message_ids() |> Map.get(message_id, [])
+  end
+
+  @doc """
+  Attention rows for many messages in ONE query, keyed by message id, for
+  render (`Message.attention`). Messages with none are omitted.
+  """
+  @spec attention_by_message_ids([binary()]) :: %{binary() => [map()]}
+  def attention_by_message_ids(message_ids) when is_list(message_ids) do
+    case Enum.filter(message_ids, &Platform.UUID.valid?/1) do
+      [] ->
+        %{}
+
+      ids ->
+        from(a in MessageAttention,
+          where: a.message_id in ^ids,
+          order_by: [asc: a.inserted_at, asc: a.id]
+        )
+        |> Repo.all()
+        |> Enum.group_by(& &1.message_id, &MessageAttention.to_view/1)
+    end
+  end
+
+  defp attention_target_message(space_id, message_id) do
+    case get_message(message_id) do
+      %Message{space_id: ^space_id, deleted_at: nil} = message -> message
+      _ -> nil
+    end
+  end
+
+  # Principal ids -> the participants to add, plus the agents refused.
+  defp resolve_attention_targets(%Space{} = space, %Message{} = message, writer, principal_ids) do
+    ids =
+      principal_ids
+      |> Enum.filter(&(is_binary(&1) and Platform.UUID.valid?(&1)))
+      |> Enum.uniq()
+
+    by_principal = space.id |> list_participants() |> Map.new(&{&1.participant_id, &1})
+    dropped = MapSet.new([message.participant_id, writer.id])
+
+    {present, absent} = Enum.split_with(ids, &Map.has_key?(by_principal, &1))
+
+    present =
+      present
+      |> Enum.map(&Map.fetch!(by_principal, &1))
+      |> Enum.reject(&MapSet.member?(dropped, &1.id))
+
+    unreadable_present =
+      present |> Enum.filter(&(&1.participant_type == "agent")) |> unreadable_participants(space)
+
+    {summoned, refused_summons} = summon_for_attention(space, writer, absent)
+
+    refused_present =
+      Enum.filter(present, &MapSet.member?(unreadable_present, &1.participant_id))
+
+    targets = Enum.reject(present, &MapSet.member?(unreadable_present, &1.participant_id))
+    targets = targets ++ summoned
+    refused = refused_present_agents(refused_present) ++ refused_summons
+
+    if targets == [] and refused == [] do
+      {:error, :invalid}
+    else
+      {:ok, targets, refused}
+    end
+  end
+
+  # Agents not yet in the space (D5). The same rule a mention's author meets,
+  # asked of the ACTOR: `mention_summon_authorized?/2`, plus the unreadable-
+  # agent refusal. Never into a DM. A principal id that is not a summonable
+  # agent is dropped.
+  defp summon_for_attention(_space, _writer, []), do: {[], []}
+  defp summon_for_attention(%Space{kind: "dm"}, _writer, _ids), do: {[], []}
+
+  defp summon_for_attention(%Space{} = space, writer, agent_ids) do
+    candidates =
+      space
+      |> summonable_agents_query()
+      |> where([a], a.id in ^agent_ids)
+      |> Repo.all()
+
+    unreadable = unreadable_agents(candidates, space.id)
+
+    {refused_unreadable, readable} =
+      Enum.split_with(candidates, &MapSet.member?(unreadable, &1.id))
+
+    if mention_summon_authorized?(space, writer.participant_id) do
+      summoned =
+        Enum.flat_map(readable, fn agent ->
+          :ok = reinstate_on_mention(space.id, agent)
+
+          case get_agent_participant(space.id, agent) do
+            %Participant{} = p -> [p]
+            _ -> []
+          end
+        end)
+
+      {summoned, refused_unreadable}
+    else
+      {[], readable ++ refused_unreadable}
+    end
+  end
+
+  defp unreadable_participants([], _space), do: MapSet.new()
+
+  defp unreadable_participants(agent_participants, %Space{id: space_id}) do
+    agent_participants
+    |> Enum.map(& &1.participant_id)
+    |> Platform.Access.AgentWake.denied(@chat_read, {:space, space_id})
+  end
+
+  defp refused_present_agents([]), do: []
+
+  defp refused_present_agents(participants) do
+    ids = Enum.map(participants, & &1.participant_id)
+    Repo.all(from(a in Agent, where: a.id in ^ids))
+  end
+
+  # One statement, so idempotency holds under concurrency without a lock:
+  # rows that already exist are skipped by the unique index and are NOT
+  # returned, which is how `added` and `unchanged` are told apart.
+  defp insert_attention_rows(%Message{} = message, %Participant{} = writer, targets) do
+    now = DateTime.utc_now()
+
+    rows =
+      Enum.map(targets, fn %Participant{} = p ->
+        %{
+          id: Platform.Types.UUIDv7.generate(),
+          message_id: message.id,
+          participant_id: p.id,
+          participant_type: p.participant_type,
+          display_name: p.display_name,
+          added_by_participant_id: writer.id,
+          added_by_display_name: writer.display_name,
+          inserted_at: now
+        }
+      end)
+
+    {_count, inserted} =
+      Repo.insert_all(MessageAttention, rows,
+        on_conflict: :nothing,
+        conflict_target: [:message_id, :participant_id],
+        returning: true
+      )
+
+    added_ids = MapSet.new(inserted, & &1.participant_id)
+    unchanged_ids = targets |> Enum.map(& &1.id) |> Enum.reject(&MapSet.member?(added_ids, &1))
+
+    unchanged =
+      if unchanged_ids == [] do
+        []
+      else
+        Repo.all(
+          from(a in MessageAttention,
+            where: a.message_id == ^message.id and a.participant_id in ^unchanged_ids
+          )
+        )
+      end
+
+    {inserted, unchanged}
+  end
+
+  # Post-insert side effects for the NEWLY added only. Like the post path's
+  # mention side effects, none of them may fail the call: the rows are
+  # already durable.
+  defp after_attention_added(%Space{} = space, %Message{} = message, writer, added, targets) do
+    added_ids = Enum.map(added, & &1.participant_id)
+
+    {:ok, _decisions} =
+      Platform.Chat.AttentionRouter.route_attention(message, added_ids, writer)
+
+    added_set = MapSet.new(added_ids)
+
+    targets
+    |> Enum.filter(&(&1.participant_type == "user" and MapSet.member?(added_set, &1.id)))
+    |> emit_chat_mention_inbox(
+      message,
+      space,
+      mention_inbox_title(writer.display_name, message, space)
+    )
+
+    message = %{message | attention: list_message_attention(message.id)}
+    ChatPubSub.broadcast(space.id, {:message_attention_changed, message})
+    :ok
+  rescue
+    error ->
+      Logger.error(
+        "[Chat] add_message_attention side effects failed for message #{inspect(message.id)}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      :ok
   end
 
   @doc """

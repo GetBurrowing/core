@@ -1611,14 +1611,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     build_reaction_group(emoji, rows, my_id, participants_map, agent_ids)
   end
 
-  # Bulk-enrich a list of messages with their current reaction groups.
-  # Used when loading a space: one batched query, then group per message.
+  # Bulk-enrich a list of messages with their current reaction groups and
+  # their attention rows ("Get someone's attention", rung 12). Used when
+  # loading a space: one batched query each, then group per message.
   defp enrich_messages_with_reactions(messages, socket) do
     my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id
     participants_map = socket.assigns[:participants_map] || %{}
     agent_ids = socket.assigns[:agent_participant_ids] || MapSet.new()
 
-    raw = Chat.list_reactions_for_messages(Enum.map(messages, & &1.id))
+    ids = Enum.map(messages, & &1.id)
+    raw = Chat.list_reactions_for_messages(ids)
+    attention = Chat.attention_by_message_ids(ids)
 
     Enum.map(messages, fn msg ->
       reactions = Map.get(raw, msg.id, [])
@@ -1631,7 +1634,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         end)
         |> Enum.sort_by(& &1.emoji)
 
-      %{msg | reactions: groups}
+      %{msg | reactions: groups, attention: Map.get(attention, msg.id, [])}
     end)
     |> LinkCards.annotate(viewer_user_id(socket))
   end
@@ -1663,7 +1666,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end)
       |> Enum.sort_by(& &1.emoji)
 
-    [%{msg | reactions: groups}]
+    [%{msg | reactions: groups, attention: Chat.list_message_attention(msg.id)}]
     |> LinkCards.annotate(viewer_user_id(socket))
     |> hd()
   end

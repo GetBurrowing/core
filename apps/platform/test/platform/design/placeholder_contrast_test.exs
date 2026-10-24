@@ -77,6 +77,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/inbox_live/meeting_briefing_component.ex",
     # The space sheet's Search page field (task 01a1557a-8a6d stage 2).
     "platform_web/live/chat/partials/space_sheet.ex",
+    # The "Get someone's attention" picker's search field (task
+    # 01a1557a-a30a stage 2).
+    "platform_web/live/chat/partials/overlays.ex",
     "platform_web/live/meeting_live.html.heex"
   ]
 

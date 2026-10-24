@@ -184,7 +184,13 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
   @with_context %{"reply_context" => "Six tasks await approval", "reply_to_message_id" => "q-1"}
 
-  @pill_labels ["React with thumbs up", "Reply in thread", "Copy", "More actions"]
+  @pill_labels [
+    "React with thumbs up",
+    "Reply in thread",
+    "Get someone's attention",
+    "Copy",
+    "More actions"
+  ]
 
   defp pill(html) do
     html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="message-pill"]))
@@ -198,7 +204,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
     |> Enum.flat_map(&String.split/1)
   end
 
-  test "every non-read-only message renders the pill with the four actions, in order" do
+  test "every non-read-only message renders the pill with the five actions, in order" do
     for {metadata, opts} <- [
           {@with_context, []},
           {%{}, []},
@@ -230,7 +236,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
   test "the pill's buttons do what their labels say" do
     quick = Platform.Chat.Emoji.quick_defaults()
     html = agent_row_html(@with_context, quick_emojis: quick)
-    [thumbs, reply, copy, more] = pill_buttons(html)
+    [thumbs, reply, attention, copy, more] = pill_buttons(html)
 
     assert LazyHTML.attribute(thumbs, "phx-click") == ["react"]
     assert LazyHTML.attribute(thumbs, "phx-value-emoji") == [hd(quick)]
@@ -238,6 +244,9 @@ defmodule PlatformWeb.Components.ChatMessageTest do
 
     assert LazyHTML.attribute(reply, "phx-click") == ["open_inline_thread"]
     assert LazyHTML.attribute(reply, "phx-value-message-id") == ["msg-a"]
+
+    assert LazyHTML.attribute(attention, "phx-click") == ["open_message_attention"]
+    assert LazyHTML.attribute(attention, "phx-value-message-id") == ["msg-a"]
 
     # Copy is client-side (MessageGestures): no server event.
     assert LazyHTML.attribute(copy, "phx-click") == []

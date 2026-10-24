@@ -23,6 +23,9 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     * `reactors_sheet/1` — `#reactors-sheet` with the desktop
       `#reactors-popover`: who reacted with one emoji (redesign rung 9
       stage 3)
+    * `message_attention_sheet/1` — `#message-attention-sheet` with the
+      desktop `#message-attention-popover`: the "Get someone's attention"
+      picker (redesign rung 12 stage 2)
     * `junk_batch_modal/1` — `#junk-batch-modal`
 
   ## WHAT DELIBERATELY DID NOT MOVE
@@ -305,7 +308,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   @doc """
   The rows of the actions surface, in the masters' order: the message
   preview, the quick strip (the six `@quick_emojis` + ＋), Reply in thread,
-  What this is answering (agent messages only), Pin or Unpin message, Copy
+  Get someone's attention (every message; rung 12), What this is answering (agent messages only), Pin or Unpin message, Copy
   text, Copy link, and Edit / Delete on the viewer's own messages.
 
   Copy text and Copy link are client-side (`MessageActionsCopy`): the row
@@ -410,6 +413,35 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           <.icon name="hero-arrow-uturn-left" class="size-5 shrink-0 text-subtle" />
           <span data-role="message-actions-label">Reply in thread</span>
         </button>
+        <%!-- Redesign rung 12: the second row on every message (masters
+             mobile 1370, desktop 810). Adding attention never edits the
+             message. It closes this sheet BEFORE opening the picker, so one
+             sheet is open at a time. The glyph is the masters' `.atic`, in
+             the sibling icons' text-subtle. --%>
+        <button
+          type="button"
+          data-role="message-actions-attention"
+          phx-click={
+            Phoenix.LiveView.JS.push("close_message_actions")
+            |> Phoenix.LiveView.JS.push("open_message_attention",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+          }
+          class={@row_class}
+        >
+          <span
+            class="inline-flex w-5 shrink-0 justify-center text-base font-extrabold leading-none text-subtle"
+            aria-hidden="true"
+          >
+            @<sup class="-ml-0.5 text-[9px]">+</sup>
+          </span>
+          <span class="flex min-w-0 flex-col py-1.5">
+            <span data-role="message-actions-label">Get someone's attention</span>
+            <span class="text-[13px] text-subtle" data-role="message-actions-attention-meta">
+              {attention_meta(@own?)}
+            </span>
+          </span>
+        </button>
         <%!-- Agent messages only. It closes this sheet BEFORE opening the
              context sheet, so exactly one sheet is ever open. --%>
         <button
@@ -510,6 +542,110 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
           <span data-role="message-actions-label">Delete</span>
         </button>
       </div>
+    </div>
+    """
+  end
+
+  # The meta line under "Get someone's attention": the phone master's own
+  # copy (mobile 1370; desktop 810 shortens it to "notify an agent or person
+  # — no edit"), and the others' copy both masters share.
+  defp attention_meta(true), do: "notify an agent or person about this — no edit"
+  defp attention_meta(_own?), do: "ask someone to look at this"
+
+  attr(:open_message_attention, :any, required: true)
+
+  @doc """
+  The "Get someone's attention" picker (redesign rung 12; masters
+  `stubAttention`, mobile 1384-1388, desktop 819-825). ONE assign
+  (`MessageAttentionHooks`' `:open_message_attention`), two frames like the
+  actions sheet: the phone bottom sheet (`lg:hidden`) and a `hidden lg:block`
+  popover anchored to the message by `MessageActionsPopover`.
+
+  Title: "Get someone's attention" on the viewer's own message, "Ask
+  someone to look" on anyone else's. Then a one-line preview of the message,
+  the search field (`attention_query`), and rung 10's `MentionList` in pick
+  mode: the same rows, ranking and not-in-space copy as the composer's list,
+  with already-added principals marked "added".
+  """
+  def message_attention_sheet(assigns) do
+    ~H"""
+    <.sheet
+      :if={@open_message_attention}
+      id="message-attention-sheet"
+      open={true}
+      placement={:bottom}
+      on_close="close_message_attention"
+      class="lg:hidden"
+      handle_close
+      swipe_dismiss
+    >
+      <:title>{@open_message_attention.title}</:title>
+      <p class="px-4 pb-2 text-base font-semibold text-base-content" aria-hidden="true">
+        {@open_message_attention.title}
+      </p>
+      <.message_attention_content id_prefix="message-attention" attention={@open_message_attention} />
+    </.sheet>
+    <div
+      :if={@open_message_attention}
+      id="message-attention-popover"
+      role="dialog"
+      aria-label={@open_message_attention.title}
+      tabindex="-1"
+      phx-hook="MessageActionsPopover"
+      phx-click-away="close_message_attention"
+      phx-window-keydown="close_message_attention"
+      phx-key="Escape"
+      data-anchor-message-id={@open_message_attention.message_id}
+      class="fixed left-1/2 top-24 z-40 hidden w-80 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-1.5 shadow-lg focus:outline-none lg:block"
+    >
+      <p class="px-2 pb-1.5 pt-1 text-[13px] font-semibold text-base-content">
+        {@open_message_attention.title}
+      </p>
+      <.message_attention_content
+        id_prefix="message-attention-popover"
+        attention={@open_message_attention}
+      />
+    </div>
+    """
+  end
+
+  attr(:id_prefix, :string, required: true)
+  attr(:attention, :map, required: true)
+
+  defp message_attention_content(assigns) do
+    ~H"""
+    <div id={"#{@id_prefix}-content"} class="flex flex-col" data-role="message-attention-picker">
+      <p
+        data-role="message-attention-preview"
+        class="mx-1 mb-2 truncate rounded-box border border-edge bg-base-200 px-3 py-2 text-[13px] text-subtle"
+      >
+        {@attention.preview}
+      </p>
+      <form
+        id={"#{@id_prefix}-search"}
+        phx-change="attention_query"
+        phx-submit="attention_query"
+        class="mx-1 mb-1"
+      >
+        <input
+          type="search"
+          name="query"
+          value={@attention.query}
+          placeholder="Search agents and people"
+          aria-label="Search agents and people"
+          autocomplete="off"
+          phx-debounce="100"
+          data-role="message-attention-search"
+          class="h-11 w-full rounded-box border border-edge bg-base-200 px-3 text-[15px] text-base-content placeholder:text-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring lg:h-9 lg:text-[13px]"
+        />
+      </form>
+      <PlatformWeb.ChatLive.Partials.MentionList.mention_list
+        id={"#{@id_prefix}-list"}
+        suggestions={@attention.suggestions}
+        query={@attention.query}
+        pick={@attention.message_id}
+        added={@attention.added}
+      />
     </div>
     """
   end

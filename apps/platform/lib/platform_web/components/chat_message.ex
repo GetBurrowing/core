@@ -739,6 +739,43 @@ defmodule PlatformWeb.Components.ChatMessage do
               </button>
             </div>
           </div>
+          <%!-- "Get someone's attention" (redesign rung 12): the added line
+               after the text, thread, link card, images and reactions
+               (masters `.attn`, mobile 383/921-927, desktop 199/776-781).
+               Always-rendered box-less slot, after the thread, so it is
+               never a new sibling ahead of a reply box. Adding attention
+               never edits the message, so it never renders "(edited)". --%>
+          <div id={"attention-slot-#{@msg.id}"} class="contents">
+            <.attention_line
+              :if={Map.get(@msg, :attention, []) != []}
+              msg={@msg}
+              current_participant={@current_participant}
+            />
+          </div>
+          <%!-- "+@ add someone" (masters `.addat`, mobile 386-388/929-930,
+               desktop 202-203/783): rendered on every own message, SHOWN only
+               on the last row of #message-list while the newest messages are
+               on screen (app.css `.message-add-attention`), so it moves to a
+               newer own message, and leaves when anyone posts after it,
+               without a server round trip. Its dashed border is --subtle, not
+               the masters' edge hairline: edge is ~1.3:1 on the own and open
+               bands and a control boundary owes 3:1 (stage 3 contrast guard). --%>
+          <button
+            :if={
+              !@read_only and @current_participant != nil and
+                @msg.participant_id == @current_participant.id and
+                !MapSet.member?(@agent_participant_ids, @msg.participant_id)
+            }
+            type="button"
+            data-role="message-add-attention"
+            class="message-add-attention mt-1 ml-1.5 mb-1.5 h-6 lg:h-[22px] items-center gap-[3px] rounded-md lg:rounded-full border border-dashed border-subtle px-2 text-xs text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            aria-label="Get someone's attention on this message"
+            title="Add someone to this message"
+            phx-click="open_message_attention"
+            phx-value-message-id={@msg.id}
+          >
+            +@ <span>add someone</span>
+          </button>
         </div>
         <%!-- end message body --%>
       </div>
@@ -786,6 +823,20 @@ defmodule PlatformWeb.Components.ChatMessage do
       >
         <span aria-hidden="true">↩</span>
       </button>
+      <%!-- Redesign rung 12: +@ sits between ↩ and ⋯ as in the masters'
+           `.acts` (mobile 922, desktop 728); rung 9's ⧉ stays next to ⋯.
+           Auto width, bold, text-xs (`.atplus`). --%>
+      <button
+        type="button"
+        class="message-pill-btn relative inline-flex h-7 lg:h-[26px] min-w-7 lg:min-w-[26px] items-center justify-center rounded-full px-1.5 text-xs font-bold leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="Get someone's attention"
+        title="Get someone's attention"
+        data-role="message-pill-attention"
+        phx-click="open_message_attention"
+        phx-value-message-id={@msg.id}
+      >
+        <span aria-hidden="true">+@</span>
+      </button>
       <button
         type="button"
         class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
@@ -808,6 +859,110 @@ defmodule PlatformWeb.Components.ChatMessage do
         <span aria-hidden="true">⋯</span>
       </button>
     </div>
+    """
+  end
+
+  attr(:msg, :map, required: true)
+  attr(:current_participant, :any, default: nil)
+
+  # The added line (redesign rung 12; masters `attnHTML`, mobile 1381,
+  # desktop 729). One line per adder, in the order they first asked, each
+  # worded for THIS viewer:
+  #
+  #   * the viewer asked on their own message: "→ @A, @B added · notified"
+  #   * the viewer asked on someone else's: "you asked @A to look"
+  #   * someone else asked: "<their name> asked @A to look" (not in canvas)
+  #
+  # Chips are @Name, semibold, on a primary tint with base-content text (the
+  # masters' interactive text colour is replaced by palette rule R5). No undo
+  # chip: undo is deferred (D6).
+  #
+  # The line is inline text, not a flex row: its words and chips then read
+  # as one sentence, with real spaces, to a screen reader and to a copy, and
+  # it still wraps between chips.
+  defp attention_line(assigns) do
+    viewer_id = assigns.current_participant && assigns.current_participant.id
+    own? = viewer_id != nil and assigns.msg.participant_id == viewer_id
+
+    groups =
+      assigns.msg.attention
+      |> Enum.group_by(& &1.added_by_participant_id)
+      |> Enum.map(fn {adder_id, [first | _] = rows} ->
+        %{
+          adder_id: adder_id,
+          first_at: first.inserted_at,
+          parts:
+            attention_parts(
+              attention_wording(adder_id, first.added_by_display_name, viewer_id, own?),
+              Enum.map(rows, & &1.display_name)
+            )
+        }
+      end)
+      |> Enum.sort_by(& &1.first_at, DateTime)
+
+    assigns = assign(assigns, :groups, groups)
+
+    ~H"""
+    <div class="mt-1" data-role="message-attention-slot">
+      <p
+        :for={g <- @groups}
+        data-role="message-attention"
+        data-added-by={g.adder_id}
+        class="ml-1.5 mb-1.5 text-sm leading-6 text-subtle"
+      >
+        <.attention_part :for={part <- g.parts} part={part} />
+      </p>
+    </div>
+    """
+  end
+
+  defp attention_wording(adder_id, _name, viewer_id, true) when adder_id == viewer_id,
+    do: :own
+
+  defp attention_wording(adder_id, _name, viewer_id, _own?)
+       when adder_id == viewer_id and not is_nil(viewer_id),
+       do: :you
+
+  defp attention_wording(_adder_id, name, _viewer_id, _own?), do: {:other, name || "Someone"}
+
+  # The line as text and chip parts, the spaces in the text (whitespace
+  # between parts in the markup collapses into them).
+  defp attention_parts(wording, names) do
+    # The comma rides inside the chip's part: a part boundary is a newline
+    # in the markup, which would render as a space BEFORE the comma.
+    last = length(names) - 1
+
+    chips =
+      names
+      |> Enum.with_index()
+      |> Enum.map(fn {name, i} -> {:chip, name, if(i < last, do: ", ", else: "")} end)
+
+    case wording do
+      :own -> [{:text, "→ "}] ++ chips ++ [{:text, " added · notified"}]
+      :you -> [{:text, "you asked "}] ++ chips ++ [{:text, " to look"}]
+      {:other, name} -> [{:text, "#{name} asked "}] ++ chips ++ [{:text, " to look"}]
+    end
+  end
+
+  attr(:part, :any, required: true)
+
+  defp attention_part(%{part: {:chip, name, comma}} = assigns) do
+    assigns =
+      assigns
+      |> assign(:name, name)
+      |> assign(:comma, comma)
+      |> assign(:class, "rounded-sm bg-primary/15 px-1.5 font-semibold text-base-content")
+
+    ~H"""
+    <span><span data-role="message-attention-chip" class={@class}>@{@name}</span>{@comma}</span>
+    """
+  end
+
+  defp attention_part(%{part: {:text, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+
+    ~H"""
+    <span>{@text}</span>
     """
   end
 

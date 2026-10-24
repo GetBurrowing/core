@@ -153,7 +153,8 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   # verifies the claim against `chat.ex` per function, so an entry cannot be
   # added here to silence the audit without the function actually composing.
   @space_authorized_chat_calls ~w(pin_message unpin_message reserve_space_upload
-                                 set_agent_silenced set_agents_awake set_agent_attention_policy)
+                                 set_agent_silenced set_agents_awake set_agent_attention_policy
+                                 add_message_attention)
 
   # ── The allowlist ─────────────────────────────────────────────────────────
   #

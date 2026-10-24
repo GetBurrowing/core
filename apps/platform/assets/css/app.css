@@ -3319,6 +3319,50 @@ body, .font-suite {
   }
 }
 
+/* Pick mode (redesign rung 12): the same list as the "Get someone's
+   attention" picker, inside a sheet or popover. In flow at every width, on
+   the sheet's own surface (no glass, no edge of its own), taller, and with
+   the right-aligned "added" mark (masters mobile 1385, desktop 823). */
+.mention-list--pick {
+  margin-bottom: 0;
+}
+
+.mention-list--pick .mention-list-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.mention-list--pick .mention-list-box {
+  max-height: min(50vh, 360px);
+}
+
+.mention-list--pick .mention-list-row[aria-disabled="true"] {
+  cursor: default;
+}
+
+.mention-list-added {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--color-subtle);
+}
+
+@media (min-width: 1024px) {
+  .mention-list--pick {
+    position: static;
+    display: block;
+    height: auto;
+  }
+
+  .mention-list--pick .mention-list-box {
+    max-height: 280px;
+  }
+}
+
 /* Opaque fallback, as the pill's: no translucency, no blur. */
 @media (prefers-reduced-transparency: reduce) {
   .mention-list-panel {
@@ -9505,5 +9549,27 @@ body.screen-share-fullscreen-active {
 @media (hover: hover) and (width >= 64rem) {
   [data-role="mask-names-chip"]:hover {
     background-color: var(--color-base-100);
+  }
+}
+
+/* "+@ add someone" (redesign rung 12; masters `.addat`). Every own message
+   renders it; only the LAST row of the list shows it, and only while the
+   newest messages are on screen, so it sits under the viewer's own latest
+   message and moves (or leaves) the moment anything newer arrives, with no
+   server round trip. The desktop hover is media-gated: no phone hover. */
+.message-add-attention {
+  display: none;
+}
+
+#message-list:not([data-newest-evicted="true"])
+  > [data-is-own-message="true"]:last-child
+  .message-add-attention {
+  display: inline-flex;
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .message-add-attention:hover {
+    color: var(--color-base-content);
+    border-color: var(--color-base-content);
   }
 }

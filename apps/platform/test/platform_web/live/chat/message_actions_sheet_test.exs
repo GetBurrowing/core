@@ -22,7 +22,15 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
   alias Platform.Chat.Message
   alias Platform.Repo
 
-  @own_rows ["Reply in thread", "Pin message", "Copy text", "Copy link", "Edit", "Delete"]
+  @own_rows [
+    "Reply in thread",
+    "Get someone's attention",
+    "Pin message",
+    "Copy text",
+    "Copy link",
+    "Edit",
+    "Delete"
+  ]
 
   setup %{conn: conn} do
     n = System.unique_integer([:positive])
@@ -158,6 +166,7 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
 
       assert rows == [
                "Reply in thread",
+               "Get someone's attention",
                "What this is answering",
                "Pin message",
                "Copy text",
@@ -181,7 +190,13 @@ defmodule PlatformWeb.ChatLive.MessageActionsSheetTest do
       render_click(view, "open_message_actions", %{"id" => msg.id})
 
       assert labels(view, "#message-actions-sheet") ==
-               ["Reply in thread", "Pin message", "Copy text", "Copy link"]
+               [
+                 "Reply in thread",
+                 "Get someone's attention",
+                 "Pin message",
+                 "Copy text",
+                 "Copy link"
+               ]
 
       refute has_element?(view, ~s([data-role="message-actions-edit"]))
       refute has_element?(view, ~s([data-role="message-actions-delete"]))

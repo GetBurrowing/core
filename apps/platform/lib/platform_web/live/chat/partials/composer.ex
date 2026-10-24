@@ -276,6 +276,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         phx-hook="ScrollToBottom"
         data-anchor-message-id={@anchor_message_id}
         data-space-id={@active_space && @active_space.id}
+        data-newest-evicted={@newest_evicted? && "true"}
       >
         <.chat_message
           :for={{dom_id, msg} <- @streams.messages}

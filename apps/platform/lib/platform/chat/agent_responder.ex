@@ -171,15 +171,20 @@ defmodule Platform.Chat.AgentResponder do
 
   # ── Built-in agent dispatch (original behavior) ─────────────────────
 
-  defp dispatch_to_built_in(_signal, context) do
+  defp dispatch_to_built_in(signal, context) do
     space_id = context.message.space_id
     agent_participant_id = context.agent_participant.id
 
     ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, true)
 
+    body =
+      context.user_message
+      |> agent_body(context.attachments)
+      |> attention_preamble(signal)
+
     result =
       with {:ok, response} <-
-             chat_module().chat(agent_body(context.user_message, context.attachments),
+             chat_module().chat(body,
                history: Enum.map(context.history, &built_in_history_entry/1),
                space_id: context.message.space_id,
                participant_id: context.agent_participant.id
@@ -1064,6 +1069,13 @@ defmodule Platform.Chat.AgentResponder do
   # answers to humans ("your message arrived empty, please resend"). Empty text
   # AND no attachments stays empty: nothing arrived, and saying so is correct.
   @spec agent_body(binary() | nil, list()) :: binary()
+  # Added attention (task 01a1557a-a30a stage 1): tell a built-in agent who
+  # asked it to look, as the external payload's `attention_added_by` does.
+  defp attention_preamble(body, %{attention_added_by: name}) when is_binary(name),
+    do: "(#{name} asked you to look at this message.)\n\n" <> body
+
+  defp attention_preamble(body, _signal), do: body
+
   defp agent_body(text, _attachments) when is_binary(text) and text != "", do: text
   defp agent_body(text, []), do: text || ""
   defp agent_body(_text, attachments), do: describe_attachments(attachments)
@@ -1173,6 +1185,11 @@ defmodule Platform.Chat.AgentResponder do
     # offer; without it a runtime must key on arrival time, so a reconnect
     # redelivery spawns a duplicate session for the same dispatch.
     |> maybe_put(:message_id, Map.get(signal, :message_id))
+    # "Get someone's attention" (task 01a1557a-a30a stage 1): the display name
+    # of the member who asked this agent to look at an already-sent message.
+    # Without it the agent sees a message that does not name it and a bare
+    # `:mention`, and cannot tell why it was pinged.
+    |> maybe_put(:attention_added_by, Map.get(signal, :attention_added_by))
     # Same flattened shape as `build_system_event_signal/2` so a runtime sees
     # one contract on both external paths. A `:chat_pattern` responsibility
     # arrives here (it has a chat message) rather than via the system_event

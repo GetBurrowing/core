@@ -42,7 +42,10 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
   ## The class scan
 
   Over chat_message.ex, overlays.ex, message_context.ex,
-  chat_version_history.ex and message_actions_hooks.ex, with comments and
+  chat_version_history.ex, message_actions_hooks.ex, and rung 12's
+  message_attention_hooks.ex and mention_list.ex (the attention picker's
+  rows; its paint is held by message_attention_contrast_guard_test.exs),
+  with comments and
   docs stripped (they may NAME what is forbidden): no `hover:` outside
   `lg:hover:`, no `text-base-content/`, no `text-error`, and no `primary` in
   the pill, reaction pill or quick-strip markup.
@@ -63,8 +66,18 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
   @version_history "lib/platform_web/components/chat_version_history.ex"
   @actions_hooks "lib/platform_web/live/chat/message_actions_hooks.ex"
   @composer "lib/platform_web/live/chat/partials/composer.ex"
+  @attention_hooks "lib/platform_web/live/chat/message_attention_hooks.ex"
+  @mention_list "lib/platform_web/live/chat/partials/mention_list.ex"
 
-  @scanned [@chat_message, @overlays, @message_context, @version_history, @actions_hooks]
+  @scanned [
+    @chat_message,
+    @overlays,
+    @message_context,
+    @version_history,
+    @actions_hooks,
+    @attention_hooks,
+    @mention_list
+  ]
 
   @aa_text 4.5
   @aa_non_text 3.0

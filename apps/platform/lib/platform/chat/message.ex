@@ -55,6 +55,12 @@ defmodule Platform.Chat.Message do
     # Shape: [%{emoji: "👍", count: 2, reacted_by_me: true}, ...].
     field(:reactions, {:array, :map}, virtual: true, default: [])
 
+    # "Get someone's attention" rows (`chat_message_attentions`, task
+    # 01a1557a-a30a stage 1), attached like `reactions` from
+    # `Chat.attention_by_message_ids/1`. Shape: `MessageAttention.to_view/1`.
+    # Never stored on the message row, so it never makes a message version.
+    field(:attention, {:array, :map}, virtual: true, default: [])
+
     # Day-bucket label (YYYY-MM-DD) attached at stream-insert time when
     # this message is the first of its calendar day in the visible list
     # (task 019e21c7 Stage 5). Render the date separator inline above the

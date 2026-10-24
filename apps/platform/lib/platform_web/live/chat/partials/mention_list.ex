@@ -65,6 +65,17 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   field after it, and a moved field blurs (measured on the dev rig: one
   blur per keystroke, and a stale `--chat-dock-h` from the tab bar's flash).
 
+  ## Pick mode
+
+  `pick` makes the same list the "Get someone's attention" picker (redesign
+  rung 12, `Partials.Overlays.message_attention_sheet/1`): a row pushes
+  `add_message_attention` with the message id and the row's principal id
+  instead of inserting a chip, a row in `added` reads a right-aligned
+  "added" and does nothing, and no row starts highlighted (no composer hook
+  owns a highlight there). The panel sits on the sheet's own surface, in
+  flow at every width (`.mention-list--pick` in app.css). One list, one row
+  anatomy: the composer and the picker cannot drift apart.
+
   Used by `Partials.Composer.composer/1` for the space composer, and by
   `PlatformWeb.Components.ChatMessage` above each thread reply box (stage 4).
   The thread's list is the one planned exception to "in flow": that reply
@@ -87,8 +98,22 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     doc: "the typed query, for the empty row; nil when the caller does not know it"
   )
 
-  attr(:field_id, :string, required: true, doc: "the field a picked row inserts its chip into")
+  attr(:field_id, :string,
+    default: nil,
+    doc: "the field a picked row inserts its chip into; unused in pick mode"
+  )
+
   attr(:open, :boolean, default: true, doc: "false renders only the empty wrapper")
+
+  attr(:pick, :string,
+    default: nil,
+    doc: "pick mode: the message id a row asks attention for (see Pick mode)"
+  )
+
+  attr(:added, :any,
+    default: MapSet.new(),
+    doc: "pick mode: principal ids already asked, rendered as 'added' no-ops"
+  )
 
   def mention_list(assigns) do
     suggestions = order(assigns.suggestions)
@@ -99,7 +124,11 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
       |> assign(:status, status_text(suggestions))
 
     ~H"""
-    <div id={"#{@id}-wrap"} data-role="mention-list" class="mention-list">
+    <div
+      id={"#{@id}-wrap"}
+      data-role="mention-list"
+      class={["mention-list", @pick && "mention-list--pick"]}
+    >
       <p class="sr-only" aria-live="polite" data-role="mention-list-status">
         {if @open, do: @status}
       </p>
@@ -109,16 +138,14 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
             :for={{suggestion, idx} <- @rows}
             id={"#{@id}-opt-#{idx}"}
             role="option"
-            aria-selected={to_string(idx == 0)}
+            aria-selected={to_string(idx == 0 and is_nil(@pick))}
+            aria-disabled={added?(suggestion, @added) && "true"}
             data-mention-suggestion={if idx == 0, do: "first", else: "row"}
             data-mention-name={suggestion.name}
+            data-principal-id={@pick && suggestion[:principal_id]}
+            data-added={added?(suggestion, @added) && "true"}
             data-kind={kind(suggestion)}
-            phx-click={
-              JS.dispatch("chat:insert-mention",
-                to: "##{@field_id}",
-                detail: %{name: suggestion.name}
-              )
-            }
+            phx-click={row_click(suggestion, @pick, @field_id, @added)}
             class="mention-list-row active:bg-base-100"
           >
             <%= case kind(suggestion) do %>
@@ -156,6 +183,13 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
                 Not in this space · adds them
               </span>
             </span>
+            <span
+              :if={added?(suggestion, @added)}
+              class="mention-list-added"
+              data-role="mention-list-added"
+            >
+              added
+            </span>
           </div>
           <div
             :if={@rows == [] and is_binary(@query)}
@@ -172,6 +206,27 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     </div>
     """
   end
+
+  # Composer mode inserts a chip into the field; pick mode asks attention for
+  # the row's principal, and an already-added row does nothing.
+  defp row_click(suggestion, nil, field_id, _added) do
+    JS.dispatch("chat:insert-mention", to: "##{field_id}", detail: %{name: suggestion.name})
+  end
+
+  defp row_click(suggestion, message_id, _field_id, added) do
+    if added?(suggestion, added) do
+      nil
+    else
+      JS.push("add_message_attention",
+        value: %{"message-id" => message_id, "ids" => [suggestion[:principal_id]]}
+      )
+    end
+  end
+
+  defp added?(%{principal_id: id}, %MapSet{} = added) when is_binary(id),
+    do: MapSet.member?(added, id)
+
+  defp added?(_suggestion, _added), do: false
 
   @doc """
   True when the list has something to show: suggestions, or a known query

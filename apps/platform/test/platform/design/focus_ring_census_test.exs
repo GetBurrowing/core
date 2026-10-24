@@ -141,16 +141,19 @@ defmodule Platform.Design.FocusRingCensusTest do
   # 29 -> 27.
   @expected_required_sites %{
     "assets/css/app.css" => 3,
-    "lib/platform_web/components/chat_message.ex" => 9,
+    # +2 in rung 12 (task 01a1557a-a30a stage 2): the pill's +@ and the
+    # "+@ add someone" button.
+    "lib/platform_web/components/chat_message.ex" => 11,
     "lib/platform_web/components/chat_message_editor.ex" => 3,
     "lib/platform_web/components/empty_state.ex" => 1,
     "lib/platform_web/components/inbox_item.ex" => 1,
     "lib/platform_web/components/sheet.ex" => 1,
     "lib/platform_web/live/chat/partials.ex" => 6,
-    "lib/platform_web/live/chat/partials/overlays.ex" => 3
+    # +1 in rung 12: the attention picker's search field.
+    "lib/platform_web/live/chat/partials/overlays.ex" => 4
   }
 
-  @expected_required_total 27
+  @expected_required_total 30
 
   # ── (a) the scan surface ──────────────────────────────────────────────────
 
