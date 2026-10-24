@@ -85,15 +85,7 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     }
 
     override init() {
-        let config = CXProviderConfiguration()
-        config.supportsVideo = false
-        config.includesCallsInRecents = true
-        config.maximumCallGroups = 1
-        config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-        // No ringtone file and no icon template until the arch mark merges
-        // (design canvas): the system defaults stand.
-        provider = CXProvider(configuration: config)
+        provider = CXProvider(configuration: Self.providerConfiguration())
         ringReporter = ProviderCallReporter(provider: provider)
         super.init()
         provider.setDelegate(self, queue: nil)
@@ -103,7 +95,40 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
         AudioManager.shared.audioSession.isAutomaticConfigurationEnabled = false
     }
 
+    /// The app's one provider configuration. `supportsVideo` (task 01a13ca2
+    /// stage 4): the meeting page's companion connection publishes the
+    /// camera, and the call reports `hasVideo` once that camera is
+    /// confirmed. Calls still start, answer and ring with `hasVideo` false.
+    static func providerConfiguration() -> CXProviderConfiguration {
+        let config = CXProviderConfiguration()
+        config.supportsVideo = true
+        config.includesCallsInRecents = true
+        config.maximumCallGroups = 1
+        config.maximumCallsPerCallGroup = 1
+        config.supportedHandleTypes = [.generic]
+        // No ringtone file and no icon template until the arch mark merges
+        // (design canvas): the system defaults stand.
+        return config
+    }
+
+    /// The update reporting whether the call has video. Only `hasVideo` is
+    /// set, so CallKit leaves every other property of the call as it was.
+    static func videoUpdate(_ hasVideo: Bool) -> CXCallUpdate {
+        let update = CXCallUpdate()
+        update.hasVideo = hasVideo
+        return update
+    }
+
     // MARK: Requests (our surface, the plugin, the intents)
+
+    /// The page's CONFIRMED companion camera (`BurrowMeetingsPlugin.setVideoActive`):
+    /// tells CallKit the call has video, or no longer has. Video itself never
+    /// goes through this call; the page's own connection carries it. A call
+    /// running without CallKit has nothing to report.
+    func setVideoActive(_ active: Bool) {
+        guard meetingID != nil, let uuid = callUUID else { return }
+        provider.reportCall(with: uuid, updated: Self.videoUpdate(active))
+    }
 
     /// `donates`: a call the person started in Burrow's UI is donated as a
     /// recipients-only meeting value (DonationPolicy); an intent run passes

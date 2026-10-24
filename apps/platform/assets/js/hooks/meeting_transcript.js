@@ -78,6 +78,8 @@
  * `assets/README.md` ("Meetings: synthesising captions").
  */
 
+import { personIdentity } from "./lib/participant_label"
+
 // Scrollback cap. Bounded because this buffer lives for the length of a
 // call and every line is a DOM node; unbounded growth is a slow leak on a
 // long meeting. 200 lines is far more scrollback than the 2-line overlay
@@ -175,10 +177,17 @@ const MeetingTranscript = {
   // ── Private ──────────────────────────────────────────────────────────
 
   _onCaption(event) {
-    const { id, speaker, identity, text, final, timestamp } = event.detail || {}
+    const { id, identity, text, final, timestamp } = event.detail || {}
+    let { speaker } = event.detail || {}
     if (!text || !text.trim()) return
 
-    const ident = typeof identity === "string" ? identity : ""
+    // Grouped and labelled by PERSON (task 01a13ca2): a line from a
+    // person's companion connection (`video:user:<uuid>`) folds onto
+    // `user:<uuid>`, so it joins that person's group and never shows the
+    // companion identity, even when the label fell back to the identity.
+    const rawIdent = typeof identity === "string" ? identity : ""
+    const ident = personIdentity(rawIdent)
+    if (rawIdent !== ident && speaker === rawIdent) speaker = ident
 
     // Same guest-suffix rule as the overlay bar: MeetingRoom stamps guest
     // LiveKit identities with a `guest:` prefix.

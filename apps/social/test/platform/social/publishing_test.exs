@@ -317,6 +317,159 @@ defmodule Platform.Social.PublishingTest do
     end
   end
 
+  describe "cover (task 01a165ec stage 3)" do
+    # A file whose bytes are on disk, so a signed URL can be fetched.
+    defp stored_media!(org_id, content_type) do
+      body = :crypto.strong_rand_bytes(1536)
+      file = media_file!(org_id, content_type, byte_size(body))
+      path = Platform.Chat.AttachmentStorage.path_for(file.storage_key)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, body)
+      on_exit(fn -> File.rm(path) end)
+      {file, body}
+    end
+
+    defp video_post!(ctx, platform, cover_attrs) do
+      {_, account} = social_account!(ctx.org_id, platform)
+      video = media_file!(ctx.org_id, "video/mp4")
+
+      approved_post!(
+        ctx.org_id,
+        account,
+        Map.merge(
+          %{media_file_ids: [video.id], media_meta: %{video.id => %{"duration_s" => 30}}},
+          cover_attrs
+        )
+      )
+    end
+
+    defp fetch(url) do
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Phoenix.ConnTest.dispatch(PlatformWeb.Endpoint, :get, URI.parse(url).path)
+
+      {conn.status, conn.resp_body}
+    end
+
+    defp published_request do
+      assert [{:publish, [_account, request], _}] = Fake.calls(:publish)
+      request
+    end
+
+    test "an uploaded cover reaches the publisher as an image whose URL serves the cover's bytes",
+         ctx do
+      {cover, bytes} = stored_media!(ctx.org_id, "image/jpeg")
+      # A second stored JPG in the org: the URL must be for the cover, not it.
+      {_other, other_bytes} = stored_media!(ctx.org_id, "image/jpeg")
+      post = video_post!(ctx, "instagram", %{cover_file_id: cover.id})
+      assert post.cover_file_id == cover.id
+
+      assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert %{cover: %{kind: :image, url: url, content_type: "image/jpeg"}} = published_request()
+      assert {200, ^bytes} = fetch(url)
+      refute bytes == other_bytes
+    end
+
+    test "a frame reaches the publisher as its offset", ctx do
+      post = video_post!(ctx, "instagram", %{cover_offset_ms: 7400})
+      assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
+      assert published_request().cover == %{kind: :frame, offset_ms: 7400}
+    end
+
+    test "a cleared cover is nil", ctx do
+      post = video_post!(ctx, "instagram", %{cover_offset_ms: 7400})
+
+      {:ok, post} =
+        post |> Ecto.Changeset.change(cover_offset_ms: nil) |> Repo.update()
+
+      assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
+      assert published_request().cover == nil
+    end
+
+    test "a cover file deleted after approval refuses the publish before the adapter", ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "instagram", %{cover_file_id: cover.id})
+      cover |> Ecto.Changeset.change(deleted_at: DateTime.utc_now()) |> Repo.update!()
+
+      assert {:error, {:media_rejected, ["The cover image is missing or not in this org"]}} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      assert Repo.get!(Post, post.id).status == "approved"
+      assert Fake.calls() == []
+    end
+
+    test "a YouTube post's uploaded cover is set once, after it is published", ctx do
+      {cover, bytes} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+
+      assert {:ok, %Post{status: "scheduled"} = scheduled} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      assert Fake.calls(:set_cover) == []
+
+      assert {:ok, %Post{status: "published", cover_error: nil}} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert [{:set_cover, [account, external_id, url], _}] = Fake.calls(:set_cover)
+      assert account.platform == "youtube"
+      assert external_id == scheduled.external_id
+      assert {200, ^bytes} = fetch(url)
+
+      # A replayed outcome is a :noop and sends nothing more.
+      assert {:ok, :noop} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert length(Fake.calls(:set_cover)) == 1
+    end
+
+    test "a synchronous YouTube publish sets the cover after the publish commits", ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+
+      Fake.put_next(
+        :publish,
+        {:ok, %{external_id: "yt_1", status: :published, external_url: nil}}
+      )
+
+      assert {:ok, %Post{status: "published"}} = Publishing.publish_post(ctx.org_id, post.id)
+      assert [{:set_cover, [_, "yt_1", _url], _}] = Fake.calls(:set_cover)
+    end
+
+    test "a failed set_cover leaves the post published with cover_error set; a frame sends nothing",
+         ctx do
+      {cover, _} = stored_media!(ctx.org_id, "image/png")
+      post = video_post!(ctx, "youtube", %{cover_file_id: cover.id})
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
+      Fake.fail_next(:set_cover, :rate_limited)
+
+      assert {:ok, %Post{status: "published", cover_error: error}} =
+               Publishing.apply_outcome(scheduled, %{
+                 kind: :published,
+                 external_url: nil,
+                 error: nil
+               })
+
+      assert error == "YouTube cover not set: the upload limit was reached; set it again later"
+      assert %Post{status: "published", cover_error: ^error} = Repo.get!(Post, post.id)
+
+      frame = video_post!(ctx, "youtube", %{cover_offset_ms: 1000})
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, frame.id)
+
+      {:ok, _} =
+        Publishing.apply_outcome(scheduled, %{kind: :published, external_url: nil, error: nil})
+
+      assert length(Fake.calls(:set_cover)) == 1
+    end
+  end
+
   describe "rate limit" do
     setup do
       previous = Application.get_env(:social, :rate_limit)
@@ -717,6 +870,131 @@ defmodule Platform.Social.PublishingTest do
                )
 
       assert length(Fake.calls(:connect_url)) == 1
+    end
+  end
+
+  describe "attempts, platform ids and published_at (Clip Studio 2/9, task 01a16662)" do
+    setup do
+      previous = Application.get_env(:social, :rate_limit)
+      Application.put_env(:social, :rate_limit, per_window: 1, window_ms: 60_000)
+      on_exit(fn -> Application.put_env(:social, :rate_limit, previous) end)
+      :ok
+    end
+
+    test "each vendor call counts one publish attempt", ctx do
+      {_, other} = social_account!(ctx.org_id, "linkedin")
+      ok = approved_post!(ctx.org_id, ctx.account)
+      limited = approved_post!(ctx.org_id, ctx.account)
+      failing = approved_post!(ctx.org_id, other)
+
+      assert Repo.get!(Post, ok.id).publish_attempts == 0
+
+      # A success: one vendor call, one attempt.
+      assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, ok.id)
+      assert Repo.get!(Post, ok.id).publish_attempts == 1
+
+      # A RateLimit refusal: nothing was sent, nothing counted.
+      assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, limited.id)
+
+      assert %Post{publish_attempts: 0, refused_reason: "rate_limited"} =
+               Repo.get!(Post, limited.id)
+
+      # A vendor failure: one vendor call, one attempt.
+      Fake.fail_next(:publish, :vendor_down)
+
+      assert {:error, {:publish_failed, :vendor_down}} =
+               Publishing.publish_post(ctx.org_id, failing.id)
+
+      assert %Post{status: "failed", publish_attempts: 1} = Repo.get!(Post, failing.id)
+      assert length(Fake.calls(:publish)) == 2
+    end
+
+    test "a guard refusal and an archived account count no attempt", ctx do
+      {:ok, draft} = Social.create_post(ctx.org_id, ctx.account, %{body: "draft"})
+      assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, draft.id)
+      assert Repo.get!(Post, draft.id).publish_attempts == 0
+
+      post = approved_post!(ctx.org_id, ctx.account)
+      {:ok, _} = Social.archive_account(ctx.org_id, ctx.account)
+      assert {:error, :account_archived} = Publishing.publish_post(ctx.org_id, post.id)
+      assert Repo.get!(Post, post.id).publish_attempts == 0
+      assert Fake.calls(:publish) == []
+    end
+
+    test "the adapter's platform_post_id is stored; external_id is unchanged", ctx do
+      post = approved_post!(ctx.org_id, ctx.account)
+      assert {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
+      assert scheduled.external_id == "fake_" <> post.id
+      assert scheduled.platform_post_id == "fake_platform_" <> post.id
+      assert Repo.get!(Post, post.id).platform_post_id == "fake_platform_" <> post.id
+    end
+
+    test "published_at is written on the move to published", ctx do
+      # Through publish: the adapter answers published at once.
+      now_post = approved_post!(ctx.org_id, ctx.account)
+
+      Fake.put_next(
+        :publish,
+        {:ok,
+         %{
+           external_id: "ext_now",
+           status: :published,
+           external_url: "https://example.test/now",
+           platform_post_id: "pp_now"
+         }}
+      )
+
+      before = DateTime.utc_now()
+      assert {:ok, %Post{status: "published"}} = Publishing.publish_post(ctx.org_id, now_post.id)
+      row = Repo.get!(Post, now_post.id)
+      assert %DateTime{} = row.published_at
+      assert DateTime.compare(row.published_at, before) != :lt
+      assert {row.external_id, row.platform_post_id} == {"ext_now", "pp_now"}
+
+      # Through apply_outcome (refresh_status): scheduled first, no published_at.
+      {_, other} = social_account!(ctx.org_id, "linkedin")
+      later = approved_post!(ctx.org_id, other)
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, later.id)
+      assert scheduled.published_at == nil
+
+      Fake.put_next(
+        :status,
+        {:ok,
+         %{
+           status: :published,
+           external_url: "https://example.test/later",
+           error: nil,
+           platform_post_id: "pp_later"
+         }}
+      )
+
+      assert {:ok, %Post{status: "published"}} = Publishing.refresh_status(ctx.org_id, later.id)
+      row = Repo.get!(Post, later.id)
+      assert %DateTime{} = row.published_at
+      assert row.platform_post_id == "pp_later"
+      assert row.external_id == scheduled.external_id
+
+      # A move to failed writes no published_at.
+      {_, third} = social_account!(ctx.org_id, "linkedin")
+      failing = approved_post!(ctx.org_id, third)
+      {:ok, f} = Publishing.publish_post(ctx.org_id, failing.id)
+      {:ok, _} = Publishing.apply_outcome(f, %{kind: :failed, error: "nope"})
+      assert %Post{status: "failed", published_at: nil} = Repo.get!(Post, failing.id)
+    end
+
+    test "one account publishes and another fails in the same sweep (put_next_for)", ctx do
+      {_, other} = social_account!(ctx.org_id, "linkedin")
+      good = approved_post!(ctx.org_id, ctx.account)
+      bad = approved_post!(ctx.org_id, other)
+      Fake.put_next_for(other.id, :publish, {:error, :token_expired})
+
+      results = for p <- [good, bad], do: Publishing.publish_post(ctx.org_id, p.id)
+
+      assert [{:ok, %Post{status: "scheduled"}}, {:error, {:publish_failed, :token_expired}}] =
+               results
+
+      assert %Post{status: "failed", publish_attempts: 1} = Repo.get!(Post, bad.id)
+      assert %Post{status: "scheduled", publish_attempts: 1} = Repo.get!(Post, good.id)
     end
   end
 end

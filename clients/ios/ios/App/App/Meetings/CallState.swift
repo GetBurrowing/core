@@ -55,6 +55,34 @@ struct CallParticipant: Equatable, Identifiable {
         self.isSpeaking = isSpeaking
     }
 
+    /// A person's video-only second connection (task 01a13ca2): the meeting
+    /// page inside the app joins as `video:user:<uuid>` to publish the camera
+    /// and view video. The same prefix as the server's
+    /// `Meetings.companion_identity?/1` and the page's `isCompanionIdentity`;
+    /// all three are pinned by `companion_identities_v1.json`.
+    static let companionPrefix = "video:user:"
+
+    /// Whether `identity` is a companion connection. A plain, case-sensitive
+    /// prefix test; nil is not a companion.
+    static func isCompanion(identity: String?) -> Bool {
+        identity?.hasPrefix(companionPrefix) ?? false
+    }
+
+    /// The person a connection belongs to: `video:user:X` -> `user:X`, any
+    /// other identity (and nil) unchanged.
+    static func personIdentity(_ identity: String?) -> String? {
+        guard let identity, isCompanion(identity: identity) else { return identity }
+        return "user:" + identity.dropFirst(companionPrefix.count)
+    }
+
+    /// Persons only: every companion connection dropped. The ONE place the
+    /// call surface filters them, so `.alone`, the head count, the people
+    /// list and the speakers all count persons. A companion's own person is
+    /// in the room through their audio connection, or is us.
+    static func persons(_ participants: [CallParticipant]) -> [CallParticipant] {
+        participants.filter { !isCompanion(identity: $0.id) }
+    }
+
     /// An agent is a LiveKit agent participant, or anyone whose metadata
     /// says `{"agent": true}` (Burrow's own voice workers publish that).
     static func isAgent(kindIsAgent: Bool, metadata: String?) -> Bool {
@@ -87,6 +115,8 @@ struct CallState: Equatable {
     var mutedByHost = false
     /// The current audio output's name ("iPhone", "AirPods Pro", ...).
     var route: String?
+    /// The other PERSONS and agents in the call. Companion connections
+    /// (`video:user:`) never land here: `reduce` drops them.
     var participants: [CallParticipant] = []
     /// Whether the SFU reports US as speaking (the local participant's
     /// `isSpeaking`, from the same speaker update every web viewer's
@@ -171,7 +201,7 @@ struct CallState: Equatable {
             }
 
         case .participantsChanged(let participants):
-            s.participants = participants
+            s.participants = CallParticipant.persons(participants)
             if s.phase == .connected || s.phase == .alone { s.phase = presence(s) }
 
         case .localParticipantChanged(let identity, let isSpeaking):

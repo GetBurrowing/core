@@ -16,7 +16,12 @@ defmodule Platform.Social.Tools do
   ## No publish, no approve
 
   Writes go through `Platform.Social.AgentDrafts`, whose ceiling is
-  `needs_approval`. `social_task_request` (Social 6/7) files a task through
+  `needs_approval`. The five `social_clip_job_*` tools (Clip Studio 1/9)
+  work the job list in `Platform.Social.ClipJobs`; the claimer is always
+  the calling agent, never an argument. `social_clip_submit` lands a clip as
+  review pending; no tool writes a review field, and the submitting agent
+  comes from the context, never from arguments. `social_task_request`
+  (Social 6/7) files a task through
   `Platform.Social.TaskBridge`, assigned to the calling agent; the agent
   and space come from the context, never from arguments. Refusals are Play-style envelopes
   `%{error, code, recoverable, suggestion}`; each status or lock refusal
@@ -25,9 +30,35 @@ defmodule Platform.Social.Tools do
 
   alias Platform.Federation.ResultBound
   alias Platform.Social
-  alias Platform.Social.{Account, AgentDrafts, Clip, Post, Profile, TaskBridge, ToolDefinitions}
+
+  alias Platform.Social.{
+    Account,
+    AgentDrafts,
+    Clip,
+    ClipJob,
+    ClipJobs,
+    Idea,
+    IdeaNote,
+    IdeaNotes,
+    Ideas,
+    Post,
+    PostEvent,
+    PostEvents,
+    Profile,
+    TaskBridge,
+    ToolDefinitions
+  }
 
   @human ToolDefinitions.human_approves()
+
+  # Clip Studio 1/9: the clip job tools.
+  @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_progress
+                social_clip_job_complete social_clip_job_fail)
+
+  # Social authoring 2/11: the tools that need the calling agent (the idea
+  # creator, and the change log's actor on a draft write).
+  @agent_tools ~w(social_idea_create social_idea_list social_idea_note_add social_draft_create
+                  social_draft_update)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -37,6 +68,15 @@ defmodule Platform.Social.Tools do
     cond do
       tool == "social_task_request" ->
         with {:ok, scope} <- scope(context), do: task_request(args, scope, context)
+
+      tool == "social_clip_submit" ->
+        with {:ok, scope} <- scope(context), do: clip_submit(args, scope, agent(context))
+
+      tool in @job_tools ->
+        with {:ok, scope} <- scope(context), do: job_tool(tool, args, scope, agent(context))
+
+      tool in @agent_tools ->
+        with {:ok, scope} <- scope(context), do: agent_tool(tool, args, scope, agent(context))
 
       tool in ToolDefinitions.names() ->
         with {:ok, scope} <- scope(context), do: run(tool, args, scope)
@@ -208,6 +248,220 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  # ── Clip Studio 1/9: social_clip_submit ──────────────────────────────
+
+  # Only these argument keys reach AgentDrafts: never a review field, rev,
+  # origin or an agent id. The submitting agent is the CALLER (context).
+  @submit_keys ~w(file_id title caption speaker episode_code source_label platforms
+                  duration_s width height)
+
+  defp clip_submit(args, scope, agent) do
+    attrs = Map.take(args, @submit_keys)
+
+    case AgentDrafts.submit_clip(scope, args["profile_id"], attrs, agent.id) do
+      {:ok, clip} -> {:ok, %{clip: clip_json(clip)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  # ── Clip Studio 1/9: the clip job tools ──────────────────────────────
+
+  # The acting agent is ALWAYS the caller (context), never an argument; a
+  # complete reads only the submit argument keys (ClipJobs.result_keys/0).
+  defp job_tool("social_clip_job_list", args, scope, _agent) do
+    filters = [status: blank_to_nil(args["status"]), kind: blank_to_nil(args["kind"])]
+
+    case ClipJobs.list_jobs(scope, args["profile_id"], filters) do
+      {:ok, jobs} ->
+        {limit, offset} = ResultBound.page(args)
+        page = jobs |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&job_json/1)
+
+        {:ok,
+         ResultBound.paged(:jobs, page, length(jobs), offset, %{limit: limit, offset: offset})}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp job_tool("social_clip_job_claim", args, scope, agent) do
+    scope |> ClipJobs.claim(args["job_id"], agent.id) |> job_reply()
+  end
+
+  defp job_tool("social_clip_job_progress", args, scope, agent) do
+    scope
+    |> ClipJobs.progress(args["job_id"], agent.id, args["progress"], args["eta_s"])
+    |> job_reply()
+  end
+
+  defp job_tool("social_clip_job_complete", args, scope, agent) do
+    result = Map.take(args, ClipJobs.result_keys())
+
+    case ClipJobs.complete(scope, args["job_id"], agent.id, result) do
+      {:ok, %{job: job, clip: clip}} ->
+        {:ok, %{job: job_json(job), clip: clip && clip_json(clip)}}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp job_tool("social_clip_job_fail", args, scope, agent) do
+    scope |> ClipJobs.fail(args["job_id"], agent.id, args["error"], args["code"]) |> job_reply()
+  end
+
+  defp job_reply({:ok, %ClipJob{} = job}), do: {:ok, %{job: job_json(job)}}
+  defp job_reply(error), do: {:error, error_envelope(error)}
+
+  # ── Social authoring 2/11: ideas, and drafts that name one ────────────
+
+  @idea_keys ~w(title brief source_kind clip_id task_id meeting_id message_id source_url)
+
+  # The agent is ALWAYS the caller (context): it is the idea's creator and
+  # the change log's actor, never an argument.
+  defp agent_tool("social_draft_create", args, scope, agent) do
+    attrs = Map.drop(args, ["profile_id", "org_id"])
+
+    case AgentDrafts.create_agent_drafts(scope, args["profile_id"], attrs, agent_id: agent.id) do
+      {:ok, posts} -> {:ok, %{posts: Enum.map(posts, &post_json/1), count: length(posts)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_draft_update", args, scope, agent) do
+    attrs = Map.drop(args, ["post_id", "org_id"])
+
+    case AgentDrafts.update_agent_draft(scope, args["post_id"], attrs, agent_id: agent.id) do
+      {:ok, post} -> {:ok, %{post: post_json(post)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_idea_create", args, scope, agent) do
+    attrs = Map.take(args, @idea_keys)
+
+    case Ideas.create(scope, args["profile_id"], attrs, {:agent, agent.id}) do
+      {:ok, idea} -> {:ok, %{idea: idea_json(idea, [])}}
+      {:error, :not_found} -> {:error, not_found("profile")}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  # Social authoring 7/11: a note on the idea's thread, by the calling agent.
+  defp agent_tool("social_idea_note_add", args, scope, agent) do
+    case IdeaNotes.add(scope, args["idea_id"], {:agent, agent.id}, args["body"]) do
+      {:ok, note} ->
+        {:ok, %{note: note_json(note)}}
+
+      {:error, :not_found} ->
+        {:error, not_found("idea")}
+
+      {:error, reason} when reason in [:body_required, :body_too_long] ->
+        {:error,
+         err(
+           :invalid_argument,
+           "body must be 1 to #{IdeaNote.max_body()} characters; nothing was written",
+           true,
+           "Send a shorter, non-blank note."
+         )}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_idea_list", args, scope, _agent) do
+    case Social.get_profile(scope, args["profile_id"]) do
+      %Profile{} = profile ->
+        {limit, offset} = ResultBound.page(args)
+        stage = blank_to_nil(args["stage"])
+
+        ideas = Ideas.list(scope, profile.id, archived: args["archived"] == true)
+        posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
+
+        rows =
+          ideas
+          |> Enum.map(&{&1, Map.get(posts, &1.id, [])})
+          |> Enum.filter(fn {_idea, ps} -> stage == nil or Ideas.stage(ps) == stage end)
+
+        page =
+          rows
+          |> Enum.drop(offset)
+          |> Enum.take(limit)
+          |> Enum.map(fn {idea, ps} -> idea_json(idea, ps) end)
+
+        {:ok,
+         ResultBound.paged(:ideas, page, length(rows), offset, %{limit: limit, offset: offset})}
+
+      nil ->
+        {:error, not_found("profile")}
+    end
+  end
+
+  defp idea_json(%Idea{} = idea, posts) do
+    events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
+
+    revisions =
+      for post <- posts,
+          %PostEvent{} = e <- [PostEvents.open_revision(Map.get(events, post.id, []))] do
+        %{
+          post_id: post.id,
+          note: e.note,
+          requested_by_user_id: e.actor_id,
+          requested_at: e.inserted_at
+        }
+      end
+
+    idea
+    |> Map.take([
+      :id,
+      :profile_id,
+      :title,
+      :brief,
+      :source_kind,
+      :clip_id,
+      :task_id,
+      :meeting_id,
+      :message_id,
+      :source_url,
+      :created_by_user_id,
+      :created_by_agent_id,
+      :archived_at,
+      :inserted_at
+    ])
+    |> Map.merge(%{
+      stage: Ideas.stage(posts),
+      posts: Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id))),
+      open_revisions: revisions,
+      notes: idea.id |> IdeaNotes.list() |> Enum.map(&note_json/1)
+    })
+  end
+
+  defp note_json(%IdeaNote{} = note),
+    do: Map.take(note, [:id, :idea_id, :author_kind, :author_id, :body, :inserted_at])
+
+  defp posts_with_events(posts) do
+    events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
+    Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id)))
+  end
+
+  defp events_json(events, post_id) do
+    events
+    |> Map.get(post_id, [])
+    |> Enum.map(
+      &Map.take(&1, [
+        :id,
+        :action,
+        :actor_kind,
+        :actor_id,
+        :body_before,
+        :body_after,
+        :note,
+        :inserted_at
+      ])
+    )
+  end
+
   # ── Scope ────────────────────────────────────────────────────────────
 
   defp scope(context) do
@@ -269,24 +523,6 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp run("social_draft_create", args, scope) do
-    attrs = Map.drop(args, ["profile_id", "org_id"])
-
-    case AgentDrafts.create_agent_drafts(scope, args["profile_id"], attrs) do
-      {:ok, posts} -> {:ok, %{posts: Enum.map(posts, &post_json/1), count: length(posts)}}
-      error -> {:error, error_envelope(error)}
-    end
-  end
-
-  defp run("social_draft_update", args, scope) do
-    attrs = Map.drop(args, ["post_id", "org_id"])
-
-    case AgentDrafts.update_agent_draft(scope, args["post_id"], attrs) do
-      {:ok, post} -> {:ok, %{post: post_json(post)}}
-      error -> {:error, error_envelope(error)}
-    end
-  end
-
   defp run("social_post_list", args, scope) do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
@@ -299,7 +535,7 @@ defmodule Platform.Social.Tools do
         ]
 
         posts = Social.list_posts(scope, filters)
-        page = posts |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&post_json/1)
+        page = posts |> Enum.drop(offset) |> Enum.take(limit) |> posts_with_events()
 
         {:ok,
          ResultBound.paged(:posts, page, length(posts), offset, %{limit: limit, offset: offset})}
@@ -334,20 +570,39 @@ defmodule Platform.Social.Tools do
   end
 
   defp run("social_clip_list", args, scope) do
-    case Social.get_profile(scope, args["profile_id"]) do
-      %Profile{} = profile ->
-        {limit, offset} = ResultBound.page(args)
+    with {:ok, review_status} <- review_filter(args["review_status"]),
+         %Profile{} = profile <- Social.get_profile(scope, args["profile_id"]) do
+      {limit, offset} = ResultBound.page(args)
 
-        clips =
-          Social.list_clips(scope, profile_id: profile.id, status: blank_to_nil(args["status"]))
+      # Clip Studio 1/9: the review filter is applied here, over
+      # Social.list_clips/2's result (social.ex is not edited).
+      clips =
+        scope
+        |> Social.list_clips(profile_id: profile.id, status: blank_to_nil(args["status"]))
+        |> Enum.filter(&(review_status == nil or &1.review_status == review_status))
 
-        page = clips |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&clip_json/1)
+      page = clips |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&clip_json/1)
 
-        {:ok,
-         ResultBound.paged(:clips, page, length(clips), offset, %{limit: limit, offset: offset})}
+      {:ok,
+       ResultBound.paged(:clips, page, length(clips), offset, %{limit: limit, offset: offset})}
+    else
+      {:error, :invalid_review_status} ->
+        {:error, error_envelope({:error, :invalid_review_status})}
 
       nil ->
         {:error, not_found("profile")}
+    end
+  end
+
+  defp review_filter(value) do
+    case blank_to_nil(value) do
+      nil ->
+        {:ok, nil}
+
+      status ->
+        if status in Clip.review_statuses(),
+          do: {:ok, status},
+          else: {:error, :invalid_review_status}
     end
   end
 
@@ -376,7 +631,7 @@ defmodule Platform.Social.Tools do
       :profile_needs_project,
       Social.profile_needs_project(),
       false,
-      "Ask a human to set the profile's project (one in the profile's org)."
+      "Relay the error to a human in these words: an approver sets it in Social › Settings › Project for renders."
     )
   end
 
@@ -395,6 +650,96 @@ defmodule Platform.Social.Tools do
       "the source video and transcript must be files in the profile's project",
       true,
       "Upload them to the profile's project in Burrow Files and pass those ids."
+    )
+  end
+
+  defp error_envelope({:error, :file_not_in_project}) do
+    err(
+      :file_not_in_project,
+      "the file must be a video in Burrow Files in the profile's project",
+      true,
+      "Upload it with file_add using project_id = the profile's project, and pass that file_id."
+    )
+  end
+
+  defp error_envelope({:error, :not_a_video}) do
+    err(
+      :not_a_video,
+      "the file is not a video (its content type must be video/*)",
+      true,
+      "Upload the rendered MP4 and pass its file_id."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_title}) do
+    err(
+      :invalid_title,
+      "title must be non-blank and at most 200 characters",
+      true,
+      "Pass a shorter title, or omit it."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_review_status}) do
+    err(
+      :invalid_review_status,
+      "review_status must be one of pending, approved, rejected",
+      true,
+      "Omit review_status, or pass one of pending, approved, rejected."
+    )
+  end
+
+  defp error_envelope({:error, :already_claimed}) do
+    err(
+      :already_claimed,
+      "already claimed: another runner (or you) claimed this job first",
+      false,
+      "Call social_clip_job_list for another queued job."
+    )
+  end
+
+  defp error_envelope({:error, :not_claimer}) do
+    err(
+      :not_claimer,
+      "not the claimer: only the agent that claimed this job may report on it",
+      false,
+      "Claim a queued job with social_clip_job_claim first."
+    )
+  end
+
+  defp error_envelope({:error, :job_closed}) do
+    err(
+      :job_closed,
+      "job closed: it is already done or failed",
+      false,
+      "Call social_clip_job_list for open jobs."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_progress}) do
+    err(
+      :invalid_progress,
+      "progress must be a number from 0 to 1, and eta_s a number >= 0",
+      true,
+      "Pass progress as a fraction, e.g. 0.5."
+    )
+  end
+
+  defp error_envelope({:error, :job_in_flight}) do
+    err(
+      :job_in_flight,
+      "this clip already has an open job",
+      true,
+      "Wait for it to finish."
+    )
+  end
+
+  defp error_envelope({:error, :invalid_error}) do
+    err(
+      :invalid_error,
+      "error must be a non-blank string",
+      true,
+      "Say what went wrong, and pass the clip error code as code."
     )
   end
 
@@ -430,6 +775,15 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :banned_phrase, phrase}) do
+    err(
+      :banned_phrase,
+      "banned phrase: the body contains \"#{phrase}\", which this brand never says; nothing was written",
+      true,
+      "Rewrite the body without \"#{phrase}\". social_profile_get lists the profile's voice.banned phrases."
+    )
+  end
+
   defp error_envelope({:error, :post_locked}) do
     err(
       :post_locked,
@@ -448,6 +802,24 @@ defmodule Platform.Social.Tools do
       "that task is a social task for another profile; nothing was written",
       false,
       "Draft for the task's own profile (task_get shows it), or drop task_id."
+    )
+  end
+
+  defp error_envelope({:error, :idea_profile_mismatch}) do
+    err(
+      :idea_profile_mismatch,
+      "that idea belongs to another profile; nothing was written",
+      false,
+      "Draft under the idea's own profile (social_idea_list shows it), or create an idea for this profile."
+    )
+  end
+
+  defp error_envelope({:error, :idea_archived}) do
+    err(
+      :idea_archived,
+      "that idea is archived and takes no new posts; nothing was written",
+      false,
+      "Create a new idea with social_idea_create, or drop idea_id."
     )
   end
 
@@ -537,7 +909,7 @@ defmodule Platform.Social.Tools do
     accounts =
       scope
       |> Social.list_accounts(profile_id: p.id)
-      |> Enum.map(&account_json/1)
+      |> Enum.map(&account_json(&1, full?))
 
     base = %{
       id: p.id,
@@ -548,7 +920,40 @@ defmodule Platform.Social.Tools do
       accounts: accounts
     }
 
-    if full?, do: Map.put(base, :voice_notes, p.voice_notes), else: base
+    if full?,
+      do:
+        Map.merge(base, %{
+          voice_notes: p.voice_notes,
+          timezone: p.timezone,
+          voice: voice_json(p),
+          drafting_agent_id: p.drafting_agent_id
+        }),
+      else: base
+  end
+
+  # Social authoring 4/11: the brand's voice as a drafting agent reads it.
+  # banned phrases refuse a draft (`banned_phrase`); learnings are notes a
+  # human accepted.
+  defp voice_json(%Profile{} = p) do
+    voice = Platform.Social.Voice.of(p)
+
+    %{
+      samples: voice.samples,
+      banned: voice.banned,
+      learnings:
+        Enum.map(voice.learnings, &%{id: &1.id, text: &1.text, accepted_at: &1.accepted_at})
+    }
+  end
+
+  defp account_json(%Account{} = a, false), do: account_json(a)
+
+  # Slots are local to the profile's timezone; next_free_slot is UTC.
+  defp account_json(%Account{} = a, true) do
+    Map.merge(account_json(a), %{
+      posting_slots: Enum.map(a.posting_slots || [], &%{weekday: &1.weekday, time: &1.time}),
+      weekly_goal: a.weekly_goal,
+      next_free_slot: Social.next_free_slot(a, DateTime.utc_now())
+    })
   end
 
   # Never secret_slug, provider refs or anything credential-shaped.
@@ -570,12 +975,18 @@ defmodule Platform.Social.Tools do
       :link_url,
       :media_file_ids,
       :scheduled_at,
+      :schedule_reason,
       :error,
       :rejection_reason,
       :rejected_at,
       :refused_reason,
       :refused_at,
       :retry_after,
+      :clip_id,
+      :idea_id,
+      :platform_post_id,
+      :publish_attempts,
+      :published_at,
       :approved_at,
       :task_id,
       :meeting_id,
@@ -583,6 +994,9 @@ defmodule Platform.Social.Tools do
       :episode_url,
       :start_s,
       :end_s,
+      :cover_file_id,
+      :cover_offset_ms,
+      :cover_error,
       :inserted_at,
       :updated_at
     ])
@@ -602,8 +1016,19 @@ defmodule Platform.Social.Tools do
         :requested_end_s,
         :start_s,
         :end_s,
+        :title,
         :caption,
         :speaker,
+        :episode_code,
+        :origin,
+        :source_label,
+        :review_status,
+        :review_note,
+        :reviewed_at,
+        :rev,
+        :look,
+        :trim_in_s,
+        :trim_out_s,
         :crop_x,
         :platforms,
         :render_file_id,
@@ -613,6 +1038,25 @@ defmodule Platform.Social.Tools do
         :byte_size,
         :attempts,
         :rendered_at
+      ])
+
+  defp job_json(%ClipJob{} = j),
+    do:
+      Map.take(j, [
+        :id,
+        :profile_id,
+        :clip_id,
+        :kind,
+        :status,
+        :progress,
+        :eta_s,
+        :payload,
+        :result,
+        :error,
+        :claimed_by_agent_id,
+        :claimed_at,
+        :finished_at,
+        :inserted_at
       ])
 
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)

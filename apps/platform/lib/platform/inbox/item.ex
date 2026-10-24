@@ -38,13 +38,28 @@ defmodule Platform.Inbox.Item do
   # day's insight briefing: ONE row per person per `digest_date`, written and
   # refreshed only by `Platform.Inbox.upsert_briefing_item/2`, with
   # `source_type: "briefing"` and `source_id` = the `memory_briefings` id.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing)
+  # `meeting_briefing` (task 01a1694a stage 2) is a concluded meeting's
+  # after-action briefing: ONE row per attendee per meeting, written and
+  # refreshed only by `Platform.Inbox.upsert_meeting_briefing_item/3`, with
+  # `source_type: "meeting_briefing"` and `source_id` = the
+  # `meeting_briefings` id.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
   # the plain `task` source so a rollup dismissal never touches a
   # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
-  @source_types ~w(chat_message task review_request meeting task_review briefing)
+  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing)
+
+  # `inbox_items.title` is `varchar(255)` (`add(:title, :string)` in
+  # `20260723185711_create_inbox_items.exs`). Producers build titles as a
+  # prefix plus user text ("You're now sponsoring: <task title>", where
+  # `tasks.title` is itself up to 255), so an over-long title must be cut
+  # here, for every producer, rather than reach Postgres: a 22001 inside a
+  # caller's transaction aborts that transaction even when the producer
+  # rescues it (prod 2026-10-23: every long-titled task insight rolled back).
+  @title_max 255
+  @ellipsis "…"
 
   @type t :: %__MODULE__{}
 
@@ -93,7 +108,8 @@ defmodule Platform.Inbox.Item do
 
   Requires `user_id`, `kind`, `source_type`, `source_id` and `title`; guards
   `kind` / `source_type` against their enums and asserts the `user_id` foreign
-  key.
+  key. A `title` longer than the column is truncated (see `truncate_title/1`),
+  never rejected.
   """
   @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(item, attrs) do
@@ -109,9 +125,40 @@ defmodule Platform.Inbox.Item do
       :read_at,
       :dismissed_at
     ])
+    |> update_change(:title, &truncate_title/1)
     |> validate_required([:user_id, :kind, :source_type, :source_id, :title])
     |> validate_inclusion(:kind, kinds())
     |> validate_inclusion(:source_type, source_types())
     |> foreign_key_constraint(:user_id)
   end
+
+  @doc """
+  Fit `title` into the `varchar(255)` column. Unchanged when it fits;
+  otherwise cut on a grapheme boundary and ended with "…", the whole at most
+  255 characters. Postgres counts code points, not graphemes, so the budget
+  is measured in code points and a grapheme is never split.
+  """
+  @spec truncate_title(String.t() | nil) :: String.t() | nil
+  def truncate_title(title) when is_binary(title) do
+    if codepoints(title) <= @title_max do
+      title
+    else
+      budget = @title_max - codepoints(@ellipsis)
+
+      title
+      |> String.graphemes()
+      |> Enum.reduce_while({[], 0}, fn g, {acc, used} ->
+        used = used + codepoints(g)
+        if used <= budget, do: {:cont, {[g | acc], used}}, else: {:halt, {acc, used}}
+      end)
+      |> elem(0)
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+      |> Kernel.<>(@ellipsis)
+    end
+  end
+
+  def truncate_title(title), do: title
+
+  defp codepoints(string), do: string |> String.codepoints() |> length()
 end

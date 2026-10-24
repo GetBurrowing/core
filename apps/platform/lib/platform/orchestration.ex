@@ -21,8 +21,10 @@ defmodule Platform.Orchestration do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Chat.{Message, Space}
   alias Platform.Orchestration.{RuntimeEvent, RuntimeSupervision, TaskRouter, TaskRouterWatcher}
   alias Platform.Repo
+  alias Platform.Tasks.{Plan, Stage, Task}
 
   @doc "Get current router status for a task."
   @spec task_status(String.t()) :: map()
@@ -150,6 +152,145 @@ defmodule Platform.Orchestration do
     case last_stage_ack(task_id, stage_id, runtime_id) do
       {%DateTime{} = acked_at, _subagent_id} -> acked_at
       _ -> nil
+    end
+  end
+
+  @doc """
+  How many `task_assigned` dispatches ONE runtime has been sent for one stage
+  (or for the stageless planning dispatch, when `stage_id` is nil) since it
+  last showed any sign of life, as
+  `%{count: n, last_delivered_at: dt | nil, last_sign_of_life_at: dt | nil}`.
+
+  Task 01a16bf5 stage 1. `TaskRouter.do_dispatch_resolved/6` reads this to cap
+  and back off re-dispatches that nobody answers. On 2026-10-23 one task's
+  execution space took 1,437 deliveries at a 2s cadence, and nothing in the
+  router counted them.
+
+  ## What is counted
+
+  Execution-space messages posted by the router with
+  `metadata.reason == "task_assigned"`, `metadata.dispatch_runtime_id ==
+  runtime_id` and `metadata.stage_id == stage_id`. A nil `stage_id` matches
+  rows whose `stage_id` key is present and null; rows with no such key, posted
+  before this function existed, match nothing, so counting starts at deploy.
+  The router posts one such row per delivery, in the
+  same branch that broadcasts the prompt, so the row count is the delivery
+  count. A task with NO execution space has no rows, and this returns a zero
+  count for it.
+
+  ## What resets it (sign of life)
+
+  Only rows posted AFTER the latest of these count:
+
+    * any `runtime_events` row for the task whose `runtime_id` column is
+      `runtime_id` (an ack, a heartbeat, a blocker, a finish). The router's own
+      self-filed events carry a different `runtime_id` and never reset it;
+    * the stage's `started_at` (a restarted stage opens a new round);
+    * `RuntimeSupervision.last_human_release_at/2` (a person released a hold);
+    * the newest plan's `inserted_at` for the task (covers stageless planning);
+    * `metadata["blocked_reason_at"]` when the task is NOT currently blocked:
+      a person or a late ack moved it out of a block, so the next dispatch is
+      a fresh attempt rather than the continuation of a dead-lettered streak.
+
+  ## Why durable
+
+  For the reason `last_stage_ack/3` gives: `clear_liveness/1` and a router
+  restart wipe ETS, so a counter on router state would reset every time the
+  router stopped. Rows in Postgres survive both.
+
+  A nil, blank or non-binary `runtime_id` returns a zero count without querying.
+  """
+  @spec unanswered_dispatch_streak(String.t(), String.t() | nil, String.t() | nil) :: %{
+          count: non_neg_integer(),
+          last_delivered_at: DateTime.t() | nil,
+          last_sign_of_life_at: DateTime.t() | nil
+        }
+  def unanswered_dispatch_streak(task_id, stage_id, runtime_id)
+      when is_binary(task_id) and is_binary(runtime_id) and runtime_id != "" and
+             (is_nil(stage_id) or is_binary(stage_id)) do
+    stage_id = if stage_id == "", do: nil, else: stage_id
+    since = last_sign_of_life_at(task_id, stage_id, runtime_id)
+
+    {count, last_delivered_at} =
+      from(m in Message,
+        join: s in Space,
+        on: s.id == m.space_id,
+        where:
+          s.kind == "execution" and fragment("?->>'task_id' = ?", s.metadata, ^task_id) and
+            is_nil(m.deleted_at) and
+            fragment("?->>'source' = 'task_router'", m.metadata) and
+            fragment("?->>'reason' = 'task_assigned'", m.metadata) and
+            fragment("?->>'dispatch_runtime_id' = ?", m.metadata, ^runtime_id),
+        select: {count(m.id), max(m.inserted_at)}
+      )
+      |> scope_streak_stage(stage_id)
+      |> scope_streak_since(since)
+      |> Repo.one()
+
+    %{count: count || 0, last_delivered_at: last_delivered_at, last_sign_of_life_at: since}
+  end
+
+  def unanswered_dispatch_streak(_task_id, _stage_id, _runtime_id),
+    do: %{count: 0, last_delivered_at: nil, last_sign_of_life_at: nil}
+
+  # The key must be PRESENT and null. Engagements posted before this stage
+  # carry no `stage_id` key at all, and stage dispatches among them would
+  # otherwise be counted as stageless ones; requiring the key means counting
+  # starts at deploy instead of inheriting a history it cannot classify.
+  defp scope_streak_stage(query, nil),
+    do: from(m in query, where: fragment("? @> '{\"stage_id\": null}'::jsonb", m.metadata))
+
+  defp scope_streak_stage(query, stage_id),
+    do: from(m in query, where: fragment("?->>'stage_id' = ?", m.metadata, ^stage_id))
+
+  defp scope_streak_since(query, nil), do: query
+
+  defp scope_streak_since(query, %DateTime{} = since),
+    do: from(m in query, where: m.inserted_at > ^since)
+
+  defp last_sign_of_life_at(task_id, stage_id, runtime_id) do
+    runtime_event_at =
+      Repo.one(
+        from(e in RuntimeEvent,
+          where: e.task_id == ^task_id and e.runtime_id == ^runtime_id,
+          select: max(e.occurred_at)
+        )
+      )
+
+    plan_at =
+      Repo.one(from(p in Plan, where: p.task_id == ^task_id, select: max(p.inserted_at)))
+
+    stage_started_at =
+      if stage_id,
+        do: Repo.one(from(st in Stage, where: st.id == ^stage_id, select: st.started_at)),
+        else: nil
+
+    released_at = if stage_id, do: RuntimeSupervision.last_human_release_at(task_id, stage_id)
+
+    [runtime_event_at, plan_at, stage_started_at, released_at, unblocked_at(task_id)]
+    |> Enum.filter(&match?(%DateTime{}, &1))
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  # `blocked_reason_at` persists after unblock (tasks.ex `stamp_blocked_reason/3`),
+  # so on a task that is no longer blocked it is the instant of the block that
+  # somebody has since cleared. On a task that IS blocked it says nothing about
+  # an answer, and is ignored.
+  defp unblocked_at(task_id) do
+    case Repo.one(
+           from(t in Task,
+             where: t.id == ^task_id,
+             select: {t.status, fragment("?->>'blocked_reason_at'", t.metadata)}
+           )
+         ) do
+      {status, at} when status != "blocked" and is_binary(at) ->
+        case DateTime.from_iso8601(at) do
+          {:ok, dt, _offset} -> dt
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   end
 

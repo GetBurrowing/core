@@ -659,3 +659,50 @@ describe("MeetingClient — media state at join", () => {
     expect(joinSweeps).toBe(1)
   })
 })
+
+/**
+ * Grouped by PERSON (task 01a13ca2 stage 2). A person's video-only
+ * companion connection (`video:user:<uuid>`) carries their camera while
+ * their own `user:<uuid>` connection carries the mic. The payload names the
+ * person once and never a `video:` identity.
+ */
+describe("MeetingClient — media states group a companion onto its person", () => {
+  function pushedFor(remotes) {
+    const room = fakeRoom(remotes)
+    const hook = buildHook()
+    hook._bindRoomEvents(room)
+    room.emit(RoomEvent.TrackMuted, pub(AUDIO, { muted: true }), remotes[0])
+    return hook.pushed
+  }
+
+  it("muted mic on user:A + live camera on video:user:A gives muted [user:A], camera_off []", () => {
+    const pushed = pushedFor([
+      remote("user:A", [pub(AUDIO, { muted: true })]),
+      remote("video:user:A", [pub(VIDEO, { muted: false, source: Track.Source.Camera })]),
+    ])
+    expect(pushed.at(-1)).toEqual(["media_states", { muted: ["user:A"], camera_off: [] }])
+    expect(JSON.stringify(pushed)).not.toContain("video:")
+  })
+
+  it("with the companion camera muted, camera_off is [user:A]", () => {
+    const pushed = pushedFor([
+      remote("user:A", [pub(AUDIO, { muted: false })]),
+      remote("video:user:A", [pub(VIDEO, { muted: true, source: Track.Source.Camera })]),
+    ])
+    expect(pushed.at(-1)).toEqual(["media_states", { muted: [], camera_off: ["user:A"] }])
+    expect(JSON.stringify(pushed)).not.toContain("video:")
+  })
+
+  it("the companion arriving first changes nothing; a companion screen share is not a camera", () => {
+    const pushed = pushedFor([
+      remote("video:user:A", [
+        pub(VIDEO, { muted: false, source: Track.Source.ScreenShare }),
+        pub(VIDEO, { muted: true, source: Track.Source.Camera }),
+      ]),
+      remote("user:A", [pub(AUDIO, { muted: false })]),
+      remote("user:B", [pub(AUDIO, { muted: false }), pub(VIDEO, { muted: false })]),
+    ])
+    expect(pushed.at(-1)).toEqual(["media_states", { muted: [], camera_off: ["user:A"] }])
+    expect(JSON.stringify(pushed)).not.toContain("video:")
+  })
+})

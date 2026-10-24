@@ -1,6 +1,7 @@
 package com.koboai.burrow.widgets
 
 import android.content.Context
+import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.work.Constraints
@@ -24,11 +25,17 @@ import java.util.concurrent.TimeUnit
  * refresh also schedules a render-only run just past the stale boundary of
  * the counts it fetched, so a widget whose next refresh never comes still
  * drops its cyan on time (the Android form of iOS's second timeline entry).
+ * The same worker refreshes Today's briefing and schedules its own
+ * render-only run at its stale boundary or the server zone's midnight,
+ * whichever comes first.
  */
 object WidgetRefresh {
     private const val PERIODIC = "burrow-widgets-periodic"
     private const val NOW = "burrow-widgets-now"
     private const val STALE_RENDER = "burrow-widgets-stale-render"
+
+    /** The briefing's own stale render: a distinct name, so it never REPLACEs the counts' one. */
+    const val BRIEFING_STALE_RENDER = "burrow-widgets-briefing-stale-render"
     const val KEY_RENDER_ONLY = "render_only"
 
     fun schedule(context: Context) {
@@ -64,20 +71,24 @@ object WidgetRefresh {
     internal fun scheduleStaleRender(
         context: Context,
         delayMillis: Long,
+        name: String = STALE_RENDER,
     ) {
         val request =
             OneTimeWorkRequestBuilder<CountsRefreshWorker>()
                 .setInitialDelay(delayMillis.coerceAtLeast(0), TimeUnit.MILLISECONDS)
                 .setInputData(workDataOf(KEY_RENDER_ONLY to true))
                 .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(STALE_RENDER, ExistingWorkPolicy.REPLACE, request)
+        WorkManager.getInstance(context).enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE, request)
     }
+
+    /** Every widget [render] re-renders: the two count widgets and Today's briefing (home and cover share one class). */
+    internal fun renderedWidgets(): List<GlanceAppWidget> = listOf(MyApprovalsWidget(), MyTasksWidget(), TodaysBriefingWidget())
 
     /** Re-renders every placed widget with what is in the cache now. */
     suspend fun render(context: Context) {
         val manager = GlanceAppWidgetManager(context)
         val version = System.currentTimeMillis()
-        for (widget in listOf(MyApprovalsWidget(), MyTasksWidget())) {
+        for (widget in renderedWidgets()) {
             for (id in manager.getGlanceIds(widget.javaClass)) {
                 updateAppWidgetState(context, id) { it[RENDER_VERSION] = version }
                 widget.update(context, id)
@@ -99,6 +110,13 @@ class CountsRefreshWorker(
                 if (counts != null) {
                     val staleAt = counts.fetchedAtMillis + SlabState.STALE_AFTER_MILLIS + 1_000
                     WidgetRefresh.scheduleStaleRender(context, staleAt - System.currentTimeMillis())
+                }
+                // Today's briefing: one more request in the same worker, on the same triggers.
+                val briefing = BriefingRepository.forContext(context).refresh(host)
+                if (briefing != null) {
+                    val now = System.currentTimeMillis()
+                    val at = BriefingState.staleRenderAt(briefing, now)
+                    WidgetRefresh.scheduleStaleRender(context, at - now, WidgetRefresh.BRIEFING_STALE_RENDER)
                 }
             }
         }

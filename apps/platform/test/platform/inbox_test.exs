@@ -59,6 +59,38 @@ defmodule Platform.InboxTest do
       assert Keyword.has_key?(changeset.errors, :kind)
       assert Repo.aggregate(from(i in Item, where: i.user_id == ^user.id), :count) == 0
     end
+
+    # `inbox_items.title` is varchar(255) and producers prefix user text
+    # ("You're now sponsoring: <255-char task title>"). Uncut, the insert
+    # raised 22001 and aborted the caller's transaction (prod, 2026-10-23).
+    test "a title longer than the column inserts, cut to 255 characters ending in …" do
+      user = insert_user()
+      title = String.duplicate("a", 300)
+
+      assert {:ok, %Item{} = item} = Inbox.emit(valid_attrs(user, %{title: title}))
+
+      stored = Repo.get!(Item, item.id).title
+      assert String.length(stored) == 255
+      assert stored == String.duplicate("a", 254) <> "…"
+    end
+
+    test "a title that fits is stored unchanged; a cut never splits a grapheme" do
+      user = insert_user()
+      exact = String.duplicate("b", 255)
+
+      assert {:ok, %Item{} = item} = Inbox.emit(valid_attrs(user, %{title: exact}))
+      assert Repo.get!(Item, item.id).title == exact
+
+      # "é" as e + combining acute: one grapheme, two code points (Postgres
+      # counts code points).
+      decomposed = String.duplicate("é", 200)
+      cut = Item.truncate_title(decomposed)
+      assert length(String.codepoints(cut)) <= 255
+      assert String.ends_with?(cut, "…")
+      assert cut |> String.trim_trailing("…") |> String.graphemes() |> Enum.all?(&(&1 == "é"))
+
+      assert {:ok, %Item{}} = Inbox.emit(valid_attrs(user, %{title: decomposed}))
+    end
   end
 
   # An invite gets its own typed row so it can be grouped and counted as an
@@ -1036,7 +1068,13 @@ defmodule Platform.InboxTest do
                "lifecycle_step_failed"
              ]
 
-      assert Inbox.action_kinds() == ["task_plan_review", "review_request_pending", "briefing"]
+      assert Inbox.action_kinds() == [
+               "task_plan_review",
+               "review_request_pending",
+               "briefing",
+               "meeting_briefing"
+             ]
+
       assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
     end
 
@@ -1467,6 +1505,126 @@ defmodule Platform.InboxTest do
       assert Inbox.source_titles([]) == %{}
     end
   end
+
+  # ── Task 01a1694a stage 2: the meeting briefing row ───────────────────────
+
+  describe "upsert_meeting_briefing_item/3 and reconcile_for_user/1 — meeting_briefing (ADR 0049)" do
+    alias Platform.Meetings.Meeting
+    alias Platform.Meetings.MeetingBriefing
+    alias Platform.Meetings.MeetingBriefings
+
+    defp ended_meeting!(ended_at) do
+      n = System.unique_integer([:positive])
+      {:ok, project} = Platform.Tasks.create_project(%{name: "MB Inbox #{n}"})
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{project_id: project.id, name: "MB #{n}"})
+
+      {:ok, live} =
+        meeting
+        |> Meeting.status_changeset("live", %{started_at: DateTime.add(ended_at, -3600, :second)})
+        |> Repo.update()
+
+      {:ok, ended} =
+        live |> Meeting.status_changeset("ended", %{ended_at: ended_at}) |> Repo.update()
+
+      ended
+    end
+
+    defp meeting_briefing_row!(user, ended_at) do
+      meeting = ended_meeting!(ended_at)
+
+      briefing =
+        Repo.insert!(%MeetingBriefing{meeting_id: meeting.id, attendee_user_ids: [user.id]})
+
+      {:ok, item, :created} =
+        Inbox.upsert_meeting_briefing_item(briefing, user.id, %{
+          title: meeting.name,
+          body: "1 item",
+          url: "/inbox/meeting/" <> meeting.id
+        })
+
+      {briefing, item}
+    end
+
+    defp ttl_days, do: Platform.Memory.Insight.default_ttl_days()
+
+    defp live_row?(item), do: is_nil(Repo.get!(Item, item.id).dismissed_at)
+
+    test "one row per attendee: a second upsert updates, and re-lists only when new_items?" do
+      user = insert_user()
+      {briefing, item} = meeting_briefing_row!(user, DateTime.utc_now())
+
+      assert item.kind == "meeting_briefing"
+      assert item.source_type == "meeting_briefing"
+      assert item.source_id == briefing.id
+
+      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+
+      assert {:ok, _, :updated} =
+               Inbox.upsert_meeting_briefing_item(briefing, user.id, %{body: "2 items"})
+
+      refute live_row?(item), "a refresh that added nothing must not re-list the row"
+
+      assert {:ok, _, :updated} =
+               Inbox.upsert_meeting_briefing_item(briefing, user.id, %{new_items?: true})
+
+      assert live_row?(item)
+
+      assert Repo.aggregate(
+               from(i in Item, where: i.user_id == ^user.id and i.kind == "meeting_briefing"),
+               :count
+             ) == 1
+    end
+
+    test "a meeting that ended recently is NOT stale (control); one past the TTL is" do
+      user = insert_user()
+      {_fresh, fresh_item} = meeting_briefing_row!(user, DateTime.utc_now())
+
+      {_old, old_item} =
+        meeting_briefing_row!(user, DateTime.add(DateTime.utc_now(), -(ttl_days() + 1), :day))
+
+      :ok = Inbox.reconcile_for_user(user.id)
+
+      assert live_row?(fresh_item)
+      refute live_row?(old_item)
+    end
+
+    test "a missing briefing row is not confirmation: the Inbox row stays" do
+      user = insert_user()
+
+      {:ok, item} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "meeting_briefing",
+          source_type: "meeting_briefing",
+          source_id: Ecto.UUID.generate(),
+          title: "Gone meeting",
+          url: "/inbox/meeting/x"
+        })
+
+      :ok = Inbox.reconcile_for_user(user.id)
+      assert live_row?(item)
+      refute MeetingBriefings.inbox_row_stale?(item.source_id)
+      refute MeetingBriefings.inbox_row_stale?("not-a-uuid")
+    end
+
+    test "the TTL edge: exactly the TTL is not stale, one second past it is" do
+      ended_at = ~U[2026-10-01 12:00:00.000000Z]
+      meeting = ended_meeting!(ended_at)
+      briefing = Repo.insert!(%MeetingBriefing{meeting_id: meeting.id})
+      edge = DateTime.add(ended_at, ttl_days() * 86_400, :second)
+
+      refute MeetingBriefings.inbox_row_stale?(briefing.id, now: edge)
+      assert MeetingBriefings.inbox_row_stale?(briefing.id, now: DateTime.add(edge, 1, :second))
+    end
+
+    test "meeting_briefing is listed on open but is not a core (Mobile approval) action kind" do
+      assert "meeting_briefing" in Inbox.action_kinds()
+      refute "meeting_briefing" in Inbox.core_action_kinds()
+      refute "meeting_briefing" in Platform.Mobile.AppEntities.approval_kinds()
+    end
+  end
 end
 
 defmodule Platform.InboxPushTest do
@@ -1585,5 +1743,22 @@ defmodule Platform.InboxPushTest do
 
   test "push_kinds excludes chat_mention" do
     assert Inbox.push_kinds() == ~w(task_plan_review review_request_pending)
+  end
+
+  describe "briefing_summary/1 (task 01a161f9)" do
+    test "nothing open reads all done, whatever the total" do
+      assert Inbox.briefing_summary(%{total: 6, open: 0, calls: 0}) ==
+               "All done · nothing waiting"
+    end
+
+    test "otherwise it is briefing_summary/2 of total and calls" do
+      assert Inbox.briefing_summary(%{total: 12, open: 3, calls: 3}) ==
+               "12 items · 3 need your call"
+
+      assert Inbox.briefing_summary(%{total: 5, open: 4, calls: 0}) == "5 items · FYI only"
+
+      assert Inbox.briefing_summary(%{total: 2, open: 1, calls: 1}) ==
+               "2 items · 1 needs your call"
+    end
   end
 end

@@ -138,6 +138,32 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       assert html =~ ~s(data-quickmeet-screen-share-sharer)
     end
 
+    # Task 01a13ca2 stage 5: a LiveView patch emptied the sharer name and
+    # reset the slot's data attributes while a share was live, because the
+    # viewer was server-patched. Each viewer is now phx-update="ignore" with
+    # a stable id, holds the slot, button and label, and carries no data-*
+    # state of its own (those would be re-copied from the template).
+    test "each preview viewer is ignored by patches and owns its slot, button and sharer label" do
+      doc = LazyHTML.from_fragment(render_panel(%{}))
+
+      for pane <- ["desktop", "mobile"] do
+        viewer = LazyHTML.query(doc, "#meeting-screen-share-viewer-#{pane}")
+
+        assert LazyHTML.attribute(viewer, "phx-update") == ["ignore"]
+        assert LazyHTML.attribute(viewer, "data-screen-share-viewer") == [""]
+        assert LazyHTML.attribute(viewer, "data-screen-share-active") == []
+
+        assert viewer
+               |> LazyHTML.query(~s([data-quickmeet-screen-share-slot][data-pane="#{pane}"]))
+               |> Enum.count() == 1
+
+        assert viewer |> LazyHTML.query("[data-screen-share-fullscreen]") |> Enum.count() == 1
+
+        assert viewer |> LazyHTML.query("[data-quickmeet-screen-share-sharer]") |> Enum.count() ==
+                 1
+      end
+    end
+
     test "screen-share slots only render when in a meeting" do
       html = render_panel(%{in_meeting: false})
 

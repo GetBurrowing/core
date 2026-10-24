@@ -8,7 +8,8 @@ defmodule Platform.Social.Approvals do
   Inbox items cannot carry actions on core main (`Platform.Inbox.Item` has
   no action field), so the inbox row is a POINTER: one
   `social_post_approval` row per reachable approver, deep-linking to the
-  card's message, carrying no post text and no media. Approve, Edit and
+  post's idea on the Social Queue (`queue_url/2`, Social authoring 5/11),
+  carrying no post text and no media. Approve, Edit and
   Reject live on the card (a `social_post_card` canvas in the profile's
   channel), handled in the clicking human's own LiveView process by
   `PlatformWeb.SocialCardHooks`, which calls the `decide_*` functions here.
@@ -64,7 +65,7 @@ defmodule Platform.Social.Approvals do
   alias Platform.Chat
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, Publishing}
+  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, PostEvents, Publishing}
 
   @kind "social_post_approval"
   @source_type "social_post"
@@ -238,9 +239,8 @@ defmodule Platform.Social.Approvals do
 
   defp approval_candidates(%Account{owner_user_id: owner_id}, _profile), do: [owner_id]
 
-  defp fan_out(post, profile, account, card, canvas, message) do
-    space = Chat.get_space(message.space_id)
-    url = "/chat/#{Chat.space_path_segment(space)}?message=#{message.id}"
+  defp fan_out(post, profile, account, card, canvas, _message) do
+    url = queue_url(post, profile)
 
     {reachable, unreachable} =
       account
@@ -274,6 +274,22 @@ defmodule Platform.Social.Approvals do
     end
 
     unreachable
+  end
+
+  @doc """
+  Where an approval inbox row (and so its push notification) opens
+  (Social authoring 5/11): the Queue, on this post's idea
+  (`/m/social?profile=<id>&tab=queue&idea=<idea id, or the post id for a
+  post with no idea>`). Clicks there go through the same `decide_*`.
+  """
+  @spec queue_url(Post.t(), Social.Profile.t()) :: String.t()
+  def queue_url(%Post{} = post, profile) do
+    "/m/social?" <>
+      URI.encode_query([
+        {"profile", profile.id},
+        {"tab", "queue"},
+        {"idea", post.idea_id || post.id}
+      ])
   end
 
   # ── Where the card goes (task 01a14ce1, stage 3) ──────────────────────
@@ -426,6 +442,14 @@ defmodule Platform.Social.Approvals do
     end
   end
 
+  @doc """
+  The Social system participant of `space_id`, added on first use
+  (Social authoring 2/11: `Platform.Social.Ideas` posts the revision
+  message as it).
+  """
+  @spec system_participant(Ecto.UUID.t()) :: {:ok, map()} | {:error, term()}
+  def system_participant(space_id), do: ensure_system_participant(space_id)
+
   defp system_participant_id(space_id) do
     <<a::binary-8, b::binary-4, c::binary-4, d::binary-4, e::binary-12, _::binary>> =
       :crypto.hash(:sha256, "social_system:#{space_id}") |> Base.encode16(case: :lower)
@@ -450,13 +474,14 @@ defmodule Platform.Social.Approvals do
 
   @doc """
   The content fingerprint of what an approver is shown: body, link, media,
-  schedule and account. Rendered into the card at view time and compared
+  schedule, account and cover (task 01a165ec stage 2). Rendered into the card at view time and compared
   with the locked row at click time (`:post_changed` on mismatch).
   """
   @spec fingerprint(Post.t()) :: String.t()
   def fingerprint(%Post{} = post) do
     {post.account_id, post.body, post.link_url, post.media_file_ids || [],
-     post.scheduled_at && DateTime.to_iso8601(post.scheduled_at)}
+     post.scheduled_at && DateTime.to_iso8601(post.scheduled_at), post.cover_file_id,
+     post.cover_offset_ms}
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
@@ -498,11 +523,33 @@ defmodule Platform.Social.Approvals do
     end
   end
 
-  def decide_approve(canvas_id, clicker, shown_fingerprint) do
+  def decide_approve(canvas_id, clicker, shown_fingerprint),
+    do: do_approve(canvas_id, clicker, shown_fingerprint, nil)
+
+  @doc """
+  `decide_approve/3`, but the post goes out at `at` instead of its own
+  `scheduled_at` (Social authoring 5/11: the Queue's "Approve into next
+  slot"). Every check of `decide_approve/3` runs first, including the
+  fingerprint the human was shown, then `scheduled_at` is set to `at` in the
+  same transaction, before the approval. `at` must be in the future, else
+  `{:error, :slot_passed}`. The `approved` event's note names the slot.
+  """
+  @spec decide_approve_at(Ecto.UUID.t(), map(), String.t() | nil, DateTime.t()) ::
+          {:ok, map()} | {:error, refusal() | :slot_passed | term()}
+  def decide_approve_at(canvas_id, clicker, shown_fingerprint, %DateTime{} = at) do
+    if DateTime.compare(at, DateTime.utc_now()) == :gt,
+      do: do_approve(canvas_id, clicker, shown_fingerprint, at),
+      else: {:error, :slot_passed}
+  end
+
+  defp do_approve(canvas_id, clicker, shown_fingerprint, at) do
     approve = fn card, post, account, profile, user_id ->
       with :ok <- refuse_draft_only(account),
            :ok <- claim(card),
+           {:ok, _} <- put_slot(post, at),
            {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
+           _event =
+             PostEvents.record!(approved, "approved", {:human, user_id}, note: slot_note(at)),
            {:ok, card} <-
              card |> ApprovalCard.decided_changeset("approve", user_id) |> Repo.update() do
         {card, approved, profile}
@@ -518,6 +565,14 @@ defmodule Platform.Social.Approvals do
     end
   end
 
+  defp put_slot(post, nil), do: {:ok, post}
+
+  defp put_slot(post, %DateTime{} = at),
+    do: post |> Changeset.change(scheduled_at: at) |> Repo.update()
+
+  defp slot_note(nil), do: nil
+  defp slot_note(%DateTime{} = at), do: "Into the next slot, " <> DateTime.to_iso8601(at)
+
   @doc """
   A human approver edits the post's text from the card. Only `body`
   changes; the post stays `needs_approval`, the card stays pending (with
@@ -531,6 +586,11 @@ defmodule Platform.Social.Approvals do
 
     edit = fn card, post, _account, profile, user_id ->
       with {:ok, edited} <- post |> Post.human_edit_changeset(%{body: body}) |> Repo.update(),
+           _event =
+             PostEvents.record!(edited, "edited", {:human, user_id},
+               body_before: post.body,
+               body_after: edited.body
+             ),
            {:ok, card} <- card |> ApprovalCard.edited_changeset(user_id) |> Repo.update() do
         {card, edited, profile}
       end
@@ -563,6 +623,7 @@ defmodule Platform.Social.Approvals do
       reject = fn card, post, _account, profile, user_id ->
         with :ok <- claim(card),
              {:ok, rejected} <- post |> Post.reject_changeset(reason) |> Repo.update(),
+             _event = PostEvents.record!(rejected, "rejected", {:human, user_id}, note: reason),
              {:ok, card} <-
                card |> ApprovalCard.decided_changeset("reject", user_id) |> Repo.update() do
           {card, rejected, profile}
@@ -997,7 +1058,12 @@ defmodule Platform.Social.Approvals do
   # preview, and Reject as the only action.
   defp rejecter_view(card, post, account, profile) do
     view = approver_view(card, post, account, profile)
-    %{view | actions: Enum.filter(view.actions, &(&1 == :reject))}
+
+    %{
+      view
+      | actions: Enum.filter(view.actions, &(&1 == :reject)),
+        cover: view.cover && %{view.cover | editable?: false}
+    }
   end
 
   defp approver_view(card, post, account, profile) do
@@ -1016,6 +1082,7 @@ defmodule Platform.Social.Approvals do
       link_url: post.link_url,
       hashtags: profile.default_hashtags || [],
       media: media(post),
+      cover: cover(post),
       char_count: count,
       char_limit: limit,
       over_limit?: is_integer(limit) and count > limit,
@@ -1027,16 +1094,63 @@ defmodule Platform.Social.Approvals do
     }
   end
 
-  defp media(%Post{media_file_ids: ids, media_meta: meta}) do
+  defp media(%Post{media_file_ids: ids, media_meta: meta} = post) do
     for id <- ids || [], file = Platform.Files.get_file(id), file != nil do
       facts = Map.get(meta || %{}, id) || %{}
+      video? = String.starts_with?(file.content_type || "", "video/")
 
       %{
         id: id,
         src: "/files/blob/#{id}",
         content_type: file.content_type,
         width: facts["width"],
-        height: facts["height"]
+        height: facts["height"],
+        # The chosen cover as the card's thumbnail (task 01a165ec stage 4):
+        # an uploaded cover is the <video>'s poster, a frame is a media
+        # fragment on its src (`#t=<seconds>`, preload=metadata paints it).
+        poster: video? && post.cover_file_id && "/files/blob/#{post.cover_file_id}",
+        fragment: video? && is_integer(post.cover_offset_ms) && fragment(post.cover_offset_ms)
+      }
+    end
+  end
+
+  # `#t=7.4` for 7400 ms, `#t=7` for 7000 ms.
+  defp fragment(ms) when rem(ms, 1000) == 0, do: "#t=#{div(ms, 1000)}"
+  defp fragment(ms), do: "#t=#{:erlang.float_to_binary(ms / 1000, [:short])}"
+
+  # A video post's cover, for the card's Cover control (task 01a165ec
+  # stage 4): nil on a post with no video. `kind` is :first_frame (nothing
+  # chosen), :frame or :uploaded; `editable?` only while the post is a draft
+  # or awaiting approval (the rejecter and waiting views turn it off).
+  defp cover(%Post{} = post) do
+    video =
+      Enum.find_value(post.media_file_ids || [], fn id ->
+        case Platform.Files.get_file(id) do
+          %{content_type: "video/" <> _} = file -> file
+          _ -> nil
+        end
+      end)
+
+    if video do
+      duration_s =
+        case Map.get(post.media_meta || %{}, video.id) do
+          %{"duration_s" => d} when is_number(d) and d > 0 -> d
+          _ -> nil
+        end
+
+      %{
+        post_id: post.id,
+        video_src: "/files/blob/#{video.id}",
+        duration_ms: duration_s && round(duration_s * 1000),
+        kind:
+          cond do
+            is_binary(post.cover_file_id) -> :uploaded
+            is_integer(post.cover_offset_ms) -> :frame
+            true -> :first_frame
+          end,
+        offset_ms: post.cover_offset_ms,
+        file_id: post.cover_file_id,
+        editable?: post.status in ~w(draft needs_approval)
       }
     end
   end
@@ -1106,6 +1220,10 @@ defmodule Platform.Social.Approvals do
             "Approved by #{user_name(post.approved_by_user_id)}, #{hhmm(post.approved_at)}. " <>
               "Publishing #{publishing_text(post)}"
         }
+
+      # Social authoring 2/11: a human asked the agent for a revision.
+      post.status == "needs_approval" and PostEvents.revision_open?(post.id) ->
+        %{tone: :warning, text: "Revision asked"}
 
       post.status == "needs_approval" ->
         %{tone: :warning, text: "Needs approval"}

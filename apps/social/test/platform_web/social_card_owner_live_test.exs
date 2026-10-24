@@ -47,8 +47,6 @@ defmodule PlatformWeb.SocialCardOwnerLiveTest do
   end
 
   defp in_card(card, sel), do: "#inline-canvas-#{card.message_id} #{sel}"
-  defp q_card(card), do: "#queue-card-#{card.id}"
-  defp in_q(card, sel), do: "#{q_card(card)} #{sel}"
 
   test "the owner sees Approve and it publishes once", ctx do
     view = open(ctx.owner, ctx)
@@ -70,44 +68,47 @@ defmodule PlatformWeb.SocialCardOwnerLiveTest do
     assert has_element?(view, in_card(ctx.card, "[data-role='social-card-reject']"))
   end
 
+  # Social authoring 5/11: the Queue is one idea card per idea; a post with
+  # no idea is its own card, keyed by the post id.
+  defp q_idea(post), do: "#queue-card-idea-#{post.id}"
+  defp in_v(post, sel), do: "#queue-#{post.id} #{sel}"
+
   test "a profile approver sees the post read-only and waits, and forged events are refused",
        ctx do
     child = open_queue(ctx.h1)
-    assert has_element?(child, q_card(ctx.card) <> "[data-card-role='waiting']")
+    assert has_element?(child, "#queue-#{ctx.post.id}[data-version-role='waiting']")
     assert render(child) =~ "Episode 12 is live"
 
-    assert child |> element(in_q(ctx.card, "[data-role='social-card-waiting']")) |> render() =~
+    assert child |> element(in_v(ctx.post, "[data-role='queue-waiting']")) |> render() =~
              "Waiting for Omar"
 
-    # Hidden, not disabled: no button of any kind on the card.
-    refute has_element?(child, in_q(ctx.card, "button"))
-    refute has_element?(child, in_q(ctx.card, "[data-role='social-card-posts-as']"))
+    # Hidden, not disabled: no button of any kind on the version.
+    refute has_element?(child, in_v(ctx.post, "button"))
+    refute has_element?(child, "#{q_idea(ctx.post)} [data-role='queue-approve-all']")
 
     fp = Approvals.fingerprint(ctx.post)
-    target = with_target(child, q_card(ctx.card))
+    target = with_target(child, q_idea(ctx.post))
 
-    html =
-      render_click(target, "social_card_approve", %{
-        "canvas-id" => ctx.card.canvas_id,
-        "fingerprint" => fp
-      })
-
+    html = render_click(target, "q_approve", %{"post-id" => ctx.post.id, "fingerprint" => fp})
     assert html =~ "Only Omar can approve posts to their account."
 
-    render_click(target, "social_card_edit_save", %{
-      "canvas-id" => ctx.card.canvas_id,
-      "body" => "Hijacked",
+    render_click(target, "q_edit_save", %{
+      "post-id" => ctx.post.id,
+      "text" => "Hijacked",
       "fingerprint" => fp
     })
 
-    render_click(target, "social_card_reject_submit", %{
-      "canvas-id" => ctx.card.canvas_id,
-      "reason" => "Not mine",
+    render_click(target, "q_reject_submit", %{
+      "post-id" => ctx.post.id,
+      "text" => "Not mine",
       "fingerprint" => fp
     })
+
+    render_click(target, "q_revise_submit", %{"post-id" => ctx.post.id, "text" => "Not mine"})
 
     post = Repo.get!(Post, ctx.post.id)
     assert {post.status, post.body} == {"needs_approval", "Episode 12 is live: listen now"}
+    assert Platform.Social.PostEvents.list_for_post(post.id) |> Enum.map(& &1.action) == []
     assert Fake.calls(:publish) == []
   end
 
@@ -115,25 +116,25 @@ defmodule PlatformWeb.SocialCardOwnerLiveTest do
     {:ok, _} = Platform.Accounts.archive_user(ctx.owner)
     child = open_queue(ctx.h1)
 
-    assert has_element?(child, in_q(ctx.card, "[data-role='social-card-reject']"))
-    refute has_element?(child, in_q(ctx.card, "[data-role='social-card-approve']"))
-    refute has_element?(child, in_q(ctx.card, "[data-role='social-card-edit']"))
-    refute has_element?(child, in_q(ctx.card, "[data-role='social-card-waiting']"))
+    assert has_element?(child, in_v(ctx.post, "[data-role='queue-reject']"))
+    refute has_element?(child, in_v(ctx.post, "[data-role='queue-approve']"))
+    refute has_element?(child, in_v(ctx.post, "[data-role='queue-edit']"))
+    refute has_element?(child, in_v(ctx.post, "[data-role='queue-waiting']"))
 
     html =
-      render_click(with_target(child, q_card(ctx.card)), "social_card_approve", %{
-        "canvas-id" => ctx.card.canvas_id,
+      render_click(with_target(child, q_idea(ctx.post)), "q_approve", %{
+        "post-id" => ctx.post.id,
         "fingerprint" => Approvals.fingerprint(ctx.post)
       })
 
     assert html =~ "Only Omar can approve posts to their account."
     assert Fake.calls(:publish) == []
 
-    child |> element(in_q(ctx.card, "[data-role='social-card-reject']")) |> render_click()
+    child |> element(in_v(ctx.post, "[data-role='queue-reject']")) |> render_click()
 
     child
-    |> element(in_q(ctx.card, "[data-role='social-card-reject-box']"))
-    |> render_submit(%{"reason" => "Owner has left"})
+    |> element(in_v(ctx.post, "[data-role='queue-reject-form']"))
+    |> render_submit(%{"text" => "Owner has left"})
 
     assert Repo.get!(Post, ctx.post.id).status == "draft"
   end

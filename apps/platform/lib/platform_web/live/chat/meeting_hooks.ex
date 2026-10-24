@@ -524,9 +524,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Symmetric companion to `toggle_mic/1` — same broadcast contract.
   """
   @spec toggle_camera(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  # The native call has no camera until stage 4 of task 01a13c62; the button
-  # is hidden, so a stray event changes nothing rather than lying.
+  # A native call with no companion camera hides the button, so a stray
+  # event changes nothing rather than lying. With the companion (task
+  # 01a13ca2 stage 3) a tap asks the companion Room and waits for its
+  # publication, exactly as the native mic does.
   def toggle_camera(%{assigns: %{native_call: %{camera: false}}} = socket), do: socket
+
+  def toggle_camera(%{assigns: %{native_call: %{}}} = socket),
+    do: request_companion_camera(socket)
 
   def toggle_camera(socket) do
     new_camera = !socket.assigns.camera_enabled
@@ -582,6 +587,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     socket
     |> assign(:native_call, nil)
     |> assign(:mic_pending, false)
+    |> assign(:camera_pending, false)
     |> assign(:media_error, nil)
   end
 
@@ -598,31 +604,120 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp request_native_mic(socket), do: socket
 
+  # ── The companion camera (task 01a13ca2 stage 3) ──────────────────────
+  #
+  # A build whose `capabilities().camera` is true gets a SECOND, video-only
+  # LiveKit connection from the page (`join-companion`, identity
+  # `video:user:<uuid>`, a mic-less token from
+  # `Meetings.companion_token_for_user/3`). The native call keeps audio.
+  # From then on `:camera_enabled` follows ONLY the companion's confirmed
+  # publication (`companion_media_state`); the native snapshot's `camera`
+  # is always false and is ignored. A tap sets `:camera_pending` and asks
+  # (`toggle-camera %{want: bool}`), the same shape as the native mic.
+
+  @media_error_camera "Couldn't change the camera."
+
+  @doc "The one line shown when the companion did not confirm a camera change."
+  @spec media_error_camera() :: String.t()
+  def media_error_camera, do: @media_error_camera
+
+  defp request_companion_camera(
+         %{assigns: %{native_call: %{camera: true}, camera_pending: false}} = socket
+       ) do
+    socket
+    |> assign(:camera_pending, true)
+    |> push_event("toggle-camera", %{want: !socket.assigns.camera_enabled})
+    |> broadcast_native(socket.assigns.mic_enabled, socket.assigns.camera_enabled)
+  end
+
+  defp request_companion_camera(socket), do: socket
+
   @doc """
   `native_call_attached` from `meeting_client.js`: the native call owns the
   media. Assigns `:native_call` (`%{mic, camera, active_speakers}`, booleans)
   and the confirmed mic/camera. A value the build did not report (`nil`)
   leaves the assign as it was.
+
+  When the build reports `camera: true` and the socket has a user and a
+  space, it mints the companion token and pushes `join-companion`
+  `%{token, url, room_name}`; the camera then starts OFF until the
+  companion's publication says otherwise. When the token cannot be minted
+  (or there is no user, e.g. a guest), nothing is pushed and the call stays
+  audio only: `native_call.camera` is false, so the UI is today's.
   """
   @spec apply_native_call_attached(Phoenix.LiveView.Socket.t(), map()) ::
           Phoenix.LiveView.Socket.t()
   def apply_native_call_attached(socket, params) when is_map(params) do
     caps = if is_map(params["capabilities"]), do: params["capabilities"], else: %{}
 
+    {socket, companion?} =
+      if caps["camera"] == true, do: join_companion(socket), else: {socket, false}
+
     native = %{
       mic: caps["mic"] == true,
-      camera: caps["camera"] == true,
+      camera: companion?,
       active_speakers: caps["activeSpeakers"] == true
     }
+
+    params = if companion?, do: Map.put(params, "camera", false), else: params
 
     socket
     |> assign(:native_call, native)
     |> assign(:mic_pending, false)
+    |> assign(:camera_pending, false)
     |> assign(:media_error, nil)
     |> assign_confirmed_media(params)
   end
 
   def apply_native_call_attached(socket, _params), do: socket
+
+  # The token is a bearer credential for the room: it goes to the page and
+  # nowhere else (never into a log line).
+  defp join_companion(socket) do
+    with user_id when is_binary(user_id) <- socket.assigns[:user_id],
+         space_id when is_binary(space_id) <- active_space_id(socket),
+         {:ok, %{token: token, room: room}} <-
+           Meetings.companion_token_for_user(space_id, user_id, resolve_display_name(socket)) do
+      {push_event(socket, "join-companion", %{
+         token: token,
+         url: Meetings.livekit_url(),
+         room_name: room.livekit_room_name
+       }), true}
+    else
+      {:error, reason} ->
+        Logger.debug("[MeetingHooks] companion not joined: #{inspect(reason)}")
+        {socket, false}
+
+      _ ->
+        {socket, false}
+    end
+  end
+
+  @doc """
+  `companion_media_state` from `meeting_client.js`: the companion Room's
+  CONFIRMED camera, read from its publication after a tap, a background
+  turn-off or a dropped connection. Clears `:camera_pending`. With
+  `"failed" => "camera"` it sets `:media_error`; a later confirmation clears
+  a camera error (a mic error is the mic's to clear).
+  """
+  @spec apply_companion_media_state(Phoenix.LiveView.Socket.t(), map()) ::
+          Phoenix.LiveView.Socket.t()
+  def apply_companion_media_state(%{assigns: %{native_call: %{camera: true}}} = socket, params)
+      when is_map(params) do
+    error =
+      cond do
+        params["failed"] == "camera" -> @media_error_camera
+        socket.assigns[:media_error] == @media_error_camera -> nil
+        true -> socket.assigns[:media_error]
+      end
+
+    socket
+    |> assign(:camera_pending, false)
+    |> assign(:media_error, error)
+    |> assign_confirmed_media(Map.take(params, ["camera"]))
+  end
+
+  def apply_companion_media_state(socket, _params), do: socket
 
   @doc """
   `native_media_state` from `meeting_client.js`: the CONFIRMED mic/camera,
@@ -640,10 +735,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     socket
     |> assign(:mic_pending, false)
     |> assign(:media_error, error)
-    |> assign_confirmed_media(params)
+    |> assign_confirmed_media(native_media_params(socket, params))
   end
 
   def apply_native_media_state(socket, _params), do: socket
+
+  # With the companion the native snapshot's `camera` (always false) says
+  # nothing about the camera: only `companion_media_state` moves it.
+  defp native_media_params(%{assigns: %{native_call: %{camera: true}}}, params),
+    do: Map.delete(params, "camera")
+
+  defp native_media_params(_socket, params), do: params
 
   defp assign_confirmed_media(socket, params) do
     socket =
@@ -720,6 +822,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp handle_event("native_media_state", params, socket) do
     {:halt, apply_native_media_state(socket, params)}
+  end
+
+  defp handle_event("companion_media_state", params, socket) do
+    {:halt, apply_companion_media_state(socket, params)}
   end
 
   defp handle_event("meeting_toggle_screen_share", _params, socket) do
@@ -887,6 +993,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, socket}
   end
 
+  defp handle_guest_event(
+         "meeting_toggle_camera",
+         _params,
+         %{assigns: %{native_call: %{}}} = socket
+       ) do
+    {:halt, request_companion_camera(socket)}
+  end
+
   defp handle_guest_event("meeting_toggle_camera", _params, socket) do
     new_camera = !socket.assigns.camera_enabled
 
@@ -944,6 +1058,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp handle_guest_event("native_media_state", params, socket) do
     {:halt, apply_native_media_state(socket, params)}
+  end
+
+  defp handle_guest_event("companion_media_state", params, socket) do
+    {:halt, apply_companion_media_state(socket, params)}
   end
 
   defp handle_guest_event("active_speakers", params, socket) do

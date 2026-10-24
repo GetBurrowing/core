@@ -438,6 +438,69 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert %DateTime{} = ended.ended_at
     end
 
+    # Task 01a1694a stage 2: conclusion delivers the meeting briefing — ONE
+    # briefing row and ONE Inbox row per attendee — and a replayed
+    # room_finished (LiveKit retries webhooks) adds nothing.
+    test "room_finished delivers one meeting briefing, and a replay adds nothing", %{conn: conn} do
+      import Ecto.Query, only: [from: 2]
+
+      {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook Brief #{unique_room_id()}"})
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{project_id: project.id, name: "Brief Me #{unique_room_id()}"})
+
+      {:ok, live} = Meetings.start_meeting(meeting)
+
+      n = System.unique_integer([:positive])
+
+      attendee =
+        Platform.Repo.insert!(%Platform.Accounts.User{
+          name: "Webhook Attendee #{n}",
+          email: "webhook-attendee-#{n}@example.com",
+          oidc_sub: "oidc-webhook-attendee-#{n}"
+        })
+
+      room =
+        Platform.Repo.insert!(%Meetings.Room{
+          space_id: live.chat_space_id,
+          livekit_room_name: "space-#{live.chat_space_id}"
+        })
+
+      Platform.Repo.insert!(%Meetings.Participant{
+        room_id: room.id,
+        user_id: attendee.id,
+        display_name: "Attendee",
+        joined_at: DateTime.add(live.started_at, -1, :second)
+      })
+
+      payload = %{
+        "event" => "room_finished",
+        "room" => %{"sid" => unique_sid(), "name" => "space-#{live.chat_space_id}"}
+      }
+
+      assert json_response(post(conn, @livekit_webhook_path, payload), 200)
+      assert json_response(post(build_conn(), @livekit_webhook_path, payload), 200)
+
+      assert Meetings.get_meeting(live.id).status == "ended"
+
+      briefings =
+        Platform.Repo.all(
+          from(b in Platform.Meetings.MeetingBriefing, where: b.meeting_id == ^live.id)
+        )
+
+      assert [%{attendee_user_ids: [attendee_id]} = briefing] = briefings
+      assert attendee_id == attendee.id
+
+      assert [_one] =
+               Platform.Repo.all(
+                 from(i in Platform.Inbox.Item,
+                   where:
+                     i.user_id == ^attendee.id and i.kind == "meeting_briefing" and
+                       i.source_id == ^briefing.id
+                 )
+               )
+    end
+
     test "leaves a scheduled meeting unchanged (no illegal transition)", %{conn: conn} do
       {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook Sched #{unique_room_id()}"})
 
@@ -1163,6 +1226,140 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
       assert %{"status" => "ignored", "reason" => "participant not found"} =
                json_response(conn, 200)
+    end
+  end
+
+  # ── companion connections (task 01a13ca2 stage 1) ───────────────────────
+  #
+  # The iOS app's video-only second connection joins as `video:user:<uuid>`.
+  # Its join and leave must write nothing and broadcast nothing; every join
+  # side effect (attendance, agent-visible roster, `{:participant_joined, _}`)
+  # sits downstream of the roster row, so no row means none of them fire.
+
+  defp participant_payload(event, room, identity, name) do
+    %{
+      "event" => event,
+      "room" => %{"name" => room.livekit_room_name},
+      "participant" => %{"identity" => identity, "name" => name, "sid" => "PA_companion"}
+    }
+  end
+
+  defp row_count, do: Platform.Repo.aggregate(Platform.Meetings.Participant, :count)
+
+  describe "POST #{@livekit_webhook_path} — companion participant" do
+    test "a companion join and leave are ignored; the same user: join DOES create a row",
+         %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+      :ok = Platform.Meetings.PubSub.subscribe_room(room.id)
+      before = row_count()
+
+      for event <- ["participant_joined", "participant_left"] do
+        resp =
+          conn
+          |> post(
+            @livekit_webhook_path,
+            participant_payload(event, room, "video:user:#{user.id}", "Ada Lovelace")
+          )
+          |> json_response(200)
+
+        assert resp == %{"status" => "ignored", "reason" => "companion"}
+        assert row_count() == before
+      end
+
+      assert Meetings.active_participants(room.id) == []
+      refute_receive {:participant_joined, _}, 100
+      refute_receive {:participant_left, _}, 50
+
+      # Positive control: the identical payload for the person's own
+      # connection creates the row and broadcasts, so the rig can see both.
+      resp =
+        conn
+        |> post(
+          @livekit_webhook_path,
+          participant_payload("participant_joined", room, "user:#{user.id}", "Ada Lovelace")
+        )
+        |> json_response(200)
+
+      assert %{"status" => "ok"} = resp
+      assert row_count() == before + 1
+      assert_receive {:participant_joined, %{user_id: user_id}}, 500
+      assert user_id == user.id
+    end
+
+    test "a companion leaving keeps the person's active row active", %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+
+      {:ok, row} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      resp =
+        conn
+        |> post(
+          @livekit_webhook_path,
+          participant_payload("participant_left", room, "video:user:#{user.id}", "Ada Lovelace")
+        )
+        |> json_response(200)
+
+      assert resp == %{"status" => "ignored", "reason" => "companion"}
+      assert Platform.Repo.get!(Platform.Meetings.Participant, row.id).left_at == nil
+    end
+
+    test "the roster read paths list the person once while a companion has joined",
+         %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+      {:ok, room} = Meetings.activate_room(room)
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      conn
+      |> post(
+        @livekit_webhook_path,
+        participant_payload("participant_joined", room, "video:user:#{user.id}", "Ada Lovelace")
+      )
+      |> json_response(200)
+
+      # `active_participants/1` is what IntentContext and IntentClassifier
+      # read for the addressee gate; `active_participants_for_space/1` is
+      # attendance, the notifier and the MCP seat guard.
+      assert [%{user_id: uid}] = Meetings.active_participants(room.id)
+      assert uid == user.id
+      assert [%{user_id: ^uid}] = Meetings.active_participants_for_space(room.space_id)
+    end
+
+    test "the context writers refuse a companion identity themselves" do
+      %{room: room, user: user} = seed_room_and_user()
+
+      {:ok, row} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      before = row_count()
+
+      assert {:error, :companion_identity} =
+               Meetings.upsert_live_participant(room, %{
+                 identity: "video:user:#{user.id}",
+                 name: "Ada Lovelace"
+               })
+
+      # Without the refusal the leave would match the person's row by
+      # display name and end it.
+      assert {:error, :companion_identity} =
+               Meetings.mark_live_participant_left(room, %{
+                 identity: "video:user:#{user.id}",
+                 name: "Ada Lovelace"
+               })
+
+      assert row_count() == before
+      assert Platform.Repo.get!(Platform.Meetings.Participant, row.id).left_at == nil
     end
   end
 

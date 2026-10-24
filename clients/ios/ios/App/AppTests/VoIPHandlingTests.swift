@@ -461,6 +461,24 @@ final class VoIPHandlingTests: XCTestCase {
         XCTAssertEqual(prompts.last, "clear:\(ringID)")
     }
 
+    // MARK: Video (task 01a13ca2 stage 4)
+
+    func testTheProviderSupportsVideo() {
+        XCTAssertTrue(CallController.providerConfiguration().supportsVideo)
+        XCTAssertEqual(CallController.providerConfiguration().maximumCallGroups, 1)
+    }
+
+    func testARingNeverReportsVideo() {
+        let update = ProviderCallReporter.incomingUpdate(callerName: "Ada in Standup")
+        XCTAssertFalse(update.hasVideo, "every call rings and answers as audio")
+        XCTAssertEqual(update.localizedCallerName, "Ada in Standup")
+    }
+
+    func testTheVideoUpdateCarriesTheConfirmedCamera() {
+        XCTAssertTrue(CallController.videoUpdate(true).hasVideo)
+        XCTAssertFalse(CallController.videoUpdate(false).hasVideo)
+    }
+
     // MARK: Payload decoding
 
     func testThePayloadCarriesNoToken() {

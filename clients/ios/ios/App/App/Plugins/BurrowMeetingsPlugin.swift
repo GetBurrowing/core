@@ -1,6 +1,7 @@
 import Capacitor
 import Combine
 import Foundation
+import UIKit
 
 /// What the plugin needs from the native call. `CallController` is the real
 /// one; tests inject a fake.
@@ -10,6 +11,9 @@ protocol MeetingMediaControl: AnyObject {
     var meetingID: String? { get }
     /// Resolves with the CONFIRMED mic state; throws when the change failed.
     func requestMuted(_ muted: Bool, timeout: TimeInterval) async throws -> Bool
+    /// The page's CONFIRMED companion camera, reported to CallKit as
+    /// `hasVideo` (task 01a13ca2 stage 4).
+    func setVideoActive(_ active: Bool)
 }
 
 /// The media state the page draws, derived from `CallState`. Only confirmed
@@ -22,7 +26,9 @@ struct MeetingMediaSnapshot: Equatable {
 
     init(_ state: CallState) {
         mic = state.micEnabled
-        // Audio only until stage 4 adds the companion camera.
+        // Always false: the native call is audio only. The camera lives on
+        // the page's companion connection (`video:user:`), and the page owns
+        // its state; it reports it back through `setVideoActive`.
         camera = false
         speaking = state.speakingIdentities.sorted()
     }
@@ -60,12 +66,19 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "leave", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "capabilities", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMuted", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setVideoActive", returnType: CAPPluginReturnPromise),
     ]
 
     /// What this build can do. Prod web is served to every installed build
     /// and Capacitor rejects an unknown method, so the page feature-detects
-    /// with this. Stage 4 flips `camera`.
-    static let capabilities: [String: Any] = ["mic": true, "camera": false, "activeSpeakers": true]
+    /// with this. `camera` (task 01a13ca2 stage 4): the page may open its
+    /// video-only companion connection, and this build has `setVideoActive`
+    /// and the `appStateChanged` event.
+    static let capabilities: [String: Any] = ["mic": true, "camera": true, "activeSpeakers": true]
+
+    /// How long the app keeps running after it resigns active, so the page
+    /// can turn the companion camera off before the web view is suspended.
+    static let resignGrace: TimeInterval = 3
 
     /// How long `setMuted` waits for the SDK's confirmation.
     static let muteTimeout: TimeInterval = 5
@@ -75,6 +88,8 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
     var media: @MainActor () -> any MeetingMediaControl = { CallController.shared }
     private var stateObserver: AnyCancellable?
     private var lastSnapshot: MeetingMediaSnapshot?
+    private var appStateObservers: [NSObjectProtocol] = []
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     override public func load() {
         Task { @MainActor in
@@ -94,9 +109,55 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
                     for event in events { self.notifyListeners(event.name, data: event.data) }
                 }
         }
+        observeAppState()
     }
 
-    /// `{mic: true, camera: false, activeSpeakers: true}`.
+    /// The `appStateChanged` payload for an application notification, or nil
+    /// for any other notification.
+    static func appStateEvent(_ name: Notification.Name) -> [String: Any]? {
+        switch name {
+        case UIApplication.willResignActiveNotification: return ["active": false]
+        case UIApplication.didBecomeActiveNotification: return ["active": true]
+        default: return nil
+        }
+    }
+
+    /// `appStateChanged {active}`. willResignActive arrives before the web
+    /// view is suspended: the page turns the companion camera off on
+    /// `active: false`, under a background task of at most `resignGrace`.
+    private func observeAppState() {
+        let center = NotificationCenter.default
+        for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+            appStateObservers.append(
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    guard let self, let data = BurrowMeetingsPlugin.appStateEvent(note.name) else { return }
+                    MainActor.assumeIsolated {
+                        if data["active"] as? Bool == false { self.holdBackgroundTask() }
+                        self.notifyListeners("appStateChanged", data: data)
+                    }
+                })
+        }
+    }
+
+    @MainActor
+    private func holdBackgroundTask() {
+        endBackgroundTask()
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "meeting-camera-off") { [weak self] in
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.resignGrace) { [weak self] in
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
+        }
+    }
+
+    @MainActor
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
+    /// `{mic: true, camera: true, activeSpeakers: true}`.
     @objc func capabilities(_ call: CAPPluginCall) {
         call.resolve(Self.capabilities)
     }
@@ -115,6 +176,20 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
             } catch {
                 call.reject("Couldn't change the mic", "MIC_FAILED")
             }
+        }
+    }
+
+    /// `{camera}` -> `{camera}`: the page's CONFIRMED companion camera,
+    /// reported to CallKit as the call's `hasVideo`. Rejects without
+    /// `camera`. Nothing here publishes or renders video.
+    @objc func setVideoActive(_ call: CAPPluginCall) {
+        guard let camera = call.getBool("camera") else {
+            call.reject("camera is required")
+            return
+        }
+        Task { @MainActor in
+            self.media().setVideoActive(camera)
+            call.resolve(["camera": camera])
         }
     }
 
@@ -137,7 +212,8 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// `{meetingId: string | null, phase: string, mic: bool, camera: bool,
-    /// speaking: [identity]}`. `mic` is the CONFIRMED state.
+    /// speaking: [identity]}`. `mic` is the CONFIRMED state; `camera` is
+    /// the native call's, always false (the page owns the camera).
     @objc func state(_ call: CAPPluginCall) {
         Task { @MainActor in
             call.resolve(Self.statePayload(self.media()))

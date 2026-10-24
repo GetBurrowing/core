@@ -486,6 +486,40 @@ defmodule PlatformWeb.AppApiController do
     })
   end
 
+  # ── briefing ─────────────────────────────────────────────────────────
+
+  @doc """
+  `GET /api/app/briefing` (task 01a161f9): the caller's OWN briefing for
+  today as counts, a summary line and the Inbox deep link, or
+  `"briefing": null`. Every query param is ignored: the user is the bearer's
+  and the date is today in `Disseminator.timezone/0` (America/Chicago), the
+  zone a briefing's `digest_date` is written in. Counts only, never items.
+  """
+  def briefing(conn, _params) do
+    %{today: today, briefing: briefing} =
+      Mobile.today_briefing_for_user(conn.assigns.current_user)
+
+    json(conn, %{
+      today: Date.to_iso8601(today),
+      zone: Platform.Memory.Insights.Disseminator.timezone(),
+      briefing: briefing_json(briefing)
+    })
+  end
+
+  defp briefing_json(nil), do: nil
+
+  defp briefing_json(%{date: date, total: total, open: open, calls: calls, handled: handled} = b) do
+    %{
+      date: Date.to_iso8601(date),
+      total: total,
+      open: open,
+      calls: calls,
+      handled: handled,
+      summary: Platform.Inbox.briefing_summary(b),
+      url: Platform.Inbox.briefing_url(date)
+    }
+  end
+
   # Field names only: a changeset's error tuples can carry the rejected
   # value in their opts, and the device token must never come back.
   defp error_fields(%Ecto.Changeset{errors: errors}) do

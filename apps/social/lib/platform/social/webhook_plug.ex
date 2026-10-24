@@ -33,7 +33,7 @@ defmodule Platform.Social.WebhookPlug do
   import Plug.Conn
 
   alias Platform.Repo
-  alias Platform.Social.{Account, Post, Profile, Publisher, Publishing, Secrets}
+  alias Platform.Social.{Account, Health, Post, Profile, Publisher, Publishing, Secrets}
 
   @impl true
   def init(opts), do: opts
@@ -81,6 +81,24 @@ defmodule Platform.Social.WebhookPlug do
 
   defp apply_event(_profile, %{kind: :ignored}), do: false
 
+  # Social authoring 9/11: the vendor says one of THIS profile's accounts was
+  # disconnected (or connected again). Matched by `provider_account_ref`
+  # among the profile's live accounts only; `Platform.Social.Health` marks
+  # it and alerts once, so a replay changes nothing.
+  defp apply_event(%Profile{} = profile, %{kind: kind, account_ref: ref} = event)
+       when kind in [:account_disconnected, :account_connected] and is_binary(ref) and ref != "" do
+    case profile_account(profile, ref) do
+      nil ->
+        false
+
+      account when kind == :account_disconnected ->
+        match?({:ok, :alerted, _}, Health.account_disconnected(account, event[:error]))
+
+      account ->
+        Health.account_reconnected(account) == {:ok, :reconnected}
+    end
+  end
+
   defp apply_event(%Profile{id: profile_id}, %{external_id: external_id} = event)
        when is_binary(external_id) and external_id != "" do
     post =
@@ -100,6 +118,16 @@ defmodule Platform.Social.WebhookPlug do
   end
 
   defp apply_event(_profile, _event), do: false
+
+  defp profile_account(%Profile{id: profile_id}, ref) do
+    Repo.one(
+      from(a in Account,
+        where: a.profile_id == ^profile_id and a.provider_account_ref == ^ref,
+        where: is_nil(a.archived_at),
+        limit: 1
+      )
+    )
+  end
 
   defp reply(conn, status, body) do
     conn

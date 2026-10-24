@@ -105,7 +105,7 @@ defmodule PlatformWeb.SocialLiveCreateTest do
       assert has_element?(
                child,
                "[data-pane='queue'] [data-role='social-empty']",
-               "Nothing waiting for approval on HTC. Connect an account to start."
+               "Connect an account to start."
              )
 
       assert has_element?(
@@ -143,7 +143,7 @@ defmodule PlatformWeb.SocialLiveCreateTest do
 
       # Switch to HTC so its rows render.
       child |> form("#social-profile-switcher", %{profile_id: htc.id}) |> render_change()
-      assert has_element?(child, "#social-queue #queue-#{post.id}[data-role='social-queue-row']")
+      assert has_element?(child, "#social-queue [data-role='social-queue-row'] #queue-#{post.id}")
       assert has_element?(child, "#social-accounts [data-role='social-account-row']")
 
       open_new_profile(child)
@@ -165,7 +165,7 @@ defmodule PlatformWeb.SocialLiveCreateTest do
       assert has_element?(
                child,
                "[data-pane='queue'] [data-role='social-empty']",
-               "Nothing waiting for approval on Legacy. Connect an account to start."
+               "Connect an account to start."
              )
     end
   end

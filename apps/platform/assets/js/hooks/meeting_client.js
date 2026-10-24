@@ -1,5 +1,10 @@
 import { Room, RoomEvent, Track } from "livekit-client"
-import { participantLabel, readParticipantNames } from "./lib/participant_label"
+import {
+  participantLabel,
+  personIdentity,
+  personLabel,
+  readParticipantNames,
+} from "./lib/participant_label"
 import { cancelActiveSpeakers, offerActiveSpeakers } from "./lib/active_speakers_debounce"
 import { toggleScreenShare } from "./lib/screen_share_policy"
 import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
@@ -35,9 +40,34 @@ const LEGACY_NATIVE_CAPABILITIES = Object.freeze({
   activeSpeakers: false,
 })
 
+// How long the page waits for the companion's camera PUBLICATION to report
+// a change before it reads the publication back and pushes it with
+// `failed: "camera"` (task 01a13ca2 stage 3). The same budget as the mic.
+export const COMPANION_CAMERA_TIMEOUT_MS = 3000
+
+// The Rooms this page opened as a person's video-only COMPANION connection
+// (`video:user:<uuid>`, task 01a13ca2 stage 3). Module-level, not a hook
+// field, because the Room outlives the hook (pinned on window) and a
+// re-mounted hook adopting it must still know what it is: a companion never
+// touches the microphone and never re-enables its camera on its own.
+const companionRooms = new WeakSet()
+
+export function isCompanionRoom(room) {
+  return !!room && typeof room === "object" && companionRooms.has(room)
+}
+
+// A companion receives VIDEO only (camera and screen share). Audio is the
+// native call's; subscribing to it here would play the call twice.
+function isVideoPublication(pub) {
+  return !!pub && pub.kind === Track.Kind.Video
+}
+
 const MeetingClient = {
   mounted() {
     this._room = null
+    // Tiles are keyed by PERSON (`personIdentity`), never by raw LiveKit
+    // identity: a person's video-only companion connection
+    // (`video:user:<uuid>`, task 01a13ca2) shares its person's tile.
     this._tiles = new Map()
     // Remote <audio> elements, keyed by `track.sid || track.mediaStreamID`.
     // The MAP is per-instance bookkeeping; the ELEMENTS deliberately outlive
@@ -77,7 +107,9 @@ const MeetingClient = {
       this._leave()
     })
     this.handleEvent("toggle-mic", (payload) => this._toggleMic(payload))
-    this.handleEvent("toggle-camera", () => this._toggleCamera())
+    this.handleEvent("toggle-camera", (payload) => this._toggleCamera(payload))
+    // Task 01a13ca2 stage 3: the iOS app's video-only companion connection.
+    this.handleEvent("join-companion", (payload) => this._joinCompanion(payload))
     this.handleEvent("toggle-screen-share", () => this._toggleScreenShare())
     // The server pushes this on every `set_stage_mode` (meeting_live.ex).
     this.handleEvent("meeting_stage_mode_changed", ({ mode }) =>
@@ -104,10 +136,22 @@ const MeetingClient = {
     // re-mount must ADOPT the still-connected room left on
     // window.__livekit_room (mirrors meeting_room.js:32-52).
     this._onPageHide = () => {
+      this._companionCameraOff()
       this._leave()
     }
     window.addEventListener("pagehide", this._onPageHide)
     window.addEventListener("beforeunload", this._onPageHide)
+
+    // The companion camera goes OFF when the page is hidden (the app went to
+    // the background, the screen locked) and stays off on return: the user
+    // taps again. A no-op without a companion Room, so the browser path is
+    // untouched.
+    this._onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") this._companionCameraOff()
+    }
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this._onVisibilityChange)
+    }
 
     // Adopt an existing connected room left behind by a prior hook
     // instance (LV repatch/reconnect). Re-wire listeners + rebuild tiles
@@ -145,6 +189,9 @@ const MeetingClient = {
 
     window.removeEventListener("pagehide", this._onPageHide)
     window.removeEventListener("beforeunload", this._onPageHide)
+    if (typeof document.removeEventListener === "function") {
+      document.removeEventListener("visibilitychange", this._onVisibilityChange)
+    }
     this._viewportQuery?.removeEventListener("change", this._onViewportChange)
     this._screenShareController?.destroy()
     this._screenShareController = null
@@ -234,6 +281,7 @@ const MeetingClient = {
     this._room = room
     window.__livekit_room = room
     window.__livekitRoom = room
+    if (isCompanionRoom(room)) this._companionRoom = room
 
     this._bindRoomEvents(room)
     this._emitState("connected", room)
@@ -456,6 +504,15 @@ const MeetingClient = {
   // Screen-share publications are skipped on both axes via
   // `isScreenShareSource`. Without that, stopping a share unpublishes a
   // video track and the tile would read it as the camera going off.
+  //
+  // GROUPED BY PERSON (task 01a13ca2 stage 2). A person may hold two
+  // connections: `user:<uuid>` (audio, maybe camera) and the video-only
+  // companion `video:user:<uuid>`. Both report under `personIdentity`, so no
+  // `video:` identity ever reaches the payload. `muted` reads the first
+  // connection that publishes a mic (a companion cannot, its grant has no
+  // microphone source). `camera_off` holds the person only when NO
+  // connection of theirs has a live, unmuted camera. With one connection per
+  // person this is exactly the per-identity computation it replaced.
   _remoteMediaStates(room) {
     const muted = []
     const cameraOff = []
@@ -464,6 +521,9 @@ const MeetingClient = {
     if (!remotes || typeof remotes.values !== "function") {
       return { muted, camera_off: cameraOff }
     }
+
+    // person -> { mic, cameraLive }, in first-seen order.
+    const people = new Map()
 
     for (const participant of remotes.values()) {
       if (!participant || !participant.identity) continue
@@ -482,8 +542,16 @@ const MeetingClient = {
         }
       }
 
-      if (this._publicationMuted(mic)) muted.push(participant.identity)
-      if (this._publicationMuted(camera)) cameraOff.push(participant.identity)
+      const person = personIdentity(participant.identity)
+      const entry = people.get(person) || { mic: null, cameraLive: false }
+      if (!entry.mic && mic) entry.mic = mic
+      if (!this._publicationMuted(camera)) entry.cameraLive = true
+      people.set(person, entry)
+    }
+
+    for (const [person, entry] of people) {
+      if (this._publicationMuted(entry.mic)) muted.push(person)
+      if (!entry.cameraLive) cameraOff.push(person)
     }
 
     muted.sort()
@@ -624,6 +692,8 @@ const MeetingClient = {
       this._ensureTile(p)
       this._pushMediaStates(room)
     })
+    // A companion leaving drops only its video; the tile goes with the
+    // person's LAST connection (`_removeTile`).
     bind(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
     bind(RoomEvent.TrackSubscribed, (track, pub, participant) => {
       this._attachTrack(track, participant, pub)
@@ -717,11 +787,202 @@ const MeetingClient = {
       this._reconcileLocalMedia(room)
     })
 
+    if (isCompanionRoom(room)) {
+      this._bindCompanionEvents(room, bind)
+      return
+    }
+
     bind(RoomEvent.Disconnected, () => {
       this._emitState("disconnected", room)
       this._cleanupRoom()
       this.pushEvent("meeting_left", {})
     })
+  },
+
+  // ── The companion Room (task 01a13ca2 stage 3) ──────────────────────────
+  //
+  // Inside the Burrow iOS app with a build whose `capabilities().camera` is
+  // true, the native call keeps audio, CallKit and the lock screen, and the
+  // page joins a SECOND time as `video:user:<uuid>` for the camera and for
+  // viewing video. Its token cannot publish a microphone (the SFU refuses
+  // it); this page never asks, never subscribes to audio and never attaches
+  // an <audio> from it. Everything else (tiles, the self-view dock, the
+  // screen-share slot, `meeting_video_tile.js`) runs unchanged on it,
+  // because it is pinned as `this._room` / `window.__livekit_room`.
+  _bindCompanionEvents(room, bind) {
+    // `autoSubscribe: false`: subscribe each VIDEO publication explicitly.
+    bind(RoomEvent.TrackPublished, (pub) => this._subscribeCompanionVideo(pub))
+
+    // The camera button follows the PUBLICATION, never the click.
+    const onLocalCamera = (pub) => {
+      if (!isVideoPublication(pub)) return
+      const source = (pub.track && pub.track.source) || pub.source
+      if (isScreenShareSource(source)) return
+      this._pushCompanionState(room)
+    }
+    bind(RoomEvent.LocalTrackPublished, onLocalCamera)
+    bind(RoomEvent.LocalTrackUnpublished, onLocalCamera)
+    const onLocalMute = (pub, participant) => {
+      const lp = room.localParticipant
+      if (!lp || !participant || participant.identity !== lp.identity) return
+      onLocalCamera(pub)
+    }
+    bind(RoomEvent.TrackMuted, onLocalMute)
+    bind(RoomEvent.TrackUnmuted, onLocalMute)
+
+    // The companion dropping is NOT the person leaving: the native call
+    // still carries them. Clean the page up and report the camera off.
+    bind(RoomEvent.Disconnected, () => {
+      this._emitState("disconnected", room)
+      if (this._companionRoom === room) this._companionRoom = null
+      this._cleanupRoom()
+      this._pushCompanionState(null)
+    })
+  },
+
+  _subscribeCompanionVideo(pub) {
+    if (!isVideoPublication(pub)) return
+    if (pub.isSubscribed === true) return
+    try {
+      pub.setSubscribed(true)
+    } catch (err) {
+      console.warn("[MeetingClient] companion video subscribe failed:", err)
+    }
+  },
+
+  // The companion's camera as its local PUBLICATION reports it.
+  _companionCameraOn(room) {
+    if (!room) return false
+    const pub = this._localCameraPublication(room)
+    return !!(pub && pub.track && !this._localCameraOff(room))
+  },
+
+  // Tell the server (and the native call, for CallKit's hasVideo) what the
+  // publication confirms. `room` null means the companion is gone: off.
+  _pushCompanionState(room, extra = {}) {
+    if (this._companionConfirmTimer) {
+      clearTimeout(this._companionConfirmTimer)
+      this._companionConfirmTimer = null
+    }
+    const camera = this._companionCameraOn(room)
+    if (room) this._watchCompanionTrack(room)
+    this.pushEvent("companion_media_state", { camera, ...extra })
+    const native = this._nativeMeetings()
+    // Stage 4 adds `setVideoActive`; an older build rejects unknown methods.
+    if (native && typeof native.setVideoActive === "function") {
+      try {
+        Promise.resolve(native.setVideoActive({ camera })).catch(() => {})
+      } catch (_) {
+        /* an older bridge throwing synchronously */
+      }
+    }
+  },
+
+  // The camera track ending or being muted by the system (the camera taken
+  // by another app, the app suspended) turns the companion camera OFF, so
+  // remote tiles show the avatar rather than a frozen frame.
+  _watchCompanionTrack(room) {
+    const pub = this._localCameraPublication(room)
+    const mst = pub && pub.track && pub.track.mediaStreamTrack
+    if (!mst || typeof mst.addEventListener !== "function") return
+    if (!this._watchedCompanionTracks) this._watchedCompanionTracks = new WeakSet()
+    if (this._watchedCompanionTracks.has(mst)) return
+    this._watchedCompanionTracks.add(mst)
+    const off = () => this._companionCameraOff()
+    mst.addEventListener("ended", off)
+    mst.addEventListener("mute", off)
+  },
+
+  async _joinCompanion({ token, url, room_name } = {}) {
+    // Only a native call whose build reported `capabilities().camera`. A
+    // legacy or audio-only build keeps exactly today's page: no Room.
+    if (!this._nativeMeetings() || this._nativeCapabilities?.camera !== true) return
+    if (!token || !url) {
+      console.error("[MeetingClient] join-companion missing token or url", { url })
+      return
+    }
+    const existing = this._companionRoom
+    if (existing && existing.state === "connected" && existing.name === room_name) {
+      // A re-attach ("Open full meeting" on a call already up): report.
+      this._pushCompanionState(existing)
+      return
+    }
+    if (existing) await this._leaveCompanion()
+
+    const room = this._newRoom()
+    companionRooms.add(room)
+    this._companionRoom = room
+    if (!(await this._connectRoom(room, url, token, { autoSubscribe: false }))) {
+      if (this._companionRoom === room) this._companionRoom = null
+      return
+    }
+
+    this._reconcileLocalVideo(room)
+    for (const participant of room.remoteParticipants.values()) {
+      this._ensureTile(participant)
+      for (const pub of participant.trackPublications.values()) {
+        this._subscribeCompanionVideo(pub)
+        if (pub.track && isVideoPublication(pub)) this._attachTrack(pub.track, participant, pub)
+      }
+    }
+    this._pushMediaStates(room)
+    this._pushCompanionState(room)
+  },
+
+  // `toggle-camera %{want}`: ask the companion and wait for its publication.
+  // A rejection pushes the real state with `failed: "camera"`; no event
+  // within COMPANION_CAMERA_TIMEOUT_MS reads the publication back the same
+  // way, so a pending button always has an exit.
+  async _setCompanionCamera(want) {
+    const room = this._companionRoom
+    if (!room || !room.localParticipant) {
+      this._pushCompanionState(null, { failed: "camera" })
+      return
+    }
+    if (this._companionConfirmTimer) clearTimeout(this._companionConfirmTimer)
+    this._companionConfirmTimer = setTimeout(() => {
+      this._companionConfirmTimer = null
+      const camera = this._companionCameraOn(this._companionRoom)
+      this._pushCompanionState(
+        this._companionRoom,
+        camera === want ? {} : { failed: "camera" },
+      )
+    }, COMPANION_CAMERA_TIMEOUT_MS)
+    try {
+      await room.localParticipant.setCameraEnabled(want)
+    } catch (err) {
+      console.warn("[MeetingClient] companion camera failed:", err && err.message)
+      this._pushCompanionState(room, { failed: "camera" })
+    }
+  },
+
+  // Background, page exit, the app resigning active, the track ending:
+  // camera OFF, confirmed through the publication like any other change.
+  // Nothing ever turns it back on except a tap.
+  _companionCameraOff() {
+    const room = this._companionRoom
+    if (!room || !room.localParticipant) return
+    Promise.resolve()
+      .then(() => room.localParticipant.setCameraEnabled(false))
+      .catch((err) => {
+        console.warn("[MeetingClient] companion camera off failed:", err && err.message)
+        this._pushCompanionState(room, { failed: "camera" })
+      })
+  },
+
+  async _leaveCompanion() {
+    const room = this._companionRoom
+    if (!room) return
+    this._companionRoom = null
+    if (this._companionConfirmTimer) {
+      clearTimeout(this._companionConfirmTimer)
+      this._companionConfirmTimer = null
+    }
+    if (this._room === room) {
+      await this._leave()
+      return
+    }
+    await Promise.resolve(room.disconnect()).catch(() => {})
   },
 
   // Detach every RoomEvent listener we installed in `_bindRoomEvents` so
@@ -768,6 +1029,7 @@ const MeetingClient = {
       this._nativeEndedHandle = native.addListener("callEnded", ({ meetingId: ended } = {}) => {
         if (!this._nativeMeetingId || ended !== this._nativeMeetingId) return
         this._nativeMeetingId = null
+        this._leaveCompanion()
         this.pushEvent("meeting_left", {})
       })
     }
@@ -805,6 +1067,9 @@ const MeetingClient = {
       capabilities = LEGACY_NATIVE_CAPABILITIES
     }
 
+    // `_joinCompanion` reads this: a build that did not say `camera: true`
+    // never gets a companion Room, whatever the server pushes.
+    this._nativeCapabilities = capabilities
     const state = await this._readNativeState(native)
     this.pushEvent("native_call_attached", {
       capabilities,
@@ -839,6 +1104,13 @@ const MeetingClient = {
         })
       })
     }
+    if (!this._nativeAppStateHandle) {
+      // Stage 4's plugin fires this on willResignActive, BEFORE the web view
+      // is suspended: the last moment to take the companion camera down.
+      this._nativeAppStateHandle = native.addListener("appStateChanged", (data = {}) => {
+        if (data.active === false) this._companionCameraOff()
+      })
+    }
     if (!this._nativeSpeakersHandle) {
       // Same guards as `MeetingRoom._onActiveSpeaker`, from the same helper.
       this._nativeSpeakersHandle = native.addListener("activeSpeakers", (data = {}) => {
@@ -850,6 +1122,7 @@ const MeetingClient = {
   },
 
   _leaveNative() {
+    this._leaveCompanion()
     if (!this._nativeMeetingId) return
     const native = this._nativeMeetings()
     this._nativeMeetingId = null
@@ -857,10 +1130,16 @@ const MeetingClient = {
   },
 
   _releaseNativeListener() {
-    const handles = [this._nativeEndedHandle, this._nativeMediaHandle, this._nativeSpeakersHandle]
+    const handles = [
+      this._nativeEndedHandle,
+      this._nativeMediaHandle,
+      this._nativeSpeakersHandle,
+      this._nativeAppStateHandle,
+    ]
     this._nativeEndedHandle = null
     this._nativeMediaHandle = null
     this._nativeSpeakersHandle = null
+    this._nativeAppStateHandle = null
     cancelActiveSpeakers(this)
     for (const handle of handles) {
       if (!handle) continue
@@ -943,27 +1222,8 @@ const MeetingClient = {
       return
     }
 
-    const room = new Room({
-      adaptiveStream: true,
-      dynacast: true,
-      publishDefaults: { simulcast: true },
-    })
-
-    this._bindRoomEvents(room)
-
-    try {
-      await room.connect(url, token)
-    } catch (err) {
-      console.error("[MeetingClient] room.connect failed", err)
-      return
-    }
-
-    this._room = room
-    window.__livekit_room = room
-    window.__livekitRoom = room
-    window.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
-    document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
-    this._emitState("connected", room)
+    const room = this._newRoom()
+    if (!(await this._connectRoom(room, url, token))) return
 
     // Enter the room in the state the lobby chose — NOT unconditionally
     // live. This used to be `setMicrophoneEnabled(true)`, which made joining
@@ -1035,6 +1295,39 @@ const MeetingClient = {
     this._reconcileLocalMedia(room, desired)
   },
 
+  // The Room both connections use: the web call's and the app's companion
+  // (task 01a13ca2 stage 3 factored these two out of `_join`).
+  _newRoom() {
+    return new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      publishDefaults: { simulcast: true },
+    })
+  },
+
+  // Bind, connect, then pin the Room where every other meeting hook looks
+  // for it. `connectOptions` is passed only when given, so the web call's
+  // `connect(url, token)` is exactly what it was.
+  async _connectRoom(room, url, token, connectOptions) {
+    this._bindRoomEvents(room)
+
+    try {
+      if (connectOptions) await room.connect(url, token, connectOptions)
+      else await room.connect(url, token)
+    } catch (err) {
+      console.error("[MeetingClient] room.connect failed", err)
+      return false
+    }
+
+    this._room = room
+    window.__livekit_room = room
+    window.__livekitRoom = room
+    window.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
+    document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
+    this._emitState("connected", room)
+    return true
+  },
+
   async _leave() {
     if (!this._room) return
     try {
@@ -1071,7 +1364,6 @@ const MeetingClient = {
           while (slot.firstChild) slot.removeChild(slot.firstChild)
           slot.classList.add("hidden")
           slot.dataset.screenShareActive = "false"
-          if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "false"
           delete slot.dataset.screenShareSharer
           const label = slot.parentElement?.querySelector?.(
             "[data-quickmeet-screen-share-sharer]",
@@ -1167,6 +1459,9 @@ const MeetingClient = {
   // test/hooks/meeting_client.test.js; a future bidirectional change must
   // fail those tests and re-read this comment.
   _reconcileLocalMedia(room, intent) {
+    // A companion never touches the mic, and its camera comes back only on a
+    // tap (task 01a13ca2 stage 3), so there is nothing to reconcile.
+    if (isCompanionRoom(room)) return
     const lp = room && room.localParticipant
     if (!lp) return
     const ds = (this.el && this.el.dataset) || {}
@@ -1232,7 +1527,13 @@ const MeetingClient = {
     }
   },
 
-  async _toggleCamera() {
+  async _toggleCamera(payload) {
+    // With the companion the server sends `want` and waits for the
+    // publication; a browser push carries no `want` and takes the Room path.
+    if (payload && typeof payload.want === "boolean") {
+      await this._setCompanionCamera(payload.want)
+      return
+    }
     const room = this._room
     if (!room || !room.localParticipant) return
     const enabled = room.localParticipant.isCameraEnabled
@@ -1305,13 +1606,25 @@ const MeetingClient = {
     // into [data-local-video-dock], not this tile. Skip it so the local user
     // renders exactly once (parity with remote: one roster row + one tile).
     if (participant.isLocal) return
+    // The app's own native call (`user:<me>`) is a REMOTE participant of the
+    // companion Room (`video:user:<me>`): the same person as the local self,
+    // who is shown by the self-view dock. A browser Room never holds a
+    // remote with the local identity, so this is a no-op there.
+    if (this._isSelf(participant)) return
     // Task 01a0d4fe stage 3: the meeting transcriber worker joins the room
     // as a LiveKit participant but is not a person, so it gets no tile.
     // Every tile path (ParticipantConnected, adopt, rejoin, _attachTrack)
     // funnels through here, so one check covers them all.
     if (this._isTranscriber(participant)) return
+    // One tile per PERSON: a companion (`video:user:<uuid>`) joins its
+    // person's tile, and creates it under the person's identity when it
+    // arrives first. Idempotent by person.
     const { identity } = participant
-    if (this._tiles.has(identity)) return
+    const person = personIdentity(identity)
+    if (this._tiles.has(person)) {
+      this._addTileConnection(person, identity)
+      return
+    }
 
     // Name, then the server's map for resolved agents (a legacy
     // `agent-AJ_…` voice worker has no LiveKit name; task 01a1117f stage 5),
@@ -1320,7 +1633,7 @@ const MeetingClient = {
     const initial = (displayName.trim()[0] || "?").toUpperCase()
 
     const tile = document.createElement("div")
-    tile.dataset.participant = identity
+    tile.dataset.participant = person
     if (participant.isLocal) tile.dataset.local = "true"
     tile.className = "meeting-tile"
 
@@ -1345,7 +1658,72 @@ const MeetingClient = {
     tile.appendChild(name)
 
     grid.appendChild(tile)
-    this._tiles.set(identity, tile)
+    this._tiles.set(person, tile)
+    this._addTileConnection(person, identity)
+  },
+
+  _isSelf(participant) {
+    const room = this._room || this._boundRoom
+    const me = room && room.localParticipant && room.localParticipant.identity
+    if (!me || !participant || !participant.identity) return false
+    return personIdentity(participant.identity) === personIdentity(me)
+  },
+
+  // person -> Set of the raw LiveKit identities currently backing its tile.
+  _addTileConnection(person, identity) {
+    if (!this._tileConnections) this._tileConnections = new Map()
+    let set = this._tileConnections.get(person)
+    if (!set) {
+      set = new Set()
+      this._tileConnections.set(person, set)
+    }
+    set.add(identity)
+  },
+
+  // Camera <video> elements a tile holds, per raw connection identity, so a
+  // companion disconnect can drop exactly its own video and nothing else.
+  _rememberConnectionVideo(identity, track, el) {
+    if (!identity) return
+    if (!this._connectionVideos) this._connectionVideos = new Map()
+    let list = this._connectionVideos.get(identity)
+    if (!list) {
+      list = []
+      this._connectionVideos.set(identity, list)
+    }
+    list.push({ track, el })
+  },
+
+  _forgetConnectionTrack(identity, track) {
+    const list = this._connectionVideos && this._connectionVideos.get(identity)
+    if (!list) return
+    const rest = list.filter((entry) => entry.track !== track)
+    if (rest.length) this._connectionVideos.set(identity, rest)
+    else this._connectionVideos.delete(identity)
+  },
+
+  _dropConnectionVideo(identity, tile) {
+    const list = this._connectionVideos && this._connectionVideos.get(identity)
+    if (this._connectionVideos) this._connectionVideos.delete(identity)
+    if (!list || !tile) return
+    for (const { track, el } of list) {
+      try {
+        track.detach?.(el)
+      } catch (_) {
+        /* already detached */
+      }
+      el.remove?.()
+    }
+    this._showTilePlaceholderIfDark(tile)
+  },
+
+  // After a companion's video leaves: back to the avatar only when the tile
+  // holds no other video (the person's own connection may still have one).
+  _showTilePlaceholderIfDark(tile) {
+    const wrapper = tile.querySelector(".meeting-tile-video")
+    if (wrapper && wrapper.querySelector("video")) return
+    if (wrapper) wrapper.style.display = "none"
+    const placeholder = tile.querySelector("[data-placeholder]")
+    if (placeholder) placeholder.style.display = ""
   },
 
   // The transcriber identity markers, pushed by the server as JSON on
@@ -1382,16 +1760,45 @@ const MeetingClient = {
     return haystacks.some((h) => markers.some((m) => h.includes(m)))
   },
 
+  // One CONNECTION left. The person's tile stays while another of their
+  // connections remains (only the leaver's video goes) and is removed with
+  // the last one.
   _removeTile(identity) {
-    const tile = this._tiles.get(identity)
+    const person = personIdentity(identity)
+    const tile = this._tiles.get(person)
     if (!tile) return
+    const connections = this._tileConnections && this._tileConnections.get(person)
+    if (connections) {
+      connections.delete(identity)
+      if (connections.size > 0) {
+        this._dropConnectionVideo(identity, tile)
+        return
+      }
+      this._tileConnections.delete(person)
+    }
+    if (this._connectionVideos) this._connectionVideos.delete(identity)
     tile.remove()
-    this._tiles.delete(identity)
+    this._tiles.delete(person)
   },
 
   _clearTiles() {
     for (const tile of this._tiles.values()) tile.remove()
     this._tiles.clear()
+    if (this._tileConnections) this._tileConnections.clear()
+    if (this._connectionVideos) this._connectionVideos.clear()
+  },
+
+  // The screen-share sharer, as the PERSON: a share published by a
+  // companion connection is attributed to its person, never `video:user:…`.
+  _sharerIdentity(participant) {
+    return personIdentity(participant?.identity || "")
+  },
+
+  // The sharer, by NAME (task 01a13ca2 stage 5): their own LiveKit name,
+  // another connection of the same person in the room, then the server's
+  // name map. A nameless `video:user:X` share reads as X's name.
+  _sharerLabel(participant) {
+    return personLabel(participant, this._room, readParticipantNames(this.el))
   },
 
   _screenShareSlot() {
@@ -1438,24 +1845,22 @@ const MeetingClient = {
     if (!slot) return
     if (video.parentElement === slot) {
       const button = slot.parentElement?.querySelector?.("[data-screen-share-fullscreen]")
-      // phx-update="ignore" preserves the JS-owned <video>, but the
-      // surrounding viewer/button are still server patched. A patch can
-      // therefore reset these server-authored attributes to their inactive
-      // defaults while the live track remains attached. Re-stamp the active
+      // The viewer is phx-update="ignore" (task 01a13ca2 stage 5), so a
+      // patch no longer reaches the slot, button or sharer label. This
+      // hook's `updated()` only runs when `#meeting-client` itself changes,
+      // so it was never the thing keeping them alive. Re-stamp the active
       // surface on every hook update so fullscreen does not silently vanish
       // after a roster/timer/LiveView reconnect render.
       slot.classList?.remove("hidden")
       slot.dataset.screenShareActive = "true"
-      if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "true"
       if (this._screenShareParticipant?.identity) {
-        slot.dataset.screenShareSharer = this._screenShareParticipant.identity
+        slot.dataset.screenShareSharer = this._sharerIdentity(this._screenShareParticipant)
       }
       const label = slot.parentElement?.querySelector?.(
         "[data-quickmeet-screen-share-sharer]",
       )
       if (label) {
-        label.textContent =
-          this._screenShareParticipant?.name || this._screenShareParticipant?.identity || ""
+        label.textContent = this._sharerLabel(this._screenShareParticipant)
       }
       if (button) button.hidden = false
       if (this._screenShareController?.button !== button) {
@@ -1472,7 +1877,6 @@ const MeetingClient = {
       oldSlot.dataset.screenShareActive = "false"
       delete oldSlot.dataset.screenShareSharer
       oldSlot.classList?.add("hidden")
-      if (oldSlot.parentElement?.dataset) oldSlot.parentElement.dataset.screenShareActive = "false"
       const oldLabel = oldSlot.parentElement?.querySelector?.(
         "[data-quickmeet-screen-share-sharer]",
       )
@@ -1483,14 +1887,12 @@ const MeetingClient = {
     slot.appendChild(video)
     slot.classList.remove("hidden")
     slot.dataset.screenShareActive = "true"
-    if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "true"
     if (this._screenShareParticipant?.identity) {
-      slot.dataset.screenShareSharer = this._screenShareParticipant.identity
+      slot.dataset.screenShareSharer = this._sharerIdentity(this._screenShareParticipant)
     }
     const label = slot.parentElement?.querySelector?.("[data-quickmeet-screen-share-sharer]")
     if (label) {
-      label.textContent =
-        this._screenShareParticipant?.name || this._screenShareParticipant?.identity || ""
+      label.textContent = this._sharerLabel(this._screenShareParticipant)
     }
     this._mountScreenShareController(slot, video, this._screenSharePublication)
   },
@@ -1507,7 +1909,7 @@ const MeetingClient = {
       }
 
       this._ensureTile(participant)
-      const tile = this._tiles.get(participant.identity)
+      const tile = this._tiles.get(personIdentity(participant.identity))
       if (!tile) return
 
       let wrapper = tile.querySelector(".meeting-tile-video")
@@ -1526,6 +1928,7 @@ const MeetingClient = {
       el.playsInline = true
       el.muted = participant.isLocal === true
       wrapper.appendChild(el)
+      this._rememberConnectionVideo(participant.identity, track, el)
     } else if (track.kind === Track.Kind.Audio) {
       // STAYS: attaching local audio creates an echo loop.
       if (participant.isLocal) return
@@ -1588,17 +1991,15 @@ const MeetingClient = {
 
     slot.classList.remove("hidden")
     slot.dataset.screenShareActive = "true"
-    const viewer = slot.parentElement
-    if (viewer?.dataset) viewer.dataset.screenShareActive = "true"
     if (participant?.identity) {
-      slot.dataset.screenShareSharer = participant.identity
+      slot.dataset.screenShareSharer = this._sharerIdentity(participant)
     }
 
     const sharerLabel = slot.parentElement?.querySelector(
       "[data-quickmeet-screen-share-sharer]",
     )
     if (sharerLabel) {
-      sharerLabel.textContent = participant?.name || participant?.identity || ""
+      sharerLabel.textContent = this._sharerLabel(participant)
     }
 
     this._screenShareTrack = track
@@ -1618,7 +2019,8 @@ const MeetingClient = {
     elements.forEach((el) => el.remove())
 
     if (track.kind === Track.Kind.Video) {
-      const tile = this._tiles.get(participant?.identity)
+      this._forgetConnectionTrack(participant?.identity, track)
+      const tile = this._tiles.get(personIdentity(participant?.identity))
       if (!tile) return
       const wrapper = tile.querySelector(".meeting-tile-video")
       if (wrapper && !wrapper.querySelector("video")) {
@@ -1659,7 +2061,6 @@ const MeetingClient = {
         while (slot.firstChild) slot.removeChild(slot.firstChild)
         slot.classList.add("hidden")
         slot.dataset.screenShareActive = "false"
-        if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "false"
         delete slot.dataset.screenShareSharer
         const sharerLabel = slot.parentElement?.querySelector(
           "[data-quickmeet-screen-share-sharer]",
@@ -1668,10 +2069,12 @@ const MeetingClient = {
       })
   },
 
+  // Tiles are keyed by person, so speakers are folded to their person too
+  // (a Set dedupes `user:A` + `video:user:A` into one ring).
   _markSpeakers(identities) {
-    const speaking = new Set(identities)
-    for (const [identity, tile] of this._tiles) {
-      tile.classList.toggle("meeting-tile-speaking", speaking.has(identity))
+    const speaking = new Set((identities || []).map(personIdentity))
+    for (const [person, tile] of this._tiles) {
+      tile.classList.toggle("meeting-tile-speaking", speaking.has(person))
     }
   },
 }

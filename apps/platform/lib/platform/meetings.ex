@@ -769,6 +769,149 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  "Which tasks did this meeting file?" — the ONE place that rule is written
+  (task 01a1694a stage 1). A `dynamic` over the NAMED bindings `:task`
+  (`Platform.Tasks.Task`) and `:meeting` (`Platform.Meetings.Meeting`), so
+  every reader composes it instead of restating it:
+
+    * `meeting_tasks_query/1` — the meeting briefing builder and its revert
+      check;
+    * `Platform.Meetings.Archive` — the action-item chip count AND the
+      action-item search vector.
+
+  A meeting reaches its tasks by two routes, because the two filers stamp
+  different metadata keys (task 01a04e16):
+
+    * **the live arm** — `Platform.Meetings.Candidates.graduate/2` stamps
+      `metadata["meeting_id"]`. That stamp names exactly one meeting, so the
+      arm is unbounded in time.
+    * **the canvas arm** — `Platform.Meetings.Triage.file_tasks_from_canvas/2`
+      stamps `metadata["source_canvas_id"]` and no meeting id. The task
+      belongs to a meeting when that canvas is a live `chat_canvases` row in
+      the meeting's chat space AND the task was inserted at or after the
+      meeting's `started_at`. A meeting that never started (nil `started_at`)
+      matches no canvas-arm task: `inserted_at >= NULL` is never true.
+
+  There is deliberately no `<= ended_at` cap on the canvas arm: triage is
+  the post-meeting reconciliation pass and files AFTER the meeting ends by
+  design. The canvas arm is an `EXISTS` rather than a join, so a task
+  reachable through several of the meeting's canvases still yields one row.
+
+  Soft-deleted tasks (`deleted_at` set) never match.
+  """
+  @spec meeting_task_scope() :: Ecto.Query.dynamic_expr()
+  def meeting_task_scope do
+    dynamic(
+      [task: t, meeting: m],
+      is_nil(t.deleted_at) and
+        (fragment("(? ->> 'meeting_id')", t.metadata) == fragment("?::text", m.id) or
+           (t.inserted_at >= m.started_at and
+              fragment(
+                """
+                EXISTS (
+                  SELECT 1
+                  FROM chat_canvases AS cv
+                  WHERE cv.space_id = ? AND cv.deleted_at IS NULL
+                    AND (? ->> 'source_canvas_id') = cv.id::text
+                )\
+                """,
+                m.chat_space_id,
+                t.metadata
+              )))
+    )
+  end
+
+  @doc """
+  The tasks `meeting` filed, as a query over `Platform.Tasks.Task` with the
+  named bindings `:task` and `:meeting`. The rule is `meeting_task_scope/0`;
+  this only binds it to one meeting.
+  """
+  @spec meeting_tasks_query(Meeting.t()) :: Ecto.Query.t()
+  def meeting_tasks_query(%Meeting{id: id}) do
+    from(t in Platform.Tasks.Task,
+      as: :task,
+      join: m in Meeting,
+      as: :meeting,
+      on: m.id == ^id,
+      where: ^meeting_task_scope()
+    )
+  end
+
+  @doc """
+  The users who attended `meeting`: distinct `meeting_participants.user_id`s
+  in the room of the meeting's chat space whose presence overlapped the
+  meeting's actual window `[started_at, coalesce(ended_at, now)]`.
+
+  Time-windowed because the room is per chat space and outlives the meeting:
+  people can rejoin after it ends, and a rejoin is not attendance.
+
+  Agents (`agent_id` set) and anonymous guests (no `user_id`) are excluded,
+  and so is any user who is an EXTERNAL member (role `guest`) of the
+  meeting's own org — the org of the meeting's chat space. That last rule is
+  a declared deviation from "every human attendee"; it mirrors the insight
+  disseminator's `:guest_addressee` refusal, since the Inbox lists only
+  mentions to an external viewer.
+
+  Guest status is decided against the meeting's org ONLY, by the
+  orchestrator's ruling on task 01a1694a: a member of this org who is a
+  guest somewhere else is still an attendee here. A chat space with no org
+  (a project with no org) has no org to be a guest of, so nobody is dropped
+  on that ground.
+
+  A meeting with a nil `started_at` never ran and has no attendees: `[]`.
+  """
+  @spec human_attendee_ids(Meeting.t()) :: [binary()]
+  def human_attendee_ids(%Meeting{started_at: nil}), do: []
+
+  def human_attendee_ids(%Meeting{chat_space_id: space_id, started_at: started_at} = meeting)
+      when is_binary(space_id) do
+    until = meeting.ended_at || DateTime.utc_now()
+
+    from(p in Participant,
+      join: r in Room,
+      on: r.id == p.room_id,
+      where: r.space_id == ^space_id,
+      where: not is_nil(p.user_id) and is_nil(p.agent_id),
+      where: p.joined_at <= ^until,
+      where: is_nil(p.left_at) or p.left_at >= ^started_at,
+      distinct: true,
+      select: p.user_id
+    )
+    |> Repo.all()
+    |> drop_org_guests(space_org_id(space_id))
+    |> Enum.sort()
+  end
+
+  def human_attendee_ids(%Meeting{}), do: []
+
+  @doc """
+  Whether `user_id` is an EXTERNAL member (role `guest`) of `meeting`'s own
+  org — the org of its chat space. The same check `human_attendee_ids/1`
+  drops attendees by, exposed so the briefing's action path refuses exactly
+  the people delivery left out (task 01a1694a stage 3). `false` when the
+  space has no org.
+  """
+  @spec meeting_org_guest?(Meeting.t(), binary()) :: boolean()
+  def meeting_org_guest?(%Meeting{chat_space_id: space_id}, user_id)
+      when is_binary(space_id) and is_binary(user_id) do
+    drop_org_guests([user_id], space_org_id(space_id)) == []
+  end
+
+  def meeting_org_guest?(%Meeting{}, _user_id), do: false
+
+  defp space_org_id(space_id) do
+    Repo.one(from(s in Platform.Chat.Space, where: s.id == ^space_id, select: s.org_id))
+  end
+
+  defp drop_org_guests(user_ids, nil), do: user_ids
+  defp drop_org_guests([], _org_id), do: []
+
+  defp drop_org_guests(user_ids, org_id) do
+    guests = Platform.Tenancy.external_member_ids(org_id, user_ids)
+    Enum.reject(user_ids, &MapSet.member?(guests, &1))
+  end
+
+  @doc """
   Was this meeting *meant* to have happened by `now`, and never started?
 
   This is a REPORT over the `(status, scheduled_start_at, started_at)`
@@ -1313,11 +1456,29 @@ defmodule Platform.Meetings do
           {:meeting_ended, updated}
         )
 
+        deliver_meeting_briefing(updated)
         ok
 
       error ->
         error
     end
+  end
+
+  # Conclusion is the trigger for the after-action briefing (task 01a1694a
+  # stage 2): `end_meeting/1` is the only live→ended transition, so this runs
+  # once per meeting and never when one person leaves. Synchronous — the work
+  # is DB-only — and rescued, because a briefing failure must never fail the
+  # `room_finished` webhook that ended the meeting.
+  defp deliver_meeting_briefing(%Meeting{} = meeting) do
+    Platform.Meetings.MeetingBriefings.deliver(meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] meeting briefing for #{meeting.id} not delivered: " <>
+          Exception.message(error)
+      )
+
+      :error
   end
 
   @doc """
@@ -3135,6 +3296,8 @@ defmodule Platform.Meetings do
     end
   end
 
+  @companion_prefix "video:user:"
+
   @doc """
   Parse a LiveKit participant identity string into a typed FK tuple.
 
@@ -3154,11 +3317,57 @@ defmodule Platform.Meetings do
   attempting to resolve a bogus foreign key.
   """
   @spec parse_identity(String.t() | nil) ::
-          {:user, binary()} | {:agent, binary()} | {:guest, binary()} | :unknown
+          {:user, binary()}
+          | {:agent, binary()}
+          | {:guest, binary()}
+          | {:companion, binary()}
+          | :unknown
   def parse_identity("user:" <> uuid), do: cast_identity(:user, uuid)
   def parse_identity("agent:" <> uuid), do: cast_identity(:agent, uuid)
   def parse_identity("guest:" <> uuid), do: cast_identity(:guest, uuid)
+  def parse_identity(@companion_prefix <> uuid), do: cast_identity(:companion, uuid)
   def parse_identity(_), do: :unknown
+
+  # ── Companion identities (task 01a13ca2 stage 1) ─────────────────────────
+  #
+  # The Burrow iOS app keeps call AUDIO on its native LiveKit connection
+  # (`user:<uuid>`) and opens a SECOND, video-only connection from the page
+  # for camera publish and video viewing. That second connection is the
+  # person's "companion", identity `video:user:<uuid>`.
+  #
+  # The prefix is deliberately NOT `user:`-prefixed: `parse_identity/1` casts
+  # whatever follows `user:` as a UUID, and prefix tests elsewhere
+  # (`"user:" <>` matches in the LiveViews) would mistake a `user:<uuid>/video`
+  # form for the person. The same prefix string exists in the page JS
+  # (`personIdentity` in participant_label.js) and in Swift
+  # (`CallParticipant.isCompanion`); all three are pinned by the shared
+  # fixture `test/support/fixtures/companion_identities_v1.json`.
+
+  @doc """
+  The companion identity of `user_id`: `"video:user:" <> user_id`.
+  """
+  @spec companion_identity(binary()) :: String.t()
+  def companion_identity(user_id) when is_binary(user_id), do: @companion_prefix <> user_id
+
+  @doc """
+  The PERSON a LiveKit identity belongs to: a companion
+  `"video:user:<rest>"` folds to `"user:<rest>"`; any other string, or nil,
+  is returned unchanged. Use it wherever a roster, head count or presence
+  check must count people rather than connections.
+  """
+  @spec person_identity(String.t() | nil) :: String.t() | nil
+  def person_identity(@companion_prefix <> rest), do: "user:" <> rest
+  def person_identity(identity), do: identity
+
+  @doc """
+  True when `identity` is a companion (video-only) connection, i.e. it starts
+  with `"video:user:"`. A plain prefix test, so it answers for a malformed
+  suffix too: the webhook must ignore every companion-shaped identity, not
+  only the well-formed ones.
+  """
+  @spec companion_identity?(term()) :: boolean()
+  def companion_identity?(@companion_prefix <> _), do: true
+  def companion_identity?(_), do: false
 
   @doc """
   True when a LiveKit participant identity names a Burrow AGENT.
@@ -3228,8 +3437,22 @@ defmodule Platform.Meetings do
           required(:identity) => String.t() | nil,
           required(:name) => String.t() | nil,
           optional(:sid) => String.t() | nil
-        }) :: {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
+        }) ::
+          {:ok, Participant.t()} | {:error, Ecto.Changeset.t() | :companion_identity}
   def upsert_live_participant(%Room{} = room, %{identity: identity} = attrs) do
+    if companion_identity?(identity) do
+      # A companion (video-only) connection is the SAME person as their
+      # `user:` connection, never a roster row of its own: no nil-FK row named
+      # after the person, no `{:participant_joined, _}` broadcast, no inbox
+      # dismissal. The webhook already short-circuits; this is the context's
+      # own refusal so no other caller can write one either.
+      {:error, :companion_identity}
+    else
+      do_upsert_live_participant(room, identity, attrs)
+    end
+  end
+
+  defp do_upsert_live_participant(%Room{} = room, identity, attrs) do
     name = Map.get(attrs, :name)
     parsed = parse_identity(identity)
     fk = identity_fk(parsed)
@@ -3382,8 +3605,20 @@ defmodule Platform.Meetings do
           required(:identity) => String.t() | nil,
           required(:name) => String.t() | nil,
           optional(:sid) => String.t() | nil
-        }) :: {:ok, Participant.t()} | {:error, :not_found | :superseded}
+        }) ::
+          {:ok, Participant.t()} | {:error, :not_found | :superseded | :companion_identity}
   def mark_live_participant_left(%Room{} = room, %{identity: identity} = attrs) do
+    if companion_identity?(identity) do
+      # A companion owns no row. Falling through would match the PERSON's
+      # active row by display name (`find_active_participant/3`, nil-FK
+      # branch) and end it while their audio connection is still live.
+      {:error, :companion_identity}
+    else
+      do_mark_live_participant_left(room, identity, attrs)
+    end
+  end
+
+  defp do_mark_live_participant_left(%Room{} = room, identity, attrs) do
     name = Map.get(attrs, :name)
     parsed = parse_identity(identity)
     fk = identity_fk(parsed)
@@ -3634,6 +3869,10 @@ defmodule Platform.Meetings do
   defp identity_fk({:user, uuid}), do: %{user_id: uuid}
   defp identity_fk({:agent, uuid}), do: %{agent_id: uuid}
   defp identity_fk({:guest, _uuid}), do: %{}
+  # A companion's suffix IS a user uuid, but the connection is not the user's
+  # roster seat: never a user FK. (Both writers refuse companions before they
+  # get here; this clause keeps the function total and the intent explicit.)
+  defp identity_fk({:companion, _uuid}), do: %{}
   defp identity_fk(:unknown), do: %{}
 
   defp display_name_from_identity(_), do: nil
@@ -4148,6 +4387,20 @@ defmodule Platform.Meetings do
   """
   @spec generate_token(Room.t(), map()) :: {:ok, String.t()} | {:error, atom()}
   def generate_token(%Room{} = room, %{identity: identity, name: name}) do
+    build_room_token(room, identity, name, %{}, %{})
+  end
+
+  # Room-name-string form of `generate_token/2`; documented on the first clause
+  # above, since @doc is per name/arity and a second one would be discarded.
+  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
+    generate_token(room_name, identity, [])
+  end
+
+  # The ONE builder behind `generate_token/2` and `companion_token_for_user/3`,
+  # so the TTL (6 h), the `video.room` scope and the room config cannot drift
+  # between a person's token and their companion's. `video_overrides` is
+  # merged over the default grant; `extra_claims` adds top-level claims.
+  defp build_room_token(%Room{} = room, identity, name, video_overrides, extra_claims) do
     config = livekit_config()
     api_key = config[:api_key]
     api_secret = config[:api_secret]
@@ -4158,6 +4411,18 @@ defmodule Platform.Meetings do
       now = System.system_time(:second)
       ttl = 6 * 60 * 60
 
+      video =
+        Map.merge(
+          %{
+            "room" => room.livekit_room_name,
+            "roomJoin" => true,
+            "canPublish" => true,
+            "canSubscribe" => true,
+            "canPublishData" => true
+          },
+          video_overrides
+        )
+
       claims =
         %{
           "iss" => api_key,
@@ -4166,25 +4431,65 @@ defmodule Platform.Meetings do
           "exp" => now + ttl,
           "jti" => Ecto.UUID.generate(),
           "name" => name,
-          "video" => %{
-            "room" => room.livekit_room_name,
-            "roomJoin" => true,
-            "canPublish" => true,
-            "canSubscribe" => true,
-            "canPublishData" => true
-          }
+          "video" => video
         }
+        |> Map.merge(extra_claims)
         |> maybe_put_room_config(room.livekit_room_name)
 
       {:ok, encode_jwt(claims, api_secret)}
     end
   end
 
-  # Room-name-string form of `generate_token/2`; documented on the first clause
-  # above, since @doc is per name/arity and a second one would be discarded.
-  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
-    generate_token(room_name, identity, [])
+  # The only sources a companion may publish. NO "microphone": the SFU must
+  # refuse a companion mic so call audio can never play twice (the person's
+  # native connection carries audio).
+  @companion_publish_sources ["camera", "screen_share"]
+
+  @doc """
+  Mint the token for `user_id`'s video-only COMPANION connection to the call
+  of chat space `space_id` (task 01a13ca2 stage 1).
+
+  The iOS app keeps audio on its native `user:<uuid>` connection; the page
+  opens a second connection as `companion_identity(user_id)`
+  (`"video:user:<uuid>"`) for camera publish and video viewing.
+
+  Passes the SAME `authorize_join/2` gate as `join_for_user/3`, then looks
+  the room up with `ensure_room/1`. Unlike `join_for_user/3` it deliberately
+  does NOT ensure a chat participant, activate the room, or upsert a
+  `meeting_participants` row, so a companion causes no join broadcast, no
+  attendance and no agent-visible roster entry. Mints through the same
+  builder as `generate_token/2` (same TTL and room), with the grant narrowed
+  to `canPublishSources: ["camera", "screen_share"]` and `canPublishData:
+  false`, plus the participant attribute `companion_of: "user:<uuid>"`. The
+  `name` is the person's, so any label that falls back to it still reads as
+  the person.
+
+  Returns `{:ok, %{token, room, identity}}` or `{:error, :join_not_permitted}`
+  (or the room lookup's / builder's error). The token is a bearer credential
+  for the room: never log it.
+  """
+  @spec companion_token_for_user(binary(), binary(), String.t() | nil) ::
+          {:ok, %{token: String.t(), room: Room.t(), identity: String.t()}}
+          | {:error, :join_not_permitted | :invalid_join | term()}
+  def companion_token_for_user(space_id, user_id, display_name)
+      when is_binary(space_id) and is_binary(user_id) do
+    identity = companion_identity(user_id)
+
+    with :ok <- authorize_join(space_id, user_id),
+         {:ok, room} <- ensure_room(space_id),
+         {:ok, token} <-
+           build_room_token(
+             room,
+             identity,
+             display_name,
+             %{"canPublishSources" => @companion_publish_sources, "canPublishData" => false},
+             %{"attributes" => %{"companion_of" => "user:" <> user_id}}
+           ) do
+      {:ok, %{token: token, room: room, identity: identity}}
+    end
   end
+
+  def companion_token_for_user(_space_id, _user_id, _display_name), do: {:error, :invalid_join}
 
   @doc """
   Generate a LiveKit access token from a room name string.
@@ -5354,6 +5659,10 @@ defmodule Platform.Meetings do
           nil -> nil
         end
 
+      # A companion is a person's video connection, never an agent.
+      {:companion, _user_id} ->
+        nil
+
       _other ->
         agent_name_from_participant_row(identity, room_name)
     end
@@ -5468,12 +5777,27 @@ defmodule Platform.Meetings do
         case result do
           {:ok, updated} ->
             maybe_dispatch_scribe_attention(updated)
+            refresh_meeting_briefing(updated)
             {:ok, updated}
 
           error ->
             error
         end
     end
+  end
+
+  # A completed transcript carries the summary the meeting's briefing shows
+  # (task 01a1694a stage 2). Rescued: the transcript is complete either way.
+  defp refresh_meeting_briefing(%Transcript{} = transcript) do
+    Platform.Meetings.MeetingBriefings.refresh_for_transcript(transcript)
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] meeting briefing refresh for transcript #{transcript.id} failed: " <>
+          Exception.message(error)
+      )
+
+      :error
   end
 
   # Opportunistic dispatch to the `meeting_scribe` role-assigned agent's linked
@@ -8158,6 +8482,7 @@ defmodule Platform.Meetings do
     case parse_identity(identity) do
       {:user, _} -> {:error, :not_an_agent}
       {:guest, _} -> {:error, :not_an_agent}
+      {:companion, _} -> {:error, :not_an_agent}
       _ -> {:ok, identity}
     end
   end
@@ -8471,9 +8796,15 @@ defmodule Platform.Meetings do
   @spec presence_from_identities([String.t()], String.t()) ::
           %{viewer_present?: boolean(), others: [String.t()]}
   def presence_from_identities(identities, viewer_identity) when is_list(identities) do
+    # Count PEOPLE, not connections: a companion (`video:user:<uuid>`) folds
+    # onto its person, and one person with two connections counts once. The
+    # viewer's own companion is therefore never "someone else in the room".
+    persons = identities |> Enum.map(&person_identity/1) |> Enum.uniq()
+    viewer = person_identity(viewer_identity)
+
     %{
-      viewer_present?: viewer_identity in identities,
-      others: Enum.reject(identities, &(&1 == viewer_identity))
+      viewer_present?: viewer in persons,
+      others: Enum.reject(persons, &(&1 == viewer))
     }
   end
 

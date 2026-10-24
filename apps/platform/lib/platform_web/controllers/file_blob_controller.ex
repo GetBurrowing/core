@@ -108,14 +108,65 @@ defmodule PlatformWeb.FileBlobController do
       # Prevent MIME-sniffing: stored content_type is authoritative.
       |> put_resp_header("x-content-type-options", "nosniff")
       |> maybe_sandbox_header(file)
-      |> send_download({:file, path},
-        filename: file.original_filename || file.name || "file",
-        content_type: file.content_type,
-        disposition: disposition
-      )
+      |> send_media_or_whole(file, path, disposition)
     else
       send_resp(conn, :not_found, "Not found")
     end
+  end
+
+  # Video and audio answer a single `Range` request (206/416, parsed exactly
+  # as `PlatformWeb.ChatAttachmentController` does), so a <video> on this
+  # route is seekable: a `#t=` media fragment paints that frame, and the
+  # Social cover picker can scrub (task 01a165ec stage 4). Everything else,
+  # and a media request without a usable range, gets the whole body as before.
+  defp send_media_or_whole(conn, file, path, disposition) do
+    with true <- media?(file.content_type),
+         [range | _] <- get_req_header(conn, "range"),
+         {:ok, %File.Stat{size: size}} <- File.stat(path) do
+      case PlatformWeb.ChatAttachmentController.parse_range(range, size) do
+        {:ok, first, last} ->
+          conn
+          |> put_resp_header("accept-ranges", "bytes")
+          |> put_resp_content_type(file.content_type, nil)
+          |> put_resp_header("content-disposition", disposition_header(file, disposition))
+          |> put_resp_header("content-range", "bytes #{first}-#{last}/#{size}")
+          |> send_file(206, path, first, last - first + 1)
+
+        :unsatisfiable ->
+          conn
+          |> put_resp_header("content-range", "bytes */#{size}")
+          |> send_resp(416, "")
+
+        :ignore ->
+          send_whole(conn, file, path, disposition)
+      end
+    else
+      _ -> send_whole(conn, file, path, disposition)
+    end
+  end
+
+  defp send_whole(conn, file, path, disposition) do
+    conn =
+      if media?(file.content_type),
+        do: put_resp_header(conn, "accept-ranges", "bytes"),
+        else: conn
+
+    send_download(conn, {:file, path},
+      filename: file_name(file),
+      content_type: file.content_type,
+      disposition: disposition
+    )
+  end
+
+  defp media?("video/" <> _), do: true
+  defp media?("audio/" <> _), do: true
+  defp media?(_), do: false
+
+  defp file_name(file), do: file.original_filename || file.name || "file"
+
+  defp disposition_header(file, disposition) do
+    encoded = URI.encode(file_name(file), &URI.char_unreserved?/1)
+    ~s(#{disposition}; filename="#{encoded}"; filename*=utf-8''#{encoded})
   end
 
   defp force_download?(%{"download" => value}) when value in ["1", "true"], do: true

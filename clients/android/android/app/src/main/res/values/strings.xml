@@ -63,6 +63,31 @@
     <string name="widget_tasks_title">My tasks</string>
     <string name="widget_approvals_description">Approvals waiting on you</string>
     <string name="widget_tasks_description">Your open tasks, beside your approvals</string>
+    <!-- Today's briefing widget (canvas 01a161fa). Counts only, never titles. -->
+    <string name="widget_briefing_title">Today\'s briefing</string>
+    <string name="widget_briefing_description">How many of today\'s briefing items need your call</string>
+    <string name="widget_briefing_cover_description">Today\'s briefing on the cover screen</string>
+    <string name="widget_briefing_need_call">need your call</string>
+    <string name="widget_briefing_needs_call">needs your call</string>
+    <string name="widget_briefing_your_call">your call</string>
+    <plurals name="widget_briefing_items">
+        <item quantity="one">%d item</item>
+        <item quantity="other">%d items</item>
+    </plurals>
+    <plurals name="widget_briefing_handled">
+        <item quantity="one">%d handled</item>
+        <item quantity="other">%d handled</item>
+    </plurals>
+    <!-- %1$s is widget_briefing_items, %2$s is widget_briefing_handled. -->
+    <string name="widget_briefing_items_handled">%1$s · %2$s</string>
+    <string name="widget_briefing_fyi">FYI only</string>
+    <string name="widget_briefing_all_done">All done</string>
+    <string name="widget_briefing_nothing_waiting">Nothing waiting</string>
+    <string name="widget_briefing_none">No briefing today</string>
+    <!-- %1$s is the BRIEFING's date ("Tue 21 Oct"), never the device's. -->
+    <string name="widget_briefing_stale_label">Briefing · %1$s</string>
+    <string name="widget_briefing_open_to_refresh">Open to refresh</string>
+    <string name="widget_briefing_sign_in">Open Burrow to sign in</string>
     <!-- Add your install (task 01a12787, design canvas 01a12787-c69f rev 1): first launch and the switcher's Add install. Copy verbatim. -->
     <string name="add_flow_title">Add your install</string>
     <string name="add_flow_body">Enter the address your team uses for Burrow.</string>

@@ -265,7 +265,11 @@ defmodule Platform.Social.TaskBridgeTest do
 
     test "a profile with no project is refused", %{w: w, seg: seg} do
       {:ok, bare} =
-        Social.create_profile(w.org_id, %{name: "Bare #{unique()}", space_id: w.space.id})
+        Social.create_profile(w.org_id, %{
+          name: "Bare #{unique()}",
+          space_id: w.space.id,
+          project_id: nil
+        })
 
       {:ok, _} = Social.create_account(w.org_id, bare, %{platform: "x"})
 

@@ -200,4 +200,69 @@ defmodule Platform.Social.WebhookTest do
       assert row(ctx.post) == before
     end
   end
+
+  describe "platform ids and published_at (Clip Studio 2/9, task 01a16662)" do
+    test "a published delivery stores platform_post_id and published_at", ctx do
+      payload =
+        body(ctx.post.external_id, "published", %{
+          external_url: "https://example.test/p/7",
+          platform_post_id: "pp_7"
+        })
+
+      assert %{"applied" => 1} =
+               json_response(
+                 deliver(build_conn(), ctx.profile.id, payload, Fake.sign(payload, @secret)),
+                 200
+               )
+
+      row = row(ctx.post)
+      assert row.status == "published"
+      assert row.platform_post_id == "pp_7"
+      assert row.external_id == ctx.post.external_id
+      assert %DateTime{} = row.published_at
+    end
+
+    test "Zernio webhook stores platformPostId", ctx do
+      previous = Application.get_env(:social, :publisher)
+      Application.put_env(:social, :publisher, Platform.Social.Publisher.Zernio)
+      on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+
+      # The OpenAPI webhook envelope `{id, event, post, timestamp}`.
+      payload =
+        Jason.encode!(%{
+          id: "evt_zernio_pp",
+          event: "post.published",
+          timestamp: "2026-10-23T00:00:00Z",
+          post: %{
+            _id: ctx.post.external_id,
+            status: "published",
+            platforms: [
+              %{
+                platform: "linkedin",
+                status: "published",
+                platformPostId: "urn:li:share:8001",
+                publishedUrl: "https://li.example.test/8001"
+              }
+            ]
+          }
+        })
+
+      sig = :crypto.mac(:hmac, :sha256, @secret, payload) |> Base.encode16(case: :lower)
+
+      conn =
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-zernio-signature", sig)
+        |> post("/api/ext/social/webhooks/#{ctx.profile.id}", payload)
+
+      assert %{"applied" => 1} = json_response(conn, 200)
+
+      row = row(ctx.post)
+      assert row.status == "published"
+      assert row.platform_post_id == "urn:li:share:8001"
+      assert row.external_id == ctx.post.external_id
+      assert row.external_url == "https://li.example.test/8001"
+      assert %DateTime{} = row.published_at
+    end
+  end
 end

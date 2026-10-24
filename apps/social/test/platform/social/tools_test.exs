@@ -100,8 +100,18 @@ defmodule Platform.Social.ToolsTest do
       assert {p.home_url, p.voice_notes, p.default_hashtags} == {@home, "warm", ["#htc"]}
 
       for account <- p.accounts do
+        # Social authoring 4/11 adds the account's slots, goal and next slot.
         assert Map.keys(account) |> Enum.sort() ==
-                 [:approval_mode, :handle, :id, :platform, :status]
+                 [
+                   :approval_mode,
+                   :handle,
+                   :id,
+                   :next_free_slot,
+                   :platform,
+                   :posting_slots,
+                   :status,
+                   :weekly_goal
+                 ]
       end
     end
 
@@ -316,6 +326,43 @@ defmodule Platform.Social.ToolsTest do
     end
   end
 
+  describe "social_post_list Clip Studio fields (task 01a16662)" do
+    test "carries clip_id, platform_post_id, publish_attempts and published_at, nil-tolerant",
+         ctx do
+      assert {:ok, %{posts: [bare]}} =
+               call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert {bare.clip_id, bare.platform_post_id, bare.publish_attempts, bare.published_at} ==
+               {nil, nil, 0, nil}
+
+      at = DateTime.utc_now()
+
+      Repo.update_all(from(p in Post, where: p.id == ^ctx.post.id),
+        set: [
+          clip_id: ctx.clip.id,
+          platform_post_id: "urn:li:share:1",
+          publish_attempts: 2,
+          published_at: at
+        ]
+      )
+
+      assert {:ok, %{posts: [p]}} =
+               call("social_post_list", %{"profile_id" => ctx.profile.id}, ctx.a)
+
+      assert {p.clip_id, p.platform_post_id, p.publish_attempts, p.published_at} ==
+               {ctx.clip.id, "urn:li:share:1", 2, at}
+    end
+
+    test "neither draft tool takes them as a parameter", _ctx do
+      for definition <- ToolDefinitions.definitions(),
+          definition.name in ~w(social_draft_create social_draft_update),
+          field <- ~w(clip_id platform_post_id publish_after publish_attempts published_at)a do
+        refute Map.has_key?(definition.parameters, field),
+               "#{definition.name} takes #{field}"
+      end
+    end
+  end
+
   describe "social_clip_propose" do
     @clip %{"source_url" => "https://youtu.be/abc123", "start_s" => 10, "end_s" => 40}
 
@@ -438,7 +485,7 @@ defmodule Platform.Social.ToolsTest do
       F.closed_candidate!(w.meeting, ret, :retracted)
       F.candidate!(w.meeting, filing, %{state: :acting})
 
-      {:ok, bare} = Social.create_profile(w.org_id, %{name: "Bare #{unique()}"})
+      {:ok, bare} = Social.create_profile(w.org_id, %{name: "Bare #{unique()}", project_id: nil})
       {:ok, _} = Social.create_account(w.org_id, bare, %{platform: "x"})
 
       {:ok, m2} =
@@ -536,6 +583,81 @@ defmodule Platform.Social.ToolsTest do
                  },
                  g
                )
+    end
+  end
+
+  # Task 01a165ec stage 2.
+  describe "cover fields" do
+    setup ctx do
+      %{
+        video: media_file!(ctx.org_a, "video/mp4"),
+        png: media_file!(ctx.org_a, "image/png"),
+        pdf: media_file!(ctx.org_a, "application/pdf")
+      }
+    end
+
+    test "the draft tools document both fields and the row lists them" do
+      for name <- ~w(social_draft_create social_draft_update) do
+        tool = Enum.find(ToolDefinitions.definitions(), &(&1.name == name))
+        assert %{type: "string"} = tool.parameters.cover_file_id
+        assert %{type: "integer"} = tool.parameters.cover_offset_ms
+        assert tool.returns =~ "cover_file_id, cover_offset_ms, cover_error"
+      end
+    end
+
+    test "create and update round-trip both fields", ctx do
+      assert {:ok, %{posts: [post]}} =
+               call(
+                 "social_draft_create",
+                 %{
+                   "profile_id" => ctx.profile.id,
+                   "account_ids" => [ctx.acc1.id],
+                   "body" => "clip",
+                   "media_file_ids" => [ctx.video.id],
+                   "cover_file_id" => ctx.png.id
+                 },
+                 ctx.a
+               )
+
+      assert {post.cover_file_id, post.cover_offset_ms, post.cover_error} ==
+               {ctx.png.id, nil, nil}
+
+      {:ok, _} =
+        Social.update_post(ctx.org_a, post.id, %{
+          media_meta: %{ctx.video.id => %{"duration_s" => 10}}
+        })
+
+      assert {:ok, %{post: %{cover_file_id: nil, cover_offset_ms: 9_000}}} =
+               call(
+                 "social_draft_update",
+                 %{"post_id" => post.id, "cover_offset_ms" => 9_000},
+                 ctx.a
+               )
+    end
+
+    test "surface the cover refusals as invalid_argument with the message", ctx do
+      assert {:error, %{code: :invalid_argument, error: error}} =
+               call(
+                 "social_draft_create",
+                 %{
+                   "profile_id" => ctx.profile.id,
+                   "account_ids" => [ctx.acc1.id],
+                   "media_file_ids" => [ctx.video.id],
+                   "cover_file_id" => ctx.pdf.id
+                 },
+                 ctx.a
+               )
+
+      assert error =~ "cover_file_id cover must be a JPG or PNG image"
+
+      assert {:error, %{code: :invalid_argument, error: error}} =
+               call(
+                 "social_draft_update",
+                 %{"post_id" => ctx.post.id, "cover_offset_ms" => 0},
+                 ctx.a
+               )
+
+      assert error =~ "cover_offset_ms a cover applies only to a video post"
     end
   end
 end

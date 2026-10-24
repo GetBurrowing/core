@@ -210,6 +210,48 @@ final class InCallModelTests: XCTestCase {
         XCTAssertEqual(s.elapsed(at: t0.addingTimeInterval(30)), 15)
     }
 
+    // MARK: Companions (task 01a13ca2 stage 4)
+
+    /// What the reducer leaves after a `participantsChanged` from the room.
+    private func fromRoom(_ remote: [CallParticipant]) -> CallState {
+        let events: [CallEvent] = [.startConnecting(meetingName: "Design review"), .connected, .participantsChanged(remote)]
+        return events.reduce(CallState(), CallState.reduce)
+    }
+
+    private func companion(_ id: String, name: String) -> CallParticipant {
+        CallParticipant(id: "video:user:" + id, name: name, isAgent: false)
+    }
+
+    /// `user:bo`, Bo's companion and OUR companion: two people in the
+    /// meeting, Bo and us.
+    func testCompanionsAreNotCountedInTheHeadCount() {
+        let s = fromRoom([bo, companion("bo", name: "Bo"), companion("me", name: "Me")])
+        XCTAssertEqual(s.phase, .connected)
+        let m = InCallModel.make(state: s, elapsed: 5)
+        XCTAssertEqual(m.status, "0:05  ·  " + InCallCopy.inMeeting(2))
+        XCTAssertEqual(m.people.map(\.id), ["you", "user:bo"], "Bo once, no companion row")
+        XCTAssertNil(m.aloneText)
+    }
+
+    /// Only our own companion in the room: we are alone.
+    func testOurOwnCompanionAloneReadsAlone() {
+        let s = fromRoom([companion("me", name: "Me")])
+        XCTAssertEqual(s.phase, .alone)
+        let m = InCallModel.make(state: s, elapsed: 5)
+        XCTAssertEqual(m.aloneText, "You're the only one here")
+        XCTAssertEqual(m.status, "0:05  ·  " + InCallCopy.inMeeting(1))
+        XCTAssertEqual(m.people.map(\.id), ["you"])
+    }
+
+    func testASpeakingCompanionIsNeverAnActiveSpeaker() {
+        var talking = companion("bo", name: "Bo")
+        talking.isSpeaking = true
+        let s = fromRoom([bo, talking])
+        XCTAssertEqual(s.activeSpeakers, [])
+        XCTAssertEqual(s.speakingIdentities, [])
+        XCTAssertEqual(InCallModel.make(state: s, elapsed: 5).ringed, [])
+    }
+
     // MARK: Forced dark
 
     func testTheInCallScreenIsForcedDark() {

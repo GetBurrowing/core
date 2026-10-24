@@ -108,7 +108,10 @@ final class ProviderCallReporter: IncomingCallReporting {
         self.provider = provider
     }
 
-    func reportIncoming(uuid: UUID, callerName: String, completion: @escaping (Error?) -> Void) {
+    /// A ring. `hasVideo` stays false even though the provider supports
+    /// video (task 01a13ca2): every call answers as audio, and only the
+    /// page's confirmed camera reports video later.
+    static func incomingUpdate(callerName: String) -> CXCallUpdate {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: callerName)
         update.localizedCallerName = callerName
@@ -117,6 +120,11 @@ final class ProviderCallReporter: IncomingCallReporting {
         update.supportsDTMF = false
         update.supportsGrouping = false
         update.supportsUngrouping = false
+        return update
+    }
+
+    func reportIncoming(uuid: UUID, callerName: String, completion: @escaping (Error?) -> Void) {
+        let update = Self.incomingUpdate(callerName: callerName)
         provider.reportNewIncomingCall(with: uuid, update: update) { error in
             DispatchQueue.main.async { completion(error) }
         }

@@ -97,14 +97,21 @@ defmodule PlatformWeb.SocialCardComponent do
 
   @impl true
   def mount(socket) do
-    {:ok, assign(socket, mode: nil, reject_text: "", edit_text: nil, notice: nil)}
+    {:ok,
+     assign(socket,
+       mode: nil,
+       reject_text: "",
+       edit_text: nil,
+       notice: nil,
+       cover_controls: false
+     )}
   end
 
   @impl true
   def update(assigns, socket) do
     socket =
       socket
-      |> assign(Map.take(assigns, [:id, :card_id, :rev, :canvas_id, :viewer]))
+      |> assign(Map.take(assigns, [:id, :card_id, :rev, :canvas_id, :viewer, :cover_controls]))
       |> refresh()
 
     {:ok, socket}
@@ -258,6 +265,8 @@ defmodule PlatformWeb.SocialCardComponent do
           edit_text={@edit_text}
           canvas_id={@canvas_id}
         />
+
+        <.cover_button :if={@cover_controls and @view[:cover]} view={@view} />
 
         <p
           :if={@view.provenance}
@@ -472,7 +481,8 @@ defmodule PlatformWeb.SocialCardComponent do
         <div :for={m <- @view.media} data-role="social-card-media" class="w-full">
           <video
             :if={String.starts_with?(m.content_type || "", "video/")}
-            src={m.src}
+            src={m.src <> (m[:fragment] || "")}
+            poster={m[:poster] || nil}
             controls
             playsinline
             preload="metadata"
@@ -551,6 +561,50 @@ defmodule PlatformWeb.SocialCardComponent do
       </div>
     </div>
     """
+  end
+
+  attr :view, :map, required: true
+
+  # The video post's Cover control (task 01a165ec stage 4), queue only
+  # (`cover_controls`): a quiet text button that opens the parent page's
+  # picker (`cover_open`, untargeted, so SocialLive handles it), or a
+  # read-only label once the post is past approval or this viewer may not
+  # change it.
+  defp cover_button(assigns) do
+    assigns = assign(assigns, :label, cover_label(assigns.view.cover))
+
+    ~H"""
+    <button
+      :if={@view.role == :approver and @view.cover.editable?}
+      type="button"
+      phx-click="cover_open"
+      phx-value-post-id={@view.cover.post_id}
+      data-role="social-card-cover"
+      data-cover-kind={@view.cover.kind}
+      class="btn btn-ghost btn-sm -ml-2 px-2 text-[15px] font-normal"
+    >
+      {@label}
+    </button>
+    <p
+      :if={not (@view.role == :approver and @view.cover.editable?)}
+      data-role="social-card-cover-label"
+      data-cover-kind={@view.cover.kind}
+      class="text-[15px] text-subtle"
+    >
+      {@label}
+    </p>
+    """
+  end
+
+  @doc "The Cover control's copy for a card view's `cover` (stage 4)."
+  def cover_label(%{kind: :uploaded}), do: "Cover: uploaded image"
+  def cover_label(%{kind: :frame, offset_ms: ms}), do: "Cover: frame " <> clock_ms(ms)
+  def cover_label(_cover), do: "Cover: first frame"
+
+  @doc "m:ss for a millisecond offset, truncated (7400 -> 0:07)."
+  def clock_ms(ms) when is_integer(ms) do
+    s = div(ms, 1000)
+    "#{div(s, 60)}:#{s |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")}"
   end
 
   attr :view, :map, required: true

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import MeetingClient from "../../js/hooks/meeting_client.js"
+import { RoomEvent, Track } from "livekit-client"
+import { createElement, installFakeDocument, serialize } from "../lib/fake_dom.js"
 
 // Task 01a06925 stage 2: `_join` constructs `new Room(...)` from
 // livekit-client when it has no room to adopt. Swap ONLY the Room class for
@@ -1422,7 +1424,7 @@ describe("MeetingClient — quick-meet screen-share routing", () => {
     const label = { textContent: "" }
     slot.classList.add("hidden")
     slot.dataset.screenShareActive = "false"
-    slot.parentElement.dataset = { screenShareActive: "false" }
+    slot.parentElement.dataset = {}
     slot.parentElement.querySelector = (selector) => {
       if (selector === "[data-screen-share-fullscreen]") return button
       if (selector === "[data-quickmeet-screen-share-sharer]") return label
@@ -1435,7 +1437,9 @@ describe("MeetingClient — quick-meet screen-share routing", () => {
     expect(slot.children).toContain(hook._screenShareEl)
     expect(slot.classList.contains("hidden")).toBe(false)
     expect(slot.dataset.screenShareActive).toBe("true")
-    expect(slot.parentElement.dataset.screenShareActive).toBe("true")
+    // The viewer is phx-update="ignore" and carries no data-* state of its
+    // own (task 01a13ca2 stage 5); the slot is the active-state authority.
+    expect(slot.parentElement.dataset.screenShareActive).toBeUndefined()
     expect(slot.dataset.screenShareSharer).toBe("user:remote")
     expect(label.textContent).toBe("Remote Sharer")
     expect(button.hidden).toBe(false)
@@ -2036,5 +2040,386 @@ describe("MeetingClient — transcriber gets no quick-meet tile (01a0d4fe)", () 
     const src = readFileSync(path, "utf8")
     expect(src).not.toContain("transcriber:")
     expect(src).not.toContain("meeting-transcriber")
+  })
+})
+
+/**
+ * One person, one tile (task 01a13ca2 stage 2).
+ *
+ * The iOS app keeps call audio on its native connection (`user:<uuid>`) and
+ * opens a SECOND, video-only LiveKit connection for the camera as
+ * `video:user:<uuid>`. Every web client must show that as ONE person: one
+ * tile keyed `user:<uuid>` with the companion's camera inside it, one
+ * speaking ring, and no `video:` identity anywhere.
+ *
+ * These drive `_bindRoomEvents` with real `RoomEvent`s against a fake Room
+ * and the fake DOM in test/lib/fake_dom.js, so what is asserted is the
+ * bound handler path, not a helper called directly.
+ */
+describe("MeetingClient — a person's companion connection shares their tile", () => {
+  let uninstall
+
+  beforeEach(() => {
+    uninstall = installFakeDocument()
+  })
+
+  afterEach(() => {
+    uninstall()
+  })
+
+  function companionRoom() {
+    const handlers = new Map()
+    return {
+      name: "space-room",
+      state: "connected",
+      localParticipant: { identity: "user:me", isLocal: true, trackPublications: new Map() },
+      remoteParticipants: new Map(),
+      on(event, cb) {
+        const list = handlers.get(event) || []
+        list.push(cb)
+        handlers.set(event, list)
+        return this
+      },
+      off(event, cb) {
+        const list = handlers.get(event) || []
+        const i = list.indexOf(cb)
+        if (i >= 0) list.splice(i, 1)
+        return this
+      },
+      emit(event, ...args) {
+        for (const cb of handlers.get(event) || []) cb(...args)
+      },
+    }
+  }
+
+  function videoTrack(sid, source = Track.Source.Camera) {
+    return {
+      kind: Track.Kind.Video,
+      source,
+      sid,
+      els: [],
+      attach() {
+        const el = createElement("video")
+        this.els.push(el)
+        return el
+      },
+      detach(el) {
+        const out = el ? [el] : this.els.slice()
+        this.els = el ? this.els.filter((e) => e !== el) : []
+        return out
+      },
+    }
+  }
+
+  function audioTrack(sid) {
+    return {
+      kind: Track.Kind.Audio,
+      sid,
+      attach() {
+        return createElement("audio")
+      },
+      detach() {
+        return []
+      },
+    }
+  }
+
+  function person(identity, name, pubs = []) {
+    return {
+      identity,
+      name,
+      isLocal: false,
+      trackPublications: new Map(pubs.map((p, i) => [`${identity}-${i}`, p])),
+    }
+  }
+
+  function connect(room, p) {
+    room.remoteParticipants.set(p.identity, p)
+    room.emit(RoomEvent.ParticipantConnected, p)
+  }
+
+  function disconnect(room, p) {
+    room.remoteParticipants.delete(p.identity)
+    room.emit(RoomEvent.ParticipantDisconnected, p)
+  }
+
+  function harness(names = {}) {
+    const grid = createElement("div")
+    const sink = createElement("div")
+    const room = companionRoom()
+    const hook = Object.create(MeetingClient)
+    hook.el = { dataset: { participantNames: JSON.stringify(names) } }
+    hook._tiles = new Map()
+    hook._audioEls = new Map()
+    hook._grid = () => grid
+    hook._mediaContainer = () => sink
+    hook._reconcileLocalVideo = () => {}
+    hook._boundRoom = null
+    hook._roomListeners = []
+    hook._lastMediaStatesKey = null
+    hook.pushed = []
+    hook.pushEvent = (event, payload) => {
+      hook.pushed.push([event, payload])
+      return Promise.resolve()
+    }
+    hook._bindRoomEvents(room)
+    return { hook, grid, room }
+  }
+
+  const tiles = (grid) => grid.children.filter((c) => c.className.includes("meeting-tile"))
+  const videosIn = (tile) => tile.querySelectorAll("video")
+  const ringed = (grid) =>
+    tiles(grid)
+      .filter((t) => t.classList.contains("meeting-tile-speaking"))
+      .map((t) => t.dataset.participant)
+
+  it("audio-only user:A plus camera-only video:user:A gives ONE tile, user:A, with the camera inside", () => {
+    const { grid, room } = harness()
+    const cam = videoTrack("cam-A")
+    const a = person("user:A", "Ada", [{ kind: Track.Kind.Audio, isMuted: false }])
+    const companion = person("video:user:A", "Ada", [{ kind: Track.Kind.Video, isMuted: false, track: cam }])
+
+    connect(room, a)
+    // DIRECTION CONTROL: the person's own tile exists and has no video yet.
+    expect(tiles(grid)).toHaveLength(1)
+    expect(videosIn(tiles(grid)[0])).toHaveLength(0)
+
+    connect(room, companion)
+    room.emit(RoomEvent.TrackSubscribed, cam, companion.trackPublications.get("video:user:A-0"), companion)
+
+    expect(tiles(grid)).toHaveLength(1)
+    const tile = tiles(grid)[0]
+    expect(tile.dataset.participant).toBe("user:A")
+    expect(videosIn(tile)).toEqual(cam.els)
+    expect(videosIn(tile)).toHaveLength(1)
+    expect(tile.querySelector(".meeting-tile-video").style.display).toBe("block")
+    expect(tile.querySelector("[data-placeholder]").style.display).toBe("none")
+    expect(serialize(grid)).not.toContain("video:")
+  })
+
+  // Task 01a13ca2 stage 3 (f). In the iOS app the page's Room IS the
+  // companion: local `video:user:me`, while the native call's audio
+  // connection `user:me` is a REMOTE participant of it. That is the local
+  // self, shown by the self-view dock, never a second tile.
+  it("(f) the self tile is single while video:user:me (local) and user:me (remote) both exist", () => {
+    const { grid, room, hook } = harness()
+    room.localParticipant = { identity: "video:user:me", isLocal: true, trackPublications: new Map() }
+    hook._room = room
+    const me = person("user:me", "Me", [{ kind: Track.Kind.Audio, isMuted: false }])
+    const b = person("user:B", "Bea", [{ kind: Track.Kind.Audio, isMuted: false }])
+
+    hook._ensureTile(room.localParticipant)
+    connect(room, me)
+    // DIRECTION CONTROL: another person in the same room does get a tile.
+    connect(room, b)
+
+    expect(tiles(grid).map((t) => t.dataset.participant)).toEqual(["user:B"])
+    expect(serialize(grid)).not.toContain("video:")
+
+    // And a speaking ring for `user:me` rings no stray tile.
+    room.emit(RoomEvent.ActiveSpeakersChanged, [me])
+    expect(ringed(grid)).toEqual([])
+  })
+
+  it("(f) control: in a browser Room (local user:me), a remote user:B is the only tile and nothing is skipped", () => {
+    const { grid, room, hook } = harness()
+    hook._room = room
+    connect(room, person("user:B", "Bea", [{ kind: Track.Kind.Audio, isMuted: false }]))
+    connect(room, person("video:user:B", "Bea", [{ kind: Track.Kind.Video, isMuted: false }]))
+    expect(tiles(grid).map((t) => t.dataset.participant)).toEqual(["user:B"])
+  })
+
+  it("the companion connecting BEFORE the person also gives one tile, under the person", () => {
+    const { grid, room } = harness({ "user:A": "Ada" })
+    const cam = videoTrack("cam-A")
+    // No LiveKit name on the companion: the label must still be the
+    // person's, through the server map keyed by the PERSON identity.
+    const companion = person("video:user:A", "", [{ kind: Track.Kind.Video, isMuted: false, track: cam }])
+    const a = person("user:A", "Ada", [{ kind: Track.Kind.Audio, isMuted: false }])
+
+    connect(room, companion)
+    room.emit(RoomEvent.TrackSubscribed, cam, companion.trackPublications.get("video:user:A-0"), companion)
+    connect(room, a)
+
+    expect(tiles(grid)).toHaveLength(1)
+    const tile = tiles(grid)[0]
+    expect(tile.dataset.participant).toBe("user:A")
+    expect(videosIn(tile)).toEqual(cam.els)
+    expect(tile.querySelector(".meeting-tile-name").textContent).toBe("Ada")
+    expect(serialize(grid)).not.toContain("video:")
+  })
+
+  it("a companion disconnect keeps the tile and drops only its video; the person leaving then removes it", () => {
+    const { grid, room } = harness()
+    const cam = videoTrack("cam-A")
+    const a = person("user:A", "Ada", [{ kind: Track.Kind.Audio, isMuted: false }])
+    const companion = person("video:user:A", "Ada", [{ kind: Track.Kind.Video, isMuted: false, track: cam }])
+    connect(room, a)
+    connect(room, companion)
+    room.emit(RoomEvent.TrackSubscribed, cam, companion.trackPublications.get("video:user:A-0"), companion)
+    expect(videosIn(tiles(grid)[0])).toHaveLength(1)
+
+    disconnect(room, companion)
+
+    expect(tiles(grid)).toHaveLength(1)
+    const tile = tiles(grid)[0]
+    expect(tile.dataset.participant).toBe("user:A")
+    expect(videosIn(tile)).toHaveLength(0)
+    expect(tile.querySelector(".meeting-tile-video").style.display).toBe("none")
+    expect(tile.querySelector("[data-placeholder]").style.display).toBe("")
+
+    disconnect(room, a)
+    expect(tiles(grid)).toHaveLength(0)
+  })
+
+  it("the person leaving first keeps the tile (with the companion's camera) until the companion goes", () => {
+    const { grid, room } = harness()
+    const cam = videoTrack("cam-A")
+    const a = person("user:A", "Ada", [{ kind: Track.Kind.Audio, isMuted: false }])
+    const companion = person("video:user:A", "Ada", [{ kind: Track.Kind.Video, isMuted: false, track: cam }])
+    connect(room, a)
+    connect(room, companion)
+    room.emit(RoomEvent.TrackSubscribed, cam, companion.trackPublications.get("video:user:A-0"), companion)
+
+    disconnect(room, a)
+    expect(tiles(grid)).toHaveLength(1)
+    expect(videosIn(tiles(grid)[0])).toHaveLength(1)
+
+    disconnect(room, companion)
+    expect(tiles(grid)).toHaveLength(0)
+  })
+
+  it("speakers user:A + video:user:A ring exactly ONE tile; a companion-only speaker rings the person", () => {
+    const { grid, room } = harness()
+    connect(room, person("user:A", "Ada"))
+    connect(room, person("video:user:A", "Ada"))
+    connect(room, person("user:B", "Bea"))
+
+    room.emit(RoomEvent.ActiveSpeakersChanged, [{ identity: "user:A" }, { identity: "video:user:A" }])
+    expect(ringed(grid)).toEqual(["user:A"])
+
+    // The person tile must answer to its companion identity too: with the
+    // fold removed, this set has no `user:A` and the ring goes dark.
+    room.emit(RoomEvent.ActiveSpeakersChanged, [{ identity: "video:user:A" }])
+    expect(ringed(grid)).toEqual(["user:A"])
+
+    room.emit(RoomEvent.ActiveSpeakersChanged, [{ identity: "user:B" }])
+    expect(ringed(grid)).toEqual(["user:B"])
+  })
+
+  it("a screen share from a companion is attributed to the person, never video:", () => {
+    const { hook } = harness()
+    const slot = createElement("div")
+    const viewer = createElement("div")
+    const label = createElement("span")
+    label.dataset.quickmeetScreenShareSharer = ""
+    viewer.appendChild(slot)
+    viewer.appendChild(label)
+    hook._screenShareSlot = () => slot
+    hook._mountScreenShareController = () => {}
+
+    hook._attachTrack(
+      videoTrack("share-A", Track.Source.ScreenShare),
+      { identity: "video:user:A", name: "", isLocal: false },
+      null,
+    )
+
+    expect(slot.dataset.screenShareSharer).toBe("user:A")
+    expect(label.textContent).toBe("user:A")
+    expect(serialize(viewer)).not.toContain("video:")
+  })
+
+  // Task 01a13ca2 stage 5: the quick-meet label names the sharer. A share
+  // by a nameless companion reads as the name its person joined with.
+  function shareHarness() {
+    const h = harness()
+    const slot = createElement("div")
+    const viewer = createElement("div")
+    const label = createElement("span")
+    label.dataset.quickmeetScreenShareSharer = ""
+    viewer.appendChild(slot)
+    viewer.appendChild(label)
+    h.hook._room = h.room
+    h.hook._screenShareSlot = () => slot
+    h.hook._mountScreenShareController = () => {}
+    return { ...h, slot, viewer, label }
+  }
+
+  it("a share by a nameless video:user:A is labelled with A's person name on the attach path", () => {
+    const { hook, room, slot, viewer, label } = shareHarness()
+    connect(room, person("user:A", "Ada", [{ kind: Track.Kind.Audio, isMuted: false }]))
+    const companion = person("video:user:A", "", [])
+    connect(room, companion)
+
+    hook._attachTrack(videoTrack("share-A", Track.Source.ScreenShare), companion, null)
+
+    expect(label.textContent).toBe("Ada")
+    expect(slot.dataset.screenShareSharer).toBe("user:A")
+    expect(serialize(viewer)).not.toContain("video:")
+  })
+
+  it("a named sharer is labelled by name, and the label empties when the share ends", () => {
+    const { hook, room, label, slot } = shareHarness()
+    const wes = person("user:W", "Wes", [])
+    connect(room, wes)
+    const share = videoTrack("share-W", Track.Source.ScreenShare)
+
+    hook._attachTrack(share, wes, null)
+    expect(label.textContent).toBe("Wes")
+    expect(slot.dataset.screenShareActive).toBe("true")
+
+    globalThis.document = { querySelectorAll: () => [slot] }
+    hook._detachScreenShareTrack(share)
+    delete globalThis.document
+    expect(label.textContent).toBe("")
+    expect(slot.dataset.screenShareActive).toBe("false")
+  })
+
+  // ── Regression: no companion present ────────────────────────────────
+  //
+  // With no `video:` identity in the room every output must be BYTE-
+  // IDENTICAL to the code before this stage. GOLDEN below was produced by
+  // running this exact scenario against the pre-stage meeting_client.js
+  // (commit 753e871ce, before task 01a13ca2 stage 2), not written by hand.
+  function noCompanionScenario() {
+    const { hook, grid, room } = harness({ "agent:x": "Saru" })
+    const camA = videoTrack("cam-A")
+    const camB = videoTrack("cam-B")
+    const a = person("user:A", "Ada", [
+      { kind: Track.Kind.Audio, isMuted: false },
+      { kind: Track.Kind.Video, isMuted: false, track: camA },
+    ])
+    const b = person("user:B", "Bea", [
+      { kind: Track.Kind.Audio, isMuted: true },
+      { kind: Track.Kind.Video, isMuted: true, track: camB },
+    ])
+    const agent = person("agent:x", "", [{ kind: Track.Kind.Audio, isMuted: false }])
+    const out = []
+
+    connect(room, a)
+    connect(room, b)
+    connect(room, agent)
+    room.emit(RoomEvent.TrackSubscribed, camA, a.trackPublications.get("user:A-1"), a)
+    room.emit(RoomEvent.TrackSubscribed, camB, b.trackPublications.get("user:B-1"), b)
+    room.emit(RoomEvent.TrackSubscribed, audioTrack("mic-A"), a.trackPublications.get("user:A-0"), a)
+    room.emit(RoomEvent.ActiveSpeakersChanged, [{ identity: "user:A" }, { identity: "agent:x" }])
+    out.push(serialize(grid))
+    room.emit(RoomEvent.TrackUnsubscribed, camB, b.trackPublications.get("user:B-1"), b)
+    room.emit(RoomEvent.TrackMuted, { kind: Track.Kind.Audio, isMuted: true }, a)
+    room.emit(RoomEvent.ActiveSpeakersChanged, [{ identity: "user:B" }])
+    disconnect(room, agent)
+    out.push(serialize(grid))
+    out.push(JSON.stringify(hook.pushed))
+    return out.join("\n")
+  }
+
+  const GOLDEN = [
+    "<DIV data=\"\" class=\"\" style=\"\" text=\"\"><DIV data=\"participant=user:A\" class=\"meeting-tile meeting-tile-speaking\" style=\"\" text=\"\"><DIV data=\"\" class=\"meeting-tile-video\" style=\"display:block\" text=\"\"><VIDEO data=\"\" class=\"\" style=\"\" text=\"\"></></><DIV data=\"placeholder=\" class=\"meeting-tile-avatar\" style=\"display:none\" text=\"\"><DIV data=\"\" class=\"meeting-tile-avatar-circle\" style=\"\" text=\"A\"></></><DIV data=\"\" class=\"meeting-tile-name\" style=\"\" text=\"Ada\"></></><DIV data=\"participant=user:B\" class=\"meeting-tile\" style=\"\" text=\"\"><DIV data=\"\" class=\"meeting-tile-video\" style=\"display:block\" text=\"\"><VIDEO data=\"\" class=\"\" style=\"\" text=\"\"></></><DIV data=\"placeholder=\" class=\"meeting-tile-avatar\" style=\"display:none\" text=\"\"><DIV data=\"\" class=\"meeting-tile-avatar-circle\" style=\"\" text=\"B\"></></><DIV data=\"\" class=\"meeting-tile-name\" style=\"\" text=\"Bea\"></></><DIV data=\"participant=agent:x\" class=\"meeting-tile meeting-tile-speaking\" style=\"\" text=\"\"><DIV data=\"placeholder=\" class=\"meeting-tile-avatar\" style=\"\" text=\"\"><DIV data=\"\" class=\"meeting-tile-avatar-circle\" style=\"\" text=\"S\"></></><DIV data=\"\" class=\"meeting-tile-name\" style=\"\" text=\"Saru\"></></></>",
+    "<DIV data=\"\" class=\"\" style=\"\" text=\"\"><DIV data=\"participant=user:A\" class=\"meeting-tile\" style=\"\" text=\"\"><DIV data=\"\" class=\"meeting-tile-video\" style=\"display:block\" text=\"\"><VIDEO data=\"\" class=\"\" style=\"\" text=\"\"></></><DIV data=\"placeholder=\" class=\"meeting-tile-avatar\" style=\"display:none\" text=\"\"><DIV data=\"\" class=\"meeting-tile-avatar-circle\" style=\"\" text=\"A\"></></><DIV data=\"\" class=\"meeting-tile-name\" style=\"\" text=\"Ada\"></></><DIV data=\"participant=user:B\" class=\"meeting-tile meeting-tile-speaking\" style=\"\" text=\"\"><DIV data=\"\" class=\"meeting-tile-video\" style=\"display:none\" text=\"\"></><DIV data=\"placeholder=\" class=\"meeting-tile-avatar\" style=\"display:\" text=\"\"><DIV data=\"\" class=\"meeting-tile-avatar-circle\" style=\"\" text=\"B\"></></><DIV data=\"\" class=\"meeting-tile-name\" style=\"\" text=\"Bea\"></></></>",
+    "[[\"media_states\",{\"muted\":[],\"camera_off\":[]}],[\"media_states\",{\"muted\":[\"user:B\"],\"camera_off\":[\"user:B\"]}],[\"media_states\",{\"muted\":[\"user:B\"],\"camera_off\":[\"agent:x\",\"user:B\"]}]]",
+  ].join("\n")
+
+  it("REGRESSION: with no companion, tiles, rings and media_states are byte-identical to before", () => {
+    expect(noCompanionScenario()).toBe(GOLDEN)
   })
 })

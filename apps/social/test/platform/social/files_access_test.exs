@@ -93,7 +93,7 @@ defmodule Platform.Social.FilesAccessTest do
                %{agent_id: world.agent.id}
              )
 
-    assert msg =~ "needs a project in its org"
+    assert msg == Social.profile_needs_project()
     assert Repo.get!(Clip, clip.id).status == "candidate"
   end
 end

@@ -403,6 +403,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
      "stage 4's Email module reads. The org id, account filter and message/project ids arrive from LiveView `params` (`?org=`, `?account=`, `/email/messages/:id`, the Add to files select) and each is guarded before it reaches `where:`: `inbound_query/2`, `deliveries_query/3`, `drafts_query/2`, `org_projects/1`, `org_channels/1` (org_id), `get_inbound/2` (org_id and id — two calls), `inbound_org_id/1` (id), `narrow_account/2` (account_id) and `fetch_org_project/2` (project_id). A malformed value narrows to nothing / nil rather than dropping the filter"},
+    {"platform_web/components/meeting_briefing_row.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "task 01a1694a stage 4: `meeting_id/1` reads the meeting id out of an Inbox row's `url` (`/inbox/meeting/<id>`) and answers nil unless it is a canonical uuid; the value only feeds a `data-meeting-id` attribute and the selected-row comparison, never a query"},
     {"platform_web/live/experiments_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "parse_project/1's predicate (task 01a0d415 stage 6). `project_id` comes from the create form's LiveView params; the guard turns a malformed id into the page's 'No such project.' flash before it reaches Experiment.changeset/2, whose own guard and FK constraint are the second line"},
     {"platform_web/live/tasks/board_data.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -481,8 +484,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "per-agent hold-to-talk — `resolve_pressed_agent/1` guards with Platform.UUID.valid?/1 before its `Repo.get(Agent, ...)`. The pressed `agent_id` arrives on the `push_to_talk_press` payload (a user-controlled phx-value / channel message), so a malformed id would otherwise raise Ecto.Query.CastError out of `PressCard.open/3` on key-down. Used as a BOOLEAN with the string discarded — a malformed id folds to `:error`, exactly like a well-formed-but-absent one, and the press takes the configured default target rather than crashing. Pinned by `push_to_talk_target_test.exs` \"a malformed pressed id falls back to the default and does not raise\""},
     {"platform/meetings/press_card.ex", :get, "Agent", 1, :safe_internal,
      "reached only through `resolve_pressed_agent/1`'s Platform.UUID.valid?/1 branch recorded above, so the value is a canonical 36-character uuid by construction; an id with no active-agent row returns `:error` and `pressed_agent/1` falls back to the default target, never bylining a card to a stranger"},
-    {"platform/meetings/triage.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "task 01a03fda — `build_reconciliation/1` guards the meeting-candidate reconciliation query. `:meeting_id` has always been an OPTIONAL passthrough on `file_tasks_from_canvas/2`, enriched by the triage-officer runtime and forwarded straight into telemetry, so it has never had to be a real id — `triage_test.exs` passes the literal \"mtg-stage4\". Without the guard that string reaches a `:binary_id` WHERE and raises Ecto.Query.CastError mid-batch. An unusable id reconciles nothing, which is the pre-01a03fda behaviour"},
+    {"platform/meetings/triage.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a03fda — `build_reconciliation/1` guards the meeting-candidate reconciliation query. `:meeting_id` has always been an OPTIONAL passthrough on `file_tasks_from_canvas/2`, enriched by the triage-officer runtime and forwarded straight into telemetry, so it has never had to be a real id — `triage_test.exs` passes the literal \"mtg-stage4\". Without the guard that string reaches a `:binary_id` WHERE and raises Ecto.Query.CastError mid-batch. An unusable id reconciles nothing, which is the pre-01a03fda behaviour Count 1 -> 2 at task 01a1694a stage 2: `refresh_meeting_briefing/1` guards the same optional `:meeting_id` passthrough with Platform.UUID.valid?/1 before its `Repo.get(Platform.Meetings.Meeting, ...)` (this file's `get(Platform.Meetings.Meeting)` entry); a malformed id refreshes nothing and the filing still returns its result"},
+    {"platform/meetings/triage.ex", :get, "Platform.Meetings.Meeting", 1, :safe_internal,
+     "task 01a1694a stage 2: `refresh_meeting_briefing/1` reaches this `Repo.get` only through the Platform.UUID.valid?/1 guard recorded in this file's `platform_uuid_guard` entry, so the `:meeting_id` (an optional triage-officer passthrough) is a canonical uuid by construction; a missing row refreshes nothing"},
+    {"platform/meetings/meeting_briefings.ex", :get, "Meeting", 1, :safe_internal,
+     "task 01a1694a stage 1: `build/1` re-reads the meeting by the `id` of the `%Meeting{}` struct its caller passes (end_meeting/1's updated row, refresh_for_transcript/1's query result, triage's guarded get), so the id is a primary key read off a loaded row, never a raw boundary value"},
+    {"platform/meetings/meeting_briefings.ex", :get!, "Meeting", 1, :safe_internal,
+     "task 01a1694a stage 2: `deliver/1` re-reads the meeting by the id `build/1` has just loaded and found `ended` in the same call, so the row exists and the id is a primary key"},
+    {"platform/meetings/meeting_briefings.ex", :platform_uuid_guard, "-", 6, :safe_internal,
+     "task 01a1694a stages 1-4. `get_for_attendee/2` guards BOTH ids (the `:meeting_id` URL path segment of `/inbox/meeting/:meeting_id` and the viewer's user id) before its `where:`, answering nil for a malformed one exactly as for a non-attendee; `list_for_attendee/2` filters the Inbox rows' `source_id`s and guards the user id the same way; `inbox_row_stale?/2` guards the Inbox row's `source_id` (false, the row stays); `revertible_task_ids/2` keeps only uuid-shaped `task:<id>` refs out of the briefing's jsonb `items` before `where: t.id in ^ids`. Each guard is a BOOLEAN; the value is never rewritten"},
     # ── Memory ─────────────────────────────────────────────────────────
     {"platform/memory/insights/briefings.ex", :get_by, "Briefing", 3, :safe_internal,
      "task 01a13867 stage 4: `get_by_canvas/1` looks up `canvas_id:` with the id of a canvas row the caller already loaded (canvas_hooks.ex `insight_card_action/5` passes the clicked `%Canvas{}.id` from `find/2`), behind this file's Platform.UUID.valid?/1 guard; the briefing's insight id is then read out of that row's `items`, never from the click Count 1 -> 3 at task 01a15ee1 stages 4-5: `for_user_on/2` (`user_id:` + `digest_date:`) and `get_for_user/2` (`id:` + `user_id:`) each check every id with Platform.UUID.valid?/1 before the lookup. The briefing id reaches `get_for_user/2` from an InboxLive event and the date from the `/inbox/briefing/:date` path, so these are the :must_cast end, and the guard keeps a malformed id a nil (the same as another person's row) rather than a CastError"},
@@ -1321,7 +1332,20 @@ defmodule Platform.RepoLookupBoundaryTest do
     # reachable), so the `Repo.one` sits inside `if Platform.UUID.valid?(...)`
     # (the meetings.ex `:platform_uuid_guard` entry, 20 -> 21 by the same
     # change). A malformed id answers {:error, :not_found}.
-    "platform/meetings.ex" => 18,
+    #
+    # 18 -> 19 at task 01a1694a stage 2: `space_org_id/1` reads `s.org_id`
+    # with `where: s.id == ^space_id`, where `space_id` is the `chat_space_id`
+    # field of the `%Meeting{}` `human_attendee_ids/1` was handed — a foreign
+    # key read off a loaded row, never a boundary value.
+    "platform/meetings.ex" => 19,
+    # Task 01a1694a — the meeting briefing. Triaged by hand: `lock_briefing/1`
+    # and `lock_row!/1` pin ids read off rows already loaded (the briefing's
+    # own id, the meeting's id); `get_for_attendee/2` and `inbox_row_stale?/2`
+    # pin ids that DO arrive from a boundary (a URL segment, an Inbox row's
+    # source_id) and reach `where:` only behind this file's
+    # Platform.UUID.valid?/1 guards; `refresh_for_transcript/1` and
+    # `summary_attrs/1` pin the `space_id` and `started_at` of loaded rows.
+    "platform/meetings/meeting_briefings.ex" => 5,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive
@@ -1450,7 +1474,16 @@ defmodule Platform.RepoLookupBoundaryTest do
     # read off a `%Stage{}` already loaded from the plan. No boundary caller
     # exists; one would need `Platform.UUID.valid?/1`, and this count is the
     # tripwire that makes somebody look.
-    "platform/orchestration.ex" => 2,
+    # 2 → 7 for task 01a16bf5 stage 1's `unanswered_dispatch_streak/3` (the
+    # TaskRouter's re-dispatch cap). HAND TRIAGE of the five new calls: the
+    # engagement count compares `task_id`, `runtime_id` and `stage_id` as TEXT
+    # through `->>` on JSONB and cannot cast-raise; the four sign-of-life reads
+    # pin `e.task_id`, `p.task_id`, `t.id` (uuid) and `st.id` (uuid). No guard,
+    # for the reason its siblings above have none: the only caller is
+    # `TaskRouter.redispatch_streak/2` with `state.task_id` and a `stage.id`
+    # read off a `%Stage{}` loaded from the plan. A boundary caller would need
+    # `Platform.UUID.valid?/1`, and this count is the tripwire.
+    "platform/orchestration.ex" => 7,
     "platform/orchestration/execution_space.ex" => 4,
     # 4 → 5 for task 01a04a8c's `needs_human_hold/3`. Its `where:` pins a
     # `task_id`, a `runtime_id` and a `stage_id`, and all three reach it from

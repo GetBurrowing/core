@@ -166,11 +166,11 @@ defmodule Platform.Social.OwnerDmCardTest do
   end
 
   describe "one card, owner-only inbox" do
-    test "the inbox row goes to the owner only, deep-linking into the DM", ctx do
-      {post, card} = pending_post!(ctx, ctx.owned)
+    test "the inbox row goes to the owner only, deep-linking into the Queue", ctx do
+      {post, _card} = pending_post!(ctx, ctx.owned)
 
       assert [item] = items(ctx.owner, post)
-      assert item.url =~ "/chat/#{card_space(card)}?message=#{card.message_id}"
+      assert item.url == Platform.Social.Approvals.queue_url(post, ctx.profile)
 
       for approver <- [ctx.h1, ctx.h2, ctx.n],
           do: assert(items(approver, post) == [], "#{approver.name} got a row")

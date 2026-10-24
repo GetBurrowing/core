@@ -254,6 +254,7 @@ defmodule Platform.Meetings.Triage do
       # dry-run parses don't spam the canvas.
       if result.filed != [] do
         append_junk_batch_action_row(ctx.canvas)
+        refresh_meeting_briefing(meeting_id)
       end
 
       {:ok,
@@ -266,6 +267,30 @@ defmodule Platform.Meetings.Triage do
        }}
     end
   end
+
+  # Tasks filed from the transcript after the meeting are part of its
+  # after-action briefing (task 01a1694a stage 2): merge them in, with no
+  # second push. Only when the caller named the meeting and this call filed
+  # something. Rescued: the filing already happened and must not be reported
+  # as failed because the briefing could not be refreshed.
+  defp refresh_meeting_briefing(meeting_id) when is_binary(meeting_id) do
+    with true <- Platform.UUID.valid?(meeting_id),
+         %Platform.Meetings.Meeting{} = meeting <-
+           Repo.get(Platform.Meetings.Meeting, meeting_id) do
+      Platform.Meetings.MeetingBriefings.deliver(meeting)
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[Triage] meeting briefing refresh for #{meeting_id} failed: " <> Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp refresh_meeting_briefing(_meeting_id), do: :ok
 
   # ── Junk-batch rollback (stage 5 + M5b stage 4) ─────────────────────────
 

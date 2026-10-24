@@ -885,6 +885,7 @@ defmodule Platform.Chat.AgentResponder do
       space_id
       |> Chat.list_messages(opts)
       |> Enum.reject(&(&1.id == message.id))
+      |> Enum.reject(&task_router_post?/1)
       |> Enum.sort_by(& &1.inserted_at, fn left, right ->
         DateTime.compare(left, right) != :gt
       end)
@@ -894,14 +895,96 @@ defmodule Platform.Chat.AgentResponder do
       |> Enum.map(& &1.id)
       |> Chat.list_attachments_for_messages()
 
-    Enum.flat_map(candidates, fn item ->
+    candidates
+    |> Enum.flat_map(fn item ->
       attachments = serialize_attachments(Map.get(attachments_by_msg, item.id, []))
 
       case history_message(item, agent_participant_id, attachments) do
         nil -> []
-        entry -> [entry]
+        entry -> [%{entry | content: cap_history_entry(entry.content)}]
       end
     end)
+    |> cap_history_total()
+  end
+
+  # ── History filter and size ceiling (task 01a16bf5 stage 2) ─────────────
+  #
+  # A TaskRouter post is an instruction, not a conversational turn. Its
+  # `task_assigned` engagements are 23-38KB each and every one is ALSO routed
+  # to the assignee through AttentionRouter -> here, so before this filter the
+  # Nth dispatch carried up to `@history_limit` earlier dispatch bodies in
+  # `payload.history` (~400KB on prod). The current dispatch already arrives
+  # in full as the current message. Router log lines never reach history
+  # anyway (content_type `system`); this drops the engagements, blocker posts
+  # and notices, which share `metadata["source"] == "task_router"`.
+  #
+  # The filter runs BEFORE `history_message/3` and AFTER `list_messages/2`'s
+  # limit, so a space full of dispatches yields fewer than `@history_limit`
+  # entries rather than reaching further back. That is deliberate: the
+  # history window is "the last N messages", not "the last N human turns".
+  defp task_router_post?(%Message{metadata: %{"source" => "task_router"}}), do: true
+  defp task_router_post?(_message), do: false
+
+  @history_entry_max_bytes 4_096
+  @history_total_max_bytes 32_768
+
+  defp history_entry_max_bytes,
+    do: Application.get_env(:platform, :history_entry_max_bytes, @history_entry_max_bytes)
+
+  defp history_total_max_bytes,
+    do: Application.get_env(:platform, :history_total_max_bytes, @history_total_max_bytes)
+
+  # Cap ONE entry's content at `limit` bytes INCLUDING the marker, cut on a
+  # grapheme boundary so a multi-byte character (or an emoji sequence) is never
+  # split. The marker names how many bytes were dropped. The dispatch PROMPT is
+  # never passed through here: it is the current message, not history, and
+  # cutting it would drop instructions.
+  @doc false
+  @spec cap_history_entry(binary() | nil, pos_integer()) :: binary() | nil
+  def cap_history_entry(content, limit \\ history_entry_max_bytes())
+
+  def cap_history_entry(content, limit)
+      when is_binary(content) and byte_size(content) > limit do
+    total = byte_size(content)
+    # Sized for the largest possible dropped count, so the real marker
+    # (which can only name a number <= total) never pushes past `limit`.
+    budget = max(limit - byte_size(truncation_marker(total)), 0)
+    prefix = grapheme_prefix(content, budget)
+    prefix <> truncation_marker(total - byte_size(prefix))
+  end
+
+  def cap_history_entry(content, _limit), do: content
+
+  defp truncation_marker(dropped), do: "… [truncated #{dropped} bytes]"
+
+  defp grapheme_prefix(content, budget), do: grapheme_prefix(content, budget, [], 0)
+
+  defp grapheme_prefix(rest, budget, acc, size) do
+    case String.next_grapheme(rest) do
+      {grapheme, tail} when size + byte_size(grapheme) <= budget ->
+        grapheme_prefix(tail, budget, [acc | grapheme], size + byte_size(grapheme))
+
+      _ ->
+        IO.iodata_to_binary(acc)
+    end
+  end
+
+  # Cap the SUM of entry contents by dropping the OLDEST entries first.
+  # `entries` is oldest-first (the sort in `build_history/3`), so the newest
+  # turns, the ones the agent is most likely answering, survive.
+  @doc false
+  @spec cap_history_total([map()], pos_integer()) :: [map()]
+  def cap_history_total(entries, limit \\ history_total_max_bytes()) do
+    entries
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], 0}, fn entry, {kept, size} ->
+      entry_size = byte_size(entry.content || "")
+
+      if size + entry_size <= limit,
+        do: {:cont, {[entry | kept], size + entry_size}},
+        else: {:halt, {kept, size}}
+    end)
+    |> elem(0)
   end
 
   # Author role + display name come off the message's author snapshot

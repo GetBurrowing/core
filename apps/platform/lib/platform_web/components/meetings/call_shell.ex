@@ -1200,7 +1200,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     `%{mic, camera, active_speakers}` while the native call owns the media,
     else nil (a browser: every control exactly as before). The camera
     button is HIDDEN, not disabled, while `camera` is false, and Share is
-    hidden in the app; "Audio only in the app" closes the bar instead. A
+    hidden in the app; "Audio only in the app" closes the bar instead. With
+    `camera: true` the page runs a video-only companion connection (task
+    01a13ca2 stage 3): the camera button shows and the note does not. A
     build that cannot drive the mic from the page (`mic: false`) hides the
     mic too.
     """
@@ -1209,6 +1211,11 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:mic_pending, :boolean,
     default: false,
     doc: "a page mute is waiting for the native call: warning ring, disabled, aria-busy"
+  )
+
+  attr(:camera_pending, :boolean,
+    default: false,
+    doc: "a camera change is waiting for the companion's publication: same pattern as the mic"
   )
 
   attr(:media_error, :string,
@@ -1320,9 +1327,12 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         data-role={@camera_role}
         data-active={to_string(@camera_on)}
         data-on={to_string(@camera_on)}
+        data-pending={@native && to_string(@camera_pending)}
+        disabled={@native && @camera_pending}
+        aria-busy={if @native && @camera_pending, do: "true"}
         aria-pressed={to_string(!@camera_on)}
         aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
-        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
+        class={camera_class(@native, @camera_pending)}
       >
         <span
           class={["size-4", if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash")]}
@@ -1379,7 +1389,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         {@media_error}
       </p>
       <p
-        :if={@native && !@media_error}
+        :if={@native && !@native.camera && !@media_error}
         data-role="call-control-native-note"
         class="min-w-0 truncate text-sm text-base-content"
       >
@@ -1411,6 +1421,14 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       pending && "ring-2! ring-warning"
     ]
   end
+
+  # Browser and a camera at rest: byte-identical to before. Pending takes
+  # the mic's warning ring (`ring-2!`, for the same daisyUI reason).
+  @camera_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
+
+  defp camera_class(nil, _pending), do: @camera_class
+  defp camera_class(_native, true), do: [@camera_class, "ring-2! ring-warning"]
+  defp camera_class(_native, _pending), do: @camera_class
 
   attr(:on, :boolean, required: true)
   attr(:when_on, :string, required: true)

@@ -12,7 +12,7 @@ import com.google.firebase.messaging.RemoteMessage
  */
 class BurrowMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
-        NotificationPresenter.present(this, message.data)
+        PushDispatch.handle(this, message.data)
     }
 
     /**

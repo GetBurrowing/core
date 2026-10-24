@@ -26,7 +26,7 @@ Please try:
 Also in v1.2: native meetings. Joining a meeting runs it as a real phone call: audio keeps going when you leave the app or lock the phone, the Lock Screen and AirPods control it, and it shows in the phone app's Recents. If someone invites you while their meeting is live, or a meeting you were invited to starts, your phone rings like a call. A second invite during a call shows a banner with Not now and Switch. "Start a meeting in Burrow" (Siri and Shortcuts) starts the call natively.
 
 Known gaps in this build:
-- Native calls are audio only: no video, screen share or live captions, and Open full meeting does not add them.
+- Video works in Open full meeting: you can turn your camera on, and you see others' video and screen shares there. The native call screen itself stays audio only, and your camera turns off when you leave the app (tap Camera again when you come back). Not yet: sharing your own screen from the app, and live captions.
 - iPad: Burrow asks for Local Network access only to reach a server on your own network; for internet servers you can decline it.
 - Not built: PushToTalk, a custom ringtone, native game streaming, Apple Watch.
 

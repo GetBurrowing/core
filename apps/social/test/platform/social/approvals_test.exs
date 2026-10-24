@@ -61,7 +61,13 @@ defmodule Platform.Social.ApprovalsTest do
           refute text =~ "/files/"
         end
 
-        assert item.url =~ "?message=#{card.message_id}"
+        # Social authoring 5/11: the row (and its push) opens the Queue on
+        # this post's idea, where the same decide_* run.
+        assert item.url ==
+                 "/m/social?profile=#{ctx.profile.id}&tab=queue&idea=#{post.id}"
+
+        assert item.url == Approvals.queue_url(post, ctx.profile)
+        refute item.url =~ card.message_id
       end
 
       assert items(ctx.n, post) == []

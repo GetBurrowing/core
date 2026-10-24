@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Today's briefing on the Galaxy Z Flip 5 cover screen (Flex Window).
+     Samsung's documented form (developer.samsung.com/galaxy-z/flex_window.html
+     and the widget-flex-window codelab, read 2026-10-23): keyguard category,
+     352x339dp minimum, resizable both ways, plus the
+     com.samsung.android.appwidget.provider meta-data on the receiver
+     (samsung_todays_briefing_cover_widget). Not tested on a real device. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_briefing_cover_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="352dp"
+    android:minHeight="339dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="keyguard" />

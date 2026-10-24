@@ -6,6 +6,10 @@ characters). It must match `versionName` in `android/app/build.gradle`.
 
 ## v1.0
 New in this build:
+- Today's briefing widget: how many of today's briefing items need your call, sized for small spaces. On a Galaxy Z Flip 5, add it to the cover screen under Settings > Cover screen > Widgets and check it fits.
+
+## v1.0, versionCode 7
+New in this build:
 - One app, many installs: notifications from every install you're signed in to, with the install's name on each one and unread counts per install. An install that is down shows Could not update.
 - Notifications show the sender's picture.
 - No built-in installs: new users start at Add your install. Saved installs and sign-ins are kept.

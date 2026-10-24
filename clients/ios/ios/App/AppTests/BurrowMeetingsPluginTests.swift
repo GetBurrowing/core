@@ -1,4 +1,5 @@
 import Capacitor
+import UIKit
 import XCTest
 
 @testable import App
@@ -9,6 +10,7 @@ private final class FakeMedia: MeetingMediaControl {
     var state = CallState()
     var meetingID: String? = "m1"
     var requests: [Bool] = []
+    var videoActive: [Bool] = []
     var failure: Error?
     private var pending: CheckedContinuation<Bool, Error>?
 
@@ -25,6 +27,8 @@ private final class FakeMedia: MeetingMediaControl {
     }
 
     var isWaiting: Bool { pending != nil }
+
+    func setVideoActive(_ active: Bool) { videoActive.append(active) }
 }
 
 private struct SDKRefused: Error {}
@@ -57,7 +61,7 @@ final class BurrowMeetingsPluginTests: XCTestCase {
 
     func testTheNewMethodsAreRegistered() {
         let names = BurrowMeetingsPlugin().pluginMethods.map(\.name)
-        for name in ["join", "state", "leave", "capabilities", "setMuted"] {
+        for name in ["join", "state", "leave", "capabilities", "setMuted", "setVideoActive"] {
             XCTAssertTrue(names.contains(name), name)
         }
     }
@@ -67,7 +71,7 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         BurrowMeetingsPlugin().capabilities(makeCall("capabilities", done: done))
         wait(for: [done], timeout: 1)
         XCTAssertEqual(resolved?["mic"] as? Bool, true)
-        XCTAssertEqual(resolved?["camera"] as? Bool, false, "stage 4 flips camera")
+        XCTAssertEqual(resolved?["camera"] as? Bool, true, "the page may open its video-only companion (task 01a13ca2)")
         XCTAssertEqual(resolved?["activeSpeakers"] as? Bool, true)
         XCTAssertEqual(resolved?.count, 3)
     }
@@ -87,7 +91,7 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         XCTAssertEqual(resolved?["meetingId"] as? String, "m1")
         XCTAssertEqual(resolved?["phase"] as? String, "connected")
         XCTAssertEqual(resolved?["mic"] as? Bool, true, "the confirmed state, not the request")
-        XCTAssertEqual(resolved?["camera"] as? Bool, false)
+        XCTAssertEqual(resolved?["camera"] as? Bool, false, "the native call is audio only; the page owns the camera")
         XCTAssertEqual(resolved?["speaking"] as? [String], ["agent:x", "user:me"])
     }
 
@@ -124,6 +128,44 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         wait(for: [done], timeout: 1)
         XCTAssertEqual(rejected, "muted is required")
         XCTAssertEqual(media.requests, [])
+    }
+
+    // MARK: Video (task 01a13ca2 stage 4)
+
+    func testCapabilitiesAdvertiseTheCamera() {
+        XCTAssertEqual(BurrowMeetingsPlugin.capabilities["camera"] as? Bool, true)
+    }
+
+    func testSetVideoActiveForwardsTheConfirmedCamera() async {
+        let media = FakeMedia()
+        let plugin = makePlugin(media)
+        let on = expectation(description: "on")
+        plugin.setVideoActive(makeCall("setVideoActive", ["camera": true], done: on))
+        await fulfillment(of: [on], timeout: 1)
+        XCTAssertEqual(resolved?["camera"] as? Bool, true)
+        let off = expectation(description: "off")
+        plugin.setVideoActive(makeCall("setVideoActive", ["camera": false], done: off))
+        await fulfillment(of: [off], timeout: 1)
+        XCTAssertEqual(media.videoActive, [true, false])
+        XCTAssertEqual(resolved?["camera"] as? Bool, false)
+        XCTAssertNil(rejected)
+    }
+
+    func testSetVideoActiveWithoutCameraRejects() {
+        let media = FakeMedia()
+        let done = expectation(description: "settled")
+        makePlugin(media).setVideoActive(makeCall("setVideoActive", ["active": true], done: done))
+        wait(for: [done], timeout: 1)
+        XCTAssertEqual(rejected, "camera is required")
+        XCTAssertNil(resolved)
+        XCTAssertEqual(media.videoActive, [])
+    }
+
+    func testAppStateEventsFollowResignAndBecomeActive() {
+        XCTAssertEqual(BurrowMeetingsPlugin.appStateEvent(UIApplication.willResignActiveNotification)?["active"] as? Bool, false)
+        XCTAssertEqual(BurrowMeetingsPlugin.appStateEvent(UIApplication.didBecomeActiveNotification)?["active"] as? Bool, true)
+        XCTAssertNil(BurrowMeetingsPlugin.appStateEvent(UIApplication.didEnterBackgroundNotification))
+        XCTAssertLessThanOrEqual(BurrowMeetingsPlugin.resignGrace, 3)
     }
 
     // MARK: Listeners

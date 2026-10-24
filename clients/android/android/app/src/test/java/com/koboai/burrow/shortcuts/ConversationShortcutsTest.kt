@@ -101,7 +101,14 @@ class ConversationShortcutsTest {
     @Test
     fun `(d) a published shortcut is a long-lived conversation that opens the space`() {
         val sink = RecordingShortcutSink()
-        val id = shortcuts(sink).publish("burrow.example.com", "0192-s", "Internal Legacy Globex", "/chat/internal-legacy-globex", listOf(sam))
+        val id =
+            shortcuts(sink).publish(
+                "burrow.example.com",
+                "0192-s",
+                "Internal Legacy Globex",
+                "/chat/internal-legacy-globex",
+                listOf(sam),
+            )
         assertEquals("burrow.example.com|0192-s", id)
         val shortcut = sink.pushed.single()
 
@@ -128,7 +135,10 @@ class ConversationShortcutsTest {
 
     @Test
     fun `the conversation path strips the query and refuses anything that is not a chat path`() {
-        assertEquals("/chat/internal-legacy-globex", ConversationShortcuts.conversationPath("/chat/internal-legacy-globex?message=0192-m", "s"))
+        assertEquals(
+            "/chat/internal-legacy-globex",
+            ConversationShortcuts.conversationPath("/chat/internal-legacy-globex?message=0192-m", "s"),
+        )
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("//evil.example/chat/x", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath("/chat", "s"))
         assertEquals("/chat/s", ConversationShortcuts.conversationPath(null, "s"))

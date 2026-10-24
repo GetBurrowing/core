@@ -22,7 +22,9 @@ defmodule PlatformWeb.Components.InboxItemKindLabelTest do
     "task_sponsor_assigned" => "Task sponsor assigned",
     "lifecycle_step_failed" => "Lifecycle step failed",
     # Main's briefing kind (task 01a15ee1), humanized there: "Briefing".
-    "briefing" => "Briefing"
+    "briefing" => "Briefing",
+    # Main's meeting briefing kind (task 01a1694a), humanized there too.
+    "meeting_briefing" => "Meeting briefing"
   }
 
   describe "desktop labels are unchanged" do

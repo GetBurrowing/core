@@ -37,6 +37,15 @@ defmodule Platform.Social.Profile do
     # Social 3/7: the channel approval cards are posted in (FK to chat_spaces,
     # nilified when the space is deleted). Must be a space in the profile's org.
     belongs_to(:space, Platform.Chat.Space)
+    # Clip Studio 1/9: the show's default clip look (`Platform.Social.ClipLook`),
+    # possibly partial. Not editable here: ClipJobs.save_show_default writes it.
+    field(:show_look, :map, default: %{})
+    # Social authoring 4/11: the brand's clock (IANA), structured voice, who
+    # is notified (a subset of the approvers) and the drafting agent.
+    field(:timezone, :string, default: "Etc/UTC")
+    embeds_one(:voice, Platform.Social.Voice, on_replace: :update, defaults_to_struct: true)
+    field(:notify_user_ids, {:array, :binary_id}, default: [])
+    belongs_to(:drafting_agent, Platform.Agents.Agent)
 
     has_many(:accounts, Platform.Social.Account)
     has_many(:clips, Platform.Social.Clip)
@@ -44,7 +53,8 @@ defmodule Platform.Social.Profile do
     timestamps()
   end
 
-  @editable ~w(project_id name home_url voice_notes default_hashtags approver_user_ids brand space_id)a
+  @editable ~w(project_id name home_url voice_notes default_hashtags approver_user_ids brand space_id
+               timezone notify_user_ids drafting_agent_id)a
 
   @doc """
   Changeset for the editable fields. `org_id` is set by `Platform.Social`,
@@ -57,10 +67,26 @@ defmodule Platform.Social.Profile do
     |> cast(attrs, [:provider_profile_ref])
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_timezone()
+    |> cast_embed(:voice, with: &Platform.Social.Voice.changeset/2)
     |> Platform.Social.Brand.validate(profile.org_id)
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:space_id)
+    |> foreign_key_constraint(:drafting_agent_id)
     |> unique_constraint([:org_id, :name])
+  end
+
+  @doc "Whether `tz` names a zone in the time zone database."
+  @spec valid_timezone?(term()) :: boolean()
+  def valid_timezone?(tz) when is_binary(tz) and tz != "",
+    do: match?({:ok, _}, DateTime.now(tz))
+
+  def valid_timezone?(_tz), do: false
+
+  defp validate_timezone(changeset) do
+    validate_change(changeset, :timezone, fn :timezone, tz ->
+      if valid_timezone?(tz), do: [], else: [timezone: "is not a known time zone"]
+    end)
   end
 end
