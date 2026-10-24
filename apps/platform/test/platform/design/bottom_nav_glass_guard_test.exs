@@ -124,13 +124,18 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {["@media (prefers-reduced-transparency: reduce)"], ".bottom-nav"},
     {["@media (min-width: 1024px)"], ".bottom-nav"},
     {[], ".bottom-nav-tab"},
+    # Sliding pill (prototype t1): the tinted pill behind the current tab and
+    # the whole-cell press scale, set by the TabPill hook.
+    {[], ".bottom-nav-pill-layer"},
+    {[], ".bottom-nav-pill"},
+    {[], ".bottom-nav-tab.is-pressed"},
+    {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav-pill"},
+    {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav-tab.is-pressed"},
     {["@media (hover: hover)"],
      ".bottom-nav-tab:not(.bottom-nav-tab--active):not([data-nav-pending]):hover"},
     {[], ".bottom-nav-tab:focus-visible"},
     {[], ".bottom-nav-tab:active"},
     {[], ".bottom-nav-tab:not(.bottom-nav-tab--active):active"},
-    {[], ".bottom-nav-tab:active .bottom-nav-icon"},
-    {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav-tab:active .bottom-nav-icon"},
     {[], ".bottom-nav-tab--active"},
     {[], ".bottom-nav-dot"},
     {[], ".bottom-nav-icon"},
@@ -148,10 +153,9 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     # The More tab holds its press during the sheet round trip (task
     # 01a166be-b5b9 stage 3, canvas 01a167b0 rule 5).
     {[], ".bottom-nav-tab.press-hold.phx-click-loading:not(.bottom-nav-tab--active)"},
-    {[], ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon"},
+    {[], ".bottom-nav-tab.press-hold.phx-click-loading"},
     {[], ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-label"},
-    {["@media (prefers-reduced-motion: reduce)"],
-     ".bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon"}
+    {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav-tab.press-hold.phx-click-loading"}
   ]
 
   @colour_literal ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(|\blab\(|\blch\(|\bhwb\(/

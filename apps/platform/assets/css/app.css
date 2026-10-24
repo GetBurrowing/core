@@ -5431,13 +5431,77 @@ body, .font-suite {
   min-height: 44px;
   color: var(--tab-ink);
   position: relative;
+  /* Above the sliding pill (.bottom-nav-pill-layer, z-index 0). */
+  z-index: 1;
   cursor: pointer;
-  /* Release eases out over 120ms; press-in is instant (the :active rule
-     below zeroes the duration). Press feedback canvas 01a167b0, rule 1. */
-  transition: color 120ms ease-out;
+  touch-action: manipulation;
+  /* Ink release eases out over 120ms; ink press-in is instant (the :active
+     rule below zeroes it). Press feedback canvas 01a167b0, rule 1. The cell
+     scales to .92 and back over 80ms (sliding pill, prototype t1). */
+  transition:
+    color 120ms ease-out,
+    transform 80ms;
   background: transparent;
   border: 0;
   text-decoration: none;
+}
+
+/* Sliding pill (the product lead's pick of ten tab-feel prototypes: t1).
+   A soft primary tint sits behind the current tab and springs across when it
+   changes. The TabPill hook (assets/js/hooks/tab_pill.js) sets --pill-x and
+   --pill-w from the current (or nav-pending) tab and places it with no
+   transition on mount and on resize, so a page load never slides it in. The
+   layer is `phx-update="ignore"`, so a LiveView patch keeps the hook's
+   inline geometry. Starts transparent until the hook has placed it. */
+.bottom-nav-pill-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.bottom-nav-pill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: var(--pill-w, 0px);
+  transform: translateX(var(--pill-x, 0px));
+  border-radius: var(--radius-box);
+  /* primary at 16% in dark themes (the prototype, which is dark-only), 6% in
+     light ones. The active label is primary ink ON the pill, and any tint
+     costs it contrast. Measured on Chrome, page under the glass white/black:
+     at 16% every light preset fell to 3.7-4.3:1 and High contrast light to
+     6.3:1 (it owes 7). At 6% light presets are 4.5-5.0 over white and 4.3
+     over black (no pill: 4.9-5.5 / 4.6), High contrast light 7.5. Dark
+     presets at 16% are 5.5-6.8 over black (no pill: 6.8-8.9), High contrast
+     dark 7.5. light-dark() follows the theme's color-scheme, so no rule here
+     is qualified by data-theme. A browser without light-dark() keeps 6%. */
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  background: light-dark(
+    color-mix(in srgb, var(--color-primary) 6%, transparent),
+    color-mix(in srgb, var(--color-primary) 16%, transparent)
+  );
+  opacity: 0;
+  transition:
+    transform 0.45s cubic-bezier(0.3, 1.5, 0.5, 1),
+    width 0.45s;
+}
+
+/* Pressed: the whole cell scales to .92 while the pointer is down (the hook's
+   `is-pressed`, set on pointerdown as in prototype t1). */
+.bottom-nav-tab.is-pressed {
+  transform: scale(0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-pill {
+    transition: none;
+  }
+
+  .bottom-nav-tab.is-pressed {
+    transform: none;
+  }
 }
 
 /* Hover lifts an INACTIVE tab's ink to full base-content: never dimmer than
@@ -5466,22 +5530,21 @@ body, .font-suite {
   border-radius: calc(round(calc(var(--radius-box) * 1.57), 1px) - 1px);
 }
 
-/* Pressed (task 01a166be-b5b9, canvas 01a167b0 four-states table): the ICON
-   scales to 0.92 and an inactive tab's ink lifts to body, instantly. The cell
-   and its label never move or change size or weight. The ink rule excludes
-   the active tab so nothing but `.bottom-nav-tab--active` paints its colour.
-   Reduced motion keeps the ink and drops the scale (block further down). */
+/* Pressed (task 01a166be-b5b9, canvas 01a167b0 four-states table): an
+   inactive tab's ink lifts to body, instantly. Since the sliding pill (t1)
+   the whole CELL scales to .92 over 80ms (`.bottom-nav-tab.is-pressed`
+   above), replacing the icon-only scale; the label never changes weight.
+   The ink rule excludes the active tab so nothing but
+   `.bottom-nav-tab--active` paints its colour. Reduced motion keeps the ink
+   and drops the scale. */
 .bottom-nav-tab:active {
-  transition-duration: 0ms;
+  transition:
+    color 0ms,
+    transform 80ms;
 }
 
 .bottom-nav-tab:not(.bottom-nav-tab--active):active {
   color: var(--color-base-content);
-}
-
-.bottom-nav-tab:active .bottom-nav-icon {
-  transform: scale(0.92);
-  transition-duration: 0ms;
 }
 
 /* Active: the primary, measured on the painted glass like the inactive ink
@@ -5582,10 +5645,6 @@ body, .font-suite {
 /* Reduced motion (canvas 01a167b0 rule 8): no scale on press. The ink change
    stays. The universal reduce block already zeroes the durations. */
 @media (prefers-reduced-motion: reduce) {
-  .bottom-nav-tab:active .bottom-nav-icon {
-    transform: none;
-  }
-
   .icon-rail-tab:active .icon-rail-icon {
     transform: none;
   }
@@ -5976,13 +6035,13 @@ body, .font-suite {
   cursor: progress;
 }
 
-/* The More tab: the pressed icon (0.92, body ink on an inactive tab) stays
+/* The More tab: the pressed cell (0.92, body ink on an inactive tab) stays
    while the sheet's open/close round trip runs, and the label dims to 60%. */
 .bottom-nav-tab.press-hold.phx-click-loading:not(.bottom-nav-tab--active) {
   color: var(--color-base-content);
 }
 
-.bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon {
+.bottom-nav-tab.press-hold.phx-click-loading {
   transform: scale(0.92);
 }
 
@@ -5998,7 +6057,7 @@ body, .font-suite {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bottom-nav-tab.press-hold.phx-click-loading .bottom-nav-icon {
+  .bottom-nav-tab.press-hold.phx-click-loading {
     transform: none;
   }
 }

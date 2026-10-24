@@ -163,18 +163,20 @@ defmodule PlatformWeb.Components.PressHoldMarkupTest do
       %{css: read_asset("css/app.css"), app: read_asset("js/app.js")}
     end
 
-    test "the More tab keeps the pressed icon and ink and dims its label to 60%", %{css: css} do
+    # Since the sliding pill (prototype t1) the press scales the whole cell,
+    # so the held press does too.
+    test "the More tab keeps the pressed cell and ink and dims its label to 60%", %{css: css} do
       assert css =~
                ~r/\.bottom-nav-tab\.press-hold\.phx-click-loading:not\(\.bottom-nav-tab--active\) \{\s*color: var\(--color-base-content\);/
 
       assert css =~
-               ~r/\.bottom-nav-tab\.press-hold\.phx-click-loading \.bottom-nav-icon \{\s*transform: scale\(0\.92\);/
+               ~r/\.bottom-nav-tab\.press-hold\.phx-click-loading \{\s*transform: scale\(0\.92\);/
 
       assert css =~
                ~r/\.bottom-nav-tab\.press-hold\.phx-click-loading \.bottom-nav-label \{\s*opacity: 0\.6;/
 
       assert css =~
-               ~r/@media \(prefers-reduced-motion: reduce\) \{\s*\.bottom-nav-tab\.press-hold\.phx-click-loading \.bottom-nav-icon \{\s*transform: none;/
+               ~r/@media \(prefers-reduced-motion: reduce\) \{\s*\.bottom-nav-tab\.press-hold\.phx-click-loading \{\s*transform: none;/
     end
 
     test "a daisyUI press-hold button holds daisyUI's pressed fill", %{css: css} do

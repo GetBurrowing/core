@@ -390,6 +390,10 @@ defmodule PlatformWeb.Components.IconRail do
   is on a destination the More sheet lists (`more_sheet_destinations/2`).
   Active tabs render the `-solid` icon; inactive tabs the outline one.
 
+  A tinted pill sits behind the current tab and slides when it changes
+  (the `TabPill` hook, `assets/js/hooks/tab_pill.js`; prototype t1). Its
+  layer is `phx-update="ignore"` so a patch keeps the hook's geometry.
+
   When `inbox_unread_count` is above 0, More carries a dot
   (`data-role="more-unread-dot"`, no count) and its aria-label reads
   "More, unread in Inbox". At 0 the dot is absent from the DOM.
@@ -435,11 +439,21 @@ defmodule PlatformWeb.Components.IconRail do
 
     ~H"""
     <nav
+      id="bottom-nav"
       class="bottom-nav lg:hidden"
       role="navigation"
       aria-label="Main navigation"
       data-bottom-rail
+      phx-hook="TabPill"
     >
+      <div
+        id="bottom-nav-pill-layer"
+        class="bottom-nav-pill-layer"
+        phx-update="ignore"
+        aria-hidden="true"
+      >
+        <span class="bottom-nav-pill" data-tab-pill></span>
+      </div>
       <.link
         :for={dest <- @mobile_destinations}
         navigate={dest.path}

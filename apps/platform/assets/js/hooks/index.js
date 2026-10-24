@@ -71,6 +71,7 @@ import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
+import TabPill from "./tab_pill"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
@@ -149,6 +150,7 @@ export default {
   Sheet,
   SheetHandleClock,
   SidebarCollapse,
+  TabPill,
   TasksStatusFilter,
   ThemePicker,
   ToastPause,

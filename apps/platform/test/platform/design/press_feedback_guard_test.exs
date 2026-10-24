@@ -7,10 +7,14 @@ defmodule Platform.Design.PressFeedbackGuardTest do
 
   | control         | hover (hover: hover) | pressed (:active)          | current                     |
   |-----------------|----------------------|----------------------------|-----------------------------|
-  | bottom tab      | ink to base-content  | icon scale(0.92) + ink     | primary ink                 |
+  | bottom tab      | ink to base-content  | cell scale(0.92) + ink     | primary ink + tinted pill   |
   | rail tile       | icon ink to body     | icon scale(0.92) + ink     | base-300 tile + primary bar |
   | More sheet row  | base-200 fill        | base-300 fill              | no fill, 3px bar, weight 600 |
   | menu item       | base-200 (utility)   | base-300                   | (none exists)               |
+
+  The bottom tab's press scales the whole CELL since the sliding pill
+  (the product lead's pick, prototype t1): `.bottom-nav-tab.is-pressed`, set by the
+  TabPill hook on pointerdown, over 80ms. It replaced the icon-only scale.
 
   Reduced motion removes every press scale and keeps the ink. iOS only fires
   `:active` with a touchstart listener, so app.js registers one on document.
@@ -82,28 +86,31 @@ defmodule Platform.Design.PressFeedbackGuardTest do
         )
 
       pressed_ink = one!(rules, [], ".bottom-nav-tab:not(.bottom-nav-tab--active):active")
-      pressed_icon = one!(rules, [], ".bottom-nav-tab:active .bottom-nav-icon")
+      pressed_cell = one!(rules, [], ".bottom-nav-tab.is-pressed")
       current = one!(rules, [], ".bottom-nav-tab--active")
 
       assert decl(hover, "color") == "var(--color-base-content)"
       assert decl(pressed_ink, "color") == "var(--color-base-content)"
-      assert decl(pressed_icon, "transform") == "scale(0.92)"
+      assert decl(pressed_cell, "transform") == "scale(0.92)"
       assert decl(current, "color") == "var(--color-primary)"
 
       assert_distinct(
         hover: look(hover),
-        pressed: MapSet.union(look(pressed_ink), look(pressed_icon)),
+        pressed: MapSet.union(look(pressed_ink), look(pressed_cell)),
         current: look(current)
       )
     end
 
-    test "the cell never scales; press-in is instant", %{rules: rules} do
-      cell = one!(rules, [], ".bottom-nav-tab:active")
-      assert decl(cell, "transform") == nil, "the press scales the ICON, not the whole cell"
-      assert decl(cell, "transition-duration") == "0ms"
+    test "the cell scales on press over 80ms; the ink press-in is instant", %{rules: rules} do
+      active = one!(rules, [], ".bottom-nav-tab:active")
+      assert decl(active, "transform") == nil, "the scale is the hook's is-pressed, not :active"
+      assert decl(active, "transition") =~ ~r/^color 0ms,\s*transform 80ms$/
 
-      icon = one!(rules, [], ".bottom-nav-tab:active .bottom-nav-icon")
-      assert decl(icon, "transition-duration") == "0ms"
+      assert decl(one!(rules, [], ".bottom-nav-tab"), "transition") =~
+               ~r/transform 80ms$/
+
+      # The icon no longer scales on its own (it would compound to 0.85).
+      refute Enum.any?(rules, &(&1.selector =~ ~r/bottom-nav-tab:active \.bottom-nav-icon/))
 
       # Labels never change size or weight on press.
       refute Enum.any?(rules, &(&1.selector =~ ~r/:active.*\.bottom-nav-label/))
@@ -195,15 +202,15 @@ defmodule Platform.Design.PressFeedbackGuardTest do
       scales =
         for r <- rules,
             r.at == [],
-            r.selector =~ ":active",
+            r.selector =~ ":active" or r.selector =~ ".is-pressed",
             # The controls this contract covers; other components own theirs.
             r.selector =~ ~r/bottom-nav|icon-rail|more-sheet|menuitem/,
             t = decl(r.body, "transform"),
             t =~ "scale(",
             do: r.selector
 
-      # Anti-vacuity: both icon presses are in the list.
-      assert ".bottom-nav-tab:active .bottom-nav-icon" in scales
+      # Anti-vacuity: the tab's cell press and the rail's icon press are listed.
+      assert ".bottom-nav-tab.is-pressed" in scales
       assert ".icon-rail-tab:active .icon-rail-icon" in scales
 
       for sel <- scales do
