@@ -5,11 +5,13 @@
  * #235, #247, #254) shipped, none of which currently have browser-level
  * coverage:
  *
- *   1. Desktop hover quick-react    — action bar 👍 click adds a pill.
+ *   1. Desktop hover quick-react    — the message pill's 👍 adds a pill.
  *   2. Desktop "+" picker modal     — opens centered on viewport ≥640px.
  *   3. Mobile bottom-sheet picker   — picker enters from bottom under 640px.
- *   4. Mobile double-tap            — `LongpressMenu` hook opens the
- *                                     per-message actions sheet.
+ *   4. Mobile tap / double-tap /    — `MessageGestures` hook: a tap shows
+ *      long-press                     the message pill, a double-tap or a
+ *                                     450ms press opens the per-message
+ *                                     actions sheet (redesign rung 9).
  *   5. Mobile one-tap react         — the coarse-pointer add-reaction
  *                                     contract (task 01a000c0 stage 2).
  *
@@ -20,8 +22,8 @@
  * NOT IN CI. `.github/workflows/ci.yml` runs `mix format --check-formatted`
  * and `mix test` only — there is no Playwright step. Everything in this file
  * has to be run by hand against a dev server (see e2e/README.md), which is
- * how the `#longpress-menu` assertion in case 4 was able to rot for as long
- * as it did. Treat a green `mix test` as saying nothing about this file.
+ * how an assertion on a since-deleted overlay in case 4 was able to rot for
+ * as long as it did. Treat a green `mix test` as saying nothing about this file.
  */
 
 import { test, expect, devices, Browser, BrowserContext, Page } from "@playwright/test"
@@ -29,8 +31,8 @@ import { test, expect, devices, Browser, BrowserContext, Page } from "@playwrigh
 const SPACE = "general"
 
 // Mirrors the `@quick_emojis` assign, which is `Platform.Chat.Emoji.quick_defaults/0`
-// (`lib/platform/chat/emoji.ex`) and the single source for BOTH the desktop
-// hover action row and the touch sheet's strip. If this count drifts, the
+// (`lib/platform/chat/emoji.ex`) and the single source for the actions
+// sheet's strip and the message pill's 👍 (its first entry). If this count drifts, the
 // assign changed and the strip changed with it — update here, not in the
 // template.
 const QUICK_EMOJI_COUNT = 6
@@ -59,18 +61,30 @@ async function compose(peer: Peer, body: string) {
   // is fragile because the ComposeInput hook hands Enter different semantics
   // on touch vs. desktop, and Playwright `press("Enter")` can race with the
   // hook's mount.
-  const textarea = peer.page.locator('#compose-form textarea[name="compose[text]"]')
+  // Since rung 10 the field is a contenteditable (`.compose-field`) that
+  // ComposeInput mirrors into the hidden `compose[text]` input.
+  const textarea = peer.page.locator("#compose-form .compose-field")
+  const value = peer.page.locator('#compose-form input[name="compose[text]"]')
   await expect(textarea).toBeVisible()
   // pressSequentially fires `input` per character so phx-change="compose_changed"
   // syncs the LV's view of the textarea before phx-submit fires. With
   // Locator.fill() Phoenix sees text="" at submit time because the change
   // event arrives after the submit on the same tick.
-  await textarea.click()
-  await textarea.pressSequentially(body, { delay: 5 })
-  // Wait until the LV has reflected the textarea value back. A re-rendered
-  // value attribute is a clean signal that the last compose_changed reached
-  // the server and a re-render came back.
-  await expect(textarea).toHaveValue(body, { timeout: 5_000 })
+  // Two attempts, as in chat_message_density.spec.ts: a keystroke that lands
+  // before ComposeInput has finished mounting is eaten.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await textarea.fill("")
+    await textarea.click()
+    await textarea.pressSequentially(body, { delay: 5 })
+    try {
+      // The hook's mirror into the hidden input is the clean signal that
+      // the field holds exactly what was typed.
+      await expect(value).toHaveValue(body, { timeout: 5_000 })
+      break
+    } catch (err) {
+      if (attempt === 1) throw err
+    }
+  }
   const sendBtn = peer.page.locator(".compose-pill-send")
   await expect(sendBtn).toBeEnabled({ timeout: 5_000 })
   await sendBtn.click()
@@ -81,10 +95,10 @@ async function compose(peer: Peer, body: string) {
 }
 
 async function messageBubble(peer: Peer, body: string) {
-  // The message bubble carries `phx-hook="LongpressMenu"` and `data-message-id`.
+  // The message bubble carries `phx-hook="MessageGestures"` and `data-message-id`.
   // Find the hook root that contains the message body text.
   return peer.page
-    .locator(`[phx-hook="LongpressMenu"][data-message-id]`)
+    .locator(`[phx-hook="MessageGestures"][data-message-id]`)
     .filter({ hasText: body })
     .first()
 }
@@ -103,7 +117,7 @@ async function doubleTap(page: Page, bubble: ReturnType<Page["locator"]>) {
 }
 
 test.describe("chat reactions", () => {
-  test("desktop hover action-bar quick-react adds a pill on the peer's view", async ({
+  test("desktop hover message-pill quick-react adds a pill on the peer's view", async ({
     browser,
   }) => {
     const alice = await login(browser, `r1-alice-${Date.now()}`)
@@ -117,8 +131,8 @@ test.describe("chat reactions", () => {
       const bobBubble = await messageBubble(bob, body)
       await expect(bobBubble).toBeVisible({ timeout: 5_000 })
 
-      // Hover reveals the action bar (`hidden group-hover:flex` on the inner
-      // div). Click 👍.
+      // Hover reveals the message pill (desktop-gated CSS on
+      // `.message-pill`, rung 9). Click its 👍.
       await bobBubble.hover()
       const thumbsUp = bobBubble.locator('button[phx-click="react"][phx-value-emoji="👍"]')
       await expect(thumbsUp).toBeVisible({ timeout: 3_000 })
@@ -149,10 +163,12 @@ test.describe("chat reactions", () => {
       const bubble = await messageBubble(alice, body)
       await bubble.hover()
 
-      // The smile-face button in the action bar opens the picker.
-      const openPickerBtn = bubble.locator(
-        'button[phx-click="open_reaction_picker"]',
-      )
+      // Since rung 9 the hover row's "+" is gone: the hover pill's More
+      // opens the actions sheet, and the sheet's "+" opens the picker.
+      const more = bubble.locator('[data-role="message-pill"] [aria-label="More actions"]')
+      await expect(more).toBeVisible({ timeout: 3_000 })
+      await more.click()
+      const openPickerBtn = alice.page.locator("#message-actions-more-reactions")
       await expect(openPickerBtn).toBeVisible({ timeout: 3_000 })
       await openPickerBtn.click()
 
@@ -273,24 +289,13 @@ test.describe("chat reactions", () => {
     }
   })
 
-  // RETARGETED by task 01a000c0 stage 2. This case used to be called "mobile
-  // double-tap opens the longpress overlay and reacts" and asserted that
-  // `#longpress-menu` became visible after a double-tap. It was ALREADY
-  // FAILING before stage 2 touched it — verified by running the suite
-  // unchanged first: "element(s) not found" on `locator('#longpress-menu')`.
-  //
-  // It cannot pass on current main and has not been able to for some time.
-  // `assets/js/hooks/longpress_menu.js` pushes `open_message_actions`, and
-  // NOTHING in production pushes `open_longpress_menu` — which is the only
-  // writer of the `:longpress_menu_for` assign that `#longpress-menu` renders
-  // behind. The overlay is unreachable, so the guard was asserting on a
-  // surface the app no longer opens. Because this suite is not in CI, nobody
-  // found out.
-  //
-  // The gesture itself is real and still worth guarding, so the case is
-  // pointed at what the gesture actually opens today: the per-message actions
-  // sheet, and the quick-reaction strip task 01a000c0 stage 1 put in it.
-  test("mobile double-tap opens the message actions sheet with a quick-reaction strip", async ({
+  // RETARGETED by task 01a000c0 stage 2, then by redesign rung 9. This case
+  // once asserted on a long-press overlay that nothing in production opened
+  // any more, and was failing for it; stage 2 pointed it at the actions sheet
+  // the gesture really opens. Rung 9 deleted that overlay and made a single
+  // tap show the message pill, with the double-tap as the upgrade to the
+  // sheet. Both halves are guarded here.
+  test("mobile tap shows the pill, double-tap opens the actions sheet with a quick-reaction strip", async ({
     browser,
   }) => {
     const alice = await login(browser, `r4-alice-${Date.now()}`)
@@ -298,20 +303,26 @@ test.describe("chat reactions", () => {
     const body = `r4 doubletap ${Date.now()}`
 
     try {
-      // Alice (desktop) authors a peer message bob can react to. Own-message
-      // double-tap is reserved for edit per the LongpressMenu hook, so we
-      // need the message to NOT be authored by bob.
+      // Alice (desktop) authors a peer message bob can react to.
       await compose(alice, body)
       const bobBubble = await messageBubble(bob, body)
       await expect(bobBubble).toBeVisible({ timeout: 5_000 })
-
-      // Confirm the bubble is flagged as not-own (so the hook will fire).
       await expect(bobBubble).toHaveAttribute("data-is-own-message", "false")
 
-      await doubleTap(bob.page, bobBubble)
+      // One tap: the pill shows, and the sheet does not open.
+      const pill = bobBubble.locator('[data-role="message-pill"]')
+      await expect(pill).toHaveCSS("display", "none")
+      await bobBubble.scrollIntoViewIfNeeded()
+      const tapBox = await bobBubble.boundingBox()
+      if (!tapBox) throw new Error("bubble has no bounding box")
+      await bob.page.touchscreen.tap(tapBox.x + tapBox.width / 2, tapBox.y + tapBox.height / 2)
+      await expect(pill).toHaveCSS("display", "flex")
+      await expect(pill.locator("button")).toHaveCount(4)
+      await bob.page.waitForTimeout(400)
+      await expect(bob.page.locator("#message-actions-sheet")).toHaveCount(0)
 
-      // The gesture opens the per-message actions sheet — not the orphaned
-      // #longpress-menu overlay.
+      // Double-tap: the per-message actions sheet.
+      await doubleTap(bob.page, bobBubble)
       const sheet = bob.page.locator("#message-actions-sheet")
       await expect(sheet).toBeVisible({ timeout: 5_000 })
 
@@ -347,9 +358,53 @@ test.describe("chat reactions", () => {
         expect(moreBox.height).toBeGreaterThanOrEqual(44)
       }
 
-      // The orphaned overlay must NOT be what the gesture opened. This is the
-      // assertion the old version of this test had backwards.
-      await expect(bob.page.locator("#longpress-menu")).toHaveCount(0)
+    } finally {
+      await alice.context.close()
+      await bob.context.close()
+    }
+  })
+
+  // Long-press (rung 9): held 450ms with no movement, the press opens the
+  // same sheet. `page.touchscreen` has no hold, so the touch is driven over
+  // CDP, which Chromium turns into the pointer events the hook listens for.
+  test("mobile long-press opens the message actions sheet, a short press does not", async ({
+    browser,
+  }) => {
+    const alice = await login(browser, `r4l-alice-${Date.now()}`)
+    const bob = await login(browser, `r4l-bob-${Date.now()}`, true)
+    const body = `r4l longpress ${Date.now()}`
+
+    try {
+      await compose(alice, body)
+      const bobBubble = await messageBubble(bob, body)
+      await expect(bobBubble).toBeVisible({ timeout: 5_000 })
+      await bobBubble.scrollIntoViewIfNeeded()
+      const box = await bobBubble.boundingBox()
+      if (!box) throw new Error("bubble has no bounding box")
+      const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+
+      const cdp = await bob.context.newCDPSession(bob.page)
+      const press = async (holdMs: number) => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] })
+        await bob.page.waitForTimeout(holdMs)
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      }
+
+      // Control: a 200ms press is a tap. Pill, no sheet.
+      await press(200)
+      await bob.page.waitForTimeout(400)
+      await expect(bob.page.locator("#message-actions-sheet")).toHaveCount(0)
+
+      await press(700)
+      await expect(bob.page.locator("#message-actions-sheet")).toBeVisible({ timeout: 5_000 })
+
+      // The click the lifting finger leaves behind is swallowed: the sheet
+      // opened under the finger, and that click used to land on a sheet
+      // emoji, react with it and close the sheet (seen 2 of 5 runs before
+      // the hook swallowed it at the window).
+      await bob.page.waitForTimeout(600)
+      await expect(bob.page.locator("#message-actions-sheet")).toBeVisible()
+      await expect(bobBubble.locator(".reaction-pill")).toHaveCount(0)
     } finally {
       await alice.context.close()
       await bob.context.close()
@@ -432,91 +487,6 @@ test.describe("chat reactions", () => {
     } finally {
       await alice.context.close()
       await bob.context.close()
-    }
-  })
-
-  // Regression test for the tall-message bug: when a message bubble is taller
-  // than the viewport (rect.height > window.innerHeight * 0.6), the lift
-  // animation used to position --clone-half-h such that the longpress pill
-  // computed `top: calc(50% - var(--clone-half-h) - 12px)` to a negative
-  // value — pill rendered above the viewport top and was unreachable.
-  //
-  // The fix sets `data-tall-message="true"` on #longpress-menu and a CSS
-  // override pins the pill to viewport bottom with safe-area inset padding.
-  // This test verifies the pill stays inside the viewport on a tall message.
-  //
-  // Verification strategy: load the chat under iPhone 12 viewport, then
-  // inject the longpress overlay markup directly via page.evaluate. The
-  // synthesized double-tap gesture is unreliable in headless when the
-  // target bubble extends thousands of pixels off-screen; injecting the
-  // overlay verifies the CSS rules that ARE the fix (the JS hook's tall
-  // detection is a single arithmetic check, exercised separately during
-  // review). The committed app.css is loaded from the live dev server,
-  // so this is a real CSS application — not a mock.
-  test("tall-message mode pins the longpress pill inside the viewport", async ({
-    browser,
-  }) => {
-    const alice = await login(browser, `tall-${Date.now()}`, true)
-
-    try {
-      // Inject the overlay with data-tall-message="true" — what MessageLift
-      // sets when rect.height > viewport*0.6.
-      await alice.page.evaluate(() => {
-        const html = `
-          <div id="longpress-menu" class="fixed inset-0 z-50"
-               role="dialog" aria-label="Message actions"
-               data-tall-message="true">
-            <div class="absolute inset-0 longpress-scrim" aria-hidden="true"></div>
-            <div class="longpress-pill" role="group" aria-label="Quick reactions">
-              <button class="longpress-pill-btn" type="button">👍</button>
-              <button class="longpress-pill-btn" type="button">🎉</button>
-              <button class="longpress-pill-btn" type="button">✅</button>
-              <button class="longpress-pill-btn" type="button">❤️</button>
-              <button class="longpress-pill-btn" type="button">😂</button>
-              <button class="longpress-pill-btn" type="button">🙏</button>
-              <div class="longpress-pill-divider" aria-hidden="true"></div>
-              <button class="longpress-pill-btn longpress-pill-more"
-                      type="button">+</button>
-            </div>
-          </div>`
-        document.body.insertAdjacentHTML("beforeend", html)
-      })
-
-      const overlay = alice.page.locator("#longpress-menu[data-tall-message]")
-      await expect(overlay).toBeVisible()
-      const pill = alice.page.locator(".longpress-pill")
-      await expect(pill).toBeVisible()
-
-      // Pill must be fully inside viewport — the bug regression.
-      const box = await pill.boundingBox()
-      const vp = alice.page.viewportSize()
-      expect(box).not.toBeNull()
-      expect(vp).not.toBeNull()
-      if (box && vp) {
-        expect(box.y).toBeGreaterThanOrEqual(0)
-        expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
-        expect(box.x).toBeGreaterThanOrEqual(0)
-        expect(box.x + box.width).toBeLessThanOrEqual(vp.width)
-        // Bottom-pinned shape: pill bottom edge close to viewport bottom
-        // (within safe-area + 24px margin).
-        expect(vp.height - (box.y + box.height)).toBeLessThan(80)
-      }
-
-      // All 6 quick emojis tappable (regression-proof markup).
-      const emojiButtons = pill.locator(
-        ".longpress-pill-btn:not(.longpress-pill-more)",
-      )
-      await expect(emojiButtons).toHaveCount(6)
-
-      // The "+" more button is also reachable.
-      await expect(pill.locator(".longpress-pill-more")).toBeVisible()
-
-      // Sanity: scrim covers the viewport so taps outside the pill close
-      // the menu (production behavior preserved).
-      const scrim = alice.page.locator(".longpress-scrim")
-      await expect(scrim).toBeVisible()
-    } finally {
-      await alice.context.close()
     }
   })
 })

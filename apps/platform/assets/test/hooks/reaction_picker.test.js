@@ -7,8 +7,8 @@
 // the same shape as app_badge.test.js, which imports named helpers rather than
 // mounting anything.
 
-import { describe, it, expect } from "vitest"
-import {
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import ReactionPicker, {
   ariaLabelFor,
   buildSections,
   chunkRows,
@@ -205,5 +205,77 @@ describe("moveFocus", () => {
 
   it("returns null when there is no grid yet", () => {
     expect(moveFocus([], { r: 0, c: 0 }, "ArrowRight")).toBeNull()
+  })
+})
+
+// Direction canvas 01a1666e node m3 rule 5 (redesign rung 9 stage 2): the
+// picker opens with its search field focused, on a phone as on a desktop.
+// The field used to be focused only on a fine pointer at 640px and up.
+describe("focus on open", () => {
+  let savedDocument, savedWindow
+  beforeEach(() => {
+    savedDocument = globalThis.document
+    savedWindow = globalThis.window
+    globalThis.document = { activeElement: null }
+  })
+  afterEach(() => {
+    globalThis.document = savedDocument
+    globalThis.window = savedWindow
+  })
+
+  const focusable = () => {
+    const el = { focus: vi.fn(() => (globalThis.document.activeElement = el)) }
+    return el
+  }
+
+  for (const [label, desktop] of [
+    ["a phone (coarse pointer, narrow)", false],
+    ["a desktop (fine pointer, wide)", true],
+  ]) {
+    it(`the search input is document.activeElement after open on ${label}`, () => {
+      globalThis.window = { matchMedia: () => ({ matches: desktop }) }
+      const hook = Object.create(ReactionPicker)
+      hook.searchInput = focusable()
+      hook.panel = focusable()
+
+      hook._focusOnOpen()
+
+      expect(globalThis.document.activeElement).toBe(hook.searchInput)
+      expect(hook.panel.focus).not.toHaveBeenCalled()
+    })
+  }
+
+  it("moves focus from the panel to the field once a first open builds it", () => {
+    globalThis.window = { matchMedia: () => ({ matches: false }) }
+    const hook = Object.create(ReactionPicker)
+    hook.searchInput = null
+    hook.panel = focusable()
+    hook._focusOnOpen()
+    expect(globalThis.document.activeElement).toBe(hook.panel)
+
+    hook.searchInput = focusable()
+    hook._focusFieldOnceBuilt()
+    expect(globalThis.document.activeElement).toBe(hook.searchInput)
+  })
+
+  it("does not steal focus the user already moved off the panel", () => {
+    const hook = Object.create(ReactionPicker)
+    hook.panel = focusable()
+    hook.searchInput = focusable()
+    const elsewhere = {}
+    globalThis.document.activeElement = elsewhere
+    hook._focusFieldOnceBuilt()
+    expect(globalThis.document.activeElement).toBe(elsewhere)
+  })
+
+  it("falls back to the panel before the field is built", () => {
+    globalThis.window = { matchMedia: () => ({ matches: false }) }
+    const hook = Object.create(ReactionPicker)
+    hook.searchInput = null
+    hook.panel = focusable()
+
+    hook._focusOnOpen()
+
+    expect(globalThis.document.activeElement).toBe(hook.panel)
   })
 })

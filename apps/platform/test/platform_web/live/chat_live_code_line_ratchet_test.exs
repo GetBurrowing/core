@@ -117,6 +117,10 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
                      )
   @composer_path Path.join(@app_root, "lib/platform_web/live/chat/partials/composer.ex")
   @overlays_path Path.join(@app_root, "lib/platform_web/live/chat/partials/overlays.ex")
+  @message_actions_hooks_path Path.join(
+                                @app_root,
+                                "lib/platform_web/live/chat/message_actions_hooks.ex"
+                              )
 
   # Every file the chat surface's load-bearing explanation is allowed to live
   # in. The comment FLOOR below sums over this list so an extraction cannot
@@ -129,7 +133,8 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
     @chat_list_path,
     @conversation_path,
     @composer_path,
-    @overlays_path
+    @overlays_path,
+    @message_actions_hooks_path
   ]
 
   # MEASURED on `origin/main` @ f1311a42, 2026-08-25, by `code_line_count/1`
@@ -621,7 +626,20 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `Partials.SpaceSheet` import, the `SpaceSheetHooks` alias, its `attach/1`
   # in mount and its `reset/1` in the `:show` branch. The sheet's events live
   # in `PlatformWeb.ChatLive.SpaceSheetHooks`, not here.
-  @chat_live_code_line_count 2566
+  # Task 01a1557a-9406 stage 2 (redesign rung 9, the actions sheet): -14,
+  # measured by this guard (2566 -> 2552). `open_message_actions` /
+  # `close_message_actions` and the two mount seeds moved in place to
+  # `PlatformWeb.ChatLive.MessageActionsHooks` (attached fully qualified, so
+  # no alias line), which also owns the new `delete_message`.
+  # Task 01a1557a-9406 stage 3 (reactions and inline threads): -4, measured
+  # by this guard (2552 -> 2548). The four `MessagesHooks.reset_thread_panel/1`
+  # calls went with the thread side panel no template rendered.
+  # Task 01a1557a-9406 stage 4 (edit guard): -24, measured by this guard
+  # (2548 -> 2524). `confirm_save_edit` / `cancel_save_edit`, the
+  # `removes_content` branch of `save_edit` and the `:pending_save_edit`
+  # assign went with the custom removal modal; the native confirm in the
+  # MessageEditor hook replaced it.
+  @chat_live_code_line_count 2524
 
   @doc """
   Count the CODE lines of a source file.

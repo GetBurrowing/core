@@ -70,11 +70,11 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.SpaceTopics
 
   # The quick-react row's contents, for every surface that renders one: the
-  # desktop hover action row, the mobile double-tap pill and the mobile
-  # message-actions sheet. All three take it from this assign, and this assign
+  # message-actions sheet's quick-react strip and the message tap pill's
+  # thumbs-up (its first entry). Both take it from this assign, and this assign
   # now has exactly one source (task 019e0814 stage 2).
   #
-  # It used to be a FOUR-emoji literal on this line while the longpress pill
+  # It used to be a FOUR-emoji literal on this line while a since-deleted pill
   # carried a SIX-emoji `~w()` of its own, so the product disagreed with itself
   # about what a quick reaction is — on the same message, in the same account,
   # differing only by which device it was opened on. Six is the number the
@@ -713,7 +713,7 @@ defmodule PlatformWeb.ChatLive do
       # the ID is held — name and pinned-ness are re-derived at render by
       # `row_actions_target/5`, so the sheet's header and its Pin/Unpin verb
       # stay correct after any change to the underlying row. Same shape as
-      # `:open_message_actions_id` above.
+      # `:open_message_actions_id` (`MessageActionsHooks`).
       |> assign(:row_actions_space_id, nil)
       |> assign(:show_new_channel_modal, false)
       # The org a new channel is filed into by default, and the destinations
@@ -724,21 +724,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:active_org_id, resolve_active_org_id(socket))
       |> assign(:new_channel_org_options, new_channel_org_options(user_id))
       |> assign(:show_new_conversation_modal, false)
-      # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
-      # The matching message struct is lifted into :open_message_actions_msg so
-      # the sheet template can gate items (e.g. "Edit message") on per-message
-      # attributes like author and content_type without needing access to the
-      # stream row at template time.
-      |> assign(:open_message_actions_id, nil)
-      |> assign(:open_message_actions_msg, nil)
       # Inline edit state (task 019e0f29 Stage 5). `editing_message_id` is
       # the id of the message whose bubble is currently swapped for the
-      # editor; nil means no edit in progress. `pending_save_edit` carries
-      # %{message_id, body} when the user has clicked Save on an edit
-      # that shortens the original — the removal-warning modal is open and
-      # waiting on their confirmation.
+      # editor; nil means no edit in progress.
       |> assign(:editing_message_id, nil)
-      |> assign(:pending_save_edit, nil)
       # Version history popover (task 019e0f29 Stage 6). nil when closed;
       # %{message_id, versions} when open. Filled by show_version_history.
       |> assign(:version_history, nil)
@@ -886,6 +875,7 @@ defmodule PlatformWeb.ChatLive do
       |> Extensions.attach_live_hooks()
       |> ActiveAgentHooks.attach()
       |> MessageContextHooks.attach()
+      |> PlatformWeb.ChatLive.MessageActionsHooks.attach()
 
     # Meeting hooks own join/leave for the LiveKit room. When embedded
     # inside `MeetingLive`, the parent already owns the meeting lifecycle
@@ -2441,28 +2431,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
-  # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
-  # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
-  def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
-    # Lift the message struct alongside the id so the sheet template can
-    # gate items (e.g. "Edit message") on per-message attributes (author,
-    # content_type) — see chat_live.html.heex around the Edit affordance.
-    msg = Platform.Chat.get_message(msg_id)
-
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, msg_id)
-     |> assign(:open_message_actions_msg, msg)}
-  end
-
-  def handle_event("close_message_actions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:open_message_actions_id, nil)
-     |> assign(:open_message_actions_msg, nil)}
-  end
-
   # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
   #
   # Pin, unpin and hide were all revealed by `group-hover/row:` /
@@ -2472,7 +2440,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # These two handlers are the ONLY new events, and they carry no business
   # logic: the sheet's actions reuse `toggle_pinned` and `hide_channel`
-  # unchanged. Same shape as `open_message_actions` above.
+  # unchanged. Same shape as `open_message_actions` in `MessageActionsHooks`.
   #
   # Only the id is stored. Name and pinned-ness are re-derived at render, so
   # the header and the Pin/Unpin verb cannot go stale against the row.
@@ -2555,12 +2523,9 @@ defmodule PlatformWeb.ChatLive do
   # `edit_message_clicked` opens the editor by setting editing_message_id;
   # the chat_message component swaps the bubble for chat_message_editor
   # when @editing_message_id matches the row's msg id. `cancel_edit`
-  # closes the editor. `save_edit` is the form-submit handler — it
-  # branches on the `removes_content` flag the JS hook set:
-  #   - "true"  → stash the pending edit, surface the removal-warning
-  #               modal (Section F.4 Policy 4 of the contract).
-  #   - "false" → fire the edit immediately.
-  # `confirm_save_edit` / `cancel_save_edit` handle the modal buttons.
+  # closes the editor. `save_edit` is the form-submit handler and applies
+  # the edit directly: the MessageEditor hook already asked with the native
+  # confirm when the edit removes most of the text (redesign rung 9 stage 4).
 
   def handle_event("edit_message_clicked", params, socket) do
     msg_id = params["message-id"] || params["message_id"]
@@ -2582,10 +2547,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("cancel_edit", _params, socket) do
     msg_id = socket.assigns.editing_message_id
 
-    socket =
-      socket
-      |> assign(:editing_message_id, nil)
-      |> assign(:pending_save_edit, nil)
+    socket = assign(socket, :editing_message_id, nil)
 
     case msg_id do
       nil -> {:noreply, socket}
@@ -2593,36 +2555,8 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event(
-        "save_edit",
-        %{"message_id" => message_id, "body" => body, "removes_content" => flag},
-        socket
-      ) do
-    if flag == "true" do
-      # Stash the pending edit and let the removal-warning modal open
-      # via the @pending_save_edit assign. Keep the editor open in the
-      # background so a Cancel on the modal keeps the user's draft.
-      {:noreply, assign(socket, :pending_save_edit, %{message_id: message_id, body: body})}
-    else
-      apply_save_edit(socket, message_id, body)
-    end
-  end
-
-  def handle_event("confirm_save_edit", _params, socket) do
-    case socket.assigns.pending_save_edit do
-      %{message_id: message_id, body: body} ->
-        socket = assign(socket, :pending_save_edit, nil)
-        apply_save_edit(socket, message_id, body)
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_save_edit", _params, socket) do
-    # Modal dismissed; keep the editor open with the user's draft so
-    # they can revise.
-    {:noreply, assign(socket, :pending_save_edit, nil)}
+  def handle_event("save_edit", %{"message_id" => message_id, "body" => body}, socket) do
+    apply_save_edit(socket, message_id, body)
   end
 
   # Coordinator: Search event that also writes MessagesHooks state
@@ -2654,7 +2588,6 @@ defmodule PlatformWeb.ChatLive do
       message ->
         {:noreply,
          socket
-         |> MessagesHooks.reset_thread_panel()
          |> SearchHooks.set_highlights(message.id)}
     end
   end
@@ -2713,8 +2646,7 @@ defmodule PlatformWeb.ChatLive do
       canvas ->
         {:noreply,
          socket
-         |> CanvasHooks.set_active(canvas)
-         |> MessagesHooks.reset_thread_panel()}
+         |> CanvasHooks.set_active(canvas)}
     end
   end
 
@@ -2749,7 +2681,6 @@ defmodule PlatformWeb.ChatLive do
          |> CanvasHooks.put(canvas)
          |> MessagesHooks.stream_insert_message(message)
          |> CanvasHooks.set_active(canvas)
-         |> MessagesHooks.reset_thread_panel()
          |> CanvasHooks.show_panel()
          |> CanvasHooks.reset_new_form()
          |> put_flash(:info, PrototypeUpload.success_message(published))}
@@ -2783,7 +2714,6 @@ defmodule PlatformWeb.ChatLive do
            |> CanvasHooks.put(canvas)
            |> MessagesHooks.stream_insert_message(message)
            |> CanvasHooks.set_active(canvas)
-           |> MessagesHooks.reset_thread_panel()
            |> CanvasHooks.show_panel()
            |> CanvasHooks.reset_new_form()}
 

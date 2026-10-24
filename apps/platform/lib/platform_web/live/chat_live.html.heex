@@ -707,11 +707,6 @@
 
 <.reaction_picker reaction_picker_for={@reaction_picker_for} />
 
-<.longpress_pill
-  longpress_menu_for={@longpress_menu_for}
-  quick_emojis={@quick_emojis}
-/>
-
 <PlatformWeb.Components.ChatViewer.chat_viewer viewer={@viewer} />
 
 <%!-- Listener for scroll-to-message events from the correction header
@@ -719,25 +714,25 @@
      ChatScrollToMessage hook drives smooth scroll + brief pulse. --%>
 <div id="chat-scroll-to-message-listener" phx-hook="ChatScrollToMessage" class="hidden"></div>
 
-<%!-- Version history popover (task 019e0f29 Stage 6, contract Section D.2).
-     Surfaces when @version_history is set (clicking the `(edited)` affix on
-     a message bubble). --%>
-<PlatformWeb.Components.ChatVersionHistory.chat_version_history
-  open={@version_history != nil}
-  versions={(@version_history && @version_history.versions) || []}
-/>
-
-<.edit_removal_warning pending_save_edit={@pending_save_edit} />
+<%!-- Version history (task 019e0f29 Stage 6; redesign rung 9 stage 4):
+     a phone sheet and a desktop popover from the one @version_history
+     assign, set by clicking the `(edited)` affix on a message. --%>
+<PlatformWeb.Components.ChatVersionHistory.chat_version_history version_history={@version_history} />
 
 <.message_actions_sheet
   open_message_actions_id={@open_message_actions_id}
   open_message_actions_msg={@open_message_actions_msg}
+  open_message_actions_mine={@open_message_actions_mine}
   current_participant={@current_participant}
   quick_emojis={@quick_emojis}
   agent_participant_ids={@agent_participant_ids}
+  pinned_message_ids={@pinned_message_ids}
+  active_space={@active_space}
 />
 
-<%!-- "What this message is answering" (task 01a0d8de stage 3): popover on
+<.reactors_sheet open_reactors={@open_reactors} current_participant={@current_participant} />
+
+<%!-- The 'Answering' context panel (task 01a0d8de stage 3): popover on
      desktop, bottom sheet on mobile; state in MessageContextHooks. --%>
 <.message_context_overlay
   message_context={@message_context}

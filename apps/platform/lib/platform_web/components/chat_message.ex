@@ -23,7 +23,6 @@ defmodule PlatformWeb.Components.ChatMessage do
   alias PlatformWeb.ChatLive.Partials.MentionList
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.CanvasHooks
-  alias PlatformWeb.ChatLive.MessageContextHooks
   alias PlatformWeb.Components.ReplyFailureRow
 
   attr(:dom_id, :string, required: true)
@@ -52,7 +51,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr(:editing_message_id, :any, default: nil)
   # Task 019e95ea stage 2: true when the parent space is an archived
   # read-only snapshot. Gates every interaction affordance (quick-emoji
-  # bar, hover toolbar, longpress sheet, reaction add, thread reply) in
+  # bar, tap pill, actions sheet, reaction add, thread reply) in
   # one place — the context layer independently rejects the writes.
   attr(:read_only, :boolean, default: false)
   # Task 01a0fd62 stage 2: msg_id → [agent name] for THIS viewer's own
@@ -100,7 +99,7 @@ defmodule PlatformWeb.Components.ChatMessage do
     <div
       id={@dom_id}
       class={[
-        "group relative rounded-2xl",
+        "group relative rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         MapSet.member?(@agent_participant_ids, @msg.participant_id) && "msg-agent",
         @highlighted_message_id == @msg.id && "bg-primary/5 ring-1 ring-primary/20",
         @current_participant && @msg.participant_id == @current_participant.id &&
@@ -122,7 +121,8 @@ defmodule PlatformWeb.Components.ChatMessage do
           else: "false"
         )
       }
-      phx-hook={if @read_only, do: nil, else: "LongpressMenu"}
+      phx-hook={if @read_only, do: nil, else: "MessageGestures"}
+      tabindex={if @read_only, do: nil, else: "0"}
     >
       <%!-- Day-bucket separator (task 019e21c7 Stage 5). Rendered inside
            the stream item so morphdom reconciles it via the parent's
@@ -143,8 +143,12 @@ defmodule PlatformWeb.Components.ChatMessage do
       <%!-- `message-row-inner` is the padding box. It carries a stable class
            because a grouped continuation row needs tighter vertical padding
            than the first row of a group, and that rule lives in app.css
-           rather than in the grouping JS — see `.message-row--grouped`. --%>
-      <div class="message-row-inner flex gap-3 px-2 py-2 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-base-200/40 active:scale-[0.99] rounded-2xl">
+           rather than in the grouping JS — see `.message-row--grouped`.
+           It is also the band the pill opens on: app.css raises it to
+           base-300 while the pill shows, and on desktop on hover, in
+           media-gated CSS rather than a `hover:` utility. --%>
+      <div class="message-row-inner relative flex gap-3 px-2 py-2 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] active:scale-[0.99] rounded-2xl">
+        <.message_pill :if={!@read_only} msg={@msg} quick_emojis={@quick_emojis} />
         <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
         <div class="flex-shrink-0 mt-0.5 message-avatar">
           <%= if MapSet.member?(@agent_participant_ids, @msg.participant_id) do %>
@@ -200,218 +204,6 @@ defmodule PlatformWeb.Components.ChatMessage do
               timestamp={Platform.Chat.message_ordered_at(@msg)}
               class="text-[10px] text-subtle"
             />
-            <%!-- "Context" (task 01a0d8de stage 3; design canvas "Design
-                 direction: agent message context"). Rendered only on AGENT
-                 messages that carry something to show without generating it
-                 (`reply_context` or `reply_to_message_id` in metadata, which
-                 built-in agents write too). Always visible, not hover-gated:
-                 the reader who needs it is scanning, and touch has no hover.
-                 Also rendered when read-only, since it only reads. `shrink-0`
-                 and placed after the time, so the name and time keep
-                 truncation priority and the hover row keeps the right edge.
-                 It carries no `data-message-id`: that attribute is how the
-                 scroll hooks find the ROW, and a first match on this button
-                 would scroll to the header instead.
-
-                 `message-context-trigger` is the app.css handle for its
-                 touch hit area (45px tall below lg, via a transparent
-                 `::after`) and the stage 5 fix beside it: on `hover: none`
-                 the hover strip no longer reveals on the focus a tap gives
-                 this button, which is what used to swallow the tap. --%>
-            <button
-              :if={
-                MapSet.member?(@agent_participant_ids, @msg.participant_id) &&
-                  MessageContextHooks.has_context?(@msg)
-              }
-              type="button"
-              phx-click="open_message_context"
-              phx-value-message-id={@msg.id}
-              data-role="message-context-trigger"
-              data-context-message-id={@msg.id}
-              aria-haspopup="dialog"
-              class="message-context-trigger shrink-0 text-[10px] text-subtle hover:text-base-content hover:underline focus-visible:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
-            >
-              Context
-            </button>
-            <%!-- (edited) affix per contract Section D.1 — visible only on
-               messages with >1 version row (i.e. at least one edit on top
-               of the original v1). Clicking opens the version history
-               popover (Section D.2). --%>
-            <button
-              :if={is_integer(Map.get(@msg, :versions_count)) && @msg.versions_count > 1}
-              type="button"
-              phx-click="show_version_history"
-              phx-value-message-id={@msg.id}
-              aria-label="Show edit history"
-              title="View version history"
-              class="text-[10px] text-subtle hover:text-base-content hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
-            >
-              (edited)
-            </button>
-
-            <%!-- Revealed by OPACITY, not `hidden`, and the distinction is the whole
-                 keyboard story (task 01a000c0 stage 3).
-
-                 This row was `hidden`, swapped to `flex` under a group-hover
-                 variant. `hidden` is `display: none`, so nothing inside it was
-                 tab-reachable — not the quick-react emoji, not copy, reply,
-                 thread or pin. Adding a group-focus-within variant does NOT
-                 fix that: a `display: none` element cannot take focus, so
-                 focus can never get inside to trigger focus-within. It is
-                 circular, and it is the tempting one-word fix.
-
-                 (Those two variants are described rather than spelled: files
-                 under an `@source` path are scanned as plain text, so a
-                 utility written literally in a comment is a build candidate
-                 even with no markup using it. Quoting them here was emitting
-                 a real, unused rule into the compiled stylesheet until
-                 task 01a000c0 stage 4 rephrased this.)
-
-                 Opacity keeps every button in the tab order and focusable, so
-                 Tab reaches them and `group-focus-within` then reveals the row
-                 it is already inside. `pointer-events` is gated alongside, or
-                 the invisible row would swallow clicks aimed at the message.
-
-                 No transition on the reveal: the design direction cut fade,
-                 slide and transform because at this row density it reads as
-                 flicker. `transition-colors` on the buttons is hover colour,
-                 not the reveal, and stays.
-
-                 The row costs no vertical space — it is `ml-auto` on the
-                 existing header line — which is why moving the "+" here
-                 removes the reflow instead of relocating it.
-
-                 `message-action-row` is the handle app.css needs to keep this
-                 row alive on a grouped continuation row, where the header
-                 around it is stripped down to nothing (task 01a000c0
-                 stage 4). Without it the whole header was `display: none`
-                 there and every control in here — the "+" included — was
-                 unreachable by keyboard on most messages in a conversation. --%>
-            <div
-              :if={!@read_only}
-              class="message-action-row ml-auto flex items-center gap-1 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
-            >
-              <button
-                :for={emoji <- @quick_emojis}
-                phx-click="react"
-                phx-value-message-id={@msg.id}
-                phx-value-emoji={emoji}
-                title={"React with #{emoji}"}
-                class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                {emoji}
-              </button>
-
-              <%!-- Add-reaction, moved here from the reaction row below the
-                   message body (task 01a000c0 stage 3). It joins the
-                   quick-react buttons that were already here, so this row was
-                   always partly about reacting — the consolidation is putting
-                   the general case next to the shortcuts rather than in a
-                   second corner revealed by the same gesture.
-
-                   The count is deliberately not written down here. @quick_emojis
-                   is `Platform.Chat.Emoji.quick_defaults/0` (task 019e0814
-                   stage 2) and this row renders whatever it holds; a number in
-                   this comment is a fourth place for the set to drift, which is
-                   the defect that stage exists to close.
-
-                   Treatment is copied verbatim from its siblings: no new
-                   colour, no text label (it would be the only word in a glyph
-                   row), no divider. Accessible name via aria-label only. --%>
-              <button
-                aria-label="Add reaction"
-                title="Add reaction"
-                phx-click="open_reaction_picker"
-                phx-value-message-id={@msg.id}
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-plus size-4"></span>
-              </button>
-
-              <button
-                :if={present?(@msg.content)}
-                phx-hook="CopyToClipboard"
-                id={"copy-msg-#{@msg.id}"}
-                data-clipboard-text={@msg.content}
-                title="Copy message"
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-clipboard-document-list size-4"></span>
-              </button>
-
-              <button
-                phx-click="toggle_inline_thread"
-                phx-value-message-id={@msg.id}
-                title="Reply"
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-chat-bubble-left-right size-4"></span>
-              </button>
-
-              <button
-                phx-click="toggle_inline_thread"
-                phx-value-message-id={@msg.id}
-                title="Open thread"
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-subtle hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-arrow-top-right-on-square size-4"></span>
-              </button>
-
-              <button
-                phx-click="pin_toggle"
-                phx-value-message-id={@msg.id}
-                phx-value-space-id={@msg.space_id}
-                title={if MapSet.member?(@pinned_message_ids, @msg.id), do: "Unpin", else: "Pin"}
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class={[
-                  "size-4",
-                  if(MapSet.member?(@pinned_message_ids, @msg.id),
-                    do: "hero-bookmark-solid",
-                    else: "hero-bookmark"
-                  )
-                ]}>
-                </span>
-              </button>
-
-              <%!-- "Summarise what led here" (task 01a0d8de stage 3). Only on
-                   agent messages with NO context of their own; those get no
-                   header marker, because marking every agent message would put
-                   a control on most of the chat. Opens the same panel as the
-                   header's "Context" button, with a generated summary. --%>
-              <button
-                :if={
-                  MapSet.member?(@agent_participant_ids, @msg.participant_id) &&
-                    !MessageContextHooks.has_context?(@msg)
-                }
-                type="button"
-                phx-click="summarise_message_context"
-                phx-value-message-id={@msg.id}
-                data-role="message-context-summarise"
-                aria-label="Summarise what led here"
-                title="Summarise what led here"
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-document-text size-4" aria-hidden="true"></span>
-              </button>
-
-              <%!-- 3-dot overflow menu (task 019e0f29 Stage 3). Replaces the
-                 Stage-2 placeholder DaisyUI dropdown that didn't open on
-                 touch (design-review bug report). Now fires `open_message_actions`
-                 which sets a single LV-level `:open_message_actions_id`
-                 assign; chat_live.html.heex renders one Sheet at the page
-                 bottom that surfaces the actions for the open message. --%>
-              <button
-                type="button"
-                phx-click="open_message_actions"
-                phx-value-id={@msg.id}
-                aria-label="More message actions"
-                title="More"
-                class="rounded px-1.5 py-0.5 text-xs text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-ellipsis-horizontal size-4"></span>
-              </button>
-            </div>
           </div>
 
           <%!-- A text message can carry a canvas too: the composer's tray
@@ -436,7 +228,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               :if={is_nil(Map.get(@canvases_by_id, @msg.canvas_id))}
               phx-click="canvas_open_mobile"
               phx-value-message-id={@msg.id}
-              class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer hover:bg-base-300 transition-colors"
+              class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer lg:hover:bg-base-300 transition-colors"
             >
               <p class="truncate text-sm font-semibold text-base-content">
                 {CanvasHooks.message_canvas_title(@msg, @canvases_by_id)}
@@ -456,7 +248,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             type="button"
             phx-click="scroll_to_message"
             phx-value-id={@msg.corrects_message_id}
-            class="flex items-center gap-1 text-[11px] text-subtle hover:text-base-content transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded"
+            class="flex items-center gap-1 text-[11px] text-subtle lg:hover:text-base-content transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring rounded"
           >
             <span class="hero-arrow-up-circle size-3.5"></span>
             <span>Correction to earlier message</span>
@@ -541,6 +333,29 @@ defmodule PlatformWeb.Components.ChatMessage do
           >
             {rendered_content}
           </div>
+
+          <%!-- (edited) affix per contract Section D.1: shown only on
+             messages with >1 version row (at least one edit on top of the
+             original v1). It opens version history, a sheet on a phone and a
+             popover on desktop (Section D.2; redesign rung 9 stage 4), and is
+             the ONLY way in, so it sits after the text, as the masters'
+             `.edited` does, and never inside `.message-header`: a
+             continuation row hides every header child (app.css,
+             `.message-row--grouped .message-header > *`), which made it
+             unreachable on most rows of a same-author run. --%>
+          <button
+            :if={is_integer(Map.get(@msg, :versions_count)) && @msg.versions_count > 1}
+            type="button"
+            phx-click="show_version_history"
+            phx-value-message-id={@msg.id}
+            id={"message-edited-#{@msg.id}"}
+            data-role="message-edited"
+            aria-haspopup="dialog"
+            title="Version history"
+            class="block text-[13px] text-subtle lg:hover:text-base-content lg:hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+          >
+            (edited)
+          </button>
 
           <.link_cards
             :if={@editing_message_id != @msg.id and Map.get(@msg, :link_cards) not in [nil, []]}
@@ -667,23 +482,37 @@ defmodule PlatformWeb.Components.ChatMessage do
               class="reaction-row flex flex-wrap gap-1 mt-0.5"
             >
               <%!-- Reaction pills stay visible on read-only snapshots (they
-                 are part of the frozen history) but stop toggling. --%>
+                 are part of the frozen history) but stop toggling.
+
+                 Redesign rung 9 stage 3 (masters `.react span`, direction
+                 m1): NEUTRAL, never primary. Not mine is base-200 with the
+                 edge border; mine is the raised base-300 with a
+                 base-content outline. A tap toggles through `react`; a
+                 long-press on a phone pushes `open_reactors`
+                 (`ReactorPopover`), and desktop keeps the hover popover.
+                 The phone hit area (44px) and the desktop hover fill are
+                 app.css, media-gated. --%>
               <button
                 :for={r <- @msg.reactions}
                 id={"reaction-#{@msg.id}-#{r.emoji}"}
+                type="button"
+                data-role="reaction-pill"
                 phx-hook="ReactorPopover"
                 phx-click={if @read_only, do: nil, else: "react"}
                 phx-value-message-id={@msg.id}
                 phx-value-emoji={r.emoji}
                 data-emoji={r.emoji}
+                data-mine={r.reacted_by_me && "true"}
                 data-reactors={Jason.encode!(r.reactors)}
                 data-extra-count={r.extra_count}
                 aria-label={reactor_aria_label(r)}
+                aria-pressed={to_string(r.reacted_by_me)}
                 class={[
-                  "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-                  "hover:bg-base-300",
-                  r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                  !r.reacted_by_me && "border-edge text-subtle"
+                  "reaction-pill relative flex h-7 items-center gap-1 rounded-full border px-2 text-[13px] leading-none text-base-content tabular-nums transition-colors",
+                  if(r.reacted_by_me,
+                    do: "bg-base-300 border-base-content",
+                    else: "bg-base-200 border-edge"
+                  )
                 ]}
               >
                 <span>{r.emoji}</span>
@@ -707,32 +536,20 @@ defmodule PlatformWeb.Components.ChatMessage do
             Map.has_key?(@thread_previews, @msg.id) or
               MapSet.member?(@expanded_threads, @msg.id)
           }>
-            <%!-- Thread indicator (collapsed state) --%>
-            <div
+            <%!-- Thread chip (collapsed state; masters `.thread-ind`,
+                 direction m1): '↩ N replies · time' in subtle text, no
+                 fill and no avatar. It TOGGLES; Reply in thread (the pill's
+                 ↩ and the sheet row) only ever opens. --%>
+            <button
               :if={not MapSet.member?(@expanded_threads, @msg.id)}
+              type="button"
               phx-click="toggle_inline_thread"
               phx-value-message-id={@msg.id}
               class="thread-indicator"
+              data-role="thread-chip"
             >
-              <div class="thread-avatars">
-                <div class="t-av ai">↩</div>
-              </div>
-              <span class="ti-count">
-                {Map.get(@thread_previews, @msg.id, %{}) |> Map.get(:reply_count, 0)}
-                {if Map.get(@thread_previews, @msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
-                  do: "reply",
-                  else: "replies"}
-              </span>
-              <span
-                :if={Map.get(@thread_previews, @msg.id, %{}) |> Map.get(:last_reply_at)}
-                class="ti-time"
-              >
-                · {relative_time(
-                  Map.get(@thread_previews, @msg.id, %{})
-                  |> Map.get(:last_reply_at)
-                )}
-              </span>
-            </div>
+              {thread_chip_label(Map.get(@thread_previews, @msg.id, %{}))}
+            </button>
 
             <%!-- Expanded thread --%>
             <div
@@ -885,7 +702,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                       aria-label="Reply in thread"
                       enterkeyhint="send"
                       data-draft-key={"thread-draft:#{@msg.id}"}
-                      data-placeholder="Reply in thread..."
+                      data-placeholder="Reply in thread"
                       data-value-input={"inline-thread-compose-value-#{@msg.id}"}
                       data-clear-on-submit
                     ></div>
@@ -900,39 +717,93 @@ defmodule PlatformWeb.Components.ChatMessage do
                     disabled
                     data-send-blocked={to_string(is_nil(@current_participant))}
                     data-staged="false"
-                    aria-label="Send reply"
-                    title="Reply"
+                    aria-label="Send"
                   >
-                    <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
+                    Send
                   </button>
                 </.form>
               </div>
 
-              <%!-- Collapse thread --%>
+              <%!-- The footer collapse (masters `.thread-ind[data-thread=close]`). --%>
               <button
+                type="button"
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
                 class="thread-collapse"
+                data-role="thread-collapse"
               >
-                ▲ Collapse thread
+                collapse
               </button>
             </div>
           </div>
         </div>
         <%!-- end message body --%>
-
-        <%!-- Left-gutter reply button (desktop, hidden until hover via CSS) --%>
-        <button
-          :if={!@read_only}
-          phx-click="toggle_inline_thread"
-          phx-value-message-id={@msg.id}
-          class="msg-reply-gutter"
-          title="Reply"
-        >
-          ↩
-        </button>
       </div>
       <%!-- end inner flex row --%>
+    </div>
+    """
+  end
+
+  attr(:msg, :map, required: true)
+  attr(:quick_emojis, :list, required: true)
+
+  # The tap pill (redesign rung 9, task 01a1557a-9406; masters `.m .acts`,
+  # direction canvas 01a1666e node m3). Hidden until the row carries
+  # `data-pill-open` (set by the MessageGestures hook on a tap) or, on
+  # desktop, until the row is hovered or holds focus: app.css owns the
+  # display rules. It replaces the desktop hover row, the left-gutter reply
+  # and the dead long-press lift pill. The glyphs are literal by design; the
+  # names are the aria-labels. Neutral surface, never primary.
+  defp message_pill(assigns) do
+    ~H"""
+    <div
+      data-role="message-pill"
+      role="toolbar"
+      aria-label="Message actions"
+      class="message-pill absolute right-2 -top-4 lg:-top-[15px] z-10 items-center gap-0.5 p-0.5 bg-base-300 border border-edge rounded-full shadow-sm"
+    >
+      <button
+        type="button"
+        class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="React with thumbs up"
+        title="React with thumbs up"
+        phx-click="react"
+        phx-value-message-id={@msg.id}
+        phx-value-emoji={List.first(@quick_emojis)}
+      >
+        <span aria-hidden="true">👍</span>
+      </button>
+      <button
+        type="button"
+        class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="Reply in thread"
+        title="Reply in thread"
+        phx-click="open_inline_thread"
+        phx-value-message-id={@msg.id}
+      >
+        <span aria-hidden="true">↩</span>
+      </button>
+      <button
+        type="button"
+        class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="Copy"
+        title="Copy"
+        data-role="message-pill-copy"
+        data-clipboard-text={@msg.content || ""}
+      >
+        <span class="message-pill-copy-glyph" aria-hidden="true">⧉</span>
+        <span class="message-pill-copy-check hero-check size-4" aria-hidden="true"></span>
+      </button>
+      <button
+        type="button"
+        class="message-pill-btn relative inline-flex size-7 lg:size-[26px] items-center justify-center rounded-full text-sm leading-none text-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        aria-label="More actions"
+        title="More actions"
+        phx-click="open_message_actions"
+        phx-value-id={@msg.id}
+      >
+        <span aria-hidden="true">⋯</span>
+      </button>
     </div>
     """
   end
@@ -1053,6 +924,18 @@ defmodule PlatformWeb.Components.ChatMessage do
     do: "Only a channel admin can bring agents into this channel."
 
   defp refused_summon_reason(_kind), do: "Only an admin of this conversation can bring agents in."
+
+  # The thread chip's copy (masters `.thread-ind`): '↩ 2 replies · 5m ago',
+  # 'reply' at one, and no time until a reply carries one.
+  defp thread_chip_label(preview) do
+    count = Map.get(preview, :reply_count, 0)
+    noun = if count == 1, do: "reply", else: "replies"
+
+    case Map.get(preview, :last_reply_at) do
+      nil -> "↩ #{count} #{noun}"
+      at -> "↩ #{count} #{noun} · #{relative_time(at)}"
+    end
+  end
 
   defp format_timestamp(%DateTime{} = dt), do: Calendar.strftime(dt, "%I:%M %p")
 

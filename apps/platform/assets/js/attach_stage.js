@@ -96,13 +96,16 @@ export function attachedToastText(count) {
   return count === 1 ? "Image attached" : `${count} images attached`
 }
 
-// A short status toast above the composer ("Image attached").
-export function toast(text) {
+// A short status toast above the composer ("Image attached"). The message
+// pill's Copy (hooks/message_gestures.js) reuses it with its own id, a
+// `data-role` e2e can find, and its own duration.
+export function toast(text, { id = "attach-toast", role = null, ms = 2500 } = {}) {
   if (typeof document === "undefined") return
-  let el = document.getElementById("attach-toast")
+  let el = document.getElementById(id)
   if (!el) {
     el = document.createElement("div")
-    el.id = "attach-toast"
+    el.id = id
+    if (role) el.dataset.role = role
     el.setAttribute("role", "status")
     el.className =
       "pointer-events-none fixed inset-x-0 z-50 mx-auto w-max rounded-box bg-base-content px-3 py-1.5 text-sm text-base-100 shadow-lg"
@@ -122,7 +125,7 @@ export function toast(text) {
   clearTimeout(el._timer)
   el._timer = setTimeout(() => {
     el.hidden = true
-  }, 2500)
+  }, ms)
 }
 
 // Delegated click on a failed thumbnail's retry glyph. Installed once; the

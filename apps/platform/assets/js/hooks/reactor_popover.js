@@ -1,22 +1,32 @@
-// Reactor popover for a reaction pill (desktop only).
+// Reactor list for a reaction pill.
 //
-// On hover or focus of a reaction pill, render a small floating popover
-// near it showing who reacted with that emoji. List is provided
-// server-side via `data-reactors` JSON on the pill — no server
-// round-trip per hover, and no eager DOM for every reactor (50
-// reactors × many messages is hostile).
+// DESKTOP (hover): on hover or focus of a reaction pill, render a small
+// floating popover near it showing who reacted with that emoji. The list
+// is provided server-side via `data-reactors` JSON on the pill — no server
+// round-trip per hover, and no eager DOM for every reactor (50 reactors ×
+// many messages is hostile).
 //
-// Rendered as a portal to `document.body` so Phoenix LV's
-// `stream_insert` replacing the message row does not tear down an
-// open popover mid-interaction (matters for active surveys where
-// reactions are arriving in real time).
+// Rendered as a portal to `document.body` so Phoenix LV's `stream_insert`
+// replacing the message row does not tear down an open popover
+// mid-interaction (matters for active surveys where reactions are
+// arriving in real time).
 //
-// Mobile is intentionally no-op per product decision — touch users
-// don't need reactor metadata, and the hover affordance is desktop-
-// native. Screen reader accessibility is handled by `aria-label` on
-// the pill itself, which carries the full reactor list as a string
-// and works the same on every device.
+// TOUCH (redesign rung 9 stage 3, task 01a1557a-9406; direction canvas
+// 01a1666e node m3 rule 5): a long-press on the pill pushes `open_reactors`
+// {message-id, emoji}, and the server renders the 'Reacted <emoji>' sheet
+// from the DATABASE, never from this pill's JSON. The press is
+// `createLongPress` from message_gestures.js, so it has the message's own
+// timing (450ms), move cancel (10px) and click swallow: the click a fired
+// press leaves behind must not toggle the reaction. The pointerdown stops
+// here, so the message's own long-press never sees it. A short tap still
+// toggles through the pill's `phx-click="react"`.
+//
+// Screen readers get the reactor list from the pill's `aria-label` on
+// every device.
 
+import { createLongPress } from "./message_gestures"
+
+const HAPTIC_MS = 20
 const MOBILE_MATCH = "(hover: none)"
 const CLOSE_DELAY_MS = 100
 
@@ -32,7 +42,21 @@ function escapeHtml(s) {
 
 const ReactorPopover = {
   mounted() {
-    // Touch devices: skip entirely. Reactor metadata is desktop-only.
+    this._longPress = createLongPress(() => this.openReactors())
+    this._onDown = (e) => {
+      if (e.pointerType === "mouse" || e.isPrimary === false) return
+      e.stopPropagation()
+      this._longPress.start(e)
+    }
+    this._onMove = (e) => this._longPress.move(e)
+    this._onUp = (e) => this._longPress.end(e)
+    this._onCancel = () => this._longPress.cancel()
+    this.el.addEventListener("pointerdown", this._onDown)
+    this.el.addEventListener("pointermove", this._onMove)
+    this.el.addEventListener("pointerup", this._onUp)
+    this.el.addEventListener("pointercancel", this._onCancel)
+
+    // Touch devices get the long-press only; the hover popover is desktop.
     if (window.matchMedia && window.matchMedia(MOBILE_MATCH).matches) return
 
     this._popover = null
@@ -62,6 +86,11 @@ const ReactorPopover = {
   },
 
   destroyed() {
+    this._longPress.cancel()
+    this.el.removeEventListener("pointerdown", this._onDown)
+    this.el.removeEventListener("pointermove", this._onMove)
+    this.el.removeEventListener("pointerup", this._onUp)
+    this.el.removeEventListener("pointercancel", this._onCancel)
     this.close({immediate: true})
     if (this._onEnter) {
       this.el.removeEventListener("mouseenter", this._onEnter)
@@ -69,6 +98,13 @@ const ReactorPopover = {
       this.el.removeEventListener("focus", this._onFocus)
       this.el.removeEventListener("blur", this._onBlur)
     }
+  },
+
+  openReactors() {
+    const messageId = this.el.getAttribute("phx-value-message-id")
+    if (!messageId) return
+    if (navigator.vibrate) navigator.vibrate(HAPTIC_MS)
+    this.pushEvent("open_reactors", { "message-id": messageId, emoji: this.el.dataset.emoji || "" })
   },
 
   open() {

@@ -38,12 +38,13 @@ import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
 import LastProject from "./last_project"
 import TasksMyListRows from "./tasks_my_list_rows"
-import LongpressMenu from "./longpress_menu"
+import MessageGestures from "./message_gestures"
+import MessageActionsCopy from "./message_actions_copy"
+import MessageActionsPopover from "./message_actions_popover"
 import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingAskFloorVeil from "./meeting_ask_floor_veil"
 import MeetingBar from "./meeting_bar"
-import MessageLift from "./message_lift"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingLobbyPreview from "./meeting_lobby_preview"
@@ -117,7 +118,9 @@ export default {
   LastProject,
   TasksMyListRows,
   LocalTime,
-  LongpressMenu,
+  MessageGestures,
+  MessageActionsCopy,
+  MessageActionsPopover,
   MarkdownEditor,
   MeetingAskFloorVeil,
   MeetingBar,
@@ -138,7 +141,6 @@ export default {
   MeetingWhiteboard,
   MermaidDiagram,
   MessageEditor,
-  MessageLift,
   NativeInstallSwitch,
   PushSubscribe,
   ReactionPicker,

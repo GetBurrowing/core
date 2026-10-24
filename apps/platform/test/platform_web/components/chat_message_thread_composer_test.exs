@@ -174,7 +174,7 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     assert attr_of(html, field, "role") == "combobox"
     assert attr_of(html, field, "aria-controls") == "inline-thread-mention-list-msg-1"
     assert attr_of(html, field, "enterkeyhint") == "send"
-    assert attr_of(html, field, "data-placeholder") == "Reply in thread..."
+    assert attr_of(html, field, "data-placeholder") == "Reply in thread"
     assert attr_of(html, field, "data-draft-key") == "thread-draft:msg-1"
     refute attr_of(html, field, "data-draft-key") =~ "chat-draft:"
     assert attr_of(html, field, "data-value-input") == "inline-thread-compose-value-msg-1"

@@ -1,79 +1,45 @@
 /**
- * MessageEditor — keyboard shortcuts + removed-content detection for the
- * inline message editor (task 019e0f29 Stage 5, editable-messages contract
- * Section F.4 + Section d.3).
+ * MessageEditor — keyboard shortcuts and the removal guard for the inline
+ * message editor (task 019e0f29 Stage 5; redesign rung 9 stage 4, masters
+ * MM `startEdit`, direction canvas 01a1666e node m3 rule 8).
  *
- * Mounted on the editor's `<form>` element. The form has:
- *   - a `<textarea name="body">` pre-filled with the original content
- *   - a hidden `<input name="removes_content" type="hidden">` whose value
- *     this hook keeps in sync as the user types
- *   - `data-original-content` set to the message's pre-edit content
+ * Mounted on the editor's `<form>` element, which carries a
+ * `<textarea name="body">` pre-filled with the original content and
+ * `data-original-content` holding the pre-edit text.
  *
  * Hook behavior (keys: redesign rung 10, stage 4, coverage row 117):
- *   - Enter on the textarea → submits the form (phx-submit "save_edit"
- *     fires on the LV). Cmd/Ctrl + Enter still saves too.
- *   - Shift + Enter → a newline (the textarea's own behaviour).
- *   - Escape on the textarea → pushes `cancel_edit` to the LV.
- *   - On every `input` event, compute whether the new content shortens
- *     the original OR removes a contiguous substring of the original.
- *     If yes, set the hidden input's value to "true" so the LV's
- *     save_edit handler can decide whether to surface the removal
- *     warning modal (Policy 4 in the contract).
- *
- * The actual diff broadcast on a successful save is computed
- * server-side in the controller / context layer — this hook only
- * needs a coarse "did the edit shorten / remove anything" signal to
- * gate the pre-submit modal.
+ *   - Enter on the textarea submits the form (phx-submit "save_edit").
+ *     Cmd/Ctrl + Enter still saves too.
+ *   - Shift + Enter is a newline (the textarea's own behaviour).
+ *   - Escape on the textarea pushes `cancel_edit` to the LV.
+ *   - On submit (Enter or the Save button), an edit that removes MORE than
+ *     half the text asks with the NATIVE `window.confirm`. Cancel keeps the
+ *     editor open with the draft and nothing reaches the server; OK lets the
+ *     submit through. The server applies `save_edit` directly: there is no
+ *     server-side warning step.
  */
+
+export const REMOVES_MOST_CONFIRM = "This edit removes most of the text. Save anyway?"
+
+// Strings are measured in code points, so an emoji counts once.
+const len = (s) => [...(s || "").trim()].length
 
 /**
- * Pure detection function for the removal-warning gate (editable-messages
- * contract Section f, Policy 4).
- *
- * Whitespace-tokenize both strings, normalize each token by stripping
- * leading/trailing Unicode punctuation/symbol code points and
- * lowercasing, then return true iff any normalized prev-token is missing
- * from the normalized next-set.
- *
- * Server-aligned in structure: the server's compute_removed_substrings/2
- * (apps/platform/lib/platform/chat/messages/edit.ex) uses the same
- * whitespace split (~r/\s+/, trim: true) and the same set-membership
- * check. The client adds light punctuation+case normalization so an
- * additive edit that moves trailing/leading punctuation (e.g.
- * "tomorrow?" → "tomorrow at 10am?") no longer trips the user-facing
- * warning. The server may still surface those tokens in the agent
- * payload — that's out of scope for this predicate, which only gates
- * the pre-submit warning modal where false positives erode trust.
- *
- * Acceptable false positives (matching or relaxing server behavior):
- *   - URL edits: a URL is a single whitespace-bounded token, so any
- *     change to it flags removal.
- *   - Repeated-word collapses: "go go go" → "go" reports no removal
- *     because token sets are identical — matches server.
- *   - Apostrophe-contraction expansions: "don't" → "do not" reports
- *     removal because the token "don't" is not in {do, not}. Fixing
- *     this would require a contraction table; out of scope for Stage 2.
+ * True when `next` keeps under half of `original` (both trimmed): the
+ * masters' `t.length < orig.length * 0.5`. Removing exactly half does not
+ * ask.
  */
-export function shortenedOrRemoved(original, next) {
-  const prevTokens = tokenize(original)
-  const nextSet = new Set(tokenize(next))
-  return prevTokens.some(t => !nextSet.has(t))
-}
-
-function tokenize(s) {
-  return s
-    .split(/\s+/)
-    .map(t => t.toLowerCase().replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ""))
-    .filter(t => t.length > 0)
+export function removesMost(original, next) {
+  const before = len(original)
+  return before > 0 && len(next) < before * 0.5
 }
 
 const MessageEditor = {
   mounted() {
     this.textarea = this.el.querySelector("textarea[name='body']")
-    this.flagInput = this.el.querySelector("input[name='removes_content']")
     this.original = this.el.dataset.originalContent || ""
 
-    if (!this.textarea || !this.flagInput) return
+    if (!this.textarea) return
 
     this.textarea.focus()
     // Place cursor at end of pre-filled content (less surprising than
@@ -97,19 +63,23 @@ const MessageEditor = {
       }
     }
 
-    this.onInput = () => {
-      this.flagInput.value =
-        shortenedOrRemoved(this.original, this.textarea.value) ? "true" : "false"
+    // Runs on the form, before LiveView's window-level submit binding, so a
+    // declined confirm stops the event before LiveView sees it.
+    this.onSubmit = (e) => {
+      if (!removesMost(this.original, this.textarea.value)) return
+      if (window.confirm(REMOVES_MOST_CONFIRM)) return
+      e.preventDefault()
+      e.stopPropagation()
     }
 
     this.textarea.addEventListener("keydown", this.onKeyDown)
-    this.textarea.addEventListener("input", this.onInput)
+    this.el.addEventListener("submit", this.onSubmit)
   },
 
   destroyed() {
     if (!this.textarea) return
     this.textarea.removeEventListener("keydown", this.onKeyDown)
-    this.textarea.removeEventListener("input", this.onInput)
+    this.el.removeEventListener("submit", this.onSubmit)
   }
 }
 

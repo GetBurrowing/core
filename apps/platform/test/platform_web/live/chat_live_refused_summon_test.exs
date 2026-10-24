@@ -189,7 +189,7 @@ defmodule PlatformWeb.ChatLiveRefusedSummonTest do
     send_text(view, "thread root")
     [root | _] = Chat.list_messages(space.id)
 
-    render_click(view, "open_thread", %{"message-id" => root.id})
+    render_click(view, "open_inline_thread", %{"message-id" => root.id})
 
     render_submit(view, "send_inline_thread_message", %{
       "inline_thread_compose" => %{

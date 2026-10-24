@@ -1,8 +1,8 @@
 defmodule PlatformWeb.ChatLive.Partials.Overlays do
   @moduledoc """
   The top-level overlay layer of the chat template — the reaction picker,
-  the long-press quick-reaction pill, the edit-removal warning dialog, the
-  message-actions bottom sheet and the junk-batch confirmation modal.
+  the message-actions bottom sheet with its desktop popover, the reactors
+  sheet, and the junk-batch confirmation modal.
 
   Same split as `ChatLive.Partials`, `ChatLive.Partials.ExternalRail`,
   `ChatLive.Partials.Rail`, `ChatLive.Partials.ChatList`,
@@ -17,11 +17,12 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
 
     * `reaction_picker/1` — `#reaction-picker`, including
       `.reaction-picker-grid`
-    * `longpress_pill/1` — `#longpress-menu`, the `MessageLift` hook host
-      and `.longpress-pill`
-    * `edit_removal_warning/1` — `#edit-removal-warning`
     * `message_actions_sheet/1` — the `<.sheet>` with
-      `#message-actions-sheet`
+      `#message-actions-sheet` and the desktop `#message-actions-popover`,
+      both rendering `message_actions_content/1` (redesign rung 9 stage 2)
+    * `reactors_sheet/1` — `#reactors-sheet` with the desktop
+      `#reactors-popover`: who reacted with one emoji (redesign rung 9
+      stage 3)
     * `junk_batch_modal/1` — `#junk-batch-modal`
 
   ## WHAT DELIBERATELY DID NOT MOVE
@@ -38,11 +39,15 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   ## NO COMPONENT HERE MAY ADD A WRAPPER ELEMENT
 
   Every overlay in this module is `position: fixed` with an `inset-0`
-  scrim and a `z-50` stacking context, and `#longpress-menu` is read from
-  JS by id (`MessageLift` / `LongpressMenu`). Each component renders the
-  MOVED element as its template root, so `<.longpress_pill ... />` emits
-  `#longpress-menu` as a direct child of the template root exactly as the
+  scrim and a `z-50` stacking context. Each component renders the MOVED
+  element as its template root, so `<.reaction_picker ... />` emits
+  `#reaction-picker` as a direct child of the template root exactly as the
   inline markup did.
+
+  The long-press quick-reaction pill that used to live here (and its lift
+  hook) was deleted in redesign rung 9: nothing had opened it since the
+  gesture became a double-tap. The tap pill that replaced it is per
+  message, in `PlatformWeb.Components.ChatMessage`.
 
   ## THE BESPOKE CSS CLASSES ARE LOAD-BEARING
 
@@ -58,9 +63,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
   `reaction-picker-grid`, `reaction-picker-row`, `reaction-picker-tile`,
   `reaction-picker-skeleton-tile`, `reaction-picker-error`,
   `reaction-picker-error-text`, `reaction-picker-retry`,
-  `reaction-picker-close`, `longpress-scrim`, `longpress-pill`,
-  `longpress-pill-btn`, `longpress-pill-divider` and `longpress-pill-more`
-  are hand-written in `assets/css/app.css`, not Tailwind utilities.
+  and `reaction-picker-close` are hand-written in `assets/css/app.css`, not Tailwind utilities.
   Tailwind's content scan covers `lib/**/*.ex` as well as `*.heex`, so the
   move does not change what is generated — but the class strings are
   byte-identical here for that reason, and must stay that way.
@@ -84,9 +87,8 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
 
   use Phoenix.Component
 
+  import PlatformWeb.CoreComponents, only: [icon: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
-
-  alias Phoenix.LiveView.JS
 
   attr(:reaction_picker_for, :any, required: true)
 
@@ -166,10 +168,8 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
         restores focus to the control that opened the picker on close.
         The deferral this comment used to record ("full focus management
         lands in PR B") was that PR. `tabindex="-1"` makes the panel the
-        initial focus target on open, which is what MOBILE keeps: the hook
-        moves initial focus to the search field only on a fine pointer at
-        640px and up, because raising a soft keyboard unbidden collapses
-        the grid to two rows before the user has asked to search.
+        fallback focus target; the hook focuses the search field on open
+        on every device (direction canvas 01a1666e node m3 rule 5).
       --%>
       <div
         class="reaction-picker-panel border border-edge bg-base-100 p-3 shadow-xl"
@@ -180,14 +180,14 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
       >
         <div class="reaction-picker-header mb-2 flex items-center justify-between">
           <span class="text-xs font-semibold uppercase tracking-widest text-base-content">
-            Add reaction
+            Reactions
           </span>
           <button
             type="button"
             phx-click="close_reaction_picker"
             title="Close"
             aria-label="Close reaction picker"
-            class="reaction-picker-close rounded p-1 text-subtle hover:bg-base-content/5 hover:text-base-content"
+            class="reaction-picker-close rounded p-1 text-subtle lg:hover:bg-base-200 lg:hover:text-base-content"
           >
             <span class="hero-x-mark size-5"></span>
           </button>
@@ -212,181 +212,208 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
     """
   end
 
-  attr(:longpress_menu_for, :any, required: true)
-  attr(:quick_emojis, :list, required: true)
-
-  @doc """
-  The mobile double-tap quick-react pill.
-
-  The emoji come from `@quick_emojis` — the same assign the desktop hover
-  action row and the message-actions sheet render, sourced from
-  `Platform.Chat.Emoji.quick_defaults/0` (task 019e0814 stage 2). This markup
-  used to carry its own six-emoji `~w()` literal, which is how this surface
-  came to offer six while the other two offered four. Do not put a literal
-  back; if the set is wrong, change `quick_defaults/0`.
-  """
-  def longpress_pill(assigns) do
-    ~H"""
-    <%!--
-      Quick-react popover (mobile). Triggered by double-tap on a message
-      authored by someone else — see the `LongpressMenu` JS hook, which
-      despite the legacy name now listens for a double-tap gesture rather
-      than a 450ms hold. Scrim + blur fade in, target message clones and
-      animates to viewport center via `MessageLift`, and the emoji pill
-      floats above the lifted clone. Pill position is driven by
-      `--clone-half-h`, set by the hook at mount. The historical action
-      card (Copy / Open in thread / Pin) was removed: Copy duplicated the
-      browser's native selection menu on mobile, and Pin was frequently
-      triggered by accident. Thread-open is deferred to a follow-up UX
-      pass; desktop still exposes both via the hover action bar.
-    --%>
-    <div
-      :if={@longpress_menu_for}
-      id="longpress-menu"
-      class="fixed inset-0 z-50"
-      role="dialog"
-      aria-label="Message actions"
-      data-target-message-id={@longpress_menu_for}
-      phx-hook="MessageLift"
-    >
-      <div
-        class="absolute inset-0 longpress-scrim"
-        phx-click="close_longpress_menu"
-        aria-hidden="true"
-      >
-      </div>
-
-      <%!-- Emoji quick-react pill, floats above the lifted clone.
-           Each tap fires `react` (persists the reaction via Chat.toggle_reaction
-           → close_picker/1 closes both reaction_picker_for and longpress_menu_for). --%>
-      <div class="longpress-pill" role="group" aria-label="Quick reactions">
-        <button
-          :for={emoji <- @quick_emojis}
-          type="button"
-          class="longpress-pill-btn"
-          title={"React with #{emoji}"}
-          phx-click="react"
-          phx-value-message-id={@longpress_menu_for}
-          phx-value-emoji={emoji}
-        >
-          {emoji}
-        </button>
-        <div class="longpress-pill-divider" aria-hidden="true"></div>
-        <button
-          type="button"
-          class="longpress-pill-btn longpress-pill-more"
-          title="More emoji"
-          aria-label="More emoji"
-          phx-click={
-            JS.push("open_reaction_picker", value: %{"message-id" => @longpress_menu_for})
-            |> JS.push("close_longpress_menu")
-          }
-        >
-          <span class="hero-plus size-4"></span>
-        </button>
-      </div>
-    </div>
-    """
-  end
-
-  attr(:pending_save_edit, :any, required: true)
-
-  @doc """
-  The edit-removal confirmation dialog.
-  """
-  def edit_removal_warning(assigns) do
-    ~H"""
-    <%!-- Removal-warning modal (task 019e0f29 Stage 5, contract Section F.4
-         Policy 4). Surfaces only when the user's edit shortens / removes
-         content. Copy locked in by the designer on 2026-05-11 review round 1:
-         terse, factual, no editorial. Buttons: Cancel (keeps editor open
-         with the user's draft) / Edit anyway (fires the actual edit). --%>
-    <div
-      :if={@pending_save_edit}
-      id="edit-removal-warning"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      phx-window-keydown="cancel_save_edit"
-      phx-key="escape"
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="edit-removal-warning-title"
-        class="w-full max-w-md rounded-2xl border border-base-content/10 bg-base-100 p-5 shadow-xl"
-      >
-        <h2 id="edit-removal-warning-title" class="text-base font-semibold text-base-content">
-          Edit removes text.
-        </h2>
-        <p class="mt-2 text-sm text-base-content">
-          Agents that already read this still have the original in their memory.
-        </p>
-        <div class="mt-4 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            phx-click="cancel_save_edit"
-            class="rounded-md px-3 py-1.5 text-sm text-base-content hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            phx-click="confirm_save_edit"
-            class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            Edit anyway
-          </button>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
   attr(:open_message_actions_id, :any, required: true)
   attr(:open_message_actions_msg, :any, required: true)
+  attr(:open_message_actions_mine, :any, default: MapSet.new())
   attr(:current_participant, :any, required: true)
   attr(:quick_emojis, :list, required: true)
   attr(:agent_participant_ids, :any, default: MapSet.new())
+  attr(:pinned_message_ids, :any, default: MapSet.new())
+  attr(:active_space, :any, default: nil)
 
   @doc """
-  The per-message actions bottom sheet.
+  The per-message actions surface (redesign rung 9 stage 2; masters canvas
+  01a1382f node `proto`, MM `stubMessageActions`, MD `messageActions`).
 
-  Its explanatory comment block sat ABOVE the `ChatScrollToMessage`
-  listener in `chat_live.html.heex`, six unrelated elements away from the
-  `<.sheet>` it describes — earlier edits inserted markup between them.
-  The comment travelled here, with the markup it documents; nothing was
-  deleted.
+  ONE assign, two frames: the phone 'Message' bottom sheet (`lg:hidden`) and
+  the desktop ⋯ popover (`hidden lg:block`, anchored to the message by the
+  `MessageActionsPopover` hook, closed by click-away). Both render
+  `message_actions_content/1`, so they cannot disagree about what a message
+  offers. LiveView only fires `phx-click-away` on a VISIBLE element, so the
+  popover's click-away never fires on a phone, where it is `display: none`.
   """
   def message_actions_sheet(assigns) do
     ~H"""
-    <%!-- Per-message actions sheet (task 019e0f29 Stage 3 — fixes the designer's bug
-         report that the chat-message 3-dot dropdown didn't open on touch).
-         Single Sheet at the page bottom, sourced by :open_message_actions_id;
-         same pattern as the per-row task-actions sheet from Task 05 Stage 2.
-
-         Actions are the chat-message hover-toolbar's text-able actions
-         (Copy / Pin / Reply). Quick-emoji react row + reaction picker are
-         deferred — they'd need their own design beyond a simple action list.
-         The Edit item lands in Stage 4 once the editable-messages contract
-         ships. --%>
     <.sheet
       :if={@open_message_actions_id}
       id="message-actions-sheet"
       open={true}
       placement={:bottom}
       on_close="close_message_actions"
+      class="lg:hidden"
+      handle_close
+      swipe_dismiss
     >
-      <:title>Message actions</:title>
-      <div class="flex flex-col gap-1">
-        <%!-- "What this message is answering" (task 01a0d8de stage 3). The
-             first row, on agent messages only, with or without context of
-             their own: the panel shows the agent's context when there is
-             some and generates a summary when there is not. It closes this
-             sheet first, so exactly one sheet is ever open. --%>
+      <:title>Message</:title>
+      <p class="px-4 pb-2 text-base font-semibold text-base-content" aria-hidden="true">
+        Message
+      </p>
+      <.message_actions_content
+        id_prefix="message-actions"
+        open_message_actions_id={@open_message_actions_id}
+        open_message_actions_msg={@open_message_actions_msg}
+        open_message_actions_mine={@open_message_actions_mine}
+        current_participant={@current_participant}
+        quick_emojis={@quick_emojis}
+        agent_participant_ids={@agent_participant_ids}
+        pinned_message_ids={@pinned_message_ids}
+        active_space={@active_space}
+      />
+    </.sheet>
+    <div
+      :if={@open_message_actions_id}
+      id="message-actions-popover"
+      role="dialog"
+      aria-label="Message"
+      tabindex="-1"
+      phx-hook="MessageActionsPopover"
+      phx-click-away="close_message_actions"
+      phx-window-keydown="close_message_actions"
+      phx-key="Escape"
+      data-anchor-message-id={@open_message_actions_id}
+      class="fixed left-1/2 top-24 z-40 hidden w-80 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-1.5 shadow-lg focus:outline-none lg:block"
+    >
+      <.message_actions_content
+        id_prefix="message-actions-popover"
+        open_message_actions_id={@open_message_actions_id}
+        open_message_actions_msg={@open_message_actions_msg}
+        open_message_actions_mine={@open_message_actions_mine}
+        current_participant={@current_participant}
+        quick_emojis={@quick_emojis}
+        agent_participant_ids={@agent_participant_ids}
+        pinned_message_ids={@pinned_message_ids}
+        active_space={@active_space}
+      />
+    </div>
+    """
+  end
+
+  # Shared by every row: 48px on a phone with a pressed fill, a hover fill on
+  # desktop only (`lg:hover:`; the phone has no hover), never primary.
+  @row_class "flex min-h-12 w-full items-center gap-3 rounded-box px-3 text-left text-[15px] text-base-content active:bg-base-200 lg:min-h-9 lg:hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+
+  attr(:id_prefix, :string, required: true)
+  attr(:open_message_actions_id, :any, required: true)
+  attr(:open_message_actions_msg, :any, required: true)
+  attr(:open_message_actions_mine, :any, required: true)
+  attr(:current_participant, :any, required: true)
+  attr(:quick_emojis, :list, required: true)
+  attr(:agent_participant_ids, :any, required: true)
+  attr(:pinned_message_ids, :any, required: true)
+  attr(:active_space, :any, required: true)
+
+  @doc """
+  The rows of the actions surface, in the masters' order: the message
+  preview, the quick strip (the six `@quick_emojis` + ＋), Reply in thread,
+  What this is answering (agent messages only), Pin or Unpin message, Copy
+  text, Copy link, and Edit / Delete on the viewer's own messages.
+
+  Copy text and Copy link are client-side (`MessageActionsCopy`): the row
+  carries `data-clipboard-text` and the toast copy in `data-copy-toast`.
+  Copy link is the ABSOLUTE deep link `ChatLive.resolve_deep_link_anchor/3`
+  resolves. Delete asks with the native confirm before `delete_message`,
+  which re-checks the author on the server.
+  """
+  def message_actions_content(assigns) do
+    msg = assigns.open_message_actions_msg
+    viewer = assigns.current_participant
+    agent? = msg != nil and MapSet.member?(assigns.agent_participant_ids, msg.participant_id)
+    own? = msg != nil and viewer != nil and msg.participant_id == viewer.id and not agent?
+
+    assigns =
+      assigns
+      |> assign(:row_class, @row_class)
+      |> assign(:agent?, agent?)
+      |> assign(:own?, own?)
+      |> assign(:editable?, own? and msg.content_type == "text")
+      |> assign(
+        :pinned?,
+        MapSet.member?(assigns.pinned_message_ids, assigns.open_message_actions_id)
+      )
+      |> assign(:text, (msg && msg.content) || "")
+      |> assign(:link, message_link(assigns.active_space, assigns.open_message_actions_id))
+
+    ~H"""
+    <div
+      id={"#{@id_prefix}-content"}
+      class="flex flex-col"
+      phx-hook="MessageActionsCopy"
+      data-actions-message-id={@open_message_actions_id}
+    >
+      <p
+        data-role="message-actions-preview"
+        class="mx-1 mb-2 line-clamp-2 break-words rounded-box border border-edge bg-base-200 px-3 py-2 text-[13px] text-subtle"
+      >
+        {@text}
+      </p>
+      <%!-- The quick strip. Its set is `@quick_emojis`, the one assign the tap
+           pill's thumbs-up also reads; change `Emoji.quick_defaults/0`, never
+           a literal here. The ＋ is a CONTROL, not a seventh emoji: it opens
+           the existing picker. 'Mine' (the viewer already reacted) is a
+           neutral raised fill with a base-content ring, never primary. --%>
+      <div
+        id={"#{@id_prefix}-quick-reactions"}
+        class="flex items-center justify-between gap-1 px-1 pb-2"
+        role="group"
+        aria-label="Quick reactions"
+      >
         <button
-          :if={
-            @open_message_actions_msg &&
-              MapSet.member?(@agent_participant_ids, @open_message_actions_msg.participant_id)
+          :for={emoji <- @quick_emojis}
+          type="button"
+          aria-label={"React with #{Platform.Chat.Emoji.quick_name(emoji)}"}
+          aria-pressed={to_string(MapSet.member?(@open_message_actions_mine, emoji))}
+          data-mine={MapSet.member?(@open_message_actions_mine, emoji) && "true"}
+          phx-click={
+            Phoenix.LiveView.JS.push("react")
+            |> Phoenix.LiveView.JS.push("close_message_actions")
           }
+          phx-value-message-id={@open_message_actions_id}
+          phx-value-emoji={emoji}
+          class={[
+            "flex size-11 shrink-0 items-center justify-center rounded-full lg:size-9 text-2xl leading-none text-base-content transition-transform lg:text-xl active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            if(MapSet.member?(@open_message_actions_mine, emoji),
+              do: "bg-base-300 ring-1 ring-base-content",
+              else: "bg-base-200"
+            )
+          ]}
+        >
+          {emoji}
+        </button>
+        <button
+          type="button"
+          id={"#{@id_prefix}-more-reactions"}
+          aria-label="More reactions"
+          phx-click={
+            Phoenix.LiveView.JS.push("open_reaction_picker",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+            |> Phoenix.LiveView.JS.push("close_message_actions")
+          }
+          class="flex size-11 shrink-0 items-center justify-center rounded-full lg:size-9 bg-base-200 text-xl leading-none text-base-content transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <span aria-hidden="true">＋</span>
+        </button>
+      </div>
+      <div class="mx-1 border-t border-edge" aria-hidden="true"></div>
+      <div class="flex flex-col pt-1" data-role="message-actions-rows">
+        <button
+          type="button"
+          data-role="message-actions-reply"
+          phx-click={
+            Phoenix.LiveView.JS.push("open_inline_thread",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+            |> Phoenix.LiveView.JS.push("close_message_actions")
+          }
+          class={@row_class}
+        >
+          <.icon name="hero-arrow-uturn-left" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">Reply in thread</span>
+        </button>
+        <%!-- Agent messages only. It closes this sheet BEFORE opening the
+             context sheet, so exactly one sheet is ever open. --%>
+        <button
+          :if={@agent?}
           type="button"
           data-role="message-actions-context"
           phx-click={
@@ -395,120 +422,18 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
               value: %{"message-id" => @open_message_actions_id}
             )
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class={@row_class}
         >
-          <span class="hero-arrow-up-right size-5 text-base-content" aria-hidden="true"></span>
-          <span class="font-medium">What this message is answering</span>
-        </button>
-        <div
-          :if={
-            @open_message_actions_msg &&
-              MapSet.member?(@agent_participant_ids, @open_message_actions_msg.participant_id)
-          }
-          class="border-t border-edge"
-          aria-hidden="true"
-        >
-        </div>
-        <%!-- Quick-reaction strip (task 01a000c0 stage 1).
-
-             WHY A STRIP AND NOT AN "Add reaction…" MENU ROW: design canvas
-             01a000c4-5bd3-795c-b982-acbb9488e5f8 (ADR-0046) cut the menu row.
-             On touch there is no hover, so the always-visible dashed "+" is
-             today the only add-reaction path on a phone — a single tap. A menu
-             row would turn that one tap into four (double-tap, read the menu,
-             tap the row, wait for the picker, tap an emoji). One tap here has
-             to stay one tap.
-
-             EMOJI SET: @quick_emojis, the same assign the desktop hover action
-             row and the double-tap longpress pill render, so pointer and touch
-             cannot drift. That claim was FALSE when it was written: the
-             longpress pill 150 lines above carried its own six-emoji `~w()`
-             while this assign held four. Task 019e0814 stage 2 collapsed all
-             three onto `Platform.Chat.Emoji.quick_defaults/0`. Do not hardcode
-             a literal list here; if the set is wrong, change quick_defaults/0.
-
-             THE "+" IS IN THIS ROW, NOT A ROW OF ITS OWN: the product ruling —
-             "the reaction should be next to the other emojis as a + sign; when
-             you hit that you get the other options". The desktop hover action
-             row renders these same @quick_emojis beside its own "+", so touch
-             and pointer end up the same shape and the same gesture. A labelled
-             "More reactions…" menu row on one surface and a glyph on the other
-             would be two ways to do one thing. The "+" is an additional
-             CONTROL, never an entry in the assign — which is why the tests
-             count the emoji and the "+" separately rather than asserting a
-             single total.
-
-             SIZING: 44x44 hit targets (size-11), the vertical hairline before
-             the "+", and the "+"'s own base-200 fill / scale-on-press are
-             borrowed from the orphaned .longpress-pill, .longpress-pill-divider
-             and .longpress-pill-more treatment in app.css rather than
-             reinvented. --%>
-        <div
-          id="message-actions-quick-reactions"
-          class="flex items-center gap-1 px-1 pb-2"
-          role="group"
-          aria-label="Quick reactions"
-        >
-          <button
-            :for={emoji <- @quick_emojis}
-            type="button"
-            aria-label={"React with #{emoji}"}
-            title={"React with #{emoji}"}
-            phx-click={
-              Phoenix.LiveView.JS.push("react")
-              |> Phoenix.LiveView.JS.push("close_message_actions")
-            }
-            phx-value-message-id={@open_message_actions_id}
-            phx-value-emoji={emoji}
-            class="flex size-11 shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-base-content hover:bg-base-200 active:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            {emoji}
-          </button>
-          <%!-- Hairline before the "+", matching .longpress-pill-divider (1px x
-               24px on --color-base-300). It says the "+" is a different KIND of
-               target from the emoji beside it — one opens the picker, the
-               others react — without pulling it out of the row. --%>
-          <div class="h-6 w-px shrink-0 bg-base-300" aria-hidden="true"></div>
-          <%!-- Escape hatch for anything outside @quick_emojis. Same event chain
-               the deleted "More reactions…" row used: open the existing
-               #reaction-picker, then close this sheet. Filled on --color-base-200
-               with a press-scale rather than a press-fill (borrowed verbatim from
-               .longpress-pill-more / .longpress-pill-btn:active), because at rest
-               it already carries that fill. No --color-primary: an add-reaction
-               control is not an action to advertise. --%>
-          <button
-            type="button"
-            id="message-actions-more-reactions"
-            aria-label="More reactions"
-            title="More reactions"
-            phx-click={
-              Phoenix.LiveView.JS.push("open_reaction_picker",
-                value: %{"message-id" => @open_message_actions_id}
-              )
-              |> Phoenix.LiveView.JS.push("close_message_actions")
-            }
-            class="flex size-11 shrink-0 items-center justify-center rounded-full bg-base-200 text-base-content transition-transform active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <span class="hero-plus size-5"></span>
-          </button>
-        </div>
-        <div class="border-t border-edge" aria-hidden="true"></div>
-        <button
-          type="button"
-          phx-click={
-            Phoenix.LiveView.JS.push("toggle_inline_thread",
-              value: %{"message-id" => @open_message_actions_id}
-            )
-            |> Phoenix.LiveView.JS.push("close_message_actions")
-          }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          <span class="hero-chat-bubble-left-right size-5 text-base-content"></span>
-          <span class="font-medium">Reply in thread</span>
+          <.icon name="hero-arrow-up-right" class="size-5 shrink-0 text-subtle" />
+          <span class="flex min-w-0 flex-col py-1.5">
+            <span data-role="message-actions-label">What this is answering</span>
+            <span class="text-[13px] text-subtle">context · summarise what led here</span>
+          </span>
         </button>
         <button
-          id="message-actions-pin"
+          id={"#{@id_prefix}-pin"}
           type="button"
+          data-role="message-actions-pin"
           phx-click={
             Phoenix.LiveView.JS.push("pin_toggle",
               value: %{
@@ -518,38 +443,174 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
             )
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class={@row_class}
         >
-          <span class="hero-bookmark size-5 text-base-content"></span>
-          <span class="font-medium">Pin / Unpin</span>
+          <.icon name="hero-bookmark" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">
+            {if @pinned?, do: "Unpin message", else: "Pin message"}
+          </span>
         </button>
-        <%!-- Edit affordance — Policy 3 of the editable-messages contract
-             (own non-agent text messages only). The message struct is lifted
-             into @open_message_actions_msg by the open_message_actions
-             handler so the visibility filter can be evaluated at template
-             render time. The hover-pencil affordance on the chat row was
-             removed in task 019e2452; this sheet item is now the SOLE edit
-             entry point on all viewports. --%>
         <button
-          :if={
-            @open_message_actions_msg && @current_participant &&
-              @open_message_actions_msg.participant_id == @current_participant.id &&
-              @open_message_actions_msg.content_type == "text"
-          }
           type="button"
+          data-role="message-actions-copy-text"
+          data-clipboard-text={@text}
+          data-copy-toast="Copied"
+          phx-click="close_message_actions"
+          class={@row_class}
+        >
+          <.icon name="hero-document-duplicate" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">Copy text</span>
+        </button>
+        <button
+          type="button"
+          data-role="message-actions-copy-link"
+          data-clipboard-text={@link}
+          data-copy-toast="Link copied"
+          phx-click="close_message_actions"
+          class={@row_class}
+        >
+          <.icon name="hero-link" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">Copy link</span>
+        </button>
+        <%!-- Own text messages only (Policy 3 of the editable-messages
+             contract); `edit_message_clicked` re-checks the author. --%>
+        <button
+          :if={@editable?}
+          type="button"
+          data-role="message-actions-edit"
           phx-click={
             Phoenix.LiveView.JS.push("edit_message_clicked",
               value: %{"message-id" => @open_message_actions_id}
             )
             |> Phoenix.LiveView.JS.push("close_message_actions")
           }
-          class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          class={@row_class}
         >
-          <span class="hero-pencil-square size-5 text-base-content"></span>
-          <span class="font-medium">Edit message</span>
+          <.icon name="hero-pencil-square" class="size-5 shrink-0 text-subtle" />
+          <span data-role="message-actions-label">Edit</span>
+        </button>
+        <%!-- Own messages only. The red is on the ICON, painted as its
+             mask FILL (`bg-error`; a heroicon paints `currentColor`, which
+             the utility overrides), so no `text-error` class exists at all
+             here: red is never a text colour. `data-confirm`
+             is LiveView's native confirm; the server re-checks the author. --%>
+        <button
+          :if={@own?}
+          type="button"
+          data-role="message-actions-delete"
+          data-confirm="Delete this message?"
+          phx-click={
+            Phoenix.LiveView.JS.push("delete_message",
+              value: %{"message-id" => @open_message_actions_id}
+            )
+          }
+          class={@row_class}
+        >
+          <.icon name="hero-trash" class="size-5 shrink-0 bg-error" />
+          <span data-role="message-actions-label">Delete</span>
         </button>
       </div>
+    </div>
+    """
+  end
+
+  defp message_link(nil, _id), do: nil
+  defp message_link(_space, nil), do: nil
+
+  defp message_link(space, id) do
+    PlatformWeb.Endpoint.url() <>
+      "/chat/#{Platform.Chat.space_path_segment(space)}?message=#{id}"
+  end
+
+  attr(:open_reactors, :any, required: true)
+  attr(:current_participant, :any, default: nil)
+
+  @doc """
+  Who reacted with one emoji on one message (redesign rung 9 stage 3;
+  masters stub 'Reacted 👍', direction m3 rule 5). Opened by a long-press on
+  a reaction pill (`open_reactors`). The list is the one
+  `MessageActionsHooks` re-read from the DATABASE on open, never the
+  pill's client JSON. ONE assign, two frames, like the actions sheet: the
+  phone bottom sheet (`lg:hidden`) and a `hidden lg:block` popover anchored
+  by `MessageActionsPopover`. The viewer's own row carries the meta 'you'.
+  """
+  def reactors_sheet(assigns) do
+    ~H"""
+    <.sheet
+      :if={@open_reactors}
+      id="reactors-sheet"
+      open={true}
+      placement={:bottom}
+      on_close="close_reactors"
+      class="lg:hidden"
+      handle_close
+      swipe_dismiss
+    >
+      <:title>Reacted {@open_reactors.emoji}</:title>
+      <p class="px-4 pb-2 text-base font-semibold text-base-content" aria-hidden="true">
+        Reacted {@open_reactors.emoji}
+      </p>
+      <.reactors_list
+        id="reactors-sheet-list"
+        open_reactors={@open_reactors}
+        current_participant={@current_participant}
+      />
     </.sheet>
+    <div
+      :if={@open_reactors}
+      id="reactors-popover"
+      role="dialog"
+      aria-label={"Reacted #{@open_reactors.emoji}"}
+      tabindex="-1"
+      phx-hook="MessageActionsPopover"
+      phx-click-away="close_reactors"
+      phx-window-keydown="close_reactors"
+      phx-key="Escape"
+      data-anchor-message-id={@open_reactors.message_id}
+      class="fixed left-1/2 top-24 z-40 hidden w-64 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-3 shadow-lg focus:outline-none lg:block"
+    >
+      <p class="pb-1 text-[13px] font-semibold text-base-content">
+        Reacted {@open_reactors.emoji}
+      </p>
+      <.reactors_list
+        id="reactors-popover-list"
+        open_reactors={@open_reactors}
+        current_participant={@current_participant}
+      />
+    </div>
+    """
+  end
+
+  attr(:id, :string, required: true)
+  attr(:open_reactors, :map, required: true)
+  attr(:current_participant, :any, required: true)
+
+  defp reactors_list(assigns) do
+    assigns =
+      assign(assigns, :viewer_id, assigns.current_participant && assigns.current_participant.id)
+
+    ~H"""
+    <ul id={@id} class="flex flex-col px-1 pb-2" data-role="reactors-list">
+      <li
+        :for={r <- @open_reactors.reactors}
+        class="flex min-h-11 items-center justify-between gap-3 px-3 lg:min-h-8"
+        data-role="reactor-row"
+        data-participant-id={r.id}
+      >
+        <span class="truncate text-[15px] text-base-content">{r.name}</span>
+        <span :if={r.id == @viewer_id} class="text-[13px] text-subtle" data-role="reactor-you">
+          you
+        </span>
+      </li>
+      <li
+        :if={@open_reactors.extra_count > 0}
+        class="flex min-h-11 items-center px-3 text-[13px] text-subtle lg:min-h-8"
+      >
+        and {@open_reactors.extra_count} {if @open_reactors.extra_count == 1,
+          do: "other",
+          else: "others"}
+      </li>
+    </ul>
     """
   end
 

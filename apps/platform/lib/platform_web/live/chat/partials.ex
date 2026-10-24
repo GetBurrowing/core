@@ -602,7 +602,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   Each item is gated on what the ROW could do before this stage, so the menu
   adds no capability anywhere:
 
-    * Pin / Unpin: every conversation row.
+    * Pin or Unpin: every conversation row.
     * Hide from my rail: sub-org channel rows only. `hide_channel` writes
       `users.preferences["hidden_channel_ids"]`, and the Hidden drawer that
       reverses it lists channels, so offering it on a DM would create a state

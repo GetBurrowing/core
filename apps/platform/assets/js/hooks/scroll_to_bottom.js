@@ -1186,16 +1186,9 @@ const ScrollToBottom = {
     const rows = Array.from(this.el.querySelectorAll("[data-participant-id]"));
     let prevParticipantId = null;
 
-    // A row carrying the "Context" header button (task 01a0d8de stage 3)
-    // always OPENS a run. A continuation row hides every header child but the
-    // action row, so grouping it would hide the one control the design says
-    // is always visible; opening a run keeps name, time and Context together.
-    const opensRun = (row) =>
-      Boolean(row && row.querySelector('[data-role="message-context-trigger"]'));
-
     rows.forEach((row, i) => {
       const pid = row.dataset.participantId;
-      const grouped = Boolean(pid) && pid === prevParticipantId && !opensRun(row);
+      const grouped = Boolean(pid) && pid === prevParticipantId;
 
       // Look one row ahead rather than back-patching the previous row, so
       // this stays a single forward pass. A row with no participant id is
@@ -1203,7 +1196,7 @@ const ScrollToBottom = {
       // continues it, so it always ends a run.
       const next = rows[i + 1];
       const nextPid = next?.dataset.participantId;
-      const runEnd = !(Boolean(pid) && nextPid === pid && !opensRun(next));
+      const runEnd = !(Boolean(pid) && nextPid === pid);
 
       row.classList.toggle("message-row--grouped", grouped);
       row.classList.toggle("message-row--run-end", runEnd);

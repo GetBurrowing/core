@@ -398,7 +398,7 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
       view |> form("#compose-form", compose: %{text: "thread root"}) |> render_submit()
       [msg | _] = Chat.list_messages(space.id)
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       form = "form#inline-thread-compose-form-#{msg.id}"
       list = "#inline-thread-mention-list-#{msg.id}"

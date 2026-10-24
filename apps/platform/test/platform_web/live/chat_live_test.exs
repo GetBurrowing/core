@@ -24,13 +24,14 @@ defmodule PlatformWeb.ChatLiveTest do
   # `Chat.list_reactions_grouped/1`, which groups by exact match. A row that
   # dropped the variation selector would detach every heart reaction already in
   # the database into a second pill, and no migration repairs that.
+  # The set is the designer's masters' six (redesign rung 9 stage 2).
   @quick_react_row [
     "\u{1F44D}",
-    "\u{1F389}",
-    "\u{2705}",
+    "\u{1F525}",
     "\u{2764}\u{FE0F}",
     "\u{1F602}",
-    "\u{1F64F}"
+    "\u{1F440}",
+    "\u{2705}"
   ]
 
   setup do
@@ -1301,7 +1302,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [root_message | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => root_message.id})
+      render_click(view, "open_inline_thread", %{"message-id" => root_message.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{
@@ -1838,13 +1839,23 @@ defmodule PlatformWeb.ChatLiveTest do
       html = render(view)
       assert html =~ "react to me"
 
-      # Quick emoji buttons should be present (in the action bar). Asserted
-      # against the pinned row rather than a hand-listed subset: this test
-      # listed four of the six and so stayed green through the entire period
-      # the hover row and the double-tap pill disagreed (task 019e0814
-      # stage 2). A subset check cannot see a missing emoji.
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # On the row itself the tap pill offers ONE quick reaction, the first of
+      # the pinned set (redesign rung 9). The full set lives in the actions
+      # sheet the pill's More opens. Asserted against the pinned row rather
+      # than a hand-listed subset: this test once listed four of the six and
+      # so stayed green while two surfaces disagreed (task 019e0814 stage 2).
+      assert has_element?(
+               view,
+               ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[phx-value-emoji="#{hd(@quick_react_row)}"])
+             )
+
+      sheet = render_click(view, "open_message_actions", %{"id" => msg.id})
+
       for emoji <- @quick_react_row do
-        assert html =~ emoji
+        assert sheet =~ ~s(phx-value-emoji="#{emoji}")
       end
     end
 
@@ -1869,10 +1880,14 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render(view)
 
-      # The add-reaction control MUST render even though the message has no
+      # The add-reaction path MUST exist even though the message has no
       # reactions. That is what task 019e3402 stage 1 was protecting, and it
-      # still holds.
-      assert html =~ ~s(aria-label="Add reaction")
+      # still holds: the pill's More opens the actions sheet, whose "+"
+      # opens the picker (redesign rung 9 deleted the hover row's "+").
+      assert has_element?(
+               view,
+               ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="More actions"])
+             )
 
       # THE GUARD MOVED, IT DID NOT VANISH (task 01a000c0 stage 3). This used
       # to also assert `reaction-add-btn`, the dashed pill that sat in the
@@ -1885,12 +1900,12 @@ defmodule PlatformWeb.ChatLiveTest do
       # home, rather than deleting the case.
       refute html =~ "reaction-add-btn"
 
-      assert html =~ ~s(phx-click="open_reaction_picker")
+      render_click(view, "open_message_actions", %{"id" => msg.id})
 
-      # And it is inside the action row, not orphaned somewhere else in the
-      # markup — the row is revealed by opacity so it stays tab-reachable
-      # (see the comment on that div in chat_message.ex).
-      assert html =~ "group-focus-within:opacity-100"
+      assert has_element?(
+               view,
+               ~s(#message-actions-more-reactions[aria-label="More reactions"])
+             )
     end
 
     test "reacting to a message persists the reaction and updates the reaction count in the UI",
@@ -2481,10 +2496,15 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
-  # ── Quick-react popover (mobile double-tap) ─────────────────────────────────
+  # ── Message tap pill (redesign rung 9, task 01a1557a-9406) ──────────────────
+  #
+  # The pill replaced the dead long-press lift pill, the desktop hover row and
+  # the left-gutter reply. Gesture timing (tap, double-tap, long-press) is
+  # unit-tested in assets/test/hooks/message_gestures.test.js; these pin the
+  # server half: the markup the hook drives and the events its buttons fire.
 
-  describe "quick-react popover" do
-    test "opening the popover renders the dialog with the target message id",
+  describe "message pill" do
+    test "message rows carry the MessageGestures hook, data-message-id, data-is-own-message and one pill",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/general")
@@ -2492,82 +2512,43 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(id="longpress-menu")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap target"})
+      |> form("#compose-form", compose: %{text: "pill attach"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-
-      assert html =~ ~s(id="longpress-menu")
-      assert html =~ ~s(aria-label="Message actions")
-      # The MessageLift hook reads the target via this attribute and clones
-      # the corresponding DOM element on mount.
-      assert html =~ ~s(data-target-message-id="#{msg.id}")
-      assert html =~ ~s(phx-hook="MessageLift")
-      # Scrim + pill render together; the Copy / Open-in-thread / Pin action
-      # card was removed when long-press was replaced with double-tap, since
-      # the card surfaced actions that either duplicated the browser's
-      # native selection menu (Copy) or were frequently triggered by
-      # accident (Pin).
-      assert html =~ "longpress-scrim"
-      assert html =~ "longpress-pill"
-      # Action card container and its rows are gone — verified via the
-      # container class (checking the row labels would false-positive on
-      # the desktop hover-bar, which reuses strings like "Copy message"
-      # as button titles).
-      refute html =~ "longpress-card"
-      refute html =~ "longpress-card-label"
-      assert html =~ ~s(aria-label="Quick reactions")
-      # Emojis should all be present in the pill.
-      for emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏) do
-        assert html =~ emoji
-      end
+      row = ~s([data-message-id="#{msg.id}"][phx-hook="MessageGestures"])
+      assert has_element?(view, row)
+      assert has_element?(view, ~s(#{row}[data-is-own-message="true"][tabindex="0"]))
+      assert has_element?(view, ~s(#{row} [data-role="message-pill"][role="toolbar"]))
+      refute has_element?(view, ~s(#{row} .message-action-row))
+      refute has_element?(view, ~s(#{row} .msg-reply-gutter))
     end
 
-    test "closing the popover removes it from the DOM", %{conn: conn} do
+    test "the pill's More button opens the actions sheet", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap close"})
+      |> form("#compose-form", compose: %{text: "pill more target"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-      assert html =~ ~s(id="longpress-menu")
-
-      html = render_click(view, "close_longpress_menu", %{})
-      refute html =~ ~s(id="longpress-menu")
-    end
-
-    test "message bubbles carry the LongpressMenu hook, data-message-id, and data-is-own-message",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      refute has_element?(view, "#message-actions-sheet")
 
       view
-      |> form("#compose-form", compose: %{text: "double-tap attach"})
-      |> render_submit()
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="More actions"])
+      )
+      |> render_click()
 
-      space = Chat.get_space_by_slug("general")
-      [msg | _] = Chat.list_messages(space.id)
-
-      html = render(view)
-      # Hook name retained for minimal churn; the JS now listens for
-      # double-tap rather than a 450ms hold.
-      assert html =~ ~s(phx-hook="LongpressMenu")
-      assert html =~ ~s(data-message-id="#{msg.id}")
-      # Authorship flag is what the JS reads to skip firing on the
-      # current user's own bubbles (reserved for edit gesture, PR2).
-      assert html =~ ~s(data-is-own-message="true")
+      assert has_element?(view, "#message-actions-sheet")
     end
 
-    test "tapping an emoji in the pill persists a reaction and closes the popover",
-         %{conn: conn} do
+    test "the pill's thumbs-up persists the first quick reaction", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -2578,17 +2559,36 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+      view
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="React with thumbs up"])
+      )
+      |> render_click()
 
-      # Fire the same event the pill emits (phx-click="react" with
-      # message-id + emoji as phx-value-* attributes).
-      html = render_click(view, "react", %{"message-id" => msg.id, "emoji" => "🎉"})
+      [first | _] = Platform.Chat.Emoji.quick_defaults()
+      assert [%{emoji: ^first}] = Chat.list_reactions(msg.id)
+    end
 
-      # Reaction persisted.
-      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+    test "the pill's Reply opens the inline thread", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      # Popover closed — close_picker/1 also resets :longpress_menu_for.
-      refute html =~ ~s(id="longpress-menu")
+      view
+      |> form("#compose-form", compose: %{text: "pill reply target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      refute has_element?(view, "#inline-thread-#{msg.id}")
+
+      view
+      |> element(
+        ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="Reply in thread"])
+      )
+      |> render_click()
+
+      assert has_element?(view, "#inline-thread-#{msg.id}")
     end
   end
 
@@ -2604,8 +2604,8 @@ defmodule PlatformWeb.ChatLiveTest do
   # the reaction and close the sheet, with no picker in between. A test that
   # has to open the picker to succeed is testing the wrong thing.
   #
-  # The strip is 👍 ❤️ 😂 🎉 + — five targets in ONE row, the last of them a
-  # "+" that opens the picker. Sam ruled out the separate "More
+  # The strip is the masters' 👍 🔥 ❤️ 😂 👀 ✅ then ＋ (redesign rung 9) —
+  # seven targets in ONE row, the last of them a "+" that opens the picker. Sam ruled out the separate "More
   # reactions…" row these tests originally pinned: stage 3 puts a "+" beside
   # the same four emoji in the desktop hover row, and a labelled menu row on
   # touch against a glyph on pointer would be two ways to do one thing.
@@ -2640,7 +2640,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # template and never this literal alone.
       for emoji <- @quick_react_row do
         assert html =~ ~s(phx-value-emoji="#{emoji}")
-        assert html =~ ~s(aria-label="React with #{emoji}")
+        assert html =~ ~s(aria-label="React with #{Platform.Chat.Emoji.quick_name(emoji)}")
       end
 
       # Every strip button carries the sheet's target message id, so a tap
@@ -2649,15 +2649,19 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # The strip sits ABOVE "Reply in thread" — ordering is the design, not
       # an accident: the one-tap path is first, the menu rows follow.
-      strip_at = :binary.match(html, "message-actions-quick-reactions") |> elem(0)
-      reply_at = :binary.match(html, "Reply in thread") |> elem(0)
+      # Measured inside the sheet only: every message row's tap pill also
+      # carries a "Reply in thread" label, earlier in the page.
+      {sheet_at, _} = :binary.match(html, ~s(id="message-actions-sheet"))
+      sheet = binary_part(html, sheet_at, byte_size(html) - sheet_at)
+      strip_at = :binary.match(sheet, "message-actions-quick-reactions") |> elem(0)
+      reply_at = :binary.match(sheet, "Reply in thread") |> elem(0)
       assert strip_at < reply_at
 
       # The escape hatch is the "+" INSIDE the strip, not a labelled row of
       # its own — Sam's ruling, and the shape stage 3 gives the desktop
       # hover row. So it must fall between the strip and "Reply in thread",
       # and the old bottom row must be gone entirely.
-      more_at = :binary.match(html, ~s(id="message-actions-more-reactions")) |> elem(0)
+      more_at = :binary.match(sheet, ~s(id="message-actions-more-reactions")) |> elem(0)
       assert strip_at < more_at
       assert more_at < reply_at
       refute html =~ "More reactions…"
@@ -2686,8 +2690,8 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(phx-value-emoji="+")
 
       # ALL of them, "+" included, are 44x44. size-11 is Tailwind's 2.75rem on
-      # both axes, matching the .longpress-pill-btn hit target this strip
-      # borrows from. shrink-0 stops flex from squeezing one below 44px on a
+      # both axes, matching the old quick-react pill's hit target this strip
+      # borrowed from. shrink-0 stops flex from squeezing one below 44px on a
       # narrow phone — the "+" is last in the row and would be squeezed first,
       # and the row got longer when the set went from four to six.
       assert length(buttons) == length(@quick_react_row) + 1
@@ -2708,10 +2712,10 @@ defmodule PlatformWeb.ChatLiveTest do
       # then push("close_message_actions"). Firing the bare event by name
       # would skip the wiring this stage is adding.
       view
-      |> element("#message-actions-quick-reactions button", "🎉")
+      |> element("#message-actions-quick-reactions button", "🔥")
       |> render_click()
 
-      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+      assert [%{emoji: "🔥"}] = Chat.list_reactions(msg.id)
 
       html = render(view)
 
@@ -2743,7 +2747,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert [] = Chat.list_reactions(msg.id)
     end
 
-    test "the sheet's Pin / Unpin row pins and unpins the message and closes the sheet",
+    test "the sheet's Pin message row pins and unpins the message and closes the sheet",
          %{view: view, msg: msg} do
       # Phones have no hover pin button, so this sheet row is their only way
       # to pin. Click the real element so the chained JS command runs as it
@@ -2793,10 +2797,10 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug(slug)
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_click(view, "open_thread", %{"message-id" => msg.id})
+      html = render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       assert html =~ "inline-thread-compose-form-#{msg.id}"
-      assert html =~ "Reply in thread..."
+      assert html =~ "Reply in thread"
     end
 
     test "toggling the inline thread closed hides its composer", %{conn: conn} do
@@ -2810,7 +2814,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
       html = render_click(view, "toggle_inline_thread", %{"message-id" => msg.id})
 
       refute html =~ "inline-thread-compose-form-#{msg.id}"
@@ -2827,7 +2831,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{"text" => "thread reply", "message_id" => msg.id}
@@ -2850,7 +2854,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{
@@ -2894,7 +2898,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "open_thread", %{"message-id" => msg.id})
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
 
       render_submit(view, "send_inline_thread_message", %{
         "inline_thread_compose" => %{"text" => "timestamp thread reply", "message_id" => msg.id}
@@ -4351,7 +4355,7 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
-  # ── Quick-react row: one set, three surfaces ─────────────────────────────────
+  # ── Quick-react row: one set, two surfaces ─────────────────────────────────
 
   # The emoji of one quick-react row, in DOM order, read off `phx-value-emoji`.
   #
@@ -4367,11 +4371,13 @@ defmodule PlatformWeb.ChatLiveTest do
     |> Enum.map(&(&1 |> Floki.attribute("phx-value-emoji") |> List.first()))
   end
 
-  defp hover_row_selector(msg_id) do
-    ~s(.message-action-row button[phx-value-message-id="#{msg_id}"][phx-value-emoji])
+  # The tap pill (redesign rung 9) carries one react button: the FIRST of the
+  # set. The hover row and the long-press pill that used to render the whole
+  # set are deleted.
+  defp pill_react_selector(msg_id) do
+    ~s([data-message-id="#{msg_id}"] [data-role="message-pill"] button[phx-value-emoji])
   end
 
-  @longpress_pill_selector ".longpress-pill button[phx-value-emoji]"
   @actions_sheet_selector "#message-actions-quick-reactions button[phx-value-emoji]"
 
   describe "quick-react row is one set across every surface" do
@@ -4389,17 +4395,11 @@ defmodule PlatformWeb.ChatLiveTest do
       %{view: view, msg: msg}
     end
 
-    test "the desktop hover row renders the pinned set, in order", %{view: view, msg: msg} do
+    test "the tap pill's react button posts the first of the pinned set",
+         %{view: view, msg: msg} do
       html = render(view)
 
-      assert quick_row_emoji(html, hover_row_selector(msg.id)) == @quick_react_row
-    end
-
-    test "the mobile double-tap pill renders the pinned set, in order",
-         %{view: view, msg: msg} do
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-
-      assert quick_row_emoji(html, @longpress_pill_selector) == @quick_react_row
+      assert quick_row_emoji(html, pill_react_selector(msg.id)) == [hd(@quick_react_row)]
     end
 
     test "the mobile message-actions sheet renders the pinned set, in order",
@@ -4409,20 +4409,13 @@ defmodule PlatformWeb.ChatLiveTest do
       assert quick_row_emoji(html, @actions_sheet_selector) == @quick_react_row
     end
 
-    test "all three surfaces agree with each other on one render pass",
+    test "the surfaces agree with each other on one render pass",
          %{view: view, msg: msg} do
-      # The three assertions above each compare a surface to the pin. This
-      # compares the surfaces to EACH OTHER, which is the defect being closed:
-      # every one of them looked right in isolation while the pointer row
-      # offered four emoji and the touch pill offered six, on the same message,
-      # in the same account, differing only by the device it was opened on.
-      hover = quick_row_emoji(render(view), hover_row_selector(msg.id))
-
-      pill =
-        quick_row_emoji(
-          render_hook(view, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
+      # The assertions above each compare a surface to the pin. This compares
+      # the surfaces to EACH OTHER, which is the defect being closed: every one
+      # of them once looked right in isolation while the pointer row offered
+      # four emoji and the touch pill offered six, on the same message.
+      [pill] = quick_row_emoji(render(view), pill_react_selector(msg.id))
 
       sheet =
         quick_row_emoji(
@@ -4430,9 +4423,8 @@ defmodule PlatformWeb.ChatLiveTest do
           @actions_sheet_selector
         )
 
-      assert hover == pill
-      assert pill == sheet
-      assert length(hover) == 6
+      assert pill == hd(sheet)
+      assert length(sheet) == 6
     end
 
     test "the picker control is still a control, not a seventh emoji",
@@ -4442,12 +4434,6 @@ defmodule PlatformWeb.ChatLiveTest do
       # Counted separately on each surface, the way the sheet's own strip test
       # counts them, because "the + is a control, not an emoji" is a rule about
       # kinds and not about a total.
-      pill_html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-      pill_buttons = pill_html |> Floki.parse_document!() |> Floki.find(".longpress-pill button")
-
-      assert length(pill_buttons) == 7
-      assert [_] = Floki.find(pill_buttons, ".longpress-pill-more")
-
       sheet_html = render_click(view, "open_message_actions", %{"id" => msg.id})
 
       sheet_buttons =
@@ -4458,7 +4444,6 @@ defmodule PlatformWeb.ChatLiveTest do
       assert length(sheet_buttons) == 7
       assert [_] = Floki.find(sheet_buttons, "#message-actions-more-reactions")
 
-      refute pill_html =~ ~s(phx-value-emoji="+")
       refute sheet_html =~ ~s(phx-value-emoji="+")
     end
   end
@@ -4503,29 +4488,12 @@ defmodule PlatformWeb.ChatLiveTest do
       assert [%{emoji: "\u{1F64F}"}] = Chat.list_reactions(msg.id)
       assert render(view_b) =~ "same row for everyone"
 
-      selector = hover_row_selector(msg.id)
-      alice_row = quick_row_emoji(render(view_a), selector)
-      bob_row = quick_row_emoji(render(view_b), selector)
-
-      assert alice_row == bob_row
-      assert alice_row == @quick_react_row
-
-      # And on touch, where the reacting gesture and the row both live in the
-      # same overlay.
-      alice_pill =
-        quick_row_emoji(
-          render_hook(view_a, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
-
-      bob_pill =
-        quick_row_emoji(
-          render_hook(view_b, "open_longpress_menu", %{"message_id" => msg.id}),
-          @longpress_pill_selector
-        )
+      selector = pill_react_selector(msg.id)
+      alice_pill = quick_row_emoji(render(view_a), selector)
+      bob_pill = quick_row_emoji(render(view_b), selector)
 
       assert alice_pill == bob_pill
-      assert alice_pill == @quick_react_row
+      assert alice_pill == [hd(@quick_react_row)]
 
       alice_sheet =
         quick_row_emoji(

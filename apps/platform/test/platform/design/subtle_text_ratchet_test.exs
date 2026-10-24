@@ -220,7 +220,11 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # dialog's large-file row, whose 11px size line was one of them: 112 -> 111.
   # Rung 16 (task 01a1557a-b5f9 stage 2) retired the Files picker's 10px org
   # count and the upload sheet's 10px size note (now text-xs): 111 -> 109.
-  @small_subtle_ceiling 109
+  # Rung 9 (task 01a1557a-9406 stage 1) deleted the agent header's 10px
+  # "Context" button: 109 -> 108. Rung 9 stage 4 raised the 10px '(edited)'
+  # affix to the masters' 13px and replaced the old version-history modal's
+  # 11px meta line: 108 -> 106.
+  @small_subtle_ceiling 106
   @small_size ~r/(?<![\w-])text-\[(?:\d|1[01])(?:\.\d+)?px\]|(?<![\w-])text-\[0\.(?:[0-6]\d*|7[0-4]\d*)rem\]/
   @tier_collapses [
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex", ">unassigned<"},

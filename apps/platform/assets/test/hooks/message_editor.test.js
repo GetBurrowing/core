@@ -1,53 +1,26 @@
-import { describe, it, expect, vi } from "vitest"
-import MessageEditor, { shortenedOrRemoved } from "../../js/hooks/message_editor.js"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import MessageEditor, { removesMost, REMOVES_MOST_CONFIRM } from "../../js/hooks/message_editor.js"
 
 /**
- * Tests for `shortenedOrRemoved(original, next)` — the pure heuristic that
- * gates the removal-warning modal (editable-messages contract Policy 4,
- * task 019e1eaf).
- *
- * Each row: [name, original, next, expected].
- *
- * Three known-limitation rows are included intentionally:
- *   - "repeated word" — whitespace-tokenize-into-set treats `"go go go"`
- *     and `"go"` as having identical token sets, so the function reports
- *     no removal. Matches the server's behaviour (the server uses the
- *     same `~r/\s+/` split, so client and server agree). Acceptable
- *     limitation.
- *   - "URL edit" — `https://example.com/v1` is a single whitespace-bounded
- *     token; changing it to `/v2` makes the original token absent → the
- *     function reports removal. Acceptable conservative false-positive
- *     for URL edits.
- *   - "apostrophe contraction" — `"don't"` (one token) vs `"do not"`
- *     (two tokens) cannot be reconciled without an external contraction
- *     table. Token "don't" is not in {do, not, forget} → function reports
- *     removal. Acceptable conservative false-positive; explicitly out of
- *     scope for Stage 2 (task 019e1eaf plan v2).
+ * `removesMost(original, next)` (redesign rung 9 stage 4; masters MM
+ * `startEdit`): true when the trimmed new text keeps UNDER half of the
+ * trimmed original, the masters' `t.length < orig.length * 0.5`. It gates
+ * the native confirm; removing exactly half does not ask.
  */
-const CASES = [
-  ["additive end",            "Hey can we talk about the API tomorrow?",  "Hey can we talk about the API tomorrow at 10am?",  false],
-  ["additive comma-insert",   "Hey can we talk about the API tomorrow?",  "Hey, can we talk about the API tomorrow at 10am?", false],
-  ["true substring removal",  "Hey can we talk about the API tomorrow?",  "Hey can we talk tomorrow?",                        true],
-  ["middle replace longer",   "leaked secret token here",                 "leaked redacted-credential here",                   true],
-  ["pure word reorder",       "alpha beta gamma",                         "gamma alpha beta",                                  false],
-  ["strict shorter",          "abcdef",                                   "abc",                                                true],
-  ["empty original",          "",                                         "hello world",                                       false],
-  ["emoji preserved",         "Great work \u{1F389}",                     "Great work \u{1F389} indeed",                       false],
-  ["CJK preserved",           "こんにちは world",     "こんにちは world today",        false],
-  ["apostrophe contraction",  "don't forget",                             "do not forget",                                     true],
-  ["repeated word",           "go go go",                                 "go",                                                false],
-  ["URL edit",                "see https://example.com/v1",               "see https://example.com/v2",                        true],
-  ["@mention removal",        "@alice please review",                     "please review",                                     true],
-  ["remove and add",          "buy milk and eggs",                        "buy oat milk",                                      true],
-  ["trailing whitespace",     "hello",                                    "hello ",                                            false]
-]
+const TEN = "abcdefghij" // 10 code points
 
-describe("shortenedOrRemoved(original, next)", () => {
-  for (const [name, original, next, expected] of CASES) {
-    it(name, () => {
-      expect(shortenedOrRemoved(original, next)).toBe(expected)
-    })
-  }
+describe("removesMost(original, next)", () => {
+  it("removing 55% asks", () => expect(removesMost(TEN + TEN, TEN.slice(0, 9))).toBe(true))
+  it("removing exactly 50% does not ask", () => expect(removesMost(TEN, "abcde")).toBe(false))
+  it("removing 40% does not ask", () => expect(removesMost(TEN, "abcdef")).toBe(false))
+  it("an additive edit does not ask", () => expect(removesMost("hello", "hello world")).toBe(false))
+  it("emptying the text asks", () => expect(removesMost("hello world", "   ")).toBe(true))
+  it("an empty original never asks", () => expect(removesMost("", "")).toBe(false))
+  it("surrounding whitespace is trimmed on both sides", () =>
+    expect(removesMost("  abcd  ", " ab ")).toBe(false))
+  it("an emoji counts once (code points, not UTF-16 units)", () =>
+    // 4 code points (8 UTF-16 units) -> 2 code points: exactly half, no ask.
+    expect(removesMost("\u{1F389}\u{1F389}ab", "\u{1F389}a")).toBe(false))
 })
 
 // The editor's keys (redesign rung 10, stage 4, coverage row 117): Enter
@@ -62,11 +35,13 @@ describe("MessageEditor keys", () => {
       addEventListener: (type, fn) => (listeners[type] = fn),
       removeEventListener: vi.fn(),
     }
-    const flag = { value: "false" }
+    const formListeners = {}
     const form = {
       dataset: { originalContent: "the original" },
       requestSubmit: vi.fn(),
-      querySelector: (sel) => (sel.startsWith("textarea") ? textarea : flag),
+      querySelector: (sel) => (sel.startsWith("textarea") ? textarea : null),
+      addEventListener: (type, fn) => (formListeners[type] = fn),
+      removeEventListener: vi.fn(),
     }
     const hook = Object.create(MessageEditor)
     hook.el = form
@@ -77,7 +52,12 @@ describe("MessageEditor keys", () => {
       listeners.keydown(e)
       return e
     }
-    return { form, hook, press }
+    const submit = () => {
+      const e = { preventDefault: vi.fn(), stopPropagation: vi.fn() }
+      formListeners.submit(e)
+      return e
+    }
+    return { form, hook, press, submit, textarea }
   }
 
   it("Enter submits the edit", () => {
@@ -113,5 +93,50 @@ describe("MessageEditor keys", () => {
     expect(e.preventDefault).toHaveBeenCalled()
     expect(hook.pushEvent).toHaveBeenCalledWith("cancel_edit", {})
     expect(form.requestSubmit).not.toHaveBeenCalled()
+  })
+
+  describe("the removal guard on submit", () => {
+    let savedWindow
+    beforeEach(() => {
+      savedWindow = globalThis.window
+      globalThis.window = { confirm: vi.fn() }
+    })
+    afterEach(() => {
+      globalThis.window = savedWindow
+    })
+
+    // "the original" is 12 code points.
+    it("removing most (58%) calls the native confirm with the exact string", () => {
+      const { submit, textarea } = editor()
+      window.confirm.mockReturnValue(true)
+      textarea.value = "the o" // 5 of 12 kept: 58% removed
+      const e = submit()
+      expect(window.confirm).toHaveBeenCalledTimes(1)
+      expect(window.confirm).toHaveBeenCalledWith("This edit removes most of the text. Save anyway?")
+      expect(REMOVES_MOST_CONFIRM).toBe("This edit removes most of the text. Save anyway?")
+      // OK lets the submit through to LiveView.
+      expect(e.preventDefault).not.toHaveBeenCalled()
+      expect(e.stopPropagation).not.toHaveBeenCalled()
+    })
+
+    it("removing 50% or 25% does not ask", () => {
+      const { submit, textarea } = editor()
+      textarea.value = "the or" // 6 of 12: 50% removed
+      submit()
+      textarea.value = "the origi" // 9 of 12: 25% removed
+      submit()
+      expect(window.confirm).not.toHaveBeenCalled()
+    })
+
+    it("a declined confirm stops the submit and keeps the draft", () => {
+      const { submit, textarea, hook } = editor()
+      window.confirm.mockReturnValue(false)
+      textarea.value = "x"
+      const e = submit()
+      expect(e.preventDefault).toHaveBeenCalled()
+      expect(e.stopPropagation).toHaveBeenCalled()
+      expect(textarea.value).toBe("x")
+      expect(hook.pushEvent).not.toHaveBeenCalled()
+    })
   })
 })

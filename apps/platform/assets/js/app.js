@@ -399,13 +399,13 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
 
   navigator.modelContext.registerTool({
     name: "toggle_thread",
-    description: "Open a thread panel for a specific message by clicking its thread button",
+    description: "Open the inline thread under a specific message by clicking its Reply in thread button",
     input: { type: "object", properties: { messageId: { type: "string", description: "The message ID to open the thread for" } }, required: ["messageId"] },
     async execute({ messageId }) {
       if (typeof messageId !== "string" || !SAFE_ID_RE.test(messageId)) {
         return errorResult("Error: messageId must match [a-z0-9-]{1,36}");
       }
-      const btn = document.querySelector(`[phx-click="open_thread"][phx-value-message-id="${messageId}"]`);
+      const btn = document.querySelector(`[phx-click="open_inline_thread"][phx-value-message-id="${messageId}"]`);
       if (!btn) return errorResult(`Thread button not found for message ${messageId}`);
       btn.click();
       return { content: [{ type: "text", text: `Thread opened for message ${messageId}` }] };

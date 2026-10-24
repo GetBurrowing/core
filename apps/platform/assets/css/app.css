@@ -1664,74 +1664,35 @@ body, .font-suite {
 
 /* ═══ THREAD & REPLY SYSTEM — exact-match to thread-reply-prototype.html ═══ */
 
-/* ── Left-gutter reply button (desktop) ── */
-.msg-reply-gutter {
-  position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
-  width: 28px; height: 28px; border-radius: 50%; border: none;
-  background: #252c3d; color: var(--color-primary); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: all 0.15s ease; z-index: 10;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.08);
-  font-size: 14px;
-}
-.message:hover .msg-reply-gutter,
-.group:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
-.msg-reply-gutter:hover { background: var(--color-primary); color: var(--color-primary-content); transform: translateY(-50%) scale(1.1); }
-[data-theme="light"] .msg-reply-gutter { box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px #E0E0E0; background: #F5F5F5; }
-
-/* Thread indicator (collapsed state) */
+/* Thread chip (collapsed state; redesign rung 9 stage 3, masters
+   `.thread-ind`): '↩ N replies · time' in subtle text, no fill and no
+   avatar. Pressed dims it; the desktop hover lifts it to base-content. */
 .thread-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
+  margin-top: 4px;
+  padding: 4px 0;
+  border: none;
+  background: none;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--color-primary);
-  transition: background 150ms ease;
-  opacity: 0.85;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-subtle);
+  font-variant-numeric: tabular-nums;
 }
-.thread-indicator:hover {
-  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
-  opacity: 1;
+.thread-indicator:active { opacity: 0.7; }
+@media (hover: hover) and (min-width: 1024px) {
+  .thread-indicator:hover { color: var(--color-base-content); }
 }
-.thread-indicator .ti-count { font-weight: 600; }
-.thread-indicator .ti-time { color: #666; }
 
-/* Thread avatar stack */
-.thread-avatars {
-  display: flex;
-  margin-right: 4px;
-}
-.thread-avatars .t-av {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  font-size: 8px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #161b26;
-  margin-left: -6px;
-}
-.thread-avatars .t-av:first-child { margin-left: 0; }
-.thread-avatars .t-av.ai { background: var(--color-primary); color: var(--color-primary-content); }
-.thread-avatars .t-av.human { background: rgba(255,255,255,0.12); color: #B0B0B0; }
-[data-theme="light"] .thread-avatars .t-av { border-color: #FFFFFF; }
-[data-theme="light"] .thread-avatars .t-av.human { background: #D0D0D0; color: #4A4A4A; }
-
-/* Thread replies container */
+/* Thread replies container: indented under the parent with a hairline. */
 .thread-replies {
   margin-top: 8px;
   padding: 8px 0 8px 16px;
-  border-left: 2px solid rgba(255,255,255,0.07);
+  border-left: 1px solid var(--color-edge);
   margin-left: 6px;
 }
 .thread-replies.collapsed { display: none; }
-[data-theme="light"] .thread-replies { border-left-color: #E0E0E0; }
 
 /* Individual thread reply */
 .thread-reply {
@@ -1858,10 +1819,13 @@ body, .font-suite {
   margin: 0;
 }
 .thread-send {
-  width: 30px;
+  min-width: 30px;
   height: 30px;
+  padding: 0 12px;
   margin-bottom: 4px;
-  border-radius: 50%;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 600;
   border: none;
   background: var(--color-primary);
   color: var(--color-primary-content);
@@ -1882,24 +1846,23 @@ body, .font-suite {
   color: var(--color-base-content);
 }
 
-/* Thread collapse button */
+/* The footer 'collapse' (masters `.thread-ind[data-thread=close]`). */
 .thread-collapse {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   margin-top: 6px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  color: #666;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--color-subtle);
   cursor: pointer;
-  transition: color 150ms ease, background 150ms ease;
+  transition: color 150ms ease;
   background: none;
   border: none;
   font-family: inherit;
 }
-.thread-collapse:hover { color: #B0B0B0; background: rgba(255,255,255,0.02); }
-[data-theme="light"] .thread-collapse:hover { background: rgba(0,0,0,0.02); }
+@media (hover: hover) and (min-width: 1024px) {
+  .thread-collapse:hover { color: var(--color-base-content); }
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    IMAGE UPLOAD PANEL & GALLERY — matches reference-image-upload.html
@@ -2076,14 +2039,16 @@ body, .font-suite {
   animation: chat-message-jump-tint 2s ease-out forwards;
 }
 .chat-message-jump:focus { outline: none; }
-/* Focus lands on the ROW after a jump, and the hover action row reveals on
-   `group-focus-within`, which matches the focused row itself. Left alone the
-   strip floats over the author's name on arrival (measured at 375px). Keep
-   it hidden while the row itself holds focus; Tab into the row still
-   reveals it, because focus is then on a descendant, not the row. */
-[data-message-id]:focus:not(:hover) > .message-row-inner .message-action-row {
-  opacity: 0;
-  pointer-events: none;
+/* Focus lands on the ROW after a jump, and on desktop the message pill
+   reveals on focus-within, which matches the focused row itself. Left alone
+   the pill would float over the row on arrival. Keep it hidden while the row
+   itself holds a POINTER-caused focus. A keyboard focus on the row matches
+   `:focus-visible` and keeps the pill, which is what lets Tab go on into
+   it. */
+[data-message-id]:focus:not(:focus-visible):not(:hover):not([data-pill-open])
+  > .message-row-inner
+  > .message-pill {
+  display: none;
 }
 .chat-message-jump:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -2095,13 +2060,12 @@ body, .font-suite {
   .chat-message-jump::after { animation: none; opacity: 0.1; }
 }
 
-/* Secondary labels in the Context panel ("From the agent", "Replying to",
-   the source line): the secondary-text tier, in both themes (task 01a15907
-   stage 5). They were `--color-neutral` in light and, in dark, base-content
-   50% mixed into neutral: an opaque third grey, which the two-level rule
-   (body and subtle) refuses. --color-subtle resolves per theme block and is
-   guarded at 4.5:1 on every ground. */
-.message-context-label { color: var(--color-subtle); }
+/* The agent's name in the 'Answering' panel's lead line ("<agent> was
+   answering:", redesign rung 9 stage 2): the agent's accent text token,
+   resolved by the `data-agent-slot` on the span (rung 3's pointer rules
+   above). Its secondary labels moved to `text-subtle` utilities, so the old
+   `.message-context-label` rule went with them. */
+.message-context-agent-name { color: var(--ag-text); }
 
 /* Canvas picker meta line ("#space · edited Oct 13", task 01a1559a stage 3).
    Secondary text, so it paints the secondary-text token (task 01a15902
@@ -3843,21 +3807,6 @@ body, .font-suite {
   transition: transform 0.1s ease;
 }
 
-/* ── V3 long-press menu (mobile) ─────────────────────────────────────────── */
-
-/* Lifted clone of the target message bubble. Positioned at the original
-   message's rect at mount, animates to the viewport center via CSS
-   transition when the .lifted class is added. See
-   assets/js/hooks/message_lift.js. */
-.message-lift {
-  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
-  will-change: transform;
-}
-
-.message-lift.lifted {
-  transform: translate(var(--lift-dx, 0), var(--lift-dy, 0)) scale(1.02);
-}
-
 /* ── Reaction picker — bottom sheet on mobile, centered modal on desktop ── */
 
 /* Container is always an inset-0 fixed overlay; positioning of the
@@ -4066,8 +4015,7 @@ body, .font-suite {
 
 /* `overscroll-behavior: contain` stops the chat behind an open sheet from
    scrolling on iOS once this area hits its end. The body scroll lock in the
-   hook covers the rest of the surface: message_lift.js's lock is already gone
-   by the time the picker opens, because the longpress menu closes first. */
+   hook covers the rest of the surface. */
 .reaction-picker-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -4458,16 +4406,21 @@ body, .font-suite {
 .reaction-pill { transition: transform 120ms ease, background-color 120ms ease; }
 .reaction-pill:active { transform: scale(0.94); }
 
-@media (hover: none) and (pointer: coarse) {
-  .reaction-pill {
-    padding: 0.25rem 0.625rem;
-    font-size: 0.8125rem;
-    min-height: 32px;
+/* Redesign rung 9 stage 3: the pill is 28px tall everywhere; below lg a
+   transparent pseudo-element grows its hit area to 44px tall, and the row's
+   4px gap keeps neighbours apart. The hover fill is desktop only. */
+@media (width < 64rem) {
+  .reaction-pill::after {
+    content: "";
+    position: absolute;
+    top: -8px;
+    bottom: -8px;
+    left: -2px;
+    right: -2px;
   }
-  .reaction-add-btn {
-    min-height: 32px;
-    padding: 0.25rem 0.625rem;
-  }
+}
+@media (hover: hover) and (min-width: 1024px) {
+  .reaction-pill:not([data-mine]):hover { background-color: var(--color-base-300); }
 }
 
 /* THE HOVER HEIGHT REVEAL IS GONE (task 01a000c0 stage 4).
@@ -4489,11 +4442,9 @@ body, .font-suite {
        there is no empty box left to collapse or expand. `data-empty` went
        with it.
 
-   The `.reaction-add-btn` opacity rules that shared this block went too:
-   stage 3 deleted the element that carried the class. The coarse-pointer
-   block above still sizes `.reaction-add-btn` — left deliberately untouched
-   under this task's instructions; it is inert until something re-introduces
-   that class. */
+   The add-reaction button's rules that shared this block went too: stage 3
+   deleted the element that carried the class, and redesign rung 9 stage 4
+   swept its last coarse-pointer sizing rule. */
 
 /* ── Grouped continuation rows ────────────────────────────────────────
    Applied by ScrollToBottom.applyGrouping() to every message whose author
@@ -4523,217 +4474,99 @@ body, .font-suite {
    In a real conversation that is most messages, and it directly contradicts
    the requirement stage 3 was built to satisfy.
 
-   Verified by pressing Tab rather than by reading this file: before the
-   change, 60 Shift+Tab presses walking back from the compose box reached
-   only the left-gutter reply button on grouped rows and never once landed
-   on "Add reaction" inside one.
-
-   So hide the repeated TEXT and keep the action row. */
-.message-row--grouped .message-header > :not(.message-action-row) {
+   The action row has since gone (redesign rung 9: its controls are the
+   message pill, which sits outside the header). What the header holds now
+   is the author's name and the time, and nothing else may go in it:
+   anything a continuation row must still show or reach lives OUTSIDE the
+   header. The '(edited)' affix ([data-role="message-edited"], the only way
+   into version history) once sat in the header and was hidden on every
+   continuation row by this rule; it now follows the message text. */
+.message-row--grouped .message-header > * {
   display: none;
 }
 
-/* With every in-flow child gone the header is a zero-height flex box sitting
-   exactly where the message body starts — which makes it the right anchor
-   for the action row below, and a better one than the row: the row box also
-   contains the day separator, so anything positioned against it lands in the
-   wrong place on the first message of a day.
+/* ── Message tap pill (redesign rung 9, task 01a1557a-9406) ─────────────
+   The 4-glyph pill (`[data-role="message-pill"]`, chat_message.ex) is the
+   one place a message's quick actions live. It replaced the desktop hover
+   row, the left-gutter reply and the dead long-press lift pill.
 
-   This used to be scoped to `.message-row--grouped .message-header`, but the
-   action row is an ORDINARY IN-FLOW flex child on every row, grouped or not
-   — its base classes (`opacity-0 pointer-events-none`) carry no `hover:`/
-   `pointer:` gate, so it is present with `display:flex` and reserves its
-   full min-content width (measured 324px for 7 buttons) on every render, on
-   every device. On an ungrouped (first-of-run) row that pushes the
-   flex-shrinkable, unwrapped sender-name span below its own content width
-   at narrow viewports (315px available at 375px), wrapping the name onto two
-   lines at rest, unhovered — confirmed with `(hover: hover)` and
-   `(pointer: fine)` both true, so this is not a touch-only bug. Taking the
-   row out of flow unconditionally is the same fix the grouped case already
-   used, generalized to every row so it can never reserve header width. */
-.message-header {
-  position: relative;
+   Phone: hidden until the MessageGestures hook sets `data-pill-open` on the
+   row, which it does inside the tap's own pointerup handler. Desktop: the
+   same pill also shows on hover and while the row holds focus, gated on a
+   real cursor at lg so a latched `:hover` after a tap never opens it. The
+   band behind an open pill is the raised surface (base-300), as the
+   masters draw it. Child combinators throughout, so nothing here reaches a
+   row nested inside another. */
+.message-pill {
+  display: none;
 }
 
-/* The action row then has to leave the flow. Left in it, the header would
-   stop being zero-height and every continuation row would grow by the
-   height of a button — reintroducing on every row exactly the reflow this
-   ticket removed from the hover state. Floating a hover affordance over the
-   row is the pattern `.msg-reply-gutter` already uses further up this file,
-   for the same reason.
-
-   It stays `opacity: 0` until hover or focus-within (Tailwind classes, in
-   chat_message.ex), so a row is visually untouched at rest and still
-   measures its no-action-row width — for a grouped row that's the 31px it
-   measured before; for an ungrouped row this now also keeps the action row
-   from ever reserving width against the sender name.
-
-   `right: 0` against the header lands it at the same x it occupies on a
-   run-opening row, and `top` pins it to the FIRST line of the body rather
-   than the row's centre. Centring looked right on a one-line row and cut the
-   text of a wrapped one in half lengthwise — the strip sat across the middle
-   of the glyphs with their ascenders poking out above it.
-
-   The backing is not decoration: revealed, these buttons sit ON TOP of the
-   message text (on an ungrouped row, on top of the name/timestamp baseline),
-   and `--color-base-100` is the pane's own surface in both themes, so it
-   occludes what's underneath instead of tinting it. */
-.message-action-row {
-  position: absolute;
-  right: 0;
-  top: -0.125rem;
-  z-index: 10;
-  background-color: var(--color-base-100);
-  border-radius: 0.5rem;
-  padding-inline: 0.25rem;
+[data-pill-open] > .message-row-inner > .message-pill {
+  display: flex;
 }
 
-/* ── No hover strip on a touch screen (task 01a0d8de stage 5) ──────────
-   The strip reveals on hover and on focus-within. Tailwind already gates
-   the hover variant on `(hover: hover)`; the focus-within variant has no
-   such gate, so on a phone any TAP that focuses something in the row
-   revealed the strip. A tap on the header "Context" button focuses it on
-   mousedown, the 354px-wide strip appears over the header, the mouseup
-   lands on the strip's overflow button, and the click resolves to their
-   common ancestor: the sheet never opened (measured at 375px, 2 of 2
-   taps). The double-tap actions sheet is the touch path to everything in
-   the strip, so on `hover: none` the strip stays hidden and inert.
-
-   Keyboard focus is the one exception, because a phone or tablet with a
-   hardware keyboard has no other way to reach these buttons. A pointer
-   focus does not match `:focus-visible`, a Tab does, so focus INSIDE the
-   strip still reveals it. Focus on the Context trigger (or anywhere else
-   in the row outside the strip) does not. */
-@media (hover: none) {
-  .message-action-row {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .message-action-row:has(:focus-visible) {
-    opacity: 1;
-    pointer-events: auto;
-  }
+[data-pill-open] > .message-row-inner {
+  background-color: var(--color-base-300);
+  border-radius: var(--radius-box);
 }
 
-/* The Context trigger is 10px text, a 15px-tall box. Below lg it gets a
-   transparent `::after` that grows the HIT area to 45px tall and 8px wider
-   without moving anything in layout: a pseudo-element hit-tests as its
-   originating element, so a tap on it is a tap on the button. More of the
-   growth goes down, into this message's own first line, than up, into the
-   message above. */
-.message-context-trigger {
-  position: relative;
+.message-pill-copy-check {
+  display: none;
 }
 
+/* The buttons are 28px circles; below lg the hit area grows to 44px tall
+   through a transparent pseudo-element, which hit-tests as its button.
+   Horizontally each one stops at half the gap, so neighbours never overlap
+   and a tap can only land on one. */
 @media (width < 64rem) {
-  .message-context-trigger::after {
+  .message-pill-btn::after {
     content: "";
     position: absolute;
-    top: -12px;
-    bottom: -18px;
-    left: -4px;
-    right: -4px;
+    top: -8px;
+    bottom: -8px;
+    left: -1px;
+    right: -1px;
+  }
+
+  /* The hook owns press-and-hold on a message, so the native selection
+     menu must not compete for it (the reason long-press was once dropped).
+     Copy in the pill and the actions sheet replaces native selection on a
+     phone. Fields inside a message (the inline thread reply) stay
+     selectable. */
+  [phx-hook="MessageGestures"] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  [phx-hook="MessageGestures"] :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
   }
 }
 
-/* ── Hover feedback on the individual action buttons ──────────────────
-   The sponsor filed "the emoji buttons don't work on desktop", then
-   retracted it to "maybe it does work". The buttons were live the whole
-   time; the hover state was simply too faint to prove it, so a working
-   control read as a dead one. That is a real defect — an affordance that
-   does not answer the cursor — and this block is the fix.
-
-   WHY `hover:bg-base-300` (the Tailwind class still on every button in
-   chat_message.ex) was not enough, measured rather than eyeballed. The
-   strip's own backing is `--color-base-100`, so the hover fill is read
-   against THAT, not against the page:
-
-     light   base-100 #FFFFFF vs base-300 oklch(88%)  ->  1.36:1   (pre-Burrow)
-     dark    base-100 (pre-Burrow) vs base-300 oklch(20%)  ->  1.09:1
-     light   base-100 #fbfaf9 vs base-300 #efebe7  ->  1.1376:1   (Burrow)
-     dark    base-100 #191b20 vs base-300 #25272b  ->  1.1516:1   (Burrow)
-
-   1.09:1 is not a subtle hover, it is no hover: in dark the fill lands
-   within a percent of the surface it sits on, because base-300 is defined
-   as the RAISED surface for a base-200 sidebar and was never a step away
-   from the base-100 chat pane. Confirmed on screen before touching this
-   file — a hovered button in dark is indistinguishable from an unhovered
-   one.
-
-   It bites the four quick-react emoji hardest, which is exactly where the
-   report came from. The icon buttons in the row rest at the `text-subtle`
-   token and, all but one, brighten to `hover:text-base-content`, so they
-   have a second, working signal. The exception is the open-thread-in-panel
-   button, whose hover class is also `text-subtle`: it gets no colour change,
-   so for it the fill and scale below are the only hover feedback. An emoji
-   is a colour glyph that ignores `color` entirely, so for the four
-   quick-react buttons the invisible fill was the ONLY feedback there was.
-
-   So: two signals, neither depending on a lightness step that a theme can
-   flatten.
-
-     scale   1.2. Sized off the gap, not chosen by eye. The row is `gap-1`
-             (4px) and the widest button is a quick-react emoji at 30px
-             (the icon buttons are 28px), so 1.2 grows the worst case by
-             3px per side: it expands INTO the gap and stops 1px short of
-             the neighbour's box, which is what keeps it from stealing a
-             neighbour's clickable edge. 1.3 would grow that same button
-             4.5px per side and overrun the 4px gap. Growth is
-             centre-origin, so the pointer can never end up outside the
-             element it just grew, which would oscillate.
-
-     fill    `--color-base-content` at 18%, composited over the strip.
-             Derived from a token instead of naming a surface, so it steps
-             AWAY from the backing in both themes by construction: it
-             darkens on light, lightens on dark, and cannot silently
-             collapse the way a fixed base-300 did. Measures 1.69:1 light
-             and 1.94:1 dark — both well clear of the 1.09:1 that started
-             this, and the scale is carrying the rest.
-
-   `transform` on the BUTTONS only, never on `.message-action-row`. The row
-   is `position: absolute` (see above) to stop it reserving header width
-   and wrapping the sender name at phone widths, #759, and a transform on
-   it — or on any ancestor — would make it the containing block for its own
-   `position: absolute` and undo that. Transform also creates a stacking
-   context; on a leaf button that is harmless, which is the other reason it
-   goes here and not one level up.
-
-   No layout property is touched: `transform` paints, it does not reflow,
-   so the resting geometry `chat_message_density.spec.ts` pins (63px opener
-   / 31px continuation, sender name one line box at 320/375/414) is
-   measured on an unhovered row and is untouched by every rule in here.
-
-   120ms ease matches `.reaction-pill` a few hundred lines up, which
-   already scales on `:active` — same gesture vocabulary, one timing.
-
-   Gated on a real cursor. `:hover` latches after a tap on a touchscreen,
-   and a button left magnified after the finger lifts reads as stuck. Touch
-   keeps precisely today's behaviour; this is a desktop pointer fix. */
-@media (hover: hover) and (pointer: fine) {
-  .message-action-row > button {
-    transition:
-      transform 120ms ease,
-      background-color 120ms ease,
-      color 120ms ease;
+@media (hover: hover) and (min-width: 1024px) {
+  [data-message-id]:hover > .message-row-inner > .message-pill,
+  [data-message-id]:focus-within > .message-row-inner > .message-pill {
+    display: flex;
   }
 
-  .message-action-row > button:hover {
-    transform: scale(1.2);
-    background-color: color-mix(in oklch, var(--color-base-content) 18%, transparent);
+  [data-message-id]:hover > .message-row-inner {
+    background-color: var(--color-base-300);
+    border-radius: var(--radius-box);
   }
 
-  /* The magnify is decoration on top of a colour change that already says
-     "hovered", so honouring a reduced-motion preference costs nothing that
-     matters: drop the movement, keep the fill. */
-  @media (prefers-reduced-motion: reduce) {
-    .message-action-row > button {
-      transition: background-color 120ms ease, color 120ms ease;
-    }
+  .message-pill-btn:hover {
+    background-color: var(--color-base-100);
+  }
 
-    .message-action-row > button:hover {
-      transform: none;
-    }
+  /* Copy confirms with a check for 1.5s (the hook sets `data-copy-check`). */
+  .message-pill-btn[data-copy-check] .message-pill-copy-glyph {
+    display: none;
+  }
+
+  .message-pill-btn[data-copy-check] .message-pill-copy-check {
+    display: inline-block;
   }
 }
 
@@ -4863,125 +4696,6 @@ body, .font-suite {
   --run-radius-bottom: 0;
   margin-block-end: 0;
 }
-
-/* Scrim with backdrop blur. Fallback: solid semi-transparent background
-   for browsers without backdrop-filter support (older Mobile Safari). */
-.longpress-scrim {
-  background: rgba(10, 10, 10, 0.55);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
-  animation: longpress-scrim-in 220ms ease-out both;
-}
-
-@keyframes longpress-scrim-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Emoji quick-react pill — sits above the lifted message clone.
-   --clone-half-h is set by MessageLift JS to (rect.height * 1.02) / 2.
-   translate(-50%, -100%) anchors the pill's bottom edge at the top-anchor.
-   The max() floor on top is a safety net: even if --clone-half-h is large
-   (or set incorrectly), the pill never computes above the safe-area inset
-   plus a 60px margin. The MessageLift JS hook also collapses --clone-half-h
-   to 0 in tall-message mode and the [data-tall-message] override below
-   pins the pill to the bottom edge. */
-.longpress-pill {
-  position: fixed;
-  left: 50%;
-  top: max(
-    calc(env(safe-area-inset-top, 0px) + 60px),
-    calc(50% - var(--clone-half-h, 40px) - 12px)
-  );
-  transform: translate(-50%, -100%);
-  z-index: 70;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 6px;
-  border-radius: 9999px;
-  background: var(--color-base-100, #fff);
-  box-shadow:
-    0 12px 28px -6px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(0, 0, 0, 0.04);
-  animation: longpress-pill-in 240ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  transform-origin: bottom center;
-}
-
-/* Tall-message mode: when MessageLift detects a target message > 60% of
-   viewport height, it sets data-tall-message on the overlay root. Pin the
-   pill to the bottom edge with safe-area-inset-bottom padding so the user
-   can always reach it with their thumb, regardless of message length. */
-#longpress-menu[data-tall-message="true"] .longpress-pill {
-  top: auto;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
-  transform: translate(-50%, 0);
-  transform-origin: bottom center;
-}
-
-#longpress-menu[data-tall-message="true"] .longpress-pill {
-  /* Adjusted entry animation: slide up from below instead of dropping in
-     from above, since the pill now lives at the bottom edge. */
-  animation: longpress-pill-in-bottom 240ms cubic-bezier(0.34, 1.56, 0.64, 1)
-    both;
-}
-
-@keyframes longpress-pill-in-bottom {
-  from {
-    opacity: 0;
-    transform: translate(-50%, 0) scale(0.88) translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(1) translateY(0);
-  }
-}
-
-/* Tall-message mode also skips the lift translate + scale on the message
-   clone — there's no meaningful "center" to lift an oversized message
-   toward, so we just let it sit dimmed in place. */
-#longpress-menu[data-tall-message="true"] .message-lift.lifted {
-  transform: none;
-}
-
-@keyframes longpress-pill-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -100%) scale(0.88) translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -100%) scale(1) translateY(0);
-  }
-}
-
-.longpress-pill-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 9999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  transition: transform 120ms ease;
-}
-
-.longpress-pill-btn:active {
-  transform: scale(0.9);
-}
-
-.longpress-pill-more {
-  background: var(--color-base-200, #f3f4f6);
-  color: var(--color-base-content, #18181b);
-}
-
-.longpress-pill-divider {
-  width: 1px;
-  height: 24px;
-  background: var(--color-base-300, #e5e7eb);
-  margin: 0 2px;
-}
-
 
 /* Reactor popover — desktop-only hover affordance on reaction pills.
    Rendered as a portal to document.body by the ReactorPopover hook so

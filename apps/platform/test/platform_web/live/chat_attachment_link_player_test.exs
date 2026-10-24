@@ -214,8 +214,7 @@ defmodule PlatformWeb.ChatAttachmentLinkPlayerTest do
 
       render_hook(view, "save_edit", %{
         "message_id" => msg.id,
-        "body" => "take a look\n/chat/attachments/#{ctx.clip.id}",
-        "removes_content" => "false"
+        "body" => "take a look\n/chat/attachments/#{ctx.clip.id}"
       })
 
       assert_one_player_stripped(view, msg, ctx.clip)

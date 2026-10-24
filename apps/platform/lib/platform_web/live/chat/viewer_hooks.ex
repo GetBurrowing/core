@@ -6,8 +6,7 @@ defmodule PlatformWeb.ChatLive.ViewerHooks do
   The client names WHAT to open, never a URL: a message id plus either an
   attachment id or a link-card index. The item is resolved here from what
   this viewer may already read: the message's attachments in
-  `:attachments_map` / `:thread_attachments_map` (already authorized, linked
-  attachments included), or the message's link cards resolved for this
+  `:attachments_map` (already authorized, linked attachments included), or the message's link cards resolved for this
   viewer by `Platform.Chat.LinkCards` (canvas and prototype access checked
   per viewer). A prototype is re-checked with `Platform.Prototypes.readable_by?/2`
   before its frame is served. A locked card opens nothing.
@@ -119,8 +118,7 @@ defmodule PlatformWeb.ChatLive.ViewerHooks do
   # ── Resolution ───────────────────────────────────────────────────────
 
   defp message_attachments(socket, mid) do
-    Map.get(socket.assigns[:attachments_map] || %{}, mid) ||
-      Map.get(socket.assigns[:thread_attachments_map] || %{}, mid) || []
+    Map.get(socket.assigns[:attachments_map] || %{}, mid) || []
   end
 
   # The link cards this viewer sees on `mid`, resolved now (the stream item's

@@ -479,9 +479,9 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   attr(:threads, :list, required: true)
 
-  # A row fires `space_sheet_open_thread`, not `open_thread`: that one is
-  # `toggle_inline_thread` and collapses a thread that is already open, and it
-  # never scrolls. `SpaceSheetHooks` scrolls to the parent (or anchors the
+  # A row fires `space_sheet_open_thread`, not `open_inline_thread`: that one
+  # opens in place and never scrolls (and `toggle_inline_thread` would
+  # collapse a thread that is already open). `SpaceSheetHooks` scrolls to the parent (or anchors the
   # window on it when it is not loaded) and expands the thread if it is shut.
   defp threads_page(assigns) do
     ~H"""

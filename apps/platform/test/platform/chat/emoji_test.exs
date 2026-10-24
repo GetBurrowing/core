@@ -44,8 +44,8 @@ defmodule Platform.Chat.EmojiTest do
       assert defaults == Emoji.quick_defaults(), "must be a constant, not computed per call"
     end
 
-    test "is byte-identical to the six quick-react emoji already in production" do
-      # The longpress overlay's literal at the time this module was introduced.
+    test "is the masters' six, in order, byte for byte" do
+      # The designer's masters set (redesign rung 9): 👍 🔥 ❤️ 😂 👀 ✅.
       # Frozen here as escapes, not as glyphs: `\u{2764}\u{FE0F}` and a bare
       # `\u{2764}` look identical in an editor and are different strings to
       # `Chat.list_reactions_grouped/1`, which groups by exact match. Getting
@@ -53,12 +53,26 @@ defmodule Platform.Chat.EmojiTest do
       # no migration can repair it after the fact.
       assert Emoji.quick_defaults() == [
                "\u{1F44D}",
-               "\u{1F389}",
-               "\u{2705}",
+               "\u{1F525}",
                "\u{2764}\u{FE0F}",
                "\u{1F602}",
-               "\u{1F64F}"
+               "\u{1F440}",
+               "\u{2705}"
              ]
+    end
+
+    test "the heart carries U+FE0F and no bare heart is offered" do
+      heart = Enum.at(Emoji.quick_defaults(), 2)
+      assert String.to_charlist(heart) == [0x2764, 0xFE0F]
+      refute "\u{2764}" in Emoji.quick_defaults()
+    end
+
+    test "every quick default has a spoken name" do
+      for emoji <- Emoji.quick_defaults() do
+        refute Emoji.quick_name(emoji) == emoji, "#{emoji} has no quick_name"
+      end
+
+      assert Emoji.quick_name("\u{1F44D}") == "thumbs up"
     end
 
     test "every default carries the variation selector it needs, and is accepted by the guard" do

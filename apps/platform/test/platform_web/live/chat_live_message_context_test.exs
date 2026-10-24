@@ -117,9 +117,17 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
     view
   end
 
+  # The header "Context" button is gone (redesign rung 9): the panel opens
+  # from the message-actions sheet, which the pill's More button opens.
   defp open_context(view, msg) do
     view
-    |> element(~s([data-role="message-context-trigger"][data-context-message-id="#{msg.id}"]))
+    |> element(
+      ~s([data-message-id="#{msg.id}"] [data-role="message-pill"] button[aria-label="More actions"])
+    )
+    |> render_click()
+
+    view
+    |> element(~s(#message-actions-sheet [data-role="message-actions-context"]))
     |> render_click()
   end
 
@@ -183,8 +191,26 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
       text = text_of(html, "#message-context-popover [data-role=\"message-context-agent-text\"]")
       assert text =~ "<script>window.__ctx_pwned = 1</script> sentinel-context-line"
 
-      assert text_of(html, "#message-context-popover") =~ "What this message is answering"
-      assert text_of(html, "#message-context-popover") =~ "From the agent"
+      # The re-skinned panel (redesign rung 9 stage 2): titled 'Answering',
+      # led by "<agent> was answering:" with the name in the agent's accent,
+      # the context labelled 'agent context', and the full text with no
+      # "Show more" clamp.
+      assert text_of(html, "#message-context-popover-title") =~ "Answering"
+      refute text_of(html, "#message-context-popover") =~ "What this message is answering"
+
+      assert text_of(html, ~s(#message-context-popover [data-role="message-context-lead"])) =~
+               ~r/#{agent.display_name}\s+was answering:/
+
+      assert has_element?(
+               view,
+               ~s(#message-context-popover [data-role="message-context-agent-name"].message-context-agent-name[data-agent-slot])
+             )
+
+      assert text_of(html, "#message-context-popover") =~ "agent context"
+      refute html =~ "Show more"
+      refute html =~ "line-clamp-2\" id=\"message-context"
+      assert text_of(html, "#message-context-popover") =~ "Jump to message"
+      assert text_of(html, "#message-context-popover") =~ "Retry summary"
 
       # The answered message's author and preview, and the jump control.
       assert text_of(
@@ -363,15 +389,10 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
 
       view = open_chat(conn, space)
 
-      # No header marker on a no-context message; the hover row has the entry.
-      refute has_element?(
-               view,
-               ~s([data-role="message-context-trigger"][data-context-message-id="#{r.id}"])
-             )
+      # No header marker on any message; the actions sheet has the entry.
+      refute has_element?(view, ~s([data-context-message-id="#{r.id}"]))
 
-      view
-      |> element(~s([data-message-id="#{r.id}"] [data-role="message-context-summarise"]))
-      |> render_click()
+      open_context(view, r)
 
       assert_receive {:context_summary_stub_called, _creds, _messages, _opts}, 2_000
 
@@ -423,7 +444,10 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
 
       assert_receive {:context_summary_stub_called, _, _, _}, 2_000
       html = eventually_render(view, &(&1 =~ "Second try worked."))
-      refute html =~ ~s(data-role="message-context-retry")
+      refute html =~ ~s(data-role="message-context-summary-error")
+      # 'Retry summary' is one of the panel's two standing buttons (the
+      # masters' 'Answering' stub), so it is offered again after a success.
+      assert has_element?(view, ~s(#message-context-popover [data-role="message-context-retry"]))
     end
 
     test "with no provider configured, it says summaries are unavailable", %{
@@ -447,10 +471,9 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
       h = post_msg(space, asker, "a human line")
       view = open_chat(conn, space)
 
-      refute has_element?(
-               view,
-               ~s([data-message-id="#{h.id}"] [data-role="message-context-summarise"])
-             )
+      render_click(view, "open_message_actions", %{"id" => h.id})
+      refute has_element?(view, ~s(#message-actions-sheet [data-role="message-actions-context"]))
+      render_click(view, "close_message_actions", %{})
 
       render_click(view, "summarise_message_context", %{"message-id" => h.id})
       refute has_element?(view, "#message-context-popover")
@@ -472,6 +495,10 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
 
       html = open_context(view, a)
       assert has_element?(view, "#message-context-sheet")
+      # Swipe-dismissable, with the handle Close button and a visible title.
+      assert has_element?(view, ~s(#message-context-sheet[data-swipe-dismiss="true"]))
+      assert has_element?(view, "#message-context-sheet .sheet-handle-button")
+      assert text_of(html, ~s(#message-context-sheet p[aria-hidden="true"])) =~ "Answering"
       refute has_element?(view, "#message-context-popover")
 
       assert text_of(html, ~s(#message-context-sheet [data-role="message-context-agent-text"])) =~
@@ -497,10 +524,23 @@ defmodule PlatformWeb.ChatLiveMessageContextTest do
       render_click(view, "close_message_actions", %{})
 
       render_click(view, "open_message_actions", %{"id" => a.id})
-      assert has_element?(view, ~s([data-role="message-actions-context"]))
+      # One row in each frame of the one assign: the phone sheet and the
+      # desktop popover.
+      assert has_element?(view, ~s(#message-actions-sheet [data-role="message-actions-context"]))
 
-      view |> element(~s([data-role="message-actions-context"])) |> render_click()
+      assert has_element?(
+               view,
+               ~s(#message-actions-popover [data-role="message-actions-context"])
+             )
+
+      view
+      |> element(~s(#message-actions-sheet [data-role="message-actions-context"]))
+      |> render_click()
+
+      # Exactly one sheet open: the actions surface closed (both frames)
+      # before the context panel opened.
       refute has_element?(view, "#message-actions-sheet")
+      refute has_element?(view, "#message-actions-popover")
 
       assert render(view)
              |> text_of(~s(#message-context-popover [data-role="message-context-agent-text"])) =~

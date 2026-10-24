@@ -29,27 +29,42 @@ defmodule Platform.Chat.Emoji do
   # Deferring costs nothing else, because every quick-react row in the product
   # reads from this one function.
   #
-  # These six are the set already live in the longpress overlay, byte for byte.
-  # `\u{2764}\u{FE0F}` in particular carries its variation selector: reactions
-  # are grouped by exact string match (`Chat.list_reactions_grouped/1` uses
+  # The designer's masters set (redesign rung 9, masters canvas 01a1382f node
+  # `proto`: 👍 🔥 ❤️ 😂 👀 ✅, in that order). It replaced the old overlay's
+  # 👍 🎉 ✅ ❤️ 😂 🙏. Reactions already stored with 🎉 or 🙏 are untouched:
+  # this list only decides what the one-tap strip offers.
+  #
+  # `\u{2764}\u{FE0F}` carries its variation selector: reactions are grouped
+  # by exact string match (`Chat.list_reactions_grouped/1` uses
   # `Enum.group_by(& &1.emoji)`), so emitting a bare `\u{2764}` here would split
   # every heart reaction in the product into a second pill, and no migration
   # repairs that.
   @quick_defaults [
     "\u{1F44D}",
-    "\u{1F389}",
-    "\u{2705}",
+    "\u{1F525}",
     "\u{2764}\u{FE0F}",
     "\u{1F602}",
-    "\u{1F64F}"
+    "\u{1F440}",
+    "\u{2705}"
   ]
+
+  # The accessible names the strip reads out ("React with <name>"), CLDR
+  # short names. Keyed by the exact strings above.
+  @quick_names %{
+    "\u{1F44D}" => "thumbs up",
+    "\u{1F525}" => "fire",
+    "\u{2764}\u{FE0F}" => "red heart",
+    "\u{1F602}" => "face with tears of joy",
+    "\u{1F440}" => "eyes",
+    "\u{2705}" => "check mark button"
+  }
 
   @doc """
   The quick-react emoji offered without opening the full picker, in display
   order.
 
-  Single source of truth: the longpress overlay and the message hover row both
-  read this rather than carrying their own literal.
+  Single source of truth: the message-actions sheet and the message pill's
+  thumbs-up both read this rather than carrying their own literal.
 
       iex> Platform.Chat.Emoji.quick_defaults() |> length()
       6
@@ -57,4 +72,15 @@ defmodule Platform.Chat.Emoji do
   """
   @spec quick_defaults() :: [String.t()]
   def quick_defaults, do: @quick_defaults
+
+  @doc """
+  The accessible name of a quick-react emoji, for its "React with <name>"
+  label. Anything outside `quick_defaults/0` falls back to the emoji itself.
+
+      iex> Platform.Chat.Emoji.quick_name("\u{1F525}")
+      "fire"
+
+  """
+  @spec quick_name(String.t()) :: String.t()
+  def quick_name(emoji), do: Map.get(@quick_names, emoji, emoji)
 end
