@@ -2,8 +2,10 @@
 // release host's generated `@extensions` entry spreads this map into core's
 // hooks, so core's js/hooks/index.js never imports Social. Each key is the
 // `phx-hook` name Social renders: the cover picker, and the Clips tab's
-// Review bay (Clip Studio 3/9, task 01a16662-8c00 stage 4).
+// Review bay (Clip Studio 3/9, task 01a16662-8c00 stage 4), and the
+// Calendar's browser time zone (Social authoring 8/11).
 import CoverPicker from "./hooks/cover_picker.js"
 import ClipReview from "./hooks/clip_review.js"
+import SocialCalendarZone from "./hooks/social_calendar_zone.js"
 
-export default { CoverPicker, ClipReview }
+export default { CoverPicker, ClipReview, SocialCalendarZone }

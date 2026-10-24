@@ -87,11 +87,13 @@ defmodule PlatformWeb.SocialAcceptanceTest do
 
   defp fp(card, user), do: Approvals.card_view(card.id, {:user, user.id}).fingerprint
 
-  # Every DOM id a profile's posts and accounts can own on this page.
+  # Every DOM id a profile's posts and accounts can own on this page. The
+  # calendar's rows are hours since Social authoring 8/11, so its leak check
+  # is the scheduled posts' `data-post-id` (grid and agenda both carry it).
   defp ids_of(%{queued: queued, scheduled: scheduled, accounts: accounts}) do
     Enum.map(queued, &"#queue-#{&1.id}") ++
       Enum.map(scheduled, &"[data-post-id='#{&1.id}']") ++
-      Enum.flat_map(accounts, &["#accounts-#{&1.id}", "#calendar_rows-#{&1.id}"])
+      Enum.map(accounts, &"#accounts-#{&1.id}")
   end
 
   describe "1. switching HTC <-> Legacy changes accounts, queue and calendar with no leak" do

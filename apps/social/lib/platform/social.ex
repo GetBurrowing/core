@@ -1525,7 +1525,9 @@ defmodule Platform.Social do
   for a post published or failed at approval with no schedule; the schema
   has no published-at column), `:profile_ids` (posts on any of those
   profiles' accounts), `:updated_from` (last written at or after a
-  `DateTime`), and `refused: true` (task 01a165f1:
+  `DateTime`), `:calendar_from` + `:calendar_to` (Social authoring 8/11:
+  a half-open range on the placement with `published_at` first for a
+  published post), and `refused: true` (task 01a165f1:
   `approved` posts with a `refused_reason`). Rows carry `status`, `error`,
   `rejection_reason`, `rejected_at` and the refusal fields.
   """
@@ -1607,6 +1609,40 @@ defmodule Platform.Social do
       case filters[:updated_from] do
         %DateTime{} = from -> where(q, [po], po.updated_at >= ^from)
         nil -> q
+      end
+    end)
+    |> then(fn q ->
+      # Social authoring 8/11's calendar: `[from, to)` on the placement that
+      # also reads `published_at`: a published post sits where it went out
+      # (`published_at`, else `scheduled_at`, else `approved_at`); any other
+      # post where `:placed_from` puts it (`scheduled_at`, else `approved_at`).
+      case {filters[:calendar_from], filters[:calendar_to]} do
+        {%DateTime{} = from, %DateTime{} = to} ->
+          where(
+            q,
+            [po],
+            fragment(
+              "CASE WHEN ? = 'published' THEN coalesce(?, ?, ?) ELSE coalesce(?, ?) END",
+              po.status,
+              po.published_at,
+              po.scheduled_at,
+              po.approved_at,
+              po.scheduled_at,
+              po.approved_at
+            ) >= ^from and
+              fragment(
+                "CASE WHEN ? = 'published' THEN coalesce(?, ?, ?) ELSE coalesce(?, ?) END",
+                po.status,
+                po.published_at,
+                po.scheduled_at,
+                po.approved_at,
+                po.scheduled_at,
+                po.approved_at
+              ) < ^to
+          )
+
+        _ ->
+          q
       end
     end)
     |> then(fn q ->
