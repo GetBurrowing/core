@@ -566,9 +566,15 @@ defmodule PlatformWeb.Components.IconRail do
 
   @doc """
   The mobile More sheet's module rows, for an actor (task 01a1557a-807f
-  stage 2): the destinations for `more_sheet_order/0`, in that order, then
-  every `Platform.Extensions.rail_items/0` item the actor may see, in
-  rail_items order, after Changelog.
+  stage 2): the destinations for `more_sheet_order/0`, in that order, with
+  every `Platform.Extensions.rail_items/0` item the actor may see placed
+  right after Inbox, in rail_items order.
+
+  Extension rows lead the long tail rather than trailing it. The list is
+  taller than the sheet on a phone browser (at 390x664, Safari's visible
+  viewport on a 390x844 phone, the last rows sit below the fold), and
+  a module appended after Changelog was the row nobody scrolled to: Social
+  read as missing on mobile. Inbox stays first.
 
   Every row goes through the same `rail_filter/2` and `enabled?/1` as the
   rails (via `destinations/1`), so a module the actor may not open, or one
@@ -582,8 +588,12 @@ defmodule PlatformWeb.Components.IconRail do
     by_key = Map.new(visible, &{&1.key, &1})
     extension_keys = Enum.map(Platform.Extensions.rail_items(), & &1.key)
 
-    Enum.flat_map(@more_sheet_order, &List.wrap(Map.get(by_key, &1))) ++
-      Enum.filter(visible, &(&1.key in extension_keys))
+    {inbox, rest} =
+      @more_sheet_order
+      |> Enum.flat_map(&List.wrap(Map.get(by_key, &1)))
+      |> Enum.split_while(&(&1.key == :inbox))
+
+    inbox ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
   end
 
   @doc """

@@ -8,8 +8,9 @@ defmodule PlatformWeb.Components.MoreSheet do
   ## Rows (task 01a1557a-807f stage 2)
 
   One list, no headings (Saru: it is a list), from
-  `IconRail.more_sheet_rows/2`: Inbox, Email, Files, Skills, Org memory,
-  Agents, Experiments, Changelog, then every extension row the actor may see.
+  `IconRail.more_sheet_rows/2`: Inbox, then every extension row the actor
+  may see (Social), then Email, Files, Skills, Org memory, Agents,
+  Experiments, Changelog.
   Canvases opens the Files browser filtered to canvases
   (`/files?tab=browse&type=canvas`, rung 16). Games holds a place in
   `IconRail.more_sheet_order/0` and renders nothing until rung 21 adds a

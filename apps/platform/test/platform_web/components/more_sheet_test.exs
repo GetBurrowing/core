@@ -18,7 +18,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
   The More sheet's rows, order, copy and states (task 01a1557a-807f stage 2).
 
   One ordered list (`IconRail.more_sheet_order/0`) of module rows, extension
-  rows after Changelog, no headings, and Settings pinned in the footer. Paint
+  rows right after Inbox, no headings, and Settings pinned in the footer. Paint
   is stage 3 and dismissal stage 4; neither is asserted here.
 
   async: false — flips `:mail_enabled` and `:extensions`.
@@ -98,7 +98,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{root_user: true})
 
       assert row_keys(html) ==
-               ~w(inbox email files canvases skills context agents experiments changelog fixture)
+               ~w(inbox fixture email files canvases skills context agents experiments changelog)
 
       footer = html |> doc() |> LazyHTML.query(".sheet-actions [data-destination=settings]")
       assert Enum.count(footer) == 1
