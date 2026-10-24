@@ -92,6 +92,11 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
                         {[], ".more-sheet-check"},
                         {[], ".more-sheet .sheet-actions"},
                         {[], ".more-sheet .sheet-handle"},
+                        # Fit and scroll cue: the body's padding, the sticky
+                        # cue and the opaque last row that covers it.
+                        {[], ".more-sheet .sheet-body"},
+                        {[], ".more-sheet-cue"},
+                        {[], ".more-sheet-row:last-child"},
                         # Optimistic navigation (task 01a166be-b5b9 stage 2):
                         # the tapped row keeps base-300 and the sheet leaves.
                         {[], ".more-sheet-row[data-nav-pending]"},
@@ -271,13 +276,15 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
     assert r.body =~ ~r/transition:\s*none\s*!important;/
   end
 
-  test "the handle paints with --color-subtle; rows stay at least 48px", %{rules: rules} do
+  # 44px, the touch-target floor: at 52px, then 48px, the list was taller
+  # than an iPhone's visible sheet (more_sheet_test.exs, "fits an iPhone").
+  test "the handle paints with --color-subtle; rows stay at least 44px", %{rules: rules} do
     [handle] = Enum.filter(rules, &(&1.selector == ".more-sheet .sheet-handle"))
     assert handle.body =~ ~r/background:\s*var\(--color-subtle\);/
 
     [row] = Enum.filter(rules, &(&1.selector == ".more-sheet-row"))
     [_, px] = Regex.run(~r/min-height:\s*(\d+)px;/, row.body)
-    assert String.to_integer(px) >= 48
+    assert String.to_integer(px) >= 44
     assert row.body =~ ~r/font-size:\s*15px;/
     assert row.body =~ ~r/color:\s*var\(--color-base-content\);/
   end

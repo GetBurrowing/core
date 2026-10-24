@@ -353,6 +353,78 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       end
     end
   end
+
+  # An iPhone's visible sheet (Safari's 390x664 on a 390x844 phone, 375x667
+  # on an SE) is 100dvh - 48px - the bar's clearance: 544px. With 52px rows
+  # the last two rows sat below it and nothing said the list scrolls. Rows
+  # are now exactly the 44px touch-target floor (taller and ten rows no
+  # longer fit, shorter and they are not a touch target), and a scroll cue
+  # covers shorter screens. Measured in headless Chrome against the built
+  # CSS when this landed; these pin the inputs to that measurement.
+  describe "fits an iPhone, with a scroll cue when it cannot" do
+    @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
+
+    defp more_rule(selector) do
+      rules =
+        @app_css_path
+        |> File.read!()
+        |> Platform.Design.CssRules.rules()
+        |> Enum.filter(&(&1.selector == selector and &1.at == []))
+
+      case rules do
+        [rule] -> rule.body
+        other -> flunk("expected one `#{selector}` rule, found #{length(other)}")
+      end
+    end
+
+    defp px(body, property) do
+      case Regex.run(~r/(?:^|[;{\s])#{property}:\s*(-?\d+)px;/, body) do
+        [_, n] -> String.to_integer(n)
+        nil -> flunk("no `#{property}: <n>px` in #{inspect(body)}")
+      end
+    end
+
+    test "rows and the Settings row are a 44px touch target, and no taller" do
+      for selector <- [".more-sheet-row", ".more-sheet-settings"] do
+        assert px(more_rule(selector), "min-height") == 44, selector
+      end
+
+      refute more_rule(".more-sheet-row") =~ ~r/(?:^|[;\s])height:/
+    end
+
+    test "the cue renders once, hidden from AT, just before the last row" do
+      put_env(:mail_enabled, true)
+      html = render_more_sheet(%{root_user: true})
+
+      cue = html |> doc() |> LazyHTML.query(~s(.more-sheet-list [data-role="more-sheet-cue"]))
+      assert Enum.count(cue) == 1
+      assert LazyHTML.attribute(cue, "aria-hidden") == ["true"]
+
+      # Its next sibling is the last row, the one that covers it at the end.
+      assert html
+             |> doc()
+             |> LazyHTML.query(
+               ~s(.more-sheet-list > [data-role="more-sheet-cue"] + .more-sheet-row:last-child)
+             )
+             |> LazyHTML.attribute("data-destination") == ["changelog"]
+
+      # It is not a row: the row list is unchanged by it.
+      refute "more-sheet-cue" in row_keys(html)
+    end
+
+    test "the cue sticks to the list's bottom, takes no space, and the last row covers it" do
+      cue = more_rule(".more-sheet-cue")
+      assert cue =~ ~r/position:\s*sticky;/
+      assert cue =~ ~r/(?:^|[;\s])bottom:\s*0;/
+      assert px(cue, "margin-bottom") == -px(cue, "height")
+      assert cue =~ ~r/pointer-events:\s*none;/
+      # Shorter than a row, so the last row hides all of it.
+      assert px(cue, "height") < px(more_rule(".more-sheet-row"), "min-height")
+
+      assert more_rule(".more-sheet-row:last-child") =~
+               ~r/background-color:\s*var\(--color-base-100\);/
+    end
+  end
 end
 
 defmodule PlatformWeb.Components.MoreSheetScopeTest do
