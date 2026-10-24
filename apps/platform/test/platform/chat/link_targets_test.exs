@@ -108,6 +108,75 @@ defmodule Platform.Chat.LinkTargetsTest do
     end
   end
 
+  # OWN_HOST_ALIASES: the test env configures "alias.example.com" (see
+  # config/test.exs). An alias is exact-host, case-insensitive, on the
+  # endpoint's port or the scheme default, and keeps every guard above.
+  describe "alias hosts" do
+    @alias "alias.example.com"
+
+    test "a canvas or prototype link on a configured alias is this install" do
+      id = Ecto.UUID.generate()
+
+      assert [%{kind: :canvas, id: ^id}] = targets("https://#{@alias}/canvases/#{id}")
+      assert [%{kind: :prototype, version: 2}] = targets("https://#{@alias}/proto/#{id}/2/")
+      assert kinds("http://#{@alias}/canvases/#{id}") == [:canvas]
+      assert kinds("https://ALIAS.Example.COM/canvases/#{id}") == [:canvas]
+    end
+
+    test "the endpoint's own port works on an alias; any other port does not" do
+      id = Ecto.UUID.generate()
+      uri = PlatformWeb.Endpoint.struct_url()
+
+      assert kinds("http://#{@alias}:#{uri.port}/canvases/#{id}") == [:canvas]
+      assert kinds("https://#{@alias}:8443/canvases/#{id}") == [:link]
+      assert kinds("http://#{@alias}:443/canvases/#{id}") == [:link]
+    end
+
+    test "look-alike hosts of an alias are external" do
+      id = Ecto.UUID.generate()
+
+      assert kinds("https://#{@alias}.evil.example/canvases/#{id}") == [:link]
+      assert kinds("https://evil#{@alias}/canvases/#{id}") == [:link]
+      assert kinds("https://evil-#{@alias}/canvases/#{id}") == [:link]
+      assert kinds("https://sub.#{@alias}/canvases/#{id}") == [:link]
+      assert kinds("https://example.com/canvases/#{id}") == [:link]
+    end
+
+    test "the userinfo trick does not ride an alias" do
+      id = Ecto.UUID.generate()
+
+      assert kinds("https://#{@alias}@evil.example/canvases/#{id}") == [:link]
+      refute LinkTargets.in_app?("https://#{@alias}@evil.example/canvases/#{id}")
+      refute LinkTargets.in_app?("https://user:pw@#{@alias}/canvases/#{id}")
+      refute LinkTargets.in_app?("https://evil.example@#{@alias}/canvases/#{id}")
+    end
+
+    test "a lenient-parse port (alias:443.evil) is not this install" do
+      id = Ecto.UUID.generate()
+
+      refute LinkTargets.in_app?("https://#{@alias}:443.evil.example/canvases/#{id}")
+      refute LinkTargets.own_host?(URI.parse("https://#{@alias}:443.evil.example/"))
+    end
+
+    test "alias_host?/2 is true only for an alias, never the endpoint's own host" do
+      uri = PlatformWeb.Endpoint.struct_url()
+
+      assert LinkTargets.alias_host?(URI.parse("https://#{@alias}/canvases/x"))
+      refute LinkTargets.alias_host?(URI.parse("#{uri.scheme}://#{uri.host}:#{uri.port}/x"))
+      refute LinkTargets.alias_host?(URI.parse("https://evil#{@alias}/x"))
+      refute LinkTargets.alias_host?(URI.parse("ftp://#{@alias}/x"))
+    end
+
+    test "an empty alias list (the default) makes the alias external" do
+      id = Ecto.UUID.generate()
+      url = "https://#{@alias}/canvases/#{id}"
+
+      assert {:canvas, ^id, nil} = LinkTargets.classify(url)
+      assert {:link, nil, nil} = LinkTargets.classify(url, aliases: [])
+      assert {:link, nil, nil} = LinkTargets.classify(url, aliases: ["", "  "])
+    end
+  end
+
   describe "dangerous schemes" do
     test "javascript: and data: hrefs are neutralized before classification and give no target" do
       html =

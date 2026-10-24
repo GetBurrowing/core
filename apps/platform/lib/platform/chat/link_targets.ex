@@ -24,8 +24,11 @@ defmodule Platform.Chat.LinkTargets do
     * `:link` - any other http(s) URL.
 
   "This install" means the URL's host and port equal
-  `PlatformWeb.Endpoint`'s configured URL exactly (case-insensitive host).
-  There is no suffix or prefix matching, a URL carrying userinfo
+  `PlatformWeb.Endpoint`'s configured URL exactly (case-insensitive host), or
+  its host is one of the configured aliases (`config :platform,
+  :own_host_aliases`, from `OWN_HOST_ALIASES`) - an install served on more
+  than one hostname - exactly and case-insensitively, with the endpoint's
+  port or the scheme's default port. There is no suffix or prefix matching, a URL carrying userinfo
   (`https://host@evil.example/`) is never this install, and the authority must
   be a plain `host[:port]` because `URI.parse/1` is lenient
   (`host:4002.evil.example` parses as host + port 4002). A path-relative href
@@ -136,16 +139,41 @@ defmodule Platform.Chat.LinkTargets do
 
   @doc """
   True when `uri`'s scheme is http(s), it carries no userinfo, its authority
-  is a plain `host[:port]`, and host and port equal this install's.
+  is a plain `host[:port]`, and either host and port equal this install's, or
+  the host is a configured alias (exact, case-insensitive) on the endpoint's
+  port or the scheme's default port.
+
+  Options: `:base_url` overrides the install URL, `:aliases` the alias list
+  (tests).
   """
   @spec own_host?(URI.t(), keyword()) :: boolean()
   def own_host?(%URI{} = uri, opts \\ []) do
+    plain_authority?(uri) and (base_host?(uri, opts) or alias_host?(uri, opts))
+  end
+
+  @doc """
+  True when `uri` is this install reached through a configured alias host
+  rather than the endpoint's own host. The renderer rewrites such a link to
+  a path-relative href so it opens on the current origin.
+  """
+  @spec alias_host?(URI.t(), keyword()) :: boolean()
+  def alias_host?(%URI{} = uri, opts \\ []) do
     base = base_uri(opts)
 
-    uri.scheme in ["http", "https"] and is_nil(uri.userinfo) and
-      is_binary(uri.authority) and Regex.match?(@plain_authority, uri.authority) and
-      is_binary(uri.host) and is_binary(base.host) and
-      String.downcase(uri.host) == String.downcase(base.host) and uri.port == base.port
+    plain_authority?(uri) and not base_host?(uri, opts) and
+      String.downcase(uri.host) in aliases(opts) and
+      uri.port in [base.port, URI.default_port(uri.scheme)]
+  end
+
+  @doc "The configured alias hosts, lowercased."
+  @spec aliases(keyword()) :: [String.t()]
+  def aliases(opts \\ []) do
+    opts
+    |> Keyword.get_lazy(:aliases, fn -> Application.get_env(:platform, :own_host_aliases, []) end)
+    |> List.wrap()
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+    |> Enum.reject(&(&1 == ""))
   end
 
   @doc """
@@ -206,6 +234,19 @@ defmodule Platform.Chat.LinkTargets do
   end
 
   # ── internals ────────────────────────────────────────────────────────
+
+  defp plain_authority?(%URI{} = uri) do
+    uri.scheme in ["http", "https"] and is_nil(uri.userinfo) and
+      is_binary(uri.authority) and Regex.match?(@plain_authority, uri.authority) and
+      is_binary(uri.host) and uri.host != ""
+  end
+
+  defp base_host?(%URI{} = uri, opts) do
+    base = base_uri(opts)
+
+    is_binary(base.host) and String.downcase(uri.host) == String.downcase(base.host) and
+      uri.port == base.port
+  end
 
   defp to_key(url, opts) when is_binary(url), do: key(url, opts)
   defp to_key(key, _opts), do: key

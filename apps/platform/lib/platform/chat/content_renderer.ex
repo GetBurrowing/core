@@ -133,13 +133,31 @@ defmodule Platform.Chat.ContentRenderer do
 
         case Platform.Chat.LinkTargets.classify(href) do
           {kind, _id, _version} when kind in [:canvas, :prototype] ->
-            ~s(<a data-in-app-link="#{kind}" href=#{quoted})
+            ~s(<a data-in-app-link="#{kind}" href=#{relative_if_alias(href, quoted)})
 
           _ ->
             ~s(<a target="_blank" rel="noopener noreferrer" href=#{quoted})
         end
       end
     )
+  end
+
+  # An in-app link written with one of this install's alias hosts
+  # (`LinkTargets.alias_host?/2`) becomes path-relative, so the in-app
+  # viewer and any frame src resolve against the current origin rather than
+  # a host the endpoint is not configured as.
+  defp relative_if_alias(href, quoted) do
+    uri = href |> unescape() |> String.trim() |> URI.parse()
+
+    if Platform.Chat.LinkTargets.alias_host?(uri) do
+      relative =
+        %URI{path: uri.path, query: uri.query, fragment: uri.fragment}
+        |> URI.to_string()
+
+      ~s("#{Phoenix.HTML.html_escape(relative) |> Phoenix.HTML.safe_to_string()}")
+    else
+      quoted
+    end
   end
 
   # Rung 13 stage 1: a raw URL that stays as text (the anchor's text IS its
@@ -154,12 +172,23 @@ defmodule Platform.Chat.ContentRenderer do
         end
 
       if (href && not String.contains?(attrs, "class=")) and
-           unescape(text) == unescape(href) and String.starts_with?(href, "http") do
+           (raw_text?(text, href) or rewritten_alias?(attrs, text, href)) do
         ~s(<a class="font-mono" #{attrs}>#{text}</a>)
       else
         whole
       end
     end)
+  end
+
+  defp raw_text?(text, href),
+    do: unescape(text) == unescape(href) and String.starts_with?(href, "http")
+
+  # An alias-host in-app link was made path-relative above; its text is
+  # still the raw URL the sender typed.
+  defp rewritten_alias?(attrs, text, href) do
+    String.contains?(attrs, "data-in-app-link=") and String.starts_with?(href, "/") and
+      String.starts_with?(unescape(text), "http") and
+      String.ends_with?(unescape(text), unescape(href))
   end
 
   defp unescape(s), do: s |> String.replace("&amp;", "&") |> String.trim()

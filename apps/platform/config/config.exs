@@ -38,6 +38,10 @@ config :platform, :start_responsibilities_registry, true
 # `Platform.Chat.space_retention_days/0`.
 config :platform, :space_retention_days, 30
 
+# Extra hostnames this install is served on; see OWN_HOST_ALIASES in
+# runtime.exs. Empty by default: real hosts belong in deploy config.
+config :platform, :own_host_aliases, []
+
 # Historian windowed dispatch (task 019f4f55, ADR-0041 T6 follow-up):
 # per-window token budget the slicer uses to bound each dispatched
 # digest, and the hard cap on windows per threshold sweep tick so the

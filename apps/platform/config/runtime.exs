@@ -565,6 +565,27 @@ config :platform, :meet_host, System.get_env("MEET_HOST")
 # does not fire and `chat_url/1` stays host-relative.
 config :platform, :chat_host, System.get_env("CHAT_HOST")
 
+# OWN_HOST_ALIASES: comma-separated extra hostnames this same install is
+# reached on (a second apex, a renamed host). `Platform.Chat.LinkTargets`
+# treats a canvas/prototype link on one of them as in-app (exact host match,
+# case-insensitive, endpoint or scheme-default port) and the renderer makes
+# it path-relative. Top level, not prod-only, so dev/CI exercise the real
+# path. Unset leaves whatever compile-time config set (`[]` by default; the
+# test env sets an example.com alias). No default hostnames here: the real
+# values live in deploy config.
+case System.get_env("OWN_HOST_ALIASES") do
+  nil ->
+    :ok
+
+  aliases ->
+    config :platform,
+           :own_host_aliases,
+           aliases
+           |> String.split(",")
+           |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+           |> Enum.reject(&(&1 == ""))
+end
+
 config :platform, :execution,
   proof_repo_path: proof_repo_path,
   local_run_root: proof_run_root,

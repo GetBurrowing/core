@@ -185,6 +185,53 @@ defmodule Platform.Chat.ContentRendererTest do
       refute result =~ "data-in-app-link"
     end
 
+    # OWN_HOST_ALIASES (config/test.exs sets "alias.example.com"): an
+    # in-app link on an alias host is rewritten path-relative so the viewer
+    # and frame src use the current origin.
+    test "an alias-host canvas link is in-app with a path-relative href" do
+      id = Ecto.UUID.generate()
+      result = render("see https://alias.example.com/canvases/#{id} for the plan")
+
+      assert result =~ ~s[data-in-app-link="canvas"]
+      assert result =~ ~s[href="/canvases/#{id}"]
+      refute result =~ ~s[href="https://alias.example.com]
+      refute result =~ ~s[target="_blank"]
+      assert result =~ ~s[class="font-mono"]
+    end
+
+    test "an alias-host prototype link keeps its path and query, relative" do
+      id = Ecto.UUID.generate()
+      result = render("[demo](https://ALIAS.example.com/proto/#{id}/latest/a.html?x=1&y=2)")
+
+      assert result =~ ~s[data-in-app-link="prototype"]
+      assert result =~ ~s[href="/proto/#{id}/latest/a.html?x=1&amp;y=2"]
+      refute result =~ "font-mono"
+    end
+
+    test "alias look-alikes and non-in-app alias paths stay external and absolute" do
+      id = Ecto.UUID.generate()
+
+      for url <- [
+            "https://alias.example.com.evil.example/canvases/#{id}",
+            "https://evilalias.example.com/canvases/#{id}",
+            "https://alias.example.com@evil.example/canvases/#{id}"
+          ] do
+        result = render(url)
+        assert result =~ ~s[target="_blank"], url
+        refute result =~ "data-in-app-link", url
+        refute result =~ ~s[href="/canvases/], url
+      end
+
+      result = render("https://alias.example.com/chat/some-space")
+      assert result =~ ~s[target="_blank"]
+      assert result =~ ~s[href="https://alias.example.com/chat/some-space"]
+    end
+
+    test "the endpoint's own host keeps its absolute href" do
+      id = Ecto.UUID.generate()
+      assert render("#{origin()}/canvases/#{id}") =~ ~s[href="#{origin()}/canvases/#{id}"]
+    end
+
     test "blocked hrefs are never classified as in-app" do
       result = render("[click](javascript:alert(1))")
       assert result =~ "#blocked:"

@@ -113,6 +113,10 @@ config :phoenix_live_view,
 config :phoenix,
   sort_verified_routes_query_params: true
 
+# One alias host so the in-app link path through OWN_HOST_ALIASES is real in
+# tests (Platform.Chat.LinkTargets / ContentRenderer).
+config :platform, :own_host_aliases, ["alias.example.com"]
+
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
 
