@@ -14,6 +14,7 @@
 // ever arrives already-prefixed with `"suite:"`, we strip it before passing
 // through so ClientState's own `suite:compose:` prefix isn't doubled.
 import ClientState from "../client_state.js";
+import { attachSendFeel, SEND_SELECTOR } from "../lib/send_feel.js";
 import {
   attachedToastText,
   dropBufferedProgress,
@@ -327,6 +328,10 @@ const ComposeInput = {
 
   destroyed() {
     releaseRetry(this);
+    if (this._sendFeel) {
+      this._sendFeel.detach();
+      this._sendFeel = null;
+    }
     if (this._form) this._form.removeEventListener("mousedown", this._onSendMousedown);
     if (this._form && this._onListPress) {
       this._form.removeEventListener("pointerdown", this._onListPress);
@@ -608,11 +613,19 @@ const ComposeInput = {
     // The thread reply (`data-clear-on-submit`) then clears itself: no
     // `compose_reset` comes back for it. On the next task, so LiveView has
     // serialized the value first (see CLEAR_AFTER_SUBMIT_MS).
+    // Send's press and send feedback (lib/send_feel.js): only on the chat
+    // composer, the one form with `.compose-pill-send`. Decoration only; it
+    // runs after the value is in place and never holds the submit.
+    if (this._form && this._form.querySelector(SEND_SELECTOR)) {
+      this._sendFeel = attachSendFeel(this._form);
+    }
+
     if (this._form) {
       this._form.addEventListener("submit", () => {
         const input = this._valueInput();
         if (input) input.value = serialize(el);
         this._focusAtSubmit = document.activeElement === el;
+        if (this._sendFeel) this._sendFeel.go();
         if (this._clearsOnSubmit()) {
           const refocus = this._focusAtSubmit;
           setTimeout(() => {

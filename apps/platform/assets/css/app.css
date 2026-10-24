@@ -2980,6 +2980,122 @@ body, .font-suite {
   transform: none;
 }
 
+/* ── Send feel "4g: Ring + flash" (2026-10-23) ─────────────────────────
+   lib/send_feel.js sets the two states on <html>, not on the button (a
+   LiveView patch would strip a class on a server-rendered button mid
+   animation): `data-send-down` while a pointer is down on Send,
+   `data-send-go` for 470ms after an actual send. Ported from the approved
+   prototype, with tokens for its literals: accent -> --color-primary, its
+   white icon -> --color-primary-content. The two flash colours (#fff3e8 and
+   #ffd0a8 over #f07f33) are --color-primary mixed 90% and 62% with white,
+   so they follow every preset.
+
+   The flash runs through two registered percentages rather than animating
+   background/color directly: those are `!important` on Send (the lit and
+   disabled rules above) and an !important declaration beats an animation.
+   While `data-send-go` is on, Send stays lit even though the send has
+   just emptied the field and disabled it; that is the point of the flash. */
+@property --send-flash {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+
+@property --send-ink {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+
+.compose-pill-send {
+  position: relative;
+  transition-property: transform, filter, box-shadow, opacity, background;
+  transition-duration: 70ms, 70ms, 200ms, 200ms, 200ms;
+}
+
+/* Press: respond on pointerdown, not click. */
+:root[data-send-down] .compose-pill-send:not(:disabled) {
+  transform: scale(0.9);
+  filter: brightness(0.8);
+}
+
+:root[data-send-go] .compose-pill-send {
+  --send-fill: color-mix(in oklab, var(--color-primary), #fff var(--send-flash));
+  background: var(--send-fill) !important;
+  color: color-mix(
+    in oklab,
+    var(--color-primary-content),
+    var(--color-primary) var(--send-ink)
+  ) !important;
+  animation: send-go 0.32s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+@keyframes send-go {
+  0% {
+    transform: scale(0.9);
+    --send-flash: 90%;
+    --send-ink: 100%;
+  }
+  25% {
+    --send-flash: 62%;
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 22px 6px color-mix(in oklab, var(--color-primary) 50%, transparent);
+  }
+  100% {
+    transform: none;
+    box-shadow: none;
+    --send-flash: 0%;
+    --send-ink: 0%;
+  }
+}
+
+@keyframes send-glow {
+  50% {
+    box-shadow: 0 0 22px 6px color-mix(in oklab, var(--color-primary) 50%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+/* The ring: Send's own <span class="send-ring">. Nothing between Send and
+   the chat pane clips it (the pill and the dock set no overflow). */
+.compose-pill-send .send-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid var(--color-primary);
+  opacity: 0;
+  pointer-events: none;
+}
+
+:root[data-send-go] .compose-pill-send .send-ring {
+  animation: send-ring 0.45s ease-out;
+}
+
+@keyframes send-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.3);
+    opacity: 0;
+  }
+}
+
+/* Reduced motion keeps the press and skips the flash and the ring. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-send-go] .compose-pill-send,
+  :root[data-send-go] .compose-pill-send::before,
+  :root[data-send-go] .compose-input-area .compose-pill-send::before,
+  :root[data-send-go] .compose-pill-send .send-ring {
+    animation: none;
+  }
+}
+
 /* ── The rich field, its chips and the @ button (redesign rung 10) ────
    #compose_text is a contenteditable (see Partials.Composer.composer/1).
    Body text is text-base (16px, which also stops iOS zooming on focus);
@@ -3374,6 +3490,26 @@ body, .font-suite {
 
   .compose-input-area .compose-pill-send:disabled::before {
     background: transparent;
+  }
+
+  /* Send feel (above): on the phone the disc is ::before, so the flash
+     paints there and the 44px box stays clear; the ring starts at the
+     disc's edge. */
+  /* The glow goes on the disc too: on the 44px box it left a dark band
+     between the disc and the halo. `!important` because the box's own
+     send-go animation would otherwise paint it. */
+  :root[data-send-go] .compose-input-area .compose-pill-send {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  :root[data-send-go] .compose-input-area .compose-pill-send::before {
+    background: var(--send-fill);
+    animation: send-glow 0.32s cubic-bezier(0.3, 1.6, 0.5, 1);
+  }
+
+  .compose-input-area .compose-pill-send .send-ring {
+    inset: 5px;
   }
 
   /* On a grown pill (typed lines, staged tray) the controls sit on the

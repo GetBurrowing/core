@@ -242,7 +242,8 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     //
     // 2026-10-23 (sponsor feedback): Send's disc inside the pill, the controls'
     // bottom alignment, the staged tray's inset, and the dock's soft-keyboard
-    // rule. Still no `.chat-jump` selector.
+    // rule. Send feel "4g" adds the phone disc's flash and ring inset.
+    // Still no `.chat-jump` selector.
     expect(gated.map((r) => r.selector)).toEqual([
       ".compose-input-area",
       ":root .compose-input-area .compose-pill-bar",
@@ -253,6 +254,9 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       ".compose-input-area .compose-pill-send",
       ".compose-input-area .compose-pill-send::before",
       ".compose-input-area .compose-pill-send:disabled::before",
+      ":root[data-send-go] .compose-input-area .compose-pill-send",
+      ":root[data-send-go] .compose-input-area .compose-pill-send::before",
+      ".compose-input-area .compose-pill-send .send-ring",
       ".compose-input-area .compose-pill-attach,\n  .compose-input-area .compose-mention-button,\n  .compose-input-area .compose-pill-send",
       '.compose-input-area [data-role="staged-area"]',
       ".compose-input-area .compose-pill-bar textarea:placeholder-shown,\n  .compose-input-area .compose-pill-bar textarea::placeholder",

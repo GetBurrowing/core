@@ -55,6 +55,9 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
   # Deliberate change, 2026-10-23 (sponsor feedback: "back off on the rounded
   # corners"): the pill's radius is --radius-box (12px) instead of 26px, and
   # Send gains `touch-action: manipulation` and a transparent tap highlight.
+  # Deliberate change, send feel "4g: Ring + flash" (2026-10-23): Send is
+  # position: relative with 70ms press transitions, and the press, flash, ring
+  # and reduced-motion rules are new (23 -> 32 rules).
   @desktop_snapshot [
     {".compose-input-area", [], "padding: 12px 20px 16px;"},
     {".compose-pill-bar", [],
@@ -93,6 +96,24 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     {".compose-pill-send:active:not(:disabled)", [], "transform: scale(0.95);"},
     {".compose-pill-send:disabled", [],
      "background: transparent !important;\n  color: var(--color-subtle) !important;\n  box-shadow: none;\n  cursor: default;\n  opacity: 1;\n  transform: none;"},
+    {".compose-pill-send", [],
+     "position: relative;\n  transition-property: transform, filter, box-shadow, opacity, background;\n  transition-duration: 70ms, 70ms, 200ms, 200ms, 200ms;"},
+    {":root[data-send-down] .compose-pill-send:not(:disabled)", [],
+     "transform: scale(0.9);\n  filter: brightness(0.8);"},
+    {":root[data-send-go] .compose-pill-send", [],
+     "--send-fill: color-mix(in oklab, var(--color-primary), #fff var(--send-flash));\n  background: var(--send-fill) !important;\n  color: color-mix(\n    in oklab,\n    var(--color-primary-content),\n    var(--color-primary) var(--send-ink)\n  ) !important;\n  animation: send-go 0.32s cubic-bezier(0.3, 1.6, 0.5, 1);"},
+    {".compose-pill-send .send-ring", [],
+     "position: absolute;\n  inset: 0;\n  border-radius: 50%;\n  border: 3px solid var(--color-primary);\n  opacity: 0;\n  pointer-events: none;"},
+    {":root[data-send-go] .compose-pill-send .send-ring", [],
+     "animation: send-ring 0.45s ease-out;"},
+    {":root[data-send-go] .compose-pill-send", ["@media (prefers-reduced-motion: reduce)"],
+     "animation: none;"},
+    {":root[data-send-go] .compose-pill-send::before",
+     ["@media (prefers-reduced-motion: reduce)"], "animation: none;"},
+    {":root[data-send-go] .compose-input-area .compose-pill-send::before",
+     ["@media (prefers-reduced-motion: reduce)"], "animation: none;"},
+    {":root[data-send-go] .compose-pill-send .send-ring",
+     ["@media (prefers-reduced-motion: reduce)"], "animation: none;"},
     {":root:not([data-theme=\"light\"]) .compose-pill-bar",
      ["@media (prefers-color-scheme: dark)"],
      "background: oklch(0.21 0 0);\n    border-color: rgba(255, 255, 255, 0.08);"}
@@ -110,7 +131,7 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     assert phone != []
     assert Enum.any?(phone, &(&1.selector == @pill_glass and &1.at == [@phone]))
     assert Enum.any?(phone, &(&1.selector == @pill_border and &1.at == [@phone]))
-    assert length(@desktop_snapshot) == 23
+    assert length(@desktop_snapshot) == 32
   end
 
   test "desktop composer rules equal the feat/redesign snapshot", %{desktop: desktop} do

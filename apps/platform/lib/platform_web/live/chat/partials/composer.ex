@@ -745,6 +745,11 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
             title="Send"
           >
             <span class="hero-paper-airplane size-4 -rotate-45"></span>
+            <%!-- The send ring (send feel "4g", lib/send_feel.js): a
+                 decoration that goes out on a send. Its own element because
+                 the phone Send already spends ::before (its disc) and
+                 ::after (its 44px tap square). --%>
+            <span class="send-ring" aria-hidden="true"></span>
           </button>
         </div>
 
