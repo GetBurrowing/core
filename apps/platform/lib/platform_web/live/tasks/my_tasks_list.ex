@@ -36,6 +36,16 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   chosen view survives PubSub refreshes and opening or closing a task. A
   tab-bar navigate remounts the LiveView and lands on this list again.
 
+  ## Rows only where the list can show (task 01a166be stage 3)
+
+  `row_limit` (`FilterHooks`' `@tasks_my_list_limit`) caps the row links a
+  join renders: none on a desktop join, the first screenful on a phone
+  join, all when `nil`. The section, header, count and sheets render as
+  always. `data-rows` says which (`none`, `some` or `all`), and the
+  `TasksMyListRows` hook (`assets/js/hooks/tasks_my_list_rows.js`) asks
+  for the rest when the `#tasks-my-list-more` sentinel nears the viewport
+  or the window narrows below `lg`.
+
   ## States
 
   Row: default, pressed (`active:bg-base-100`) and focus-visible. There is
@@ -74,6 +84,11 @@ defmodule PlatformWeb.Tasks.MyTasksList do
 
   attr :filtered_tasks, :list, required: true, doc: "BoardData.narrow_list/3 (stage 1)"
   attr :filtered_count, :integer, required: true
+
+  attr :row_limit, :any,
+    default: nil,
+    doc: "@tasks_my_list_limit: rows to render, nil for all (0 on a desktop join)"
+
   attr :my_needs_you, :any, required: true
   attr :mask_names?, :boolean, default: false
   attr :mask_labels, :map, default: %{}
@@ -107,6 +122,7 @@ defmodule PlatformWeb.Tasks.MyTasksList do
       assigns
       |> assign(:url, url)
       |> assign(:filters, filters)
+      |> assign_rows()
       |> assign(:clear_href, FilterBar.clear_href(url))
       |> assign(:project_label, FilterBar.title_project(assigns))
       |> assign(:epic_label, FilterBar.title_epic(assigns))
@@ -115,6 +131,8 @@ defmodule PlatformWeb.Tasks.MyTasksList do
     <section
       id="tasks-my-list"
       data-role="tasks-my-list"
+      phx-hook="TasksMyListRows"
+      data-rows={@rows_state}
       class="lg:hidden flex min-h-0 min-w-0 flex-1 flex-col bg-base-200"
     >
       <div class="flex shrink-0 items-center pr-2">
@@ -152,7 +170,7 @@ defmodule PlatformWeb.Tasks.MyTasksList do
           </.link>
         </div>
         <.link
-          :for={task <- @filtered_tasks}
+          :for={task <- @rows}
           patch={~p"/tasks/#{task.id}"}
           data-role="tasks-my-row"
           data-row-task-id={task.id}
@@ -208,6 +226,14 @@ defmodule PlatformWeb.Tasks.MyTasksList do
             </span>
           </span>
         </.link>
+        <div
+          :if={@rows_state == "some"}
+          id="tasks-my-list-more"
+          data-role="tasks-my-list-more"
+          class="h-px"
+          aria-hidden="true"
+        >
+        </div>
       </div>
       <FilterSheets.project_sheet
         sheet={@sheet}
@@ -237,6 +263,16 @@ defmodule PlatformWeb.Tasks.MyTasksList do
   @doc "The priority word at a row's right: 'Critical', 'High', 'Medium', 'Low'."
   def priority_word(priority) when is_binary(priority), do: String.capitalize(priority)
   def priority_word(_priority), do: nil
+
+  defp assign_rows(%{row_limit: limit, filtered_tasks: tasks} = assigns)
+       when is_integer(limit) and length(tasks) > limit do
+    assigns
+    |> assign(:rows, Enum.take(tasks, limit))
+    |> assign(:rows_state, if(limit == 0, do: "none", else: "some"))
+  end
+
+  defp assign_rows(assigns),
+    do: assigns |> assign(:rows, assigns.filtered_tasks) |> assign(:rows_state, "all")
 
   defp loaded_epic(%{epic: %{id: _} = epic}), do: epic
   defp loaded_epic(_task), do: nil

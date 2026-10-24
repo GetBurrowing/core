@@ -53,7 +53,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   """
 
   import Phoenix.Component, only: [assign: 3, assign_new: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, send_update: 2]
+  import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, push_event: 3, send_update: 2]
 
   alias Platform.Tasks
   alias Platform.Tasks.ReviewRequests
@@ -89,6 +89,36 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> FilterHooks.attach()
     |> attach_hook(:board_info, :handle_info, &handle_info/2)
   end
+
+  @doc """
+  Task 01a166be: the mount's stand-in for `refresh_board/1`. Call LAST in
+  `TasksLive.mount/3`.
+
+  `handle_params/3` always runs before the first render (dead and
+  connected), and on a bare or filtered `/tasks` it narrows the board to the
+  URL's or the stored project. Loading the widest board in mount only for
+  that first `handle_params/3` to replace it was a wasted pass on every
+  arrival. So mount marks the board `:board_pending`, and the first
+  `handle_params/3` loads it exactly once: `apply_url_filters/3` on the
+  board routes, and the `:board_arrival` hook below on `/tasks/:task_id`,
+  whose clause never reaches `apply_url_filters/3`. `load_board/1` clears
+  the flag.
+  """
+  @spec defer_board(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def defer_board(socket) do
+    socket
+    |> assign(:board_pending, true)
+    |> attach_hook(:board_arrival, :handle_params, &load_pending_for_task_route/3)
+  end
+
+  defp load_pending_for_task_route(
+         %{"task_id" => _},
+         _uri,
+         %{assigns: %{board_pending: true}} = s
+       ),
+       do: {:cont, refresh_board(s)}
+
+  defp load_pending_for_task_route(_params, _uri, socket), do: {:cont, socket}
 
   # ── PubSub ─────────────────────────────────────────────────────────────
 
@@ -224,7 +254,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
     socket =
       cond do
-        board_changed? -> refresh_board(socket)
+        # Task 01a166be: the arrival's one board load (`defer_board/1`).
+        board_changed? or socket.assigns[:board_pending] == true -> refresh_board(socket)
         search_changed? -> rebuild_board_shapes(socket)
         # Stage 4: the desktop board narrows by these too. A re-query, so
         # clearing the last one restores the DB-derived shapes exactly.
@@ -299,6 +330,53 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     project = Selection.readable_project(socket, project_id)
     readable? = not is_nil(project) and not Platform.Projects.archived?(project)
 
+    if inline_selection?(socket) do
+      select_inline(socket, readable?, project_id, epic_id)
+    else
+      select_url_project_later(socket, readable?, project_id, epic_id)
+    end
+  end
+
+  # Task 01a166be: a URL project change is applied here, inline, and the
+  # caller's cond loads the board once. The message path
+  # (`{:sidebar_project_selected, _}` -> `select_project/2`, then
+  # `{:sidebar_epic_selected, _}`) refreshed the board a second and third
+  # time on every arrival with a stored project.
+  #
+  # Inline only when the message path's extra work is a no-op: no task
+  # detail is selected (its `clear_detail/1`) and no execution space is held
+  # (its `resubscribe_execution_space(nil)`). That is always true on the
+  # LiveView's first `handle_params/3` (mount sets neither) and on the
+  # LastProject device replay that follows it. A patch away from an open
+  # `/tasks/:task_id` keeps the message path, as do sidebar clicks, which
+  # send the message themselves.
+  defp inline_selection?(socket) do
+    socket.assigns[:board_pending] == true or
+      (is_nil(socket.assigns[:selected_task]) and
+         is_nil(socket.assigns[:subscribed_execution_space_id]))
+  end
+
+  # What the message path does that still applies is done here: the
+  # unreadable/archived fallback to All projects, the epic and epic-list
+  # load, and `selected_project_changed` for the LastProject hook (connected
+  # only). No hold is taken, so `FilterPrefs.sync/1` writes the resolved
+  # selection in the same pass, and only when it differs from the stored one.
+  defp select_inline(socket, readable?, project_id, epic_id) do
+    socket =
+      if readable?,
+        do: assign_selection(socket, project_id, epic_id),
+        else: assign_selection(socket, nil, nil)
+
+    if connected?(socket) do
+      push_event(socket, "selected_project_changed", %{
+        id: socket.assigns.selected_project_id || "__all__"
+      })
+    else
+      socket
+    end
+  end
+
+  defp select_url_project_later(socket, readable?, project_id, epic_id) do
     if connected?(socket) do
       send(self(), {:sidebar_project_selected, project_id})
       # `select_project/2` resets the epic to nil first, so this toggle sets it.
@@ -362,8 +440,21 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   Public because the shell's non-PubSub paths (project selection, epic
   selection, filter clear, `handle_params/3`'s sponsor decode) and the
   components' notifies all funnel through it too.
+
+  Wrapped in a `[:platform_web, :tasks, :refresh_board]` telemetry span
+  (`:start` / `:stop` / `:exception`, empty metadata) so a test or a local
+  probe can count board loads per LiveView process. With no handler
+  attached the span costs two ETS lookups.
   """
   def refresh_board(socket) do
+    :telemetry.span([:platform_web, :tasks, :refresh_board], %{}, fn ->
+      {load_board(socket), %{}}
+    end)
+  end
+
+  defp load_board(socket) do
+    socket = assign(socket, :board_pending, false)
+
     opts =
       []
       |> maybe_put(:project_id, socket.assigns.selected_project_id)
@@ -404,7 +495,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     |> assign(:all_tasks, tasks)
     |> assign(:stacks, stacks)
     |> assign(:stack_board_data, stack_board_data)
-    |> assign(:columns, Tasks.list_by_status(opts))
+    # The same rows as `tasks`, bucketed in memory (task 01a166be stage 3):
+    # `list_by_status(opts)` re-ran the widest query and its preloads.
+    |> assign(:columns, Tasks.group_by_status(tasks))
     |> assign(:desktop_stacks_by_column, BoardData.group_desktop_stacks(stack_entries))
     |> assign(:board_items, BoardData.group_board_items(tasks, stack_entries, board_sort))
     # Per ADR 0041 acceptance criterion 3, any list refetch collapses
@@ -419,8 +512,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # board events.
     # `:access_scope` (task 01a1386d-e528 stage 3): a badge counting hidden
     # tasks would report how many a deny removed.
-    |> assign(:scope_counts, Tasks.count_by_scope(access_scope: access_scope(socket)))
-    |> assign(:scope_counts_db, Tasks.count_by_scope(access_scope: access_scope(socket)))
+    |> assign_scope_counts()
     # The all-tasks bucket's key (task 01a116de stage 3): the root org's slug
     # from config or its row, read once per LiveView, never a literal.
     |> assign_new(:root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
@@ -686,4 +778,16 @@ defmodule PlatformWeb.Tasks.BoardHooks do
 
   defp maybe_put_map(map, _key, nil), do: map
   defp maybe_put_map(map, key, value), do: Map.put(map, key, value)
+
+  # One `Tasks.count_by_scope/1` per refresh (task 01a166be; it ran twice
+  # with identical args). The rail badges read `:scope_counts`;
+  # `:scope_counts_db` keeps the DB read so `rebuild_board_shapes/1` can
+  # re-derive `:scope_counts` for a search and restore it when it clears.
+  defp assign_scope_counts(socket) do
+    counts = Tasks.count_by_scope(access_scope: access_scope(socket))
+
+    socket
+    |> assign(:scope_counts, counts)
+    |> assign(:scope_counts_db, counts)
+  end
 end

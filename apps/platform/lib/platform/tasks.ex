@@ -6949,10 +6949,7 @@ defmodule Platform.Tasks do
     # Statuses we actually pull from the DB: the 7 directly-bucketed ones
     # plus any whose tasks we fold into another bucket (e.g. cancelled →
     # done). Anything outside this set is excluded from the board shape.
-    fetched_statuses =
-      (Enum.map(@kanban_status_keys, &Atom.to_string/1) ++
-         Map.keys(@status_bucket_overrides))
-      |> Enum.uniq()
+    fetched_statuses = fetched_board_statuses()
 
     tasks =
       Task
@@ -6975,6 +6972,35 @@ defmodule Platform.Tasks do
       |> preload([:project, :epic, :sponsor, plans: :stages])
       |> Repo.all()
 
+    bucket_by_status(tasks)
+  end
+
+  @doc """
+  The `list_by_status/1` shape built in memory from tasks already loaded by
+  `list_all_tasks/1` with the SAME options (task 01a166be stage 3): the board
+  loads its rows once and derives the columns, instead of querying the same
+  rows and preloads a second time.
+
+  Keeps only the statuses `list_by_status/1` fetches (`:stack_pending` and
+  any unknown status are dropped, `cancelled` folds into `:done`) and orders
+  each bucket by `updated_at` desc, as the query does.
+  """
+  @spec group_by_status([%Task{}]) :: %{atom() => [%Task{}]}
+  def group_by_status(tasks) when is_list(tasks) do
+    fetched = MapSet.new(fetched_board_statuses())
+
+    tasks
+    |> Enum.filter(&MapSet.member?(fetched, &1.status))
+    |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+    |> bucket_by_status()
+  end
+
+  defp fetched_board_statuses do
+    (Enum.map(@kanban_status_keys, &Atom.to_string/1) ++ Map.keys(@status_bucket_overrides))
+    |> Enum.uniq()
+  end
+
+  defp bucket_by_status(tasks) do
     empty = Map.new(@kanban_status_keys, &{&1, []})
 
     tasks

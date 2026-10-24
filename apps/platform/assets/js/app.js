@@ -46,7 +46,15 @@ const liveSocket = new LiveSocket("/live", Socket, {
   // WHICH DAY COLUMN a meeting lands in is a bucketing decision the server
   // makes before any HTML exists, so the zone has to arrive with the
   // connect rather than after the render.
-  params: {_csrf_token: csrfToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
+  //
+  // `viewport_lg` (task 01a166be stage 3) is read per join, hence the
+  // function: /tasks skips the rows of its phone-only list when the join
+  // comes from an `lg`-or-wider window (`PlatformWeb.Tasks.FilterHooks`).
+  params: () => ({
+    _csrf_token: csrfToken,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    viewport_lg: window.matchMedia("(min-width: 64rem)").matches,
+  }),
   hooks: Hooks,
 })
 

@@ -37,6 +37,7 @@ import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LazyInlineCanvas from "./lazy_inline_canvas"
 import LastProject from "./last_project"
+import TasksMyListRows from "./tasks_my_list_rows"
 import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
@@ -112,6 +113,7 @@ export default {
   InlineThread,
   KanbanDragDrop,
   LastProject,
+  TasksMyListRows,
   LocalTime,
   LongpressMenu,
   MarkdownEditor,

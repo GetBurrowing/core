@@ -142,6 +142,8 @@ defmodule PlatformWeb.TasksWriteInventoryTest do
     # Stage 5: a replace patch to `?project=<id>`; the selection then goes
     # through handle_params and its readability check like any URL.
     {"filter_hooks", "tasks_restore_device_project"},
+    # Task 01a166be stage 3: flips a render flag for the phone list's rows.
+    {"filter_hooks", "tasks_my_list_rows"},
     {"sidebar_component", "sidebar_toggle"},
     {"sidebar_component", "sidebar_toggle_projects_section"},
     {"sidebar_component", "sidebar_toggle_epics_panel"},
