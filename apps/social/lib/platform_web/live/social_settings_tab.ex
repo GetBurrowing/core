@@ -2,8 +2,10 @@ defmodule PlatformWeb.SocialSettingsTab do
   @moduledoc """
   The Settings tab (extracted from `PlatformWeb.SocialLive` by Social
   authoring 1/11, no behaviour change): the profile's settings form (read
-  only for a non-approver), "Project for renders" (`PlatformWeb.SocialProjectSetting`)
-  and the install's Zernio API key. Per brand only (`all_brands?/0` false).
+  only for a non-approver), "Project for renders" (`PlatformWeb.SocialProjectSetting`),
+  voice, timezone and posting slots (`PlatformWeb.SocialVoiceSettings`, Social
+  authoring 4/11, whose events this tab routes) and the install's Zernio API
+  key. Per brand only (`all_brands?/0` false).
 
   ## The install's Zernio API key (task 01a14722)
 
@@ -22,7 +24,7 @@ defmodule PlatformWeb.SocialSettingsTab do
   alias Platform.Accounts.User
   alias Platform.Social
   alias Platform.Social.{Publisher, Secrets}
-  alias PlatformWeb.{SocialConnectionsTab, SocialProjectSetting, SocialScope}
+  alias PlatformWeb.{SocialConnectionsTab, SocialProjectSetting, SocialScope, SocialVoiceSettings}
 
   @impl true
   def enabled?, do: true
@@ -30,7 +32,7 @@ defmodule PlatformWeb.SocialSettingsTab do
   @impl true
   def events,
     do: ~w(validate_settings save_settings set_profile_project save_zernio_key
-           replace_zernio_key retry_zernio_key cancel_zernio_key)
+           replace_zernio_key retry_zernio_key cancel_zernio_key) ++ SocialVoiceSettings.events()
 
   @impl true
   def init(socket) do
@@ -47,6 +49,7 @@ defmodule PlatformWeb.SocialSettingsTab do
     |> assign(:settings_options, %{approvers: [], spaces: []})
     |> assign(:project_setting, nil)
     |> assign(:settings_form, nil)
+    |> SocialVoiceSettings.load()
   end
 
   def load(%{assigns: %{profile: profile, can_edit?: can_edit?}} = socket) do
@@ -54,6 +57,7 @@ defmodule PlatformWeb.SocialSettingsTab do
     |> assign(:settings_options, settings_options(profile, can_edit?))
     |> assign(:project_setting, SocialProjectSetting.load(profile, can_edit?))
     |> assign(:settings_form, settings_form(profile, %{}))
+    |> SocialVoiceSettings.load()
   end
 
   @impl true
@@ -76,6 +80,7 @@ defmodule PlatformWeb.SocialSettingsTab do
            |> assign(:profile, profile)
            |> assign(:scope, {:profile, profile})
            |> assign(:settings_form, settings_form(profile, %{}))
+           |> SocialVoiceSettings.load()
            |> notice("Settings saved.")}
 
         {:error, %Ecto.Changeset{} = changeset} ->
@@ -151,6 +156,12 @@ defmodule PlatformWeb.SocialSettingsTab do
        do: socket |> assign(:zernio_mode, mode) |> assign_zernio(),
        else: socket
      )}
+  end
+
+  def handle_event(event, params, socket) when is_binary(event) do
+    if event in SocialVoiceSettings.events(),
+      do: SocialVoiceSettings.handle_event(event, params, socket),
+      else: {:noreply, socket}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -290,6 +301,19 @@ defmodule PlatformWeb.SocialSettingsTab do
       can_edit?={@can_edit?}
       options={@settings_options}
       project_setting={@project_setting}
+    />
+    <SocialVoiceSettings.editor
+      :if={@profile && @can_edit? && @voice_draft}
+      profile={@profile}
+      draft={@voice_draft}
+      options={@voice_options}
+      errors={@voice_errors}
+      cards={@slot_cards}
+    />
+    <SocialVoiceSettings.readonly
+      :if={@profile && !@can_edit?}
+      profile={@profile}
+      cards={@slot_cards}
     />
     """
   end

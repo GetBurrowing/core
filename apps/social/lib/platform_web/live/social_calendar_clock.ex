@@ -14,10 +14,12 @@ defmodule PlatformWeb.SocialCalendarClock do
       else `"Etc/UTC"`.
     * `account_slots/1` - the account's `posting_slots`, else `[]`.
 
-  Before 4/11 is on main both answer the defaults (UTC, no slots), so the
-  calendar draws in UTC with no shading. TODO(01a16c4f-9041): once
-  `Platform.Social.Slots.slots_in_week/2` is on main, have `slots_in_week/4`
-  call it rather than reading `posting_slots` here.
+  A profile without a zone, or an account without slots, answers the
+  defaults (UTC, no slots). `slots_in_week/4` resolves each slot's instant
+  with `Platform.Social.Slots.resolve/3`, the same DST rule
+  `Platform.Social.next_free_slot/2` uses; it keeps its own week walk
+  because it draws in a viewer zone that may differ from the profile's
+  (`Platform.Social.slots_in_week/2` is profile-zone only).
   """
 
   @utc "Etc/UTC"
@@ -107,7 +109,7 @@ defmodule PlatformWeb.SocialCalendarClock do
     for {weekday, time} <- slots,
         date <- days,
         Date.day_of_week(date) == weekday,
-        local = date |> at_local(time, profile_zone) |> local(draw_zone),
+        local = date |> Platform.Social.Slots.resolve(time, profile_zone) |> local(draw_zone),
         local_date = DateTime.to_date(local),
         Date.diff(local_date, monday) in 0..6 do
       %{

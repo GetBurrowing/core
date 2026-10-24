@@ -158,16 +158,17 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_profile_get",
         description:
-          "Read one social profile: its accounts, home_url, voice notes and default hashtags. " <>
+          "Read one social profile: its accounts (with posting slots, weekly goal and next free slot), home_url, timezone, voice (sample posts, banned phrases, learnings), voice notes and default hashtags. " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."}
         },
         returns:
-          "%{id, org_id, name, home_url, voice_notes, default_hashtags, accounts: [%{id, platform, handle, approval_mode, status}]}",
+          "%{id, org_id, name, home_url, voice_notes, default_hashtags, timezone (IANA), voice: %{samples, banned, learnings: [%{id, text, accepted_at}]}, drafting_agent_id, accounts: [%{id, platform, handle, approval_mode, status, posting_slots: [%{weekday 1..7 (Mon=1), time HH:MM in timezone}], weekly_goal, next_free_slot (UTC ISO 8601 or null)}]}",
         limitations:
           "not_found for a profile outside your org, exactly as for a missing id. No credential or secret is ever returned.",
-        when_to_use: "Before drafting, to match the profile's voice and hashtags."
+        when_to_use:
+          "Before drafting, to match the profile's voice (imitate samples, never use a banned phrase) and hashtags, and to pick a scheduled_at (next_free_slot)."
       },
       %{
         name: "social_draft_create",
@@ -192,7 +193,7 @@ defmodule Platform.Social.ToolDefinitions do
           }),
         returns: "%{posts: [#{@post_row}], count}",
         limitations:
-          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org. An idea_id outside your org is not_found; another profile's idea is idea_profile_mismatch; an archived idea is idea_archived.",
+          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org. An idea_id outside your org is not_found; another profile's idea is idea_profile_mismatch; an archived idea is idea_archived. A body containing one of the profile's voice.banned phrases (case-insensitive) is refused with banned_phrase, naming it.",
         when_to_use:
           "When you have post copy ready for a human to review. With no link_url, home_url is appended."
       },
@@ -207,7 +208,7 @@ defmodule Platform.Social.ToolDefinitions do
           }),
         returns: "%{post: #{@post_row}}",
         limitations:
-          "A post past needs_approval (approved, scheduled, published, failed) is refused with post_locked and left unchanged. Rejection fields cannot be written.",
+          "A post past needs_approval (approved, scheduled, published, failed) is refused with post_locked and left unchanged. Rejection fields cannot be written. A body containing one of the profile's voice.banned phrases is refused with banned_phrase.",
         when_to_use: "To revise a draft, for example after a human rejected it with a reason."
       },
       %{

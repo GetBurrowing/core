@@ -89,31 +89,41 @@ defmodule Platform.Social.QueueFeedTest do
     end
   end
 
-  describe "NextSlot (fallback while 4/11's Slots is not merged)" do
-    test "is the next top of the hour at least 15 minutes away, skipping a taken hour", ctx do
-      refute NextSlot.slots_available?()
+  describe "NextSlot (4/11's posting slots)" do
+    test "is the account's next free slot in the profile's timezone; no slots is nil", ctx do
       [%{id: id}] = drafts!(ctx, nil, [ctx.a])
       post = Repo.get!(Post, id)
+      now = ~U[2026-11-01 12:00:00.000000Z]
 
-      now = ~U[2026-11-02 09:50:00.000000Z]
-      assert NextSlot.next_free(ctx.profile, post, now) == ~U[2026-11-02 11:00:00.000000Z]
+      assert NextSlot.next_free(ctx.profile, post, now) == nil
 
-      assert NextSlot.next_free(ctx.profile, post, ~U[2026-11-02 09:20:00Z]) ==
-               ~U[2026-11-02 10:00:00.000000Z]
+      {:ok, profile} =
+        Social.update_profile(ctx.org_id, ctx.profile, %{timezone: "America/Denver"})
 
-      # Another approved post on the same account holds 11:00.
+      {:ok, _} =
+        Social.update_account_schedule(ctx.org_id, ctx.a, %{
+          posting_slots: [%{weekday: 1, time: "09:00"}]
+        })
+
+      # Monday 09:00 Denver after the 2026-11-01 change is 16:00Z.
+      assert NextSlot.next_free(profile, post, now) == ~U[2026-11-02 16:00:00.000000Z]
+
+      # Another scheduled post on the same account holds that slot.
       {:ok, held} = Social.create_post(ctx.org_id, ctx.a, %{body: "held"})
 
       Repo.update_all(from(p in Post, where: p.id == ^held.id),
         set: [
           status: "scheduled",
-          scheduled_at: ~U[2026-11-02 11:00:00.000000Z],
+          scheduled_at: ~U[2026-11-02 16:00:00.000000Z],
           approved_by_user_id: ctx.h1.id,
           approved_at: now
         ]
       )
 
-      assert NextSlot.next_free(ctx.profile, post, now) == ~U[2026-11-02 12:00:00.000000Z]
+      assert NextSlot.next_free(profile, post, now) == ~U[2026-11-09 16:00:00.000000Z]
+
+      # Another profile's call never answers for this post.
+      assert NextSlot.next_free(%{profile | id: Ecto.UUID.generate()}, post, now) == nil
     end
   end
 

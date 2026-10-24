@@ -370,12 +370,15 @@ defmodule Platform.Social.PlatformLimits do
   @doc """
   The deterministic flags for a draft on `platform`. `post` is a map with
   any of `body`, `title`, `link_url`, `media` (the `MediaRules` item shape
-  plus `alt`) and `account` (`approval_mode`, `status`,
-  `platform_account_type`). Keys are atoms or strings.
+  plus `alt`), `account` (`approval_mode`, `status`,
+  `platform_account_type`) and `banned` (the profile's banned phrases,
+  `profile.voice.banned`). Keys are atoms or strings.
 
   Flag keys: `account_disconnected`, `posts_by_hand`, `over_limit`,
   `thread_needed`, `missing_title`, `title_over_limit`, `missing_alt`,
-  `link_not_clickable`, `too_many_hashtags`, `media_rule`.
+  `link_not_clickable`, `too_many_hashtags`, `media_rule`, `banned_phrase`
+  (Social authoring 4/11: a warning for a human; an agent's draft with one
+  is refused in `Platform.Social.AgentDrafts`).
   """
   @spec flags(platform(), map()) :: [flag()]
   def flags(platform, post) when is_map(post) do
@@ -392,13 +395,23 @@ defmodule Platform.Social.PlatformLimits do
         alt_flags(media),
         link_flags(limits, body, fetch(post, :link_url)),
         hashtag_flags(limits, body),
-        media_flags(platform, account, media)
+        media_flags(platform, account, media),
+        banned_flags(body, fetch(post, :banned))
       ]
       |> List.flatten()
     else
       [%{key: "unsupported_platform", text: "#{inspect(platform)} is not a supported platform"}]
     end
   end
+
+  defp banned_flags(body, banned) when is_list(banned) do
+    case Platform.Social.Voice.banned_phrase(body, banned) do
+      nil -> []
+      phrase -> [%{key: "banned_phrase", text: "Uses a banned phrase: \"#{phrase}\""}]
+    end
+  end
+
+  defp banned_flags(_body, _banned), do: []
 
   defp account_flags(nil), do: []
 

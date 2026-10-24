@@ -45,6 +45,15 @@ defmodule Platform.Social.AgentDrafts do
   after) and/or `submitted` (draft to needs_approval). The actor is the
   calling agent (`opts[:agent_id]`). Each event is written in the
   transaction that writes the post.
+
+  ## Banned phrases (Social authoring 4/11)
+
+  A create or update whose `body` contains one of the profile's banned
+  phrases (`profile.voice.banned`, matched by
+  `Platform.Social.Voice.banned_phrase/2`, case-insensitive) is refused
+  with `{:error, :banned_phrase, phrase}`, the phrase as the brand wrote it,
+  and nothing is written. Humans are never blocked by this; they see a
+  `banned_phrase` flag in the preview.
   """
 
   import Ecto.Query
@@ -87,6 +96,7 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :idea_profile_mismatch | :idea_archived}
           | {:error, :file_not_in_project | :not_a_video | :invalid_title}
           | {:error, :field_not_allowed, [String.t()]}
+          | {:error, :banned_phrase, String.t()}
           | {:error, Ecto.Changeset.t()}
 
   @doc "Statuses an agent may set."
@@ -115,6 +125,7 @@ defmodule Platform.Social.AgentDrafts do
          {:ok, status} <- create_status(attrs),
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
+         :ok <- refuse_banned(attrs, profile),
          {:ok, idea_id} <- check_idea(scope, attrs["idea_id"], profile),
          :ok <- check_task_profile(attrs, profile),
          {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
@@ -266,6 +277,7 @@ defmodule Platform.Social.AgentDrafts do
              :ok <- refuse_locked(locked),
              :ok <- refuse_transition(locked, attrs),
              profile = profile_of(locked),
+             :ok <- refuse_banned(attrs, profile),
              :ok <- check_task_profile(attrs, profile),
              changeset = agent_changeset(locked, attrs, profile),
              :ok <-
@@ -274,9 +286,11 @@ defmodule Platform.Social.AgentDrafts do
           log_update(locked, updated, changeset, actor)
           updated
         else
+          {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
+      |> unwrap_banned()
       |> after_commit()
     end
   end
@@ -294,6 +308,21 @@ defmodule Platform.Social.AgentDrafts do
     if before.status == "draft" and updated.status == "needs_approval",
       do: PostEvents.record!(updated, "submitted", actor)
   end
+
+  # Social authoring 4/11: an agent's body may not contain one of the
+  # profile's banned phrases (`Platform.Social.Voice.banned_phrase/2`,
+  # case-insensitive). A human is only warned, in the preview.
+  defp refuse_banned(%{"body" => body}, profile) when is_binary(body) do
+    case Platform.Social.Voice.banned_phrase(body, profile) do
+      nil -> :ok
+      phrase -> {:error, :banned_phrase, phrase}
+    end
+  end
+
+  defp refuse_banned(_attrs, _profile), do: :ok
+
+  defp unwrap_banned({:error, {:banned_phrase, phrase}}), do: {:error, :banned_phrase, phrase}
+  defp unwrap_banned(other), do: other
 
   defp refuse_status_value(%{"status" => status}) when status not in @agent_statuses,
     do: {:error, :status_not_allowed}

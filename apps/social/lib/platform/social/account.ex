@@ -45,6 +45,10 @@ defmodule Platform.Social.Account do
     field(:platform_account_type, :string)
     # Task 01a14ce1: set by `Platform.Social.set_account_owner/3`, never cast.
     belongs_to(:owner_user, Platform.Accounts.User)
+    # Social authoring 4/11: weekly slots in the PROFILE's timezone, and the
+    # posts-per-week goal. Written by `schedule_changeset/2` only.
+    embeds_many(:posting_slots, Platform.Social.PostingSlot, on_replace: :delete)
+    field(:weekly_goal, :integer)
 
     has_many(:posts, Platform.Social.Post)
 
@@ -105,4 +109,41 @@ defmodule Platform.Social.Account do
     |> change(owner_user_id: owner_user_id)
     |> foreign_key_constraint(:owner_user_id)
   end
+
+  @max_slots 50
+
+  @doc """
+  Social authoring 4/11: the account's `posting_slots` (each
+  `%{weekday, time}`, de-duplicated and sorted, at most #{@max_slots}) and
+  `weekly_goal` (nil or 1..100). Only these two fields; written through
+  `Platform.Social.update_account_schedule/3`.
+  """
+  @spec schedule_changeset(t(), map()) :: Ecto.Changeset.t()
+  def schedule_changeset(%__MODULE__{} = account, attrs) do
+    account
+    |> cast(attrs, [:weekly_goal])
+    |> cast_embed(:posting_slots, with: &Platform.Social.PostingSlot.changeset/2)
+    |> validate_number(:weekly_goal, greater_than_or_equal_to: 1, less_than_or_equal_to: 100)
+    |> check_constraint(:weekly_goal, name: :social_accounts_weekly_goal_check)
+    |> dedupe_slots()
+    |> validate_length(:posting_slots, max: @max_slots, message: "at most %{count} slots")
+  end
+
+  defp dedupe_slots(%Ecto.Changeset{valid?: true} = changeset) do
+    case fetch_change(changeset, :posting_slots) do
+      {:ok, slot_changesets} ->
+        unique =
+          slot_changesets
+          |> Enum.reject(&(&1.action == :replace))
+          |> Enum.uniq_by(&{get_field(&1, :weekday), get_field(&1, :time)})
+          |> Enum.sort_by(&{get_field(&1, :weekday), get_field(&1, :time)})
+
+        put_embed(changeset, :posting_slots, Enum.map(unique, &apply_changes/1))
+
+      :error ->
+        changeset
+    end
+  end
+
+  defp dedupe_slots(changeset), do: changeset
 end

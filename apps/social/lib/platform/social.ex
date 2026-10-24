@@ -276,6 +276,88 @@ defmodule Platform.Social do
     |> validate_project_in_org(org_id)
     |> validate_space_in_org(org_id)
     |> validate_approvers()
+    |> validate_notify_subset()
+    |> validate_drafting_agent(org_id)
+  end
+
+  # Social authoring 4/11: who gets notified is a subset of the approvers.
+  # An approver removed from the list is dropped from it too; naming
+  # someone who is not an approver is an error.
+  defp validate_notify_subset(changeset) do
+    approvers = Changeset.get_field(changeset, :approver_user_ids) || []
+    notify = Changeset.get_field(changeset, :notify_user_ids) || []
+
+    cond do
+      Enum.all?(notify, &(&1 in approvers)) ->
+        changeset
+
+      Changeset.get_change(changeset, :notify_user_ids) != nil ->
+        Changeset.add_error(changeset, :notify_user_ids, "must be approvers of this profile")
+
+      true ->
+        Changeset.put_change(changeset, :notify_user_ids, Enum.filter(notify, &(&1 in approvers)))
+    end
+  end
+
+  defp validate_drafting_agent(changeset, org_id) do
+    case Changeset.get_change(changeset, :drafting_agent_id) do
+      nil ->
+        changeset
+
+      agent_id ->
+        if Enum.any?(drafting_agent_options(org_id), &(&1.id == agent_id)),
+          do: changeset,
+          else: Changeset.add_error(changeset, :drafting_agent_id, "must be an agent in this org")
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: the agents a profile in `org_id` may name as its
+  drafting agent: active agents whose home org (core's
+  `Platform.Experiments.Tools.home_org/1`) is `:root` or this org, by name.
+  """
+  @spec drafting_agent_options(term()) :: [Platform.Agents.Agent.t()]
+  def drafting_agent_options(org_id) do
+    case Ecto.UUID.cast(org_id) do
+      {:ok, org_id} ->
+        from(a in Platform.Agents.Agent, where: a.status == "active", order_by: [asc: a.name])
+        |> Repo.all()
+        |> Enum.filter(fn agent ->
+          case Platform.Experiments.Tools.home_org(agent) do
+            :root -> true
+            {:tenant, ^org_id} -> true
+            _ -> false
+          end
+        end)
+
+      :error ->
+        []
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: removes one accepted learning from the profile's
+  voice. Approvers only (`approver_check/3`), else
+  `{:error, :not_an_approver}`; an unknown learning id is `{:error, :not_found}`.
+  """
+  @spec remove_voice_learning(scope(), Profile.t() | Ecto.UUID.t(), term(), term()) ::
+          {:ok, Profile.t()} | {:error, term()}
+  def remove_voice_learning(org_id, profile, user_id, learning_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(profile.org_id, profile, user_id) do
+      voice = Platform.Social.Voice.of(profile)
+
+      case Enum.split_with(voice.learnings, &(&1.id == learning_id)) do
+        {[], _} ->
+          {:error, :not_found}
+
+        {_removed, kept} ->
+          profile
+          |> Changeset.change()
+          |> Changeset.put_embed(:voice, %{learnings: kept})
+          |> Repo.update()
+      end
+    end
   end
 
   # Social 3/7: the profile's channel must be a space in the profile's org,
@@ -374,6 +456,44 @@ defmodule Platform.Social do
       account |> Account.changeset(attrs) |> Repo.update()
     end
   end
+
+  @doc """
+  Social authoring 4/11: writes an account's `posting_slots` (a list of
+  `%{weekday: 1..7, time: "HH:MM"}` in the profile's timezone) and
+  `weekly_goal` (nil or 1..100), and nothing else
+  (`Account.schedule_changeset/2`). Who may call it is the caller's rule
+  (Settings checks the approver).
+  """
+  @spec update_account_schedule(scope(), Account.t() | Ecto.UUID.t(), map()) ::
+          {:ok, Account.t()} | {:error, term()}
+  def update_account_schedule(org_id, account, attrs) do
+    with {:ok, account} <- fetch(Account, org_id, account) do
+      account |> Account.schedule_changeset(attrs) |> Repo.update()
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: the first posting slot of `account` at or after
+  `now` that no approved, scheduled or published post of that account
+  occupies, as a UTC `DateTime`; nil when the account has no slots (or is
+  archived, or every slot in the next 53 weeks is taken). Slots are read in
+  the profile's timezone, so DST is handled: see `Platform.Social.Slots`.
+
+  This is the function "approve into next slot" (needs-you queue, 5/11)
+  calls. It does not reserve the slot.
+  """
+  @spec next_free_slot(Account.t(), DateTime.t()) :: DateTime.t() | nil
+  def next_free_slot(%Account{} = account, %DateTime{} = now),
+    do: Platform.Social.Slots.next_free(account, now)
+
+  @doc """
+  Social authoring 4/11: every slot instant of the profile's live accounts
+  in the local week starting on the Monday of `monday` (a `Date`), for
+  calendar shading (8/11). See `Platform.Social.Slots.slots_in_week/2`.
+  """
+  @spec slots_in_week(Profile.t(), Date.t()) :: [Platform.Social.Slots.week_slot()]
+  def slots_in_week(%Profile{} = profile, %Date{} = monday),
+    do: Platform.Social.Slots.slots_in_week(profile, monday)
 
   @doc """
   Sets the account's owner, the person it posts as (task 01a14ce1), or

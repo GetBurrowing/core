@@ -745,6 +745,15 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :banned_phrase, phrase}) do
+    err(
+      :banned_phrase,
+      "banned phrase: the body contains \"#{phrase}\", which this brand never says; nothing was written",
+      true,
+      "Rewrite the body without \"#{phrase}\". social_profile_get lists the profile's voice.banned phrases."
+    )
+  end
+
   defp error_envelope({:error, :post_locked}) do
     err(
       :post_locked,
@@ -870,7 +879,7 @@ defmodule Platform.Social.Tools do
     accounts =
       scope
       |> Social.list_accounts(profile_id: p.id)
-      |> Enum.map(&account_json/1)
+      |> Enum.map(&account_json(&1, full?))
 
     base = %{
       id: p.id,
@@ -881,7 +890,40 @@ defmodule Platform.Social.Tools do
       accounts: accounts
     }
 
-    if full?, do: Map.put(base, :voice_notes, p.voice_notes), else: base
+    if full?,
+      do:
+        Map.merge(base, %{
+          voice_notes: p.voice_notes,
+          timezone: p.timezone,
+          voice: voice_json(p),
+          drafting_agent_id: p.drafting_agent_id
+        }),
+      else: base
+  end
+
+  # Social authoring 4/11: the brand's voice as a drafting agent reads it.
+  # banned phrases refuse a draft (`banned_phrase`); learnings are notes a
+  # human accepted.
+  defp voice_json(%Profile{} = p) do
+    voice = Platform.Social.Voice.of(p)
+
+    %{
+      samples: voice.samples,
+      banned: voice.banned,
+      learnings:
+        Enum.map(voice.learnings, &%{id: &1.id, text: &1.text, accepted_at: &1.accepted_at})
+    }
+  end
+
+  defp account_json(%Account{} = a, false), do: account_json(a)
+
+  # Slots are local to the profile's timezone; next_free_slot is UTC.
+  defp account_json(%Account{} = a, true) do
+    Map.merge(account_json(a), %{
+      posting_slots: Enum.map(a.posting_slots || [], &%{weekday: &1.weekday, time: &1.time}),
+      weekly_goal: a.weekly_goal,
+      next_free_slot: Social.next_free_slot(a, DateTime.utc_now())
+    })
   end
 
   # Never secret_slug, provider refs or anything credential-shaped.

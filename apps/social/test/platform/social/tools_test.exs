@@ -100,8 +100,18 @@ defmodule Platform.Social.ToolsTest do
       assert {p.home_url, p.voice_notes, p.default_hashtags} == {@home, "warm", ["#htc"]}
 
       for account <- p.accounts do
+        # Social authoring 4/11 adds the account's slots, goal and next slot.
         assert Map.keys(account) |> Enum.sort() ==
-                 [:approval_mode, :handle, :id, :platform, :status]
+                 [
+                   :approval_mode,
+                   :handle,
+                   :id,
+                   :next_free_slot,
+                   :platform,
+                   :posting_slots,
+                   :status,
+                   :weekly_goal
+                 ]
       end
     end
 

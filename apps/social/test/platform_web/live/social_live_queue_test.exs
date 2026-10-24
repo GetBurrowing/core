@@ -216,9 +216,15 @@ defmodule PlatformWeb.SocialLiveQueueTest do
           "schedule_reason" => "Tuesday mornings get the most replies here."
         })
 
+      # 4/11: the button needs a posting slot on the post's account.
+      {:ok, _} =
+        Social.update_account_schedule(ctx.org_id, post.account_id, %{
+          posting_slots: for(d <- 1..7, do: %{weekday: d, time: "06:15"})
+        })
+
       profile = Social.get_profile(ctx.org_id, ctx.profile.id)
       slot = NextSlot.next_free(profile, post)
-      assert %DateTime{} = slot
+      assert %DateTime{minute: 15} = slot
 
       child = open(conn, ctx.h1)
 
