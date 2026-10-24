@@ -1472,7 +1472,16 @@ defmodule Platform.RepoLookupBoundaryTest do
     # read off a `%Stage{}` already loaded from the plan. No boundary caller
     # exists; one would need `Platform.UUID.valid?/1`, and this count is the
     # tripwire that makes somebody look.
-    "platform/orchestration.ex" => 2,
+    # 2 → 7 for task 01a16bf5 stage 1's `unanswered_dispatch_streak/3` (the
+    # TaskRouter's re-dispatch cap). HAND TRIAGE of the five new calls: the
+    # engagement count compares `task_id`, `runtime_id` and `stage_id` as TEXT
+    # through `->>` on JSONB and cannot cast-raise; the four sign-of-life reads
+    # pin `e.task_id`, `p.task_id`, `t.id` (uuid) and `st.id` (uuid). No guard,
+    # for the reason its siblings above have none: the only caller is
+    # `TaskRouter.redispatch_streak/2` with `state.task_id` and a `stage.id`
+    # read off a `%Stage{}` loaded from the plan. A boundary caller would need
+    # `Platform.UUID.valid?/1`, and this count is the tripwire.
+    "platform/orchestration.ex" => 7,
     "platform/orchestration/execution_space.ex" => 4,
     # 4 → 5 for task 01a04a8c's `needs_human_hold/3`. Its `where:` pins a
     # `task_id`, a `runtime_id` and a `stage_id`, and all three reach it from
