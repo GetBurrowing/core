@@ -17,7 +17,8 @@ defmodule Platform.Social.Extension do
   the Social rail item and the `/m/social` live page
   (`PlatformWeb.SocialLive`). Every other registry is empty on purpose: no
   runtime-channel event, LiveView hook (the card's LiveComponent needs
-  none), experiment surface or metric.
+  none) or experiment metric. Composer 1/5 (task 01a14aca) adds the
+  `social.composer.adaptation` experiment surface.
   """
 
   @behaviour Platform.Extension
@@ -82,7 +83,10 @@ defmodule Platform.Social.Extension do
   def live_hooks, do: []
 
   @impl true
-  def experiment_surfaces, do: []
+  # Composer 1/5 (task 01a14aca): the per-platform adaptation prompt and
+  # model. Core's own `@surfaces` list is untouched; `Surfaces.list/0`
+  # merges this in.
+  def experiment_surfaces, do: [Platform.Social.Composer.AdaptationSurface]
 
   @impl true
   def experiment_metrics, do: %{}

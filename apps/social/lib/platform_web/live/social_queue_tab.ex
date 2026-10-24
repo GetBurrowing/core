@@ -281,7 +281,19 @@ defmodule PlatformWeb.SocialQueueTab do
     end
   end
 
+  # Social authoring 6/11: the composer sent (or saved) an idea; re-read the
+  # cards and counts so it shows here at once.
+  def handle_info({PlatformWeb.SocialComposer, _sent_or_saved, _idea_id}, socket),
+    do:
+      {:noreply,
+       socket |> load() |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))}
+
   def handle_info(_message, _socket), do: :unhandled
+
+  # Social authoring 6/11: the composer's host. The shell renders overlays
+  # only from tabs, and Queue is always enabled.
+  @impl true
+  def overlay(assigns), do: PlatformWeb.SocialComposer.host(assigns)
 
   defp card_rev(card) do
     case Platform.Chat.get_canvas(card.canvas_id) do

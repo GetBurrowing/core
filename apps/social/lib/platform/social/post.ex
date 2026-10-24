@@ -94,6 +94,12 @@ defmodule Platform.Social.Post do
     # shown under the suggested time on the Queue's idea card.
     field(:schedule_reason, :string)
 
+    # Composer 1/5 (task 01a14aca): post-side facts of a composed post
+    # (platform, prompt slug, composition id, edited?, edit count before
+    # send), nil for every other post. Never the experiment arm: that is on
+    # the Experiments.Assignment row for the composition.
+    field(:composer_provenance, :map)
+
     timestamps()
   end
 
@@ -116,6 +122,9 @@ defmodule Platform.Social.Post do
   @spec refused_reasons() :: [String.t()]
   def refused_reasons, do: @refused_reasons
 
+  # Composer 1/5: written once, by `Platform.Social.Composer.send/4`.
+  @composer_fields ~w(composer_provenance)a
+
   @doc "Accepted `status` values."
   @spec statuses() :: [String.t()]
   def statuses, do: @statuses
@@ -134,6 +143,7 @@ defmodule Platform.Social.Post do
     post
     |> cast(attrs, @editable)
     |> cast(attrs, @publisher_fields)
+    |> cast(attrs, @composer_fields)
     |> force_aigc_for_agent_media()
     |> validate_required([:status])
     |> validate_inclusion(:status, @statuses)

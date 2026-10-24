@@ -85,3 +85,17 @@ end
 if config_env() == :test do
   config :social, :renderer, Platform.Social.Renderer.Fake
 end
+
+# The composer's model seam (Composer 1/5, task 01a14aca): DATA, read on
+# every call by `Platform.Social.Composer.config/1`, which falls back to the
+# same values when unset (a release whose config does not set it). The
+# drafting agent is whoever `Platform.Roles.assignee_for/1` resolves for
+# `responsibility_key`; no assignee means every column answers
+# `{:error, :no_drafting_agent}`. `model: nil` keeps the agent's own model;
+# an experiment arm on `social.composer.adaptation` may name another.
+config :social, :composer,
+  provider: Platform.Agents.Providers.Anthropic,
+  responsibility_key: "social.composer",
+  temperature: 0.7,
+  max_tokens: 1500,
+  model: nil

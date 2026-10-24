@@ -1790,14 +1790,22 @@ defmodule Platform.Social do
     |> Repo.all()
   end
 
-  @doc "Creates a post on an account in the caller's org. Refused on an archived account."
-  @spec create_post(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), map()) ::
+  @doc """
+  Creates a post on an account in the caller's org. Refused on an archived account.
+
+  `opts` (Social authoring 6/11, the composer): `idea_id:` joins the post to
+  that idea, which must be in the caller's org and on the account's
+  profile, else `{:error, :idea_profile_mismatch}` (a missing idea is
+  `{:error, :not_found}`). `idea_id` stays out of every cast list.
+  """
+  @spec create_post(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), map(), keyword()) ::
           {:ok, Post.t()} | {:error, term()}
-  def create_post(org_id, account, attrs) do
+  def create_post(org_id, account, attrs, opts \\ []) do
     with {:ok, account} <- fetch(Account, org_id, account),
-         :ok <- refuse_archived(account) do
+         :ok <- refuse_archived(account),
+         {:ok, idea_id} <- post_idea(org_id, account, Keyword.get(opts, :idea_id)) do
       changeset =
-        %Post{account_id: account.id}
+        %Post{account_id: account.id, idea_id: idea_id}
         |> Post.changeset(attrs)
         |> ClipMedia.put_media_meta(account.profile_id)
 
@@ -1805,6 +1813,16 @@ defmodule Platform.Social do
            {:ok, post} <- Repo.insert(changeset) do
         {:ok, needs_approval_written(post)}
       end
+    end
+  end
+
+  defp post_idea(_org_id, _account, nil), do: {:ok, nil}
+
+  defp post_idea(org_id, %Account{profile_id: profile_id}, idea_id) do
+    case Platform.Social.Ideas.get(org_id, idea_id) do
+      %Platform.Social.Idea{profile_id: ^profile_id, id: id} -> {:ok, id}
+      %Platform.Social.Idea{} -> {:error, :idea_profile_mismatch}
+      nil -> {:error, :not_found}
     end
   end
 

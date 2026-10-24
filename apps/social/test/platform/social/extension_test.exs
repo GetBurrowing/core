@@ -15,7 +15,7 @@ defmodule Platform.Social.ExtensionTest do
     refute bundle.owns_tool?.("task_get")
     assert Extension.runtime_channel_events() == []
     assert Extension.live_hooks() == []
-    assert Extension.experiment_surfaces() == []
+    assert Extension.experiment_surfaces() == [Platform.Social.Composer.AdaptationSurface]
     assert Extension.experiment_metrics() == %{}
     assert Extension.runtime_disconnected("some-runtime") == :ok
     assert {:error, _} = Extension.handle_runtime_event("anything", "some-runtime", %{})

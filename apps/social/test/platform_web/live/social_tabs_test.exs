@@ -77,7 +77,8 @@ defmodule PlatformWeb.SocialTabsTest do
 
       refute SocialIdeasTab.enabled?()
       refute SocialResultsTab.enabled?()
-      refute PlatformWeb.SocialComposer.enabled?()
+      # Social authoring 6/11 switched the composer on.
+      assert PlatformWeb.SocialComposer.enabled?()
 
       assert Enum.map(SocialTabs.tabs(), & &1.key) ==
                ~w(queue calendar clips connections settings)
@@ -87,7 +88,7 @@ defmodule PlatformWeb.SocialTabsTest do
       assert SocialTabs.tabs([ideas, queue]) == [queue]
     end
 
-    test "a disabled tab adds no button, no data-tab, no pane and no New idea button",
+    test "a disabled tab adds no button, no data-tab and no pane; New idea shows once enabled",
          %{conn: conn, j: j} do
       child = open(conn, j)
 
@@ -101,7 +102,7 @@ defmodule PlatformWeb.SocialTabsTest do
         refute has_element?(child, "[data-pane='#{key}']")
       end
 
-      refute has_element?(child, "[data-role='social-new-idea']")
+      assert has_element?(child, "[data-role='social-new-idea']")
     end
 
     test "a disabled tab's key is ignored by select_tab and by ?tab=", %{conn: conn, j: j} do
