@@ -50,6 +50,14 @@ const ASSETS = resolve(HERE, "..");
 // compose_input hook and lib/mention_field.js). Both are first-party hook code.
 // Same reasoning as above: 960 KB still catches an island leak (~8.2 MB) by a
 // factor of eight.
+//
+// Task 01a13ca2 (Burrow iOS hybrid video, companion connection) raised the
+// ceiling on main from 896 KB to 912 KB, measured in CI with the with-Play
+// build: main was 909,510 bytes at d6577958 and the task branch was 919,160
+// bytes. That is first-party meeting hook code (the companion Room,
+// per-person grouping, and the sharer label and its share-end teardown), not
+// an island. When main was merged into feat/redesign the higher 960 KB
+// ceiling was kept; it covers both sides' first-party growth.
 const MAX_BYTES = 960 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
@@ -135,7 +143,7 @@ async function buildAppBundle() {
 // the loader on app.js's import graph for the first time. Verified this
 // narrowing does NOT defang the guard: with a top-level
 // `import "@excalidraw/excalidraw"` in js/app.js the test still fails on
-// hundreds of surviving occurrences (and the 960 KB ceiling below fires too).
+// hundreds of surviving occurrences (and the KB ceiling below fires too).
 const LOADER_TOKENS = [
   "/assets/js/excalidraw_island.js",
   "/assets/js/excalidraw_island.css",
@@ -164,7 +172,7 @@ test("js/app.js bundle does not contain excalidraw", async () => {
   );
 });
 
-test("js/app.js bundle stays under 960 KB minified", async (t) => {
+test(`js/app.js bundle stays under ${MAX_BYTES / 1024} KB minified`, async (t) => {
   const js = await buildAppBundle();
   const bytes = js.contents.byteLength;
   const flavour = EXTENSIONS_JS ? `with modules (${EXTENSIONS_JS})` : "without modules";
@@ -174,7 +182,7 @@ test("js/app.js bundle stays under 960 KB minified", async (t) => {
   assert.ok(
     bytes < MAX_BYTES,
     `js/app.js bundle is ${bytes} bytes (${(bytes / 1024).toFixed(1)} KB), over the ` +
-      `${MAX_BYTES} byte (960 KB) ceiling. Either something large was added to the ` +
+      `${MAX_BYTES} byte (${MAX_BYTES / 1024} KB) ceiling. Either something large was added to the ` +
       "application bundle, or a lazily-loaded island leaked into it."
   );
 });

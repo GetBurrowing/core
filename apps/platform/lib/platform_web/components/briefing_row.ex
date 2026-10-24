@@ -108,8 +108,7 @@ defmodule PlatformWeb.Components.BriefingRow do
   "5 items · FYI only" or "All done · nothing waiting".
   """
   @spec summary(map()) :: String.t()
-  def summary(%{open: 0}), do: "All done · nothing waiting"
-  def summary(%{total: total, calls: calls}), do: Inbox.briefing_summary(total, calls)
+  def summary(counts), do: Inbox.briefing_summary(counts)
 
   # `{lead, pill}`: the plain part of the line and the call-count pill
   # (nil when nothing needs a call). Joined, they read exactly `summary/1`.

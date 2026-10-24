@@ -26,6 +26,11 @@ config :social, :rate_limit, per_window: 25, window_ms: 3_600_000
 # window has ended (task 01a165f1).
 config :social, :publish_retry, interval_ms: 60_000
 
+# Clip Studio 2/9: the server-side undo window between a human's clip
+# approval and its posts' publish (Platform.Social.ClipPublish), and how often
+# it sweeps for due posts besides the timer each approval arms.
+config :social, :clip_publish, window_ms: 8_000, interval_ms: 30_000
+
 # Dev only: shrink the limit and the retry sweep to watch a rate-limited post
 # go out without waiting an hour. Unset, the defaults above stand.
 if config_env() == :dev do
@@ -49,6 +54,14 @@ end
 # outside a test's sandbox.
 if config_env() == :test do
   config :social, :publish_retry, interval_ms: :infinity
+
+  # The same for ClipPublish: no timers and no boot sweep in the
+  # application's instance; tests run their own and call sweep_now/2.
+  config :social, :clip_publish,
+    window_ms: 8_000,
+    interval_ms: :infinity,
+    timers: false,
+    boot_sweep: false
 end
 
 # How long a connect invite link stays usable (task 01a14ce1), in days.
@@ -72,3 +85,17 @@ end
 if config_env() == :test do
   config :social, :renderer, Platform.Social.Renderer.Fake
 end
+
+# The composer's model seam (Composer 1/5, task 01a14aca): DATA, read on
+# every call by `Platform.Social.Composer.config/1`, which falls back to the
+# same values when unset (a release whose config does not set it). The
+# drafting agent is whoever `Platform.Roles.assignee_for/1` resolves for
+# `responsibility_key`; no assignee means every column answers
+# `{:error, :no_drafting_agent}`. `model: nil` keeps the agent's own model;
+# an experiment arm on `social.composer.adaptation` may name another.
+config :social, :composer,
+  provider: Platform.Agents.Providers.Anthropic,
+  responsibility_key: "social.composer",
+  temperature: 0.7,
+  max_tokens: 1500,
+  model: nil

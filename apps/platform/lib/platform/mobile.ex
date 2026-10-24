@@ -569,6 +569,50 @@ defmodule Platform.Mobile do
     %{approvals: approvals, tasks: tasks, unread: unread, as_of: as_of}
   end
 
+  @doc """
+  Today's daily briefing counts for `user`'s OWN briefing (task 01a161f9,
+  the Android cover-screen widget). "Today" is the America/Chicago date
+  `Platform.Memory.Insights.Disseminator` writes `digest_date` in, so a
+  04:30Z request on the 23rd still reads the 22nd's briefing.
+
+  Composes existing reads only: `Briefings.for_user_on/2` (keyed on the
+  caller's own id, so no other user's row is reachable) and the counts of
+  `Briefings.view/2`, the same numbers the Inbox row shows. Items, titles
+  and bodies are never returned.
+
+  Options: `:now` (DateTime, default `DateTime.utc_now/0`).
+  """
+  @spec today_briefing_for_user(User.t(), keyword()) :: %{
+          today: Date.t(),
+          briefing:
+            nil
+            | %{
+                date: Date.t(),
+                total: non_neg_integer(),
+                open: non_neg_integer(),
+                calls: non_neg_integer(),
+                handled: non_neg_integer()
+              }
+        }
+  def today_briefing_for_user(%User{} = user, opts \\ []) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+    today = Platform.Memory.Insights.Disseminator.local_date(now)
+
+    briefing =
+      case Platform.Memory.Insights.Briefings.for_user_on(user.id, today) do
+        nil ->
+          nil
+
+        row ->
+          %{counts: counts} =
+            Platform.Memory.Insights.Briefings.view(row, Platform.Access.Scope.for_user(user))
+
+          Map.put(counts, :date, row.digest_date)
+      end
+
+    %{today: today, briefing: briefing}
+  end
+
   @doc "SHA-256 of a raw token or code, as stored."
   @spec hash(String.t()) :: binary()
   def hash(raw) when is_binary(raw), do: :crypto.hash(:sha256, raw)

@@ -358,6 +358,22 @@ describe("MeetingTranscript", () => {
     expect(hook.el.innerHTML.match(/data-role="transcript-time">\d{2}:\d{2}</g)).toHaveLength(3)
   })
 
+  it("groups and labels a line from a companion (video:user:A) under user:A, never video:", () => {
+    caption(listeners, { id: "a", speaker: "Ada", identity: "user:A", text: "one" })
+    caption(listeners, { id: "b", speaker: "Ada", identity: "video:user:A", text: "two" })
+    // A nameless companion whose label fell back to its raw identity.
+    caption(listeners, { id: "c", speaker: "video:user:A", identity: "video:user:A", text: "three" })
+
+    expect(headerCount(hook)).toBe(1)
+    expect(hairlineCount(hook)).toBe(0)
+    expect(renderedLines(hook)).toEqual(["Ada one", "Ada two", "user:A three"])
+    expect(hook.el.innerHTML).not.toContain("video:")
+
+    // DIRECTION CONTROL: a different person still starts a new group.
+    caption(listeners, { id: "d", speaker: "Bea", identity: "user:B", text: "four" })
+    expect(headerCount(hook)).toBe(2)
+  })
+
   it("marks an agent speaker with an outline chip keyed on the agent: identity prefix, never a colour", () => {
     caption(listeners, { id: "a", speaker: "Alex", identity: "user:1", text: "human" })
     expect(hook.el.innerHTML).not.toContain("transcript-agent-chip")

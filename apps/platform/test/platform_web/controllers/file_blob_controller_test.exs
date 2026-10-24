@@ -337,6 +337,79 @@ defmodule PlatformWeb.FileBlobControllerTest do
     end
   end
 
+  # Task 01a165ec stage 4: a <video> on this route must be seekable, so a
+  # `#t=` media fragment paints its frame and the Social cover picker can
+  # scrub. Only video/audio answer a range; other types are unchanged.
+  describe "Range on video and audio" do
+    test "a video answers a single range with 206 and the exact slice", %{conn: conn} do
+      user = insert_user()
+      {file, _path} = seed_blob(seed_acme_project(), "video/mp4", "0123456789")
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("range", "bytes=2-5")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert response(conn, 206) == "2345"
+      assert get_resp_header(conn, "content-range") == ["bytes 2-5/10"]
+      assert get_resp_header(conn, "accept-ranges") == ["bytes"]
+      assert response_content_type(conn, :mp4) =~ "video/mp4"
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    end
+
+    test "a video without a range is the whole body and advertises ranges", %{conn: conn} do
+      user = insert_user()
+      {file, _path} = seed_blob(seed_acme_project(), "video/mp4", "0123456789")
+
+      conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
+
+      assert response(conn, 200) == "0123456789"
+      assert get_resp_header(conn, "accept-ranges") == ["bytes"]
+    end
+
+    test "a range past the end is 416", %{conn: conn} do
+      user = insert_user()
+      {file, _path} = seed_blob(seed_acme_project(), "audio/mpeg", "0123456789")
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("range", "bytes=50-60")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 416
+      assert get_resp_header(conn, "content-range") == ["bytes */10"]
+    end
+
+    test "a non-media file ignores the range and is served whole", %{conn: conn} do
+      user = insert_user()
+      {file, _path} = seed_blob(seed_acme_project(), "image/png", "PNGBYTES")
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("range", "bytes=0-1")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert response(conn, 200) == "PNGBYTES"
+      assert get_resp_header(conn, "accept-ranges") == []
+    end
+
+    test "a non-member still gets 403, range or not", %{conn: conn} do
+      user = insert_user(member: false)
+      {file, _path} = seed_blob(seed_acme_project(), "video/mp4", "0123456789")
+
+      conn =
+        conn
+        |> authed_conn(user)
+        |> put_req_header("range", "bytes=0-3")
+        |> get(~p"/files/blob/#{file.id}")
+
+      assert conn.status == 403
+    end
+  end
+
   describe "GET /files/blob/:id?download=1" do
     test "forces attachment disposition for an inline-default type (image)", %{conn: conn} do
       user = insert_user()

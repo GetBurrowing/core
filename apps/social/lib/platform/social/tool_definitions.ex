@@ -7,10 +7,17 @@ defmodule Platform.Social.ToolDefinitions do
 
   ## There is no publish tool and no approve tool
 
-  Nine tools: read profiles, draft and edit posts up to `needs_approval`,
-  list posts (with why a human rejected one), propose clips, (Social 5/7)
-  queue a clip's render and list clips with their render state, and (Social
-  6/7) file a social task for an ask heard in a meeting or chat. Every description
+  Ten tools: read profiles, draft and edit posts up to `needs_approval`,
+  list posts (with why a human rejected one), propose clips, (Clip Studio
+  1/9) submit a clip rendered outside Burrow for review, (Social 5/7)
+  queue a clip's render and list clips with their render and review state,
+  (Social 6/7) file a social task for an ask heard in a meeting or chat,
+  and (Clip Studio 1/9) five tools a clip runner uses to work Clip Studio's
+  job list (list, claim, progress, complete, fail), and (Social authoring
+  2/11) create and list ideas, the record one post per account hangs off.
+  Seventeen in all. No tool
+  creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
+  tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
   platform publishes.
 
@@ -24,8 +31,10 @@ defmodule Platform.Social.ToolDefinitions do
   @human_approves "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
-            social_post_list social_clip_propose social_clip_render social_clip_list
-            social_task_request)
+            social_post_list social_clip_propose social_clip_submit social_clip_render
+            social_clip_list social_task_request social_clip_job_list social_clip_job_claim
+            social_clip_job_progress social_clip_job_complete social_clip_job_fail
+            social_idea_create social_idea_list social_idea_note_add)
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -54,6 +63,12 @@ defmodule Platform.Social.ToolDefinitions do
       required: false,
       description:
         "ISO-8601 time to publish at, in the future. It only takes effect once a human approves."
+    },
+    schedule_reason: %{
+      type: "string",
+      required: false,
+      description:
+        "Why you suggest scheduled_at, in one plain sentence (at most 280 characters), e.g. \"Tuesday mornings get the most replies on this account.\" Shown to the approver under the time."
     },
     status: %{
       type: "string",
@@ -88,12 +103,34 @@ defmodule Platform.Social.ToolDefinitions do
       required: false,
       description: "Source start, in seconds into the episode."
     },
-    end_s: %{type: "number", required: false, description: "Source end, in seconds."}
+    end_s: %{type: "number", required: false, description: "Source end, in seconds."},
+    cover_file_id: %{
+      type: "string",
+      required: false,
+      description:
+        "Video posts only: id of a JPG or PNG (Burrow Files, in the profile's org) to use as the cover. Setting it clears cover_offset_ms; send null to clear."
+    },
+    cover_offset_ms: %{
+      type: "integer",
+      required: false,
+      description:
+        "Video posts only: use the frame at this many milliseconds into the video as the cover (0 to the video's length; refused when the length is unknown). Setting it clears cover_file_id; send null to clear. Never send both."
+    }
   }
 
-  @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, caption, speaker, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at}"
+  @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, title, caption, speaker, episode_code, origin, source_label, review_status, review_note, reviewed_at, rev, look, trim_in_s, trim_out_s, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at}"
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, inserted_at, updated_at}"
+  @review_only "The clip lands as review pending. Only a human approver approves or rejects it; review_status, review_note, reviewed_by_user_id, reviewed_at and rev are never taken from an agent."
+
+  @job_row "%{id, profile_id, clip_id, kind, status, progress, eta_s, payload, result, error, claimed_by_agent_id, claimed_at, finished_at, inserted_at}"
+
+  @runner_contract "The runner only runs `clip` commands plus review.toml. New clip: `clip process <video> --project <dir>`, write in/out to review.toml, `clip review <project> --apply`, `clip finalize`. Re-render: edit only that clip's start/end or look, `clip review <project> --apply`, `clip finalize`. Read state only through `clip project info --json`, `clip version --json` and `clip doctor --json`; project files are internal. Never write picks JSON. Look changes go into a user profile with extends = \"how-to-computer\" (`clip profile new|import`, `clip profile use`), named by payload.clip_user_profile; never edit the built-in how-to-computer profile. payload.clip_overrides.mapped holds the clip profile keys; payload.clip_overrides.unmapped lists studio look keys with no clip equivalent, which you report rather than invent. Upload the output to Burrow Files in the profile's project (file_add) and pass its file_id to social_clip_job_complete. Report progress with social_clip_job_progress and failures, with the clip error code, through social_clip_job_fail."
+
+  @job_errors "not_found for a job or profile outside your org, exactly as for a missing id. already_claimed when another runner (or you) claimed it first. not_claimer when you did not claim it. job_closed when it is already done or failed. invalid_progress unless progress is 0..1 and eta_s >= 0. file_not_in_project when the file is missing, deleted, or in another project or org (all alike). not_a_video unless the file is video/*."
+
+  @privacy_null "title, caption, speaker and episode_code may be null (the clip tool's [privacy] mode = \"local\" sends nothing transcript-derived)."
+
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, schedule_reason, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, idea_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -121,16 +158,17 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_profile_get",
         description:
-          "Read one social profile: its accounts, home_url, voice notes and default hashtags. " <>
+          "Read one social profile: its accounts (with posting slots, weekly goal and next free slot), home_url, timezone, voice (sample posts, banned phrases, learnings), voice notes and default hashtags. " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."}
         },
         returns:
-          "%{id, org_id, name, home_url, voice_notes, default_hashtags, accounts: [%{id, platform, handle, approval_mode, status}]}",
+          "%{id, org_id, name, home_url, voice_notes, default_hashtags, timezone (IANA), voice: %{samples, banned, learnings: [%{id, text, accepted_at}]}, drafting_agent_id, accounts: [%{id, platform, handle, approval_mode, status, posting_slots: [%{weekday 1..7 (Mon=1), time HH:MM in timezone}], weekly_goal, next_free_slot (UTC ISO 8601 or null)}]}",
         limitations:
           "not_found for a profile outside your org, exactly as for a missing id. No credential or secret is ever returned.",
-        when_to_use: "Before drafting, to match the profile's voice and hashtags."
+        when_to_use:
+          "Before drafting, to match the profile's voice (imitate samples, never use a banned phrase) and hashtags, and to pick a scheduled_at (next_free_slot)."
       },
       %{
         name: "social_draft_create",
@@ -145,11 +183,17 @@ defmodule Platform.Social.ToolDefinitions do
               required: true,
               description: "Ids of the profile's accounts to post on.",
               schema: %{type: "array", items: %{type: "string"}}
+            },
+            idea_id: %{
+              type: "string",
+              required: false,
+              description:
+                "The idea these posts belong to (social_idea_create / social_idea_list), one post per account. Must be an idea of the same profile."
             }
           }),
         returns: "%{posts: [#{@post_row}], count}",
         limitations:
-          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org.",
+          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org. An idea_id outside your org is not_found; another profile's idea is idea_profile_mismatch; an archived idea is idea_archived. A body containing one of the profile's voice.banned phrases (case-insensitive) is refused with banned_phrase, naming it.",
         when_to_use:
           "When you have post copy ready for a human to review. With no link_url, home_url is appended."
       },
@@ -164,7 +208,7 @@ defmodule Platform.Social.ToolDefinitions do
           }),
         returns: "%{post: #{@post_row}}",
         limitations:
-          "A post past needs_approval (approved, scheduled, published, failed) is refused with post_locked and left unchanged. Rejection fields cannot be written.",
+          "A post past needs_approval (approved, scheduled, published, failed) is refused with post_locked and left unchanged. Rejection fields cannot be written. A body containing one of the profile's voice.banned phrases is refused with banned_phrase.",
         when_to_use: "To revise a draft, for example after a human rejected it with a reason."
       },
       %{
@@ -188,8 +232,10 @@ defmodule Platform.Social.ToolDefinitions do
           limit: %{type: "integer", required: false, description: "Page size (default 50)."},
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
-        returns: "%{posts: [#{@post_row}], total, has_more, limit, offset}",
-        limitations: "not_found for a profile outside your org. Oldest first.",
+        returns:
+          "%{posts: [#{@post_row} plus events: [%{id, action, actor_kind, actor_id, body_before, body_after, note, inserted_at}]], total, has_more, limit, offset}",
+        limitations:
+          "not_found for a profile outside your org. Oldest first. clip_id, idea_id, platform_post_id, publish_attempts and published_at are read-only and may be null (publish_attempts is 0 before any vendor call). events is the post's change log, oldest first: actor_kind says whether an agent, a human or the system made each change.",
         when_to_use:
           "To see what is waiting, what shipped, what was rejected and why, and (refused: true) what is stuck before the vendor. Only a human retries a refused post; a rate_limited one goes out by itself at retry_after."
       },
@@ -251,9 +297,81 @@ defmodule Platform.Social.ToolDefinitions do
         when_to_use: "When a moment in an episode would make a good short clip."
       },
       %{
+        name: "social_clip_submit",
+        description:
+          "Submit a clip rendered OUTSIDE Burrow (for example by htc-clip-tool) for review: the rendered video must already be in Burrow Files in the profile's project. It lands as origin external, status rendered, review pending, rev 1, with the profile's show look. " <>
+            @review_only <> " " <> @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          file_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The rendered video in Burrow Files, in the profile's project. Upload it first with file_add using project_id = the profile's project (for large files, the presigned POST)."
+          },
+          title: %{
+            type: "string",
+            required: false,
+            description: "The clip's title (non-blank, at most 200 characters). May be null."
+          },
+          caption: %{
+            type: "string",
+            required: false,
+            description: "Suggested caption. May be null."
+          },
+          speaker: %{
+            type: "string",
+            required: false,
+            description: "Who is speaking. May be null."
+          },
+          episode_code: %{
+            type: "string",
+            required: false,
+            description: "The episode code, e.g. S2E14 (at most 32 characters). May be null."
+          },
+          source_label: %{
+            type: "string",
+            required: false,
+            description: "Where the clip was rendered, e.g. htc-clip-tool. Default \"external\"."
+          },
+          platforms: %{
+            type: "array",
+            required: false,
+            description:
+              "Target platforms; each must be one of the profile's accounts. Default: none.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          duration_s: %{
+            type: "number",
+            required: false,
+            description:
+              "The video's length in seconds. Used only when the server cannot probe the file."
+          },
+          width: %{
+            type: "number",
+            required: false,
+            description:
+              "The video's width in pixels. Used only when the server cannot probe the file."
+          },
+          height: %{
+            type: "number",
+            required: false,
+            description:
+              "The video's height in pixels. Used only when the server cannot probe the file."
+          }
+        },
+        returns: "%{clip: #{@clip_row}}",
+        limitations:
+          "not_found for a profile outside your org, exactly as for a missing id. file_not_in_project when the file is missing, deleted, or in another project or org (all alike). not_a_video unless the file's content type is video/*. invalid_title for a blank or over-long title. invalid_argument for platforms not on the profile. profile_needs_project when the profile has no project in its org. " <>
+            @review_only <>
+            " Chat attachments are not accepted: the file must be in Burrow Files. " <>
+            @privacy_null,
+        when_to_use: "When a clip rendered outside Burrow should reach review."
+      },
+      %{
         name: "social_clip_render",
         description:
-          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Burrow Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. Attach the render_file_id to a draft with social_draft_create. " <>
+          "Queue a clip's render: a 1080x1920 captioned video with an end card, stored in Burrow Files. Returns at once with status rendering; poll social_clip_list until it is rendered or failed. A rendered clip enters review as pending (a forced re-render of an approved clip stays approved). Attach the render_file_id to a draft with social_draft_create. " <>
             @human_approves,
         parameters: %{
           clip_id: %{type: "string", required: true, description: "The clip id."},
@@ -278,7 +396,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_clip_list",
         description:
-          "List a profile's clips with their render state: status, error, render_file_id, duration_s, width and height. " <>
+          "List a profile's clips with their render state (status, error, render_file_id, duration_s, width, height) and their review state (review_status, review_note, reviewed_at, rev, look). review_note is how a reviewer's rejection reason reaches the renderer: read it before re-rendering a rejected clip. " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -287,11 +405,19 @@ defmodule Platform.Social.ToolDefinitions do
             required: false,
             description: "One of candidate, rendering, rendered, failed."
           },
+          review_status: %{
+            type: "string",
+            required: false,
+            description:
+              "A read filter: one of pending, approved, rejected. It never changes a clip's review."
+          },
           limit: %{type: "integer", required: false, description: "Page size (default 50)."},
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
         returns: "%{clips: [#{@clip_row}], total, has_more, limit, offset}",
-        limitations: "not_found for a profile outside your org. Oldest first.",
+        limitations:
+          "not_found for a profile outside your org. invalid_review_status unless review_status is pending, approved or rejected. Oldest first. " <>
+            @privacy_null,
         when_to_use: "To follow a render, or to find a rendered clip's render_file_id."
       },
       %{
@@ -350,6 +476,241 @@ defmodule Platform.Social.ToolDefinitions do
         limitations:
           "Refused for segments classed off-topic (segment_off_topic), retracted or vetoed (segment_retracted), or not yet classified (segment_unclassified, recoverable: retry, or cite the episode by URL and time). The task is assigned to YOU: draft its posts with social_draft_create task_id=<returned task_id>. No post is published without a human. not_found for a profile outside your org, exactly as for a missing id; meeting_not_found for a meeting outside the profile's project.",
         when_to_use: "When a human in a meeting or chat asks for a post or a clip for a profile."
+      },
+      %{
+        name: "social_clip_job_list",
+        description:
+          "List a profile's Clip Studio jobs (new_clip, rerender, save_default), each with the payload a clip runner needs. Humans enqueue jobs in Burrow; no tool creates one. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          status: %{
+            type: "string",
+            required: false,
+            description: "One of queued, claimed, running, done, failed."
+          },
+          kind: %{
+            type: "string",
+            required: false,
+            description: "One of new_clip, rerender, save_default."
+          },
+          limit: %{type: "integer", required: false, description: "Page size (default 50)."},
+          offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
+        },
+        returns: "%{jobs: [#{@job_row}], total, has_more, limit, offset}",
+        limitations: @job_errors <> " Oldest first. " <> @privacy_null,
+        when_to_use: "To find queued jobs to claim, and to read a job's payload."
+      },
+      %{
+        name: "social_clip_job_claim",
+        description:
+          "Claim a queued Clip Studio job for yourself. Atomic: exactly one claimer wins; every other gets already_claimed. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{type: "string", required: true, description: "The job id."}
+        },
+        returns: "%{job: #{@job_row}}",
+        limitations:
+          "The claimer is always you (your agent), never an argument. " <>
+            @job_errors <> " " <> @privacy_null,
+        when_to_use: "Before running `clip` for a queued job."
+      },
+      %{
+        name: "social_clip_job_progress",
+        description:
+          "Report progress on a job you claimed; the job becomes running. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{type: "string", required: true, description: "The job id."},
+          progress: %{type: "number", required: true, description: "Fraction done, 0 to 1."},
+          eta_s: %{
+            type: "number",
+            required: false,
+            description: "Estimated seconds left (>= 0)."
+          }
+        },
+        returns: "%{job: #{@job_row}}",
+        limitations: @job_errors <> " " <> @privacy_null,
+        when_to_use: "While `clip` runs, so the studio's render queue shows progress."
+      },
+      %{
+        name: "social_clip_job_complete",
+        description:
+          "Complete a job you claimed with the rendered video and its metadata (the social_clip_submit arguments). For new_clip and rerender the clip gets the new file and a new rev and returns to review as pending; save_default writes no clip. " <>
+            @runner_contract <> " " <> @review_only <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{type: "string", required: true, description: "The job id."},
+          file_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Required for new_clip and rerender: the rendered video in Burrow Files, in the profile's project (file_add with project_id = the profile's project)."
+          },
+          title: %{type: "string", required: false, description: "The clip's title. May be null."},
+          caption: %{
+            type: "string",
+            required: false,
+            description: "Suggested caption. May be null."
+          },
+          speaker: %{
+            type: "string",
+            required: false,
+            description: "Who is speaking. May be null."
+          },
+          episode_code: %{
+            type: "string",
+            required: false,
+            description: "The episode code, e.g. S2E14. May be null."
+          },
+          source_label: %{
+            type: "string",
+            required: false,
+            description: "Where it was rendered. Default htc-clip-tool."
+          },
+          platforms: %{
+            type: "array",
+            required: false,
+            description: "Target platforms; each must be one of the profile's accounts.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          duration_s: %{
+            type: "number",
+            required: false,
+            description: "Length in seconds, used only when the server cannot probe the file."
+          },
+          width: %{
+            type: "number",
+            required: false,
+            description: "Width in pixels, used only when the server cannot probe the file."
+          },
+          height: %{
+            type: "number",
+            required: false,
+            description: "Height in pixels, used only when the server cannot probe the file."
+          }
+        },
+        returns: "%{job: #{@job_row}, clip: #{@clip_row} | nil}",
+        limitations:
+          "Only the arguments listed are read; anything else, including every review field, is ignored. " <>
+            @job_errors <> " " <> @privacy_null,
+        when_to_use: "After `clip finalize`, once the output is uploaded to Burrow Files."
+      },
+      %{
+        name: "social_clip_job_fail",
+        description:
+          "Fail a job you claimed, with the error and the `clip` error code. A new_clip job's clip stays a candidate with no file. " <>
+            @runner_contract <> " " <> @human_approves,
+        parameters: %{
+          job_id: %{type: "string", required: true, description: "The job id."},
+          error: %{
+            type: "string",
+            required: true,
+            description: "What went wrong, in words (at most 2000 characters)."
+          },
+          code: %{
+            type: "string",
+            required: false,
+            description: "The `clip` error code, prefixed to the error."
+          }
+        },
+        returns: "%{job: #{@job_row}}",
+        limitations: "invalid_error for a blank error. " <> @job_errors <> " " <> @privacy_null,
+        when_to_use: "When `clip` fails or the job cannot be done."
+      },
+      %{
+        name: "social_idea_create",
+        description:
+          "Create an idea under a profile: the record one post per account belongs to. Then draft its posts with social_draft_create idea_id=<id>. " <>
+            @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          title: %{
+            type: "string",
+            required: true,
+            description: "The idea in a few words (at most 200 characters)."
+          },
+          brief: %{type: "string", required: false, description: "What the posts should say."},
+          source_kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Where the idea came from: one of human, agent, chat, clip, task, meeting, url (default agent)."
+          },
+          clip_id: %{
+            type: "string",
+            required: false,
+            description: "Source clip, of this profile."
+          },
+          task_id: %{
+            type: "string",
+            required: false,
+            description: "Source task, in the profile's org."
+          },
+          meeting_id: %{
+            type: "string",
+            required: false,
+            description: "Source meeting, in the profile's org."
+          },
+          message_id: %{
+            type: "string",
+            required: false,
+            description: "Source chat message, in a space of the profile's org."
+          },
+          source_url: %{type: "string", required: false, description: "Source http or https URL."}
+        },
+        returns:
+          "%{idea: %{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts, open_revisions}}",
+        limitations:
+          "not_found for a profile outside your org. Refs outside the profile's org are invalid_argument. You are recorded as the creator. Creating an idea writes no post and asks no human.",
+        when_to_use:
+          "Before drafting the same idea for several accounts, so the drafts stay one group."
+      },
+      %{
+        name: "social_idea_list",
+        description:
+          "List a profile's ideas, newest first, each with its stage (derived from its posts: inbox, drafting, in_review, scheduled, live, failed), its posts with their change log, any open revision notes a human left, and the idea's notes thread (humans and agents, oldest first). " <>
+            @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          stage: %{
+            type: "string",
+            required: false,
+            description:
+              "Only ideas at this stage: inbox, drafting, in_review, scheduled, live or failed."
+          },
+          archived: %{
+            type: "boolean",
+            required: false,
+            description: "true: include archived ideas. Default false."
+          },
+          limit: %{type: "integer", required: false, description: "Page size (default 50)."},
+          offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
+        },
+        returns:
+          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}], notes: [%{id, author_kind, author_id, body, inserted_at}]}], total, has_more, limit, offset}",
+        limitations:
+          "not_found for a profile outside your org. Posts with no idea are not listed here (social_post_list has them). A revision note stays open until you edit the post (social_draft_update) or a human decides it.",
+        when_to_use:
+          "To see where each idea stands and what a human asked you to revise. Revise with social_draft_update; the post stays waiting for the human."
+      },
+      %{
+        name: "social_idea_note_add",
+        description:
+          "Add a note to an idea's thread, where the humans on the profile and other agents read it in the Ideas tab. " <>
+            @human_approves,
+        parameters: %{
+          idea_id: %{type: "string", required: true, description: "The idea id."},
+          body: %{
+            type: "string",
+            required: true,
+            description: "The note (at most 4000 characters)."
+          }
+        },
+        returns: "%{note: %{id, idea_id, author_kind, author_id, body, inserted_at}}",
+        limitations:
+          "not_found for an idea outside your org, exactly as for a missing id. invalid_argument for a blank or over-long body. You are recorded as the author. A note writes no post and approves nothing.",
+        when_to_use:
+          "To answer a human's note on an idea, or to say what you are doing with it (a question, a plan, why a version differs)."
       }
     ]
   end

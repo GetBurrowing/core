@@ -65,6 +65,17 @@ defmodule Platform.Social.Publisher do
         }
 
   @typedoc """
+  A video post's cover (task 01a165ec, stage 3): an uploaded image, by a
+  vendor-fetchable signed URL, or a frame of the video, by offset. `nil`
+  when the post has none. An adapter maps it where its platform takes a
+  cover at create time and ignores it elsewhere.
+  """
+  @type cover ::
+          nil
+          | %{kind: :image, url: String.t(), content_type: String.t()}
+          | %{kind: :frame, offset_ms: non_neg_integer()}
+
+  @typedoc """
   The vendor-neutral publish request. `idempotency_key` is the post id, so a
   retried publish is a replay at the vendor, not a second post.
   """
@@ -76,28 +87,43 @@ defmodule Platform.Social.Publisher do
           is_aigc: boolean(),
           ai_disclosure: String.t() | nil,
           platform: String.t(),
-          idempotency_key: String.t()
+          idempotency_key: String.t(),
+          cover: cover(),
+          options: %{optional(String.t()) => String.t()}
         }
 
+  @typedoc """
+  A publish result. `external_id` is the vendor's id for the post. The
+  optional `:platform_post_id` (Clip Studio 2/9) is the platform's own id
+  for it, when the vendor reports one; `Platform.Social.Publishing` stores it
+  on the row and treats a missing key or nil as "not known yet".
+  """
   @type publish_result :: %{
-          external_id: binary(),
-          status: :scheduled | :published,
-          external_url: binary() | nil
+          required(:external_id) => binary(),
+          required(:status) => :scheduled | :published,
+          required(:external_url) => binary() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
+  @typedoc "A status read. `:platform_post_id` is optional, as in `t:publish_result/0`."
   @type status_result :: %{
-          status: :scheduled | :published | :failed,
-          external_url: binary() | nil,
-          error: String.t() | nil
+          required(:status) => :scheduled | :published | :failed,
+          required(:external_url) => binary() | nil,
+          required(:error) => String.t() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
-  @typedoc "One status event from a verified webhook delivery."
+  @typedoc """
+  One status event from a verified webhook delivery. `:platform_post_id` is
+  optional, as in `t:publish_result/0`.
+  """
   @type event :: %{
-          event_id: String.t() | nil,
-          external_id: String.t() | nil,
-          kind: :published | :failed | :ignored,
-          external_url: String.t() | nil,
-          error: String.t() | nil
+          required(:event_id) => String.t() | nil,
+          required(:external_id) => String.t() | nil,
+          required(:kind) => :published | :failed | :ignored,
+          required(:external_url) => String.t() | nil,
+          required(:error) => String.t() | nil,
+          optional(:platform_post_id) => String.t() | nil
         }
 
   @type delivery :: %{raw_body: binary(), headers: map()}
@@ -159,6 +185,17 @@ defmodule Platform.Social.Publisher do
   one the vendor already disconnected is `:ok`.
   """
   @callback disconnect_account(account()) :: :ok | {:error, term()}
+
+  @doc """
+  OPTIONAL. Sets an uploaded cover image on a post AFTER it is published,
+  for platforms whose create call takes none (YouTube). `url` is a
+  vendor-fetchable signed URL. Called once, never retried; a failure is
+  recorded on the post's `cover_error` and never changes its status.
+  """
+  @callback set_cover(account(), external_id :: String.t(), url :: String.t()) ::
+              :ok | {:error, term()}
+
+  @optional_callbacks set_cover: 3
 
   @doc """
   Verifies a webhook delivery's signature over the RAW body with `secret`

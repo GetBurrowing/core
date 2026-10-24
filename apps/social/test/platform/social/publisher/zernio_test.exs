@@ -251,6 +251,105 @@ defmodule Platform.Social.Publisher.ZernioTest do
     end
   end
 
+  describe "covers (task 01a165ec stage 3)" do
+    @video [
+      %{
+        url: "https://cdn.example.test/v.mp4",
+        content_type: "video/mp4",
+        byte_size: 9,
+        duration_s: 30
+      }
+    ]
+    @image_cover %{
+      kind: :image,
+      url: "https://suite.example.test/files/signed/tok",
+      content_type: "image/jpeg"
+    }
+    @frame_cover %{kind: :frame, offset_ms: 7400}
+
+    defp publish_body(ctx, platform, cover) do
+      {_, account} = account!(ctx.org_id, platform, %{provider_account_ref: "zacct_#{platform}"})
+      put_key!(account)
+      capture_post()
+
+      assert {:ok, _} =
+               Zernio.publish(account, request(platform, %{media: @video, cover: cover}))
+
+      assert_received {:zernio, "POST", "/api/v1/posts", _, body}
+      assert [%{"platformSpecificData" => data}] = body["platforms"]
+      {body, data}
+    end
+
+    test "instagram + video + uploaded cover sends instagramThumbnail, no thumbOffset", ctx do
+      {_body, data} = publish_body(ctx, "instagram", @image_cover)
+      assert data["instagramThumbnail"] == @image_cover.url
+      refute Map.has_key?(data, "thumbOffset")
+      refute Map.has_key?(data, "reelCover")
+    end
+
+    test "instagram + video + frame sends thumbOffset as integer ms, no instagramThumbnail",
+         ctx do
+      {_body, data} = publish_body(ctx, "instagram", @frame_cover)
+      assert data["thumbOffset"] == 7400
+      refute Map.has_key?(data, "instagramThumbnail")
+      refute Map.has_key?(data, "reelCover")
+    end
+
+    test "no cover sends neither key", ctx do
+      {body, data} = publish_body(ctx, "instagram", nil)
+      assert data == %{"isAiGenerated" => false}
+      refute body |> Jason.encode!() |> String.contains?("Thumb")
+    end
+
+    test "linkedin and tiktok carry no cover keys even with a cover", ctx do
+      for {platform, cover} <- [{"linkedin", @image_cover}, {"tiktok", @frame_cover}] do
+        {body, data} = publish_body(ctx, platform, cover)
+        assert data == %{}
+        encoded = Jason.encode!(body)
+
+        for key <- ~w(instagramThumbnail thumbOffset reelCover cover thumbnail),
+            do: refute(String.contains?(encoded, key), "#{platform} body carried #{key}")
+      end
+    end
+
+    test "a YouTube publish body carries no thumbnail key", ctx do
+      {body, data} = publish_body(ctx, "youtube", @image_cover)
+      assert data == %{"containsSyntheticMedia" => false}
+      refute body |> Jason.encode!() |> String.downcase() |> String.contains?("thumb")
+    end
+
+    test "set_cover POSTs /v1/posts/<id>/update-metadata with platform youtube and thumbnailUrl",
+         ctx do
+      {_, account} = account!(ctx.org_id, "youtube", %{provider_account_ref: "zacct_yt"})
+      put_key!(account)
+      capture_post(200, %{"success" => true})
+
+      assert :ok = Zernio.set_cover(account, "zp_yt", @image_cover.url)
+
+      assert_received {:zernio, "POST", "/api/v1/posts/zp_yt/update-metadata", headers, body}
+      assert {"authorization", "Bearer " <> @key} in headers
+
+      assert body == %{
+               "platform" => "youtube",
+               "accountId" => "zacct_yt",
+               "thumbnailUrl" => @image_cover.url
+             }
+    end
+
+    test "set_cover maps 400 and 429 to errors", ctx do
+      {_, account} = account!(ctx.org_id, "youtube", %{provider_account_ref: "zacct_yt"})
+      put_key!(account)
+
+      capture_post(400, %{"error" => "channel is not phone-verified"})
+
+      assert {:error, "Zernio refused the request (HTTP 400): channel is not phone-verified"} =
+               Zernio.set_cover(account, "zp_yt", @image_cover.url)
+
+      capture_post(429, %{"error" => "uploadRateLimitExceeded"})
+      assert {:error, :rate_limited} = Zernio.set_cover(account, "zp_yt", @image_cover.url)
+    end
+  end
+
   describe "connect_url/2, status/2, delete/2" do
     test "connect_url returns the authUrl; x is twitter", ctx do
       {profile, account} = account!(ctx.org_id, "x")
@@ -329,18 +428,36 @@ defmodule Platform.Social.Publisher.ZernioTest do
         {%{
            "status" => "published",
            "platforms" => [%{"platformPostUrl" => "https://li.example.test/2"}]
-         }, %{status: :published, external_url: "https://li.example.test/2", error: nil}},
+         },
+         %{
+           status: :published,
+           external_url: "https://li.example.test/2",
+           error: nil,
+           platform_post_id: nil
+         }},
         {%{"status" => "failed", "platforms" => [%{"errorMessage" => "token expired"}]},
-         %{status: :failed, external_url: nil, error: "token expired"}},
+         %{status: :failed, external_url: nil, error: "token expired", platform_post_id: nil}},
         {%{
            "status" => "partial",
            "platforms" => [
              %{"platformPostId" => "123", "platformPostUrl" => "https://li.example.test/3"}
            ]
-         }, %{status: :published, external_url: "https://li.example.test/3", error: nil}},
+         },
+         %{
+           status: :published,
+           external_url: "https://li.example.test/3",
+           error: nil,
+           platform_post_id: "123"
+         }},
         {%{"status" => "cancelled", "platforms" => [%{}]},
-         %{status: :failed, external_url: nil, error: "cancelled at vendor"}},
-        {%{"status" => "publishing"}, %{status: :scheduled, external_url: nil, error: nil}}
+         %{
+           status: :failed,
+           external_url: nil,
+           error: "cancelled at vendor",
+           platform_post_id: nil
+         }},
+        {%{"status" => "publishing"},
+         %{status: :scheduled, external_url: nil, error: nil, platform_post_id: nil}}
       ]
 
       for {post, expected} <- cases do
@@ -879,7 +996,9 @@ defmodule Platform.Social.Publisher.ZernioTest do
                external_id: "zp_1",
                kind: :published,
                external_url: "https://li.example.test/9",
-               error: nil
+               platform_post_id: "1",
+               error: nil,
+               auth?: false
              }
     end
 
@@ -989,6 +1108,121 @@ defmodule Platform.Social.Publisher.ZernioTest do
             do: {Path.relative_to(path, lib), pattern}
 
       assert offenders == []
+    end
+  end
+
+  describe "platformPostId (Clip Studio 2/9, task 01a16662)" do
+    setup do
+      previous = Application.get_env(:social, :publisher)
+      Application.put_env(:social, :publisher, Zernio)
+      on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
+      :ok
+    end
+
+    # A Post in the OpenAPI shape: `_id` is Zernio's post id, and each
+    # `platforms[]` entry carries the platform's own `platformPostId`.
+    defp openapi_post(id, status, entry) do
+      %{
+        "_id" => id,
+        "content" => "via zernio",
+        "status" => status,
+        "platforms" => [
+          Map.merge(%{"platform" => "linkedin", "accountId" => "zacct_1"}, entry)
+        ]
+      }
+    end
+
+    test "Zernio publish stores platformPostId", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!(account)
+      post = approved_post!(ctx.org_id, account, %{body: "via zernio"})
+
+      capture_post(
+        201,
+        %{
+          "message" => "Post created",
+          "post" =>
+            openapi_post("zp_pp", "published", %{
+              "status" => "published",
+              "platformPostId" => "urn:li:share:7001",
+              "platformPostUrl" => "https://li.example.test/7001"
+            })
+        }
+      )
+
+      assert {:ok, %Post{status: "published"}} = Publishing.publish_post(ctx.org_id, post.id)
+
+      row = Repo.get!(Post, post.id)
+      assert row.platform_post_id == "urn:li:share:7001"
+      assert row.external_id == "zp_pp"
+      assert row.external_url == "https://li.example.test/7001"
+      assert %DateTime{} = row.published_at
+      assert row.publish_attempts == 1
+    end
+
+    test "Zernio status stores platformPostId", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!(account)
+      post = approved_post!(ctx.org_id, account)
+      capture_post(201, %{"post" => openapi_post("zp_st", "scheduled", %{"status" => "pending"})})
+
+      assert {:ok, %Post{status: "scheduled", platform_post_id: nil}} =
+               Publishing.publish_post(ctx.org_id, post.id)
+
+      Req.Test.stub(Zernio, fn conn ->
+        assert conn.method == "GET"
+        assert conn.request_path == "/api/v1/posts/zp_st"
+
+        Req.Test.json(conn, %{
+          "post" =>
+            openapi_post("zp_st", "published", %{
+              "status" => "published",
+              "platformPostId" => "urn:li:share:7002",
+              "platformPostUrl" => "https://li.example.test/7002"
+            })
+        })
+      end)
+
+      assert {:ok, %Post{status: "published"}} = Publishing.refresh_status(ctx.org_id, post.id)
+      row = Repo.get!(Post, post.id)
+      assert row.platform_post_id == "urn:li:share:7002"
+      assert row.external_id == "zp_st"
+      assert %DateTime{} = row.published_at
+    end
+
+    test "Zernio webhook stores platformPostId", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!(account)
+      post = approved_post!(ctx.org_id, account)
+      capture_post(201, %{"post" => openapi_post("zp_wh", "scheduled", %{})})
+      {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
+
+      body =
+        Jason.encode!(%{
+          id: "evt_pp",
+          event: "post.published",
+          timestamp: "2026-10-23T00:00:00Z",
+          post:
+            openapi_post("zp_wh", "published", %{
+              "status" => "published",
+              "platformPostId" => "urn:li:share:7003",
+              "publishedUrl" => "https://li.example.test/7003"
+            })
+        })
+
+      sig = :crypto.mac(:hmac, :sha256, @secret, body) |> Base.encode16(case: :lower)
+
+      assert {:ok, [event]} =
+               Zernio.verify_webhook(
+                 %{raw_body: body, headers: %{"x-zernio-signature" => sig}},
+                 @secret
+               )
+
+      assert event.platform_post_id == "urn:li:share:7003"
+      assert {:ok, %Post{status: "published"}} = Publishing.apply_outcome(scheduled, event)
+      row = Repo.get!(Post, post.id)
+      assert row.platform_post_id == "urn:li:share:7003"
+      assert row.external_id == "zp_wh"
     end
   end
 end

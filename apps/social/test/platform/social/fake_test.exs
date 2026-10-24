@@ -89,6 +89,36 @@ defmodule Platform.Social.Publisher.FakeTest do
       assert Fake.list_accounts(profile) == {:ok, []}
     end
 
+    test "publish/2 answers a platform_post_id beside the external_id" do
+      assert {:ok, %{external_id: "fake_p9", platform_post_id: "fake_platform_p9"}} =
+               Fake.publish(account(), request("p9"))
+    end
+
+    test "put_next_for programs one account only" do
+      a = account()
+      b = account()
+      Fake.put_next_for(a.id, :publish, {:error, :token_expired})
+
+      # Another account's call neither sees nor consumes it.
+      assert {:ok, %{status: :scheduled}} = Fake.publish(b, request("b1"))
+
+      # The programmed account gets it once, then the default again.
+      assert {:error, :token_expired} = Fake.publish(a, request("a1"))
+      assert {:ok, %{status: :scheduled}} = Fake.publish(a, request("a2"))
+
+      # It is consulted before the global put_next, which stays for the next call.
+      Fake.put_next(:publish, {:error, :global})
+      Fake.put_next_for(b.id, :publish, {:error, :only_b})
+      assert {:error, :only_b} = Fake.publish(b, request("b2"))
+      assert {:error, :global} = Fake.publish(a, request("a3"))
+      assert {:ok, _} = Fake.publish(b, request("b3"))
+
+      # reset/0 forgets it too.
+      Fake.put_next_for(a.id, :publish, {:error, :stale})
+      Fake.reset()
+      assert {:ok, _} = Fake.publish(a, request("a4"))
+    end
+
     test "platforms/0 is Account.platforms/0" do
       assert Fake.platforms() == Platform.Social.Account.platforms()
     end
@@ -125,6 +155,19 @@ defmodule Platform.Social.Publisher.FakeTest do
                Fake.verify_webhook(delivery(body, headers), @secret)
 
       assert event.external_url == "https://x.test/1"
+      assert event.platform_post_id == nil
+    end
+
+    test "an event's platform_post_id round-trips" do
+      body =
+        Fake.webhook_body([
+          %{event_id: "e3", external_id: "fake_p1", kind: "published", platform_post_id: "pp_1"}
+        ])
+
+      headers = %{Fake.signature_header() => Fake.sign(body, @secret)}
+
+      assert {:ok, [%{platform_post_id: "pp_1"}]} =
+               Fake.verify_webhook(delivery(body, headers), @secret)
     end
 
     test "one changed byte in the body is refused", %{body: body} do

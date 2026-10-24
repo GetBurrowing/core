@@ -120,7 +120,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # lives in the stage-2 classification posted to the task's execution space.
   #
   # 28 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
-  # 4 resource, 1 not-a-topic.
+  # 5 resource, 1 not-a-topic.
   @topics [
     # ── space ──
     {"active_agent:<id>", :space},
@@ -199,6 +199,13 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
     # key. Only a caller of `check_auth/2` knows the ref.
     {"agent_host:auth:<id>", :resource},
+    # Task 01a1694a stage 3. Keyed by a `meeting_briefings` id; the reachable
+    # set is that briefing's attendees. Payload is
+    # `{:meeting_briefing_changed, briefing_id}`, the id only, and a
+    # subscriber re-reads through `MeetingBriefings.get_for_attendee/2`, which
+    # answers nil to anyone not on the row. A non-member who subscribed learns
+    # only that some briefing they cannot load changed.
+    {"meeting_briefing:<id>", :resource},
 
     # ── global ──
     {"audit:<id>", :global},

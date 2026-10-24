@@ -153,5 +153,66 @@ defmodule Platform.Social.ClipToolsTest do
       assert {:error, %{code: :not_found}} =
                call("social_clip_list", %{"profile_id" => w.other.profile.id}, w.ctx)
     end
+
+    # Clip Studio 1/9: the review state is returned and filterable.
+    test "the review_status filter; invalid_review_status for anything else", w do
+      [pending, approved, rejected, unrendered] =
+        for _ <- 1..4, do: file_clip!(w, 2.0, 14.0)
+
+      review = fn clip, decision ->
+        {:ok, clip} = clip |> Clip.review_changeset(decision) |> Repo.update()
+        clip
+      end
+
+      review.(pending, :reset_pending)
+      review.(approved, {:approve, w.approver.id})
+      review.(rejected, {:reject, w.approver.id, "payoff is cut off"})
+
+      ids = fn status ->
+        assert {:ok, %{clips: clips, total: total}} =
+                 call(
+                   "social_clip_list",
+                   %{"profile_id" => w.profile.id, "review_status" => status},
+                   w.ctx
+                 )
+
+        assert total == length(clips)
+        Enum.map(clips, & &1.id)
+      end
+
+      assert ids.("pending") == [pending.id]
+      assert ids.("approved") == [approved.id]
+      assert ids.("rejected") == [rejected.id]
+
+      assert Enum.sort(ids.(nil)) ==
+               Enum.sort([pending.id, approved.id, rejected.id, unrendered.id])
+
+      assert length(ids.("")) == 4
+
+      assert {:ok, %{clips: [row]}} =
+               call(
+                 "social_clip_list",
+                 %{"profile_id" => w.profile.id, "review_status" => "rejected"},
+                 w.ctx
+               )
+
+      assert row.review_note == "payoff is cut off"
+      assert %DateTime{} = row.reviewed_at
+      assert row.rev == 1
+      assert row.origin == "burrow"
+      assert row.look == %{}
+
+      for key <- ~w(title episode_code source_label trim_in_s trim_out_s)a,
+          do: assert(Map.has_key?(row, key))
+
+      for bad <- ["done", "APPROVED", "candidate"] do
+        assert {:error, %{code: :invalid_review_status}} =
+                 call(
+                   "social_clip_list",
+                   %{"profile_id" => w.profile.id, "review_status" => bad},
+                   w.ctx
+                 )
+      end
+    end
   end
 end

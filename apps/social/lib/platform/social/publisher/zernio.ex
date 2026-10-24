@@ -62,6 +62,15 @@ defmodule Platform.Social.Publisher.Zernio do
     * AI disclosure: TikTok `tiktokSettings.video_made_with_ai`, X
       `platformSpecificData.madeWithAi`, Instagram `isAiGenerated`, YouTube
       `containsSyntheticMedia`.
+    * Covers (OpenAPI v1.336.0, task 01a165ec stage 3):
+      `InstagramPlatformData.instagramThumbnail` (public JPG/PNG URL; overrides
+      `thumbOffset`), `thumbOffset` (integer ms, min 0). We send exactly one of
+      them, for an Instagram video only, and never the `reelCover` alias, the
+      MediaItem-level thumbnail or TikTok's cover fields. YouTube takes no
+      thumbnail at create time: `POST /v1/posts/{postId}/update-metadata` with
+      `{platform: "youtube", accountId, thumbnailUrl}` sets it after publish
+      (JPEG/PNG/GIF, 50MB, phone-verified channel; 400 refused with a reason,
+      429 `uploadRateLimitExceeded`). There is no YouTube frame offset.
     * TikTok requires `privacy_level`, `allow_comment`, `content_preview_confirmed: true`,
       `express_consent_given: true`.
     * Rate limits: 60 to 1,200 requests/minute by plan, plus per-account caps
@@ -87,7 +96,7 @@ defmodule Platform.Social.Publisher.Zernio do
 
   @behaviour Platform.Social.Publisher
 
-  alias Platform.Social.Secrets
+  alias Platform.Social.{PlatformOptions, Secrets}
 
   @default_base_url "https://zernio.com/api"
   @signature_headers ["x-zernio-signature", "x-late-signature"]
@@ -205,12 +214,34 @@ defmodule Platform.Social.Publisher.Zernio do
           id when is_binary(id) ->
             post = resp_post(resp_body)
             {status, url} = publish_status(post, account)
-            {:ok, %{external_id: id, status: status, external_url: url}}
+
+            {:ok,
+             %{
+               external_id: id,
+               status: status,
+               external_url: url,
+               platform_post_id: platform_post_id(account_entry(post, account))
+             }}
 
           _ ->
             {:error, :unexpected_response}
         end
       end)
+    end
+  end
+
+  # YouTube's cover, after publish (see the moduledoc). Never retried: one
+  # call, and a 429 means "later", not "again now".
+  @impl true
+  def set_cover(account, external_id, url) do
+    with {:ok, key} <- api_key(account) do
+      request(key)
+      |> Req.post(
+        url: "/v1/posts/#{URI.encode(external_id)}/update-metadata",
+        json: %{platform: "youtube", accountId: account.provider_account_ref, thumbnailUrl: url},
+        retry: false
+      )
+      |> handle(fn _ -> :ok end)
     end
   end
 
@@ -243,6 +274,7 @@ defmodule Platform.Social.Publisher.Zernio do
          %{
            status: status,
            external_url: entry && (entry["platformPostUrl"] || entry["publishedUrl"]),
+           platform_post_id: platform_post_id(entry),
            error: error
          }}
       end)
@@ -340,12 +372,18 @@ defmodule Platform.Social.Publisher.Zernio do
   defp post_body(account, platform, request, media) do
     base = %{
       content: content(request),
-      mediaItems: media,
+      mediaItems: alt_text(media, request),
       platforms: [
         %{
           platform: platform,
           accountId: account.provider_account_ref,
-          platformSpecificData: platform_specific(request.platform, request.is_aigc)
+          platformSpecificData:
+            request.platform
+            |> platform_specific(request.is_aigc)
+            |> cover(request.platform, media, Map.get(request, :cover))
+            |> Map.merge(
+              PlatformOptions.zernio_platform_data(request.platform, Map.get(request, :options))
+            )
         }
       ],
       timezone: "UTC"
@@ -354,6 +392,15 @@ defmodule Platform.Social.Publisher.Zernio do
     base
     |> schedule(request.scheduled_at)
     |> tiktok(request)
+  end
+
+  # Social authoring 7/11: the version's alt text on every image item
+  # (Zernio `MediaItem.altText`), only where the platform takes it.
+  defp alt_text(media, request) do
+    case PlatformOptions.zernio_alt_text(request.platform, Map.get(request, :options)) do
+      nil -> media
+      alt -> Enum.map(media, &if(&1.type == "image", do: Map.put(&1, :altText, alt), else: &1))
+    end
   end
 
   defp content(%{body: body, link_url: link}) when is_binary(link) and link != "",
@@ -368,6 +415,25 @@ defmodule Platform.Social.Publisher.Zernio do
   defp platform_specific("instagram", aigc), do: %{isAiGenerated: aigc == true}
   defp platform_specific("youtube", aigc), do: %{containsSyntheticMedia: aigc == true}
   defp platform_specific(_, _), do: %{}
+
+  # Instagram is the only platform that takes a cover at create time here.
+  # An image wins over a frame by construction: exactly one key is sent.
+  defp cover(data, "instagram", media, cover) do
+    video? = Enum.any?(media, &(&1.type == "video"))
+
+    case cover do
+      %{kind: :image, url: url} when video? and is_binary(url) ->
+        Map.put(data, :instagramThumbnail, url)
+
+      %{kind: :frame, offset_ms: offset} when video? and is_integer(offset) and offset >= 0 ->
+        Map.put(data, :thumbOffset, offset)
+
+      _ ->
+        data
+    end
+  end
+
+  defp cover(data, _platform, _media, _cover), do: data
 
   defp tiktok(body, %{platform: "tiktok", is_aigc: aigc}) do
     Map.put(body, :tiktokSettings, %{
@@ -491,6 +557,12 @@ defmodule Platform.Social.Publisher.Zernio do
 
   defp published_entry?(_), do: false
 
+  # The platform's own id for the post (Clip Studio 2/9): the account
+  # entry's documented `platformPostId`. `external_id` stays the Zernio
+  # post `_id`.
+  defp platform_post_id(%{} = entry), do: blank_to_nil(entry["platformPostId"])
+  defp platform_post_id(_entry), do: nil
+
   # ── Account list ─────────────────────────────────────────────────────
 
   # Zernio's enum back to our names; a platform we don't support is dropped.
@@ -542,6 +614,21 @@ defmodule Platform.Social.Publisher.Zernio do
     Enum.find_value(headers, fn {k, v} -> if String.downcase(to_string(k)) == name, do: v end)
   end
 
+  # Social authoring 9/11: account events (OpenAPI v1.350.1,
+  # https://zernio.com/openapi.json, `WebhookPayloadAccountDisconnected` /
+  # `WebhookPayloadAccountConnected`): `account.accountId` is our
+  # `provider_account_ref`; a disconnect carries a human-readable `reason`.
+  defp event(%{"event" => name, "account" => %{} = account} = payload, header_event_id)
+       when name in ["account.disconnected", "account.connected"] do
+    %{
+      event_id: payload["id"] || header_event_id,
+      kind:
+        if(name == "account.disconnected", do: :account_disconnected, else: :account_connected),
+      account_ref: blank_to_nil(account["accountId"]),
+      error: if(name == "account.disconnected", do: blank_to_nil(account["reason"]))
+    }
+  end
+
   defp event(payload, header_event_id) do
     post = if is_map(payload["post"]), do: payload["post"], else: %{}
     entry = webhook_entry(post)
@@ -552,7 +639,11 @@ defmodule Platform.Social.Publisher.Zernio do
       external_id: post["_id"] || post["id"],
       kind: kind,
       external_url: if(kind == :published, do: blank_to_nil(entry && entry["publishedUrl"])),
-      error: error
+      platform_post_id: platform_post_id(entry),
+      error: error,
+      # `errorCategory` `auth_expired`: the token expired or was revoked
+      # (OpenAPI v1.350.1), i.e. the account must be reconnected.
+      auth?: kind == :failed and is_map(entry) and entry["errorCategory"] == "auth_expired"
     }
   end
 

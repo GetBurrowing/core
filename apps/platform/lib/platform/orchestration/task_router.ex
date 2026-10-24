@@ -321,6 +321,10 @@ defmodule Platform.Orchestration.TaskRouter do
       # re-read on every dispatch; the key only keeps N injectors from
       # producing N identical notices. A re-stamp (new `_at`) re-arms it.
       :delivered_but_open_key,
+      # Task 01a16bf5 stage 1 — `{stage_id, ack}` of the last `Dispatch
+      # withheld` notice posted, or `nil`. A narration key like the two above:
+      # it only keeps N injectors from posting N identical notices for one ack.
+      :last_withheld_ack,
       status: :dispatching,
       # Task 019fe1b7 stage 2 — see `maybe_run_design_edge/2`. One designer
       # edge run per router process, whatever the run's fate.
@@ -2622,6 +2626,8 @@ defmodule Platform.Orchestration.TaskRouter do
     # whole prompt on the wire as `message.content`. A guard wrapped around
     # `post_engagement/3` instead would remove the execution-space message
     # and still wake the runtime, which is the opposite of the fix.
+    streak = redispatch_streak(state, stage)
+
     cond do
       # Task 01a04135 / 01a00915. Checked BEFORE the boot-engagement guard
       # because it is the more general condition: that guard only ever fires
@@ -2633,6 +2639,18 @@ defmodule Platform.Orchestration.TaskRouter do
 
       unchanged_boot_engagement?(state, task, stage, prompt, boot_dispatch?) ->
         suppress_unchanged_boot_engagement(state, task)
+
+      # Task 01a16bf5 stage 1. The two clauses below are the cap and the
+      # backoff on deliveries nobody answers. See the note at
+      # `redispatch_streak/2`. `streak` is read before the `cond` because a
+      # binding made inside one clause's condition is not visible to the next;
+      # the read is side-effect free, so reading it before the two guards above
+      # changes no decision they make.
+      redispatch_capped?(streak) ->
+        dead_letter_dispatch(state, task, stage, streak)
+
+      redispatch_throttled?(streak) ->
+        suppress_redispatch_backoff(state, task, stage, streak)
 
       true ->
         delivered_online = RuntimePresence.online?(state.assignee.id)
@@ -2689,7 +2707,10 @@ defmodule Platform.Orchestration.TaskRouter do
                 metadata: %{
                   "reason" => "task_assigned",
                   "dispatch_runtime_id" => state.assignee.id,
-                  "delivered_online" => delivered_online
+                  "delivered_online" => delivered_online,
+                  # Task 01a16bf5 stage 1: makes deliveries countable per stage
+                  # from Postgres. `unanswered_dispatch_streak/3` reads it.
+                  "stage_id" => stage && stage.id
                 }
               )
             end
@@ -2971,15 +2992,39 @@ defmodule Platform.Orchestration.TaskRouter do
     stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
     arm_liveness_timers(state.task_id, stage, stage_kind, state.assignee.id)
 
-    ack_identity = live_ack_identity(state.task_id, stage.id, state.assignee.id)
+    ack = Platform.Orchestration.last_stage_ack(state.task_id, stage.id, state.assignee.id)
+    ack_identity = live_ack_identity(ack, state.assignee.id)
 
     Logger.info(
       "[TaskRouter] suppressed dispatch for task=#{state.task_id} stage=#{stage.id}: " <>
         "stage already acked by a live executor inside its safety net (#{ack_identity})"
     )
 
+    # Telemetry stays per call; the chat row does not (task 01a16bf5 stage 1).
     emit_dispatch_suppressed_telemetry(state.task_id, :live_acked_executor)
 
+    # ONE ROW PER ACK, NOT PER INJECTION (task 01a16bf5 stage 1). A 2s
+    # injector posted 3,346 identical notices into one execution space on
+    # 2026-10-23. The key is the stage plus the ack's instant and subagent,
+    # never the rendered `ack_identity` string: that carries the ack's AGE in
+    # minutes and so changes every minute while saying nothing new. A new ack
+    # (a different executor) or a different stage posts again. The key lives
+    # on router state, so a router restart posts one fresh notice, which is
+    # the bound this accepts.
+    withheld_key = {stage.id, ack}
+
+    state =
+      if state.last_withheld_ack == withheld_key do
+        state
+      else
+        post_withheld_notice(state, task, stage, ack_identity)
+        %{state | last_withheld_ack: withheld_key}
+      end
+
+    {:noreply, %{state | task_status: task.status}}
+  end
+
+  defp post_withheld_notice(state, task, stage, ack_identity) do
     ExecutionSpace.post_log(
       state.execution_space_id,
       "Dispatch withheld: #{task.title} | stage #{stage.position} already has an acked " <>
@@ -2991,8 +3036,6 @@ defmodule Platform.Orchestration.TaskRouter do
         "it call task_ack, then clear the block with task_update status: in_progress, which " <>
         "releases the hold and lets the router dispatch this stage again."
     )
-
-    {:noreply, %{state | task_status: task.status}}
   end
 
   # WHAT THE NOTICE OWES ITS READER (ticket 01a08e86, fix candidate 2). The
@@ -3021,8 +3064,8 @@ defmodule Platform.Orchestration.TaskRouter do
   # so the notice cites the ack that actually withheld the dispatch, and names
   # the runtime next to the subagent — the runtime is the authenticated half,
   # the subagent id is caller-asserted.
-  defp live_ack_identity(task_id, stage_id, runtime_id) do
-    case Platform.Orchestration.last_stage_ack(task_id, stage_id, runtime_id) do
+  defp live_ack_identity(ack, runtime_id) do
+    case ack do
       {%DateTime{} = acked_at, subagent_id} ->
         age_min = DateTime.diff(DateTime.utc_now(), acked_at, :second) |> div(60)
 
@@ -3032,6 +3075,212 @@ defmodule Platform.Orchestration.TaskRouter do
       _ ->
         "ack instant unknown, by subagent unknown"
     end
+  end
+
+  # ── Unanswered re-dispatch cap and backoff (task 01a16bf5 stage 1) ────
+  #
+  # WHY HERE. On 2026-10-23 one execution space took 1,437 `task_assigned`
+  # deliveries and 3,346 `Dispatch withheld` notices at a 2s cadence, and three
+  # tasks of one runtime got exactly 688 withheld rows each, phase-locked: one
+  # injector fanned `:dispatch` out to every task of that runtime. Nothing
+  # capped it. `live_acked_executor?/2` stopped withholding 90m after the last
+  # ack, and from then on every re-dispatch went through
+  # `LeaseManager.record_dispatch/4` -> `redispatch_lease/4`, which keeps the
+  # old `ack_at`, so `no_ack_at` stays nil (the no-ack alarm cannot fire) and
+  # `safety_net_at` is pushed forward on every re-dispatch. The only thing that
+  # ended it was the injector going quiet. This stage does not change those
+  # lease semantics; they are the reason the cap lives in the dispatch path.
+  #
+  # Every `task_assigned` delivery the router makes passes through
+  # `do_dispatch_resolved/6`: it is the only caller of `dispatch_attention/5`
+  # with that reason. ~12 injectors send `:dispatch` (see the plan-gate note
+  # in `handle_info(:dispatch_now, ...)`); a guard on any one of them leaves
+  # the others open.
+  #
+  # THE STREAK is read from Postgres (`unanswered_dispatch_streak/3`): the
+  # deliveries to THIS runtime for THIS stage since the runtime last showed any
+  # sign of life. With `count >= cap` the dispatch is dead-lettered and the
+  # task blocked. With `count >= 1` and the last delivery younger than
+  # `base_ms * 2^(count - 1)` the dispatch is throttled: no chat row, no
+  # liveness arm, NO retry timer. The router must not become a retrier, so an
+  # injector that goes quiet ends the stream.
+  #
+  # Both clauses fail OPEN like their siblings: a raising read logs, emits
+  # telemetry and delivers.
+  @default_redispatch_cap 5
+  @default_redispatch_backoff_base_ms 30_000
+
+  # A non-integer or non-positive cap disables both clauses (no read at all).
+  defp redispatch_cap do
+    case Application.get_env(:platform, :redispatch_cap, @default_redispatch_cap) do
+      cap when is_integer(cap) and cap > 0 -> cap
+      _ -> nil
+    end
+  end
+
+  defp redispatch_backoff_base_ms do
+    case Application.get_env(
+           :platform,
+           :redispatch_backoff_base_ms,
+           @default_redispatch_backoff_base_ms
+         ) do
+      ms when is_integer(ms) and ms >= 0 -> ms
+      _ -> @default_redispatch_backoff_base_ms
+    end
+  end
+
+  defp redispatch_streak(%State{assignee: %{id: runtime_id}} = state, stage)
+       when is_binary(runtime_id) do
+    if redispatch_cap() do
+      stage_id =
+        case stage do
+          %Stage{id: id} -> id
+          _ -> nil
+        end
+
+      Platform.Orchestration.unanswered_dispatch_streak(state.task_id, stage_id, runtime_id)
+    end
+  rescue
+    error -> redispatch_fail_open(state.task_id, error)
+  catch
+    kind, reason -> redispatch_fail_open(state.task_id, {kind, reason})
+  end
+
+  defp redispatch_streak(_state, _stage), do: nil
+
+  defp redispatch_fail_open(task_id, error) do
+    Logger.warning(
+      "[TaskRouter] redispatch cap failed open for task=#{task_id}: " <>
+        "#{inspect(error)}; dispatching anyway"
+    )
+
+    :telemetry.execute(
+      [:platform, :orchestration, :redispatch_cap, :failed_open],
+      %{count: 1},
+      %{task_id: task_id, error: inspect(error)}
+    )
+
+    nil
+  end
+
+  defp redispatch_capped?(%{count: count}) when is_integer(count) do
+    case redispatch_cap() do
+      cap when is_integer(cap) -> count >= cap
+      _ -> false
+    end
+  end
+
+  defp redispatch_capped?(_streak), do: false
+
+  defp redispatch_throttled?(%{count: count, last_delivered_at: %DateTime{} = last})
+       when is_integer(count) and count >= 1 do
+    window_ms = redispatch_backoff_base_ms() * Integer.pow(2, min(count - 1, 20))
+    DateTime.diff(DateTime.utc_now(), last, :millisecond) < window_ms
+  end
+
+  defp redispatch_throttled?(_streak), do: false
+
+  defp suppress_redispatch_backoff(state, task, stage, streak) do
+    Logger.info(
+      "[TaskRouter] throttled re-dispatch for task=#{state.task_id} " <>
+        "stage=#{stage && stage.id}: #{streak.count} unanswered deliveries to " <>
+        "#{state.assignee.id}, last at #{DateTime.to_iso8601(streak.last_delivered_at)}"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :redispatch_backoff)
+
+    {:noreply, %{state | task_status: task.status}}
+  end
+
+  @dead_letter_kind "execution.dispatch_dead_lettered"
+
+  # Mirrors `fire_no_ack_alert/2`: one router event, one durable
+  # `blocked_reason` + `blocked_cause` (which moves the task to `blocked`), and
+  # one `needs_human` blocker post. A task this router already dead-lettered
+  # for the same stage is not stamped or posted twice: a `:dispatch` queued
+  # before the watcher stops the router lands here again.
+  defp dead_letter_dispatch(state, task, stage, streak) do
+    stage_id = stage && stage.id
+    emit_dispatch_suppressed_telemetry(state.task_id, :redispatch_dead_lettered)
+
+    if already_dead_lettered?(task, stage_id) do
+      {:noreply, state}
+    else
+      do_dead_letter_dispatch(state, task, stage_id, streak)
+    end
+  end
+
+  defp already_dead_lettered?(
+         %{status: "blocked", metadata: %{"blocked_cause" => cause}},
+         stage_id
+       )
+       when is_map(cause) do
+    cause["kind"] == @dead_letter_kind and cause["stage_id"] == stage_id
+  end
+
+  defp already_dead_lettered?(_task, _stage_id), do: false
+
+  defp do_dead_letter_dispatch(state, task, stage_id, streak) do
+    runtime_id = state.assignee.id
+    now = DateTime.utc_now()
+
+    Logger.warning(
+      "[TaskRouter] task #{state.task_id} stage #{stage_id} — #{streak.count} unanswered " <>
+        "deliveries to #{runtime_id}; firing #{@dead_letter_kind}"
+    )
+
+    broadcast_router_event(@dead_letter_kind, state.task_id, stage_id, %{
+      task_id: state.task_id,
+      stage_id: stage_id,
+      runtime_id: runtime_id,
+      delivery_count: streak.count,
+      last_delivered_at: streak.last_delivered_at,
+      last_sign_of_life_at: Map.get(streak, :last_sign_of_life_at)
+    })
+
+    sentence = dead_letter_sentence(streak, runtime_id, now)
+
+    stamp_blocked_reason(state.task_id, sentence, %{
+      kind: @dead_letter_kind,
+      stage_id: stage_id,
+      runtime_id: runtime_id
+    })
+
+    post_router_blocker(state, sentence, %{
+      "reason" => @dead_letter_kind,
+      "stage_id" => stage_id,
+      "runtime_id" => runtime_id,
+      "needs_human" => true,
+      "delivery_count" => streak.count
+    })
+
+    state =
+      state
+      |> clear_liveness()
+      |> Map.put(:status, :stalled)
+      |> Map.put(:task_status, task.status)
+
+    {:noreply, state}
+  end
+
+  # Only what the router measured: how many deliveries, to whom, and how long
+  # since the runtime last answered. No cause (task 01a0a3fc).
+  defp dead_letter_sentence(streak, runtime_id, now) do
+    since =
+      case Map.get(streak, :last_sign_of_life_at) do
+        %DateTime{} = at ->
+          "#{div(DateTime.diff(now, at, :second), 60)}m since its last sign of life " <>
+            "(#{DateTime.to_iso8601(at)})"
+
+        _ ->
+          "no sign of life from it on record for this task"
+      end
+
+    "Dispatch dead-lettered after #{streak.count} unanswered deliveries to runtime " <>
+      "#{runtime_id}, #{since}. No ack, heartbeat or other runtime event arrived from that " <>
+      "runtime between the deliveries, so the router has stopped re-sending this stage. " <>
+      "Recovery is manual: get an executor onto the stage and have it call task_ack, or " <>
+      "clear the block with task_update status: in_progress to allow a fresh dispatch."
   end
 
   # ── Unchanged-boot-engagement guard (task 01a03ed3 stage 3) ───────────
@@ -3868,6 +4117,7 @@ defmodule Platform.Orchestration.TaskRouter do
   # our own event types keeps the state machine hermetic.
   defp apply_runtime_event(state, %{event_type: "execution.no_ack_timeout"}), do: state
   defp apply_runtime_event(state, %{event_type: "execution.safety_net_fired"}), do: state
+  defp apply_runtime_event(state, %{event_type: "execution.dispatch_dead_lettered"}), do: state
 
   # Same hermeticism, and load-bearing for task 019fb977 stage 3's stated
   # invariant. `note_foreign_lease/2` fires during `init/1`, AFTER

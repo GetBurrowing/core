@@ -87,11 +87,13 @@ defmodule PlatformWeb.SocialAcceptanceTest do
 
   defp fp(card, user), do: Approvals.card_view(card.id, {:user, user.id}).fingerprint
 
-  # Every DOM id a profile's posts and accounts can own on this page.
+  # Every DOM id a profile's posts and accounts can own on this page. The
+  # calendar's rows are hours since Social authoring 8/11, so its leak check
+  # is the scheduled posts' `data-post-id` (grid and agenda both carry it).
   defp ids_of(%{queued: queued, scheduled: scheduled, accounts: accounts}) do
     Enum.map(queued, &"#queue-#{&1.id}") ++
       Enum.map(scheduled, &"[data-post-id='#{&1.id}']") ++
-      Enum.flat_map(accounts, &["#accounts-#{&1.id}", "#calendar_rows-#{&1.id}"])
+      Enum.map(accounts, &"#accounts-#{&1.id}")
   end
 
   describe "1. switching HTC <-> Legacy changes accounts, queue and calendar with no leak" do
@@ -123,7 +125,7 @@ defmodule PlatformWeb.SocialAcceptanceTest do
       shown = fp(ctx.htc_card, ctx.h1)
 
       child
-      |> element("#queue-#{ctx.htc_q1.id} [data-role='social-card-approve']")
+      |> element("#queue-#{ctx.htc_q1.id} [data-role='queue-approve']")
       |> render_click()
 
       assert [{:publish, _, _}] = Fake.calls(:publish)
@@ -137,37 +139,37 @@ defmodule PlatformWeb.SocialAcceptanceTest do
 
       html =
         child
-        |> with_target("#queue-card-#{ctx.htc_card.id}")
-        |> render_click("social_card_approve", %{
-          "canvas-id" => ctx.htc_card.canvas_id,
-          "fingerprint" => shown
-        })
+        |> with_target("#queue-card-idea-#{ctx.htc_q1.id}")
+        |> render_click("q_approve", %{"post-id" => ctx.htc_q1.id, "fingerprint" => shown})
 
       assert html =~ "Someone already decided this post."
       assert length(Fake.calls(:publish)) == 1
     end
   end
 
-  describe "3. non-approvers and agents see status lines only" do
-    test "N and an agent get no action and no body; H1 (positive control) gets both",
+  # Social authoring 5/11 (task 01a16c50): on the Queue a human who can
+  # open the profile but is not an approver sees the previews, with no
+  # buttons at all (not disabled ones). Agents still get the status line
+  # only, through card_view/2 and the chat card.
+  describe "3. non-approvers see previews with no actions; agents see status lines only" do
+    test "N gets previews and no action; an agent gets no action and no body; H1 (positive control) gets both",
          %{conn: conn} = ctx do
-      actions = ~w(approve edit reject copy)
-
       approver = open(conn, ctx.h1)
-      assert has_element?(approver, "#queue-#{ctx.htc_q1.id} [data-role='social-card-approve']")
-      assert has_element?(approver, "#queue-#{ctx.htc_d1.id} [data-role='social-card-copy']")
+      assert has_element?(approver, "#queue-#{ctx.htc_q1.id} [data-role='queue-approve']")
+      assert has_element?(approver, "#queue-#{ctx.htc_d1.id} [data-role='queue-copy']")
       assert render(approver) =~ "SECRET-PREVIEW-BODY"
       assert render(approver) =~ "DRAFT-ONLY-BODY"
 
       viewer = open(conn, ctx.n)
-      assert has_element?(viewer, "#queue-#{ctx.htc_q1.id} [data-card-role='viewer']")
+      assert has_element?(viewer, "#queue-#{ctx.htc_q1.id}[data-version-role='viewer']")
+      assert has_element?(viewer, "#queue-#{ctx.htc_q1.id} [data-role='social-preview']")
 
-      for a <- actions,
-          do: refute(has_element?(viewer, "#social-queue [data-role='social-card-#{a}']"))
+      for a <- ~w(approve approve-slot approve-all edit revise reject copy phone-bar bar-approve) do
+        refute has_element?(viewer, "#social-queue [data-role='queue-#{a}']")
+      end
 
-      refute has_element?(viewer, "#social-queue button")
-      refute render(viewer) =~ "SECRET-PREVIEW-BODY"
-      refute render(viewer) =~ "DRAFT-ONLY-BODY"
+      refute has_element?(viewer, "#social-queue [data-role='queue-actions']")
+      refute has_element?(viewer, "#social-queue [disabled]")
 
       for card <- [ctx.htc_card, ctx.htc_d_card] do
         assert %{role: :viewer} = view = Approvals.card_view(card.id, {:agent, ctx.g.id})
@@ -186,6 +188,22 @@ defmodule PlatformWeb.SocialAcceptanceTest do
         refute html =~ "SECRET-PREVIEW-BODY"
         refute html =~ "DRAFT-ONLY-BODY"
       end
+
+      # The Queue's idea card, rendered for an agent: status only.
+      group = %{key: ctx.htc_q1.id, idea: nil, posts: [ctx.htc_q1, ctx.htc_d1], first_at: nil}
+
+      html =
+        render_component(PlatformWeb.SocialIdeaCard,
+          id: "agent-idea",
+          group: group,
+          viewer: {:agent, ctx.g.id},
+          profiles: %{ctx.profile.id => ctx.profile}
+        )
+
+      assert html =~ "queue-status-only"
+      refute html =~ "<button"
+      refute html =~ "SECRET-PREVIEW-BODY"
+      refute html =~ "DRAFT-ONLY-BODY"
     end
   end
 
@@ -196,17 +214,17 @@ defmodule PlatformWeb.SocialAcceptanceTest do
 
       assert has_element?(
                child,
-               "#queue-#{ctx.htc_d1.id} [data-role='social-card-copy']",
+               "#queue-#{ctx.htc_d1.id} [data-role='queue-copy']",
                "Copy text"
              )
 
-      refute has_element?(child, "#queue-#{ctx.htc_d1.id} [data-role='social-card-approve']")
+      refute has_element?(child, "#queue-#{ctx.htc_d1.id} [data-role='queue-approve']")
 
       html =
         child
-        |> with_target("#queue-card-#{ctx.htc_d_card.id}")
-        |> render_click("social_card_approve", %{
-          "canvas-id" => ctx.htc_d_card.canvas_id,
+        |> with_target("#queue-card-idea-#{ctx.htc_d1.id}")
+        |> render_click("q_approve", %{
+          "post-id" => ctx.htc_d1.id,
           "fingerprint" => fp(ctx.htc_d_card, ctx.h1)
         })
 

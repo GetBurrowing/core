@@ -16,12 +16,19 @@
  * clear the timer by name.
  */
 
+import { personIdentity } from "./participant_label"
+
 // Trailing-debounce window, in ms.
 export const ACTIVE_SPEAKER_DEBOUNCE_MS = 250
 
-// Non-empty identity strings, sorted, so set equality is string equality.
+// Non-empty identity strings, folded to their PERSON (`video:user:X` ->
+// `user:X`, task 01a13ca2) and deduped, sorted, so set equality is string
+// equality and a companion connection never reaches the server payload.
 export function normalizeIdentities(identities) {
-  return (identities || []).filter((id) => typeof id === "string" && id !== "").sort()
+  const persons = (identities || [])
+    .filter((id) => typeof id === "string" && id !== "")
+    .map(personIdentity)
+  return [...new Set(persons)].sort()
 }
 
 // Offer a new identity list. `flush(identities)` runs at most once per

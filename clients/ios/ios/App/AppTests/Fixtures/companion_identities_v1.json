@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "description": "Burrow meeting companion identities v1 (task 01a13ca2). A companion is a person's video-only second LiveKit connection, identity `video:user:<uuid>`. For each case, `person` is what the person-identity fold returns for `identity` (Elixir Meetings.person_identity/1, JS personIdentity, Swift CallParticipant) and `companion` is the companion predicate (Elixir Meetings.companion_identity?/1, JS isCompanionIdentity, Swift CallParticipant.isCompanion). The fold is a plain, case-sensitive prefix rewrite `video:user:` -> `user:`; every other string, and null, is returned unchanged. The server file is the source; client copies must be byte-identical, never edited alone.",
+  "cases": [
+    {"note": "companion of a user", "identity": "video:user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": "user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": true},
+    {"note": "companion of a second user", "identity": "video:user:01a13ca2-5f2e-7000-986d-1c7ec5c5c354", "person": "user:01a13ca2-5f2e-7000-986d-1c7ec5c5c354", "companion": true},
+    {"note": "the person's own audio connection", "identity": "user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": "user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": false},
+    {"note": "an agent", "identity": "agent:0193a1b2-c3d4-7e5f-8a9b-000000000001", "person": "agent:0193a1b2-c3d4-7e5f-8a9b-000000000001", "companion": false},
+    {"note": "an agent by slug", "identity": "agent:summarizer", "person": "agent:summarizer", "companion": false},
+    {"note": "a guest", "identity": "guest:0193a1b2-c3d4-7e5f-8a9b-000000000002", "person": "guest:0193a1b2-c3d4-7e5f-8a9b-000000000002", "companion": false},
+    {"note": "a livekit-agents worker default identity", "identity": "agent-AJ_x7Yq3LmN9pQr", "person": "agent-AJ_x7Yq3LmN9pQr", "companion": false},
+    {"note": "companion prefix with a bad uuid: still a companion by prefix, folded verbatim", "identity": "video:user:not-a-uuid", "person": "user:not-a-uuid", "companion": true},
+    {"note": "companion prefix with a 16-character suffix (the fabricated-uuid case)", "identity": "video:user:0123456789abcdef", "person": "user:0123456789abcdef", "companion": true},
+    {"note": "empty string", "identity": "", "person": "", "companion": false},
+    {"note": "null", "identity": null, "person": null, "companion": false},
+    {"note": "near miss: extra character in the prefix", "identity": "videox:user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": "videox:user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": false},
+    {"note": "near miss: prefix order reversed", "identity": "user:video:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": "user:video:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": false},
+    {"note": "near miss: upper case (the fold is case-sensitive)", "identity": "VIDEO:USER:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": "VIDEO:USER:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": false},
+    {"note": "near miss: leading space", "identity": " video:user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "person": " video:user:0193a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", "companion": false},
+    {"note": "near miss: video prefix on a guest", "identity": "video:guest:0193a1b2-c3d4-7e5f-8a9b-000000000002", "person": "video:guest:0193a1b2-c3d4-7e5f-8a9b-000000000002", "companion": false}
+  ]
+}

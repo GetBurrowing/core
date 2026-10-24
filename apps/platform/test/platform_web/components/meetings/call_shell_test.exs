@@ -1194,6 +1194,63 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert html =~ "Audio only in the app"
     end
 
+    # Task 01a13ca2 stage 3: a build with `camera: true` runs the page's
+    # video-only companion connection. The camera shows, the note does not
+    # (it would be false), and Share stays hidden in the app.
+    @companion %{mic: true, camera: true, active_speakers: true}
+
+    test "with the companion camera the camera shows, the note does not, Share stays hidden" do
+      html = controls(native: @companion)
+
+      assert role?(html, "call-control-mic")
+      assert role?(html, "call-control-camera")
+      refute role?(html, "call-control-share")
+      refute role?(html, "call-control-native-note")
+      refute html =~ "Audio only in the app"
+
+      # Direction control on the same render path: camera false keeps the note.
+      assert controls(native: @native) =~ "Audio only in the app"
+    end
+
+    test "a pending companion camera is disabled, aria-busy, with the warning ring; settled is not" do
+      html = controls(native: @companion, camera_pending: true)
+
+      cam =
+        html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="call-control-camera"]))
+
+      assert LazyHTML.attribute(cam, "disabled") == [""]
+      assert LazyHTML.attribute(cam, "aria-busy") == ["true"]
+      assert LazyHTML.attribute(cam, "data-pending") == ["true"]
+      assert [class] = LazyHTML.attribute(cam, "class")
+      assert "ring-warning" in String.split(class)
+      assert "ring-2!" in String.split(class)
+
+      settled =
+        controls(native: @companion, camera_pending: false)
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="call-control-camera"]))
+
+      assert LazyHTML.attribute(settled, "disabled") == []
+      assert LazyHTML.attribute(settled, "aria-busy") == []
+      assert LazyHTML.attribute(settled, "data-pending") == ["false"]
+    end
+
+    test "a browser camera button is unchanged by camera_pending" do
+      for pending <- [false, true] do
+        cam =
+          controls(camera_pending: pending)
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(~s([data-role="call-control-camera"]))
+
+        assert LazyHTML.attribute(cam, "disabled") == []
+        assert LazyHTML.attribute(cam, "data-pending") == []
+
+        assert LazyHTML.attribute(cam, "class") == [
+                 "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
+               ]
+      end
+    end
+
     test "share reflects whether a share is already running" do
       idle = controls(sharing: false)
       live = controls(sharing: true)

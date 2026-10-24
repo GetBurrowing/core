@@ -136,8 +136,11 @@ props="-PburrowVersionCode=${VERSION_CODE}"
 [ "${MODE}" = "--local" ] && props="${props} -PburrowLocalDebugSigned=true"
 build_log="$(on_rig "mktemp -p '${WORK}' release-build.XXXXXX.log")"
 secrets_env=""
+# rig.sh on the rig needs RIG_ROOT (required since #1271) and this run's
+# prefix; ssh does not carry our environment, so pass both explicitly.
+rig_env="RIG_ROOT='${RIG_ROOT}' RIG_PREFIX='${PREFIX}'"
 [ -n "${SECRETS}" ] && secrets_env="RIG_SECRETS='${SECRETS}'"
-if ! on_rig "cd '${WORK}/clients/android' && ${secrets_env} RIG_GRADLE_PROPS='${props}' '${RIG}' gradle bundleRelease > '${build_log}' 2>&1"; then
+if ! on_rig "cd '${WORK}/clients/android' && ${rig_env} ${secrets_env} RIG_GRADLE_PROPS='${props}' '${RIG}' gradle bundleRelease > '${build_log}' 2>&1"; then
   on_rig "grep -E 'FAILURE|What went wrong|error:' '${build_log}' | head -20" >&2 || true
   die 1 "bundleRelease failed (log on the rig: ${build_log})"
 fi
@@ -147,7 +150,7 @@ AAB_REL="clients/android/android/app/build/outputs/bundle/release/app-release.aa
 on_rig "test -s '${WORK}/${AAB_REL}'" || die 5 "no AAB at ${AAB_REL}"
 
 # ── Assertions on the AAB ────────────────────────────────────────────────
-manifest="$(on_rig "'${RIG}' bundletool dump manifest --bundle '/work/${AAB_REL}'")"
+manifest="$(on_rig "${rig_env} '${RIG}' bundletool dump manifest --bundle '/work/${AAB_REL}'")"
 attr() { awk -v k="$1" 'match($0, k "=\"[^\"]*\"") { v = substr($0, RSTART + length(k) + 2, RLENGTH - length(k) - 3); print v; exit }' <<<"${manifest}"; }
 pkg="$(attr 'package')"
 [ "${pkg}" = "${PACKAGE}" ] || die 5 "applicationId is '${pkg}', expected ${PACKAGE}"

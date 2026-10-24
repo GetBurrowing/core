@@ -332,6 +332,13 @@ defmodule Platform.Role do
     },
     %{
       kind: :push,
+      file: "lib/platform/meetings/meeting_briefings.ex",
+      class: :follows_caller,
+      note:
+        "meeting briefing push on delivery: end_meeting/1 (the room_finished webhook request), complete_transcript/2 and triage call deliver/1 in their own process; it pushes only on a created Inbox row"
+    },
+    %{
+      kind: :push,
       file: "lib/platform/meetings/meeting_notifier.ex",
       class: :background,
       note: "MeetingNotifier, PubSub consumer, full only"

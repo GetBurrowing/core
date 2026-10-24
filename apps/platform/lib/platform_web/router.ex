@@ -877,6 +877,7 @@ defmodule PlatformWeb.Router do
       live("/inbox", InboxLive, :index)
       # The day's briefing, opened from its Inbox row (task 01a15ee1 stage 4).
       live("/inbox/briefing/:date", InboxLive, :briefing)
+      live("/inbox/meeting/:meeting_id", InboxLive, :meeting_briefing)
       live("/tasks", TasksLive, :index)
       # Keep the static module-admin route above the task-id catch-all.
       live("/tasks/pipeline", PipelineLive, :index)
@@ -1159,6 +1160,8 @@ defmodule PlatformWeb.Router do
     post("/spaces/:space_id/uploads", AppApiController, :create_upload)
     get("/upload_config", AppApiController, :upload_config)
     get("/counts", AppApiController, :counts)
+    # Today's briefing counts for the Android widget (task 01a161f9).
+    get("/briefing", AppApiController, :briefing)
 
     # App Intents (task 01a10db6): Siri, Shortcuts, widgets, controls.
     get("/approvals", AppIntentsController, :approvals)

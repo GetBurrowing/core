@@ -34,6 +34,26 @@ defmodule Platform.Social.AgentDrafts do
   `Platform.Files`), never a Repo query on a core table. A `task_id` that
   names a social task (Social 6/7, `Platform.Social.TaskBridge`) must also
   be for the draft's profile, else `{:error, :task_profile_mismatch}`.
+
+  ## Ideas and the change log (Social authoring 2/11)
+
+  A create may name an `idea_id`: read through the scope (another org's is
+  `{:error, :not_found}`), refused archived (`:idea_archived`), and it must
+  be the draft's profile's idea, else `{:error, :idea_profile_mismatch}`.
+  Every create writes a `created` event (and `submitted` when it lands in
+  `needs_approval`); every update writes `edited` (with the body before and
+  after) and/or `submitted` (draft to needs_approval). The actor is the
+  calling agent (`opts[:agent_id]`). Each event is written in the
+  transaction that writes the post.
+
+  ## Banned phrases (Social authoring 4/11)
+
+  A create or update whose `body` contains one of the profile's banned
+  phrases (`profile.voice.banned`, matched by
+  `Platform.Social.Voice.banned_phrase/2`, case-insensitive) is refused
+  with `{:error, :banned_phrase, phrase}`, the phrase as the brand wrote it,
+  and nothing is written. Humans are never blocked by this; they see a
+  `banned_phrase` flag in the preview.
   """
 
   import Ecto.Query
@@ -41,12 +61,28 @@ defmodule Platform.Social.AgentDrafts do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Clip, ClipMedia, Links, Post, Profile}
+
+  alias Platform.Social.{
+    Account,
+    Clip,
+    ClipLook,
+    ClipMedia,
+    ClipRender,
+    Cover,
+    Idea,
+    Ideas,
+    Links,
+    OrgFiles,
+    Post,
+    PostEvents,
+    Profile
+  }
 
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
-               segment_ids episode_url start_s end_s)a
+               segment_ids episode_url start_s end_s cover_file_id cover_offset_ms
+               schedule_reason)a
   @forbidden ~w(approved_by_user_id approved_at external_url external_id error
-                rejection_reason rejected_at)
+                rejection_reason rejected_at cover_error)
   @agent_statuses ~w(draft needs_approval)
   @default_status "needs_approval"
   @editable_statuses ~w(draft needs_approval)
@@ -57,7 +93,10 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :invalid_source | :source_not_in_project | :profile_needs_project}
           | {:error, :invalid_crop_x | {:invalid_platforms, [String.t()]}}
           | {:error, :task_profile_mismatch}
+          | {:error, :idea_profile_mismatch | :idea_archived}
+          | {:error, :file_not_in_project | :not_a_video | :invalid_title}
           | {:error, :field_not_allowed, [String.t()]}
+          | {:error, :banned_phrase, String.t()}
           | {:error, Ecto.Changeset.t()}
 
   @doc "Statuses an agent may set."
@@ -76,14 +115,18 @@ defmodule Platform.Social.AgentDrafts do
   `link_url`, the link is `Links.effective_link/4` (the profile's home_url,
   or the YouTube episode at `start_s`) and it is appended to the body once.
   """
-  @spec create_agent_drafts(Social.scope(), term(), map()) :: {:ok, [Post.t()]} | error()
-  def create_agent_drafts(scope, profile_id, attrs) do
+  @spec create_agent_drafts(Social.scope(), term(), map(), keyword()) ::
+          {:ok, [Post.t()]} | error()
+  def create_agent_drafts(scope, profile_id, attrs, opts \\ []) do
     attrs = normalize(attrs)
+    actor = {:agent, Keyword.get(opts, :agent_id)}
 
     with :ok <- refuse_forbidden(attrs),
          {:ok, status} <- create_status(attrs),
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
+         :ok <- refuse_banned(attrs, profile),
+         {:ok, idea_id} <- check_idea(scope, attrs["idea_id"], profile),
          :ok <- check_task_profile(attrs, profile),
          {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
          :ok <- require_channels(status, profile, accounts) do
@@ -92,17 +135,35 @@ defmodule Platform.Social.AgentDrafts do
       Repo.transaction(fn ->
         Enum.map(accounts, fn account ->
           changeset =
-            %Post{account_id: account.id}
+            %Post{account_id: account.id, idea_id: idea_id}
             |> agent_changeset(attrs, profile)
             |> put_effective_link(profile)
 
           case Repo.insert(changeset) do
-            {:ok, post} -> post
-            {:error, changeset} -> Repo.rollback(changeset)
+            {:ok, post} ->
+              PostEvents.record!(post, "created", actor)
+              if post.status == "needs_approval", do: PostEvents.record!(post, "submitted", actor)
+              post
+
+            {:error, changeset} ->
+              Repo.rollback(changeset)
           end
         end)
       end)
       |> after_commit()
+    end
+  end
+
+  # Social authoring 2/11: the idea a draft joins. Read through the scope
+  # (another org's idea is :not_found, like a missing id); it must be the
+  # draft's profile's idea.
+  defp check_idea(_scope, nil, _profile), do: {:ok, nil}
+
+  defp check_idea(scope, idea_id, %Profile{id: profile_id}) do
+    case Ideas.fetch_for_draft(scope, idea_id) do
+      {:ok, %Idea{profile_id: ^profile_id, id: id}} -> {:ok, id}
+      {:ok, %Idea{}} -> {:error, :idea_profile_mismatch}
+      error -> error
     end
   end
 
@@ -200,9 +261,11 @@ defmodule Platform.Social.AgentDrafts do
   `{:error, :post_locked}`, untouched. A needs_approval post cannot go back
   to draft. Rejection fields are never touched.
   """
-  @spec update_agent_draft(Social.scope(), term(), map()) :: {:ok, Post.t()} | error()
-  def update_agent_draft(scope, post_id, attrs) do
+  @spec update_agent_draft(Social.scope(), term(), map(), keyword()) ::
+          {:ok, Post.t()} | error()
+  def update_agent_draft(scope, post_id, attrs, opts \\ []) do
     attrs = normalize(attrs)
+    actor = {:agent, Keyword.get(opts, :agent_id)}
 
     with :ok <- refuse_forbidden(attrs),
          :ok <- refuse_status_value(attrs),
@@ -214,19 +277,52 @@ defmodule Platform.Social.AgentDrafts do
              :ok <- refuse_locked(locked),
              :ok <- refuse_transition(locked, attrs),
              profile = profile_of(locked),
+             :ok <- refuse_banned(attrs, profile),
              :ok <- check_task_profile(attrs, profile),
              changeset = agent_changeset(locked, attrs, profile),
              :ok <-
                Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
              {:ok, updated} <- Repo.update(changeset) do
+          log_update(locked, updated, changeset, actor)
           updated
         else
+          {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
+      |> unwrap_banned()
       |> after_commit()
     end
   end
+
+  # Social authoring 2/11: `edited` when anything but the status changed
+  # (body before/after), `submitted` on draft -> needs_approval.
+  defp log_update(before, updated, changeset, actor) do
+    if changeset.changes |> Map.delete(:status) |> map_size() > 0 do
+      PostEvents.record!(updated, "edited", actor,
+        body_before: before.body,
+        body_after: updated.body
+      )
+    end
+
+    if before.status == "draft" and updated.status == "needs_approval",
+      do: PostEvents.record!(updated, "submitted", actor)
+  end
+
+  # Social authoring 4/11: an agent's body may not contain one of the
+  # profile's banned phrases (`Platform.Social.Voice.banned_phrase/2`,
+  # case-insensitive). A human is only warned, in the preview.
+  defp refuse_banned(%{"body" => body}, profile) when is_binary(body) do
+    case Platform.Social.Voice.banned_phrase(body, profile) do
+      nil -> :ok
+      phrase -> {:error, :banned_phrase, phrase}
+    end
+  end
+
+  defp refuse_banned(_attrs, _profile), do: :ok
+
+  defp unwrap_banned({:error, {:banned_phrase, phrase}}), do: {:error, :banned_phrase, phrase}
+  defp unwrap_banned(other), do: other
 
   defp refuse_status_value(%{"status" => status}) when status not in @agent_statuses,
     do: {:error, :status_not_allowed}
@@ -293,6 +389,95 @@ defmodule Platform.Social.AgentDrafts do
     end
   end
 
+  @doc """
+  Clip Studio 1/9: submits a clip rendered OUTSIDE Burrow (htc-clip-tool)
+  for review. `attrs` (string or atom keys): `file_id` (required: a video in
+  the profile's project, see `check_clip_file/2`), and optionally `title`
+  (non-blank, at most 200, else `{:error, :invalid_title}`), `caption`,
+  `speaker`, `episode_code`, `source_label` (default `"external"`),
+  `platforms` (each one of the profile's account platforms) and
+  `duration_s`/`width`/`height` (used only when the file cannot be probed).
+  Any other key, including every review field and `rev`, is ignored.
+
+  In one transaction it inserts the clip with `Clip.submit_changeset/2`
+  (external, rendered, review pending, rev 1; look = the profile's effective
+  show look; `submitted_by_agent_id` = `agent_id`) and its rev-1
+  `Platform.Social.ClipRender` row, then broadcasts the clip.
+
+  Title, caption, speaker and episode code may all be nil: under the clip
+  tool's `[privacy] mode = "local"` nothing transcript-derived arrives.
+  """
+  @spec submit_clip(Social.scope(), term(), map(), Ecto.UUID.t() | nil) ::
+          {:ok, Clip.t()} | error()
+  def submit_clip(scope, profile_id, attrs, agent_id) do
+    attrs = normalize(attrs)
+
+    with {:ok, profile} <- fetch_profile(scope, profile_id),
+         {:ok, _project} <- render_project(profile),
+         {:ok, file} <- check_clip_file(attrs["file_id"], profile),
+         :ok <- validate_title(attrs),
+         {:ok, platforms} <- validate_platforms(attrs["platforms"], profile) do
+      look = ClipLook.effective(profile.show_look)
+
+      fields =
+        attrs
+        |> Map.take(~w(title caption speaker episode_code))
+        |> Map.merge(clip_file_meta(file, attrs))
+        |> Map.merge(%{
+          "source_label" => blank_default(attrs["source_label"], "external"),
+          "platforms" => platforms,
+          "render_file_id" => file.id,
+          "look" => look
+        })
+
+      Repo.transaction(fn ->
+        with {:ok, clip} <-
+               %Clip{profile_id: profile.id}
+               |> Clip.submit_changeset(fields)
+               |> Changeset.put_change(:submitted_by_agent_id, agent_id)
+               |> Repo.insert(),
+             {:ok, _render} <-
+               %ClipRender{}
+               |> ClipRender.changeset(%{
+                 clip_id: clip.id,
+                 rev: 1,
+                 file_id: file.id,
+                 look: look,
+                 submitted_by_agent_id: agent_id
+               })
+               |> Repo.insert() do
+          clip
+        else
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+      |> case do
+        {:ok, clip} ->
+          Social.broadcast_clip(clip)
+          {:ok, clip}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp validate_title(attrs) do
+    case Map.fetch(attrs, "title") do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, t} when is_binary(t) -> if valid_title?(t), do: :ok, else: {:error, :invalid_title}
+      {:ok, _} -> {:error, :invalid_title}
+    end
+  end
+
+  defp valid_title?(t), do: String.trim(t) != "" and String.length(t) <= 200
+
+  defp blank_default(v, default) when is_binary(v),
+    do: if(String.trim(v) == "", do: default, else: v)
+
+  defp blank_default(_v, default), do: default
+
   defp source_kind(attrs) do
     file? = present?(attrs["source_file_id"]) or present?(attrs["transcript_file_id"])
     url? = present?(attrs["source_url"])
@@ -334,11 +519,114 @@ defmodule Platform.Social.AgentDrafts do
   # Through core's public Files API; a file in another project (or missing,
   # or soft-deleted) is refused alike.
   defp in_project(id, profile) do
-    case Platform.Files.get_file(id) do
-      %{project_id: project_id} when project_id == profile.project_id -> :ok
-      _ -> {:error, :source_not_in_project}
+    case project_file(id, profile) do
+      {:ok, _file} -> :ok
+      :error -> {:error, :source_not_in_project}
     end
   end
+
+  # Clip Studio 1/9: the one rule behind every "is this file the profile's"
+  # check. `Platform.Files.get_file/1` hides soft-deleted rows, so a deleted
+  # file is missing; a file in another project, or another org's, is
+  # refused exactly like a random id.
+  defp project_file(id, %Profile{project_id: project_id})
+       when is_binary(id) and is_binary(project_id) do
+    case Platform.Files.get_file(id) do
+      %{project_id: ^project_id, deleted_at: nil} = file -> {:ok, file}
+      _ -> :error
+    end
+  end
+
+  defp project_file(_id, _profile), do: :error
+
+  @doc """
+  Clip Studio 1/9: checks that `file_id` names a rendered clip the profile
+  may hold: a live file in the profile's project whose content type is
+  `video/*`. A missing, deleted, other-project or other-org file is
+  `{:error, :file_not_in_project}` alike; any other content type is
+  `{:error, :not_a_video}`. Shared by `submit_clip/4` and the clip job
+  list's complete (`Platform.Social.ClipJobs`).
+  """
+  @spec check_clip_file(term(), Profile.t()) ::
+          {:ok, Platform.Files.File.t()} | {:error, :file_not_in_project | :not_a_video}
+  def check_clip_file(file_id, %Profile{} = profile) do
+    case project_file(file_id, profile) do
+      {:ok, file} -> if video?(file), do: {:ok, file}, else: {:error, :not_a_video}
+      :error -> {:error, :file_not_in_project}
+    end
+  end
+
+  @doc """
+  Clip Studio 1/9: whether `file_id` is a live file in the profile's
+  project (any content type). Used for a new clip's episode source and
+  transcript (`Platform.Social.ClipJobs`).
+  """
+  @spec file_in_project?(term(), Profile.t()) :: boolean()
+  def file_in_project?(file_id, %Profile{} = profile),
+    do: match?({:ok, _}, project_file(file_id, profile))
+
+  @doc """
+  Clip Studio 1/9: `platforms` (nil = none) must each be one of the
+  profile's live account platforms. `{:ok, unique_list}` or
+  `{:error, {:invalid_platforms, bad}}`.
+  """
+  @spec check_platforms(term(), Profile.t()) ::
+          {:ok, [String.t()]} | {:error, {:invalid_platforms, [String.t()]}}
+  def check_platforms(platforms, %Profile{} = profile), do: validate_platforms(platforms, profile)
+
+  @doc """
+  Clip Studio 1/9: a clip title is optional; given, it is a non-blank
+  string of at most 200 characters, else `{:error, :invalid_title}`.
+  """
+  @spec check_title(map()) :: :ok | {:error, :invalid_title}
+  def check_title(attrs), do: attrs |> normalize() |> validate_title()
+
+  defp video?(%{content_type: type}) when is_binary(type), do: String.starts_with?(type, "video/")
+  defp video?(_), do: false
+
+  @doc """
+  Clip Studio 1/9: the rendered file's measurements. ffprobe on the stored
+  file when storage gives a local path; otherwise (or when the probe fails)
+  the caller's `duration_s`, `width` and `height`. `byte_size` always comes
+  from the file row.
+  """
+  @spec clip_file_meta(Platform.Files.File.t(), map()) :: map()
+  def clip_file_meta(file, attrs) do
+    attrs = normalize(attrs)
+
+    base = %{
+      "duration_s" => number(attrs["duration_s"]),
+      "width" => integer(attrs["width"]),
+      "height" => integer(attrs["height"]),
+      "byte_size" => file.byte_size
+    }
+
+    case probe(file) do
+      {:ok, %{duration_s: d, width: w, height: h}} ->
+        Map.merge(base, %{"duration_s" => d, "width" => w, "height" => h})
+
+      _ ->
+        base
+    end
+  end
+
+  defp probe(file) do
+    with {:ok, path} <- Platform.Files.Extractor.local_path(file),
+         true <- File.exists?(path) do
+      Platform.Social.Renderer.Ffmpeg.probe(path)
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp number(n) when is_number(n), do: n * 1.0
+  defp number(_), do: nil
+
+  defp integer(n) when is_integer(n), do: n
+  defp integer(n) when is_float(n), do: round(n)
+  defp integer(_), do: nil
 
   defp validate_crop(nil), do: :ok
   defp validate_crop(x) when is_number(x) and x >= 0 and x <= 1, do: :ok
@@ -434,11 +722,14 @@ defmodule Platform.Social.AgentDrafts do
     |> Changeset.validate_required([:status])
     |> Changeset.validate_inclusion(:status, @agent_statuses)
     |> validate_future(:scheduled_at)
+    |> Changeset.validate_length(:schedule_reason, max: Post.max_schedule_reason())
     |> validate_ref(:task_id, org_id, &task_org/1)
     |> validate_ref(:meeting_id, org_id, &meeting_org/1)
     |> validate_media(org_id)
     # Social 5/7: a rendered clip's length and size, for MediaRules at publish.
     |> ClipMedia.put_media_meta(profile.id)
+    # Task 01a165ec stage 2: the one cover rule, shared with Post.changeset.
+    |> Cover.validate(attrs, %{org_id: org_id, profile_id: profile.id})
     |> Changeset.check_constraint(:status, name: :social_posts_status_check)
     |> Changeset.check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check
@@ -475,7 +766,7 @@ defmodule Platform.Social.AgentDrafts do
   defp validate_media(changeset, org_id) do
     ids = Changeset.get_change(changeset, :media_file_ids) || []
 
-    if Enum.all?(ids, &(file_org(&1) == org_id)),
+    if Enum.all?(ids, &OrgFiles.in_org?(&1, org_id)),
       do: changeset,
       else: Changeset.add_error(changeset, :media_file_ids, "must exist in the profile's org")
   end
@@ -489,14 +780,6 @@ defmodule Platform.Social.AgentDrafts do
 
   defp meeting_org(id) do
     case Platform.Meetings.get_meeting(id) do
-      %{project_id: project_id} -> project_org(project_id)
-      _ -> nil
-    end
-  end
-
-  defp file_org(id) do
-    case Platform.Files.get_file(id) do
-      %{org_id: org_id} when is_binary(org_id) -> org_id
       %{project_id: project_id} -> project_org(project_id)
       _ -> nil
     end

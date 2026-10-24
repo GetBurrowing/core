@@ -30,6 +30,18 @@ defmodule Platform.Social do
   "must be a human user"; the FK to `users` is the second layer. Profile
   `approver_user_ids` get the same check on write. Whether the approver is
   in the profile's list is Social 3/7's rule.
+
+  ## Project for renders (task 01a16532)
+
+  A profile's clip renders are stored as files in its project. A new
+  profile without an explicit `project_id` takes
+  `default_render_project_id/1`: the org's only non-archived project, or
+  the first by name (then id). An org with no projects leaves it nil. No
+  project is ever created for this: a silently created project clutters
+  the project switcher (design canvas 01a16763-cfb1, rule 5), so the
+  ticket's "or create a Social project" option was dropped.
+  `set_profile_project/4` is the approver-only way to correct it; there
+  is no agent tool for it.
   """
 
   import Ecto.Query
@@ -154,11 +166,17 @@ defmodule Platform.Social do
   def list_profiles(org_id),
     do: Profile |> scoped_query(org_id) |> order_by([p], asc: p.name) |> Repo.all()
 
+  @doc """
+  Creates a profile in `org_id`. When `attrs` carry no `project_id` key
+  (atom or string), the project defaults to
+  `default_render_project_id/1`; an explicit `project_id` (nil included)
+  wins and is still validated against the org.
+  """
   @spec create_profile(Ecto.UUID.t(), map()) :: {:ok, Profile.t()} | {:error, term()}
   def create_profile(org_id, attrs) do
     case Ecto.UUID.cast(org_id) do
       {:ok, org_id} ->
-        %Profile{org_id: org_id}
+        %Profile{org_id: org_id, project_id: default_project_unless_given(org_id, attrs)}
         |> Profile.changeset(attrs)
         |> validate_profile(org_id)
         |> Repo.insert()
@@ -179,6 +197,73 @@ defmodule Platform.Social do
     end
   end
 
+  defp default_project_unless_given(org_id, attrs) do
+    if Map.has_key?(attrs, :project_id) or Map.has_key?(attrs, "project_id"),
+      do: nil,
+      else: default_render_project_id(org_id)
+  end
+
+  @doc """
+  The project a new profile in `org_id` stores its renders in: the org's
+  non-archived projects ordered by name, then id; none -> nil, otherwise
+  the first. Never creates a project.
+
+  KEEP IN SYNC with the SQL in
+  `priv/repo/migrations/20261023070500_backfill_social_profile_project.exs`
+  (task 01a16532 stage 2), which applies this same rule to existing
+  profiles with a nil project. Names compare in byte order (Elixir term
+  order), which is why that SQL sorts with `COLLATE "C"`.
+  """
+  @spec default_render_project_id(term()) :: Ecto.UUID.t() | nil
+  def default_render_project_id(org_id) do
+    case Ecto.UUID.cast(org_id) do
+      {:ok, org_id} ->
+        [org_id: org_id]
+        |> Platform.Tasks.list_projects_unscoped()
+        |> Enum.filter(&is_nil(&1.archived_at))
+        |> Enum.min_by(&{&1.name, &1.id}, fn -> nil end)
+        |> case do
+          nil -> nil
+          project -> project.id
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  @doc """
+  Sets the project a profile's renders are stored in. Only an approver of
+  the profile may (`approver_check/3`, checked before anything else; a
+  refusal writes nothing). Only `project_id` is cast; it must name a
+  non-archived project in the profile's org, so another org's project, an
+  unknown id, an archived project or a blank are refused. Agents are never
+  approvers, and there is deliberately no agent tool for this.
+  """
+  @spec set_profile_project(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), term()) ::
+          {:ok, Profile.t()}
+          | {:error, :not_found | approver_refusal() | Ecto.Changeset.t()}
+  def set_profile_project(org_id, profile, user_id, project_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id) do
+      profile
+      |> Changeset.cast(%{project_id: project_id}, [:project_id])
+      |> Changeset.validate_required([:project_id])
+      |> validate_project_in_org(profile.org_id)
+      |> validate_project_not_archived()
+      |> Repo.update()
+    end
+  end
+
+  defp validate_project_not_archived(%Changeset{valid?: false} = changeset), do: changeset
+
+  defp validate_project_not_archived(changeset) do
+    case Platform.Tasks.get_project(Changeset.get_field(changeset, :project_id)) do
+      %{archived_at: nil} -> changeset
+      _ -> Changeset.add_error(changeset, :project_id, "must not be an archived project")
+    end
+  end
+
   @doc "Deletes the profile and (FK `delete_all`) its accounts, posts and clips."
   @spec delete_profile(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t()) ::
           {:ok, Profile.t()} | {:error, term()}
@@ -191,6 +276,88 @@ defmodule Platform.Social do
     |> validate_project_in_org(org_id)
     |> validate_space_in_org(org_id)
     |> validate_approvers()
+    |> validate_notify_subset()
+    |> validate_drafting_agent(org_id)
+  end
+
+  # Social authoring 4/11: who gets notified is a subset of the approvers.
+  # An approver removed from the list is dropped from it too; naming
+  # someone who is not an approver is an error.
+  defp validate_notify_subset(changeset) do
+    approvers = Changeset.get_field(changeset, :approver_user_ids) || []
+    notify = Changeset.get_field(changeset, :notify_user_ids) || []
+
+    cond do
+      Enum.all?(notify, &(&1 in approvers)) ->
+        changeset
+
+      Changeset.get_change(changeset, :notify_user_ids) != nil ->
+        Changeset.add_error(changeset, :notify_user_ids, "must be approvers of this profile")
+
+      true ->
+        Changeset.put_change(changeset, :notify_user_ids, Enum.filter(notify, &(&1 in approvers)))
+    end
+  end
+
+  defp validate_drafting_agent(changeset, org_id) do
+    case Changeset.get_change(changeset, :drafting_agent_id) do
+      nil ->
+        changeset
+
+      agent_id ->
+        if Enum.any?(drafting_agent_options(org_id), &(&1.id == agent_id)),
+          do: changeset,
+          else: Changeset.add_error(changeset, :drafting_agent_id, "must be an agent in this org")
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: the agents a profile in `org_id` may name as its
+  drafting agent: active agents whose home org (core's
+  `Platform.Experiments.Tools.home_org/1`) is `:root` or this org, by name.
+  """
+  @spec drafting_agent_options(term()) :: [Platform.Agents.Agent.t()]
+  def drafting_agent_options(org_id) do
+    case Ecto.UUID.cast(org_id) do
+      {:ok, org_id} ->
+        from(a in Platform.Agents.Agent, where: a.status == "active", order_by: [asc: a.name])
+        |> Repo.all()
+        |> Enum.filter(fn agent ->
+          case Platform.Experiments.Tools.home_org(agent) do
+            :root -> true
+            {:tenant, ^org_id} -> true
+            _ -> false
+          end
+        end)
+
+      :error ->
+        []
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: removes one accepted learning from the profile's
+  voice. Approvers only (`approver_check/3`), else
+  `{:error, :not_an_approver}`; an unknown learning id is `{:error, :not_found}`.
+  """
+  @spec remove_voice_learning(scope(), Profile.t() | Ecto.UUID.t(), term(), term()) ::
+          {:ok, Profile.t()} | {:error, term()}
+  def remove_voice_learning(org_id, profile, user_id, learning_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(profile.org_id, profile, user_id) do
+      voice = Platform.Social.Voice.of(profile)
+
+      case Enum.split_with(voice.learnings, &(&1.id == learning_id)) do
+        {[], _} ->
+          {:error, :not_found}
+
+        {_removed, kept} ->
+          profile
+          |> Changeset.change()
+          |> Changeset.put_embed(:voice, %{learnings: kept})
+          |> Repo.update()
+      end
+    end
   end
 
   # Social 3/7: the profile's channel must be a space in the profile's org,
@@ -214,8 +381,10 @@ defmodule Platform.Social do
         changeset
 
       project_id ->
-        case Platform.Tasks.get_project(project_id) do
-          %{org_id: ^org_id} -> changeset
+        with {:ok, project_id} <- Ecto.UUID.cast(project_id),
+             %{org_id: ^org_id} <- Platform.Tasks.get_project(project_id) do
+          changeset
+        else
           _ -> Changeset.add_error(changeset, :project_id, "must belong to the profile's org")
         end
     end
@@ -287,6 +456,44 @@ defmodule Platform.Social do
       account |> Account.changeset(attrs) |> Repo.update()
     end
   end
+
+  @doc """
+  Social authoring 4/11: writes an account's `posting_slots` (a list of
+  `%{weekday: 1..7, time: "HH:MM"}` in the profile's timezone) and
+  `weekly_goal` (nil or 1..100), and nothing else
+  (`Account.schedule_changeset/2`). Who may call it is the caller's rule
+  (Settings checks the approver).
+  """
+  @spec update_account_schedule(scope(), Account.t() | Ecto.UUID.t(), map()) ::
+          {:ok, Account.t()} | {:error, term()}
+  def update_account_schedule(org_id, account, attrs) do
+    with {:ok, account} <- fetch(Account, org_id, account) do
+      account |> Account.schedule_changeset(attrs) |> Repo.update()
+    end
+  end
+
+  @doc """
+  Social authoring 4/11: the first posting slot of `account` at or after
+  `now` that no approved, scheduled or published post of that account
+  occupies, as a UTC `DateTime`; nil when the account has no slots (or is
+  archived, or every slot in the next 53 weeks is taken). Slots are read in
+  the profile's timezone, so DST is handled: see `Platform.Social.Slots`.
+
+  This is the function "approve into next slot" (needs-you queue, 5/11)
+  calls. It does not reserve the slot.
+  """
+  @spec next_free_slot(Account.t(), DateTime.t()) :: DateTime.t() | nil
+  def next_free_slot(%Account{} = account, %DateTime{} = now),
+    do: Platform.Social.Slots.next_free(account, now)
+
+  @doc """
+  Social authoring 4/11: every slot instant of the profile's live accounts
+  in the local week starting on the Monday of `monday` (a `Date`), for
+  calendar shading (8/11). See `Platform.Social.Slots.slots_in_week/2`.
+  """
+  @spec slots_in_week(Profile.t(), Date.t()) :: [Platform.Social.Slots.week_slot()]
+  def slots_in_week(%Profile{} = profile, %Date{} = monday),
+    do: Platform.Social.Slots.slots_in_week(profile, monday)
 
   @doc """
   Sets the account's owner, the person it posts as (task 01a14ce1), or
@@ -853,6 +1060,11 @@ defmodule Platform.Social do
       locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
 
       case live_account_with_ref(locked, entry.ref) do
+        # Social authoring 9/11: a Reconnect of a disconnected row (same
+        # vendor ref) moves it back to "connected" and re-arms its alert.
+        %Account{status: "reauth_needed"} = account ->
+          {account |> backfill_type!(entry) |> reconnected!(), :connected}
+
         %Account{} = account ->
           {backfill_type!(account, entry), :already_connected}
 
@@ -960,6 +1172,16 @@ defmodule Platform.Social do
     end
   end
 
+  defp reconnected!(%Account{} = account) do
+    account
+    |> Changeset.change(status: "connected", disconnect_alerted_at: nil)
+    |> Repo.update()
+    |> case do
+      {:ok, account} -> account
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
   # The ONLY write: ref, status, a missing handle and a reported account type.
   # Not the editable cast. A type is written only when the vendor reported one
   # we know; nil never overwrites a stored type (an entry without the key is
@@ -969,7 +1191,7 @@ defmodule Platform.Social do
     account_type = Map.get(entry, :account_type)
 
     changes =
-      [provider_account_ref: entry.ref, status: "connected"] ++
+      [provider_account_ref: entry.ref, status: "connected", disconnect_alerted_at: nil] ++
         if(is_nil(account.handle) and is_binary(entry.username),
           do: [handle: entry.username],
           else: []
@@ -1436,7 +1658,11 @@ defmodule Platform.Social do
   `:placed_to` (Social 7/7's calendar: a half-open `[from, to)` range of
   `DateTime`s on the post's PLACEMENT time, `scheduled_at`, or `approved_at`
   for a post published or failed at approval with no schedule; the schema
-  has no published-at column), and `refused: true` (task 01a165f1:
+  has no published-at column), `:profile_ids` (posts on any of those
+  profiles' accounts), `:updated_from` (last written at or after a
+  `DateTime`), `:calendar_from` + `:calendar_to` (Social authoring 8/11:
+  a half-open range on the placement with `published_at` first for a
+  published post), and `refused: true` (task 01a165f1:
   `approved` posts with a `refused_reason`). Rows carry `status`, `error`,
   `rejection_reason`, `rejected_at` and the refusal fields.
   """
@@ -1503,6 +1729,58 @@ defmodule Platform.Social do
       end
     end)
     |> then(fn q ->
+      # Social authoring 1/11: posts on any of several profiles' accounts.
+      case filters[:profile_ids] do
+        nil ->
+          q
+
+        ids when is_list(ids) ->
+          account_ids = from(a in Account, where: a.profile_id in ^ids, select: a.id)
+          where(q, [po], po.account_id in subquery(account_ids))
+      end
+    end)
+    |> then(fn q ->
+      # Social authoring 1/11: last written at or after this time.
+      case filters[:updated_from] do
+        %DateTime{} = from -> where(q, [po], po.updated_at >= ^from)
+        nil -> q
+      end
+    end)
+    |> then(fn q ->
+      # Social authoring 8/11's calendar: `[from, to)` on the placement that
+      # also reads `published_at`: a published post sits where it went out
+      # (`published_at`, else `scheduled_at`, else `approved_at`); any other
+      # post where `:placed_from` puts it (`scheduled_at`, else `approved_at`).
+      case {filters[:calendar_from], filters[:calendar_to]} do
+        {%DateTime{} = from, %DateTime{} = to} ->
+          where(
+            q,
+            [po],
+            fragment(
+              "CASE WHEN ? = 'published' THEN coalesce(?, ?, ?) ELSE coalesce(?, ?) END",
+              po.status,
+              po.published_at,
+              po.scheduled_at,
+              po.approved_at,
+              po.scheduled_at,
+              po.approved_at
+            ) >= ^from and
+              fragment(
+                "CASE WHEN ? = 'published' THEN coalesce(?, ?, ?) ELSE coalesce(?, ?) END",
+                po.status,
+                po.published_at,
+                po.scheduled_at,
+                po.approved_at,
+                po.scheduled_at,
+                po.approved_at
+              ) < ^to
+          )
+
+        _ ->
+          q
+      end
+    end)
+    |> then(fn q ->
       # Task 01a165f1: approved posts whose publish was refused before the vendor.
       if filters[:refused] == true,
         do: where(q, [po], po.status == "approved" and not is_nil(po.refused_reason)),
@@ -1512,14 +1790,22 @@ defmodule Platform.Social do
     |> Repo.all()
   end
 
-  @doc "Creates a post on an account in the caller's org. Refused on an archived account."
-  @spec create_post(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), map()) ::
+  @doc """
+  Creates a post on an account in the caller's org. Refused on an archived account.
+
+  `opts` (Social authoring 6/11, the composer): `idea_id:` joins the post to
+  that idea, which must be in the caller's org and on the account's
+  profile, else `{:error, :idea_profile_mismatch}` (a missing idea is
+  `{:error, :not_found}`). `idea_id` stays out of every cast list.
+  """
+  @spec create_post(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), map(), keyword()) ::
           {:ok, Post.t()} | {:error, term()}
-  def create_post(org_id, account, attrs) do
+  def create_post(org_id, account, attrs, opts \\ []) do
     with {:ok, account} <- fetch(Account, org_id, account),
-         :ok <- refuse_archived(account) do
+         :ok <- refuse_archived(account),
+         {:ok, idea_id} <- post_idea(org_id, account, Keyword.get(opts, :idea_id)) do
       changeset =
-        %Post{account_id: account.id}
+        %Post{account_id: account.id, idea_id: idea_id}
         |> Post.changeset(attrs)
         |> ClipMedia.put_media_meta(account.profile_id)
 
@@ -1527,6 +1813,16 @@ defmodule Platform.Social do
            {:ok, post} <- Repo.insert(changeset) do
         {:ok, needs_approval_written(post)}
       end
+    end
+  end
+
+  defp post_idea(_org_id, _account, nil), do: {:ok, nil}
+
+  defp post_idea(org_id, %Account{profile_id: profile_id}, idea_id) do
+    case Platform.Social.Ideas.get(org_id, idea_id) do
+      %Platform.Social.Idea{profile_id: ^profile_id, id: id} -> {:ok, id}
+      %Platform.Social.Idea{} -> {:error, :idea_profile_mismatch}
+      nil -> {:error, :not_found}
     end
   end
 
@@ -1550,6 +1846,130 @@ defmodule Platform.Social do
            {:ok, updated} <- Repo.update(changeset) do
         {:ok, needs_approval_written(updated)}
       end
+    end
+  end
+
+  @doc """
+  A human sets or clears a video post's cover (task 01a165ec stage 2).
+  `attrs` is one of:
+
+    * `%{cover_file_id: id}`: an uploaded JPG/PNG in the post's org;
+    * `%{cover_offset_ms: ms}`, optionally with `duration_ms` (the
+      browser's `<video>.duration`, stored only when no duration is known);
+    * `:clear` (or `%{clear: true}`): no cover.
+
+  The actor is checked exactly as for the approval card's edit
+  (`post_approver_check/4`, the rule `Approvals.decide_edit/4` applies),
+  on the row locked `FOR UPDATE`; a post past `needs_approval` is
+  `{:error, :post_locked}`. The cover goes through the one cover rule
+  (`Platform.Social.Cover`), so a refusal is `{:error, changeset}`. A
+  cover change changes `Approvals.fingerprint/1`, so a card shown before
+  it is refused at approve with `:post_changed`.
+  """
+  @spec set_cover(Ecto.UUID.t(), term(), Ecto.UUID.t(), map() | :clear) ::
+          {:ok, Post.t()} | {:error, term()}
+  def set_cover(org_id, actor_user_id, post_id, attrs) do
+    attrs = cover_attrs(attrs)
+
+    with {:ok, post} <- fetch(Post, org_id, post_id) do
+      Repo.transaction(fn ->
+        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
+
+        with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_cover_locked(locked),
+             {:ok, profile} <- profile_of_post(locked),
+             account = Repo.get!(Account, locked.account_id),
+             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+             ctx = %{org_id: profile.org_id, profile_id: profile.id},
+             {:ok, updated} <- locked |> Post.cover_changeset(attrs, ctx) |> Repo.update() do
+          updated
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, updated} -> {:ok, needs_approval_written(updated)}
+        error -> error
+      end
+    end
+  end
+
+  defp cover_attrs(:clear), do: %{cover_file_id: nil, cover_offset_ms: nil}
+
+  defp cover_attrs(%{} = attrs) do
+    if Map.get(attrs, :clear) == true or Map.get(attrs, "clear") == true,
+      do: cover_attrs(:clear),
+      else:
+        Map.take(
+          attrs,
+          [:cover_file_id, :cover_offset_ms, :duration_ms] ++
+            ~w(cover_file_id cover_offset_ms duration_ms)
+        )
+  end
+
+  defp cover_attrs(_), do: %{}
+
+  defp refuse_cover_locked(%Post{status: status}) when status in ~w(draft needs_approval),
+    do: :ok
+
+  defp refuse_cover_locked(%Post{}), do: {:error, :post_locked}
+
+  @doc """
+  A human sets a version's platform options (Social authoring 7/11):
+  `attrs` (string keys) cleaned by `Platform.Social.PlatformOptions.validate/2`
+  for the account's platform, so a key that platform does not take is
+  dropped. The actor is checked as for the cover (`post_approver_check/4`
+  on the row locked `FOR UPDATE`); a post past `needs_approval` is
+  `{:error, :post_locked}`; an over-long value is
+  `{:error, {:invalid_options, %{key => message}}}`. A change is logged as
+  a human `edited` event whose note names the options.
+  """
+  @spec set_platform_options(Ecto.UUID.t(), term(), Ecto.UUID.t(), map()) ::
+          {:ok, Post.t()} | {:error, term()}
+  def set_platform_options(org_id, actor_user_id, post_id, attrs) when is_map(attrs) do
+    with {:ok, post} <- fetch(Post, org_id, post_id) do
+      Repo.transaction(fn ->
+        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
+
+        with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_cover_locked(locked),
+             {:ok, profile} <- profile_of_post(locked),
+             account = Repo.get!(Account, locked.account_id),
+             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+             {:ok, options} <- options_for(account.platform, attrs) do
+          if options == (locked.platform_options || %{}) do
+            locked
+          else
+            updated = locked |> Post.options_changeset(options) |> Repo.update!()
+
+            Platform.Social.PostEvents.record!(updated, "edited", {:human, actor_user_id},
+              note: "Platform options: " <> options_note(account.platform, options)
+            )
+
+            updated
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end
+  end
+
+  defp options_for(platform, attrs) do
+    case Platform.Social.PlatformOptions.validate(platform, attrs) do
+      {:ok, options} -> {:ok, options}
+      {:error, errors} -> {:error, {:invalid_options, errors}}
+    end
+  end
+
+  defp options_note(platform, options) do
+    case for(
+           f <- Platform.Social.PlatformOptions.fields(platform),
+           Map.has_key?(options, f.key),
+           do: f.label
+         ) do
+      [] -> "cleared"
+      labels -> Enum.join(labels, ", ")
     end
   end
 
@@ -1843,6 +2263,65 @@ defmodule Platform.Social do
   end
 
   @doc """
+  Posts across the profiles `user` may see (Social authoring 1/11, the
+  "All brands" scope). The profile ids ALWAYS come from
+  `list_profiles_for_user/1`, read now: `scope` is `:all` or a list of ids
+  that can only NARROW that set (an id the user cannot see is dropped, never
+  read). `filters` are `list_posts/2`'s, minus `:profile_id`/`:profile_ids`.
+  Each org is read through its own scope; rows come back oldest first.
+  """
+  @spec list_posts_for_profiles(
+          Platform.Accounts.User.t() | nil,
+          :all | [Ecto.UUID.t()],
+          keyword() | map()
+        ) :: [Post.t()]
+  def list_posts_for_profiles(user, scope, filters \\ []) do
+    filters = filters |> Map.new() |> Map.drop([:profile_id, :profile_ids])
+
+    user
+    |> scoped_profiles(scope)
+    |> Enum.group_by(& &1.org_id, & &1.id)
+    |> Enum.flat_map(fn {org_id, ids} ->
+      list_posts(org_id, Map.put(filters, :profile_ids, ids))
+    end)
+    |> Enum.sort_by(&{&1.inserted_at, &1.id}, fn {a, ida}, {b, idb} ->
+      case DateTime.compare(a, b) do
+        :lt -> true
+        :gt -> false
+        :eq -> ida <= idb
+      end
+    end)
+  end
+
+  @doc """
+  The accounts of the profiles `user` may see, with the same `scope` rule as
+  `list_posts_for_profiles/3` (ids from `list_profiles_for_user/1`, never
+  widened by the caller). `opts` are `list_accounts/2`'s
+  (`:include_archived`; archived accounts are omitted by default).
+  """
+  @spec list_accounts_for_profiles(
+          Platform.Accounts.User.t() | nil,
+          :all | [Ecto.UUID.t()],
+          keyword()
+        ) :: [Account.t()]
+  def list_accounts_for_profiles(user, scope, opts \\ []) do
+    opts = Keyword.delete(opts, :profile_id)
+
+    user
+    |> scoped_profiles(scope)
+    |> Enum.group_by(& &1.org_id, & &1.id)
+    |> Enum.flat_map(fn {org_id, ids} ->
+      org_id |> list_accounts(opts) |> Enum.filter(&(&1.profile_id in ids))
+    end)
+  end
+
+  defp scoped_profiles(nil, _scope), do: []
+  defp scoped_profiles(user, :all), do: list_profiles_for_user(user)
+
+  defp scoped_profiles(user, ids) when is_list(ids),
+    do: user |> list_profiles_for_user() |> Enum.filter(&(&1.id in ids))
+
+  @doc """
   The profiles `user` may see, ordered by name (Social 7/7, the Social tab's
   switcher). Built on the two swap points: `Platform.Tenancy.visibility/1`
   says which orgs the user reads (`:root_all`, `{:orgs, ids}` or `:none`),
@@ -1964,6 +2443,22 @@ defmodule Platform.Social do
     with {:ok, clip} <- fetch(Clip, org_id, clip), do: Repo.delete(clip)
   end
 
+  # Clip decisions (Clip Studio 2/9)
+  #
+  # A human's one-step clip decision (task 01a16662): see
+  # `Platform.Social.ClipDecisions`. Each takes opts with an injectable `:now`.
+
+  defdelegate approve_clip(org_id, clip_id, user_id, attrs, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate reject_clip(org_id, clip_id, user_id, note, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate undo_clip_decision(org_id, clip_id, user_id, opts \\ []),
+    to: Platform.Social.ClipDecisions
+
+  defdelegate retry_post(org_id, post_id, user_id), to: Platform.Social.ClipDecisions
+
   # ── Clip rendering (Social 5/7) ──────────────────────────────────────
 
   @render_from ~w(candidate failed)
@@ -1999,7 +2494,7 @@ defmodule Platform.Social do
   @spec profile_needs_project() :: String.t()
   def profile_needs_project,
     do:
-      "the profile needs a project in its org to store renders in; set the profile's project first"
+      "This profile has no project to store renders in. An approver can set one in Social › Settings › Project for renders."
 
   @doc """
   Queues a clip for rendering and returns at once with the clip in

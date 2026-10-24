@@ -199,7 +199,16 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
 
     assert ctx.h1.id in options and ctx.n.id in options
     refute ctx.g.id in options
-    refute html =~ ctx.g.name
+
+    # Social authoring 4/11: the drafting-agent picker lists agents by
+    # design, so the name check is scoped to the approver picker.
+    approver_html =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("select[name='profile[approver_user_ids][]']")
+      |> LazyHTML.to_html()
+
+    refute approver_html =~ ctx.g.name
 
     assert has_element?(
              child,
@@ -272,7 +281,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     assert has_element?(
              child,
              "[data-pane='connections'] [data-role='social-empty']",
-             "No accounts connected for #{empty.name} yet"
+             "No accounts yet for #{empty.name}"
            )
   end
 

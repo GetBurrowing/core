@@ -11,6 +11,10 @@ defmodule Platform.Social.Publisher.Fake do
     * `calls/0`, `calls/1` - the recorded calls, oldest first (all, or one callback's).
     * `reset/0` - forgets every call and every programmed result.
     * `put_next/2` - the next call to a callback returns this result instead.
+    * `put_next_for/3` - the next call to a callback FOR ONE ACCOUNT returns
+      this result (Clip Studio 2/9). It is consulted before `put_next/2` and
+      consumed once, so one account can publish and another fail in the
+      same sweep.
     * `fail_next/2` - shorthand for `put_next(fun, {:error, reason})`.
     * `sign/2` - the signature header value for a raw body, so tests (and the
       webhook tests) can mint a valid delivery; `webhook_body/1` builds one.
@@ -20,7 +24,9 @@ defmodule Platform.Social.Publisher.Fake do
   ## Webhook format
 
   The Fake's delivery is JSON `{"events": [{"event_id", "external_id",
-  "kind", "external_url", "error"}]}` signed with HMAC-SHA256 of the RAW
+  "kind", "external_url", "platform_post_id", "error", "auth"}]}` (or, for
+  kind `account_disconnected` / `account_connected`, `{"event_id", "kind",
+  "account_ref", "error"}`) signed with HMAC-SHA256 of the RAW
   body, lowercase hex, in header `#{"x-social-fake-signature"}`. The compare is
   `Plug.Crypto.secure_compare/2` (`Platform.Webhooks.GithubSignature`'s pattern).
   """
@@ -67,6 +73,19 @@ defmodule Platform.Social.Publisher.Fake do
   @spec put_next(atom(), term()) :: :ok
   def put_next(fun, result) when is_atom(fun) do
     :ets.insert(@table, {{:next, fun}, result})
+    :ok
+  end
+
+  @doc """
+  The next call to `fun` whose account is `account_id` returns `result`
+  (then the default again). Consulted before `put_next/2`; a call for any
+  other account does not consume it. Only callbacks that take an account
+  (`publish`, `status`, `delete`, `disconnect_account`, `connect_url`) can
+  match.
+  """
+  @spec put_next_for(Ecto.UUID.t(), atom(), term()) :: :ok
+  def put_next_for(account_id, fun, result) when is_binary(account_id) and is_atom(fun) do
+    :ets.insert(@table, {{:next, fun, account_id}, result})
     :ok
   end
 
@@ -118,7 +137,12 @@ defmodule Platform.Social.Publisher.Fake do
   def publish(account, request) do
     record(:publish, [account, request], fn ->
       {:ok,
-       %{external_id: "fake_" <> request.idempotency_key, status: :scheduled, external_url: nil}}
+       %{
+         external_id: "fake_" <> request.idempotency_key,
+         status: :scheduled,
+         external_url: nil,
+         platform_post_id: "fake_platform_" <> request.idempotency_key
+       }}
     end)
   end
 
@@ -131,6 +155,13 @@ defmodule Platform.Social.Publisher.Fake do
 
   @impl Platform.Social.Publisher
   def delete(account, external_id), do: record(:delete, [account, external_id], fn -> :ok end)
+
+  # Records the call (`calls(:set_cover)`); `fail_next(:set_cover, reason)`
+  # makes the next one fail. The request's `cover` is recorded by publish/2
+  # as given.
+  @impl Platform.Social.Publisher
+  def set_cover(account, external_id, url),
+    do: record(:set_cover, [account, external_id, url], fn -> :ok end)
 
   @impl Platform.Social.Publisher
   def disconnect_account(account), do: record(:disconnect_account, [account], fn -> :ok end)
@@ -157,11 +188,19 @@ defmodule Platform.Social.Publisher.Fake do
       {{:call, System.unique_integer([:monotonic])}, {fun, args, DateTime.utc_now()}}
     )
 
-    case :ets.take(@table, {:next, fun}) do
+    with [] <- take_for_account(fun, args),
+         [] <- :ets.take(@table, {:next, fun}) do
+      default.()
+    else
       [{_, result}] -> result
-      [] -> default.()
     end
   end
+
+  defp take_for_account(fun, [%Platform.Social.Account{id: account_id} | _])
+       when is_binary(account_id),
+       do: :ets.take(@table, {:next, fun, account_id})
+
+  defp take_for_account(_fun, _args), do: []
 
   defp header(headers, name) do
     Enum.find_value(headers, fn {k, v} -> if String.downcase(to_string(k)) == name, do: v end)
@@ -174,18 +213,40 @@ defmodule Platform.Social.Publisher.Fake do
     end
   end
 
+  # Social authoring 9/11: the account events, as Zernio's adapter
+  # normalizes them (`account_ref` is our `provider_account_ref`).
+  defp event(%{"kind" => kind} = map)
+       when kind in ["account_disconnected", "account_connected"] do
+    %{
+      event_id: map["event_id"],
+      kind:
+        if(kind == "account_disconnected", do: :account_disconnected, else: :account_connected),
+      account_ref: map["account_ref"],
+      error: map["error"]
+    }
+  end
+
   defp event(map) when is_map(map) do
     %{
       event_id: map["event_id"],
       external_id: map["external_id"],
       kind: kind(map["kind"]),
       external_url: map["external_url"],
-      error: map["error"]
+      platform_post_id: map["platform_post_id"],
+      error: map["error"],
+      auth?: map["auth"] == true
     }
   end
 
   defp event(_),
-    do: %{event_id: nil, external_id: nil, kind: :ignored, external_url: nil, error: nil}
+    do: %{
+      event_id: nil,
+      external_id: nil,
+      kind: :ignored,
+      external_url: nil,
+      platform_post_id: nil,
+      error: nil
+    }
 
   defp kind("published"), do: :published
   defp kind("failed"), do: :failed

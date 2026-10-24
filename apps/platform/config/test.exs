@@ -202,6 +202,14 @@ config :platform, :start_task_router_watcher, false
 # Production defaults to `true` (see TaskRouterWatcher.schedule_reconcile/0).
 config :platform, :task_router_watcher_reconcile, false
 
+# TaskRouter unanswered re-dispatch backoff (task 01a16bf5 stage 1).
+# Production waits `30_000 * 2^(n-1)` ms between unanswered deliveries; a test
+# that drives two dispatches back to back would read that as the guard. The
+# CAP stays at its default (5), so it is live in every router test; the
+# backoff is exercised by `task_router_redispatch_cap_test.exs`, which sets
+# its own base.
+config :platform, :redispatch_backoff_base_ms, 0
+
 # SpacePurger (task 019e95ea stage 3): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_space_purger, false

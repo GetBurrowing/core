@@ -59,6 +59,7 @@ COPY apps/game_stream/assets game_stream/assets
 COPY apps/game_stream/priv game_stream/priv
 COPY apps/game_stream/lib game_stream/lib
 COPY apps/social/config social/config
+COPY apps/social/assets social/assets
 COPY apps/social/priv social/priv
 COPY apps/social/lib social/lib
 COPY apps/burrow_release/config burrow_release/config

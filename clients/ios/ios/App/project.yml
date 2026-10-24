@@ -197,6 +197,10 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
+      # AppTests/Fixtures/*.json are bundle resources through this path:
+      # push_seal_v1.json and companion_identities_v1.json, byte-for-byte
+      # copies of the server's test/support/fixtures files (pinned by the
+      # server's *_fixture_parity_test.exs). Tests load them from the bundle.
       - path: AppTests
     dependencies:
       - target: App

@@ -58,6 +58,13 @@ defmodule Platform.Social.Post do
     belongs_to(:generated_by_agent, Platform.Agents.Agent)
     field(:media_meta, :map, default: %{})
 
+    # A video post's cover (task 01a165ec stage 2): an uploaded image OR a
+    # frame, one at a time (`Platform.Social.Cover`). No FK into core's
+    # tables, as for media_file_ids. `cover_error` is the publisher's.
+    field(:cover_file_id, :binary_id)
+    field(:cover_offset_ms, :integer)
+    field(:cover_error, :string)
+
     # Why an approved post did not go out (task 01a165f1). In NO cast list:
     # only `refusal_changeset/4`, called by `Platform.Social.Publishing`,
     # sets them, and every success or terminal write clears them.
@@ -65,20 +72,63 @@ defmodule Platform.Social.Post do
     field(:refused_at, :utc_datetime_usec)
     field(:retry_after, :utc_datetime_usec)
 
+    # Clip Studio 2/9 (task 01a16662). In NO cast list (not @editable, not
+    # @publisher_fields, not AgentDrafts' @castable): `clip_id` and
+    # `publish_after` are written only by the human approve path, and
+    # `publish_attempts`, `platform_post_id` and `published_at` only by
+    # `Platform.Social.Publishing`. `external_id` stays the vendor's post id;
+    # `platform_post_id` is the platform's own id for it.
+    belongs_to(:clip, Platform.Social.Clip)
+    field(:platform_post_id, :string)
+    field(:publish_after, :utc_datetime_usec)
+    field(:publish_attempts, :integer, default: 0)
+    field(:published_at, :utc_datetime_usec)
+
+    # Social authoring 2/11 (task 01a16c4e). In NO cast list: set only by
+    # `Platform.Social.AgentDrafts` (checked against the idea's org and
+    # profile) and `Platform.Social.ClipDecisions.approve_clip/5`. Nil is a
+    # post that is its own one-post group.
+    belongs_to(:idea, Platform.Social.Idea)
+
+    # Social authoring 5/11 (task 01a16c50): why this time was suggested,
+    # shown under the suggested time on the Queue's idea card.
+    field(:schedule_reason, :string)
+
+    # Composer 1/5 (task 01a14aca): post-side facts of a composed post
+    # (platform, prompt slug, composition id, edited?, edit count before
+    # send), nil for every other post. Never the experiment arm: that is on
+    # the Experiments.Assignment row for the composition.
+    field(:composer_provenance, :map)
+
+    # Social authoring 7/11 (task 01a16c50-ea67): the version's platform
+    # options (`Platform.Social.PlatformOptions`). In NO cast list: only
+    # `options_changeset/2`, called by `Platform.Social.set_platform_options/4`.
+    field(:platform_options, :map, default: %{})
+
     timestamps()
   end
 
   @editable ~w(body media_file_ids link_url scheduled_at status external_url external_id error
-               task_id meeting_id segment_ids episode_url start_s end_s)a
+               task_id meeting_id segment_ids episode_url start_s end_s
+               cover_file_id cover_offset_ms cover_error schedule_reason)a
 
   # Social 2/7: the AI-disclosure flags and per-file media facts.
   @publisher_fields ~w(is_aigc ai_disclosure generated_by_agent_id media_meta)a
+
+  @max_schedule_reason 280
+
+  @doc "The longest accepted `schedule_reason` (Social authoring 5/11)."
+  @spec max_schedule_reason() :: pos_integer()
+  def max_schedule_reason, do: @max_schedule_reason
 
   @refused_reasons ~w(media_rejected rate_limited account_archived publisher_not_configured)
 
   @doc "Accepted `refused_reason` values."
   @spec refused_reasons() :: [String.t()]
   def refused_reasons, do: @refused_reasons
+
+  # Composer 1/5: written once, by `Platform.Social.Composer.send/4`.
+  @composer_fields ~w(composer_provenance)a
 
   @doc "Accepted `status` values."
   @spec statuses() :: [String.t()]
@@ -98,10 +148,38 @@ defmodule Platform.Social.Post do
     post
     |> cast(attrs, @editable)
     |> cast(attrs, @publisher_fields)
+    |> cast(attrs, @composer_fields)
     |> force_aigc_for_agent_media()
     |> validate_required([:status])
     |> validate_inclusion(:status, @statuses)
+    |> validate_length(:schedule_reason, max: @max_schedule_reason)
     |> validate_approved_has_approver()
+    |> Platform.Social.Cover.validate(attrs)
+    |> db_constraints()
+  end
+
+  @doc """
+  The ONLY changeset that writes `platform_options` (Social authoring 7/11):
+  `options` already cleaned by `Platform.Social.PlatformOptions.validate/2`.
+  """
+  @spec options_changeset(t(), map()) :: Ecto.Changeset.t()
+  def options_changeset(%__MODULE__{} = post, options) when is_map(options),
+    do: change(post, platform_options: options)
+
+  @doc """
+  The human path's cover edit (`Platform.Social.set_cover/4`): casts ONLY
+  the cover fields, optionally backfills the video's duration from the
+  browser (`duration_ms`, only when none is known), then runs the one cover
+  rule, `Platform.Social.Cover.validate/3`.
+  """
+  @spec cover_changeset(t(), map(), Platform.Social.Cover.ctx()) :: Ecto.Changeset.t()
+  def cover_changeset(%__MODULE__{} = post, attrs, ctx \\ nil) do
+    duration_ms = Map.get(attrs, :duration_ms, Map.get(attrs, "duration_ms"))
+
+    post
+    |> cast(attrs, Platform.Social.Cover.fields())
+    |> Platform.Social.Cover.backfill_duration(duration_ms, ctx)
+    |> Platform.Social.Cover.validate(attrs, ctx)
     |> db_constraints()
   end
 
@@ -231,5 +309,11 @@ defmodule Platform.Social.Post do
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:generated_by_agent_id)
+    |> foreign_key_constraint(:clip_id)
+    |> foreign_key_constraint(:idea_id)
+    |> check_constraint(:publish_attempts,
+      name: :social_posts_publish_attempts_check,
+      message: "must not be negative"
+    )
   end
 end

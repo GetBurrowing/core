@@ -15,7 +15,7 @@ defmodule Platform.Social.ExtensionTest do
     refute bundle.owns_tool?.("task_get")
     assert Extension.runtime_channel_events() == []
     assert Extension.live_hooks() == []
-    assert Extension.experiment_surfaces() == []
+    assert Extension.experiment_surfaces() == [Platform.Social.Composer.AdaptationSurface]
     assert Extension.experiment_metrics() == %{}
     assert Extension.runtime_disconnected("some-runtime") == :ok
     assert {:error, _} = Extension.handle_runtime_event("anything", "some-runtime", %{})
@@ -29,8 +29,20 @@ defmodule Platform.Social.ExtensionTest do
                label: "Post needs approval",
                icon: "hero-megaphone",
                stays_listed_on_open: true
+             },
+             %{
+               kind: "social_account_disconnected",
+               source_type: "social_account",
+               label: "Social account disconnected",
+               icon: "hero-link-slash",
+               stays_listed_on_open: false
              }
            ] = Extension.inbox_kinds()
+
+    # Social authoring 9/11: the disconnect alert is acknowledged on open.
+    assert "social_account_disconnected" in Platform.Inbox.Item.kinds()
+    assert "social_account" in Platform.Inbox.Item.source_types()
+    refute "social_account_disconnected" in Platform.Inbox.action_kinds()
 
     assert "social_post_approval" in Platform.Inbox.Item.kinds()
     assert "social_post" in Platform.Inbox.Item.source_types()

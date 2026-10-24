@@ -36,6 +36,16 @@ defmodule Platform.Social.Publishing do
   or `failed` answers `{:ok, :noop}` and is not written, so replayed
   deliveries are idempotent.
 
+  ## Attempts and platform ids (Clip Studio 2/9, task 01a16662)
+
+  Every adapter `publish/2` call adds one to `publish_attempts`, on success
+  and on failure, in the same write as its result. A refusal before the
+  adapter (the guard, an archived account, `MediaRules`, `RateLimit`, no
+  configured publisher) sent nothing, so it does not count. When a publish,
+  status or webhook result carries `:platform_post_id` (the platform's own
+  id, read from the vendor's per-account entry) it is stored; `external_id`
+  is unchanged. Every committed move to `published` writes `published_at`.
+
   Every committed move to `published` or `failed` (publish, cancel, outcome)
   is reported to `Platform.Social.TaskBridge.post_changed/1` (Social 6/7),
   which writes a social task's post URLs once all its drafts are terminal.
@@ -46,7 +56,18 @@ defmodule Platform.Social.Publishing do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, MediaRules, Post, Publisher, RateLimit}
+
+  alias Platform.Social.{
+    Account,
+    Cover,
+    MediaRules,
+    OrgFiles,
+    Post,
+    PostEvents,
+    Profile,
+    Publisher,
+    RateLimit
+  }
 
   @default_ai_disclosure "Made with AI"
   @max_error_length 1_000
@@ -79,10 +100,13 @@ defmodule Platform.Social.Publishing do
           post
           |> attempt(org_id, now_ms)
           |> record_refusal(post, org_id, now_ms)
+          |> log_outcome(post)
         end
       end)
 
     terminal_written(result, post_id)
+    |> alert_disconnect(post_id, result_reason(result))
+    |> set_cover_after_publish()
   end
 
   # ── Retry (task 01a165f1, stage 2) ───────────────────────────────────
@@ -138,10 +162,11 @@ defmodule Platform.Social.Publishing do
   defp attempt(post, org_id, now_ms) do
     with {:ok, account} <- active_account(org_id, post),
          {:ok, media} <- load_media(org_id, post),
+         {:ok, cover} <- load_cover(org_id, post),
          :ok <- check_media(account, media),
          :ok <- RateLimit.check(account.id, now_ms),
          adapter when is_atom(adapter) <- Publisher.impl() do
-      request = build_request(post, account, media)
+      request = build_request(post, account, media, cover)
       apply_publish(post, adapter.publish(account, request))
     end
   end
@@ -158,6 +183,7 @@ defmodule Platform.Social.Publishing do
         |> Post.refusal_changeset(code, readable(message), retry_after)
         |> Repo.update!()
 
+        PostEvents.record!(post, "refused", :system, note: code)
         error
     end
   end
@@ -264,11 +290,8 @@ defmodule Platform.Social.Publishing do
     end
   end
 
-  defp file_in_org?(%{project_id: nil}, _org_id), do: false
-
-  defp file_in_org?(%{project_id: project_id}, org_id) do
-    match?(%{org_id: ^org_id}, Platform.Tasks.get_project(project_id))
-  end
+  # The one org rule for a core file, shared with AgentDrafts and Cover.
+  defp file_in_org?(file, org_id), do: Platform.Social.OrgFiles.in_org?(file, org_id)
 
   @vendor_url_grace_seconds 3600
 
@@ -304,7 +327,7 @@ defmodule Platform.Social.Publishing do
   defp number(n) when is_number(n), do: n
   defp number(_), do: nil
 
-  defp build_request(post, account, media) do
+  defp build_request(post, account, media, cover) do
     %{
       body: post.body,
       link_url: post.link_url,
@@ -313,8 +336,108 @@ defmodule Platform.Social.Publishing do
       is_aigc: post.is_aigc == true,
       ai_disclosure: disclosure(post),
       platform: account.platform,
-      idempotency_key: post.id
+      idempotency_key: post.id,
+      cover: cover,
+      options:
+        Platform.Social.PlatformOptions.for_platform(post.platform_options, account.platform)
     }
+  end
+
+  # ── Cover (task 01a165ec, stage 3) ───────────────────────────────────
+
+  # The request's cover: an uploaded image goes out as a signed URL minted
+  # by `vendor_url/2`, exactly like media; a frame as its offset. The file
+  # is re-checked here (still there, still in the org, still JPG/PNG), and a
+  # failure refuses the publish before any HTTP, like a bad media file.
+  defp load_cover(org_id, %Post{cover_file_id: file_id} = post) when is_binary(file_id) do
+    with {:ok, file} <- cover_file(org_id, file_id),
+         url when is_binary(url) <- vendor_url(file, post) do
+      {:ok, %{kind: :image, url: url, content_type: file.content_type}}
+    else
+      {:error, message} -> {:error, {:media_rejected, [message]}}
+      nil -> {:error, {:media_rejected, ["The cover image could not be shared with the vendor"]}}
+    end
+  end
+
+  defp load_cover(_org_id, %Post{cover_offset_ms: offset}) when is_integer(offset),
+    do: {:ok, %{kind: :frame, offset_ms: offset}}
+
+  defp load_cover(_org_id, %Post{}), do: {:ok, nil}
+
+  defp cover_file(org_id, file_id) do
+    file = Platform.Files.get_file(file_id)
+
+    cond do
+      is_nil(file) or not OrgFiles.in_org?(file, org_id) ->
+        {:error, "The cover image is missing or not in this org"}
+
+      file.content_type not in Cover.image_types() ->
+        {:error, "The cover image must be a JPG or PNG"}
+
+      true ->
+        {:ok, file}
+    end
+  end
+
+  # YouTube takes no cover at create time, so an uploaded cover is set
+  # AFTER the post is published, once the transaction that wrote
+  # `published` has committed (publish_post/2 on a synchronous publish,
+  # apply_outcome/2 otherwise). One call with a freshly minted URL, no
+  # retry. Its outcome lands on `cover_error` only: success clears it, a
+  # failure explains it, and the post's status never changes. A frame
+  # offset sends nothing (YouTube has no API for one).
+  defp set_cover_after_publish({:ok, %Post{status: "published", cover_file_id: file_id} = post})
+       when is_binary(file_id) do
+    case youtube_account(post) do
+      {account, org_id} -> {:ok, send_cover(post, account, org_id, file_id)}
+      nil -> {:ok, post}
+    end
+  end
+
+  defp set_cover_after_publish(result), do: result
+
+  defp youtube_account(%Post{account_id: account_id}) do
+    Repo.one(
+      from(a in Account,
+        join: p in Profile,
+        on: p.id == a.profile_id,
+        where: a.id == ^account_id and a.platform == "youtube",
+        select: {a, p.org_id}
+      )
+    )
+  end
+
+  defp send_cover(post, account, org_id, file_id) do
+    with adapter when is_atom(adapter) <- Publisher.impl(),
+         true <- Code.ensure_loaded?(adapter) and function_exported?(adapter, :set_cover, 3) do
+      outcome =
+        with {:ok, file} <- cover_file(org_id, file_id),
+             url when is_binary(url) <- vendor_url(file, post) || {:error, :url_unavailable},
+             true <- is_binary(post.external_id) || {:error, :no_external_id} do
+          adapter.set_cover(account, post.external_id, url)
+        end
+
+      write_cover_error(post, cover_error(outcome))
+    else
+      _ -> post
+    end
+  end
+
+  defp cover_error(:ok), do: nil
+
+  defp cover_error({:error, :rate_limited}),
+    do: "YouTube cover not set: the upload limit was reached; set it again later"
+
+  defp cover_error({:error, reason}), do: readable("YouTube cover not set: " <> readable(reason))
+  defp cover_error(other), do: cover_error({:error, {:unexpected_result, other}})
+
+  defp write_cover_error(%Post{cover_error: same} = post, same), do: post
+
+  defp write_cover_error(post, message) do
+    case post |> Changeset.change(cover_error: message) |> Repo.update() do
+      {:ok, post} -> post
+      _ -> post
+    end
   end
 
   defp disclosure(%Post{is_aigc: true, ai_disclosure: label}) do
@@ -323,15 +446,19 @@ defmodule Platform.Social.Publishing do
 
   defp disclosure(%Post{ai_disclosure: label}), do: label
 
+  # Every clause is one adapter call's result, so every clause counts one
+  # attempt (`counted/2`), success or failure.
   defp apply_publish(post, {:ok, %{status: :scheduled, external_id: external_id} = result}) do
     post
     |> Changeset.change(
       status: "scheduled",
       external_id: external_id,
       external_url: Map.get(result, :external_url) || post.external_url,
+      platform_post_id: Map.get(result, :platform_post_id) || post.platform_post_id,
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
+    |> counted(post)
     |> update()
   end
 
@@ -341,9 +468,12 @@ defmodule Platform.Social.Publishing do
       status: "published",
       external_id: external_id,
       external_url: Map.get(result, :external_url),
+      platform_post_id: Map.get(result, :platform_post_id) || post.platform_post_id,
+      published_at: DateTime.utc_now(),
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
+    |> counted(post)
     |> update()
   end
 
@@ -352,6 +482,7 @@ defmodule Platform.Social.Publishing do
       post
       |> Changeset.change(status: "failed", error: readable(reason))
       |> Changeset.change(Post.refusal_cleared())
+      |> counted(post)
 
     case update(changeset) do
       {:ok, _failed} -> {:error, {:publish_failed, reason}}
@@ -360,6 +491,11 @@ defmodule Platform.Social.Publishing do
   end
 
   defp apply_publish(post, other), do: apply_publish(post, {:error, {:unexpected_result, other}})
+
+  # One adapter call happened. `post` is the locked re-read, so its count is
+  # the database's.
+  defp counted(changeset, %Post{publish_attempts: attempts}),
+    do: Changeset.put_change(changeset, :publish_attempts, (attempts || 0) + 1)
 
   # ── Cancel, refresh, connect ─────────────────────────────────────────
 
@@ -378,6 +514,7 @@ defmodule Platform.Social.Publishing do
           post
           |> Changeset.change(status: "failed", error: "cancelled before publishing")
           |> update()
+          |> log_outcome(post)
         else
           {:ok, %Post{}} -> {:error, :not_scheduled}
           error -> error
@@ -401,6 +538,7 @@ defmodule Platform.Social.Publishing do
       apply_outcome(post, %{
         kind: kind,
         external_url: Map.get(result, :external_url),
+        platform_post_id: Map.get(result, :platform_post_id),
         error: Map.get(result, :error)
       })
     else
@@ -469,10 +607,12 @@ defmodule Platform.Social.Publishing do
 
   @doc """
   The one transition from a vendor outcome. `outcome` is
-  `%{kind: :published | :failed | :ignored, external_url, error}`.
+  `%{kind: :published | :failed | :ignored, external_url, error}` and may
+  carry `:platform_post_id`, stored when present.
 
   Moves an `approved` or `scheduled` post (re-read under a row lock) to
-  `published` (with `external_url`) or `failed` (with `error`). A post
+  `published` (with `external_url` and `published_at`) or `failed` (with
+  `error`). A post
   already `published` or `failed`, or an `:ignored` outcome, answers
   `{:ok, :noop}` without writing. A `draft` or `needs_approval` post is
   refused with `{:error, :invalid_transition}`.
@@ -482,10 +622,12 @@ defmodule Platform.Social.Publishing do
     {:ok, result} =
       Repo.transaction(fn ->
         post = Repo.one(from(p in Post, where: p.id == ^id, lock: "FOR UPDATE"))
-        transition(post, outcome)
+        post |> transition(outcome) |> log_outcome(post)
       end)
 
     terminal_written(result, id)
+    |> alert_disconnect(id, outcome)
+    |> set_cover_after_publish()
   end
 
   defp transition(nil, _outcome), do: {:error, :not_found}
@@ -498,6 +640,8 @@ defmodule Platform.Social.Publishing do
     |> Changeset.change(
       status: "published",
       external_url: Map.get(outcome, :external_url) || post.external_url,
+      platform_post_id: Map.get(outcome, :platform_post_id) || post.platform_post_id,
+      published_at: DateTime.utc_now(),
       error: nil
     )
     |> Changeset.change(Post.refusal_cleared())
@@ -509,6 +653,7 @@ defmodule Platform.Social.Publishing do
     post
     |> Changeset.change(
       status: "failed",
+      platform_post_id: Map.get(outcome, :platform_post_id) || post.platform_post_id,
       error: readable(Map.get(outcome, :error) || "failed at the vendor")
     )
     |> Changeset.change(Post.refusal_cleared())
@@ -516,6 +661,26 @@ defmodule Platform.Social.Publishing do
   end
 
   defp transition(%Post{}, _outcome), do: {:error, :invalid_transition}
+
+  # Social authoring 2/11: the change log entry for a publish outcome, in
+  # the transaction that wrote it. A `scheduled` write and a `:noop` are not
+  # logged; a refusal before the vendor is logged by `record_refusal/4`.
+  defp log_outcome({:ok, %Post{status: "published"} = written} = result, _post) do
+    PostEvents.record!(written, "published", :system)
+    result
+  end
+
+  defp log_outcome({:ok, %Post{status: "failed"} = written} = result, _post) do
+    PostEvents.record!(written, "failed", :system, note: written.error)
+    result
+  end
+
+  defp log_outcome({:error, {:publish_failed, reason}} = result, %Post{} = post) do
+    PostEvents.record!(post, "failed", :system, note: readable(reason))
+    result
+  end
+
+  defp log_outcome(result, _post), do: result
 
   # ── Task write-back (Social 6/7) ─────────────────────────────────────
 
@@ -529,6 +694,26 @@ defmodule Platform.Social.Publishing do
     result
   end
 
+  # Social authoring 9/11: a committed failure the adapter classified as the
+  # platform account losing its authorization marks the account and alerts
+  # its approvers ONCE (`Platform.Social.Health.account_disconnected/2`
+  # dedupes on the account), after the transaction.
+  defp alert_disconnect(result, post_id, reason) do
+    with true <- failed_write?(result) and Platform.Social.Health.auth_failure?(reason),
+         %Post{account_id: account_id, error: error} <- Repo.get(Post, post_id) do
+      Platform.Social.Health.account_disconnected(account_id, error)
+    end
+
+    result
+  end
+
+  defp failed_write?({:ok, %Post{status: "failed"}}), do: true
+  defp failed_write?({:error, {:publish_failed, _}}), do: true
+  defp failed_write?(_result), do: false
+
+  defp result_reason({:error, {:publish_failed, reason}}), do: reason
+  defp result_reason(_result), do: nil
+
   defp terminal?({:ok, %Post{status: status}}), do: status in ~w(published failed)
   defp terminal?({:error, {:publish_failed, _}}), do: true
   defp terminal?(_result), do: false
@@ -541,12 +726,20 @@ defmodule Platform.Social.Publishing do
     |> Changeset.check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check
     )
+    |> Changeset.check_constraint(:publish_attempts,
+      name: :social_posts_publish_attempts_check
+    )
     |> Repo.update()
   end
 
   defp readable(reason) when is_binary(reason), do: String.slice(reason, 0, @max_error_length)
   defp readable(:rate_limited), do: "rate limited by the vendor"
   defp readable(:credentials_unavailable), do: "the account's credentials are unavailable"
+
+  defp readable(:account_disconnected),
+    do: "the platform disconnected this account; reconnect it in Connections"
+
+  defp readable({:account_disconnected, message}) when is_binary(message), do: readable(message)
 
   defp readable(reason) when is_atom(reason),
     do: reason |> Atom.to_string() |> String.replace("_", " ")

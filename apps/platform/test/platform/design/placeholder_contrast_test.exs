@@ -73,6 +73,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/partials/rail.ex",
     # The briefing detail's fields (task 01a15ee1 stage 6), from main.
     "platform_web/live/inbox_live/briefing_component.ex",
+    # The meeting briefing detail's fields (task 01a1694a), from main.
+    "platform_web/live/inbox_live/meeting_briefing_component.ex",
     # The space sheet's Search page field (task 01a1557a-8a6d stage 2).
     "platform_web/live/chat/partials/space_sheet.ex",
     "platform_web/live/meeting_live.html.heex"
