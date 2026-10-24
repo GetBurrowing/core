@@ -38,10 +38,16 @@ COPY apps/game_stream/mix.exs apps/game_stream/mix.lock game_stream/
 COPY apps/social/mix.exs apps/social/mix.lock social/
 COPY apps/burrow_release/mix.exs apps/burrow_release/mix.lock burrow_release/
 
+# tailwind and the precompiled NIFs (wasmex, vix) are GitHub release
+# downloads that OTP 28's httpc fails on (header_too_long, 2026-10-23). The
+# script fetches them with curl into the paths the deps check first; see its
+# header.
+COPY scripts/fetch-github-release-binaries.sh /usr/local/bin/
+
 WORKDIR /app/apps/burrow_release
 RUN mix deps.get --only $MIX_ENV
 # Hex deps only: the path deps (core and the module) have no source yet.
-RUN mix deps.compile --skip-local-deps
+RUN sh /usr/local/bin/fetch-github-release-binaries.sh nifs . && mix deps.compile --skip-local-deps
 
 WORKDIR /app/apps
 COPY apps/platform/config platform/config
@@ -78,7 +84,7 @@ RUN cd assets && npm ci
 # core's script copies there, and `phx.digest` writes core's
 # cache_manifest.json over the whole directory, as core's own build does.
 WORKDIR /app/apps/burrow_release
-RUN mix assets.deploy
+RUN sh /usr/local/bin/fetch-github-release-binaries.sh tailwind . ../platform/config/config.exs && mix assets.deploy
 RUN cd ../platform/assets && node scripts/copy_excalidraw_assets.mjs
 RUN mkdir -p ../platform/priv/static/assets \
  && cp -a priv/static/assets/. ../platform/priv/static/assets/

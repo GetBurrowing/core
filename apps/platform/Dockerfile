@@ -20,9 +20,14 @@ ENV MIX_ENV=prod
 # `podman inspect .Config.Env` next to the secrets.
 ARG GIT_SHA
 
+# tailwind and the precompiled NIFs (wasmex, vix) are GitHub release
+# downloads that OTP 28's httpc fails on (header_too_long, 2026-10-23). The
+# script fetches them with curl into the paths the deps check first; see its
+# header.
+COPY scripts/fetch-github-release-binaries.sh /usr/local/bin/
 COPY apps/platform/mix.exs apps/platform/mix.lock ./
 RUN mix deps.get --only $MIX_ENV
-RUN mix deps.compile
+RUN sh /usr/local/bin/fetch-github-release-binaries.sh nifs . && mix deps.compile
 
 COPY apps/platform/config config
 COPY apps/platform/assets assets
@@ -47,7 +52,7 @@ COPY docs/burrow priv/burrow_docs
 RUN printf '%s' "${GIT_SHA:-unknown}" > priv/build_commit
 
 RUN cd assets && npm ci
-RUN mix assets.deploy
+RUN sh /usr/local/bin/fetch-github-release-binaries.sh tailwind . && mix assets.deploy
 RUN mix compile
 RUN mix release
 
