@@ -144,7 +144,10 @@ defmodule PlatformWeb.SocialLive do
   alias Platform.Social.{Account, Approvals, Publisher, Secrets}
   alias PlatformWeb.SocialCalendar, as: Cal
 
-  @tabs ~w(queue calendar connections settings)
+  @tabs ~w(queue calendar clips connections settings)
+
+  # Clip Studio 3/9: the Clips tab's two views (`?view=`).
+  @clips_views ~w(review library)
 
   # The queue's status filter chips (task 01a165f1), in display order.
   @queue_filters ~w(needs_approval not_published)
@@ -194,6 +197,10 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:invite_token, nil)
       |> assign(:invite_nonce, nil)
       |> assign(:cover_picker, nil)
+      |> assign(:clips_view, "review")
+      |> assign(:clips_clip_id, nil)
+      |> assign(:clips_profile_id, nil)
+      |> assign(:clips_count, 0)
       |> allow_upload(:cover,
         accept: ~w(.jpg .jpeg .png),
         max_entries: 1,
@@ -781,6 +788,23 @@ defmodule PlatformWeb.SocialLive do
   def handle_info(:project_saved_clear, %{assigns: %{project_setting: %{} = s}} = socket),
     do: {:noreply, assign(socket, :project_setting, %{s | saved?: false})}
 
+  # Clip Studio 3/9: a clips-topic broadcast for the CURRENT profile goes
+  # to the Review bay and refreshes the tab's count; any other is ignored.
+  def handle_info({:social_clip, %Platform.Social.Clip{} = clip}, socket) do
+    case socket.assigns.profile do
+      %{id: profile_id} when profile_id == clip.profile_id ->
+        send_update(PlatformWeb.SocialClipsReview, id: "social-clips-review", clip_event: clip)
+        {:noreply, load_clips_count(socket)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # The Review bay's segmented control.
+  def handle_info({:clips_view, view}, socket) when view in @clips_views,
+    do: {:noreply, assign(socket, :clips_view, view)}
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # ONE place a profile becomes current. Every per-profile stream loads here
@@ -794,7 +818,29 @@ defmodule PlatformWeb.SocialLive do
     |> load_calendar()
     |> load_connections()
     |> maybe_reconcile()
+    |> load_clips()
   end
+
+  # Clip Studio 3/9: the current profile's clips topic (the previous
+  # profile's is dropped) and the Clips tab's pending count.
+  defp load_clips(socket) do
+    previous = socket.assigns.clips_profile_id
+    current = socket.assigns.profile && socket.assigns.profile.id
+
+    if connected?(socket) and previous != current do
+      if previous, do: Phoenix.PubSub.unsubscribe(Platform.PubSub, Social.clips_topic(previous))
+      if current, do: Phoenix.PubSub.subscribe(Platform.PubSub, Social.clips_topic(current))
+    end
+
+    socket
+    |> assign(:clips_profile_id, if(connected?(socket), do: current))
+    |> load_clips_count()
+  end
+
+  defp load_clips_count(%{assigns: %{profile: %{id: id, org_id: org_id}}} = socket),
+    do: assign(socket, :clips_count, Platform.Social.ClipReviewFeed.pending_count(org_id, id))
+
+  defp load_clips_count(socket), do: assign(socket, :clips_count, 0)
 
   # The queue stream for the current profile and filter, with `reset: true`.
   # `queue_refused?` (any refused post, whatever the filter) shows the chips.
@@ -1495,6 +1541,11 @@ defmodule PlatformWeb.SocialLive do
         profile -> load_profile(socket, profile)
       end
 
+    socket =
+      socket
+      |> assign(:clips_view, if(query["view"] in @clips_views, do: query["view"], else: "review"))
+      |> assign(:clips_clip_id, clips_clip_param(query["clip"]))
+
     case query["tab"] do
       tab when tab in @tabs -> socket |> assign(:tab, tab) |> maybe_reconcile()
       _ -> socket
@@ -1502,6 +1553,15 @@ defmodule PlatformWeb.SocialLive do
   end
 
   defp select_from_query(socket, _profiles, _query), do: socket
+
+  defp clips_clip_param(clip) when is_binary(clip) do
+    case Ecto.UUID.cast(clip) do
+      {:ok, id} -> id
+      :error -> nil
+    end
+  end
+
+  defp clips_clip_param(_clip), do: nil
 
   defp return_copy({:ok, account, :connected}, _profile) do
     case account.handle do
@@ -2093,6 +2153,13 @@ defmodule PlatformWeb.SocialLive do
                 data-tab={key}
               >
                 {label}
+                <span
+                  :if={key == "clips"}
+                  class="ml-1 text-base-content/70"
+                  data-role="social-clips-count"
+                >
+                  {if @clips_count > 0, do: @clips_count}
+                </span>
               </button>
             </nav>
           </header>
@@ -2178,6 +2245,22 @@ defmodule PlatformWeb.SocialLive do
                 rows={@streams.calendar_rows}
                 agenda={@streams.agenda_days}
               />
+            </div>
+            <div class={[@tab != "clips" && "hidden"]} data-pane="clips">
+              <.live_component
+                module={PlatformWeb.SocialClipsReview}
+                id="social-clips-review"
+                profile={@profile}
+                user_id={@user.id}
+                view={@clips_view}
+                clip_id={@clips_clip_id}
+              />
+              <.live_component
+                :if={@clips_view == "library"}
+                module={PlatformWeb.SocialClipsLibrary}
+                id="social-clips-library"
+              />
+              <.live_component module={PlatformWeb.SocialClipNew} id="social-clip-new" />
             </div>
             <div class={[@tab != "connections" && "hidden"]} data-pane="connections">
               <.notice_line notice={@notice} tone={@notice_tone} />
@@ -2459,6 +2542,7 @@ defmodule PlatformWeb.SocialLive do
     [
       {"queue", "Queue (#{count(counts, profile)})"},
       {"calendar", "Calendar"},
+      {"clips", "Clips"},
       {"connections", "Connections"},
       {"settings", "Settings"}
     ]
