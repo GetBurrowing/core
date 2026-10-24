@@ -73,6 +73,10 @@
   --color-base-200: #0a0f1a;
   --color-base-300: #1b2740;
   --edge: #2a3858;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   --color-base-content: #e9eef8;
   --color-secondary: #9fb0cc;
   --color-secondary-content: #000000;
@@ -147,6 +151,10 @@
      base-200/base-300 separation 1.0957:1 -> 1.0672:1 (accepted). */
   --color-base-300: #e2ecf2;
   --edge: #c9d3e3;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* theme.js #15202f measures 3.5393:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.5367:1. */
   --color-base-content: #000006;
@@ -229,6 +237,10 @@
   --color-base-200: #17140f;
   --color-base-300: #2e281f;
   --edge: #433b2e;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   --color-base-content: #f2ece2;
   --color-secondary: #b7ab98;
   --color-secondary-content: #000000;
@@ -303,6 +315,10 @@
   --color-base-200: #efe9d8;
   --color-base-300: #e5d9c6;
   --edge: #cdbfa6;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* theme.js #2a2219 measures 3.2571:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.6194:1 at this block's --subtle strength (57%). */
   --color-base-content: #000000;
@@ -406,6 +422,10 @@
   --color-base-200: #0e1411;
   --color-base-300: #1f2a25;
   --edge: #2f3f38;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   --color-base-content: #eaf1ec;
   --color-secondary: #a3b5aa;
   --color-secondary-content: #000000;
@@ -484,6 +504,10 @@
      base-200/base-300 separation 1.1154:1 -> 1.0859:1 (accepted). */
   --color-base-300: #dfece1;
   --edge: #c3d2c7;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* theme.js #1a241e measures 3.4620:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.5290:1. */
   --color-base-content: #000000;
@@ -570,6 +594,10 @@
   --color-base-200: #000000;
   --color-base-300: #1c1c1c;
   --edge: #5a5a5a;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   --color-base-content: #ffffff;
   --color-secondary: #d0d0d0;
   --color-secondary-content: #000000;
@@ -646,6 +674,10 @@
      already #ffffff). */
   --color-base-300: #e9e9e9;
   --edge: #6a6a6a;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   --color-base-content: #000000;
   --color-secondary: #2a2a2a;
   --color-secondary-content: #ffffff;

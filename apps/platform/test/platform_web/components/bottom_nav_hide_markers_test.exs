@@ -22,22 +22,35 @@ defmodule PlatformWeb.Components.BottomNavHideMarkersTest do
   import Phoenix.Component
   import Phoenix.LiveViewTest
 
-  alias PlatformWeb.ChatLive.Partials
+  alias PlatformWeb.Components.ChatViewer
 
   @lib Path.expand("../../../lib/platform_web", __DIR__)
 
   describe "full-screen viewers carry data-fullscreen-viewer" do
-    test "the image lightbox, while open, and not when closed" do
-      assigns = %{url: "/chat/attachments/00000000-0000-0000-0000-000000000000"}
-      open = rendered_to_string(~H"<Partials.image_lightbox url={@url} />")
+    test "the chat viewer, while open, and not when closed" do
+      assigns = %{
+        viewer: %{
+          mode: "image",
+          filename: "home.png",
+          meta: "PNG · 1.2 MB",
+          src: "/chat/attachments/00000000-0000-0000-0000-000000000000",
+          download_url: "/chat/attachments/00000000-0000-0000-0000-000000000000",
+          share_path: "/chat/attachments/00000000-0000-0000-0000-000000000000",
+          items: [],
+          index: 0,
+          pdf?: false
+        }
+      }
+
+      open = rendered_to_string(~H"<ChatViewer.chat_viewer viewer={@viewer} />")
 
       assert open
              |> LazyHTML.from_fragment()
              |> LazyHTML.query("[data-fullscreen-viewer]")
              |> Enum.count() == 1
 
-      assigns = %{url: nil}
-      closed = rendered_to_string(~H"<Partials.image_lightbox url={@url} />")
+      assigns = %{viewer: nil}
+      closed = rendered_to_string(~H"<ChatViewer.chat_viewer viewer={@viewer} />")
       refute closed =~ "data-fullscreen-viewer"
     end
 

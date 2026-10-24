@@ -756,7 +756,7 @@ defmodule PlatformWeb.ChatLive do
       # live action that renders the list, and it runs straight after mount.
       |> assign(:list_excerpts, %{})
       |> assign(:list_identities, %{})
-      |> assign(:lightbox_url, nil)
+      |> PlatformWeb.ChatLive.ViewerHooks.attach()
       # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
       # added by task 01a0419a stage 4). Both booleans are reported by the
       # ScrollToBottom hook — the NEAR_BOTTOM_PX (150) and DEEP_HISTORY_PX

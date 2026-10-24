@@ -50,8 +50,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   ## Events
 
-    * Compose: `"send_message"`, `"compose_changed"` (+ draft save),
-      `"open_lightbox"`, `"close_lightbox"`
+    * Compose: `"send_message"`, `"compose_changed"` (+ draft save)
     * Reactions: `"react"`, `"open_reaction_picker"`, `"close_reaction_picker"`
     * Threads: `"open_thread"`, `"close_thread"`, `"send_thread_message"`,
       `"toggle_inline_thread"`, `"send_inline_thread_message"`
@@ -107,6 +106,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.AttachmentLinks
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.ClosedDms
+  alias Platform.Chat.LinkCards
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.ChatListData
   alias PlatformWeb.ChatLive.SearchHooks
@@ -920,12 +920,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_event("compose_changed", _params, socket), do: {:halt, socket}
 
-  defp handle_event("open_lightbox", %{"url" => url}, socket),
-    do: {:halt, assign(socket, :lightbox_url, url)}
-
-  defp handle_event("close_lightbox", _params, socket),
-    do: {:halt, assign(socket, :lightbox_url, nil)}
-
   defp handle_event("open_reaction_picker", %{"message-id" => msg_id}, socket),
     do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
 
@@ -1713,6 +1707,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       %{msg | reactions: groups}
     end)
+    |> LinkCards.annotate(viewer_user_id(socket))
   end
 
   # Single-message enrichment. Used on every stream_insert (new message,
@@ -1742,7 +1737,18 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end)
       |> Enum.sort_by(& &1.emoji)
 
-    %{msg | reactions: groups}
+    [%{msg | reactions: groups}]
+    |> LinkCards.annotate(viewer_user_id(socket))
+    |> hd()
+  end
+
+  # Rung 13 stage 1: link cards are resolved for the viewing user, at the
+  # same two enrichment points every stream insert passes through.
+  defp viewer_user_id(socket) do
+    case viewer_principal(socket) do
+      {:user, id} -> id
+      _ -> nil
+    end
   end
 
   # ── Day-bucket separator labels (task 019e21c7 Stage 5) ───────────────

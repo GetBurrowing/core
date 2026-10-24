@@ -15,7 +15,6 @@ defmodule PlatformWeb.ChatLive.Partials do
     * `row_actions_dialog/1` — the centred menu that trigger opens
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
-    * `image_lightbox/1` — full-screen image viewer
     * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, in
       the desktop rail
   """
@@ -1769,33 +1768,6 @@ defmodule PlatformWeb.ChatLive.Partials do
           /> Mute incoming sounds
         </label>
       </div>
-    </div>
-    """
-  end
-
-  @doc "Full-screen image lightbox (click to dismiss)."
-  attr(:url, :string, default: nil)
-
-  def image_lightbox(assigns) do
-    ~H"""
-    <div
-      :if={@url}
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      phx-click="close_lightbox"
-      data-fullscreen-viewer
-    >
-      <button
-        class="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors safe-area-top"
-        phx-click="close_lightbox"
-        aria-label="Close"
-      >
-        <span class="hero-x-mark size-6"></span>
-      </button>
-      <img
-        src={@url}
-        class="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
-        phx-click="close_lightbox"
-      />
     </div>
     """
   end

@@ -89,6 +89,10 @@
      base-300, and is DARKER than the surface, the light-theme direction
      test/platform/design/border_token_direction_test.exs pins. */
   --edge: #d9d3c9;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* Focus-ring slot, theme-split (task 01a0833d). WCAG 2.2 SC 1.4.11 Non-text
      Contrast wants 3:1 minimum against every adjacent ground. The slot reads
      --color-interactive (#8b3b04), which measures 7.3919:1 on base-100
@@ -294,6 +298,10 @@
      Direction, not value, is what is pinned. See
      test/platform/design/border_token_direction_test.exs. */
   --edge: #383b42;
+  /* Viewer ground (rung 13): the full-screen media viewer, identical in
+     every theme, and the chrome text on it. */
+  --viewer: #000000;
+  --on-viewer: #ffffff;
   /* Focus-ring slot, theme-split (task 01a0833d). Dark rings with the
      primary and clears WCAG 2.2 SC 1.4.11 with room to spare: #f47721
      measures 6.1588:1 on base-100 (#191b20), 6.7002:1 on base-200 (#111214)
@@ -413,6 +421,9 @@
    breaks. */
 @theme inline {
   --color-edge: var(--edge);
+  /* Rung 13: bg-viewer / text-on-viewer for the in-app viewer. */
+  --color-viewer: var(--viewer);
+  --color-on-viewer: var(--on-viewer);
   /* Same arrangement for the focus ring (task 01a0833d): the theme blocks
      declare --focus-ring, and this mapping is the only thing that mints a
      ring-focus-ring utility for the WCAG 2.2 SC 1.4.11 focus indicator.
@@ -4952,7 +4963,7 @@ body, .font-suite {
      1. keyboard up with a composer focused. "Keyboard up" is detected by its
         proxy, focus on a ComposeInput textarea (chat, thread, task steering);
      2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
-        lightbox, the file preview, the full-screen prototype);
+        in-app chat viewer, the file preview, the full-screen prototype);
      3. the in-call room ([data-in-call], MeetingLive while in the call). The
         mini bar on OTHER tabs during a call does not hide it.
    Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */

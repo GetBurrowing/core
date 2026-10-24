@@ -216,7 +216,7 @@ defmodule Platform.Chat.AttachmentLinksTest do
     end
   end
 
-  describe "merge/2 and strip_standalone/2" do
+  describe "merge/2 and the bare-line rule" do
     test "real attachments first, unique by id" do
       a = %{id: "a"}
       b = %{id: "b"}
@@ -225,18 +225,29 @@ defmodule Platform.Chat.AttachmentLinksTest do
                %{"m" => [a, b], "n" => [b]}
     end
 
+    # Rung 13 stage 1: the bare-line rule moved into the one link parser
+    # (`LinkTargets`), applied by `ContentRenderer.render_message/2`'s
+    # `:cards` option. Same behaviour, now on the rendered html.
     test "a link alone on a line goes; one mid-sentence stays" do
       id = Ecto.UUID.generate()
       url = "#{origin()}/chat/attachments/#{id}"
+      path = "/chat/attachments/#{id}"
 
-      assert AttachmentLinks.strip_standalone("Three cuts.\n#{url}", [id]) == "Three cuts."
-      assert AttachmentLinks.strip_standalone("[clip](/chat/attachments/#{id})", [id]) == ""
+      render = fn content, cards ->
+        content
+        |> Platform.Chat.ContentRenderer.render_message(cards: cards)
+        |> Phoenix.HTML.safe_to_string()
+      end
 
-      assert AttachmentLinks.strip_standalone("watch #{url} now", [id]) ==
-               "watch #{url} now"
+      stripped = render.("Three cuts.\n#{url}", [path])
+      assert stripped =~ "Three cuts."
+      refute stripped =~ id
 
-      assert AttachmentLinks.strip_standalone("Three cuts.\n#{url}", []) ==
-               "Three cuts.\n#{url}"
+      assert render.("[clip](/chat/attachments/#{id})", [path]) == ""
+      assert render.("/chat/attachments/#{id}", [path]) == ""
+
+      assert render.("watch #{url} now", [path]) =~ ~s(href="#{url}")
+      assert render.("Three cuts.\n#{url}", []) =~ ~s(href="#{url}")
     end
   end
 end

@@ -15,6 +15,7 @@ import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
 import ChatDock from "./chat_dock"
 import ChatClip from "./chat_clip"
+import ChatViewer from "./chat_viewer"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
@@ -84,6 +85,7 @@ export default {
   CandidateClock,
   CanvasRoomBridge,
   ChatClip,
+  ChatViewer,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,

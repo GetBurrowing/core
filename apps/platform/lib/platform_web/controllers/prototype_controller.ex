@@ -81,7 +81,6 @@ defmodule PlatformWeb.PrototypeController do
   alias Platform.Prototypes.Prototype
   alias Platform.Prototypes.Storage
   alias Platform.Prototypes.Version
-  alias Platform.Tenancy
   alias PlatformWeb.PrototypeGrant
 
   @bundle_source "'self'"
@@ -134,8 +133,7 @@ defmodule PlatformWeb.PrototypeController do
 
   def latest(conn, %{"id" => id} = params) do
     with %Prototype{} = prototype <- Prototypes.get_prototype(id),
-         true <- session_member?(conn, prototype),
-         :ok <- access_check(session_user(conn), prototype),
+         true <- Prototypes.readable_by?(session_user(conn), prototype),
          %Version{} <- Prototypes.get_live_version(prototype.id, prototype.latest_version) do
       redirect_to(
         conn,
@@ -150,8 +148,7 @@ defmodule PlatformWeb.PrototypeController do
   def entry(conn, %{"id" => id, "version" => version} = params) do
     with {:ok, version} <- parse_version(version),
          %Prototype{} = prototype <- Prototypes.get_prototype(id),
-         true <- session_member?(conn, prototype),
-         :ok <- access_check(session_user(conn), prototype),
+         true <- Prototypes.readable_by?(session_user(conn), prototype),
          %Version{} = row <- Prototypes.get_live_version(prototype.id, version) do
       user_id = get_session(conn, :current_user_id)
       grant = PrototypeGrant.sign(user_id, prototype.id, version)
@@ -171,8 +168,7 @@ defmodule PlatformWeb.PrototypeController do
          %Prototype{} = prototype <- Prototypes.get_prototype(id),
          {:ok, user_id} <- PrototypeGrant.verify(grant, prototype.id, version),
          %{archived_at: nil} = user <- Accounts.get_user(user_id),
-         true <- Tenancy.member_of?(user, prototype.org_id),
-         :ok <- access_check(user, prototype),
+         true <- Prototypes.readable_by?(user, prototype),
          %Version{} = row <- Prototypes.get_live_version(prototype.id, version) do
       segments = Map.get(params, "path", [])
       serve_path(conn, row, segments)
@@ -252,13 +248,6 @@ defmodule PlatformWeb.PrototypeController do
   defp with_charset("application/json" = ct), do: ct <> "; charset=utf-8"
   defp with_charset(ct), do: ct
 
-  defp session_member?(conn, %Prototype{org_id: org_id}) do
-    case session_user(conn) do
-      %{} = user -> Tenancy.member_of?(user, org_id)
-      nil -> false
-    end
-  end
-
   defp session_user(conn) do
     case get_session(conn, :current_user_id) do
       user_id when is_binary(user_id) -> Accounts.get_user(user_id)
@@ -266,23 +255,11 @@ defmodule PlatformWeb.PrototypeController do
     end
   end
 
-  # RBAC v2 (task 01a1386e-45a5 stage 1), in conjunction with the membership
-  # check before it: `canvas.read` on the prototype's canvas and, when set,
-  # `chat.read` on its space, through `Platform.Access.check/3`. `serve/2`
-  # runs it on EVERY request, exactly like its `member_of?/2` revocation, so
-  # a grant URL minted before a deny is refused on its next use. A deny is
-  # the same 404 as an unknown id. With no grants it is `:ok`.
-  defp access_check(user, %Prototype{canvas_id: canvas_id, space_id: space_id}) do
-    scope = Platform.Access.Scope.for_user(user)
-
-    with :ok <- access_check(scope, "canvas.read", :canvas, canvas_id),
-         do: access_check(scope, "chat.read", :space, space_id)
-  end
-
-  defp access_check(_scope, _permission, _type, nil), do: :ok
-
-  defp access_check(scope, permission, type, id),
-    do: Platform.Access.check(scope, permission, {type, id})
+  # Membership and RBAC v2 (`canvas.read` on the prototype's canvas,
+  # `chat.read` on its space) are `Prototypes.readable_by?/2`, shared with the
+  # chat prototype card. `serve/2` runs it on EVERY request, so a grant URL
+  # minted before a deny or an org exit is refused on its next use; a refusal
+  # is the same 404 as an unknown id.
 
   defp parse_version(version) when is_binary(version) do
     case Integer.parse(version) do

@@ -13,6 +13,8 @@ defmodule PlatformWeb.Components.ChatMessage do
   use PlatformWeb, :verified_routes
 
   import PlatformWeb.Components.ChatInlineCanvas, only: [inline_canvas: 1]
+  import PlatformWeb.Components.ChatClipPlayer, only: [clip_player: 1]
+  import PlatformWeb.Components.ChatLinkCard, only: [link_cards: 1, file_card: 1]
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1, agent_avatar: 1]
   import PlatformWeb.Components.ChatHelpers
 
@@ -514,28 +516,37 @@ defmodule PlatformWeb.Components.ChatMessage do
             msg={@msg}
           />
 
-          <%!-- A line that is only a link to an attachment this viewer can
-               read is dropped: the player below replaces it (task 01a1655c
-               stage 3). Unreadable links are not in the map, so they render
-               as plain links exactly as before. --%>
-          <% display_content =
-            Platform.Chat.AttachmentLinks.strip_standalone(
+          <%!-- A line that is only a link this viewer gets a card or a player
+               for is dropped: the card replaces it (rung 13 rule 1; task
+               01a1655c stage 3 for linked attachments). Unreadable attachment
+               links are not in the map, so they stay plain links. A message
+               with no `:link_cards` (thread panel, search) renders plain
+               anchors exactly as before. --%>
+          <% rendered_content =
+            Platform.Chat.ContentRenderer.render_message(
               @msg.content,
-              for(
-                a <- Map.get(@attachments_map, @msg.id, []),
-                image_attachment?(a) or video_attachment?(a),
-                do: a.id
-              )
+              cards:
+                Platform.Chat.LinkCards.bare_urls(Map.get(@msg, :link_cards)) ++
+                  for(
+                    a <- Map.get(@attachments_map, @msg.id, []),
+                    do: "/chat/attachments/#{a.id}"
+                  )
             ) %>
           <div
             :if={
               @editing_message_id != @msg.id and @msg.content_type != "canvas" and
-                present?(display_content)
+                rendered_present?(rendered_content)
             }
             class="text-sm text-base-content break-words chat-markdown"
           >
-            {Platform.Chat.ContentRenderer.render_message(display_content)}
+            {rendered_content}
           </div>
+
+          <.link_cards
+            :if={@editing_message_id != @msg.id and Map.get(@msg, :link_cards) not in [nil, []]}
+            msg_id={@msg.id}
+            cards={@msg.link_cards}
+          />
 
           <%!-- Image gallery --%>
           <% images = Enum.filter(Map.get(@attachments_map, @msg.id, []), &image_attachment?/1) %>
@@ -547,8 +558,12 @@ defmodule PlatformWeb.Components.ChatMessage do
           >
             <div
               :for={{attachment, idx} <- Enum.with_index(images)}
-              phx-click="open_lightbox"
-              phx-value-url={attachment_url(attachment)}
+              id={"gallery-#{@msg.id}-#{attachment.id}"}
+              data-role="gallery-item"
+              data-viewer-open
+              phx-click="viewer_open"
+              phx-value-message_id={@msg.id}
+              phx-value-attachment_id={attachment.id}
               class={"gallery-item cursor-pointer#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
             >
               <img
@@ -587,109 +602,25 @@ defmodule PlatformWeb.Components.ChatMessage do
             </div>
           </div>
           <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
-            <%!-- Received video (task 01a120be stage 3): plays in place with
-                 no autoplay; preload=metadata fetches only the header, and
-                 Play/seek ride Range requests. The size is always shown so a
-                 phone user knows before tapping.
-
-                 Task 01a1655c stage 3: a linked attachment arrives here too.
-                 Poster frame = metadata poster_url, else a #t=0.1 media
-                 fragment so iOS Safari paints the first frame. The box keeps
-                 the clip's own aspect ratio (stored dims, else the natural
-                 ratio once metadata loads, 16:9 reserved before that) and is
-                 capped at 60vh so a vertical clip is not cropped.
-
-                 Task 01a1655c stage 4: no border; a base-300 frame clipped to
-                 --radius-box, 480px wide from sm up and full bubble width on
-                 a phone. The ChatClip hook resets the frame to the clip's own
-                 videoWidth/videoHeight on loadedmetadata (width capped so the
-                 box stays under 60vh), fills the duration when none is
-                 stored, and on error swaps the frame for the "Can't play
-                 this video" card. phx-update="ignore" keeps what the hook did
-                 across re-renders. Several clips stack, each with its own
-                 file line. --%>
-            <div
+            <%!-- Received video (task 01a120be stage 3, 01a1655c): the
+                 shared player, also used for video URLs (rung 13). Several
+                 clips stack, each with its own file line. --%>
+            <.clip_player
               :for={attachment <- Enum.filter(non_images, &video_attachment?/1)}
               id={"video-#{@msg.id}-#{attachment.id}"}
-              phx-hook="ChatClip"
-              phx-update="ignore"
-              data-role="video-attachment"
-              class="w-full sm:max-w-[480px]"
-            >
-              <div
-                data-role="clip-frame"
-                class="aspect-video max-h-[60vh] w-full overflow-hidden rounded-box bg-base-300"
-                style={video_aspect_style(attachment)}
-              >
-                <video
-                  controls
-                  preload="metadata"
-                  playsinline
-                  src={video_src(attachment)}
-                  poster={video_poster(attachment)}
-                  class="block size-full"
-                >
-                </video>
-              </div>
-              <div
-                data-role="clip-fallback"
-                class="hidden items-center gap-2 rounded-box bg-base-200 px-3 py-4 text-sm"
-              >
-                <span class="hero-exclamation-triangle size-4 shrink-0 text-error"></span>
-                <span class="flex-1">Can't play this video</span>
-                <a
-                  href={attachment_url(attachment)}
-                  download={attachment.filename}
-                  class="btn btn-ghost btn-xs shrink-0"
-                >
-                  Download
-                </a>
-              </div>
-              <% {stem, ext} = clip_name_parts(attachment.filename) %>
-              <% duration = clip_duration(attachment) %>
-              <div
-                data-role="clip-file-line"
-                class="mt-1 flex min-w-0 items-center gap-1 text-[13px] text-subtle"
-                title={attachment.filename}
-              >
-                <span class="flex min-w-0">
-                  <span class="truncate">{stem}</span><span class="shrink-0">{ext}</span>
-                </span>
-                <span class="shrink-0 tabular-nums text-subtle">
-                  · {Platform.Chat.UploadLimits.format_bytes(attachment.byte_size || 0)}
-                </span>
-                <span
-                  data-role="clip-duration"
-                  class={["shrink-0 tabular-nums", is_nil(duration) && "hidden"]}
-                >
-                  {duration && "· #{duration}"}
-                </span>
-                <%!-- Task 01a1655c stage 5: main's download affordance,
-                     restored; iOS Safari's native controls have none. --%>
-                <span class="shrink-0" aria-hidden="true">·</span>
-                <a
-                  data-role="clip-download"
-                  href={attachment_url(attachment)}
-                  download={attachment.filename}
-                  class="shrink-0 text-subtle hover:underline"
-                >
-                  Download
-                </a>
-              </div>
-            </div>
-            <a
+              src={video_src(attachment)}
+              poster={video_poster(attachment)}
+              download_url={attachment_url(attachment)}
+              filename={attachment.filename}
+              byte_size={attachment.byte_size || 0}
+              duration={clip_duration(attachment)}
+              aspect_style={video_aspect_style(attachment)}
+            />
+            <.file_card
               :for={attachment <- Enum.reject(non_images, &video_attachment?/1)}
-              href={attachment_url(attachment)}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
-            >
-              <span class="hero-paper-clip size-4"></span>
-              <span>{attachment.filename}</span>
-              <span class="text-xs text-subtle">
-                ({format_bytes(attachment.byte_size)})
-              </span>
-            </a>
+              attachment={attachment}
+              msg_id={@msg.id}
+            />
           </div>
 
           <%!-- The refused-summon notice and the reaction row arrive while

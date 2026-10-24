@@ -106,13 +106,14 @@ defmodule Platform.Chat.ContentRendererTest do
       assert Enum.uniq(ids) == ids
     end
 
-    test "renders links with target=_blank" do
+    test "renders external links with target=_blank" do
       md = ~s{[click here](https://example.com)}
       result = render(md)
       assert result =~ ~s[target="_blank"]
       assert result =~ ~s[rel="noopener noreferrer"]
       assert result =~ "https://example.com"
       assert result =~ "click here"
+      refute result =~ "data-in-app-link"
     end
 
     test "renders blockquotes" do
@@ -155,6 +156,67 @@ defmodule Platform.Chat.ContentRendererTest do
     end
   end
 
+  # Redesign rung 13 stage 1: a canvas or prototype on THIS install is an
+  # in-app link (no target; intercepted on click). Everything else keeps
+  # target=_blank.
+  describe "in-app links" do
+    test "a same-host canvas link carries data-in-app-link and no target" do
+      id = Ecto.UUID.generate()
+      result = render("see #{origin()}/canvases/#{id} for the plan")
+
+      assert result =~ ~s[data-in-app-link="canvas"]
+      assert result =~ ~s[href="#{origin()}/canvases/#{id}"]
+      refute result =~ ~s[target="_blank"]
+    end
+
+    test "a same-host prototype link and a relative canvas link are in-app" do
+      id = Ecto.UUID.generate()
+
+      assert render("#{origin()}/proto/#{id}/3/") =~ ~s[data-in-app-link="prototype"]
+      refute render("#{origin()}/proto/#{id}/3/") =~ "_blank"
+      assert render("[plan](/canvases/#{id})") =~ ~s[data-in-app-link="canvas"]
+    end
+
+    test "a foreign host's /canvases/ path stays an external link" do
+      id = Ecto.UUID.generate()
+      result = render("https://example.test/canvases/#{id}")
+
+      assert result =~ ~s[target="_blank"]
+      refute result =~ "data-in-app-link"
+    end
+
+    test "blocked hrefs are never classified as in-app" do
+      result = render("[click](javascript:alert(1))")
+      assert result =~ "#blocked:"
+      refute result =~ "data-in-app-link"
+    end
+
+    test "a raw URL left as text is set in the mono face; the sender's words are not" do
+      assert render("see https://example.com/a for details") =~ ~s[<a class="font-mono"]
+      refute render("[the pricing page](https://example.com/a)") =~ "font-mono"
+    end
+
+    test "render_message/2 :cards drops a bare line the card replaces" do
+      url = "https://example.com/pricing/plans"
+
+      result =
+        "Pricing:\n#{url}"
+        |> ContentRenderer.render_message(cards: [url])
+        |> Phoenix.HTML.safe_to_string()
+
+      assert result =~ "Pricing:"
+      refute result =~ url
+
+      assert ContentRenderer.render_message("see #{url} today", cards: [url])
+             |> Phoenix.HTML.safe_to_string() =~ ~s[href="#{url}"]
+    end
+
+    test "render_message/1 is render_message/2 with no options" do
+      md = "hello https://example.com/x"
+      assert ContentRenderer.render_message(md) == ContentRenderer.render_message(md, [])
+    end
+  end
+
   describe "XSS sanitization" do
     test "strips script tags" do
       input = "<script>alert('xss')</script>"
@@ -166,6 +228,7 @@ defmodule Platform.Chat.ContentRendererTest do
     test "strips iframe tags" do
       result = render(~s[<iframe src='evil'></iframe>])
       refute result =~ "<iframe"
+      refute render(~s[<iframe src="https://example.com"></iframe>]) =~ "<iframe"
     end
 
     test "strips on-event handlers" do
@@ -292,6 +355,11 @@ defmodule Platform.Chat.ContentRendererTest do
   end
 
   # Helper to render and extract string from Phoenix.HTML.safe tuple
+  defp origin do
+    uri = PlatformWeb.Endpoint.struct_url()
+    "#{uri.scheme}://#{uri.host}:#{uri.port}"
+  end
+
   defp render(content) do
     case ContentRenderer.render_message(content) do
       {:safe, iodata} -> IO.iodata_to_binary(iodata)

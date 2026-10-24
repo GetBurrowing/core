@@ -28,7 +28,7 @@ defmodule PlatformWeb.ChatLive.Partials.Overlays do
 
   The three `<.live_component>` calls (settings, new channel, new
   conversation), `<.row_actions_sheet>` / `<.row_actions_dialog>`,
-  `<.image_lightbox>`, the `ChatScrollToMessage` anchor,
+  `<ChatViewer.chat_viewer>`, the `ChatScrollToMessage` anchor,
   `chat_version_history`, `<.schedule_delete_modal>`,
   `<.move_to_org_picker>` / `<.move_to_org_dialog>` and
   `<.archive_undo_toast>` all stay at the template root. They are already

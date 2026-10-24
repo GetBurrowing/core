@@ -569,6 +569,33 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
   end
 
+  # Redesign rung 13 stage 1: a canvas card in a message. Access is
+  # re-checked for this viewer on every click (the card was resolved at
+  # render time and could be stale). A canvas in the open space opens in the
+  # in-chat full-screen canvas, exactly like `canvas_open_mobile`; any other
+  # space's canvas navigates to its canonical page in the same tab. Refused
+  # or missing: nothing happens, as for a locked card.
+  defp handle_event("link_card_open_canvas", %{"canvas-id" => canvas_id}, socket)
+       when is_binary(canvas_id) do
+    with user_id when is_binary(user_id) <- current_user_id(socket),
+         {:ok, canvas, _level} <-
+           CanvasAccess.fetch_for_viewer(canvas_id, {:user, user_id},
+             audit: false,
+             access_scope: socket.assigns[:access_scope]
+           ) do
+      case socket.assigns[:active_space] do
+        %{id: space_id} when space_id == canvas.space_id ->
+          register_canvas_engagement(socket, canvas, :viewing)
+          {:halt, assign(socket, :active_canvas, canvas)}
+
+        _ ->
+          {:halt, Phoenix.LiveView.push_navigate(socket, to: "/canvases/#{canvas.id}")}
+      end
+    else
+      _ -> {:halt, socket}
+    end
+  end
+
   defp handle_event(
          "canvas_action_click",
          %{"node-id" => node_id} = params,
