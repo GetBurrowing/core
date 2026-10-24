@@ -190,6 +190,21 @@ final class CallStateReducerTests: XCTestCase {
         XCTAssertFalse(s.micEnabled)
     }
 
+    /// Task 01a13ca2 stage 4: companion connections (`video:user:`) are not
+    /// people. A room of only companions is alone.
+    func testCompanionsNeverCountAsParticipants() {
+        let bo = CallParticipant(id: "user:b", name: "Bo", isAgent: false)
+        let bosCompanion = CallParticipant(id: "video:user:b", name: "Bo", isAgent: false, isSpeaking: true)
+        let mine = CallParticipant(id: "video:user:me", name: "Me", isAgent: false)
+        var s = run([.participantsChanged([bo, bosCompanion, mine])], from: connectedAlone())
+        XCTAssertEqual(s.participants.map(\.id), ["user:b"])
+        XCTAssertEqual(s.phase, .connected)
+        XCTAssertEqual(s.activeSpeakers, [], "a speaking companion is not a speaker")
+        s = CallState.reduce(s, .participantsChanged([mine]))
+        XCTAssertEqual(s.participants, [])
+        XCTAssertEqual(s.phase, .alone)
+    }
+
     func testEndingClearsTheConfirmedMic() {
         let s = run([.micConfirmed(true), .ended(.local)], from: connectedAlone())
         XCTAssertFalse(s.micEnabled)

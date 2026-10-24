@@ -3296,6 +3296,8 @@ defmodule Platform.Meetings do
     end
   end
 
+  @companion_prefix "video:user:"
+
   @doc """
   Parse a LiveKit participant identity string into a typed FK tuple.
 
@@ -3315,11 +3317,57 @@ defmodule Platform.Meetings do
   attempting to resolve a bogus foreign key.
   """
   @spec parse_identity(String.t() | nil) ::
-          {:user, binary()} | {:agent, binary()} | {:guest, binary()} | :unknown
+          {:user, binary()}
+          | {:agent, binary()}
+          | {:guest, binary()}
+          | {:companion, binary()}
+          | :unknown
   def parse_identity("user:" <> uuid), do: cast_identity(:user, uuid)
   def parse_identity("agent:" <> uuid), do: cast_identity(:agent, uuid)
   def parse_identity("guest:" <> uuid), do: cast_identity(:guest, uuid)
+  def parse_identity(@companion_prefix <> uuid), do: cast_identity(:companion, uuid)
   def parse_identity(_), do: :unknown
+
+  # ── Companion identities (task 01a13ca2 stage 1) ─────────────────────────
+  #
+  # The Burrow iOS app keeps call AUDIO on its native LiveKit connection
+  # (`user:<uuid>`) and opens a SECOND, video-only connection from the page
+  # for camera publish and video viewing. That second connection is the
+  # person's "companion", identity `video:user:<uuid>`.
+  #
+  # The prefix is deliberately NOT `user:`-prefixed: `parse_identity/1` casts
+  # whatever follows `user:` as a UUID, and prefix tests elsewhere
+  # (`"user:" <>` matches in the LiveViews) would mistake a `user:<uuid>/video`
+  # form for the person. The same prefix string exists in the page JS
+  # (`personIdentity` in participant_label.js) and in Swift
+  # (`CallParticipant.isCompanion`); all three are pinned by the shared
+  # fixture `test/support/fixtures/companion_identities_v1.json`.
+
+  @doc """
+  The companion identity of `user_id`: `"video:user:" <> user_id`.
+  """
+  @spec companion_identity(binary()) :: String.t()
+  def companion_identity(user_id) when is_binary(user_id), do: @companion_prefix <> user_id
+
+  @doc """
+  The PERSON a LiveKit identity belongs to: a companion
+  `"video:user:<rest>"` folds to `"user:<rest>"`; any other string, or nil,
+  is returned unchanged. Use it wherever a roster, head count or presence
+  check must count people rather than connections.
+  """
+  @spec person_identity(String.t() | nil) :: String.t() | nil
+  def person_identity(@companion_prefix <> rest), do: "user:" <> rest
+  def person_identity(identity), do: identity
+
+  @doc """
+  True when `identity` is a companion (video-only) connection, i.e. it starts
+  with `"video:user:"`. A plain prefix test, so it answers for a malformed
+  suffix too: the webhook must ignore every companion-shaped identity, not
+  only the well-formed ones.
+  """
+  @spec companion_identity?(term()) :: boolean()
+  def companion_identity?(@companion_prefix <> _), do: true
+  def companion_identity?(_), do: false
 
   @doc """
   True when a LiveKit participant identity names a Burrow AGENT.
@@ -3389,8 +3437,22 @@ defmodule Platform.Meetings do
           required(:identity) => String.t() | nil,
           required(:name) => String.t() | nil,
           optional(:sid) => String.t() | nil
-        }) :: {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
+        }) ::
+          {:ok, Participant.t()} | {:error, Ecto.Changeset.t() | :companion_identity}
   def upsert_live_participant(%Room{} = room, %{identity: identity} = attrs) do
+    if companion_identity?(identity) do
+      # A companion (video-only) connection is the SAME person as their
+      # `user:` connection, never a roster row of its own: no nil-FK row named
+      # after the person, no `{:participant_joined, _}` broadcast, no inbox
+      # dismissal. The webhook already short-circuits; this is the context's
+      # own refusal so no other caller can write one either.
+      {:error, :companion_identity}
+    else
+      do_upsert_live_participant(room, identity, attrs)
+    end
+  end
+
+  defp do_upsert_live_participant(%Room{} = room, identity, attrs) do
     name = Map.get(attrs, :name)
     parsed = parse_identity(identity)
     fk = identity_fk(parsed)
@@ -3543,8 +3605,20 @@ defmodule Platform.Meetings do
           required(:identity) => String.t() | nil,
           required(:name) => String.t() | nil,
           optional(:sid) => String.t() | nil
-        }) :: {:ok, Participant.t()} | {:error, :not_found | :superseded}
+        }) ::
+          {:ok, Participant.t()} | {:error, :not_found | :superseded | :companion_identity}
   def mark_live_participant_left(%Room{} = room, %{identity: identity} = attrs) do
+    if companion_identity?(identity) do
+      # A companion owns no row. Falling through would match the PERSON's
+      # active row by display name (`find_active_participant/3`, nil-FK
+      # branch) and end it while their audio connection is still live.
+      {:error, :companion_identity}
+    else
+      do_mark_live_participant_left(room, identity, attrs)
+    end
+  end
+
+  defp do_mark_live_participant_left(%Room{} = room, identity, attrs) do
     name = Map.get(attrs, :name)
     parsed = parse_identity(identity)
     fk = identity_fk(parsed)
@@ -3795,6 +3869,10 @@ defmodule Platform.Meetings do
   defp identity_fk({:user, uuid}), do: %{user_id: uuid}
   defp identity_fk({:agent, uuid}), do: %{agent_id: uuid}
   defp identity_fk({:guest, _uuid}), do: %{}
+  # A companion's suffix IS a user uuid, but the connection is not the user's
+  # roster seat: never a user FK. (Both writers refuse companions before they
+  # get here; this clause keeps the function total and the intent explicit.)
+  defp identity_fk({:companion, _uuid}), do: %{}
   defp identity_fk(:unknown), do: %{}
 
   defp display_name_from_identity(_), do: nil
@@ -4309,6 +4387,20 @@ defmodule Platform.Meetings do
   """
   @spec generate_token(Room.t(), map()) :: {:ok, String.t()} | {:error, atom()}
   def generate_token(%Room{} = room, %{identity: identity, name: name}) do
+    build_room_token(room, identity, name, %{}, %{})
+  end
+
+  # Room-name-string form of `generate_token/2`; documented on the first clause
+  # above, since @doc is per name/arity and a second one would be discarded.
+  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
+    generate_token(room_name, identity, [])
+  end
+
+  # The ONE builder behind `generate_token/2` and `companion_token_for_user/3`,
+  # so the TTL (6 h), the `video.room` scope and the room config cannot drift
+  # between a person's token and their companion's. `video_overrides` is
+  # merged over the default grant; `extra_claims` adds top-level claims.
+  defp build_room_token(%Room{} = room, identity, name, video_overrides, extra_claims) do
     config = livekit_config()
     api_key = config[:api_key]
     api_secret = config[:api_secret]
@@ -4319,6 +4411,18 @@ defmodule Platform.Meetings do
       now = System.system_time(:second)
       ttl = 6 * 60 * 60
 
+      video =
+        Map.merge(
+          %{
+            "room" => room.livekit_room_name,
+            "roomJoin" => true,
+            "canPublish" => true,
+            "canSubscribe" => true,
+            "canPublishData" => true
+          },
+          video_overrides
+        )
+
       claims =
         %{
           "iss" => api_key,
@@ -4327,25 +4431,65 @@ defmodule Platform.Meetings do
           "exp" => now + ttl,
           "jti" => Ecto.UUID.generate(),
           "name" => name,
-          "video" => %{
-            "room" => room.livekit_room_name,
-            "roomJoin" => true,
-            "canPublish" => true,
-            "canSubscribe" => true,
-            "canPublishData" => true
-          }
+          "video" => video
         }
+        |> Map.merge(extra_claims)
         |> maybe_put_room_config(room.livekit_room_name)
 
       {:ok, encode_jwt(claims, api_secret)}
     end
   end
 
-  # Room-name-string form of `generate_token/2`; documented on the first clause
-  # above, since @doc is per name/arity and a second one would be discarded.
-  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
-    generate_token(room_name, identity, [])
+  # The only sources a companion may publish. NO "microphone": the SFU must
+  # refuse a companion mic so call audio can never play twice (the person's
+  # native connection carries audio).
+  @companion_publish_sources ["camera", "screen_share"]
+
+  @doc """
+  Mint the token for `user_id`'s video-only COMPANION connection to the call
+  of chat space `space_id` (task 01a13ca2 stage 1).
+
+  The iOS app keeps audio on its native `user:<uuid>` connection; the page
+  opens a second connection as `companion_identity(user_id)`
+  (`"video:user:<uuid>"`) for camera publish and video viewing.
+
+  Passes the SAME `authorize_join/2` gate as `join_for_user/3`, then looks
+  the room up with `ensure_room/1`. Unlike `join_for_user/3` it deliberately
+  does NOT ensure a chat participant, activate the room, or upsert a
+  `meeting_participants` row, so a companion causes no join broadcast, no
+  attendance and no agent-visible roster entry. Mints through the same
+  builder as `generate_token/2` (same TTL and room), with the grant narrowed
+  to `canPublishSources: ["camera", "screen_share"]` and `canPublishData:
+  false`, plus the participant attribute `companion_of: "user:<uuid>"`. The
+  `name` is the person's, so any label that falls back to it still reads as
+  the person.
+
+  Returns `{:ok, %{token, room, identity}}` or `{:error, :join_not_permitted}`
+  (or the room lookup's / builder's error). The token is a bearer credential
+  for the room: never log it.
+  """
+  @spec companion_token_for_user(binary(), binary(), String.t() | nil) ::
+          {:ok, %{token: String.t(), room: Room.t(), identity: String.t()}}
+          | {:error, :join_not_permitted | :invalid_join | term()}
+  def companion_token_for_user(space_id, user_id, display_name)
+      when is_binary(space_id) and is_binary(user_id) do
+    identity = companion_identity(user_id)
+
+    with :ok <- authorize_join(space_id, user_id),
+         {:ok, room} <- ensure_room(space_id),
+         {:ok, token} <-
+           build_room_token(
+             room,
+             identity,
+             display_name,
+             %{"canPublishSources" => @companion_publish_sources, "canPublishData" => false},
+             %{"attributes" => %{"companion_of" => "user:" <> user_id}}
+           ) do
+      {:ok, %{token: token, room: room, identity: identity}}
+    end
   end
+
+  def companion_token_for_user(_space_id, _user_id, _display_name), do: {:error, :invalid_join}
 
   @doc """
   Generate a LiveKit access token from a room name string.
@@ -5514,6 +5658,10 @@ defmodule Platform.Meetings do
           %Agent{} = agent -> agent.name || agent.slug
           nil -> nil
         end
+
+      # A companion is a person's video connection, never an agent.
+      {:companion, _user_id} ->
+        nil
 
       _other ->
         agent_name_from_participant_row(identity, room_name)
@@ -8334,6 +8482,7 @@ defmodule Platform.Meetings do
     case parse_identity(identity) do
       {:user, _} -> {:error, :not_an_agent}
       {:guest, _} -> {:error, :not_an_agent}
+      {:companion, _} -> {:error, :not_an_agent}
       _ -> {:ok, identity}
     end
   end
@@ -8647,9 +8796,15 @@ defmodule Platform.Meetings do
   @spec presence_from_identities([String.t()], String.t()) ::
           %{viewer_present?: boolean(), others: [String.t()]}
   def presence_from_identities(identities, viewer_identity) when is_list(identities) do
+    # Count PEOPLE, not connections: a companion (`video:user:<uuid>`) folds
+    # onto its person, and one person with two connections counts once. The
+    # viewer's own companion is therefore never "someone else in the room".
+    persons = identities |> Enum.map(&person_identity/1) |> Enum.uniq()
+    viewer = person_identity(viewer_identity)
+
     %{
-      viewer_present?: viewer_identity in identities,
-      others: Enum.reject(identities, &(&1 == viewer_identity))
+      viewer_present?: viewer in persons,
+      others: Enum.reject(persons, &(&1 == viewer))
     }
   end
 

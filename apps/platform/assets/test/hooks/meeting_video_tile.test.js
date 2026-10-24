@@ -520,6 +520,71 @@ describe("MeetingVideoTile attach/detach lifecycle", () => {
     expect(newTrack._attachedEls).toContain(tile._videoEl)
   })
 
+  // ── A person's companion connection (task 01a13ca2 stage 2) ──────────
+  //
+  // The tile's `data-participant` is the PERSON (`user:A`). Their camera may
+  // be published by a separate video-only connection, `video:user:A`, while
+  // `user:A` itself carries only audio. The tile must find and show that
+  // camera, whichever connection arrived first.
+  function companionRoom(order) {
+    const cam = fakeTrack()
+    const personP = {
+      identity: "user:A",
+      isLocal: false,
+      trackPublications: new Map([["a", { kind: "audio", isMuted: false, track: fakeTrack("audio") }]]),
+    }
+    const companionP = {
+      identity: "video:user:A",
+      isLocal: false,
+      trackPublications: new Map([["v", livePub(cam)]]),
+    }
+    const list = order === "companion-first" ? [companionP, personP] : [personP, companionP]
+    return {
+      cam,
+      personP,
+      companionP,
+      room: {
+        localParticipant: { identity: "user:me", isLocal: true, trackPublications: new Map() },
+        remoteParticipants: new Map(list.map((p) => [p.identity, p])),
+      },
+    }
+  }
+
+  for (const order of ["person-first", "companion-first"]) {
+    it(`shows the companion's camera in the person's tile (${order})`, () => {
+      const tile = buildTile("user:A")
+      const { cam, companionP, room } = companionRoom(order)
+      tile._room = room
+
+      // DIRECTION CONTROL: the person's own connection has no video at all,
+      // so an attached track can only have come from the companion.
+      expect(tile._liveVideoOf(room.remoteParticipants.get("user:A"))).toBeNull()
+
+      tile._reconcile()
+
+      expect(tile._attachedTrack).toBe(cam)
+      expect(tile._findParticipant()).toBe(companionP)
+      expect(tile._slotRef.classList.has("hidden")).toBe(false)
+      expect(tile.el.dataset.participant).toBe("user:A")
+    })
+  }
+
+  it("a companion trackSubscribed event attaches into the person's tile; another person's does not", () => {
+    const tile = buildTile("user:A")
+    const { cam, companionP, room } = companionRoom("person-first")
+    tile._room = room
+
+    const other = fakeTrack()
+    tile._onTrackSubscribed(other, livePub(other), { identity: "video:user:B", isLocal: false })
+    expect(tile._attachedTrack).toBeNull()
+
+    tile._onTrackSubscribed(cam, companionP.trackPublications.get("v"), companionP)
+    expect(tile._attachedTrack).toBe(cam)
+
+    tile._onTrackUnsubscribed(cam, companionP.trackPublications.get("v"), companionP)
+    expect(tile._attachedTrack).toBeNull()
+  })
+
   // NOTE: the adaptive-stream resize-kick (`_resizeKick` and friends, PR #519)
   // was removed in task 019f8153 in favor of the StableTileElementInfo custom
   // ElementInfo, which prevents the false-negative pause at the source. Those

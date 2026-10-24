@@ -2969,6 +2969,12 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, MeetingHooks.apply_native_media_state(socket, params)}
   end
 
+  # The companion camera's confirmed state (task 01a13ca2 stage 3); the same
+  # fallback arrangement as the two clauses above.
+  def handle_event("companion_media_state", params, socket) do
+    {:noreply, MeetingHooks.apply_companion_media_state(socket, params)}
+  end
+
   # Per-identity remote mic/camera state, pushed by `MeetingClient`
   # (`_pushMediaStates`) on `RoomEvent.TrackMuted` / `TrackUnmuted`. Same
   # ONE-implementation arrangement as `active_speakers` above:

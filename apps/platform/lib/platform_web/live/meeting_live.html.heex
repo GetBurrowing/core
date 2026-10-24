@@ -1926,10 +1926,18 @@
                  `toggle-screen-share`. Mode-switch survival: the LiveKit
                  Room lives on `window.__livekit_room`, so flipping to
                  Gallery and back re-mounts this hook against the same
-                 room and synchronously reattaches the existing track. --%>
+                 room and synchronously reattaches the existing track.
+
+                 `phx-update="ignore"` (task 01a13ca2 stage 5): everything
+                 inside is static and the hook owns its state. Without it a
+                 patch put the placeholder back over a live share, re-hid
+                 the full-screen button and emptied the sharer label. The
+                 root's own data-* attributes are still copied from here on
+                 every patch; the hook's `updated()` re-stamps them. --%>
                 <div
                   id="meeting-screen-stage"
                   phx-hook="MeetingScreenShare"
+                  phx-update="ignore"
                   class="stage-mode--enter absolute inset-0 flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
                   data-placeholder="center-stage"
                   data-screen-share-viewer
@@ -1958,6 +1966,18 @@
                     class="absolute inset-0 hidden h-full w-full"
                   >
                   </div>
+
+                  <%!-- Who is sharing, by name. The hook fills the name and
+                   un-hides it while a share is attached. --%>
+                  <p
+                    hidden
+                    data-screen-share-sharer-label
+                    class="pointer-events-none absolute left-3 top-3 z-[2] inline-flex max-w-[70%] items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white"
+                  >
+                    <span class="hero-computer-desktop size-4 shrink-0" aria-hidden="true"></span>
+                    <span class="truncate" data-screen-share-sharer-name></span>
+                    <span class="sr-only">is sharing</span>
+                  </p>
 
                   <button
                     type="button"
@@ -2336,6 +2356,7 @@
             sharing={@screen_share_enabled}
             native={@native_call}
             mic_pending={@mic_pending}
+            camera_pending={@camera_pending}
             media_error={@media_error}
             show_leave={@in_meeting}
             mic_role="meeting-mic"

@@ -2133,6 +2133,22 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(phx-hook="MeetingShareButton")
       assert html =~ ~s(data-action="start-screen-share")
 
+      # Task 01a13ca2 stage 5: the stage is phx-update="ignore", so a patch
+      # cannot put the placeholder back over a live share or empty the
+      # sharer label, and it holds a hidden label for the sharer's name.
+      stage =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#meeting-screen-stage")
+
+      assert LazyHTML.attribute(stage, "phx-update") == ["ignore"]
+
+      label = LazyHTML.query(stage, "[data-screen-share-sharer-label]")
+      assert Enum.count(label) == 1
+      assert LazyHTML.attribute(label, "hidden") == [""]
+      assert label |> LazyHTML.query("[data-screen-share-sharer-name]") |> Enum.count() == 1
+      assert label |> LazyHTML.query("[data-screen-share-sharer-name]") |> LazyHTML.text() == ""
+
       refute html =~
                ~r/id="meeting-share-btn-screen-cta"[^>]*phx-click="meeting_start_screen_share"/
 

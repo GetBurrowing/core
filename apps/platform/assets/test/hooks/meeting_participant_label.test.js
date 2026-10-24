@@ -1,7 +1,16 @@
 import { describe, it, expect, afterEach } from "vitest"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import MeetingRoom from "../../js/hooks/meeting_room.js"
 import MeetingClient from "../../js/hooks/meeting_client.js"
-import { participantLabel, readParticipantNames } from "../../js/hooks/lib/participant_label.js"
+import {
+  isCompanionIdentity,
+  participantLabel,
+  personIdentity,
+  personLabel,
+  readParticipantNames,
+} from "../../js/hooks/lib/participant_label.js"
+import { normalizeIdentities } from "../../js/hooks/lib/active_speakers_debounce.js"
 
 /**
  * Participant labels on the transcript pane and quick-meet tiles
@@ -128,5 +137,119 @@ describe("MeetingClient._ensureTile labels (quick-meet)", () => {
       "user:1",
       "zzz:stranger",
     ])
+  })
+})
+
+/**
+ * The companion identity table (task 01a13ca2 stage 2).
+ *
+ * `personIdentity` / `isCompanionIdentity` are the JS twins of
+ * `Platform.Meetings.person_identity/1` / `companion_identity?/1`. This
+ * test READS the one shared fixture the server suite reads
+ * (apps/platform/test/support/fixtures/companion_identities_v1.json), so a
+ * prefix rename in one runtime cannot pass while the others still use the
+ * old string. It never passes on zero cases: a missing file throws and an
+ * empty list fails the count.
+ */
+const FIXTURE_PATH = fileURLToPath(
+  new URL("../../../test/support/fixtures/companion_identities_v1.json", import.meta.url),
+)
+
+function loadCompanionFixture() {
+  // No try/catch: a missing or unparsable file must fail loudly.
+  const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"))
+  return Array.isArray(fixture.cases) ? fixture.cases : []
+}
+
+describe("personIdentity / isCompanionIdentity — the shared companion fixture", () => {
+  const cases = loadCompanionFixture()
+
+  it("the fixture exists and has cases (never passes on an empty table)", () => {
+    expect(cases.length).toBeGreaterThan(0)
+  })
+
+  it("every fixture case: person fold and companion predicate agree with the server table", () => {
+    expect(cases.length).toBeGreaterThan(0)
+    const failures = []
+    for (const c of cases) {
+      const person = personIdentity(c.identity)
+      const companion = isCompanionIdentity(c.identity)
+      if (person !== c.person || companion !== c.companion) {
+        failures.push({ note: c.note, identity: c.identity, person, companion })
+      }
+    }
+    expect(failures).toEqual([])
+  })
+
+  it("covers the stage table: companion, user, agent, guest, agent-AJ_, empty, null", () => {
+    const by = (pred) => cases.some(pred)
+    expect(by((c) => c.companion === true)).toBe(true)
+    expect(by((c) => typeof c.identity === "string" && c.identity.startsWith("user:"))).toBe(true)
+    expect(by((c) => typeof c.identity === "string" && c.identity.startsWith("agent:"))).toBe(true)
+    expect(by((c) => typeof c.identity === "string" && c.identity.startsWith("guest:"))).toBe(true)
+    expect(by((c) => typeof c.identity === "string" && c.identity.startsWith("agent-AJ_"))).toBe(true)
+    expect(by((c) => c.identity === "")).toBe(true)
+    expect(by((c) => c.identity === null)).toBe(true)
+  })
+
+  it("undefined passes through like null, and a non-string is never a companion", () => {
+    expect(personIdentity(undefined)).toBe(undefined)
+    expect(isCompanionIdentity(undefined)).toBe(false)
+    expect(isCompanionIdentity(42)).toBe(false)
+  })
+
+  it("a nameless companion is labelled as its person, never video:", () => {
+    expect(participantLabel({ identity: "video:user:A" }, { "user:A": "Ada" })).toBe("Ada")
+    expect(participantLabel({ identity: "video:user:A" }, {})).toBe("user:A")
+    expect(participantLabel({ identity: "video:user:A", name: "Ada" }, {})).toBe("Ada")
+  })
+
+  it("the active_speakers payload folds and dedupes a companion onto its person", () => {
+    expect(normalizeIdentities(["video:user:A", "user:B", "user:A"])).toEqual(["user:A", "user:B"])
+    // No companion: unchanged (sorted, empties dropped).
+    expect(normalizeIdentities(["user:B", "", "agent:x"])).toEqual(["agent:x", "user:B"])
+  })
+})
+
+// Task 01a13ca2 stage 5: the screen-share sharer is attributed by NAME on
+// both surfaces. A share published by a nameless companion connection must
+// read as its person's name, found through the person's other connection.
+describe("personLabel — the sharer's name", () => {
+  const room = (...conns) => ({
+    localParticipant: conns[0] || null,
+    remoteParticipants: new Map(conns.slice(1).map((p) => [p.identity, p])),
+  })
+  const me = { identity: "user:ME", name: "Mia" }
+
+  it("a named connection keeps its own name", () => {
+    expect(personLabel({ identity: "user:W", name: "Wes" }, room(me), {})).toBe("Wes")
+  })
+
+  it("a nameless video:user:X share reads as the name X joined with", () => {
+    const person = { identity: "user:X", name: "Xavier" }
+    const share = { identity: "video:user:X", name: "" }
+    expect(personLabel(share, room(me, person, share), {})).toBe("Xavier")
+  })
+
+  it("the person's connection may be the LOCAL participant", () => {
+    const share = { identity: "video:user:ME", name: "  " }
+    expect(personLabel(share, room(me, share), {})).toBe("Mia")
+  })
+
+  it("never borrows a name from a DIFFERENT person", () => {
+    const other = { identity: "user:Y", name: "Yara" }
+    const share = { identity: "video:user:X", name: "" }
+    expect(personLabel(share, room(me, other, share), {})).toBe("user:X")
+  })
+
+  it("falls back to the server map, then the person identity, never video:", () => {
+    const share = { identity: "video:user:X", name: "" }
+    expect(personLabel(share, room(me, share), { "user:X": "Xavier" })).toBe("Xavier")
+    expect(personLabel(share, null, {})).toBe("user:X")
+    expect(personLabel(share, undefined, undefined)).not.toContain("video:")
+  })
+
+  it("no participant is an empty label", () => {
+    expect(personLabel(null, room(me), {})).toBe("")
   })
 })

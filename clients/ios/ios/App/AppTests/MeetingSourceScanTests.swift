@@ -80,6 +80,30 @@ final class MeetingSourceScanTests: XCTestCase {
         XCTAssertEqual(offences, [])
     }
 
+    /// Task 01a13ca2 stage 4: a companion identity (`video:user:<uuid>`)
+    /// carries a user id. No meetings log line may interpolate an identity
+    /// or anything companion-named.
+    func testNoMeetingsLogLineInterpolatesAnIdentityOrCompanion() throws {
+        let files = try swiftFiles("App/Meetings") + [appRoot.appendingPathComponent("App/Plugins/BurrowMeetingsPlugin.swift")]
+        let banned = ["identity", "companion", "participant.id", ".id)"]
+        var offences: [String] = []
+        for file in files {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines)
+            for (n, line) in lines.enumerated() {
+                let range = NSRange(line.startIndex..., in: line)
+                guard Self.logCall.firstMatch(in: line, range: range) != nil else { continue }
+                for match in Self.interpolation.matches(in: line, range: range) {
+                    guard let inner = Range(match.range(at: 1), in: line) else { continue }
+                    let expression = line[inner].lowercased()
+                    if banned.contains(where: { expression.contains($0) }) {
+                        offences.append("\(file.lastPathComponent):\(n + 1) logs \(line[inner])")
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(offences, [])
+    }
+
     func testSharedAndIntentsCodeNeverImportsLiveKit() throws {
         let root = appRoot.deletingLastPathComponent()
         var offences: [String] = []

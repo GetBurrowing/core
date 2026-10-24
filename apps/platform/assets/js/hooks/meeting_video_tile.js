@@ -15,6 +15,7 @@
  * binds once a `livekit:room-connected` event fires.
  */
 import { RemoteVideoTrack } from "livekit-client"
+import { personIdentity } from "./lib/participant_label"
 
 /**
  * StableTileElementInfo — a custom LiveKit `ElementInfo` implementation (see the
@@ -307,20 +308,54 @@ const MeetingVideoTile = {
     return participant ? this._liveVideoOf(participant) : null
   },
 
-  /** The Room's participant object for this tile's identity, or null. */
-  _findParticipant() {
-    const room = this._room
-    if (!room) return null
+  /**
+   * True when a LiveKit identity belongs to THIS tile's person. The tile's
+   * `data-participant` is always the person (`user:<uuid>`); a person's
+   * video-only companion connection (`video:user:<uuid>`, task 01a13ca2)
+   * folds onto it through `personIdentity`, so its camera lands here.
+   */
+  _isOurs(identity) {
+    return personIdentity(identity) === this._identity
+  },
 
-    if (room.localParticipant && room.localParticipant.identity === this._identity) {
-      return room.localParticipant
+  /** Every Room participant (connection) that belongs to this tile's person. */
+  _participantsForTile() {
+    const room = this._room
+    if (!room) return []
+    const found = []
+    if (room.localParticipant && this._isOurs(room.localParticipant.identity)) {
+      found.push(room.localParticipant)
     }
     if (room.remoteParticipants) {
       for (const p of room.remoteParticipants.values()) {
-        if (p && p.identity === this._identity) return p
+        if (p && this._isOurs(p.identity)) found.push(p)
       }
     }
-    return null
+    return found
+  },
+
+  /**
+   * The Room's participant object for this tile's person, or null. With
+   * more than one connection (the person plus their companion) prefer the
+   * one with a live camera, then the one holding any camera publication.
+   */
+  _findParticipant() {
+    const found = this._participantsForTile()
+    if (found.length <= 1) return found[0] || null
+    return (
+      found.find((p) => this._liveVideoOf(p)) ||
+      found.find((p) => this._hasCameraPublication(p)) ||
+      found[0]
+    )
+  },
+
+  _hasCameraPublication(participant) {
+    const pubs = participant.trackPublications || participant.tracks
+    if (!pubs || typeof pubs.values !== "function") return false
+    for (const pub of pubs.values()) {
+      if (pub && (pub.kind === "video" || (pub.track && this._isVideo(pub.track)))) return true
+    }
+    return false
   },
 
   _liveVideoOf(participant) {
@@ -447,7 +482,7 @@ const MeetingVideoTile = {
   },
 
   _onTrackSubscribed(track, pub, participant) {
-    if (participant?.identity !== this._identity) return
+    if (!this._isOurs(participant?.identity)) return
     if (!this._isVideo(track)) return
     // A participant who joins with their camera off still delivers a
     // subscribed-but-muted video publication. Route that through `_reconcile`
@@ -463,21 +498,21 @@ const MeetingVideoTile = {
   // livekit-client v2 expresses "camera off", so these are the transitions
   // that flip a remote tile between live video and avatar.
   _onMuteChanged(pub, participant) {
-    if (participant?.identity !== this._identity) return
+    if (!this._isOurs(participant?.identity)) return
     if (pub && pub.kind && pub.kind !== "video") return
     if (pub && pub.track && !this._isVideo(pub.track)) return
     this._reconcile()
   },
 
   _onTrackUnsubscribed(track, _pub, participant) {
-    if (participant?.identity !== this._identity) return
+    if (!this._isOurs(participant?.identity)) return
     if (!this._isVideo(track)) return
     this._detach()
   },
 
   _onLocalPublished(pub) {
     const lp = this._room?.localParticipant
-    if (!lp || lp.identity !== this._identity) return
+    if (!lp || !this._isOurs(lp.identity)) return
     const track = pub?.track
     if (!track || !this._isVideo(track)) return
     // Stage 2: defend against a stale `_attachedTrack` left over from a
@@ -491,7 +526,7 @@ const MeetingVideoTile = {
 
   _onLocalUnpublished(pub) {
     const lp = this._room?.localParticipant
-    if (!lp || lp.identity !== this._identity) return
+    if (!lp || !this._isOurs(lp.identity)) return
     // Stage 2: LiveKit sometimes emits the unpublish with a nulled
     // `pub.track`, so we can't rely on a track-identity match. Any
     // camera-unpublish for OUR identity must clear `_attachedTrack` to

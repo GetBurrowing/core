@@ -1443,6 +1443,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   # Task 01a13c62 stage 3: the iOS app's native call, see `CallShell.call_controls/1`.
   attr(:native_call, :map, default: nil)
   attr(:mic_pending, :boolean, default: false)
+  attr(:camera_pending, :boolean, default: false)
   attr(:media_error, :string, default: nil)
   attr(:meeting_participants, :list, default: [])
   attr(:invite_rows, :list, default: [])
@@ -1525,8 +1526,21 @@ defmodule PlatformWeb.ChatLive.Partials do
              and toggles `hidden` based on the active state. Sits above
              the participants grid so it's never cropped by avatar
              tiles. `phx-update="ignore"` because the LV doesn't render
-             the video element itself. --%>
-        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
+             the video element itself.
+
+             The VIEWER is `phx-update="ignore"` too (task 01a13ca2 stage
+             5): its content is static and meeting_client.js owns all of
+             it. Before, every patch emptied the sharer name, reset the
+             slot's data-screen-share-active / -sharer and re-hid the
+             full-screen button. The slot carries the active state; the
+             viewer's own data-* would be re-copied from here on a patch,
+             so it carries none. --%>
+        <div
+          id="meeting-screen-share-viewer-desktop"
+          class="relative mb-2"
+          data-screen-share-viewer
+          phx-update="ignore"
+        >
           <div
             data-quickmeet-screen-share-slot
             data-pane="desktop"
@@ -1634,6 +1648,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         sharing={@screen_share_enabled}
         native={@native_call}
         mic_pending={@mic_pending}
+        camera_pending={@camera_pending}
         media_error={@media_error}
         mic_role="meeting-mic"
         camera_role="meeting-camera"
@@ -1706,7 +1721,12 @@ defmodule PlatformWeb.ChatLive.Partials do
       <div class="flex-1 overflow-y-auto p-4" data-role="call-stage" data-pane="mobile">
         <%!-- Screen-share preview (task 019e420f stage 3). See the
              desktop variant for the rationale. --%>
-        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
+        <div
+          id="meeting-screen-share-viewer-mobile"
+          class="relative mb-2"
+          data-screen-share-viewer
+          phx-update="ignore"
+        >
           <div
             data-quickmeet-screen-share-slot
             data-pane="mobile"
@@ -1784,6 +1804,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         sharing={@screen_share_enabled}
         native={@native_call}
         mic_pending={@mic_pending}
+        camera_pending={@camera_pending}
         media_error={@media_error}
         mic_role="meeting-mic"
         camera_role="meeting-camera"

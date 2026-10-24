@@ -300,32 +300,10 @@ defmodule PlatformWeb.LivekitWebhookController do
   def handle(conn, %{"event" => "participant_joined"} = params) do
     participant = normalize_participant(params)
 
-    case lookup_room(params) do
-      nil ->
-        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
-
-      room ->
-        case Meetings.upsert_live_participant(room, %{
-               identity: participant["identity"],
-               name: participant["name"],
-               sid: participant["sid"]
-             }) do
-          {:ok, p} ->
-            Logger.info(
-              "[LiveKit] participant_joined room=#{room.livekit_room_name} " <>
-                "identity=#{participant["identity"]} participant_id=#{p.id}"
-            )
-
-            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
-
-          {:error, reason} ->
-            Logger.warning(
-              "[LiveKit] participant_joined upsert failed for room #{room.livekit_room_name}: " <>
-                inspect(reason)
-            )
-
-            conn |> put_status(:unprocessable_entity) |> json(%{status: "error"})
-        end
+    if Meetings.companion_identity?(participant["identity"]) do
+      ignore_companion(conn, "participant_joined")
+    else
+      handle_participant_joined(conn, params, participant)
     end
   end
 
@@ -334,29 +312,10 @@ defmodule PlatformWeb.LivekitWebhookController do
   def handle(conn, %{"event" => "participant_left"} = params) do
     participant = normalize_participant(params)
 
-    case lookup_room(params) do
-      nil ->
-        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
-
-      room ->
-        case Meetings.mark_live_participant_left(room, %{
-               identity: participant["identity"],
-               name: participant["name"],
-               sid: participant["sid"]
-             }) do
-          {:ok, p} ->
-            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
-
-          # An older LiveKit session of an identity that has since rejoined
-          # (DUPLICATE_IDENTITY); the row belongs to the newer session.
-          {:error, :superseded} ->
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "ignored", reason: "superseded participant session"})
-
-          {:error, :not_found} ->
-            conn |> put_status(:ok) |> json(%{status: "ignored", reason: "participant not found"})
-        end
+    if Meetings.companion_identity?(participant["identity"]) do
+      ignore_companion(conn, "participant_left")
+    else
+      handle_participant_left(conn, params, participant)
     end
   end
 
@@ -506,4 +465,72 @@ defmodule PlatformWeb.LivekitWebhookController do
   end
 
   defp space_id_from_room_name(_), do: nil
+
+  # A companion (`video:user:<uuid>`, the iOS app's video-only second
+  # connection, task 01a13ca2) is the same person as their `user:` connection
+  # and owns no roster row: writing one would broadcast a join, count toward
+  # attendance and show up in the agent-visible roster. So its join and leave
+  # write nothing, broadcast nothing and start nothing. The debug line
+  # carries NO identity: the identity holds a user uuid.
+  defp ignore_companion(conn, event) do
+    Logger.debug("[LiveKit] #{event} ignored: companion connection")
+    conn |> put_status(:ok) |> json(%{status: "ignored", reason: "companion"})
+  end
+
+  defp handle_participant_joined(conn, params, participant) do
+    case lookup_room(params) do
+      nil ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
+
+      room ->
+        case Meetings.upsert_live_participant(room, %{
+               identity: participant["identity"],
+               name: participant["name"],
+               sid: participant["sid"]
+             }) do
+          {:ok, p} ->
+            Logger.info(
+              "[LiveKit] participant_joined room=#{room.livekit_room_name} " <>
+                "identity=#{participant["identity"]} participant_id=#{p.id}"
+            )
+
+            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
+
+          {:error, reason} ->
+            Logger.warning(
+              "[LiveKit] participant_joined upsert failed for room #{room.livekit_room_name}: " <>
+                inspect(reason)
+            )
+
+            conn |> put_status(:unprocessable_entity) |> json(%{status: "error"})
+        end
+    end
+  end
+
+  defp handle_participant_left(conn, params, participant) do
+    case lookup_room(params) do
+      nil ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
+
+      room ->
+        case Meetings.mark_live_participant_left(room, %{
+               identity: participant["identity"],
+               name: participant["name"],
+               sid: participant["sid"]
+             }) do
+          {:ok, p} ->
+            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
+
+          # An older LiveKit session of an identity that has since rejoined
+          # (DUPLICATE_IDENTITY); the row belongs to the newer session.
+          {:error, :superseded} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "ignored", reason: "superseded participant session"})
+
+          {:error, :not_found} ->
+            conn |> put_status(:ok) |> json(%{status: "ignored", reason: "participant not found"})
+        end
+    end
+  end
 end
