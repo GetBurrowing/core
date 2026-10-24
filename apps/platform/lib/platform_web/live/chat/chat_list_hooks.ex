@@ -12,9 +12,16 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
       state.
     * Events `open_list_sheet` (param `sheet`), `close_list_sheet` and
       `list_search`.
+    * `@list_collapsed`, seeded at attach (see `attach/1`).
+    * `@list_order_hold` and `@list_hold_ref` (task 01a166bf stage 4): the
+      held order, `nil | %{section => [space id]}`, snapshotted from
+      `Partials.ChatList.section_order/1` on `chat_list_hold` and cleared on
+      `chat_list_release`, on its own `{:chat_list_hold_expired, ref}` timer
+      10s after the latest hold (a stale ref is ignored), and by
+      `leave_list/1`.
 
-  `reset/1` clears all three and is called from `handle_params/3` for
-  `:show`. That reset, not a click handler, is what closes the search sheet
+  `reset/1` clears all three; `leave_list/1` (reset plus the hold) is
+  called from `handle_params/3` for `:show`. That reset, not a click handler, is what closes the search sheet
   when the reader follows a result: every result is a plain `<.link patch>`
   with no `phx-click` (a bare-string `phx-click` on a patch link throws in the
   client, and a `JS.push` on one never reaches the server).
@@ -42,8 +49,10 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
     only: [list_filter_dms: 3, list_filter_pinned: 3, list_filter_sections: 3]
 
   alias Platform.Chat
+  alias Platform.Chat.Sidebar
   alias Platform.Chat.SidebarMask
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.Partials.ChatList
 
   @sheets %{"search" => :search, "new" => :new, "options" => :options}
   @max_query 100
@@ -52,18 +61,75 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
 
   @empty %{channels: [], dms: [], messages: [], recent: []}
 
-  @row_sheet_events ~w(toggle_pinned hide_channel close_dm close_row_actions toggle_sidebar_edit)
+  # The server's own release for a hold whose release never arrives (a stuck
+  # pointer, a lost event): 10s after the latest `chat_list_hold`.
+  @hold_timeout_ms 10_000
+
+  @row_sheet_events ~w(toggle_pinned hide_channel close_dm close_row_actions)
 
   @doc "The space id the row sheet is open on, or nil."
   def row_sheet_space_id({:row, id}), do: id
   def row_sheet_space_id(_), do: nil
 
-  @doc "Attach the list-sheet handlers. Call from `ChatLive.mount/3`."
+  @doc """
+  Attach the list-sheet handlers. Call from `ChatLive.mount/3`.
+
+  Also seeds `@list_collapsed`, the phone list's fold keys from
+  `chat_collapsed_sections` (task 01a166bf stage 3). `ChatLive`'s
+  `recompute_sidebar/1` re-reads it after every fold and every
+  `:sidebar_changed` reconcile.
+
+  The seed reads the `%User{}` ShellLive's on_mount already loaded
+  (`@current_user_record`) when it is this session's user, so the mount adds
+  no preferences read (the tab-switch query budget, #1341); otherwise it
+  falls back to reading by `@user_id`.
+  """
   def attach(socket) do
     socket
     |> reset()
+    |> assign(:list_collapsed, seed_collapsed(socket.assigns))
+    |> release_hold()
     |> attach_hook(:chat_list_events, :handle_event, &handle_event/3)
+    |> attach_hook(:chat_list_info, :handle_info, &handle_info/2)
   end
+
+  defp seed_collapsed(%{current_user_record: %{id: id} = user, user_id: id}),
+    do: Sidebar.collapsed_section_ids(user)
+
+  defp seed_collapsed(assigns), do: Sidebar.collapsed_section_ids(assigns[:user_id])
+
+  @doc "Leaving the list for a space: close the sheets and drop any hold."
+  def leave_list(socket), do: socket |> reset() |> release_hold()
+
+  @doc false
+  def hold_timeout_ms, do: @hold_timeout_ms
+
+  defp release_hold(socket) do
+    socket
+    |> assign(:list_order_hold, nil)
+    |> assign(:list_hold_ref, nil)
+  end
+
+  # The snapshot is taken once per hold; a repeat hold only re-arms the
+  # timer, so the order stays the one the reader first touched.
+  defp hold(socket) do
+    ref = make_ref()
+    Process.send_after(self(), {:chat_list_hold_expired, ref}, @hold_timeout_ms)
+
+    snapshot = socket.assigns[:list_order_hold] || ChatList.section_order(socket.assigns)
+
+    socket
+    |> assign(:list_order_hold, snapshot)
+    |> assign(:list_hold_ref, ref)
+  end
+
+  defp handle_info({:chat_list_hold_expired, ref}, socket) do
+    if ref == socket.assigns[:list_hold_ref],
+      do: {:halt, release_hold(socket)},
+      else: {:halt, socket}
+  end
+
+  defp handle_info(_msg, socket), do: {:cont, socket}
 
   @doc "Close every list sheet and clear the search."
   def reset(socket) do
@@ -103,6 +169,14 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
   end
 
   defp handle_event("close_list_sheet", _params, socket), do: {:halt, reset(socket)}
+
+  defp handle_event("chat_list_hold", _params, socket) do
+    if socket.assigns[:live_action] == :index,
+      do: {:halt, hold(socket)},
+      else: {:halt, socket}
+  end
+
+  defp handle_event("chat_list_release", _params, socket), do: {:halt, release_hold(socket)}
 
   # The row sheet's items fire the rail's EXISTING handlers, which reset
   # `@row_actions_space_id`; this resets `@list_sheet` on the same events and

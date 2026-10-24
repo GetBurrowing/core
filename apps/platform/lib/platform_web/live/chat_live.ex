@@ -1165,7 +1165,7 @@ defmodule PlatformWeb.ChatLive do
        |> PresenceHooks.enter_space(space, participant, participants)
        |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
-       |> ChatListHooks.reset()
+       |> ChatListHooks.leave_list()
        |> SpaceSheetHooks.reset()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
@@ -3298,16 +3298,21 @@ defmodule PlatformWeb.ChatLive do
   # `users.preferences`, read fresh by the resolver). The resolver owns the
   # render order — id-keyed personal order over `Section.position` default — so
   # an admin reorder stays visible to non-customized users.
+  #
+  # `@list_collapsed` (the phone list's folds, task 01a166bf stage 3) is
+  # re-read here too: every `:sidebar_changed` reconcile ends in this function,
+  # which is how a fold made in one session reaches the user's others. Its
+  # mount-time seed lives in `ChatListHooks.attach/1`.
   defp recompute_sidebar(socket) do
-    assign(
-      socket,
-      :sidebar_sections,
-      resolve_sidebar_sections(
-        socket.assigns.user_id,
-        socket.assigns.channels,
-        socket.assigns.hidden_channel_ids,
-        socket.assigns.agents_block
-      )
+    assign(socket,
+      sidebar_sections:
+        resolve_sidebar_sections(
+          socket.assigns.user_id,
+          socket.assigns.channels,
+          socket.assigns.hidden_channel_ids,
+          socket.assigns.agents_block
+        ),
+      list_collapsed: Sidebar.collapsed_section_ids(socket.assigns.user_id)
     )
   end
 

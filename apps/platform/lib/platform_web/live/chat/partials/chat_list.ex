@@ -15,11 +15,66 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
   ## Order
 
-  PINNED (the Agents row, then `ChatLive.pinned_rail_entries/2` in its order),
-  SPACES (`Sidebar.flatten_sections(@sidebar_sections)`, the curated order the
-  pills and the desktop rail use), DIRECT (`@channel_sections.dms`, the rail's
-  Direct list: pinned and closed conversations already removed, so no row
-  appears twice) and ARCHIVED (only while `@archived_open`).
+  Sections: PINNED (the Agents row, then `ChatLive.pinned_rail_entries/2`),
+  SPACES (every sub-org section of `@sidebar_sections` flattened into ONE
+  list: the phone shows Spaces as one section), DIRECT
+  (`@channel_sections.dms`, the rail's Direct list: pinned and closed
+  conversations already removed, so no row appears twice) and ARCHIVED (only
+  while `@archived_open`).
+
+  Inside every section rows sort by recency
+  (`ChatListData.sort_by_recency/3`, task 01a166bf stage 1): newest top-level
+  message first, rows with no message last by name. The Agents row stays
+  FIRST in Pinned: it is a derived entry, not a pin. The sort runs here, in
+  the component, over `@list_excerpts`, which `ChatListData.put_message/2`
+  patches live, so an arriving message moves its row on the next render.
+
+  There is no manual order on the phone (the planner's decision: recency
+  wins; pinning is how you keep something at the top). The desktop rail
+  keeps its curated order and its own edit mode.
+
+  ## Holding the order (task 01a166bf stage 4)
+
+  No row moves while the reader is touching or scrolling the list. The
+  `ChatListSettle` hook on `#chat-list-scroller` pushes `chat_list_hold` on
+  pointerdown, touchstart or scroll, and `chat_list_release` once no pointer
+  is down and no scroll has fired for 600ms. `ChatListHooks` keeps
+  `@list_order_hold`, `%{section => [space ids as displayed]}` snapshotted
+  from `section_order/1` when the hold began, and auto-releases it 10s
+  after the latest hold (a ref-checked timer, so a stale one is ignored);
+  leaving the list clears it.
+
+  While held each section renders in snapshot order with unknown ids last
+  (`ChatListData.order_rows/4`); excerpt, time, weight and dot keep reading
+  the live assigns, so ONLY order freezes. On release the list re-sorts once
+  and the hook slides moved rows over 200ms (FLIP), or jumps them under
+  `prefers-reduced-motion`. The desktop rail is untouched.
+
+  ## Folding (task 01a166bf stage 3)
+
+  Every section header (Pinned, Spaces, Direct, Archived) is a `<button>`
+  inside its `<h2>`, carrying `aria-expanded` and `aria-controls`. A tap
+  pushes the EXISTING `toggle_section_collapsed` event with the DESIRED next
+  state, so the fold persists through `Sidebar.set_section_collapsed/3` in
+  the user's `chat_collapsed_sections` preference and its broadcast converges
+  the user's other sessions. No new event, preference key or store.
+
+  The phone's keys are `"chat-list:pinned"`, `"chat-list:spaces"`,
+  `"chat-list:direct"` and `"chat-list:archived"`. Spaces folds as ONE (the
+  phone has one Spaces header). The desktop rail keys the same preference by
+  section id, so `Sidebar.resolve/3` never matches a phone key and the two
+  surfaces fold independently. `ChatLive` reads the set into
+  `@list_collapsed` at mount and in every `recompute_sidebar/1`.
+
+  A folded section renders no rows (nor its empty state). Its header shows
+  the unread dot plus the number of unread CONVERSATIONS (not messages) when
+  any row in it has unread, Pinned counting the Agents row, and nothing when
+  quiet. Archived never shows a marker. Archived is still shown only behind
+  the "Show archived" switch; once shown it folds like the rest.
+
+  Accepted side effect: `Sidebar.reset_to_default/1` clears the whole
+  `chat_collapsed_sections` key, so the desktop layout reset also unfolds the
+  phone list.
 
   ## Every row is a plain patch link
 
@@ -37,6 +92,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   `border-edge`, as a sheet does. Text is body or `text-subtle`, nothing else.
   The pairs are measured in all ten variants by
   `test/platform/design/chat_list_contrast_guard_test.exs`.
+
+  Weight, not colour, marks unread: a row's name is `font-semibold` when it
+  has unread and `font-normal` when read, always `text-base-content`. The
+  excerpt and time follow the same flag, `text-base-content` unread and
+  `text-subtle` read. Two weights only (400, 600). The desktop rail applies
+  the same weight rule to its names (`Partials.Rail`).
 
   ## THE MASKING ATTRS ARE NOT OPTIONAL
 
@@ -70,6 +131,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   alias Phoenix.LiveView.JS
 
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.ChatListData
 
   @mask_keys [:sidebar_sections, :mask_names?, :revealed_section_ids]
 
@@ -95,27 +157,24 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:unread_counts, :map, required: true)
   attr(:list_excerpts, :map, required: true)
   attr(:list_identities, :map, required: true)
+  # The phone fold keys from `chat_collapsed_sections` (stage 3, `## Folding`).
+  attr(:list_collapsed, :any, required: true)
+  # The held order, or nil (stage 4, `## Holding the order`).
+  attr(:list_order_hold, :any, default: nil)
   attr(:push_permission, :any, required: true)
   attr(:notification_banner_dismissed, :boolean, required: true)
   # The sheets (stage 3): `ChatListHooks` owns all three.
   attr(:list_sheet, :any, required: true)
   attr(:list_search_query, :string, required: true)
   attr(:list_search_results, :map, required: true)
-  # Edit order (stage 4): the rail's personal-edit mode, and its announcer.
-  attr(:sidebar_edit, :boolean, required: true)
-  attr(:reorder_announcement, :any, required: true)
 
   @doc "The list. Renders nothing unless the gate in the moduledoc holds."
   def chat_list(assigns) do
     assigns =
       assigns
       |> assign(:mask_assigns, Map.take(assigns, @mask_keys))
-      |> assign(
-        :pinned_rows,
-        ChatLive.pinned_rail_entries(assigns.channel_sections.pinned, assigns.pinned_task_spaces)
-      )
-      |> assign(:space_rows, Platform.Chat.Sidebar.flatten_sections(assigns.sidebar_sections))
-      |> assign(:dm_rows, assigns.channel_sections.dms)
+      |> assign_sorted_rows()
+      |> assign_folds()
 
     ~H"""
     <section
@@ -128,11 +187,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       <header class="flex h-12 flex-shrink-0 items-center gap-1 pl-4 pr-2">
         <h1 class="text-lg font-semibold">Chat</h1>
         <span data-role="chat-list-subtitle" class="min-w-0 flex-1 truncate text-xs text-subtle">
-          {cond do
-            @sidebar_edit -> "editing order · tap ⋯ to finish"
-            @mask_names? -> "names masked"
-            true -> nil
-          end}
+          {if @mask_names?, do: "names masked"}
         </span>
         <%!-- Prototype master-mobile.html v3 :542-544, aria-labels verbatim.
              Buttons, never links: a bare event is fine on them. --%>
@@ -152,17 +207,15 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           role="chat-list-options"
           sheet="options"
           icon="hero-ellipsis-horizontal"
-          label="List options: edit order, mask names, archived"
+          label="List options: mask names, archived"
         />
       </header>
 
-      <div id="chat-list-scroller" class="clears-tab-bar min-h-0 flex-1 overflow-y-auto">
-        <%!-- Edit order's screen-reader feedback: the rail's own announcer
-             copy ("Moved X up"). Rendered as soon as the mode opens, because
-             aria-live announces CHANGES to a region already in the DOM. --%>
-        <div :if={@sidebar_edit} class="sr-only" aria-live="polite" data-role="chat-list-announcer">
-          {@reorder_announcement}
-        </div>
+      <div
+        id="chat-list-scroller"
+        phx-hook="ChatListSettle"
+        class="clears-tab-bar min-h-0 flex-1 overflow-y-auto"
+      >
         <.list_banner
           push_permission={@push_permission}
           dismissed={@notification_banner_dismissed}
@@ -187,49 +240,111 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             data-role="chat-list-pinned"
             aria-labelledby="chat-list-label-pinned"
           >
-            <.section_label id="chat-list-label-pinned">Pinned</.section_label>
-            <.agents_row
-              :if={@agents_block}
-              editing={@sidebar_edit}
-              agents_block={@agents_block}
-              unread_counts={@unread_counts}
-              list_excerpts={@list_excerpts}
-              mask_assigns={@mask_assigns}
-            />
-            <%= for %{kind: kind, space: space} = entry <- @pinned_rows do %>
-              <.row
-                space={space}
-                kind={kind}
-                name={row_name(kind, space, @list_identities)}
-                agent={row_agent(space, @list_identities)}
-                unread={Map.get(@unread_counts, space.id, 0)}
-                excerpt={Map.get(@list_excerpts, space.id)}
-                mask_assigns={@mask_assigns}
-                restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
-                editing={@sidebar_edit}
-                long_press={kind != :task}
-                move={pinned_move(entry)}
-              />
-            <% end %>
+            <.section_label id="chat-list-label-pinned" fold={@folds.pinned}>
+              Pinned
+            </.section_label>
+            <div id={@folds.pinned.controls} data-role="chat-list-section-rows">
+              <%= if !@folds.pinned.collapsed? do %>
+                <.agents_row
+                  :if={@agents_block}
+                  agents_block={@agents_block}
+                  unread_counts={@unread_counts}
+                  list_excerpts={@list_excerpts}
+                  mask_assigns={@mask_assigns}
+                />
+                <%= for %{kind: kind, space: space} <- @pinned_rows do %>
+                  <.row
+                    space={space}
+                    kind={kind}
+                    name={row_name(kind, space, @list_identities)}
+                    agent={row_agent(space, @list_identities)}
+                    unread={Map.get(@unread_counts, space.id, 0)}
+                    excerpt={Map.get(@list_excerpts, space.id)}
+                    mask_assigns={@mask_assigns}
+                    restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
+                    long_press={kind != :task}
+                  />
+                <% end %>
+              <% end %>
+            </div>
           </section>
 
           <section data-role="chat-list-spaces" aria-labelledby="chat-list-label-spaces">
-            <.section_label id="chat-list-label-spaces">Spaces</.section_label>
-            <%= if @space_rows == [] do %>
-              <.section_empty
-                role="chat-list-spaces-empty"
-                copy="You're not in any channels yet."
-                label="New channel"
-                event="new_channel_open"
-              />
-            <% else %>
-              <%!-- Spaces is the flattened sub-org sections, rendered section
-                   by section so each row knows its section: `move_channel`
-                   moves within one section, so a row's ↑/↓ stop at its
-                   section's ends (crossing sections is coverage row 32's
-                   open question). --%>
-              <%= for %{section: section, channels: section_channels} <- @sidebar_sections,
-                      {space, index} <- Enum.with_index(section_channels) do %>
+            <.section_label id="chat-list-label-spaces" fold={@folds.spaces}>
+              Spaces
+            </.section_label>
+            <div id={@folds.spaces.controls} data-role="chat-list-section-rows">
+              <%= if @folds.spaces.collapsed? do %>
+              <% else %>
+                <%= if @space_rows == [] do %>
+                  <.section_empty
+                    role="chat-list-spaces-empty"
+                    copy="You're not in any channels yet."
+                    label="New channel"
+                    event="new_channel_open"
+                  />
+                <% else %>
+                  <%= for space <- @space_rows do %>
+                    <.row
+                      space={space}
+                      kind={:channel}
+                      name={space.name}
+                      agent={nil}
+                      unread={Map.get(@unread_counts, space.id, 0)}
+                      excerpt={Map.get(@list_excerpts, space.id)}
+                      mask_assigns={@mask_assigns}
+                      restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
+                      long_press
+                    />
+                  <% end %>
+                <% end %>
+              <% end %>
+            </div>
+          </section>
+
+          <section data-role="chat-list-direct" aria-labelledby="chat-list-label-direct">
+            <.section_label id="chat-list-label-direct" fold={@folds.direct}>
+              Direct
+            </.section_label>
+            <div id={@folds.direct.controls} data-role="chat-list-section-rows">
+              <%= if @folds.direct.collapsed? do %>
+              <% else %>
+                <%= if @dm_rows == [] do %>
+                  <.section_empty
+                    role="chat-list-direct-empty"
+                    copy="No conversations yet."
+                    label="New conversation"
+                    event="new_conversation_open"
+                  />
+                <% else %>
+                  <%= for space <- @dm_rows do %>
+                    <.row
+                      space={space}
+                      kind={:dm}
+                      name={row_name(:dm, space, @list_identities)}
+                      agent={row_agent(space, @list_identities)}
+                      unread={Map.get(@unread_counts, space.id, 0)}
+                      excerpt={Map.get(@list_excerpts, space.id)}
+                      mask_assigns={@mask_assigns}
+                      restricted?={false}
+                      long_press
+                    />
+                  <% end %>
+                <% end %>
+              <% end %>
+            </div>
+          </section>
+
+          <section
+            :if={@archived_open and @archived_channels != []}
+            data-role="chat-list-archived"
+            aria-labelledby="chat-list-label-archived"
+          >
+            <.section_label id="chat-list-label-archived" fold={@folds.archived}>
+              Archived
+            </.section_label>
+            <div id={@folds.archived.controls} data-role="chat-list-section-rows">
+              <%= for space <- @archived_rows, !@folds.archived.collapsed? do %>
                 <.row
                   space={space}
                   kind={:channel}
@@ -239,61 +354,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   excerpt={Map.get(@list_excerpts, space.id)}
                   mask_assigns={@mask_assigns}
                   restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
-                  editing={@sidebar_edit}
-                  long_press
-                  move={channel_move(space, section, index, length(section_channels))}
+                  long_press={false}
                 />
               <% end %>
-            <% end %>
-          </section>
-
-          <section data-role="chat-list-direct" aria-labelledby="chat-list-label-direct">
-            <.section_label id="chat-list-label-direct">Direct</.section_label>
-            <%= if @dm_rows == [] do %>
-              <.section_empty
-                role="chat-list-direct-empty"
-                copy="No conversations yet."
-                label="New conversation"
-                event="new_conversation_open"
-              />
-            <% else %>
-              <%= for space <- @dm_rows do %>
-                <.row
-                  space={space}
-                  kind={:dm}
-                  name={row_name(:dm, space, @list_identities)}
-                  agent={row_agent(space, @list_identities)}
-                  unread={Map.get(@unread_counts, space.id, 0)}
-                  excerpt={Map.get(@list_excerpts, space.id)}
-                  mask_assigns={@mask_assigns}
-                  restricted?={false}
-                  editing={@sidebar_edit}
-                  long_press
-                />
-              <% end %>
-            <% end %>
-          </section>
-
-          <section
-            :if={@archived_open and @archived_channels != []}
-            data-role="chat-list-archived"
-            aria-labelledby="chat-list-label-archived"
-          >
-            <.section_label id="chat-list-label-archived">Archived</.section_label>
-            <%= for space <- @archived_channels do %>
-              <.row
-                space={space}
-                kind={:channel}
-                name={space.name}
-                agent={nil}
-                unread={Map.get(@unread_counts, space.id, 0)}
-                excerpt={Map.get(@list_excerpts, space.id)}
-                mask_assigns={@mask_assigns}
-                restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
-                editing={@sidebar_edit}
-                long_press={false}
-              />
-            <% end %>
+            </div>
           </section>
         <% end %>
       </div>
@@ -316,7 +380,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         open={@list_sheet == :options}
         mask_names?={@mask_names?}
         archived_open={@archived_open}
-        sidebar_edit={@sidebar_edit}
       />
     </section>
     """
@@ -620,7 +683,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:open, :boolean, required: true)
   attr(:mask_names?, :boolean, required: true)
   attr(:archived_open, :boolean, required: true)
-  attr(:sidebar_edit, :boolean, required: true)
 
   defp options_sheet(assigns) do
     ~H"""
@@ -635,19 +697,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     >
       <:title>Chat list</:title>
       <div class="flex flex-col pb-2">
-        <%!-- Entering Edit order closes the sheet so the arrows are in view;
-             the header subtitle says how to finish (tap ⋯ again). --%>
-        <.switch_row
-          role="chat-list-option-edit-order"
-          js={
-            if @sidebar_edit,
-              do: JS.push("toggle_sidebar_edit"),
-              else: JS.push("close_list_sheet") |> JS.push("toggle_sidebar_edit")
-          }
-          on?={@sidebar_edit}
-          label="Edit order"
-          meta="move channels and sections up / down"
-        />
         <.switch_row
           role="chat-list-option-mask"
           js={JS.push("toggle_mask_names", value: %{masked: to_string(!@mask_names?)})}
@@ -711,15 +760,63 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     """
   end
 
-  attr(:id, :string, required: true)
-  slot(:inner_block, required: true)
-
   # Uppercase via CSS, at the 12px floor (the prototype's 11px raised), in the
   # shell sidebar labels' tracking.
+  attr(:id, :string, required: true)
+  # nil: a plain label (the search sheet's groups). A map from `assign_folds/1`:
+  # the list's foldable header.
+  attr(:fold, :map, default: nil)
+  slot(:inner_block, required: true)
+
+  defp section_label(%{fold: nil} = assigns) do
+    ~H"""
+    <h2 id={@id} class="px-4 pt-4 pb-1 text-xs font-medium uppercase tracking-widest text-subtle">
+      {render_slot(@inner_block)}
+    </h2>
+    """
+  end
+
+  # A foldable list header (stage 3, `## Folding`). The whole 44px row is the
+  # button; the h2 keeps the id the section's `aria-labelledby` names. A
+  # button, never a link, so the event on it is fine.
   defp section_label(assigns) do
     ~H"""
-    <h2 id={@id} class="px-4 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-subtle">
-      {render_slot(@inner_block)}
+    <h2 id={@id} class="pt-2">
+      <button
+        type="button"
+        data-role="chat-list-section-toggle"
+        data-section={@fold.key}
+        aria-expanded={to_string(!@fold.collapsed?)}
+        aria-controls={@fold.controls}
+        phx-click={
+          JS.push("toggle_section_collapsed",
+            value: %{section_id: @fold.key, collapsed: to_string(!@fold.collapsed?)}
+          )
+        }
+        class="flex min-h-11 w-full items-center gap-2 px-4 text-left text-xs font-medium uppercase tracking-widest text-subtle active:bg-base-100 focus-visible-ring"
+      >
+        <span class="min-w-0 flex-1 truncate">{render_slot(@inner_block)}</span>
+        <span
+          :if={@fold.marker}
+          data-role="chat-list-section-unread"
+          class="flex shrink-0 items-center gap-1.5 normal-case tracking-normal text-base-content"
+        >
+          <span class="size-2 shrink-0 rounded-full bg-primary" aria-hidden="true"></span>
+          <span data-role="chat-list-section-unread-count" class="tabular-nums">
+            {@fold.marker}
+          </span>
+          <span class="sr-only">unread conversations</span>
+        </span>
+        <span
+          data-role="chat-list-section-chevron"
+          class={[
+            "hero-chevron-down size-4 shrink-0 text-subtle transition-transform duration-150 motion-reduce:transition-none",
+            @fold.collapsed? && "-rotate-90"
+          ]}
+          aria-hidden="true"
+        >
+        </span>
+      </button>
     </h2>
     """
   end
@@ -785,7 +882,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   end
 
   attr(:agents_block, :map, required: true)
-  attr(:editing, :boolean, required: true)
   attr(:unread_counts, :map, required: true)
   attr(:list_excerpts, :map, required: true)
   attr(:mask_assigns, :map, required: true)
@@ -818,7 +914,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       excerpt={Map.get(@list_excerpts, @agents_block.space.id)}
       mask_assigns={@mask_assigns}
       restricted?={false}
-      editing={@editing}
     />
     """
   end
@@ -836,16 +931,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:pressed, :string, default: "active:bg-base-100")
   # DOM ids must stay unique when one space renders in the list AND in a sheet.
   attr(:id_prefix, :string, default: "chat-list")
-  # Edit order (stage 4): the list is arranging. Unread dots hide, the row's
-  # long-press is inert, and a row with a `move` shows ↑/↓.
-  attr(:editing, :boolean, default: false)
   # The row link carries the generic `RowLongPress` hook, opening the row
   # sheet. Off for the Agents row (its membership is derived, so pin, hide
   # and order are all wrong for it), pinned tasks, Archived and search rows.
   attr(:long_press, :boolean, default: false)
-  # nil, or %{event, values, up?, down?}: the existing rail event this row's
-  # ↑/↓ push, its values, and whether each direction is enabled.
-  attr(:move, :any, default: nil)
 
   # One row. The whole row is the link (at least 44px tall), with no
   # phx-click. Name `min-w-0 truncate`; time and dot never shrink.
@@ -875,15 +964,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           <span class="hero-lock-closed size-5"></span>
         </span>
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[15px] font-semibold text-base-content">
+          <span class="block truncate text-[15px] font-normal text-base-content">
             {@shown_name}
           </span>
           <span class="block truncate text-[13px] text-subtle">Restricted, ask an admin</span>
         </span>
       </div>
     <% else %>
-      <%!-- The link and the ↑/↓ are SIBLINGS: a button nested in an <a> is
-           invalid HTML, and a tap on it would bubble into the patch. --%>
       <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
         <.link
           id={"#{@id_prefix}-row-#{@space.id}"}
@@ -896,7 +983,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           data-long-press-event={@long_press && "open_list_sheet"}
           data-long-press-sheet={@long_press && "row"}
           data-long-press-space-id={@long_press && @space.id}
-          data-editing={@long_press && to_string(@editing)}
           class={[
             "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
             @pressed
@@ -910,7 +996,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           />
           <span class="min-w-0 flex-1">
             <span class="flex items-baseline gap-2">
-              <span class="min-w-0 flex-1 truncate text-[15px] font-semibold text-base-content">
+              <span
+                data-role="chat-list-row-name"
+                class={[
+                  "min-w-0 flex-1 truncate text-[15px] text-base-content",
+                  if(@unread > 0, do: "font-semibold", else: "font-normal")
+                ]}
+              >
                 {@shown_name}
               </span>
               <time
@@ -919,7 +1011,11 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                 phx-hook="LocalTime"
                 datetime={DateTime.to_iso8601(@excerpt.inserted_at)}
                 data-local-time={DateTime.to_iso8601(@excerpt.inserted_at)}
-                class="shrink-0 whitespace-nowrap tabular-nums text-xs text-subtle"
+                data-role="chat-list-row-time"
+                class={[
+                  "shrink-0 whitespace-nowrap tabular-nums text-xs",
+                  if(@unread > 0, do: "text-base-content", else: "text-subtle")
+                ]}
               >
                 {Calendar.strftime(@excerpt.inserted_at, "%H:%M")}
               </time>
@@ -941,7 +1037,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             </span>
           </span>
           <span
-            :if={@unread_text && !@editing}
+            :if={@unread_text}
             data-role="chat-list-unread-dot"
             class="size-2 shrink-0 rounded-full bg-primary"
             role="img"
@@ -949,73 +1045,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           >
           </span>
         </.link>
-        <span
-          :if={@editing && @move}
-          class="flex shrink-0 items-center pr-2"
-          data-role="chat-list-move"
-        >
-          <.move_button move={@move} direction="up" name={@shown_name} />
-          <.move_button move={@move} direction="down" name={@shown_name} />
-        </span>
       </div>
     <% end %>
     """
-  end
-
-  attr(:move, :map, required: true)
-  attr(:direction, :string, required: true)
-  attr(:name, :string, required: true)
-
-  # A 44px ↑ or ↓: base-content enabled, the disabled token at a group's end
-  # (WCAG exempts an inactive control from the contrast floor). No hover.
-  defp move_button(assigns) do
-    enabled? = if assigns.direction == "up", do: assigns.move.up?, else: assigns.move.down?
-    assigns = assign(assigns, :enabled?, enabled?)
-
-    ~H"""
-    <button
-      type="button"
-      phx-click={JS.push(@move.event, value: Map.put(@move.values, :direction, @direction))}
-      disabled={!@enabled?}
-      data-role={"chat-list-move-#{@direction}"}
-      aria-label={"Move #{@name} #{@direction}"}
-      class={[
-        "flex size-11 items-center justify-center rounded-full focus-visible-ring",
-        if(@enabled?, do: "text-base-content active:bg-base-100", else: "text-disabled")
-      ]}
-    >
-      <span
-        class={[if(@direction == "up", do: "hero-arrow-up", else: "hero-arrow-down"), "size-5"]}
-        aria-hidden="true"
-      >
-      </span>
-    </button>
-    """
-  end
-
-  # Pinned conversations reorder through the rail's `move_pinned`; a pinned
-  # task row has no `move_index` (task pins are not hand-ordered) and no
-  # arrows.
-  defp pinned_move(%{move_index: nil}), do: nil
-
-  defp pinned_move(%{space: space, move_index: index, move_count: count}) do
-    %{
-      event: "move_pinned",
-      values: %{space_id: space.id},
-      up?: index > 0,
-      down?: index < count - 1
-    }
-  end
-
-  # A Spaces row reorders within its own sub-org section, through the rail's
-  # `move_channel`.
-  defp channel_move(space, section, index, count) do
-    %{
-      event: "move_channel",
-      values: %{channel_id: space.id, section_id: section.id},
-      up?: index > 0,
-      down?: index < count - 1
-    }
   end
 
   attr(:kind, :atom, required: true)
@@ -1101,6 +1133,108 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   end
 
   defp initial(_), do: ""
+
+  # Every section's rows in display order (the moduledoc's `## Order` and
+  # `## Holding the order`). The Agents row is not among `:pinned_rows`: it
+  # renders first on its own.
+  defp assign_sorted_rows(assigns) do
+    rows = sorted_rows(assigns, assigns[:list_order_hold])
+
+    assigns
+    |> assign(:pinned_rows, rows.pinned)
+    |> assign(:space_rows, rows.spaces)
+    |> assign(:dm_rows, rows.direct)
+    |> assign(:archived_rows, rows.archived)
+  end
+
+  @doc """
+  The space ids each section displays right now, in order, as
+  `%{pinned: ids, spaces: ids, direct: ids, archived: ids}`: what `ChatListHooks` snapshots when a hold
+  begins. Reads the same assigns `chat_list/1` does (a socket's assigns do).
+  """
+  def section_order(assigns) do
+    assigns
+    |> sorted_rows(assigns[:list_order_hold])
+    |> Map.new(fn {section, rows} ->
+      {section, Enum.map(rows, &row_id/1)}
+    end)
+  end
+
+  defp row_id(%{space: %{id: id}}), do: id
+  defp row_id(%{id: id}), do: id
+
+  defp sorted_rows(assigns, hold) do
+    excerpts = assigns.list_excerpts
+    identities = assigns.list_identities
+
+    order = fn rows, section, name_fun ->
+      ChatListData.order_rows(rows, excerpts, hold && hold[section], name_fun)
+    end
+
+    pinned =
+      ChatLive.pinned_rail_entries(assigns.channel_sections.pinned, assigns.pinned_task_spaces)
+
+    spaces = Platform.Chat.Sidebar.flatten_sections(assigns.sidebar_sections)
+
+    %{
+      pinned: order.(pinned, :pinned, &row_name(&1.kind, &1.space, identities)),
+      spaces: order.(spaces, :spaces, & &1.name),
+      direct: order.(assigns.channel_sections.dms, :direct, &row_name(:dm, &1, identities)),
+      archived: order.(assigns.archived_channels, :archived, & &1.name)
+    }
+  end
+
+  @fold_keys %{
+    pinned: "chat-list:pinned",
+    spaces: "chat-list:spaces",
+    direct: "chat-list:direct",
+    archived: "chat-list:archived"
+  }
+
+  @doc "The phone list's fold keys in `chat_collapsed_sections` (`## Folding`)."
+  def fold_keys, do: @fold_keys
+
+  # One fold per section: its key, whether it is collapsed, the id of the rows
+  # container its button controls, and the collapsed unread marker (the
+  # number of rows with unread, or nil). Archived never carries a marker.
+  defp assign_folds(assigns) do
+    collapsed = assigns.list_collapsed || MapSet.new()
+    unread = assigns.unread_counts
+    restricted = assigns.restricted_channel_ids
+
+    agents =
+      case assigns.agents_block do
+        %{space: space} -> [space]
+        _ -> []
+      end
+
+    rows = %{
+      pinned: agents ++ Enum.map(assigns.pinned_rows, & &1.space),
+      spaces: assigns.space_rows,
+      direct: assigns.dm_rows,
+      archived: []
+    }
+
+    folds =
+      Map.new(@fold_keys, fn {section, key} ->
+        collapsed? = MapSet.member?(collapsed, key)
+
+        count =
+          Enum.count(rows[section], fn space ->
+            Map.get(unread, space.id, 0) > 0 and not MapSet.member?(restricted, space.id)
+          end)
+
+        {section,
+         %{
+           key: key,
+           collapsed?: collapsed?,
+           controls: "chat-list-rows-#{section}",
+           marker: if(collapsed? and count > 0, do: count)
+         }}
+      end)
+
+    assign(assigns, :folds, folds)
+  end
 
   defp row_name(:channel, space, _identities), do: space.name
 

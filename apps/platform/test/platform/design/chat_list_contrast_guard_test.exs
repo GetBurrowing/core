@@ -14,6 +14,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
   |---------------------------------------------------|-------|
   | row name: base-content on base-200 (rest)         | 4.5   |
   | row name: base-content on base-100 (pressed)      | 4.5   |
+  | time (unread): base-content on base-200 (stage 2) | 4.5   |
   | time / excerpt: --subtle on base-200 (painted)    | 4.5   |
   | time / excerpt: --subtle on base-100 (painted)    | 4.5   |
   | unread dot: primary on base-200                   | 3     |
@@ -25,14 +26,19 @@ defmodule Platform.Design.ChatListContrastGuardTest do
   | search snippet: --subtle on base-100 (painted)    | 4.5   |
   | sheet row pressed: base-content on base-200       | 4.5   |
   | sheet handle: --subtle on base-100 (painted)      | 3     |
-  | move arrow (enabled): base-content on base-200    | 3     |
-  | move arrow (disabled): disabled token             | exempt (inactive control) |
   | avatar initial: base-content on base-300          | 4.5   |
+  | collapsed count: base-content on base-200 (st. 3) | 4.5   |
+  | header label pressed: --subtle on base-100 (painted, stage 3) | 4.5 |
 
   The last row is not in the stage's list. The avatar is `aria-hidden` and
   the name beside it carries the row, so it is measured as the inventory's
   "base-300 disc + base-content" token pair and asserted at the text floor
   because the glyph is text.
+
+  Task 01a166bf stage 2 made weight, not colour, mark unread: the row name
+  stays base-content in both states (its pair above is unchanged) and only
+  its weight moves (600 / 400). The time follows the excerpt, so an unread
+  row's time paints base-content and gets its own row.
 
   `--subtle` is alpha over its ground, so its pairs are PAINTED on the worst
   pixel `Platform.Design.PaintedComposite` allows, as rung 5's More sheet
@@ -131,6 +137,8 @@ defmodule Platform.Design.ChatListContrastGuardTest do
       {"name / base-200", ratio(b, "--color-base-content", "--color-base-200"), @aa_text},
       {"name / base-100 (pressed)", ratio(b, "--color-base-content", "--color-base-100"),
        @aa_text},
+      {"time (unread) / base-200", ratio(b, "--color-base-content", "--color-base-200"),
+       @aa_text},
       {"subtle / base-200 (painted)", subtle_on(b, "--color-base-200"), @aa_text},
       {"subtle / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text},
       {"dot / base-200", ratio(b, "--color-primary", "--color-base-200"), @non_text},
@@ -146,12 +154,12 @@ defmodule Platform.Design.ChatListContrastGuardTest do
       {"sheet label pressed: base-content / base-200",
        ratio(b, "--color-base-content", "--color-base-200"), @aa_text},
       {"sheet handle: subtle / base-100 (painted)", subtle_on(b, "--color-base-100"), @non_text},
-      # Stage 4: Edit order's ↑/↓ while enabled. Disabled ones paint the
-      # disabled token and are exempt (WCAG 1.4.3/1.4.11 exempt inactive
-      # controls), so they are not measured here.
-      {"move arrow enabled: base-content / base-200",
-       ratio(b, "--color-base-content", "--color-base-200"), @non_text},
       {"avatar initial / base-300", ratio(b, "--color-base-content", "--color-base-300"),
+       @aa_text},
+      # Task 01a166bf stage 3, the foldable section headers.
+      {"collapsed count / base-200", ratio(b, "--color-base-content", "--color-base-200"),
+       @aa_text},
+      {"header label pressed: subtle / base-100 (painted)", subtle_on(b, "--color-base-100"),
        @aa_text}
     ]
   end
@@ -184,6 +192,71 @@ defmodule Platform.Design.ChatListContrastGuardTest do
       end
 
     assert failures == []
+  end
+
+  test "time (unread): base-content on base-200", %{blocks: blocks, source: src} do
+    # The pair assumes the markup: the time takes base-content iff unread.
+    assert src =~ ~s(data-role="chat-list-row-time")
+
+    assert src =~
+             ~S|"shrink-0 whitespace-nowrap tabular-nums text-xs",
+                  if(@unread > 0, do: "text-base-content", else: "text-subtle")|
+
+    assert length(blocks) == 10
+
+    failures =
+      for b <- blocks,
+          r = ratio(b, "--color-base-content", "--color-base-200"),
+          r < @aa_text,
+          do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
+
+    assert failures == []
+  end
+
+  test "collapsed count: base-content on base-200", %{blocks: blocks, source: src} do
+    # The pair assumes the markup: the marker's number paints base-content on
+    # the list ground, beside the existing dot.
+    assert src =~ ~s(data-role="chat-list-section-unread")
+
+    assert src =~
+             "flex shrink-0 items-center gap-1.5 normal-case tracking-normal text-base-content"
+
+    assert src =~ ~s(data-role="chat-list-section-unread-count")
+    assert length(blocks) == 10
+
+    failures =
+      for b <- blocks,
+          r = ratio(b, "--color-base-content", "--color-base-200"),
+          r < @aa_text,
+          do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
+
+    assert failures == []
+  end
+
+  test "header label pressed: --subtle on base-100 (painted)", %{blocks: blocks, source: src} do
+    # The pair assumes the markup: the header button is text-subtle and
+    # presses to base-100, with no hover.
+    assert src =~ ~s(data-role="chat-list-section-toggle")
+    assert src =~ "font-medium uppercase tracking-widest text-subtle active:bg-base-100"
+    assert length(blocks) == 10
+
+    failures =
+      for b <- blocks,
+          r = subtle_on(b, "--color-base-100"),
+          r < @aa_text,
+          do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
+
+    assert failures == []
+  end
+
+  test "the row name carries both weights and one colour", %{source: src} do
+    assert src =~ ~s(data-role="chat-list-row-name")
+    assert src =~ ~S|if(@unread > 0, do: "font-semibold", else: "font-normal")|
+    assert src =~ "font-semibold"
+    assert src =~ "font-normal"
+    # Two weights only on the row: no medium.
+    refute src =~ ~r/data-role="chat-list-row-name"[^>]*font-medium/s
+    assert src =~ ~S|"min-w-0 flex-1 truncate text-[15px] text-base-content"|
   end
 
   # ── structure ──────────────────────────────────────────────────────────
@@ -253,11 +326,6 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     assert src =~ "bg-primary"
     assert src =~ "rounded-full bg-base-300"
     assert src =~ "active:bg-base-200"
-    # Edit order's arrows: base-content enabled, the disabled token at a
-    # group's end, and no hover.
-    assert src =~
-             ~S|if(@enabled?, do: "text-base-content active:bg-base-100", else: "text-disabled")|
-
     assert src =~ ~S|if(@on?, do: "bg-primary", else: "bg-base-300")|
 
     # No hover anywhere in the list, and no opacity-suffixed body colour.

@@ -547,7 +547,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 title={"#{leader.name} leads"}
               />
             </span>
-            <span class="min-w-0 flex-1 truncate">{space.name}</span>
+            <span class={[
+              "min-w-0 flex-1 truncate",
+              Map.get(@unread_counts, space.id, 0) > 0 && "font-semibold"
+            ]}>
+              {space.name}
+            </span>
             <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="channel-row-unread-pill">
                 {unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -779,7 +784,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                       <span class="hero-clipboard-document-list-mini size-3.5 text-subtle"></span>
                     </span>
                 <% end %>
-                <span class="truncate flex-1">{row_label}</span>
+                <span class={[
+                  "truncate flex-1",
+                  Map.get(@unread_counts, space.id, 0) > 0 && "font-semibold"
+                ]}>
+                  {row_label}
+                </span>
                 <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                   <span class="channel-row-unread-pill">
                     {unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -933,7 +943,12 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                 @active_space && @active_space.id == space.id && "channel-row--active"
               ]}
             >
-              <span class="truncate flex-1">{row_label}</span>
+              <span class={[
+                "truncate flex-1",
+                Map.get(@unread_counts, space.id, 0) > 0 && "font-semibold"
+              ]}>
+                {row_label}
+              </span>
               <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                 <span class="channel-row-unread-pill">
                   {unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -1449,7 +1464,10 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                   ]}
                 >
                   <span class="text-subtle">#</span>
-                  <span class="truncate flex-1">
+                  <span class={[
+                    "truncate flex-1",
+                    Map.get(@unread_counts, space.id, 0) > 0 && "font-semibold"
+                  ]}>
                     {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
                   </span>
                   <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>

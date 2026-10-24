@@ -406,6 +406,31 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
+  The user's collapsed fold keys as a `MapSet`, read from
+  `chat_collapsed_sections`.
+
+  One store, two surfaces: the desktop rail stamps `collapsed?` from it in
+  `resolve/3` (keyed by section id), and the phone Chat list reads its own
+  `"chat-list:*"` keys from it (task 01a166bf stage 3). `resolve/3` only ever
+  tests membership by section id, so a phone key is a MapSet miss there and
+  folds nothing on the desktop. Anonymous or unknown ids read as empty.
+
+  Given a `%User{}` it reads that struct's `preferences` and runs no query,
+  for a caller that already holds the row (the chat mount's
+  `@current_user_record`).
+  """
+  @spec collapsed_section_ids(User.t() | binary() | nil) :: MapSet.t(binary())
+  def collapsed_section_ids(%User{preferences: prefs}), do: collapsed_from_prefs(prefs)
+
+  def collapsed_section_ids(user_id),
+    do: user_id |> Accounts.get_user_preferences() |> collapsed_from_prefs()
+
+  defp collapsed_from_prefs(prefs) when is_map(prefs),
+    do: prefs |> Map.get(@collapsed_sections_key, []) |> List.wrap() |> MapSet.new()
+
+  defp collapsed_from_prefs(_), do: MapSet.new()
+
+  @doc """
   Collapse or expand a section in the user's view.
 
   Distinct from `set_section_hidden/3`: collapsing keeps the section in the

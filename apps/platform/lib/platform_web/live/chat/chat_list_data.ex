@@ -106,6 +106,68 @@ defmodule PlatformWeb.ChatLive.ChatListData do
 
   def put_message(socket, _msg), do: socket
 
+  @doc """
+  The phone list's order inside one section (task 01a166bf stage 1): newest
+  top-level message first, by `excerpts[space.id].inserted_at` compared with
+  `DateTime.compare/2` (never as strings). A row with no excerpt goes LAST,
+  those rows by downcased name; equal times break by downcased name, then id.
+
+  `rows` are spaces, or maps carrying one under `:space` (the Pinned
+  entries). `name_fun` gives a row's name. Pure: `@list_excerpts` already
+  holds each space's newest top-level message and `put_message/2` /
+  `refresh_space/2` patch it live, so a new message re-sorts on the next
+  render with no query.
+  """
+  def sort_by_recency(rows, excerpts, name_fun) when is_function(name_fun, 1) do
+    Enum.sort(rows, fn a, b ->
+      precedes?(sort_key(a, excerpts, name_fun), sort_key(b, excerpts, name_fun))
+    end)
+  end
+
+  @doc """
+  The order one section renders in (task 01a166bf stage 4): with no hold
+  (`hold_ids` nil) exactly `sort_by_recency/3`; while the list is held,
+  the order of `hold_ids` (the section's ids when the hold began), with any
+  row the snapshot does not name appended at the END, those in recency
+  order among themselves. Only ORDER freezes: the excerpt, time, weight and
+  dot of every row still read the live assigns.
+  """
+  def order_rows(rows, excerpts, nil, name_fun), do: sort_by_recency(rows, excerpts, name_fun)
+
+  def order_rows(rows, excerpts, hold_ids, name_fun) when is_list(hold_ids) do
+    index = hold_ids |> Enum.with_index() |> Map.new()
+    {known, unknown} = Enum.split_with(rows, &Map.has_key?(index, row_space(&1).id))
+
+    Enum.sort_by(known, &Map.fetch!(index, row_space(&1).id)) ++
+      sort_by_recency(unknown, excerpts, name_fun)
+  end
+
+  defp sort_key(row, excerpts, name_fun) do
+    space = row_space(row)
+
+    time =
+      case Map.get(excerpts || %{}, space.id) do
+        %{inserted_at: %DateTime{} = at} -> at
+        _ -> nil
+      end
+
+    {time, String.downcase(to_string(name_fun.(row) || "")), to_string(space.id)}
+  end
+
+  defp row_space(%{space: %{id: _} = space}), do: space
+  defp row_space(space), do: space
+
+  defp precedes?({nil, _, _}, {%DateTime{}, _, _}), do: false
+  defp precedes?({%DateTime{}, _, _}, {nil, _, _}), do: true
+
+  defp precedes?({ta, na, ia}, {tb, nb, ib}) do
+    case if(ta && tb, do: DateTime.compare(ta, tb), else: :eq) do
+      :gt -> true
+      :lt -> false
+      :eq -> {na, ia} <= {nb, ib}
+    end
+  end
+
   @doc "Re-read one space's excerpt (after a delete). Absent when it has none."
   def refresh_space(socket, space_id) do
     with %{} <- socket.assigns[:list_excerpts],

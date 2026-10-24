@@ -1200,4 +1200,92 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
 
     :ok
   end
+
+  # ── Unread weight (task 01a166bf stage 2) ────────────────────────────────
+
+  describe "unread weight on the rail" do
+    test "desktop rail: unread name semibold, read name regular", %{conn: conn} do
+      {conn, user} = authed(conn)
+      n = System.unique_integer([:positive])
+
+      # Four rows across three rail blocks: Pinned (channel unread, DM read),
+      # Direct (DM unread) and the org section (channel read).
+      unread_pin = create_channel("weight-pin-#{n}")
+      read_channel = create_channel("weight-read-#{n}")
+      unread_dm = create_dm(user, "Unread Person")
+      read_dm = create_dm(user, "Read Person")
+
+      for ch <- [unread_pin, read_channel] do
+        {:ok, _} =
+          Chat.add_participant(ch.id, %{
+            participant_type: "user",
+            participant_id: user.id,
+            display_name: user.name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      post = fn space, from_me? ->
+        p =
+          Enum.find(Chat.list_participants(space.id), fn p ->
+            p.participant_id == user.id == from_me?
+          end) ||
+            elem(
+              Chat.add_participant(space.id, %{
+                participant_type: "user",
+                participant_id: Ecto.UUID.generate(),
+                display_name: "Poster",
+                joined_at: DateTime.utc_now()
+              }),
+              1
+            )
+
+        {:ok, _} =
+          Chat.post_message(%{
+            space_id: space.id,
+            participant_id: p.id,
+            content_type: "text",
+            content: "weight #{n}"
+          })
+      end
+
+      post.(unread_pin, false)
+      post.(read_channel, true)
+      post.(unread_dm, false)
+      post.(read_dm, true)
+
+      {:ok, _} = Sidebar.set_space_pinned(user.id, unread_pin.id, true)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, read_dm.id, true)
+
+      {:ok, view, _} = live_rail(conn)
+
+      name = fn space ->
+        "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(space)}'] span.truncate"
+      end
+
+      # Positive controls: every row renders on the rail, and the unread
+      # rows carry their pill.
+      for s <- [unread_pin, read_channel, unread_dm, read_dm] do
+        assert has_element?(view, name.(s)), "no rail row for #{s.id}"
+      end
+
+      for s <- [unread_pin, unread_dm] do
+        assert has_element?(view, "#{name.(s)}.font-semibold")
+
+        assert has_element?(
+                 view,
+                 "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(s)}'] .channel-row-unread-pill"
+               )
+      end
+
+      for s <- [read_channel, read_dm] do
+        refute has_element?(view, "#{name.(s)}.font-semibold")
+
+        refute has_element?(
+                 view,
+                 "#chat-sidebar a.channel-row[href='/chat/#{Chat.space_path_segment(s)}'] .channel-row-unread-pill"
+               )
+      end
+    end
+  end
 end

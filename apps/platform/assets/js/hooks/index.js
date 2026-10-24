@@ -67,6 +67,7 @@ import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
 import RowLongPress from "./row_long_press"
+import ChatListSettle from "./chat_list_settle"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
 import Sheet from "./sheet"
@@ -145,6 +146,7 @@ export default {
   ResizableSidebar,
   RouteResume,
   RowLongPress,
+  ChatListSettle,
   ScrollToBottom,
   SectionReorder,
   Sheet,

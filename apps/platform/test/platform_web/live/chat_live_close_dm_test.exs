@@ -671,12 +671,12 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
       # The sheet's Hide on a DM, which had no reverse, is gone: task
       # 01a1557a-8562 stage 4 re-skinned the sheet to the prototype's items
-      # (Pin, Close conversation, Edit order on a DM; prototype :1302). This
-      # is the line that was waiting to say so.
+      # (Pin, Close conversation on a DM; prototype :1302). This is the line
+      # that was waiting to say so. Edit order left the phone sheet in task
+      # 01a166bf stage 1.
       assert item_roles(dm_sheet) == [
                "row-actions-pin",
-               "row-actions-close-dm",
-               "row-actions-edit-order"
+               "row-actions-close-dm"
              ]
 
       assert item_wrapper_class(dm_sheet, "row-actions-close-dm") == "border-t border-edge",

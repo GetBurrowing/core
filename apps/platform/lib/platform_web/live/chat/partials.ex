@@ -385,8 +385,6 @@ defmodule PlatformWeb.ChatLive.Partials do
     * 'Close conversation' ('hides it until the next message') on a DM or
       group (`close_dm`). Nothing is deleted, so the red this sheet has never
       spent stays unspent.
-    * 'Edit order' enters the list's arranging mode (`toggle_sidebar_edit`,
-      the same mode as the desktop rail's personal edit) and closes the sheet.
 
   NOT built: 'Mute' / 'Unmute' ('mentions still notify'). There is no mute
   state to read or write: `chat_participants.attention_mode` defaults to
@@ -417,11 +415,6 @@ defmodule PlatformWeb.ChatLive.Partials do
     default: nil,
     doc:
       "nil when closed, else the `row_actions_target/5` map (space_id, name, pinned, hideable, closeable)"
-  )
-
-  attr(:sidebar_edit, :boolean,
-    default: false,
-    doc: "the arranging mode is on; 'Edit order' then leaves it on rather than toggling it off"
   )
 
   def row_actions_sheet(assigns) do
@@ -490,21 +483,6 @@ defmodule PlatformWeb.ChatLive.Partials do
               <span class="block">Close conversation</span>
               <span class="block text-[13px] text-subtle">hides it until the next message</span>
             </span>
-          </button>
-        </li>
-        <li :if={@target} class="border-t border-edge">
-          <button
-            type="button"
-            class={row_sheet_item_class()}
-            phx-click={
-              if @sidebar_edit,
-                do: JS.push("close_row_actions"),
-                else: JS.push("close_row_actions") |> JS.push("toggle_sidebar_edit")
-            }
-            data-role="row-actions-edit-order"
-          >
-            <span class="hero-arrows-up-down size-5 flex-shrink-0" aria-hidden="true"></span>
-            <span>Edit order</span>
           </button>
         </li>
       </ul>

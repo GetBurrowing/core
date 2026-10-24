@@ -13,6 +13,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
   import Platform.ExternalUserFixtures
   import Platform.TenancyFixtures
@@ -23,6 +24,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
   alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
+  alias PlatformWeb.ChatLive.ChatListHooks
   alias PlatformWeb.ChatLive.Partials.ChatList
   alias PlatformWeb.SpaceTopics
 
@@ -116,6 +118,20 @@ defmodule PlatformWeb.ChatLiveChatListTest do
     |> LazyHTML.attribute("data-space-id")
   end
 
+  # The ids in `ids`, in the order `list` holds them.
+  defp keep(list, ids), do: Enum.filter(list, &(&1 in ids))
+
+  # Back-date one message: `seconds` back from a fixed hour ago, so a lower
+  # number is newer and every fixture time precedes any message a test posts
+  # live.
+  defp stamp!(msg, seconds) do
+    at = DateTime.add(DateTime.utc_now(), -3600 - seconds, :second)
+
+    Repo.update_all(from(m in Platform.Chat.Message, where: m.id == ^msg.id),
+      set: [inserted_at: at]
+    )
+  end
+
   defp lv_socket(view), do: :sys.get_state(view.pid).socket
   defp lv_assigns(view), do: lv_socket(view).assigns
 
@@ -175,30 +191,133 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert has_element?(view, "#chat-list[class*='lg:hidden']")
     end
 
-    test "SPACES follow flatten_sections; DIRECT follows the rail's Direct list", %{conn: conn} do
+    test "each section orders by latest message, newest first", %{conn: conn} do
+      w = world(conn)
+      globex = Tenancy.get_org_by_slug!("globex")
+      plain_member!(w.user, globex)
+      gamma = channel_in(globex, "Gamma")
+      delta = channel_in(globex, "Delta")
+      {dm2, _me, nash} = dm!(w.user, "Nash")
+      pin_one = channel_in(acme(), "PinOne")
+      pin_two = channel_in(acme(), "PinTwo")
+      _ = Sidebar.set_space_pinned(w.user.id, pin_one.id, true)
+      _ = Sidebar.set_space_pinned(w.user.id, pin_two.id, true)
+
+      # The curated orders this stage overrides, read off a first mount.
+      {:ok, first, _} = live(w.conn, ~p"/chat")
+      a = lv_assigns(first)
+      mine = [w.alpha.id, w.beta.id, gamma.id, delta.id]
+
+      curated_spaces =
+        a.sidebar_sections |> Sidebar.flatten_sections() |> Enum.map(& &1.id) |> keep(mine)
+
+      rail_dms = a.channel_sections.dms |> Enum.map(& &1.id) |> keep([w.dm.id, dm2.id])
+
+      # Two sub-org sections: Gamma and Delta sit in their own section.
+      assert Enum.any?(a.sidebar_sections, fn %{channels: c} ->
+               Enum.sort(Enum.map(c, & &1.id)) == Enum.sort([gamma.id, delta.id])
+             end)
+
+      assert length(curated_spaces) == 4 and length(rail_dms) == 2
+
+      # Recency the reverse of each curated order. Beta never gets a message,
+      # so it goes last whatever its curated place.
+      spaces_by_recency = Enum.reverse(curated_spaces -- [w.beta.id])
+      dms_by_recency = Enum.reverse(rail_dms)
+
+      posters = %{
+        w.alpha.id => w.poster,
+        gamma.id => join!(gamma, Ecto.UUID.generate(), "Quinn"),
+        delta.id => join!(delta, Ecto.UUID.generate(), "Quinn"),
+        w.dm.id => w.moore,
+        dm2.id => nash,
+        pin_one.id => join!(pin_one, Ecto.UUID.generate(), "Quinn"),
+        pin_two.id => join!(pin_two, Ecto.UUID.generate(), "Quinn")
+      }
+
+      spaces = Map.new([w.alpha, gamma, delta, w.dm, dm2, pin_one, pin_two], &{&1.id, &1})
+
+      # world/1's own messages (Alpha's, Moore's) go back a day, so only the
+      # stamps below decide. Newest first: index 0 gets the latest time.
+      # Pinned: PinTwo newer.
+      Repo.update_all(
+        from(m in Platform.Chat.Message, where: m.space_id in ^[w.alpha.id, w.dm.id]),
+        set: [inserted_at: DateTime.add(DateTime.utc_now(), -86_400, :second)]
+      )
+
+      for {ids, base} <- [
+            {spaces_by_recency, 0},
+            {dms_by_recency, 10},
+            {[pin_two.id, pin_one.id], 20}
+          ],
+          {id, i} <- Enum.with_index(ids) do
+        msg = say!(Map.fetch!(spaces, id), Map.fetch!(posters, id), "recency #{i}")
+        stamp!(msg, base + i)
+      end
+
+      # The older DM gets a thread reply, posted now. The rail orders Direct
+      # by its newest message of ANY kind (`list_user_conversations/2`), so
+      # it lifts that DM; the list's key is the newest TOP-LEVEL message, so
+      # it does not. That is what tells a sorted Direct from the rail's.
+      [_, older_dm] = dms_by_recency
+      [parent] = Chat.list_messages(older_dm, limit: 1)
+      {:ok, thread} = Chat.create_thread(older_dm, %{parent_message_id: parent.id})
+
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: older_dm,
+          participant_id: Map.fetch!(posters, older_dm).id,
+          thread_id: thread.id,
+          content_type: "text",
+          content: "a late thread reply"
+        })
+
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      html = list_html(view)
+
+      rail_dms_now =
+        lv_assigns(view).channel_sections.dms |> Enum.map(& &1.id) |> keep(dms_by_recency)
+
+      assert rail_dms_now == Enum.reverse(dms_by_recency)
+
+      spaces_dom =
+        html |> ids_in("[data-role='chat-list-spaces'] [data-role='chat-list-row']") |> keep(mine)
+
+      assert spaces_dom == spaces_by_recency ++ [w.beta.id]
+      refute spaces_dom == curated_spaces
+
+      dms_dom =
+        html
+        |> ids_in("[data-role='chat-list-direct'] [data-role='chat-list-row']")
+        |> keep([w.dm.id, dm2.id])
+
+      assert dms_dom == dms_by_recency
+      refute dms_dom == rail_dms_now
+
+      # Pinned order was PinOne, PinTwo; recency puts PinTwo first.
+      assert Sidebar.list_pinned_space_ids(w.user.id) |> keep([pin_one.id, pin_two.id]) ==
+               [pin_one.id, pin_two.id]
+
+      assert ids_in(html, "[data-role='chat-list-pinned'] [data-role='chat-list-row']") ==
+               [pin_two.id, pin_one.id]
+    end
+
+    test "a new message moves its conversation to the top of its section without reload",
+         %{conn: conn} do
       w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
+      spaces = "[data-role='chat-list-spaces'] [data-role='chat-list-row']"
+      mine = [w.alpha.id, w.beta.id]
 
-      a = lv_assigns(view)
-      expected_spaces = a.sidebar_sections |> Sidebar.flatten_sections() |> Enum.map(& &1.id)
-      expected_dms = Enum.map(a.channel_sections.dms, & &1.id)
+      # Beta has no message, so it is the lowest of the two.
+      assert list_html(view) |> ids_in(spaces) |> keep(mine) == [w.alpha.id, w.beta.id]
 
-      html = list_html(view)
-      assert expected_spaces != []
-      assert w.alpha.id in expected_spaces and w.beta.id in expected_spaces
+      other = join!(w.beta, Ecto.UUID.generate(), "Riley")
+      say!(w.beta, other, "beta wakes up")
 
-      assert ids_in(html, "[data-role='chat-list-spaces'] [data-role='chat-list-row']") ==
-               expected_spaces
-
-      assert expected_dms == [w.dm.id]
-
-      assert ids_in(html, "[data-role='chat-list-direct'] [data-role='chat-list-row']") ==
-               expected_dms
-
-      # Section order by byte position: Spaces before Direct.
-      {spaces_at, _} = :binary.match(html, ~s(data-role="chat-list-spaces"))
-      {direct_at, _} = :binary.match(html, ~s(data-role="chat-list-direct"))
-      assert spaces_at < direct_at
+      html = render(view) && list_html(view)
+      assert html |> ids_in(spaces) |> keep(mine) == [w.beta.id, w.alpha.id]
+      assert hd(ids_in(html, spaces)) == w.beta.id
     end
 
     test "PINNED leads with the Agents row, then the pinned conversations", %{conn: conn} do
@@ -735,8 +854,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
         "search" => {"chat-list-search", "Search channels and DMs", "hero-magnifying-glass"},
         "new" => {"chat-list-new", "New channel or conversation", "hero-plus"},
         "options" =>
-          {"chat-list-options", "List options: edit order, mask names, archived",
-           "hero-ellipsis-horizontal"}
+          {"chat-list-options", "List options: mask names, archived", "hero-ellipsis-horizontal"}
       }
 
       for {key, {role, label, icon}} <- labels do
@@ -1083,14 +1201,6 @@ defmodule PlatformWeb.ChatLiveChatListTest do
     |> LazyHTML.attribute("data-role")
   end
 
-  defp enter_edit(view) do
-    open_sheet(view, "options")
-
-    view
-    |> element("#chat-list-options-sheet button[data-role='chat-list-option-edit-order']")
-    |> render_click()
-  end
-
   describe "row long-press" do
     test "list rows carry the generic RowLongPress hook; Agents and search rows do not",
          %{conn: conn} do
@@ -1100,7 +1210,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       for id <- [w.alpha.id, w.beta.id, w.dm.id] do
         assert has_element?(
                  view,
-                 "#chat-list a[data-role='chat-list-row'][data-space-id='#{id}'][phx-hook='RowLongPress'][data-long-press-event='open_list_sheet'][data-long-press-sheet='row'][data-long-press-space-id='#{id}'][data-editing='false']"
+                 "#chat-list a[data-role='chat-list-row'][data-space-id='#{id}'][phx-hook='RowLongPress'][data-long-press-event='open_list_sheet'][data-long-press-sheet='row'][data-long-press-space-id='#{id}']"
                )
       end
 
@@ -1131,7 +1241,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       refute has_element?(view, "#{agents_row}[phx-hook]")
     end
 
-    test "a channel's sheet: Pin, Hide channel, Edit order; no Close, no Mute", %{conn: conn} do
+    test "a channel's sheet: Pin, Hide channel; no Close, no Mute", %{conn: conn} do
       w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
       refute has_element?(view, "#{@row_sheet}.sheet-open")
@@ -1142,15 +1252,13 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
       assert sheet_roles(view) == [
                "row-actions-pin",
-               "row-actions-hide",
-               "row-actions-edit-order"
+               "row-actions-hide"
              ]
 
       html = view |> element(@row_sheet) |> render()
       assert html =~ "Pin to top"
       assert html =~ "Hide channel"
       assert html =~ "hidden everywhere until you unhide"
-      assert html =~ "Edit order"
       refute html =~ "Mute"
       refute html =~ "Close conversation"
 
@@ -1160,15 +1268,14 @@ defmodule PlatformWeb.ChatLiveChatListTest do
              )
     end
 
-    test "a DM's sheet: Pin, Close conversation, Edit order; no Hide", %{conn: conn} do
+    test "a DM's sheet: Pin, Close conversation; no Hide", %{conn: conn} do
       w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
       long_press(view, w.dm.id)
 
       assert sheet_roles(view) == [
                "row-actions-pin",
-               "row-actions-close-dm",
-               "row-actions-edit-order"
+               "row-actions-close-dm"
              ]
 
       html = view |> element(@row_sheet) |> render()
@@ -1239,191 +1346,454 @@ defmodule PlatformWeb.ChatLiveChatListTest do
                "#chat-list a[data-role='chat-list-row'][data-space-id='#{w.dm.id}']"
              )
     end
+  end
 
-    test "Edit order from the row sheet enters the mode and closes the sheet", %{conn: conn} do
-      w = world(conn)
+  # ── unread weight (task 01a166bf stage 2) ──────────────────────────────
+
+  # `world/1`'s DM is unread (Moore wrote last, the viewer never read it). A
+  # second DM where the viewer wrote last is read: own messages never count.
+  defp weight_world(conn) do
+    w = world(conn)
+    {read_dm, me, _} = dm!(w.user, "Okafor")
+    say!(read_dm, me, "my own last word")
+    Map.put(w, :read_dm, read_dm)
+  end
+
+  defp name_sel(id), do: "#chat-list-row-#{id} [data-role='chat-list-row-name']"
+
+  describe "unread weight" do
+    test "an unread row's name is font-semibold and a read row's font-normal; the dot only on unread",
+         %{conn: conn} do
+      w = weight_world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      long_press(view, w.alpha.id)
 
-      view
-      |> element("#{@row_sheet} button[data-role='row-actions-edit-order']")
-      |> render_click()
+      assert lv_assigns(view).unread_counts[w.dm.id] == 1
+      refute Map.has_key?(lv_assigns(view).unread_counts, w.read_dm.id)
 
-      assert lv_assigns(view).sidebar_edit == true
-      assert lv_assigns(view).list_sheet == nil
-      refute has_element?(view, "#{@row_sheet}.sheet-open")
+      # Unread: semibold, never regular, body colour, dot.
+      assert has_element?(view, "#{name_sel(w.dm.id)}.font-semibold.text-base-content")
+      refute has_element?(view, "#{name_sel(w.dm.id)}.font-normal")
+      assert has_element?(view, "#chat-list-row-#{w.dm.id} [data-role='chat-list-unread-dot']")
+
+      # Read: regular, never semibold, the SAME colour, no dot.
+      assert has_element?(view, "#{name_sel(w.read_dm.id)}.font-normal.text-base-content")
+      refute has_element?(view, "#{name_sel(w.read_dm.id)}.font-semibold")
+      refute has_element?(view, "#{name_sel(w.read_dm.id)}.text-subtle")
+
+      refute has_element?(
+               view,
+               "#chat-list-row-#{w.read_dm.id} [data-role='chat-list-unread-dot']"
+             )
     end
 
-    test "the options sheet also carries Edit order (long-press is never the only path)",
-         %{conn: conn} do
-      w = world(conn)
+    test "reading a row turns its name regular and drops the dot", %{conn: conn} do
+      w = weight_world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      open_sheet(view, "options")
+
+      assert has_element?(view, "#{name_sel(w.dm.id)}.font-semibold")
+      assert has_element?(view, "#chat-list-row-#{w.dm.id} [data-role='chat-list-unread-dot']")
+
+      view |> element("#chat-list-row-#{w.dm.id}") |> render_click()
+      assert lv_assigns(view).active_space.id == w.dm.id
+
+      render_patch(view, ~p"/chat")
+      assert lv_assigns(view).active_space == nil
+
+      assert has_element?(view, "#{name_sel(w.dm.id)}.font-normal")
+      refute has_element?(view, "#{name_sel(w.dm.id)}.font-semibold")
+      refute has_element?(view, "#chat-list-row-#{w.dm.id} [data-role='chat-list-unread-dot']")
+    end
+
+    test "an unread row's time is base-content, a read row's text-subtle", %{conn: conn} do
+      w = weight_world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      unread_time = "#chat-list-time-#{w.dm.id}[data-role='chat-list-row-time']"
+      read_time = "#chat-list-time-#{w.read_dm.id}[data-role='chat-list-row-time']"
+
+      assert has_element?(view, "#{unread_time}.text-base-content")
+      refute has_element?(view, "#{unread_time}.text-subtle")
+      assert has_element?(view, "#{read_time}.text-subtle")
+      refute has_element?(view, "#{read_time}.text-base-content")
+
+      # The time follows the excerpt.
+      assert has_element?(
+               view,
+               "#chat-list-row-#{w.dm.id} [data-role='chat-list-excerpt'].text-base-content"
+             )
 
       assert has_element?(
                view,
-               "#chat-list-options-sheet button[role='switch'][data-role='chat-list-option-edit-order'][aria-checked='false']",
-               "Edit order"
+               "#chat-list-row-#{w.read_dm.id} [data-role='chat-list-excerpt'].text-subtle"
              )
-
-      assert sheet_html(view, "options") =~ "move channels and sections up / down"
     end
   end
 
-  describe "edit order" do
-    # Two sub-org sections with two channels each, two pinned conversations,
-    # a DM.
-    defp edit_world(conn) do
+  describe "no manual order" do
+    test "no Edit order entry point in the phone list or row sheet", %{conn: conn} do
       w = world(conn)
-      globex = Tenancy.get_org_by_slug!("globex")
-      plain_member!(w.user, globex)
-      g1 = channel_in(globex, "Gamma")
-      g2 = channel_in(globex, "Delta")
-      p1 = channel_in(acme(), "PinOne")
-      p2 = channel_in(acme(), "PinTwo")
-      _ = Sidebar.set_space_pinned(w.user.id, p1.id, true)
-      _ = Sidebar.set_space_pinned(w.user.id, p2.id, true)
-      Map.merge(w, %{g1: g1, g2: g2, p1: p1, p2: p2})
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      open_sheet(view, "options")
+      # Positive control: the options sheet renders its other switches.
+      assert has_element?(view, "#chat-list-options-sheet [data-role='chat-list-option-mask']")
+      refute has_element?(view, "[data-role='chat-list-option-edit-order']")
+      refute sheet_html(view, "options") =~ "Edit order"
+      render_click(view, "close_list_sheet", %{})
+
+      long_press(view, w.alpha.id)
+      assert has_element?(view, "#{@row_sheet} [data-role='row-actions-pin']")
+      refute has_element?(view, "[data-role='row-actions-edit-order']")
+      refute view |> element(@row_sheet) |> render() =~ "Edit order"
+
+      list = list_html(view)
+      assert list =~ ~s(data-role="chat-list-row")
+      refute list =~ "chat-list-move"
+      refute list =~ "chat-list-announcer"
+      refute list =~ "data-editing"
+      refute list =~ "editing order"
+    end
+  end
+
+  # ── section folds (task 01a166bf stage 3) ───────────────────────────────
+
+  defp toggle_sel(key),
+    do: "#chat-list button[data-role='chat-list-section-toggle'][data-section='#{key}']"
+
+  defp marker_sel(key), do: "#{toggle_sel(key)} [data-role='chat-list-section-unread']"
+
+  defp tap_header(view, key), do: view |> element(toggle_sel(key)) |> render_click()
+
+  defp collapsed_pref(user),
+    do: Platform.Accounts.get_user_preferences(user.id)["chat_collapsed_sections"]
+
+  # Two unread DMs, one carrying three unread messages and one carrying one,
+  # plus the viewer's own read DM. Unread CONVERSATIONS: 2; messages: 4.
+  defp fold_unread_world(conn) do
+    user = member!()
+    {busy, _me, a} = dm!(user, "Okafor")
+    for n <- 1..3, do: say!(busy, a, "busy note #{n}")
+    {quiet, _me, b} = dm!(user, "Lindqvist")
+    say!(quiet, b, "one note")
+    {read, me, _} = dm!(user, "Haddad")
+    say!(read, me, "my own last word")
+
+    %{conn: login(conn, user.id), user: user, busy: busy, quiet: quiet, read: read}
+  end
+
+  describe "section folds" do
+    test "every list header is a button inside its h2 with aria-expanded and aria-controls",
+         %{conn: conn} do
+      w = world(conn)
+      {:ok, _} = Sidebar.set_space_pinned(w.user.id, w.beta.id, true)
+      archived = channel_in(acme(), "Old Room")
+      {:ok, _} = Chat.archive_space(archived)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      render_click(view, "toggle_archived_section", %{})
+
+      for {key, label, h2} <- [
+            {"chat-list:pinned", "Pinned", "chat-list-label-pinned"},
+            {"chat-list:spaces", "Spaces", "chat-list-label-spaces"},
+            {"chat-list:direct", "Direct", "chat-list-label-direct"},
+            {"chat-list:archived", "Archived", "chat-list-label-archived"}
+          ] do
+        section = String.replace_prefix(key, "chat-list:", "")
+        sel = "h2##{h2} > button[type='button'][data-section='#{key}']"
+        assert has_element?(view, "#{sel}[aria-expanded='true']", label)
+        assert has_element?(view, "#{sel}[aria-controls='chat-list-rows-#{section}']")
+        assert has_element?(view, "#chat-list #chat-list-rows-#{section}")
+        assert has_element?(view, "#{sel} [data-role='chat-list-section-chevron']")
+      end
     end
 
-    defp arrow(id, dir),
-      do:
-        "#chat-list [data-role='chat-list-row-wrap'][data-space-id='#{id}'] button[data-role='chat-list-move-#{dir}']"
-
-    test "arrows on Pinned and Spaces rows only, disabled at group ends and section edges",
+    test "tapping a section header collapses it and it stays collapsed after reload",
          %{conn: conn} do
-      w = edit_world(conn)
+      w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      refute has_element?(view, "#chat-list button[data-role='chat-list-move-up']")
-      # Positive control for the hidden dots below: the DM is unread now.
-      assert has_element?(view, "#chat-list [data-role='chat-list-unread-dot']")
 
-      enter_edit(view)
-      assert lv_assigns(view).sidebar_edit == true
-      refute has_element?(view, "#chat-list-options-sheet.sheet-open")
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='true']")
+      assert has_element?(view, "#chat-list-row-#{w.dm.id}")
 
-      assert has_element?(
-               view,
-               "#chat-list [data-role='chat-list-subtitle']",
-               "editing order · tap ⋯ to finish"
+      tap_header(view, "chat-list:direct")
+
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='false']")
+      refute has_element?(view, "#chat-list-row-#{w.dm.id}")
+      refute has_element?(view, "#chat-list [data-role='chat-list-direct-empty']")
+      # Negative control: Spaces is untouched.
+      assert has_element?(view, "#{toggle_sel("chat-list:spaces")}[aria-expanded='true']")
+      assert has_element?(view, "#chat-list-row-#{w.alpha.id}")
+
+      # The EXISTING store, under the phone's key, and nothing else in it.
+      assert collapsed_pref(w.user) == ["chat-list:direct"]
+
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='false']")
+      refute has_element?(view, "#chat-list-row-#{w.dm.id}")
+      assert has_element?(view, "#chat-list-row-#{w.alpha.id}")
+
+      tap_header(view, "chat-list:direct")
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='true']")
+      assert has_element?(view, "#chat-list-row-#{w.dm.id}")
+      assert collapsed_pref(w.user) == []
+    end
+
+    test "a second session for the same user converges on the fold", %{conn: conn} do
+      w = world(conn)
+      {:ok, a, _} = live(w.conn, ~p"/chat")
+      {:ok, b, _} = live(w.conn, ~p"/chat")
+
+      tap_header(a, "chat-list:direct")
+      # B was not touched: the broadcast alone must fold it.
+      assert has_element?(b, "#{toggle_sel("chat-list:direct")}[aria-expanded='false']")
+      refute has_element?(b, "#chat-list-row-#{w.dm.id}")
+      assert has_element?(b, "#{toggle_sel("chat-list:spaces")}[aria-expanded='true']")
+
+      tap_header(b, "chat-list:direct")
+      assert has_element?(a, "#{toggle_sel("chat-list:direct")}[aria-expanded='true']")
+      assert has_element?(a, "#chat-list-row-#{w.dm.id}")
+    end
+
+    test "a collapsed section with unread shows the dot and the unread-conversation count; nothing when read",
+         %{conn: conn} do
+      w = fold_unread_world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      assert lv_assigns(view).unread_counts[w.busy.id] == 3
+      assert lv_assigns(view).unread_counts[w.quiet.id] == 1
+
+      # Open: no marker on the header, the rows carry their own dots.
+      refute has_element?(view, marker_sel("chat-list:direct"))
+
+      tap_header(view, "chat-list:direct")
+      refute has_element?(view, "#chat-list-row-#{w.busy.id}")
+      assert has_element?(view, "#{marker_sel("chat-list:direct")} .bg-primary")
+
+      assert view
+             |> element(
+               "#{marker_sel("chat-list:direct")} [data-role='chat-list-section-unread-count']"
              )
+             |> render() =~ ~r/>\s*2\s*</
 
-      # Pinned: first ↑ and last ↓ disabled.
-      assert has_element?(view, "#{arrow(w.p1.id, "up")}[disabled]")
-      refute has_element?(view, "#{arrow(w.p1.id, "down")}[disabled]")
-      assert has_element?(view, "#{arrow(w.p2.id, "down")}[disabled]")
-      assert has_element?(view, "#{arrow(w.p1.id, "up")}[aria-label='Move PinOne up']")
-
-      # Spaces: each sub-org section's ends, per the resolver's sections.
-      for %{channels: chans} <- lv_assigns(view).sidebar_sections, chans != [] do
-        first = hd(chans)
-        last = List.last(chans)
-        assert has_element?(view, "#{arrow(first.id, "up")}[disabled]")
-        assert has_element?(view, "#{arrow(last.id, "down")}[disabled]")
-
-        if length(chans) > 1 do
-          refute has_element?(view, "#{arrow(first.id, "down")}[disabled]")
-          refute has_element?(view, "#{arrow(last.id, "up")}[disabled]")
-        end
+      # Read both: the folded header goes quiet.
+      for space <- [w.busy, w.quiet] do
+        render_patch(view, ~p"/chat/#{PlatformWeb.ChatLive.space_nav_target(space)}")
+        render_patch(view, ~p"/chat")
       end
 
-      # The globex section holds exactly Gamma and Delta: a boundary inside
-      # the flattened list.
-      assert Enum.any?(lv_assigns(view).sidebar_sections, fn %{channels: c} ->
-               Enum.sort(Enum.map(c, & &1.id)) == Enum.sort([w.g1.id, w.g2.id])
-             end)
-
-      # No arrows on DIRECT rows.
-      refute has_element?(view, arrow(w.dm.id, "up"))
-
-      # The arrows are siblings of the link, never inside it.
-      doc = view |> element("#chat-list") |> render() |> LazyHTML.from_fragment()
-      assert Enum.count(LazyHTML.query(doc, "button[data-role='chat-list-move-up']")) >= 4
-      assert Enum.count(LazyHTML.query(doc, "[data-phx-link] button")) == 0
-      assert Enum.count(LazyHTML.query(doc, "[data-phx-link][phx-click]")) == 0
-
-      # Long-press is inert while editing; unread dots hide.
-      assert has_element?(
-               view,
-               "#chat-list a[data-space-id='#{w.alpha.id}'][data-editing='true']"
-             )
-
-      refute has_element?(view, "#chat-list [data-role='chat-list-unread-dot']")
-
-      assert has_element?(
-               view,
-               "#chat-list [data-role='chat-list-announcer'][aria-live='polite']"
-             )
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='false']")
+      refute has_element?(view, marker_sel("chat-list:direct"))
     end
 
-    test "a Spaces move persists through Sidebar: the reloaded list AND rail show it",
+    test "Archived never shows an unread marker when collapsed", %{conn: conn} do
+      w = fold_unread_world(conn)
+      archived = channel_in(acme(), "Old Room")
+      join!(archived, w.user.id, w.user.name)
+      poster = join!(archived, Ecto.UUID.generate(), "Priya")
+      say!(archived, poster, "an archived note")
+      {:ok, _} = Chat.archive_space(archived)
+
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      render_click(view, "toggle_archived_section", %{})
+      assert lv_assigns(view).unread_counts[archived.id] == 1
+      assert has_element?(view, "#chat-list-row-#{archived.id}")
+
+      tap_header(view, "chat-list:archived")
+      tap_header(view, "chat-list:direct")
+
+      assert has_element?(view, "#{toggle_sel("chat-list:archived")}[aria-expanded='false']")
+      refute has_element?(view, "#chat-list-row-#{archived.id}")
+      refute has_element?(view, marker_sel("chat-list:archived"))
+      # Positive control: a folded section with unread does carry the marker.
+      assert has_element?(view, marker_sel("chat-list:direct"))
+    end
+
+    test "a folded Pinned counts its unread pinned conversations", %{conn: conn} do
+      w = fold_unread_world(conn)
+      {:ok, _} = Sidebar.set_space_pinned(w.user.id, w.busy.id, true)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      tap_header(view, "chat-list:pinned")
+      refute has_element?(view, "#chat-list-row-#{w.busy.id}")
+
+      assert view
+             |> element(
+               "#{marker_sel("chat-list:pinned")} [data-role='chat-list-section-unread-count']"
+             )
+             |> render() =~ ~r/>\s*1\s*</
+
+      # The pinned DM left Direct, so Direct is unaffected: still open.
+      assert has_element?(view, "#{toggle_sel("chat-list:direct")}[aria-expanded='true']")
+    end
+
+    test "empty-state sections fold too", %{conn: conn} do
+      user = member!()
+      {dm, _me, other} = dm!(user, "Moore")
+      say!(dm, other, "hello")
+      {:ok, view, _} = live(login(conn, user.id), ~p"/chat")
+
+      assert has_element?(view, "#chat-list [data-role='chat-list-spaces-empty']")
+      tap_header(view, "chat-list:spaces")
+      refute has_element?(view, "#chat-list [data-role='chat-list-spaces-empty']")
+      assert has_element?(view, "#{toggle_sel("chat-list:spaces")}[aria-expanded='false']")
+    end
+  end
+
+  # ── order hold (task 01a166bf stage 4) ─────────────────────────────────
+
+  @spaces_rows "[data-role='chat-list-spaces'] [data-role='chat-list-row']"
+
+  defp hold(view),
+    do: view |> element("#chat-list-scroller") |> render_hook("chat_list_hold", %{})
+
+  defp release(view),
+    do: view |> element("#chat-list-scroller") |> render_hook("chat_list_release", %{})
+
+  defp spaces_order(view, mine), do: view |> list_html() |> ids_in(@spaces_rows) |> keep(mine)
+
+  defp excerpt_html(view, space_id) do
+    view
+    |> element("#chat-list-row-#{space_id} [data-role='chat-list-excerpt']")
+    |> render()
+  end
+
+  describe "order hold" do
+    test "the scroller carries the ChatListSettle hook", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      assert has_element?(view, "#chat-list-scroller[phx-hook='ChatListSettle']")
+      assert ChatListHooks.hold_timeout_ms() == 10_000
+    end
+
+    test "while held, a new message updates the excerpt but not the order; release re-sorts",
          %{conn: conn} do
-      w = edit_world(conn)
+      w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      enter_edit(view)
+      mine = [w.alpha.id, w.beta.id]
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+      refute has_element?(view, "#chat-list-row-#{w.beta.id} [data-role='chat-list-excerpt']")
 
-      [section] =
-        Enum.filter(lv_assigns(view).sidebar_sections, fn %{channels: c} ->
-          Enum.any?(c, &(&1.id == w.g1.id))
-        end)
+      hold(view)
+      other = join!(w.beta, Ecto.UUID.generate(), "Riley")
+      say!(w.beta, other, "beta wakes up while held")
+      _ = render(view)
 
-      [first, second | _] = Enum.map(section.channels, & &1.id)
-      view |> element(arrow(first, "down")) |> render_click()
+      # Order frozen; excerpt, weight and dot live.
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+      assert excerpt_html(view, w.beta.id) =~ "beta wakes up while held"
+      assert has_element?(view, "#{name_sel(w.beta.id)}.font-semibold")
+      assert has_element?(view, "#chat-list-row-#{w.beta.id} [data-role='chat-list-unread-dot']")
 
-      assert view |> element("#chat-list [data-role='chat-list-announcer']") |> render() =~
-               "Moved"
+      # A second hold inside the same gesture keeps the first snapshot.
+      hold(view)
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
 
-      # A reload: a fresh mount reads the persisted order.
-      {:ok, reloaded, _} = live(w.conn, ~p"/chat")
-
-      list_ids =
-        ids_in(list_html(reloaded), "[data-role='chat-list-spaces'] [data-role='chat-list-row']")
-
-      assert Enum.find_index(list_ids, &(&1 == second)) <
-               Enum.find_index(list_ids, &(&1 == first))
-
-      rail_ids =
-        reloaded
-        |> element("#chat-sidebar")
-        |> render()
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query("[data-channel-id]")
-        |> LazyHTML.attribute("data-channel-id")
-
-      assert Enum.find_index(rail_ids, &(&1 == second)) <
-               Enum.find_index(rail_ids, &(&1 == first))
+      release(view)
+      assert spaces_order(view, mine) == [w.beta.id, w.alpha.id]
+      assert lv_assigns(view).list_order_hold == nil
     end
 
-    test "a Pinned move persists through Sidebar's pinned order", %{conn: conn} do
-      w = edit_world(conn)
+    test "a held list auto-releases on its own timer and ignores a stale one", %{conn: conn} do
+      w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      enter_edit(view)
+      mine = [w.alpha.id, w.beta.id]
 
-      before =
-        ids_in(list_html(view), "[data-role='chat-list-pinned'] [data-role='chat-list-row']")
+      hold(view)
+      first_ref = lv_assigns(view).list_hold_ref
+      assert is_reference(first_ref)
 
-      assert before == [w.p1.id, w.p2.id]
-      view |> element(arrow(w.p1.id, "down")) |> render_click()
+      # A repeat hold re-arms: the first timer is now stale.
+      hold(view)
+      ref = lv_assigns(view).list_hold_ref
+      assert is_reference(ref) and ref != first_ref
 
-      assert Sidebar.list_pinned_space_ids(w.user.id) |> Enum.filter(&(&1 in [w.p1.id, w.p2.id])) ==
-               [w.p2.id, w.p1.id]
+      other = join!(w.beta, Ecto.UUID.generate(), "Riley")
+      say!(w.beta, other, "beta wakes up")
+      _ = render(view)
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
 
-      {:ok, reloaded, _} = live(w.conn, ~p"/chat")
+      for stale <- [first_ref, make_ref()] do
+        send(view.pid, {:chat_list_hold_expired, stale})
+        _ = render(view)
+        assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+        assert lv_assigns(view).list_order_hold != nil
+      end
 
-      assert ids_in(
-               list_html(reloaded),
-               "[data-role='chat-list-pinned'] [data-role='chat-list-row']"
-             ) ==
-               [w.p2.id, w.p1.id]
+      send(view.pid, {:chat_list_hold_expired, ref})
+      _ = render(view)
+      assert spaces_order(view, mine) == [w.beta.id, w.alpha.id]
+      assert lv_assigns(view).list_order_hold == nil
     end
 
-    test "tapping Edit order again leaves the mode", %{conn: conn} do
-      w = edit_world(conn)
+    # Stage 5: a reader scrolling past 10s re-pushes the hold every few
+    # seconds. Each re-hold must refresh the timer and KEEP the snapshot, or
+    # a refresh mid-scroll would re-sort under the reader.
+    test "a re-hold during a hold re-arms the timer and keeps the snapshot", %{conn: conn} do
+      w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
-      enter_edit(view)
-      enter_edit(view)
-      assert lv_assigns(view).sidebar_edit == false
-      refute has_element?(view, "#chat-list button[data-role='chat-list-move-up']")
+      mine = [w.alpha.id, w.beta.id]
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+
+      # t=0: the gesture starts.
+      hold(view)
+      first_ref = lv_assigns(view).list_hold_ref
+      snapshot = lv_assigns(view).list_order_hold
+
+      # A message lands mid-gesture: recency now says beta first.
+      other = join!(w.beta, Ecto.UUID.generate(), "Riley")
+      say!(w.beta, other, "beta speaks mid-scroll")
+      _ = render(view)
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+
+      # t=8s: the client's throttled re-hold, still scrolling.
+      hold(view)
+      second_ref = lv_assigns(view).list_hold_ref
+      assert second_ref != first_ref
+      assert lv_assigns(view).list_order_hold == snapshot
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+
+      # t=10s: the FIRST timer fires. It is stale; the order stays frozen.
+      send(view.pid, {:chat_list_hold_expired, first_ref})
+      _ = render(view)
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
+      assert lv_assigns(view).list_order_hold == snapshot
+
+      release(view)
+      assert spaces_order(view, mine) == [w.beta.id, w.alpha.id]
+      assert lv_assigns(view).list_order_hold == nil
+    end
+
+    test "a new conversation during a hold appends at its section's end", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      hold(view)
+      # A name that sorts first and, below, the newest message: recency would
+      # put it at the TOP. Held, it goes to the end.
+      fresh = channel_in(acme(), "Aardvark")
+      _ = render(view)
+      poster = join!(fresh, Ecto.UUID.generate(), "Riley")
+      say!(fresh, poster, "a fresh channel speaks")
+      _ = render(view)
+
+      mine = [w.alpha.id, w.beta.id, fresh.id]
+      assert spaces_order(view, mine) == [w.alpha.id, w.beta.id, fresh.id]
+      assert List.last(view |> list_html() |> ids_in(@spaces_rows)) == fresh.id
+      assert excerpt_html(view, fresh.id) =~ "a fresh channel speaks"
+
+      release(view)
+      assert spaces_order(view, mine) == [fresh.id, w.alpha.id, w.beta.id]
+    end
+
+    test "leaving the list for a space drops the hold", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      hold(view)
+      assert lv_assigns(view).list_order_hold != nil
+
+      render_patch(view, ~p"/chat/#{w.alpha.slug}")
+      assert lv_assigns(view).list_order_hold == nil
+      assert lv_assigns(view).list_hold_ref == nil
     end
   end
 end

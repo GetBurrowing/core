@@ -189,13 +189,13 @@
     unread_counts={@unread_counts}
     list_excerpts={@list_excerpts}
     list_identities={@list_identities}
+    list_collapsed={@list_collapsed}
+    list_order_hold={@list_order_hold}
     push_permission={@push_permission}
     notification_banner_dismissed={@notification_banner_dismissed}
     list_sheet={@list_sheet}
     list_search_query={@list_search_query}
     list_search_results={@list_search_results}
-    sidebar_edit={@sidebar_edit}
-    reorder_announcement={@reorder_announcement}
   />
 
   <%!-- Desktop still lands in a channel from /chat: this reports which side
@@ -664,7 +664,6 @@
      name is masked like the row it came from. --%>
 <.row_actions_sheet
   :if={!@embedded and !@external?}
-  sidebar_edit={@sidebar_edit}
   target={
     ChatListHooks.row_sheet_space_id(@list_sheet)
     |> row_actions_target(@channels, @dm_conversations, @pinned_space_ids, @user_id)
