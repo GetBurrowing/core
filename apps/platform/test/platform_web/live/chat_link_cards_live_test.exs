@@ -141,24 +141,49 @@ defmodule PlatformWeb.ChatLinkCardsLiveTest do
            )
 
     assert has_element?(view, msg_sel(m_proto, "[data-role=link-card-meta]"), "Prototype · v1")
-    assert has_element?(view, msg_sel(m_proto, ".badge.badge-outline"), "Clickable")
+
+    assert has_element?(
+             view,
+             msg_sel(m_proto, "[data-role=link-card-hint]"),
+             "Clickable · tap to open"
+           )
+
     refute has_element?(view, msg_sel(m_proto, "[data-kind=prototype][target]"))
 
-    # Mid-sentence: the sender's words stay, the card follows.
+    # Mid-sentence: the sender's words stay and the link is an inline chip
+    # in the text (link previews stage 1), not a card under it.
     assert has_element?(view, msg_sel(m_mid, ".chat-markdown"), "for details")
-    assert has_element?(view, msg_sel(m_mid, "[data-role=link-card][data-kind=link]"))
 
-    # Bare link: host + path title, host second line, text line replaced.
+    assert has_element?(
+             view,
+             msg_sel(
+               m_mid,
+               ~s(.chat-markdown button[data-role=link-chip][phx-click=viewer_open][phx-value-card="0"])
+             ),
+             "Plans"
+           )
+
+    refute has_element?(view, msg_sel(m_mid, "[data-role=link-card]"))
+    refute has_element?(view, msg_sel(m_mid, ".chat-markdown a"))
+
+    # Bare link: the smart title from the slug, host and parent second line,
+    # a monogram tile, text line replaced.
     assert has_element?(
              view,
              msg_sel(m_link, "[data-role=link-card][data-kind=link] [data-role=link-card-title]"),
-             "example.com/pricing/plans"
+             "Plans"
            )
 
     assert has_element?(
              view,
-             msg_sel(m_link, "[data-role=link-card-meta] .shrink-0"),
-             "example.com"
+             msg_sel(m_link, "[data-role=link-card-meta]"),
+             "example.com · Pricing"
+           )
+
+    assert has_element?(
+             view,
+             msg_sel(m_link, "[data-role=link-site-tile][data-monogram-slot]"),
+             "E"
            )
 
     refute has_element?(view, msg_sel(m_link, ".chat-markdown"))

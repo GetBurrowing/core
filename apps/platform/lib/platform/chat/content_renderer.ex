@@ -8,6 +8,8 @@ defmodule Platform.Chat.ContentRenderer do
 
   import Phoenix.HTML, only: [raw: 1]
 
+  alias Platform.Chat.LinkTargets
+
   @dangerous_url_schemes ~w(javascript: vbscript: data:text/html)
 
   @doc """
@@ -25,6 +27,11 @@ defmodule Platform.Chat.ContentRenderer do
       card or a player. A line holding only one of those links is removed:
       the card replaces it (rule 1 of the rung 13 direction canvas). A link
       inside a sentence keeps the sender's words.
+    * `:chips` - a map from `Platform.Chat.LinkTargets.key/2` to a function
+      rendering that link as an inline chip (link previews stage 1). Each
+      anchor whose href has a key in the map is replaced by the function's
+      html, called with the sender's link text, or nil when the text was the
+      bare URL. Runs last, so a chip's own text is never mention-decorated.
   """
   @spec render_message(String.t() | nil, keyword()) :: Phoenix.HTML.safe()
   def render_message(nil, _opts), do: raw("")
@@ -36,6 +43,7 @@ defmodule Platform.Chat.ContentRenderer do
     |> Platform.Chat.LinkTargets.strip_bare_lines(Keyword.get(opts, :cards, []), [])
     |> decorate_mentions()
     |> wrap_code_blocks()
+    |> chip_links(Keyword.get(opts, :chips, %{}))
     |> raw()
   end
 
@@ -192,6 +200,32 @@ defmodule Platform.Chat.ContentRenderer do
   end
 
   defp unescape(s), do: s |> String.replace("&amp;", "&") |> String.trim()
+
+  # ── Inline chips (link previews stage 1) ───────────────────────────
+
+  defp chip_links(html, chips) when map_size(chips) == 0, do: html
+
+  defp chip_links(html, chips) do
+    Regex.replace(~r/<a\b([^>]*)>(.*?)<\/a>/s, html, fn whole, attrs, inner ->
+      with [_, href] <- Regex.run(~r/\bhref="([^"]*)"/, attrs),
+           href = decode_entities(href),
+           render when is_function(render, 1) <- Map.get(chips, LinkTargets.key(href)) do
+        text = inner |> String.replace(~r/<[^>]*>/, "") |> decode_entities() |> String.trim()
+        render.(if(text == "" or text == href, do: nil, else: text))
+      else
+        _ -> whole
+      end
+    end)
+  end
+
+  defp decode_entities(s) do
+    s
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&#39;", "'")
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&amp;", "&")
+  end
 
   # ── @-mention decoration ───────────────────────────────────────────
   #

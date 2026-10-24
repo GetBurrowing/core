@@ -39,6 +39,14 @@ defmodule Platform.ExtensionBoundaryTest do
       grow back a read of a module's setting (the module owns its config;
       `0055-extension-contract-and-build-time-modules.md § 8. Configuration that belongs to a module`).
 
+  One exemption, from the segment rule only: `@product_names`, third-party
+  product names core shows as plain text (link previews name the site a
+  link goes to, `Platform.Chat.LinkSites`). A sibling may name a module
+  after the same product, which makes the word a compound segment it
+  "owns"; the word in a site label is not a reference to that module. Every
+  FULL sibling module name, including any that contains an exempt word, is
+  still a needle, and a test below holds that.
+
   This file contains no module's name, so it cannot trip itself; it derives
   them at run time.
 
@@ -130,6 +138,9 @@ defmodule Platform.ExtensionBoundaryTest do
 
   defp compound?(segment), do: length(Regex.scan(~r/[A-Z]/, segment)) >= 2
 
+  # Product names shown as text (see moduledoc); segment rule only.
+  @product_names ~w(YouTube)
+
   defp owned_segments do
     core = core_segments()
 
@@ -139,6 +150,7 @@ defmodule Platform.ExtensionBoundaryTest do
     |> Enum.flat_map(&String.split(&1, "."))
     |> Enum.uniq()
     |> Enum.reject(&MapSet.member?(core, &1))
+    |> Enum.reject(&(&1 in @product_names))
     |> Enum.filter(&compound?/1)
     |> Enum.sort()
   end
@@ -253,6 +265,24 @@ defmodule Platform.ExtensionBoundaryTest do
     for project <- sibling_projects(), File.dir?(Path.join(project, "lib")) do
       hits = scan([Path.join(project, "lib")], compiled)
       assert length(hits) > 10, "#{rel(project)}/lib scanned with #{length(hits)} hits"
+    end
+  end
+
+  test "a product-name exemption never hides a full module name" do
+    compiled = compile(needles())
+
+    exempted =
+      for word <- @product_names,
+          name <- module_names(),
+          word in String.split(name, "."),
+          do: name
+
+    # Non-vacuous: an exemption no sibling module needs is stale; drop it.
+    assert exempted != [], "no sibling module carries #{inspect(@product_names)}"
+
+    for name <- exempted do
+      assert scan_text("#{name}.fetch(1)", "plant", compiled) != [],
+             "the exemption hid the module #{name}"
     end
   end
 

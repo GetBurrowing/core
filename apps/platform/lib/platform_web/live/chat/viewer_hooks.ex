@@ -201,10 +201,10 @@ defmodule PlatformWeb.ChatLive.ViewerHooks do
     end
   end
 
-  defp for_card(%{kind: :link, url: url, host: host, path: path}, _socket, _mid) do
+  defp for_card(%{kind: :link, url: url, host: host, path: path} = card, _socket, _mid) do
     %{
       mode: "link",
-      filename: host <> path,
+      filename: get_in(card, [:preview, :title]) || host <> path,
       meta: host,
       src: nil,
       url: url,

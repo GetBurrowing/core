@@ -310,7 +310,9 @@ defmodule PlatformWeb.Components.ChatMessage do
 
           <%!-- A line that is only a link this viewer gets a card or a player
                for is dropped: the card replaces it (rung 13 rule 1; task
-               01a1655c stage 3 for linked attachments). Unreadable attachment
+               01a1655c stage 3 for linked attachments). An outside link
+               inside a sentence becomes an inline chip (link previews stage
+               1). Unreadable attachment
                links are not in the map, so they stay plain links. A message
                with no `:link_cards` (thread panel, search) renders plain
                anchors exactly as before. --%>
@@ -322,7 +324,8 @@ defmodule PlatformWeb.Components.ChatMessage do
                   for(
                     a <- Map.get(@attachments_map, @msg.id, []),
                     do: "/chat/attachments/#{a.id}"
-                  )
+                  ),
+              chips: PlatformWeb.Components.ChatLinkCard.chips(@msg.id, Map.get(@msg, :link_cards))
             ) %>
           <div
             :if={

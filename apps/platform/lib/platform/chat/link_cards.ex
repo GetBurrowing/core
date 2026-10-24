@@ -14,7 +14,26 @@ defmodule Platform.Chat.LinkCards do
 
   Anything refused OR missing is a `:locked` card carrying only its type:
   no title, space, version or thumbnail (rule 4 of the direction canvas).
-  Nothing here fetches from the network; a link card is host + path.
+  Nothing here fetches from the network.
+
+  ## Outside links (link previews stage 1, mockup canvas 01a16ed5)
+
+  A `:link` card carries `Platform.Chat.LinkSites.describe/1`'s preview:
+  title, kind, one meta line and the site (or monogram) for its tile. Its
+  `display` is `:chip` when the link sits inside the sender's prose and is
+  not a video page (the renderer swaps the anchor for a one-line chip, option
+  3) and `:card` otherwise. A chip keeps its index in the card list, so the
+  viewer resolves it like any card.
+
+  ## Burrow cards: the preview seam
+
+  A canvas or prototype card carries `badge` ("Canvas", "Mockup",
+  "Prototype · v3"), a `hint` ("6 options · tap to open", or nil), a `cover`
+  and a `tagline`. `cover/2` is the one place a cover is chosen, in tier
+  order; stage 1 has a single tier, the canvas's first image node the viewer
+  may read. Stage 2 adds the author's cover and the auto snapshot AHEAD of it
+  in `cover/2`, and sets `tagline` (always nil here). With no cover the
+  component paints a type-coloured tile. Never the globe.
 
   Attachment links are not cards: `Platform.Chat.AttachmentLinks` authorizes
   them into the attachment player.
@@ -26,7 +45,8 @@ defmodule Platform.Chat.LinkCards do
 
   import Ecto.Query
 
-  alias Platform.Chat.{CanvasAccess, LinkTargets, Space}
+  alias Platform.Chat
+  alias Platform.Chat.{CanvasAccess, CanvasPreview, LinkSites, LinkTargets, Space}
   alias Platform.Prototypes
   alias Platform.Prototypes.Prototype
   alias Platform.Repo
@@ -130,7 +150,12 @@ defmodule Platform.Chat.LinkCards do
         {id, %{canvas: canvas, space_name: Map.get(space_names, canvas.space_id)}}
       end)
 
-    %{canvases: canvases, canvas_protos: canvas_protos, prototypes: prototypes}
+    %{
+      canvases: canvases,
+      canvas_protos: canvas_protos,
+      prototypes: prototypes,
+      user_id: user_id
+    }
   end
 
   defp readable_canvases(ids, user_id) do
@@ -163,19 +188,24 @@ defmodule Platform.Chat.LinkCards do
       {nil, _} ->
         locked(t, :canvas)
 
-      {_entry, %Prototype{} = proto} ->
-        prototype_card(t, proto, proto.latest_version)
+      {%{canvas: canvas}, %Prototype{} = proto} ->
+        preview = canvas_preview(canvas, lookup)
+        card = prototype_card(t, proto, proto.latest_version)
+        %{card | cover: preview.cover, hint: preview.hint || card.hint}
 
       {%{canvas: canvas, space_name: space_name}, nil} ->
-        %{
+        preview = canvas_preview(canvas, lookup)
+
+        Map.merge(preview, %{
           kind: :canvas,
           url: t.url,
           bare_line?: t.bare_line?,
           canvas_id: canvas.id,
           space_id: canvas.space_id,
           title: canvas.title || "Untitled canvas",
-          space_name: space_name
-        }
+          space_name: space_name,
+          badge: if(preview.prototypes >= 2, do: "Mockup", else: "Canvas")
+        })
     end
   end
 
@@ -198,7 +228,17 @@ defmodule Platform.Chat.LinkCards do
         {p, q} -> (p || "") <> "?" <> q
       end
 
-    %{kind: :link, url: url, bare_line?: t.bare_line?, host: host, path: path}
+    preview = LinkSites.describe(url)
+
+    %{
+      kind: :link,
+      url: url,
+      bare_line?: t.bare_line?,
+      host: host,
+      path: path,
+      preview: preview,
+      display: if(t.bare_line? or preview.video?, do: :card, else: :chip)
+    }
   end
 
   defp card_for(%{kind: :image, url: url} = t, _lookup),
@@ -221,9 +261,49 @@ defmodule Platform.Chat.LinkCards do
       prototype_id: proto.id,
       name: proto.name,
       version: version,
-      open_url: open_url
+      open_url: open_url,
+      badge: prototype_badge(version),
+      hint: "Clickable · tap to open",
+      cover: nil,
+      tagline: nil
     }
   end
+
+  @doc false
+  def prototype_badge(version) when is_integer(version) and version > 0,
+    do: "Prototype · v#{version}"
+
+  def prototype_badge(_version), do: "Prototype"
+
+  # What a canvas card can say without a migration: its cover (see
+  # `cover/2`) and a "what you'll get" hint counted from the document.
+  defp canvas_preview(canvas, lookup) do
+    %{images: images, prototypes: protos, cards: cards} = CanvasPreview.summary(canvas.document)
+    options = protos + cards
+
+    %{
+      cover: cover(images, Map.get(lookup, :user_id)),
+      hint: if(options >= 2, do: "#{options} options · tap to open"),
+      tagline: nil,
+      prototypes: protos
+    }
+  end
+
+  # The cover tiers, best first. Stage 2 puts the author's cover and the
+  # auto snapshot in front of the first image; the card shape is the same.
+  defp cover(images, user_id) when is_binary(user_id) do
+    Enum.find_value(images, fn src ->
+      with [_, id] <- Regex.run(~r"\A/chat/attachments/([0-9a-fA-F-]{36})\z", src),
+           %{content_type: "image/" <> _} <-
+             Chat.get_visible_attachment_for_principal(String.downcase(id), {:user, user_id}) do
+        %{src: src, tier: :first_image}
+      else
+        _ -> nil
+      end
+    end)
+  end
+
+  defp cover(_images, _user_id), do: nil
 
   # Only the type: no title, space, version or thumbnail. `url` is the link
   # the sender typed (already in the message text) and is used only to drop
