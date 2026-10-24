@@ -1523,7 +1523,9 @@ defmodule Platform.Social do
   `:placed_to` (Social 7/7's calendar: a half-open `[from, to)` range of
   `DateTime`s on the post's PLACEMENT time, `scheduled_at`, or `approved_at`
   for a post published or failed at approval with no schedule; the schema
-  has no published-at column), and `refused: true` (task 01a165f1:
+  has no published-at column), `:profile_ids` (posts on any of those
+  profiles' accounts), `:updated_from` (last written at or after a
+  `DateTime`), and `refused: true` (task 01a165f1:
   `approved` posts with a `refused_reason`). Rows carry `status`, `error`,
   `rejection_reason`, `rejected_at` and the refusal fields.
   """
@@ -1587,6 +1589,24 @@ defmodule Platform.Social do
         nil -> q
         {:ok, task_id} -> where(q, [po], po.task_id == ^task_id)
         :error -> where(q, false)
+      end
+    end)
+    |> then(fn q ->
+      # Social authoring 1/11: posts on any of several profiles' accounts.
+      case filters[:profile_ids] do
+        nil ->
+          q
+
+        ids when is_list(ids) ->
+          account_ids = from(a in Account, where: a.profile_id in ^ids, select: a.id)
+          where(q, [po], po.account_id in subquery(account_ids))
+      end
+    end)
+    |> then(fn q ->
+      # Social authoring 1/11: last written at or after this time.
+      case filters[:updated_from] do
+        %DateTime{} = from -> where(q, [po], po.updated_at >= ^from)
+        nil -> q
       end
     end)
     |> then(fn q ->
@@ -1993,6 +2013,65 @@ defmodule Platform.Social do
       _ -> false
     end
   end
+
+  @doc """
+  Posts across the profiles `user` may see (Social authoring 1/11, the
+  "All brands" scope). The profile ids ALWAYS come from
+  `list_profiles_for_user/1`, read now: `scope` is `:all` or a list of ids
+  that can only NARROW that set (an id the user cannot see is dropped, never
+  read). `filters` are `list_posts/2`'s, minus `:profile_id`/`:profile_ids`.
+  Each org is read through its own scope; rows come back oldest first.
+  """
+  @spec list_posts_for_profiles(
+          Platform.Accounts.User.t() | nil,
+          :all | [Ecto.UUID.t()],
+          keyword() | map()
+        ) :: [Post.t()]
+  def list_posts_for_profiles(user, scope, filters \\ []) do
+    filters = filters |> Map.new() |> Map.drop([:profile_id, :profile_ids])
+
+    user
+    |> scoped_profiles(scope)
+    |> Enum.group_by(& &1.org_id, & &1.id)
+    |> Enum.flat_map(fn {org_id, ids} ->
+      list_posts(org_id, Map.put(filters, :profile_ids, ids))
+    end)
+    |> Enum.sort_by(&{&1.inserted_at, &1.id}, fn {a, ida}, {b, idb} ->
+      case DateTime.compare(a, b) do
+        :lt -> true
+        :gt -> false
+        :eq -> ida <= idb
+      end
+    end)
+  end
+
+  @doc """
+  The accounts of the profiles `user` may see, with the same `scope` rule as
+  `list_posts_for_profiles/3` (ids from `list_profiles_for_user/1`, never
+  widened by the caller). `opts` are `list_accounts/2`'s
+  (`:include_archived`; archived accounts are omitted by default).
+  """
+  @spec list_accounts_for_profiles(
+          Platform.Accounts.User.t() | nil,
+          :all | [Ecto.UUID.t()],
+          keyword()
+        ) :: [Account.t()]
+  def list_accounts_for_profiles(user, scope, opts \\ []) do
+    opts = Keyword.delete(opts, :profile_id)
+
+    user
+    |> scoped_profiles(scope)
+    |> Enum.group_by(& &1.org_id, & &1.id)
+    |> Enum.flat_map(fn {org_id, ids} ->
+      org_id |> list_accounts(opts) |> Enum.filter(&(&1.profile_id in ids))
+    end)
+  end
+
+  defp scoped_profiles(nil, _scope), do: []
+  defp scoped_profiles(user, :all), do: list_profiles_for_user(user)
+
+  defp scoped_profiles(user, ids) when is_list(ids),
+    do: user |> list_profiles_for_user() |> Enum.filter(&(&1.id in ids))
 
   @doc """
   The profiles `user` may see, ordered by name (Social 7/7, the Social tab's

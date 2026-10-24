@@ -1,7 +1,7 @@
 defmodule PlatformWeb.SocialCalendar do
   @moduledoc """
   The Social tab's week (Social 7/7 stage 3), as plain data for
-  `PlatformWeb.SocialLive`'s two calendar streams.
+  `PlatformWeb.SocialCalendarTab`'s two calendar streams.
 
     * The week runs Monday to Sunday in UTC: core exposes no timezone on the
       user, so the page says "UTC" next to the week.
@@ -30,17 +30,33 @@ defmodule PlatformWeb.SocialCalendar do
   `%{post:, account:, at: DateTime, date: Date}`, in time order.
   """
   def items(profile, accounts, %Date{} = monday) do
-    from = DateTime.new!(monday, ~T[00:00:00], "Etc/UTC")
-    to = DateTime.new!(Date.add(monday, 7), ~T[00:00:00], "Etc/UTC")
+    profile.org_id
+    |> Social.list_posts([profile_id: profile.id] ++ week_filters(monday))
+    |> place(accounts)
+  end
+
+  @doc """
+  `items/3` across every profile `user` may see (Social authoring 1/11, All
+  brands), read through `Platform.Social.list_posts_for_profiles/3`.
+  """
+  def items_for_user(user, accounts, %Date{} = monday) do
+    user
+    |> Social.list_posts_for_profiles(:all, week_filters(monday))
+    |> place(accounts)
+  end
+
+  defp week_filters(monday) do
+    [
+      statuses: @statuses,
+      placed_from: DateTime.new!(monday, ~T[00:00:00], "Etc/UTC"),
+      placed_to: DateTime.new!(Date.add(monday, 7), ~T[00:00:00], "Etc/UTC")
+    ]
+  end
+
+  defp place(posts, accounts) do
     by_id = Map.new(accounts, &{&1.id, &1})
 
-    profile.org_id
-    |> Social.list_posts(
-      profile_id: profile.id,
-      statuses: @statuses,
-      placed_from: from,
-      placed_to: to
-    )
+    posts
     |> Enum.flat_map(fn post ->
       case Map.fetch(by_id, post.account_id) do
         {:ok, account} ->
