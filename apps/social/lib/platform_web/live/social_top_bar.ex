@@ -13,9 +13,11 @@ defmodule PlatformWeb.SocialTopBar do
       as a link into All brands; in All brands the needs-approval badge
       itself is the total.
     * The health dot (red, aria-label and tooltip listing the causes): any
-      visible account whose status is not "connected" (archived ones
-      excluded), or any post that failed or was refused before the vendor
-      and was last written in the last 7 days. It opens Connections on the
+      visible profile whose `Platform.Social.Health.profile/1` state is not
+      `:ok` (Social authoring 9/11), the same computation the Connections
+      rows show: an account not connected or disconnected, an Instagram
+      personal account, or a post that failed or was refused before the
+      vendor in the last 7 days. It opens Connections on the
       first affected profile (`health_open`).
     * The composer's "New idea" button (`PlatformWeb.SocialComposer`, off
       until authoring 6/11), "+ New profile", and the tab strip.
@@ -23,15 +25,15 @@ defmodule PlatformWeb.SocialTopBar do
   `assign_status/1` reads everything the bar shows for the CURRENT
   `@profiles` (always a fresh `list_profiles_for_user/1`), through
   `Platform.Social.list_accounts_for_profiles/3` and
-  `Platform.Social.list_posts_for_profiles/3`.
+  `Platform.Social.Health.by_profile/2` (whose post reads are limited to
+  those accounts).
   """
 
   use PlatformWeb, :html
 
   alias Platform.Social
+  alias Platform.Social.Health
   alias PlatformWeb.{SocialComposer, SocialCreateProfile, SocialHelpers, SocialScope}
-
-  @health_window_days 7
 
   # Header actions, each with `enabled?/0` and `button/1`; shown only while
   # enabled. Read through the list (not a direct call) so a stub's constant
@@ -53,37 +55,47 @@ defmodule PlatformWeb.SocialTopBar do
   def health(nil, _profiles), do: []
 
   def health(user, profiles) do
-    ids = Enum.map(profiles, & &1.id)
-    accounts = Social.list_accounts_for_profiles(user, ids, include_archived: true)
-    since = DateTime.add(DateTime.utc_now(), -@health_window_days, :day)
-
-    posts =
-      Social.list_posts_for_profiles(user, ids, status: "failed", updated_from: since) ++
-        Social.list_posts_for_profiles(user, ids, refused: true, updated_from: since)
-
-    profile_of = Map.new(accounts, &{&1.id, &1.profile_id})
-    unhealthy = Enum.filter(accounts, &(is_nil(&1.archived_at) and &1.status != "connected"))
-    bad_posts = Enum.frequencies_by(posts, &Map.get(profile_of, &1.account_id))
+    healths =
+      user
+      |> Social.list_accounts_for_profiles(Enum.map(profiles, & &1.id))
+      |> Health.by_profile()
 
     Enum.flat_map(profiles, fn profile ->
-      account_causes =
-        for account <- unhealthy, account.profile_id == profile.id do
-          %{profile_id: profile.id, text: account_cause(account, profile)}
-        end
-
-      post_causes =
-        case Map.get(bad_posts, profile.id, 0) do
-          0 -> []
-          n -> [%{profile_id: profile.id, text: posts_cause(n, profile)}]
-        end
-
-      account_causes ++ post_causes
+      case Map.get(healths, profile.id) do
+        %{state: :ok} -> []
+        nil -> []
+        %{accounts: rows} -> causes(profile, rows)
+      end
     end)
   end
 
-  defp account_cause(account, profile) do
+  # The dot's causes for one profile, from `Platform.Social.Health.profile/1`:
+  # each unhealthy account's own reasons first, then one line counting the
+  # failed or refused posts.
+  defp causes(profile, rows) do
+    account_causes =
+      for {account, health} <- rows,
+          reason <- health.reasons,
+          reason.code in [:not_connected, :disconnected, :personal_instagram] do
+        %{profile_id: profile.id, text: account_cause(account, reason.code, profile)}
+      end
+
+    post_causes =
+      case Enum.sum(Enum.map(rows, fn {_account, health} -> health.failure_count end)) do
+        0 -> []
+        n -> [%{profile_id: profile.id, text: posts_cause(n, profile)}]
+      end
+
+    account_causes ++ post_causes
+  end
+
+  defp account_cause(account, code, profile) do
     state =
-      if account.status == "reauth_needed", do: "needs reconnecting", else: "isn't connected"
+      case code do
+        :disconnected -> "needs reconnecting"
+        :personal_instagram -> "is a personal account"
+        _ -> "isn't connected"
+      end
 
     "#{SocialHelpers.platform_label(account.platform)} on #{profile.name} #{state}"
   end

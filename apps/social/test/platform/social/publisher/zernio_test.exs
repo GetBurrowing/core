@@ -997,7 +997,8 @@ defmodule Platform.Social.Publisher.ZernioTest do
                kind: :published,
                external_url: "https://li.example.test/9",
                platform_post_id: "1",
-               error: nil
+               error: nil,
+               auth?: false
              }
     end
 

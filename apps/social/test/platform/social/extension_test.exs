@@ -29,8 +29,20 @@ defmodule Platform.Social.ExtensionTest do
                label: "Post needs approval",
                icon: "hero-megaphone",
                stays_listed_on_open: true
+             },
+             %{
+               kind: "social_account_disconnected",
+               source_type: "social_account",
+               label: "Social account disconnected",
+               icon: "hero-link-slash",
+               stays_listed_on_open: false
              }
            ] = Extension.inbox_kinds()
+
+    # Social authoring 9/11: the disconnect alert is acknowledged on open.
+    assert "social_account_disconnected" in Platform.Inbox.Item.kinds()
+    assert "social_account" in Platform.Inbox.Item.source_types()
+    refute "social_account_disconnected" in Platform.Inbox.action_kinds()
 
     assert "social_post_approval" in Platform.Inbox.Item.kinds()
     assert "social_post" in Platform.Inbox.Item.source_types()

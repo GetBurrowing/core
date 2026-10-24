@@ -1060,6 +1060,11 @@ defmodule Platform.Social do
       locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
 
       case live_account_with_ref(locked, entry.ref) do
+        # Social authoring 9/11: a Reconnect of a disconnected row (same
+        # vendor ref) moves it back to "connected" and re-arms its alert.
+        %Account{status: "reauth_needed"} = account ->
+          {account |> backfill_type!(entry) |> reconnected!(), :connected}
+
         %Account{} = account ->
           {backfill_type!(account, entry), :already_connected}
 
@@ -1167,6 +1172,16 @@ defmodule Platform.Social do
     end
   end
 
+  defp reconnected!(%Account{} = account) do
+    account
+    |> Changeset.change(status: "connected", disconnect_alerted_at: nil)
+    |> Repo.update()
+    |> case do
+      {:ok, account} -> account
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
   # The ONLY write: ref, status, a missing handle and a reported account type.
   # Not the editable cast. A type is written only when the vendor reported one
   # we know; nil never overwrites a stored type (an entry without the key is
@@ -1176,7 +1191,7 @@ defmodule Platform.Social do
     account_type = Map.get(entry, :account_type)
 
     changes =
-      [provider_account_ref: entry.ref, status: "connected"] ++
+      [provider_account_ref: entry.ref, status: "connected", disconnect_alerted_at: nil] ++
         if(is_nil(account.handle) and is_binary(entry.username),
           do: [handle: entry.username],
           else: []

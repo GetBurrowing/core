@@ -49,6 +49,9 @@ defmodule Platform.Social.Account do
     # posts-per-week goal. Written by `schedule_changeset/2` only.
     embeds_many(:posting_slots, Platform.Social.PostingSlot, on_replace: :delete)
     field(:weekly_goal, :integer)
+    # Social authoring 9/11: the disconnect alert's once-only marker. Written
+    # by `Platform.Social.Health` only; never cast.
+    field(:disconnect_alerted_at, :utc_datetime_usec)
 
     has_many(:posts, Platform.Social.Post)
 
@@ -97,6 +100,15 @@ defmodule Platform.Social.Account do
     |> check_constraint(:approval_mode, name: :social_accounts_approval_mode_check)
     |> check_constraint(:status, name: :social_accounts_status_check)
     |> foreign_key_constraint(:profile_id)
+    |> rearm_disconnect_alert()
+  end
+
+  # Social authoring 9/11: a move to "connected" re-arms the disconnect
+  # alert, so the NEXT disconnect alerts the approvers again.
+  defp rearm_disconnect_alert(changeset) do
+    if get_change(changeset, :status) == "connected",
+      do: put_change(changeset, :disconnect_alerted_at, nil),
+      else: changeset
   end
 
   @doc """

@@ -161,6 +161,16 @@ defmodule Platform.Social.Extension do
         label: "Post needs approval",
         icon: "hero-megaphone",
         stays_listed_on_open: true
+      },
+      # Social authoring 9/11: one row per approver when an account
+      # disconnects (once per disconnect, `Platform.Social.Health`). It links
+      # to Connections; opening it acknowledges it.
+      %{
+        kind: "social_account_disconnected",
+        source_type: "social_account",
+        label: "Social account disconnected",
+        icon: "hero-link-slash",
+        stays_listed_on_open: false
       }
     ]
   end

@@ -24,7 +24,9 @@ defmodule Platform.Social.Publisher.Fake do
   ## Webhook format
 
   The Fake's delivery is JSON `{"events": [{"event_id", "external_id",
-  "kind", "external_url", "platform_post_id", "error"}]}` signed with HMAC-SHA256 of the RAW
+  "kind", "external_url", "platform_post_id", "error", "auth"}]}` (or, for
+  kind `account_disconnected` / `account_connected`, `{"event_id", "kind",
+  "account_ref", "error"}`) signed with HMAC-SHA256 of the RAW
   body, lowercase hex, in header `#{"x-social-fake-signature"}`. The compare is
   `Plug.Crypto.secure_compare/2` (`Platform.Webhooks.GithubSignature`'s pattern).
   """
@@ -211,6 +213,19 @@ defmodule Platform.Social.Publisher.Fake do
     end
   end
 
+  # Social authoring 9/11: the account events, as Zernio's adapter
+  # normalizes them (`account_ref` is our `provider_account_ref`).
+  defp event(%{"kind" => kind} = map)
+       when kind in ["account_disconnected", "account_connected"] do
+    %{
+      event_id: map["event_id"],
+      kind:
+        if(kind == "account_disconnected", do: :account_disconnected, else: :account_connected),
+      account_ref: map["account_ref"],
+      error: map["error"]
+    }
+  end
+
   defp event(map) when is_map(map) do
     %{
       event_id: map["event_id"],
@@ -218,7 +233,8 @@ defmodule Platform.Social.Publisher.Fake do
       kind: kind(map["kind"]),
       external_url: map["external_url"],
       platform_post_id: map["platform_post_id"],
-      error: map["error"]
+      error: map["error"],
+      auth?: map["auth"] == true
     }
   end
 

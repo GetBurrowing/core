@@ -281,7 +281,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     assert has_element?(
              child,
              "[data-pane='connections'] [data-role='social-empty']",
-             "No accounts connected for #{empty.name} yet"
+             "No accounts yet for #{empty.name}"
            )
   end
 

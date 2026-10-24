@@ -61,6 +61,20 @@ defmodule PlatformWeb.SocialConnectionsTab do
   pending invites with Cancel (`cancel_invite/3`). Only the token's hash is
   stored, so a pending row cannot re-show its link. The invitee side is
   `PlatformWeb.SocialInviteLanding`.
+
+  ## Health first (Social authoring 9/11, task 01a16c51-9cc5)
+
+  Rows come from `Platform.Social.Health`, the SAME computation as the top
+  bar's health dot: ordered down, then warn, then ok, then by name. Each row
+  shows a state pill with text and an icon (readable without colour), the
+  reasons in plain words, "Last posted 2d ago" (linked to the live post when
+  the vendor gave a URL), the approval mode, the owner or the approvers by
+  name, and the drafting agent when the profile has one. Each reason has at
+  most ONE fix, through an existing handler: Connect/Reconnect
+  (`connect_account`), or Retry for a publish refused before the vendor
+  (`retry_publish`, `Platform.Social.Publishing.retry_publish/3`). Fixes are
+  approver-only; anyone else reads the same health with no buttons. On a
+  phone the row stacks and the fix is full width.
   """
 
   use PlatformWeb.SocialTab
@@ -68,7 +82,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
   alias Phoenix.LiveView.JS
   alias Platform.Accounts.User
   alias Platform.Social
-  alias Platform.Social.{Account, Publisher}
+  alias Platform.Social.{Account, Health, Publisher, Publishing}
   alias PlatformWeb.{SocialInviteLanding, SocialScope}
 
   @approver_refusals [
@@ -84,7 +98,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
 
   @events ~w(connect_account open_add_account close_add_account add_account set_mode
              open_remove cancel_remove remove_account open_invite close_invite
-             create_invite cancel_invite)
+             create_invite cancel_invite retry_publish)
 
   @impl true
   def enabled?, do: true
@@ -115,6 +129,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     |> assign(:add_form, add_form([]))
     |> assign(:invite_dialog, nil)
     |> assign(:invites_empty?, true)
+    |> assign(:row_context, %{approvers: [], agent: nil})
     |> stream(:accounts, [], reset: true)
     |> stream(:invites, [], reset: true)
   end
@@ -131,7 +146,8 @@ defmodule PlatformWeb.SocialConnectionsTab do
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form(platforms))
     |> assign(:invite_dialog, nil)
-    |> stream(:accounts, Enum.map(accounts, &account_item(&1, nil)), reset: true)
+    |> assign(:row_context, row_context(profile))
+    |> stream(:accounts, account_items(accounts, nil), reset: true)
     |> restream_invites()
     |> maybe_reconcile()
   end
@@ -208,7 +224,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
       {:noreply,
        socket
        |> assign(:notice, nil)
-       |> stream_insert(:accounts, account_item(account, socket.assigns.removing))}
+       |> stream_insert(:accounts, single_item(account, socket.assigns.removing))}
     else
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
@@ -231,7 +247,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
        socket
        |> close_removal()
        |> assign(:removing, removing)
-       |> stream_insert(:accounts, account_item(preview.account, removing))}
+       |> stream_insert(:accounts, single_item(preview.account, removing))}
     else
       {:error, :not_found} -> {:noreply, account_gone(socket)}
       _ -> {:noreply, notice(socket, "Only an approver of this profile can change it.")}
@@ -247,7 +263,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
       {:noreply,
        socket
        |> assign(:removing, nil)
-       |> stream_delete(:accounts, account_item(account, nil))
+       |> stream_delete(:accounts, %{id: account.id})
        |> assign_account_flags()
        |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))
        |> removed_notice(account, result.vendor)}
@@ -331,7 +347,37 @@ defmodule PlatformWeb.SocialConnectionsTab do
     end
   end
 
+  # Retry a publish refused before the vendor (the health reason's fix):
+  # approvers only, and only for a post on one of THIS profile's accounts;
+  # `Publishing.retry_publish/3` re-checks the approver and runs the whole
+  # publish guard again.
+  def handle_event("retry_publish", %{"post_id" => post_id}, socket) when is_binary(post_id) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         %{account_id: account_id} <- Social.get_post(profile.org_id, post_id),
+         %Account{} <- profile_account(profile, account_id) do
+      result = Publishing.retry_publish(profile.org_id, post_id, user_id)
+      {:noreply, socket |> restream_accounts() |> notice(retry_copy(result))}
+    else
+      {:error, :not_an_approver} ->
+        {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply, notice(socket, "That post could not be retried. Try again.")}
+    end
+  end
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  defp retry_copy({:ok, _post}), do: "Retried. The post is on its way."
+
+  defp retry_copy({:error, {:wait_until, at}}),
+    do: "Still rate limited. Retry after #{Calendar.strftime(at, "%H:%M")} UTC."
+
+  defp retry_copy({:error, {:publish_failed, _}}),
+    do: "Retried, and the platform refused it again. See the reason on the row."
+
+  defp retry_copy({:error, :not_refused}), do: "That post is no longer waiting for a retry."
+  defp retry_copy(_error), do: "Retried, but it still can't be sent. See the reason on the row."
 
   # Pending invites (unused, uncancelled, unexpired) for an APPROVER of the
   # current profile only; anyone else gets an empty list. Used and expired
@@ -360,27 +406,66 @@ defmodule PlatformWeb.SocialConnectionsTab do
     }
   end
 
+  # The stream rows in health order (`Platform.Social.Health.profile/1`:
+  # down, warn, ok, then by name). `errors` maps an account id to its
+  # connect failure.
+  defp account_items(accounts, removing, errors \\ %{}) do
+    facts = Health.facts(accounts)
+
+    accounts
+    |> Enum.map(&{&1, Health.account(&1, Map.get(facts, &1.id))})
+    |> Health.profile()
+    |> Map.fetch!(:accounts)
+    |> Enum.map(fn {account, health} ->
+      account_item(account, health, removing, Map.get(errors, account.id))
+    end)
+  end
+
+  # One row re-rendered in place (its stream position is kept).
+  defp single_item(account, removing) do
+    facts = Health.facts([account])
+    account_item(account, Health.account(account, Map.get(facts, account.id)), removing, nil)
+  end
+
   # A stream row; `removal` is the open confirm panel's preview, else nil.
-  defp account_item(account, removing, connect_error \\ nil)
+  defp account_item(account, health, removing, connect_error) do
+    removal =
+      case removing do
+        %{account_id: id, preview: preview} when id == account.id -> preview
+        _ -> nil
+      end
 
-  defp account_item(account, %{account_id: id, preview: preview}, connect_error)
-       when id == account.id,
-       do: %{
-         id: account.id,
-         account: account,
-         removal: preview,
-         owner: owner_of(account),
-         connect_error: connect_error
-       }
-
-  defp account_item(account, _removing, connect_error),
-    do: %{
+    %{
       id: account.id,
       account: account,
-      removal: nil,
+      health: health,
+      removal: removal,
       owner: owner_of(account),
       connect_error: connect_error
     }
+  end
+
+  # What every row of this profile shares: the approvers' names (an owned
+  # account shows its owner instead) and the drafting agent, when set.
+  defp row_context(profile) do
+    users = Platform.Accounts.get_users_map(profile.approver_user_ids || [])
+
+    approvers =
+      for id <- profile.approver_user_ids || [],
+          Map.has_key?(users, id),
+          do: user_name(Map.fetch!(users, id))
+
+    agent =
+      with id when is_binary(id) <- profile.drafting_agent_id,
+           %{name: name} when is_binary(name) and name != "" <-
+             Platform.Repo.get(Platform.Agents.Agent, id) do
+        name
+      else
+        _ -> nil
+      end
+
+    %{approvers: approvers, agent: agent}
+  end
 
   # Connect (or the connect step of Add account) failed: the reason goes on
   # the row that was clicked AND in the pane's notice line, because the
@@ -447,7 +532,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     socket = assign(socket, :removing, nil)
 
     case profile_account(profile, id) do
-      %Account{} = account -> stream_insert(socket, :accounts, account_item(account, nil))
+      %Account{} = account -> stream_insert(socket, :accounts, single_item(account, nil))
       nil -> stream_delete(socket, :accounts, %{id: id})
     end
   end
@@ -506,11 +591,8 @@ defmodule PlatformWeb.SocialConnectionsTab do
     socket
     |> assign(:accounts_empty?, accounts == [])
     |> assign_reconcile_flags(accounts)
-    |> stream(
-      :accounts,
-      Enum.map(accounts, &account_item(&1, removing, Map.get(errors, &1.id))),
-      reset: true
-    )
+    |> assign(:row_context, row_context(profile))
+    |> stream(:accounts, account_items(accounts, removing, errors), reset: true)
   end
 
   # The rows `Platform.Social.reconcile_accounts/3` can fill: never connected
@@ -840,7 +922,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
       </button>
     </div>
     <p :if={@accounts_empty?} class="mb-3 text-base-content/70" data-role="social-empty">
-      No accounts connected for {@profile.name} yet
+      No accounts yet for {@profile.name}. Add one to start posting.
     </p>
     <div
       :if={@can_edit? and not @zernio_blocks_connect? and @connectable_platforms != []}
@@ -871,7 +953,9 @@ defmodule PlatformWeb.SocialConnectionsTab do
         id={dom_id}
         class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2"
         data-role="social-account-row"
+        data-health={row.health.state}
       >
+        <.health_pill state={row.health.state} />
         <.account_row
           account={row.account}
           owner={row.owner}
@@ -887,6 +971,14 @@ defmodule PlatformWeb.SocialConnectionsTab do
           <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
           <span>{row.connect_error}</span>
         </p>
+        <.health_detail
+          account={row.account}
+          health={row.health}
+          owner={row.owner}
+          context={@row_context}
+          can_edit?={@can_edit?}
+          can_connect?={@can_edit? and not @zernio_blocks_connect?}
+        />
         <.remove_panel
           :if={@can_edit? and row.removal}
           account={row.account}
@@ -1048,21 +1140,28 @@ defmodule PlatformWeb.SocialConnectionsTab do
         {@mode_labels[@account.approval_mode] || @account.approval_mode}
       </span>
     <% end %>
-    <span class="shrink-0" data-role="social-account-state" data-state={@account.status || "none"}>
+    <span
+      class={[
+        "shrink-0",
+        @account.status != "connected" && @can_connect? && "max-sm:basis-full"
+      ]}
+      data-role="social-account-state"
+      data-state={@account.status || "none"}
+    >
       <%= case @account.status do %>
         <% "connected" -> %>
           <span class="inline-flex items-center gap-1 text-sm">
             <.icon name="hero-check-circle-micro" class="size-4" /> Connected
           </span>
         <% "reauth_needed" -> %>
-          <span class="inline-flex items-center gap-2">
+          <span class="flex items-center gap-2">
             <span class="badge badge-warning gap-1 whitespace-nowrap">
               <.icon name="hero-exclamation-triangle-micro" class="size-3" /> Reconnect
             </span>
             <button
               :if={@can_connect?}
               type="button"
-              class="btn btn-outline btn-sm"
+              class="btn btn-outline btn-sm max-sm:flex-1"
               phx-click="connect_account"
               phx-value-id={@account.id}
               data-role="social-account-connect"
@@ -1074,7 +1173,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
           <button
             :if={@can_connect?}
             type="button"
-            class="btn btn-outline btn-sm"
+            class="btn btn-outline btn-sm max-sm:w-full"
             phx-click="connect_account"
             phx-value-id={@account.id}
             data-role="social-account-connect"
@@ -1095,6 +1194,162 @@ defmodule PlatformWeb.SocialConnectionsTab do
       Remove
     </button>
     """
+  end
+
+  @health_pills %{
+    down: {"badge-error", "hero-x-circle-micro", "Not working"},
+    warn: {"badge-warning", "hero-exclamation-triangle-micro", "Needs attention"},
+    ok: {"badge-success", "hero-check-circle-micro", "Healthy"}
+  }
+
+  attr :state, :atom, required: true
+
+  # The state pill: text AND an icon, so it reads without colour.
+  defp health_pill(assigns) do
+    {tone, icon, label} = Map.fetch!(@health_pills, assigns.state)
+    assigns = assign(assigns, tone: tone, icon: icon, label: label)
+
+    ~H"""
+    <span
+      class={["badge badge-soft shrink-0 gap-1 whitespace-nowrap", @tone]}
+      data-role="social-account-health"
+      data-health={@state}
+    >
+      <.icon name={@icon} class="size-3.5" /> {@label}
+    </span>
+    """
+  end
+
+  @reason_icons %{
+    down: "hero-x-circle-micro",
+    warn: "hero-exclamation-triangle-micro",
+    info: "hero-information-circle-micro"
+  }
+
+  attr :account, :map, required: true
+  attr :health, :map, required: true
+  attr :owner, :map, default: nil
+  attr :context, :map, required: true
+  attr :can_edit?, :boolean, required: true
+  attr :can_connect?, :boolean, required: true
+
+  # Under the row: the reasons in plain words (each with at most ONE fix,
+  # approvers only), then last posted, who approves and who drafts. The
+  # Connect/Reconnect of a not-connected or disconnected account is the
+  # state button on the row itself, so it is not repeated here.
+  defp health_detail(assigns) do
+    assigns = assign(assigns, :reason_icons, @reason_icons)
+
+    ~H"""
+    <div
+      class="flex w-full basis-full flex-col gap-1.5 text-sm"
+      data-role="social-account-health-detail"
+    >
+      <ul :if={@health.reasons != []} class="flex flex-col gap-1.5">
+        <li
+          :for={reason <- @health.reasons}
+          class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+          data-role="social-account-reason"
+          data-code={reason.code}
+          data-tone={reason.tone}
+        >
+          <span class={[
+            "flex items-start gap-1.5",
+            reason.tone == :info && "text-base-content/70"
+          ]}>
+            <.icon
+              name={Map.fetch!(@reason_icons, reason.tone)}
+              class="mt-0.5 size-4 shrink-0"
+            />
+            <span>{reason.text}</span>
+          </span>
+          <.reason_fix
+            :if={@can_edit?}
+            fix={reason.fix}
+            account={@account}
+            can_connect?={@can_connect?}
+          />
+        </li>
+      </ul>
+      <p class="flex flex-wrap gap-x-4 gap-y-1 text-base-content/70">
+        <span data-role="social-account-last-posted">
+          <%= cond do %>
+            <% @health.last_published_at && @health.last_published_url -> %>
+              <a href={@health.last_published_url} target="_blank" rel="noopener" class="link">
+                Last posted {ago(@health.last_published_at)}
+              </a>
+            <% @health.last_published_at -> %>
+              Last posted {ago(@health.last_published_at)}
+            <% true -> %>
+              Nothing posted yet
+          <% end %>
+        </span>
+        <span :if={!@owner} data-role="social-account-approvers">
+          <%= if @context.approvers == [] do %>
+            No approvers yet
+          <% else %>
+            Approvers: {Enum.join(@context.approvers, ", ")}
+          <% end %>
+        </span>
+        <span :if={@context.agent} data-role="social-account-drafting-agent">
+          Drafted by {@context.agent}
+        </span>
+      </p>
+    </div>
+    """
+  end
+
+  attr :fix, :any, required: true
+  attr :account, :map, required: true
+  attr :can_connect?, :boolean, required: true
+
+  defp reason_fix(%{fix: {:retry, post_id}} = assigns) do
+    assigns = assign(assigns, :post_id, post_id)
+
+    ~H"""
+    <button
+      type="button"
+      class="btn btn-outline btn-sm shrink-0 max-sm:w-full"
+      phx-click="retry_publish"
+      phx-value-post_id={@post_id}
+      phx-disable-with="Retrying..."
+      data-role="social-account-fix"
+      data-fix="retry"
+    >
+      Retry publish
+    </button>
+    """
+  end
+
+  # Only for a CONNECTED account (an Instagram personal account): any other
+  # state already shows Connect/Reconnect on the row.
+  defp reason_fix(%{fix: :connect, account: %{status: "connected"}, can_connect?: true} = assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="btn btn-outline btn-sm shrink-0 max-sm:w-full"
+      phx-click="connect_account"
+      phx-value-id={@account.id}
+      data-role="social-account-fix"
+      data-fix="connect"
+    >
+      Reconnect
+    </button>
+    """
+  end
+
+  defp reason_fix(assigns), do: ~H""
+
+  # "2d ago": minutes under an hour, hours under a day, then days.
+  defp ago(%DateTime{} = at) do
+    seconds = max(DateTime.diff(DateTime.utc_now(), at), 0)
+
+    cond do
+      seconds < 60 -> "just now"
+      seconds < 3_600 -> "#{div(seconds, 60)}m ago"
+      seconds < 86_400 -> "#{div(seconds, 3_600)}h ago"
+      true -> "#{div(seconds, 86_400)}d ago"
+    end
   end
 
   attr :invite, :map, required: true

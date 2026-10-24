@@ -105,6 +105,7 @@ defmodule Platform.Social.Publishing do
       end)
 
     terminal_written(result, post_id)
+    |> alert_disconnect(post_id, result_reason(result))
     |> set_cover_after_publish()
   end
 
@@ -623,6 +624,7 @@ defmodule Platform.Social.Publishing do
       end)
 
     terminal_written(result, id)
+    |> alert_disconnect(id, outcome)
     |> set_cover_after_publish()
   end
 
@@ -690,6 +692,26 @@ defmodule Platform.Social.Publishing do
     result
   end
 
+  # Social authoring 9/11: a committed failure the adapter classified as the
+  # platform account losing its authorization marks the account and alerts
+  # its approvers ONCE (`Platform.Social.Health.account_disconnected/2`
+  # dedupes on the account), after the transaction.
+  defp alert_disconnect(result, post_id, reason) do
+    with true <- failed_write?(result) and Platform.Social.Health.auth_failure?(reason),
+         %Post{account_id: account_id, error: error} <- Repo.get(Post, post_id) do
+      Platform.Social.Health.account_disconnected(account_id, error)
+    end
+
+    result
+  end
+
+  defp failed_write?({:ok, %Post{status: "failed"}}), do: true
+  defp failed_write?({:error, {:publish_failed, _}}), do: true
+  defp failed_write?(_result), do: false
+
+  defp result_reason({:error, {:publish_failed, reason}}), do: reason
+  defp result_reason(_result), do: nil
+
   defp terminal?({:ok, %Post{status: status}}), do: status in ~w(published failed)
   defp terminal?({:error, {:publish_failed, _}}), do: true
   defp terminal?(_result), do: false
@@ -711,6 +733,11 @@ defmodule Platform.Social.Publishing do
   defp readable(reason) when is_binary(reason), do: String.slice(reason, 0, @max_error_length)
   defp readable(:rate_limited), do: "rate limited by the vendor"
   defp readable(:credentials_unavailable), do: "the account's credentials are unavailable"
+
+  defp readable(:account_disconnected),
+    do: "the platform disconnected this account; reconnect it in Connections"
+
+  defp readable({:account_disconnected, message}) when is_binary(message), do: readable(message)
 
   defp readable(reason) when is_atom(reason),
     do: reason |> Atom.to_string() |> String.replace("_", " ")

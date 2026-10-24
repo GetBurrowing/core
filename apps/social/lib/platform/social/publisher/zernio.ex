@@ -602,6 +602,21 @@ defmodule Platform.Social.Publisher.Zernio do
     Enum.find_value(headers, fn {k, v} -> if String.downcase(to_string(k)) == name, do: v end)
   end
 
+  # Social authoring 9/11: account events (OpenAPI v1.350.1,
+  # https://zernio.com/openapi.json, `WebhookPayloadAccountDisconnected` /
+  # `WebhookPayloadAccountConnected`): `account.accountId` is our
+  # `provider_account_ref`; a disconnect carries a human-readable `reason`.
+  defp event(%{"event" => name, "account" => %{} = account} = payload, header_event_id)
+       when name in ["account.disconnected", "account.connected"] do
+    %{
+      event_id: payload["id"] || header_event_id,
+      kind:
+        if(name == "account.disconnected", do: :account_disconnected, else: :account_connected),
+      account_ref: blank_to_nil(account["accountId"]),
+      error: if(name == "account.disconnected", do: blank_to_nil(account["reason"]))
+    }
+  end
+
   defp event(payload, header_event_id) do
     post = if is_map(payload["post"]), do: payload["post"], else: %{}
     entry = webhook_entry(post)
@@ -613,7 +628,10 @@ defmodule Platform.Social.Publisher.Zernio do
       kind: kind,
       external_url: if(kind == :published, do: blank_to_nil(entry && entry["publishedUrl"])),
       platform_post_id: platform_post_id(entry),
-      error: error
+      error: error,
+      # `errorCategory` `auth_expired`: the token expired or was revoked
+      # (OpenAPI v1.350.1), i.e. the account must be reconnected.
+      auth?: kind == :failed and is_map(entry) and entry["errorCategory"] == "auth_expired"
     }
   end
 
