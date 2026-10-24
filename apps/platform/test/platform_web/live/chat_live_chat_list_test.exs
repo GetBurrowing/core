@@ -442,35 +442,38 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert SpaceTopics.held_by?(lv_socket(view), w.alpha.id, :chat_rail)
 
       row = "#chat-list [data-role='chat-list-row'][data-space-id='#{w.alpha.id}']"
-      refute has_element?(view, "#{row} [data-role='chat-list-unread-dot']")
+      refute has_element?(view, "#{row} [data-role='chat-list-unread-count']")
 
       say!(w.alpha, w.poster, "fresh news after leaving")
 
-      assert has_element?(
-               view,
-               "#{row} [data-role='chat-list-unread-dot'][aria-label='1 unread']"
-             )
+      # A dense channel row: the count pill, never the dot.
+      assert view |> element("#{row} [data-role='chat-list-unread-count']") |> render() =~
+               "1 unread"
 
-      assert view |> element("#{row} [data-role='chat-list-excerpt']") |> render() =~
-               "Priya: fresh news after leaving"
+      refute has_element?(view, "#{row} [data-role='chat-list-unread-dot']")
 
-      # The unread excerpt switches to body text.
-      assert has_element?(view, "#{row} [data-role='chat-list-excerpt'].text-base-content")
+      # The excerpt still updates (recency order reads it) but the channel
+      # row draws no preview.
+      _ = render(view)
+      assert lv_assigns(view).list_excerpts[w.alpha.id].content == "fresh news after leaving"
+      refute has_element?(view, "#{row} [data-role='chat-list-excerpt']")
     end
 
     test "a deleted newest message falls back to the previous excerpt", %{conn: conn} do
       w = world(conn)
-      newest = say!(w.alpha, w.poster, "about to vanish")
+      {dm, _me, moore} = dm!(w.user, "Vale")
+      _older = say!(dm, moore, "the older line")
+      newest = say!(dm, moore, "about to vanish")
       {:ok, view, _} = live(w.conn, ~p"/chat")
 
-      excerpt = "#chat-list [data-space-id='#{w.alpha.id}'] [data-role='chat-list-excerpt']"
+      excerpt = "#chat-list [data-space-id='#{dm.id}'] [data-role='chat-list-excerpt']"
       assert view |> element(excerpt) |> render() =~ "about to vanish"
 
       {:ok, _} = Chat.delete_message(newest)
       _ = render(view)
 
       html = view |> element(excerpt) |> render()
-      assert html =~ "the alpha headline"
+      assert html =~ "the older line"
       refute html =~ "about to vanish"
     end
 
@@ -513,16 +516,21 @@ defmodule PlatformWeb.ChatLiveChatListTest do
   # ── excerpts ────────────────────────────────────────────────────────────
 
   describe "excerpts" do
-    test "a channel reads '<author>: <content>', a DM the content only", %{conn: conn} do
+    test "a group reads '<author>: <content>', a DM the content only", %{conn: conn} do
       w = world(conn)
+      {:ok, group} = Chat.create_space(%{kind: "group"})
+      _ = join!(group, w.user.id, w.user.name)
+      sam = join!(group, Ecto.UUID.generate(), "Sam")
+      _ = join!(group, Ecto.UUID.generate(), "Alex")
+      say!(group, sam, "who has the demo laptop?")
       {:ok, view, _} = live(w.conn, ~p"/chat")
 
-      channel_excerpt =
+      group_excerpt =
         view
-        |> element("#chat-list [data-space-id='#{w.alpha.id}'] [data-role='chat-list-excerpt']")
+        |> element("#chat-list [data-space-id='#{group.id}'] [data-role='chat-list-excerpt']")
         |> render()
 
-      assert channel_excerpt =~ "Priya: the alpha headline"
+      assert group_excerpt =~ "Sam: who has the demo laptop?"
 
       dm_excerpt =
         view
@@ -532,16 +540,22 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert dm_excerpt =~ "a direct hello"
       refute dm_excerpt =~ "Moore:"
 
-      # A channel with no message has no excerpt and no time.
-      refute has_element?(
-               view,
-               "#chat-list [data-space-id='#{w.beta.id}'] [data-role='chat-list-excerpt']"
-             )
-
       assert has_element?(
                view,
-               "#chat-list time[phx-hook='LocalTime']#chat-list-time-#{w.alpha.id}"
+               "#chat-list time[phx-hook='LocalTime']#chat-list-time-#{w.dm.id}"
              )
+
+      # A channel row is dense: no excerpt and no time, even with a message.
+      for id <- [w.alpha.id, w.beta.id] do
+        refute has_element?(
+                 view,
+                 "#chat-list [data-space-id='#{id}'] [data-role='chat-list-excerpt']"
+               )
+
+        refute has_element?(view, "#chat-list-time-#{id}")
+      end
+
+      refute list_html(view) =~ "the alpha headline"
     end
 
     test "an agent DM whose agent has a blank avatar and no colour falls back as the rail does",
@@ -595,9 +609,10 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       marker = "finance-secret-#{System.unique_integer([:positive])}"
       say!(finance, admin_p, marker)
 
-      # Positive control: before the restriction the member's list shows it.
+      # Positive control: before the restriction the member's list loads its
+      # excerpt (a dense channel row draws none, but the order reads it).
       {:ok, before, _} = live(login(conn, member.id), ~p"/chat")
-      assert list_html(before) =~ marker
+      assert lv_assigns(before).list_excerpts[finance.id].content == marker
 
       {:ok, _} = Restrictions.restrict_space(finance, ["admin"], admin.id)
 
@@ -613,6 +628,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert LazyHTML.query(row, "a, button") |> Enum.count() == 0
       assert LazyHTML.text(row) =~ "Restricted, ask an admin"
       refute html =~ marker
+      refute Map.has_key?(lv_assigns(view).list_excerpts, finance.id)
     end
   end
 
@@ -628,11 +644,20 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       off = list_html(view)
       Platform.MaskAssertions.assert_name_anywhere(off, "Globex")
 
-      for s <- ["zebra crossing numbers", "yonder project notes", "xylophone practice"] do
-        assert off =~ s
-      end
+      # Channel rows are dense (no excerpt, no disc), so only the DM's
+      # excerpt can carry text into the list.
+      assert off =~ "xylophone practice"
+      refute off =~ "zebra crossing numbers"
 
-      assert avatar_text(off, w.org_named.id) == "G"
+      assert has_element?(
+               view,
+               "#chat-list [data-space-id='#{w.org_named.id}'] [data-glyph='hash']"
+             )
+
+      refute has_element?(
+               view,
+               "#chat-list [data-space-id='#{w.org_named.id}'] [data-role='chat-list-avatar']"
+             )
 
       mask(view, true)
       on = list_html(view)
@@ -643,25 +668,29 @@ defmodule PlatformWeb.ChatLiveChatListTest do
         refute on =~ s, "excerpt text #{inspect(s)} leaked with the mask on"
       end
 
-      # Every excerpt is the SAME fixed-length placeholder.
-      placeholder = ChatList.masked_excerpt()
+      # The DM's excerpt is the fixed-length placeholder.
+      excerpt =
+        view
+        |> element("#chat-list [data-space-id='#{w.dm.id}'] [data-role='chat-list-excerpt']")
+        |> render()
 
-      for id <- [w.org_named.id, w.atlas.id, w.dm.id] do
-        excerpt =
-          view
-          |> element("#chat-list [data-space-id='#{id}'] [data-role='chat-list-excerpt']")
-          |> render()
+      assert excerpt =~ ChatList.masked_excerpt()
 
-        assert excerpt =~ placeholder
+      # A masked channel row keeps its glyph (it spells nothing) and still
+      # draws no disc and no excerpt.
+      for id <- [w.org_named.id, w.atlas.id] do
+        assert has_element?(view, "#chat-list [data-space-id='#{id}'] [data-glyph='hash']")
+
+        refute has_element?(
+                 view,
+                 "#chat-list [data-space-id='#{id}'] [data-role='chat-list-avatar']"
+               )
+
+        refute has_element?(
+                 view,
+                 "#chat-list [data-space-id='#{id}'] [data-role='chat-list-excerpt']"
+               )
       end
-
-      # The masked row's avatar is a neutral disc with no initial.
-      assert has_element?(
-               view,
-               "#chat-list [data-space-id='#{w.org_named.id}'] [data-avatar='masked']"
-             )
-
-      assert avatar_text(on, w.org_named.id) == ""
     end
 
     test "masked: a project-code channel and a person's name stay verbatim", %{conn: conn} do
@@ -674,7 +703,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       # cannot infer a project code, and a DM's person names no org.
       assert on =~ "atlas"
       assert on =~ "Moore Person"
-      assert avatar_text(on, w.atlas.id) == "A"
+      assert has_element?(view, "#chat-list [data-space-id='#{w.atlas.id}'] [data-glyph='hash']")
       assert avatar_text(on, w.dm.id) == "M"
     end
   end
@@ -924,7 +953,15 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert ids_in(html, "[data-role='chat-list-search-channels'] [data-role='chat-list-row']") ==
                [w.alpha.id]
 
-      assert html =~ "Priya: the alpha headline"
+      # A channel result is the dense row: the glyph, no excerpt.
+      assert html
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(
+               "[data-role='chat-list-search-channels'] [data-role='chat-list-row'][data-row-shape='dense'] [data-glyph='hash']"
+             )
+             |> Enum.count() == 1
+
+      refute html =~ "Priya: the alpha headline"
 
       search(view, "moore")
 
@@ -1080,14 +1117,19 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       refute dm_hit =~ "practice"
 
       # A project code is verbatim; the org-derived row is reachable only by
-      # its placeholder, and draws the neutral disc.
+      # its placeholder, and is the dense row: glyph, no disc.
       search(view, "atlas")
       assert sheet_html(view, "search") =~ "atlas"
       search(view, "workspace")
 
       assert has_element?(
                view,
-               "#chat-list-search-sheet [data-space-id='#{w.org_named.id}'] [data-avatar='masked']"
+               "#chat-list-search-sheet [data-space-id='#{w.org_named.id}'] [data-glyph='hash']"
+             )
+
+      refute has_element?(
+               view,
+               "#chat-list-search-sheet [data-space-id='#{w.org_named.id}'] [data-role='chat-list-avatar']"
              )
 
       search(view, "globex")
@@ -1429,6 +1471,158 @@ defmodule PlatformWeb.ChatLiveChatListTest do
     end
   end
 
+  # ── dense channel rows (Slack # / lock) ─────────────────────────────────
+
+  defp row_sel(id), do: "#chat-list-row-#{id}"
+
+  defp restricted_world(conn) do
+    org = acme()
+    member = member!()
+    admin = create_user!()
+    plain_member!(admin, org, "admin")
+    vault = channel_in(org, "Vault")
+    {:ok, _} = Restrictions.restrict_space(vault, ["admin"], admin.id)
+    open = channel_in(org, "Lobby")
+    %{conn: conn, member: member, admin: admin, vault: vault, open: open}
+  end
+
+  describe "dense channel rows" do
+    test "a channel row is one line: a # glyph and the name, no disc, no time, no preview",
+         %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      row = row_sel(w.alpha.id)
+
+      # Positive control: alpha HAS a newest message (the order reads it).
+      assert lv_assigns(view).list_excerpts[w.alpha.id].content == "the alpha headline"
+
+      assert has_element?(view, "#{row}[data-row-shape='dense'].min-h-11")
+
+      assert has_element?(
+               view,
+               "#{row} [data-role='chat-list-glyph'][data-glyph='hash'].hero-hashtag.text-subtle"
+             )
+
+      assert view |> element("#{row} [data-role='chat-list-row-name']") |> render() =~ "Alpha"
+      refute has_element?(view, "#{row} [data-role='chat-list-avatar']")
+      refute has_element?(view, "#{row} [data-role='chat-list-excerpt']")
+      refute has_element?(view, "#{row} [data-role='chat-list-row-time']")
+      refute has_element?(view, "#{row} .hero-lock-closed")
+      refute list_html(view) =~ "the alpha headline"
+    end
+
+    test "a private channel the reader can open shows the lock, not #", %{conn: conn} do
+      w = restricted_world(conn)
+      {:ok, view, _} = live(login(w.conn, w.admin.id), ~p"/chat")
+
+      assert MapSet.member?(lv_assigns(view).list_private_ids, w.vault.id)
+      refute MapSet.member?(lv_assigns(view).restricted_channel_ids, w.vault.id)
+
+      assert has_element?(
+               view,
+               "#{row_sel(w.vault.id)} [data-glyph='lock'].hero-lock-closed"
+             )
+
+      refute has_element?(view, "#{row_sel(w.vault.id)} .hero-hashtag")
+      assert view |> element(row_sel(w.vault.id)) |> render() =~ "Private channel"
+
+      # Control: an unrestricted channel on the same list keeps #.
+      assert has_element?(view, "#{row_sel(w.open.id)} [data-glyph='hash'].hero-hashtag")
+      refute MapSet.member?(lv_assigns(view).list_private_ids, w.open.id)
+    end
+
+    test "a restricted channel shows the no-entry marker, never the lock", %{conn: conn} do
+      w = restricted_world(conn)
+      {:ok, view, _} = live(login(w.conn, w.member.id), ~p"/chat")
+
+      assert MapSet.member?(lv_assigns(view).restricted_channel_ids, w.vault.id)
+      refute MapSet.member?(lv_assigns(view).list_private_ids, w.vault.id)
+
+      row = "#chat-list [data-role='restricted-channel-row'][data-space-id='#{w.vault.id}']"
+
+      assert has_element?(
+               view,
+               "#{row} [data-glyph='restricted'].hero-no-symbol.text-subtle"
+             )
+
+      refute has_element?(view, "#{row} [class*='hero-lock']")
+      refute has_element?(view, "#{row} [data-role='chat-list-avatar']")
+      refute has_element?(view, "#chat-list-row-#{w.vault.id}")
+    end
+
+    test "a group draws hero-user-group in the avatar column and keeps its preview",
+         %{conn: conn} do
+      w = world(conn)
+      {:ok, group} = Chat.create_space(%{kind: "group"})
+      _ = join!(group, w.user.id, w.user.name)
+      sam = join!(group, Ecto.UUID.generate(), "Sam")
+      _ = join!(group, Ecto.UUID.generate(), "Alex")
+      say!(group, sam, "who has the demo laptop?")
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      row = row_sel(group.id)
+
+      assert has_element?(
+               view,
+               "#{row} [data-role='chat-list-avatar'][data-avatar='group'] .hero-user-group"
+             )
+
+      refute has_element?(view, "#{row} [data-avatar='initial']")
+      refute has_element?(view, "#{row} [data-role='chat-list-glyph']")
+
+      assert view |> element("#{row} [data-role='chat-list-excerpt']") |> render() =~
+               "Sam: who has the demo laptop?"
+    end
+
+    test "a DM keeps its avatar, time and preview", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+      row = row_sel(w.dm.id)
+
+      refute has_element?(view, "#{row}[data-row-shape='dense']")
+      assert has_element?(view, "#{row} [data-role='chat-list-avatar'][data-avatar='initial']")
+      assert avatar_text(list_html(view), w.dm.id) == "M"
+      assert has_element?(view, "#{row} [data-role='chat-list-row-time']")
+
+      assert view |> element("#{row} [data-role='chat-list-excerpt']") |> render() =~
+               "a direct hello"
+
+      refute has_element?(view, "#{row} [data-role='chat-list-glyph']")
+    end
+
+    test "unread: bold name, solid base-content glyph and a neutral count; read: none of it",
+         %{conn: conn} do
+      w = world(conn)
+      _ = join!(w.alpha, w.user.id, w.user.name)
+      _ = join!(w.beta, w.user.id, w.user.name)
+      # The fixture's headline plus two more: three unread.
+      for n <- 1..2, do: say!(w.alpha, w.poster, "news #{n}")
+      {:ok, view, _} = live(w.conn, ~p"/chat")
+
+      assert lv_assigns(view).unread_counts[w.alpha.id] == 3
+      refute Map.has_key?(lv_assigns(view).unread_counts, w.beta.id)
+
+      unread = row_sel(w.alpha.id)
+      assert has_element?(view, "#{name_sel(w.alpha.id)}.font-semibold")
+
+      assert has_element?(
+               view,
+               "#{unread} [data-glyph='hash'].hero-hashtag-solid.text-base-content"
+             )
+
+      count = "#{unread} [data-role='chat-list-unread-count']"
+      assert has_element?(view, "#{count}.bg-base-300.text-base-content")
+      refute has_element?(view, "#{count}[class*='primary']")
+      assert view |> element(count) |> render() =~ ">3<"
+      refute has_element?(view, "#{unread} [data-role='chat-list-unread-dot']")
+
+      read = row_sel(w.beta.id)
+      assert has_element?(view, "#{name_sel(w.beta.id)}.font-normal")
+      assert has_element?(view, "#{read} [data-glyph='hash'].hero-hashtag.text-subtle")
+      refute has_element?(view, "#{read} .hero-hashtag-solid")
+      refute has_element?(view, "#{read} [data-role='chat-list-unread-count']")
+    end
+  end
+
   describe "no manual order" do
     test "no Edit order entry point in the phone list or row sheet", %{conn: conn} do
       w = world(conn)
@@ -1650,10 +1844,15 @@ defmodule PlatformWeb.ChatLiveChatListTest do
 
   defp spaces_order(view, mine), do: view |> list_html() |> ids_in(@spaces_rows) |> keep(mine)
 
-  defp excerpt_html(view, space_id) do
-    view
-    |> element("#chat-list-row-#{space_id} [data-role='chat-list-excerpt']")
-    |> render()
+  # Channel rows are dense and draw no excerpt, so the live excerpt is read
+  # from the assign the order is computed from.
+  defp excerpt_content(view, space_id) do
+    _ = render(view)
+
+    case lv_assigns(view).list_excerpts[space_id] do
+      %{content: content} -> content
+      _ -> nil
+    end
   end
 
   describe "order hold" do
@@ -1670,18 +1869,22 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       {:ok, view, _} = live(w.conn, ~p"/chat")
       mine = [w.alpha.id, w.beta.id]
       assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
-      refute has_element?(view, "#chat-list-row-#{w.beta.id} [data-role='chat-list-excerpt']")
+      assert excerpt_content(view, w.beta.id) == nil
 
       hold(view)
       other = join!(w.beta, Ecto.UUID.generate(), "Riley")
       say!(w.beta, other, "beta wakes up while held")
       _ = render(view)
 
-      # Order frozen; excerpt, weight and dot live.
+      # Order frozen; excerpt, weight and count live.
       assert spaces_order(view, mine) == [w.alpha.id, w.beta.id]
-      assert excerpt_html(view, w.beta.id) =~ "beta wakes up while held"
+      assert excerpt_content(view, w.beta.id) == "beta wakes up while held"
       assert has_element?(view, "#{name_sel(w.beta.id)}.font-semibold")
-      assert has_element?(view, "#chat-list-row-#{w.beta.id} [data-role='chat-list-unread-dot']")
+
+      assert has_element?(
+               view,
+               "#chat-list-row-#{w.beta.id} [data-role='chat-list-unread-count']"
+             )
 
       # A second hold inside the same gesture keeps the first snapshot.
       hold(view)
@@ -1778,7 +1981,7 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       mine = [w.alpha.id, w.beta.id, fresh.id]
       assert spaces_order(view, mine) == [w.alpha.id, w.beta.id, fresh.id]
       assert List.last(view |> list_html() |> ids_in(@spaces_rows)) == fresh.id
-      assert excerpt_html(view, fresh.id) =~ "a fresh channel speaks"
+      assert excerpt_content(view, fresh.id) == "a fresh channel speaks"
 
       release(view)
       assert spaces_order(view, mine) == [fresh.id, w.alpha.id, w.beta.id]

@@ -33,11 +33,33 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   alias Platform.Chat
   alias Platform.Chat.Participant
 
-  @doc "Load `@list_excerpts` and `@list_identities` for the list's spaces."
+  @doc """
+  Load `@list_excerpts`, `@list_identities` and `@list_private_ids` for the
+  list's spaces.
+  """
   def assign_all(socket) do
     socket
     |> assign(:list_excerpts, load_excerpts(socket.assigns))
     |> assign(:list_identities, load_identities(socket.assigns))
+    |> assign(:list_private_ids, load_private_ids(socket.assigns))
+  end
+
+  @doc """
+  The private channels the reader CAN open, as a MapSet of ids: a channel
+  carrying a role restriction (`Platform.Access.Restrictions`) that is not in
+  `@restricted_channel_ids`. The list draws a lock for these and a `#` for
+  every other channel; a channel the reader cannot open keeps the restricted
+  row and its own marker, so "private" and "restricted" never share a glyph.
+  """
+  def load_private_ids(assigns) do
+    restricted = assigns[:restricted_channel_ids] || MapSet.new()
+
+    (List.wrap(assigns[:channels]) ++ List.wrap(assigns[:archived_channels]))
+    |> Enum.filter(&(Map.get(&1, :kind) == "channel"))
+    |> Enum.map(& &1.id)
+    |> Enum.uniq()
+    |> Platform.Access.Restrictions.gated_space_ids()
+    |> MapSet.difference(restricted)
   end
 
   @doc """

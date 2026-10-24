@@ -99,6 +99,33 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   `text-subtle` read. Two weights only (400, 600). The desktop rail applies
   the same weight rule to its names (`Partials.Rail`).
 
+  ## Channel rows (dense, Slack # / lock)
+
+  The product owner's pick from canvas 01a16e53 (options 5 "No icon (dense)"
+  and 2 "Slack # / lock"). A row is DENSE when the row is a channel row and
+  the space is `kind: "channel"` (`dense_row?/2`): one line, at least 44px
+  from `min-h-11`, indented `pl-7` under the section header as option 5 is,
+  an 18px glyph, the name, and on unread a count pill in neutral tokens
+  (base-content on base-300, never primary). No disc, no time, no excerpt;
+  the excerpt is still loaded, because recency order reads it.
+
+    * `#` (`hero-hashtag`) for a channel anyone can open.
+    * a lock (`hero-lock-closed`) for a PRIVATE channel: one carrying a role
+      restriction (`Platform.Access.Restrictions`) that the reader passes,
+      `@list_private_ids` (`ChatListData.load_private_ids/1`).
+    * `hero-no-symbol` for a RESTRICTED channel the reader cannot open,
+      unlinked, so it never shares the lock with "private".
+
+  Unread draws the glyph solid and base-content, as the name goes semibold;
+  read is the outline glyph in `text-subtle`.
+
+  Everything else keeps the 42px avatar, time and excerpt: DMs, agent DMs
+  (accent ring), the Agents row (a derived entry led by its agent), pinned
+  task conversations (check disc), and any non-channel space in a channel
+  row (an execution or system space keeps its initial disc: `#` claims
+  "channel"). A group (`kind: "group"`) draws `hero-user-group` in the disc,
+  so "Sam, Alex" stops reading as a DM.
+
   ## THE MASKING ATTRS ARE NOT OPTIONAL
 
   `ChatLive.masked_space_name/2` reads `:sidebar_sections`, `:mask_names?` and
@@ -157,6 +184,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:unread_counts, :map, required: true)
   attr(:list_excerpts, :map, required: true)
   attr(:list_identities, :map, required: true)
+  # Private channels the reader can open: the lock glyph (`## Channel rows`).
+  attr(:list_private_ids, :any, required: true)
   # The phone fold keys from `chat_collapsed_sections` (stage 3, `## Folding`).
   attr(:list_collapsed, :any, required: true)
   # The held order, or nil (stage 4, `## Holding the order`).
@@ -262,6 +291,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                     excerpt={Map.get(@list_excerpts, space.id)}
                     mask_assigns={@mask_assigns}
                     restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
+                    private?={MapSet.member?(@list_private_ids, space.id)}
                     long_press={kind != :task}
                   />
                 <% end %>
@@ -294,6 +324,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       excerpt={Map.get(@list_excerpts, space.id)}
                       mask_assigns={@mask_assigns}
                       restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
+                      private?={MapSet.member?(@list_private_ids, space.id)}
                       long_press
                     />
                   <% end %>
@@ -354,6 +385,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   excerpt={Map.get(@list_excerpts, space.id)}
                   mask_assigns={@mask_assigns}
                   restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
+                  private?={MapSet.member?(@list_private_ids, space.id)}
                   long_press={false}
                 />
               <% end %>
@@ -370,6 +402,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         dm_conversations={@dm_conversations}
         archived_channels={@archived_channels}
         restricted_channel_ids={@restricted_channel_ids}
+        list_private_ids={@list_private_ids}
         unread_counts={@unread_counts}
         list_excerpts={@list_excerpts}
         list_identities={@list_identities}
@@ -420,6 +453,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:dm_conversations, :list, required: true)
   attr(:archived_channels, :list, required: true)
   attr(:restricted_channel_ids, :any, required: true)
+  attr(:list_private_ids, :any, required: true)
   attr(:unread_counts, :map, required: true)
   attr(:list_excerpts, :map, required: true)
   attr(:list_identities, :map, required: true)
@@ -495,6 +529,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                 list_identities={@list_identities}
                 mask_assigns={@mask_assigns}
                 restricted_channel_ids={@restricted_channel_ids}
+                list_private_ids={@list_private_ids}
               />
             </section>
           <% else %>
@@ -508,6 +543,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                 list_identities={@list_identities}
                 mask_assigns={@mask_assigns}
                 restricted_channel_ids={@restricted_channel_ids}
+                list_private_ids={@list_private_ids}
               />
             </section>
             <section :if={@results.dms != []} data-role="chat-list-search-direct">
@@ -520,6 +556,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                 list_identities={@list_identities}
                 mask_assigns={@mask_assigns}
                 restricted_channel_ids={@restricted_channel_ids}
+                list_private_ids={@list_private_ids}
               />
             </section>
             <section :if={@results.messages != []} data-role="chat-list-search-messages">
@@ -553,6 +590,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:list_identities, :map, required: true)
   attr(:mask_assigns, :map, required: true)
   attr(:restricted_channel_ids, :any, required: true)
+  attr(:list_private_ids, :any, required: true)
 
   # A channel or conversation result: the list's own row, with the sheet's
   # pressed paint and its own DOM ids.
@@ -570,6 +608,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       excerpt={Map.get(@list_excerpts, @space.id)}
       mask_assigns={@mask_assigns}
       restricted?={MapSet.member?(@restricted_channel_ids, @space.id)}
+      private?={MapSet.member?(@list_private_ids, @space.id)}
       pressed="active:bg-base-200"
       id_prefix="chat-list-search"
     />
@@ -926,6 +965,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:excerpt, :any, required: true)
   attr(:mask_assigns, :map, required: true)
   attr(:restricted?, :boolean, required: true)
+  # A role-gated channel the reader can open (`ChatListData.load_private_ids/1`):
+  # the lock glyph instead of `#`. Only read on a dense channel row.
+  attr(:private?, :boolean, default: false)
   # The pressed ground: base-100 on the base-200 list, base-200 inside a
   # base-100 sheet (the More sheet's paint).
   attr(:pressed, :string, default: "active:bg-base-100")
@@ -937,7 +979,11 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:long_press, :boolean, default: false)
 
   # One row. The whole row is the link (at least 44px tall), with no
-  # phx-click. Name `min-w-0 truncate`; time and dot never shrink.
+  # phx-click. Name `min-w-0 truncate`; time, dot and count never shrink.
+  #
+  # Two shapes (`## Channel rows` in the moduledoc): a channel-kind space is
+  # DENSE (glyph, name, unread count, one line); everything else keeps the
+  # 42px avatar, the time and the excerpt.
   defp row(assigns) do
     shown = ChatLive.masked_space_name(assigns.mask_assigns, assigns.name)
     masked? = assigns.mask_assigns[:mask_names?] == true
@@ -948,115 +994,184 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       |> assign(:name_masked?, shown != assigns.name)
       |> assign(:excerpts_masked?, masked?)
       |> assign(:unread_text, unread_label(assigns.unread))
+      |> assign(:dense?, dense_row?(assigns.kind, assigns.space))
+      |> assign(:group?, Map.get(assigns.space, :kind) == "group")
 
     ~H"""
-    <%= if @restricted? do %>
-      <div
-        data-role="restricted-channel-row"
-        data-space-id={@space.id}
-        aria-disabled="true"
-        class="flex min-h-11 items-center gap-3 px-4 py-3"
-      >
-        <span
-          class="flex size-[42px] shrink-0 items-center justify-center rounded-full bg-base-300 text-subtle"
-          aria-hidden="true"
+    <%= cond do %>
+      <% @restricted? -> %>
+        <%!-- A channel the reader cannot open: no link, and a no-entry
+             marker, never the lock (the lock means "private, and yours"). --%>
+        <div
+          data-role="restricted-channel-row"
+          data-space-id={@space.id}
+          aria-disabled="true"
+          class="flex min-h-11 items-center gap-2 pl-7 pr-4"
         >
-          <span class="hero-lock-closed size-5"></span>
-        </span>
-        <span class="min-w-0 flex-1">
-          <span class="block truncate text-[15px] font-normal text-base-content">
+          <span
+            data-role="chat-list-glyph"
+            data-glyph="restricted"
+            class="hero-no-symbol size-[18px] shrink-0 text-subtle"
+            aria-hidden="true"
+          >
+          </span>
+          <span class="min-w-0 flex-1 truncate text-[15px] font-normal text-base-content">
             {@shown_name}
           </span>
-          <span class="block truncate text-[13px] text-subtle">Restricted, ask an admin</span>
-        </span>
-      </div>
-    <% else %>
-      <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
-        <.link
-          id={"#{@id_prefix}-row-#{@space.id}"}
-          patch={~p"/chat/#{ChatLive.space_nav_target(@space)}"}
-          data-role="chat-list-row"
-          data-space-id={@space.id}
-          data-row-kind={@kind}
-          data-unread={to_string(@unread > 0)}
-          phx-hook={@long_press && "RowLongPress"}
-          data-long-press-event={@long_press && "open_list_sheet"}
-          data-long-press-sheet={@long_press && "row"}
-          data-long-press-space-id={@long_press && @space.id}
-          class={[
-            "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
-            @pressed
-          ]}
-        >
-          <.avatar
-            kind={@kind}
-            name={@name}
-            agent={@agent}
-            masked?={@name_masked?}
-          />
-          <span class="min-w-0 flex-1">
-            <span class="flex items-baseline gap-2">
-              <span
-                data-role="chat-list-row-name"
-                class={[
-                  "min-w-0 flex-1 truncate text-[15px] text-base-content",
-                  if(@unread > 0, do: "font-semibold", else: "font-normal")
-                ]}
-              >
-                {@shown_name}
+          <span class="shrink-0 text-xs text-subtle">Restricted, ask an admin</span>
+        </div>
+      <% @dense? -> %>
+        <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
+          <.link
+            id={"#{@id_prefix}-row-#{@space.id}"}
+            patch={~p"/chat/#{ChatLive.space_nav_target(@space)}"}
+            data-role="chat-list-row"
+            data-space-id={@space.id}
+            data-row-kind={@kind}
+            data-row-shape="dense"
+            data-unread={to_string(@unread > 0)}
+            phx-hook={@long_press && "RowLongPress"}
+            data-long-press-event={@long_press && "open_list_sheet"}
+            data-long-press-sheet={@long_press && "row"}
+            data-long-press-space-id={@long_press && @space.id}
+            class={[
+              "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-7 pr-4 focus-visible-ring",
+              @pressed
+            ]}
+          >
+            <span
+              data-role="chat-list-glyph"
+              data-glyph={if(@private?, do: "lock", else: "hash")}
+              class={[
+                channel_glyph(@private?, @unread > 0),
+                "size-[18px] shrink-0",
+                if(@unread > 0, do: "text-base-content", else: "text-subtle")
+              ]}
+              aria-hidden="true"
+            >
+            </span>
+            <span :if={@private?} class="sr-only">Private channel</span>
+            <span
+              data-role="chat-list-row-name"
+              class={[
+                "min-w-0 flex-1 truncate text-[15px] text-base-content",
+                if(@unread > 0, do: "font-semibold", else: "font-normal")
+              ]}
+            >
+              {@shown_name}
+            </span>
+            <span
+              :if={@unread_text}
+              data-role="chat-list-unread-count"
+              class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-base-300 px-1.5 text-xs font-semibold tabular-nums text-base-content"
+            >
+              <span aria-hidden="true">{@unread_text}</span>
+              <span class="sr-only">{@unread_text} unread</span>
+            </span>
+          </.link>
+        </div>
+      <% true -> %>
+        <div class="flex items-center" data-role="chat-list-row-wrap" data-space-id={@space.id}>
+          <.link
+            id={"#{@id_prefix}-row-#{@space.id}"}
+            patch={~p"/chat/#{ChatLive.space_nav_target(@space)}"}
+            data-role="chat-list-row"
+            data-space-id={@space.id}
+            data-row-kind={@kind}
+            data-unread={to_string(@unread > 0)}
+            phx-hook={@long_press && "RowLongPress"}
+            data-long-press-event={@long_press && "open_list_sheet"}
+            data-long-press-sheet={@long_press && "row"}
+            data-long-press-space-id={@long_press && @space.id}
+            class={[
+              "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
+              @pressed
+            ]}
+          >
+            <.avatar
+              kind={@kind}
+              name={@name}
+              agent={@agent}
+              group?={@group?}
+              masked?={@name_masked?}
+            />
+            <span class="min-w-0 flex-1">
+              <span class="flex items-baseline gap-2">
+                <span
+                  data-role="chat-list-row-name"
+                  class={[
+                    "min-w-0 flex-1 truncate text-[15px] text-base-content",
+                    if(@unread > 0, do: "font-semibold", else: "font-normal")
+                  ]}
+                >
+                  {@shown_name}
+                </span>
+                <time
+                  :if={@excerpt}
+                  id={"#{@id_prefix}-time-#{@space.id}"}
+                  phx-hook="LocalTime"
+                  datetime={DateTime.to_iso8601(@excerpt.inserted_at)}
+                  data-local-time={DateTime.to_iso8601(@excerpt.inserted_at)}
+                  data-role="chat-list-row-time"
+                  class={[
+                    "shrink-0 whitespace-nowrap tabular-nums text-xs",
+                    if(@unread > 0, do: "text-base-content", else: "text-subtle")
+                  ]}
+                >
+                  {Calendar.strftime(@excerpt.inserted_at, "%H:%M")}
+                </time>
               </span>
-              <time
+              <span
                 :if={@excerpt}
-                id={"#{@id_prefix}-time-#{@space.id}"}
-                phx-hook="LocalTime"
-                datetime={DateTime.to_iso8601(@excerpt.inserted_at)}
-                data-local-time={DateTime.to_iso8601(@excerpt.inserted_at)}
-                data-role="chat-list-row-time"
+                data-role="chat-list-excerpt"
                 class={[
-                  "shrink-0 whitespace-nowrap tabular-nums text-xs",
+                  "block truncate text-[13px]",
                   if(@unread > 0, do: "text-base-content", else: "text-subtle")
                 ]}
               >
-                {Calendar.strftime(@excerpt.inserted_at, "%H:%M")}
-              </time>
+                <%= if @excerpts_masked? do %>
+                  <span aria-hidden="true">{masked_excerpt()}</span>
+                  <span class="sr-only">Message hidden</span>
+                <% else %>
+                  {excerpt_text(@kind, @space, @excerpt)}
+                <% end %>
+              </span>
             </span>
             <span
-              :if={@excerpt}
-              data-role="chat-list-excerpt"
-              class={[
-                "block truncate text-[13px]",
-                if(@unread > 0, do: "text-base-content", else: "text-subtle")
-              ]}
+              :if={@unread_text}
+              data-role="chat-list-unread-dot"
+              class="size-2 shrink-0 rounded-full bg-primary"
+              role="img"
+              aria-label={"#{@unread_text} unread"}
             >
-              <%= if @excerpts_masked? do %>
-                <span aria-hidden="true">{masked_excerpt()}</span>
-                <span class="sr-only">Message hidden</span>
-              <% else %>
-                {excerpt_text(@kind, @space, @excerpt)}
-              <% end %>
             </span>
-          </span>
-          <span
-            :if={@unread_text}
-            data-role="chat-list-unread-dot"
-            class="size-2 shrink-0 rounded-full bg-primary"
-            role="img"
-            aria-label={"#{@unread_text} unread"}
-          >
-          </span>
-        </.link>
-      </div>
+          </.link>
+        </div>
     <% end %>
     """
   end
 
+  # Dense iff the ROW is a channel row AND the space is channel-kind. An
+  # execution, system or meeting space that lands in a channel row (a pinned
+  # exec space, say) keeps the avatar shape: the `#` claims "channel".
+  defp dense_row?(:channel, %{kind: "channel"}), do: true
+  defp dense_row?(_kind, _space), do: false
+
+  # Unread draws the glyph heavier (solid), as the name goes semibold.
+  defp channel_glyph(false, false), do: "hero-hashtag"
+  defp channel_glyph(false, true), do: "hero-hashtag-solid"
+  defp channel_glyph(true, false), do: "hero-lock-closed"
+  defp channel_glyph(true, true), do: "hero-lock-closed-solid"
+
   attr(:kind, :atom, required: true)
   attr(:name, :string, required: true)
   attr(:agent, :any, required: true)
+  attr(:group?, :boolean, default: false)
   attr(:masked?, :boolean, required: true)
 
   # 42px disc. Masked: neutral, no initial, no accent. Agent: the agent's
-  # image or initial, ringed in its rung-3 slot. Task: a check glyph.
+  # image or initial, ringed in its rung-3 slot. Group: a people-stack glyph,
+  # so "Sam, Alex" does not read as a DM with Sam. Task: a check glyph.
   # Otherwise the name's first letter (a channel's without its `#`).
   defp avatar(assigns) do
     ~H"""
@@ -1085,6 +1200,15 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             loading="lazy"
           />
           <span :if={!@agent.avatar_url}>{initial(@agent.name)}</span>
+        </span>
+      <% @group? -> %>
+        <span
+          data-role="chat-list-avatar"
+          data-avatar="group"
+          class="flex size-[42px] shrink-0 items-center justify-center rounded-full bg-base-300 text-base-content"
+          aria-hidden="true"
+        >
+          <span class="hero-user-group size-5"></span>
         </span>
       <% @kind == :task -> %>
         <span

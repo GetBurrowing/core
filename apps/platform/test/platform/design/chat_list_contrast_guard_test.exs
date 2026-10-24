@@ -29,6 +29,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
   | avatar initial: base-content on base-300          | 4.5   |
   | collapsed count: base-content on base-200 (st. 3) | 4.5   |
   | header label pressed: --subtle on base-100 (painted, stage 3) | 4.5 |
+  | channel unread count: base-content on base-300 (dense rows) | 4.5 |
 
   The last row is not in the stage's list. The avatar is `aria-hidden` and
   the name beside it carries the row, so it is measured as the inventory's
@@ -160,6 +161,9 @@ defmodule Platform.Design.ChatListContrastGuardTest do
       {"collapsed count / base-200", ratio(b, "--color-base-content", "--color-base-200"),
        @aa_text},
       {"header label pressed: subtle / base-100 (painted)", subtle_on(b, "--color-base-100"),
+       @aa_text},
+      # Dense channel rows: the unread count is a neutral pill, never primary.
+      {"channel unread count / base-300", ratio(b, "--color-base-content", "--color-base-300"),
        @aa_text}
     ]
   end
@@ -200,7 +204,7 @@ defmodule Platform.Design.ChatListContrastGuardTest do
 
     assert src =~
              ~S|"shrink-0 whitespace-nowrap tabular-nums text-xs",
-                  if(@unread > 0, do: "text-base-content", else: "text-subtle")|
+                    if(@unread > 0, do: "text-base-content", else: "text-subtle")|
 
     assert length(blocks) == 10
 
@@ -243,6 +247,24 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     failures =
       for b <- blocks,
           r = subtle_on(b, "--color-base-100"),
+          r < @aa_text,
+          do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
+
+    assert failures == []
+  end
+
+  test "channel unread count: base-content on base-300", %{blocks: blocks, source: src} do
+    # The pair assumes the markup: the dense row's count pill is neutral.
+    assert src =~ ~s(data-role="chat-list-unread-count")
+
+    assert src =~
+             "rounded-full bg-base-300 px-1.5 text-xs font-semibold tabular-nums text-base-content"
+
+    assert length(blocks) == 10
+
+    failures =
+      for b <- blocks,
+          r = ratio(b, "--color-base-content", "--color-base-300"),
           r < @aa_text,
           do: "#{b.id} #{b.mode}: #{f4(r)} < #{@aa_text}"
 

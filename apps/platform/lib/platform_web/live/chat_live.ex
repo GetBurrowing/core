@@ -741,10 +741,11 @@ defmodule PlatformWeb.ChatLive do
       # hook may already have reported.
       |> assign(:unread_counts, Chat.unread_counts_for_user(user_id))
       # The phone Chat list's data (task 01a1557a-8562 stage 2). Seeded empty;
-      # `handle_params/3` for `:index` loads both, because that is the only
-      # live action that renders the list, and it runs straight after mount.
-      |> assign(:list_excerpts, %{})
-      |> assign(:list_identities, %{})
+      # `handle_params/3` for `:index` loads all three, because that is the
+      # only live action that renders the list, and it runs straight after
+      # mount. `:list_private_ids` drives the lock glyph on channel rows.
+      |> assign(list_excerpts: %{}, list_identities: %{})
+      |> assign(:list_private_ids, MapSet.new())
       |> PlatformWeb.ChatLive.ViewerHooks.attach()
       # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
       # added by task 01a0419a stage 4). Both booleans are reported by the
