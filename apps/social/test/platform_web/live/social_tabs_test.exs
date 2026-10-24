@@ -75,29 +75,29 @@ defmodule PlatformWeb.SocialTabsTest do
       assert Enum.map(SocialTabs.registry(), & &1.key) ==
                ~w(queue ideas calendar clips results connections settings)
 
-      refute SocialIdeasTab.enabled?()
+      assert SocialIdeasTab.enabled?()
       refute SocialResultsTab.enabled?()
       # Social authoring 6/11 switched the composer on.
       assert PlatformWeb.SocialComposer.enabled?()
 
       assert Enum.map(SocialTabs.tabs(), & &1.key) ==
-               ~w(queue calendar clips connections settings)
+               ~w(queue ideas calendar clips connections settings)
 
       queue = %{key: "queue", label: "Queue", module: SocialQueueTab}
-      ideas = %{key: "ideas", label: "Ideas", module: SocialIdeasTab}
-      assert SocialTabs.tabs([ideas, queue]) == [queue]
+      results = %{key: "results", label: "Results", module: SocialResultsTab}
+      assert SocialTabs.tabs([results, queue]) == [queue]
     end
 
     test "a disabled tab adds no button, no data-tab and no pane; New idea shows once enabled",
          %{conn: conn, j: j} do
       child = open(conn, j)
 
-      for key <- ~w(queue calendar clips connections settings) do
+      for key <- ~w(queue ideas calendar clips connections settings) do
         assert has_element?(child, "[data-role='social-tab-button'][data-tab='#{key}']")
         assert has_element?(child, "[data-pane='#{key}']")
       end
 
-      for key <- ~w(ideas results) do
+      for key <- ~w(results) do
         refute has_element?(child, "[data-tab='#{key}']")
         refute has_element?(child, "[data-pane='#{key}']")
       end
@@ -106,7 +106,7 @@ defmodule PlatformWeb.SocialTabsTest do
     end
 
     test "a disabled tab's key is ignored by select_tab and by ?tab=", %{conn: conn, j: j} do
-      child = open(conn, j, "?tab=ideas")
+      child = open(conn, j, "?tab=results")
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='queue']")
 
       render_click(child, "select_tab", %{"tab" => "results"})

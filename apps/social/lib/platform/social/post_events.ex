@@ -47,8 +47,21 @@ defmodule Platform.Social.PostEvents do
           }),
         else: attrs
 
-    %PostEvent{} |> PostEvent.changeset(attrs) |> Repo.insert!()
+    event = %PostEvent{} |> PostEvent.changeset(attrs) |> Repo.insert!()
+    broadcast(post)
+    event
   end
+
+  # Social authoring 7/11: the Ideas board re-derives its lanes on every
+  # entry (`Platform.Social.Ideas.posts_topic/1`). Sent from inside the
+  # writer's transaction; the board re-reads after a short delay.
+  defp broadcast(%Post{account_id: account_id}) when is_binary(account_id) do
+    from(a in Platform.Social.Account, where: a.id == ^account_id, select: a.profile_id)
+    |> Repo.one()
+    |> Platform.Social.Ideas.broadcast_changed()
+  end
+
+  defp broadcast(_post), do: :ok
 
   defp actor_fields({:agent, id}), do: {"agent", id}
   defp actor_fields({:human, id}) when is_binary(id), do: {"human", id}

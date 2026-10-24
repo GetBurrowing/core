@@ -23,8 +23,9 @@ defmodule PlatformWeb.SocialCalendarTab do
   its body is shown only to an approver of that profile or once published.
   A post waiting on the viewer can be approved from it
   (`Platform.Social.Approvals.decide_approve/3`, the card's own path), and
-  the week re-streams so the item turns solid with no reload. Ideas (7/11)
-  is still switched off, so a click opens the post detail.
+  the week re-streams so the item turns solid with no reload. A post of an
+  idea opens that idea on the Ideas tab (7/11) instead; a post with no idea
+  opens the post detail.
   """
 
   use PlatformWeb.SocialTab
@@ -224,7 +225,12 @@ defmodule PlatformWeb.SocialCalendarTab do
   end
 
   def handle_event("open_post", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :detail, detail_for(socket, id))}
+    detail = detail_for(socket, id)
+
+    case detail && PlatformWeb.SocialIdeasTab.open_idea(socket, detail.post.idea_id) do
+      {:ok, socket} -> {:noreply, socket}
+      _ -> {:noreply, assign(socket, :detail, detail)}
+    end
   end
 
   def handle_event("close_post", _params, socket), do: {:noreply, assign(socket, :detail, nil)}

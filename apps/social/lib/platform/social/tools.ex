@@ -38,6 +38,8 @@ defmodule Platform.Social.Tools do
     ClipJob,
     ClipJobs,
     Idea,
+    IdeaNote,
+    IdeaNotes,
     Ideas,
     Post,
     PostEvent,
@@ -55,7 +57,8 @@ defmodule Platform.Social.Tools do
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
-  @agent_tools ~w(social_idea_create social_idea_list social_draft_create social_draft_update)
+  @agent_tools ~w(social_idea_create social_idea_list social_idea_note_add social_draft_create
+                  social_draft_update)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -344,6 +347,29 @@ defmodule Platform.Social.Tools do
     end
   end
 
+  # Social authoring 7/11: a note on the idea's thread, by the calling agent.
+  defp agent_tool("social_idea_note_add", args, scope, agent) do
+    case IdeaNotes.add(scope, args["idea_id"], {:agent, agent.id}, args["body"]) do
+      {:ok, note} ->
+        {:ok, %{note: note_json(note)}}
+
+      {:error, :not_found} ->
+        {:error, not_found("idea")}
+
+      {:error, reason} when reason in [:body_required, :body_too_long] ->
+        {:error,
+         err(
+           :invalid_argument,
+           "body must be 1 to #{IdeaNote.max_body()} characters; nothing was written",
+           true,
+           "Send a shorter, non-blank note."
+         )}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
   defp agent_tool("social_idea_list", args, scope, _agent) do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
@@ -406,9 +432,13 @@ defmodule Platform.Social.Tools do
     |> Map.merge(%{
       stage: Ideas.stage(posts),
       posts: Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id))),
-      open_revisions: revisions
+      open_revisions: revisions,
+      notes: idea.id |> IdeaNotes.list() |> Enum.map(&note_json/1)
     })
   end
+
+  defp note_json(%IdeaNote{} = note),
+    do: Map.take(note, [:id, :idea_id, :author_kind, :author_id, :body, :inserted_at])
 
   defp posts_with_events(posts) do
     events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()

@@ -119,6 +119,7 @@ defmodule Platform.Social.Ideas do
         |> Idea.changeset(attrs, creator)
         |> validate_refs(scope, profile)
         |> Repo.insert()
+        |> broadcast_written()
 
       nil ->
         {:error, :not_found}
@@ -133,7 +134,10 @@ defmodule Platform.Social.Ideas do
   def archive(scope, id) do
     case get(scope, id) do
       %Idea{archived_at: nil} = idea ->
-        idea |> Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update()
+        idea
+        |> Changeset.change(archived_at: DateTime.utc_now())
+        |> Repo.update()
+        |> broadcast_written()
 
       %Idea{} = idea ->
         {:ok, idea}
@@ -142,6 +146,126 @@ defmodule Platform.Social.Ideas do
         {:error, :not_found}
     end
   end
+
+  @doc """
+  A human archives an idea from the Ideas tab (Social authoring 7/11): the
+  user must pass `Platform.Social.approver_check/3` on the idea's profile
+  (`:not_an_approver`), and an idea with a published post is refused
+  (`:has_published`). Otherwise `archive/2`.
+  """
+  @spec archive_by_human(Social.scope(), term(), term()) ::
+          {:ok, Idea.t()} | {:error, :not_found | :not_an_approver | :has_published}
+  def archive_by_human(scope, id, user_id) do
+    with %Idea{} = idea <- get(scope, id) || {:error, :not_found},
+         :ok <- human_approver(idea, user_id) do
+      if idea |> posts() |> Enum.any?(&(&1.status == "published")),
+        do: {:error, :has_published},
+        else: archive(scope, idea.id)
+    end
+  end
+
+  @doc """
+  "Ask <agent> to draft" (Social authoring 7/11): a human approver of the
+  idea's profile asks the drafting agent (`drafting_agent_id/2`) to draft
+  the idea. One message in the profile's approval space mentions the agent,
+  posted by the Social system participant, the way `request_revision/4`
+  wakes it.
+
+  Refusals, each writing nothing: `:not_found`, `:not_an_approver`,
+  `:idea_archived`, `:no_drafting_agent`, `:profile_has_no_channel`.
+  """
+  @spec ask_to_draft(Social.scope(), term(), term()) ::
+          {:ok, %{message: map(), agent_name: String.t()}} | {:error, atom()}
+  def ask_to_draft(scope, id, user_id) do
+    with %Idea{} = idea <- get(scope, id) || {:error, :not_found},
+         :ok <- if(idea.archived_at, do: {:error, :idea_archived}, else: :ok),
+         :ok <- human_approver(idea, user_id),
+         %Profile{} = profile <- Repo.get(Profile, idea.profile_id) || {:error, :not_found},
+         space_id when is_binary(space_id) <-
+           profile.space_id || {:error, :profile_has_no_channel},
+         agent_id when is_binary(agent_id) <-
+           drafting_agent_id(idea, posts(idea), profile) || {:error, :no_drafting_agent},
+         %Platform.Agents.Agent{name: name} when is_binary(name) and name != "" <-
+           Repo.get(Platform.Agents.Agent, agent_id) || {:error, :no_drafting_agent},
+         {:ok, participant} <- Platform.Social.Approvals.system_participant(space_id),
+         {:ok, message} <-
+           Platform.Chat.post_message(%{
+             space_id: space_id,
+             participant_id: participant.id,
+             content_type: "text",
+             content: draft_text(name, idea, profile),
+             metadata: %{"social_draft_request" => %{"idea_id" => idea.id}}
+           }) do
+      {:ok, %{message: message, agent_name: name}}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _ -> {:error, :not_sent}
+    end
+  end
+
+  defp draft_text(agent_name, idea, profile) do
+    brief =
+      case idea.brief do
+        b when is_binary(b) and b != "" -> "\nBrief: " <> b
+        _ -> ""
+      end
+
+    "@[#{agent_name}] Please draft the idea \"#{idea.title}\" for #{profile.name} " <>
+      "(idea #{idea.id}).#{brief}\n" <>
+      "Draft it with social_draft_create idea_id=#{idea.id}; social_idea_list shows its notes."
+  end
+
+  @doc """
+  The agent that drafts `idea`: the first of its posts' drafting agents
+  (`PostEvents.drafting_agent_id/1`), else the agent that created the idea,
+  else the profile's `drafting_agent_id`. Nil when there is none.
+  """
+  @spec drafting_agent_id(Idea.t(), [Post.t()], Profile.t() | nil) :: Ecto.UUID.t() | nil
+  def drafting_agent_id(%Idea{} = idea, posts, profile) do
+    Enum.find_value(posts, &PostEvents.drafting_agent_id/1) || idea.created_by_agent_id ||
+      (profile && profile.drafting_agent_id)
+  end
+
+  defp human_approver(%Idea{} = idea, user_id) do
+    with %Profile{} = profile <- Social.get_profile(idea.org_id, idea.profile_id),
+         :ok <- Social.approver_check(profile.org_id, profile, user_id) do
+      :ok
+    else
+      _ -> {:error, :not_an_approver}
+    end
+  end
+
+  # ── Live updates (Social authoring 7/11) ─────────────────────────────
+
+  @doc """
+  The PubSub topic a profile's ideas and posts change on:
+  `{:social_ideas_changed, profile_id}` goes out when an idea is created or
+  archived, a note is added, and on every change-log entry
+  (`PostEvents.record!/4`), so the Ideas board re-derives its lanes.
+  A change-log entry is broadcast from inside its transaction, so a
+  subscriber re-reads after a short delay.
+  """
+  @spec posts_topic(Ecto.UUID.t()) :: String.t()
+  def posts_topic(profile_id), do: "social:posts:#{profile_id}"
+
+  @doc "Broadcasts `{:social_ideas_changed, profile_id}` on `posts_topic/1`."
+  @spec broadcast_changed(Ecto.UUID.t() | nil) :: :ok
+  def broadcast_changed(profile_id) when is_binary(profile_id) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      posts_topic(profile_id),
+      {:social_ideas_changed, profile_id}
+    )
+  end
+
+  def broadcast_changed(_), do: :ok
+
+  defp broadcast_written({:ok, %Idea{profile_id: profile_id}} = ok) do
+    broadcast_changed(profile_id)
+    ok
+  end
+
+  defp broadcast_written(other), do: other
 
   @doc """
   Clip Studio: the ONE idea of `clip` (source_kind `clip`, title the clip's

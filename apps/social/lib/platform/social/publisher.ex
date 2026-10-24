@@ -88,7 +88,8 @@ defmodule Platform.Social.Publisher do
           ai_disclosure: String.t() | nil,
           platform: String.t(),
           idempotency_key: String.t(),
-          cover: cover()
+          cover: cover(),
+          options: %{optional(String.t()) => String.t()}
         }
 
   @typedoc """

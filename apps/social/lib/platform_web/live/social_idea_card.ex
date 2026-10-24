@@ -114,13 +114,15 @@ defmodule PlatformWeb.SocialIdeaCard do
           :show_brand?,
           :focused?,
           :deep_link?,
-          :cover_controls
+          :cover_controls,
+          :dom_prefix
         ])
       )
       |> assign_new(:show_brand?, fn -> false end)
       |> assign_new(:focused?, fn -> false end)
       |> assign_new(:deep_link?, fn -> false end)
       |> assign_new(:cover_controls, fn -> false end)
+      |> assign_new(:dom_prefix, fn -> "queue" end)
       |> refresh()
 
     {:ok, socket}
@@ -149,7 +151,9 @@ defmodule PlatformWeb.SocialIdeaCard do
       for id <- ids,
           %Post{} = post <- [posts[id]],
           %Account{} = account <- [accounts[post.account_id]] do
-        version(post, account, profile_for(socket, account), viewer)
+        post
+        |> version(account, profile_for(socket, account), viewer)
+        |> Map.put(:dom, socket.assigns.dom_prefix)
       end
 
     approvable = Enum.filter(versions, &(:approve in &1.actions))
@@ -180,7 +184,7 @@ defmodule PlatformWeb.SocialIdeaCard do
     media = media(post)
 
     {alt, flags} =
-      split_alt(PlatformLimits.flags(account.platform, flag_input(post, media, account)))
+      split_alt(PlatformLimits.flags(account.platform, flag_input(post, media, account, profile)))
 
     %{
       post: post,
@@ -249,15 +253,20 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp fragment(ms) when is_integer(ms), do: "#t=#{:erlang.float_to_binary(ms / 1000, [:short])}"
   defp fragment(_none), do: ""
 
-  defp flag_input(post, media, account) do
+  defp flag_input(post, media, account, profile) do
     %{
       body: post.body || "",
       title: nil,
       link_url: post.link_url,
       media: media,
-      account: %{approval_mode: account.approval_mode, status: account.status}
+      account: %{approval_mode: account.approval_mode, status: account.status},
+      banned: banned(profile)
     }
   end
+
+  # The profile's banned phrases (4/11), so a human sees the warning chip.
+  defp banned(%Platform.Social.Profile{} = profile), do: Platform.Social.Voice.of(profile).banned
+  defp banned(_profile), do: []
 
   defp split_alt(flags) do
     {alt, rest} = Enum.split_with(flags, &(&1.key == "missing_alt"))
@@ -744,7 +753,7 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp version_column(assigns) do
     ~H"""
     <section
-      id={"queue-#{@v.post.id}"}
+      id={"#{@v.dom}-#{@v.post.id}"}
       data-role="queue-version"
       data-index={@index}
       data-platform={@v.account.platform}
@@ -761,7 +770,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       </p>
       <SocialPreview.preview
         :if={@v.content?}
-        id={"queue-preview-#{@v.post.id}"}
+        id={"#{@v.dom}-preview-#{@v.post.id}"}
         platform={@v.account.platform}
         account={preview_account(@v)}
         body={if @mode == :edit, do: @text, else: @v.post.body || ""}
@@ -907,7 +916,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       <button
         :if={:copy in @v.actions}
         type="button"
-        id={"queue-copy-#{@v.post.id}"}
+        id={"#{@v.dom}-copy-#{@v.post.id}"}
         phx-hook="CopyToClipboard"
         data-clipboard-text={@v.post.body}
         data-role="queue-copy"
@@ -994,7 +1003,7 @@ defmodule PlatformWeb.SocialIdeaCard do
 
     ~H"""
     <form
-      id={"queue-form-#{@v.post.id}"}
+      id={"#{@v.dom}-form-#{@v.post.id}"}
       phx-change="q_text"
       phx-submit={@submit}
       phx-target={@myself}
@@ -1003,9 +1012,9 @@ defmodule PlatformWeb.SocialIdeaCard do
     >
       <input type="hidden" name="post-id" value={@v.post.id} />
       <input type="hidden" name="fingerprint" value={@v.fingerprint} />
-      <label class="block text-sm font-medium" for={"queue-text-#{@v.post.id}"}>{@label}</label>
+      <label class="block text-sm font-medium" for={"#{@v.dom}-text-#{@v.post.id}"}>{@label}</label>
       <textarea
-        id={"queue-text-#{@v.post.id}"}
+        id={"#{@v.dom}-text-#{@v.post.id}"}
         name="text"
         rows={if @mode == :edit, do: 7, else: 3}
         maxlength={if @mode == :edit, do: nil, else: 2000}
@@ -1133,7 +1142,7 @@ defmodule PlatformWeb.SocialIdeaCard do
           <button
             :if={:copy in @v.actions}
             type="button"
-            id={"queue-bar-copy-#{@v.post.id}"}
+            id={"#{@v.dom}-bar-copy-#{@v.post.id}"}
             phx-hook="CopyToClipboard"
             data-clipboard-text={@v.post.body}
             data-role="queue-bar-copy"

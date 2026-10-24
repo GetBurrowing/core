@@ -96,7 +96,7 @@ defmodule Platform.Social.Publisher.Zernio do
 
   @behaviour Platform.Social.Publisher
 
-  alias Platform.Social.Secrets
+  alias Platform.Social.{PlatformOptions, Secrets}
 
   @default_base_url "https://zernio.com/api"
   @signature_headers ["x-zernio-signature", "x-late-signature"]
@@ -372,7 +372,7 @@ defmodule Platform.Social.Publisher.Zernio do
   defp post_body(account, platform, request, media) do
     base = %{
       content: content(request),
-      mediaItems: media,
+      mediaItems: alt_text(media, request),
       platforms: [
         %{
           platform: platform,
@@ -381,6 +381,9 @@ defmodule Platform.Social.Publisher.Zernio do
             request.platform
             |> platform_specific(request.is_aigc)
             |> cover(request.platform, media, Map.get(request, :cover))
+            |> Map.merge(
+              PlatformOptions.zernio_platform_data(request.platform, Map.get(request, :options))
+            )
         }
       ],
       timezone: "UTC"
@@ -389,6 +392,15 @@ defmodule Platform.Social.Publisher.Zernio do
     base
     |> schedule(request.scheduled_at)
     |> tiktok(request)
+  end
+
+  # Social authoring 7/11: the version's alt text on every image item
+  # (Zernio `MediaItem.altText`), only where the platform takes it.
+  defp alt_text(media, request) do
+    case PlatformOptions.zernio_alt_text(request.platform, Map.get(request, :options)) do
+      nil -> media
+      alt -> Enum.map(media, &if(&1.type == "image", do: Map.put(&1, :altText, alt), else: &1))
+    end
   end
 
   defp content(%{body: body, link_url: link}) when is_binary(link) and link != "",

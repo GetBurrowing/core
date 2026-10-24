@@ -1914,6 +1914,65 @@ defmodule Platform.Social do
 
   defp refuse_cover_locked(%Post{}), do: {:error, :post_locked}
 
+  @doc """
+  A human sets a version's platform options (Social authoring 7/11):
+  `attrs` (string keys) cleaned by `Platform.Social.PlatformOptions.validate/2`
+  for the account's platform, so a key that platform does not take is
+  dropped. The actor is checked as for the cover (`post_approver_check/4`
+  on the row locked `FOR UPDATE`); a post past `needs_approval` is
+  `{:error, :post_locked}`; an over-long value is
+  `{:error, {:invalid_options, %{key => message}}}`. A change is logged as
+  a human `edited` event whose note names the options.
+  """
+  @spec set_platform_options(Ecto.UUID.t(), term(), Ecto.UUID.t(), map()) ::
+          {:ok, Post.t()} | {:error, term()}
+  def set_platform_options(org_id, actor_user_id, post_id, attrs) when is_map(attrs) do
+    with {:ok, post} <- fetch(Post, org_id, post_id) do
+      Repo.transaction(fn ->
+        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
+
+        with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_cover_locked(locked),
+             {:ok, profile} <- profile_of_post(locked),
+             account = Repo.get!(Account, locked.account_id),
+             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+             {:ok, options} <- options_for(account.platform, attrs) do
+          if options == (locked.platform_options || %{}) do
+            locked
+          else
+            updated = locked |> Post.options_changeset(options) |> Repo.update!()
+
+            Platform.Social.PostEvents.record!(updated, "edited", {:human, actor_user_id},
+              note: "Platform options: " <> options_note(account.platform, options)
+            )
+
+            updated
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end
+  end
+
+  defp options_for(platform, attrs) do
+    case Platform.Social.PlatformOptions.validate(platform, attrs) do
+      {:ok, options} -> {:ok, options}
+      {:error, errors} -> {:error, {:invalid_options, errors}}
+    end
+  end
+
+  defp options_note(platform, options) do
+    case for(
+           f <- Platform.Social.PlatformOptions.fields(platform),
+           Map.has_key?(options, f.key),
+           do: f.label
+         ) do
+      [] -> "cleared"
+      labels -> Enum.join(labels, ", ")
+    end
+  end
+
   # ── needs_approval (Social 3/7) ──────────────────────────────────────
 
   @doc """

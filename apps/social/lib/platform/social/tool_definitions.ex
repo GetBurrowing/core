@@ -34,7 +34,7 @@ defmodule Platform.Social.ToolDefinitions do
             social_post_list social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_progress social_clip_job_complete social_clip_job_fail
-            social_idea_create social_idea_list)
+            social_idea_create social_idea_list social_idea_note_add)
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -668,7 +668,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_idea_list",
         description:
-          "List a profile's ideas, newest first, each with its stage (derived from its posts: inbox, drafting, in_review, scheduled, live, failed), its posts with their change log, and any open revision notes a human left. " <>
+          "List a profile's ideas, newest first, each with its stage (derived from its posts: inbox, drafting, in_review, scheduled, live, failed), its posts with their change log, any open revision notes a human left, and the idea's notes thread (humans and agents, oldest first). " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -687,11 +687,30 @@ defmodule Platform.Social.ToolDefinitions do
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
         returns:
-          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}]}], total, has_more, limit, offset}",
+          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}], notes: [%{id, author_kind, author_id, body, inserted_at}]}], total, has_more, limit, offset}",
         limitations:
           "not_found for a profile outside your org. Posts with no idea are not listed here (social_post_list has them). A revision note stays open until you edit the post (social_draft_update) or a human decides it.",
         when_to_use:
           "To see where each idea stands and what a human asked you to revise. Revise with social_draft_update; the post stays waiting for the human."
+      },
+      %{
+        name: "social_idea_note_add",
+        description:
+          "Add a note to an idea's thread, where the humans on the profile and other agents read it in the Ideas tab. " <>
+            @human_approves,
+        parameters: %{
+          idea_id: %{type: "string", required: true, description: "The idea id."},
+          body: %{
+            type: "string",
+            required: true,
+            description: "The note (at most 4000 characters)."
+          }
+        },
+        returns: "%{note: %{id, idea_id, author_kind, author_id, body, inserted_at}}",
+        limitations:
+          "not_found for an idea outside your org, exactly as for a missing id. invalid_argument for a blank or over-long body. You are recorded as the author. A note writes no post and approves nothing.",
+        when_to_use:
+          "To answer a human's note on an idea, or to say what you are doing with it (a question, a plan, why a version differs)."
       }
     ]
   end

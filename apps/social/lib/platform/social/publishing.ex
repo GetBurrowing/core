@@ -337,7 +337,9 @@ defmodule Platform.Social.Publishing do
       ai_disclosure: disclosure(post),
       platform: account.platform,
       idempotency_key: post.id,
-      cover: cover
+      cover: cover,
+      options:
+        Platform.Social.PlatformOptions.for_platform(post.platform_options, account.platform)
     }
   end
 

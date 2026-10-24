@@ -100,6 +100,11 @@ defmodule Platform.Social.Post do
     # the Experiments.Assignment row for the composition.
     field(:composer_provenance, :map)
 
+    # Social authoring 7/11 (task 01a16c50-ea67): the version's platform
+    # options (`Platform.Social.PlatformOptions`). In NO cast list: only
+    # `options_changeset/2`, called by `Platform.Social.set_platform_options/4`.
+    field(:platform_options, :map, default: %{})
+
     timestamps()
   end
 
@@ -152,6 +157,14 @@ defmodule Platform.Social.Post do
     |> Platform.Social.Cover.validate(attrs)
     |> db_constraints()
   end
+
+  @doc """
+  The ONLY changeset that writes `platform_options` (Social authoring 7/11):
+  `options` already cleaned by `Platform.Social.PlatformOptions.validate/2`.
+  """
+  @spec options_changeset(t(), map()) :: Ecto.Changeset.t()
+  def options_changeset(%__MODULE__{} = post, options) when is_map(options),
+    do: change(post, platform_options: options)
 
   @doc """
   The human path's cover edit (`Platform.Social.set_cover/4`): casts ONLY
