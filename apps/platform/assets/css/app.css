@@ -262,8 +262,8 @@
   --ag-lime-text: #4d7802;
   /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
+  --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
+  --radius-box: 0.75rem;        /* 12px cards/modals/sheets; was 14px (re-skin Phase 1), eased 2026-10-23 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -388,8 +388,8 @@
   --ag-lime-text: var(--ag-lime);
   /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
+  --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
+  --radius-box: 0.75rem;        /* 12px cards/modals/sheets; was 14px (re-skin Phase 1), eased 2026-10-23 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -1920,9 +1920,19 @@ body, .font-suite {
   --text-primary: #E5E5E5;
   --text-secondary: #B0B0B0;
   --text-muted: #666;
+  /* These four names are ALSO Tailwind v4's radius theme variables, and this
+     block is unlayered, so it re-sizes every `rounded-sm` ... `rounded-3xl`
+     utility in the app, not just the gallery below. Eased 2026-10-23 (sponsor feedback:
+     "back off on the rounded corners ... don't make it so pronounced"):
+     md 10 -> 8px, lg 14 -> 10px, and 2xl / 3xl (Tailwind's 16 / 24px) pinned
+     to 12 / 16px, so the largest card radius matches --radius-box. sm and xl
+     keep their values. `rounded-full` is untouched. */
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
   --radius-pill: 28px;
   --transition: 150ms ease;
   --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--ui-border);
@@ -2657,7 +2667,10 @@ body, .font-suite {
   container-type: inline-size;
   background: oklch(0.21 0 0);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 26px;
+  /* --radius-box (12px), not the 26px pill it was: a 26px curve on a pill
+     that grows (staged tray, typed lines) cut into the tray's top-left tile
+     (sponsor feedback, 2026-10-23). */
+  border-radius: var(--radius-box);
   padding: 8px 8px 8px 18px;
   /* Cinema Mobile easing — same curve used across the chat surface for state transitions */
   transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -2931,6 +2944,10 @@ body, .font-suite {
   padding: 0 !important;
   border: none !important;
   box-shadow: none;
+  /* No double-tap-zoom wait on the most-pressed button, and no grey iOS
+     tap flash over the press state below. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
               opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -3329,6 +3346,53 @@ body, .font-suite {
     box-shadow: none;
   }
 
+  /* Send sits wholly INSIDE the pill (sponsor feedback, 2026-10-23: it straddled the
+     right edge, its disc painted over the focus border). The 44px box keeps
+     its -1px block margin and full-box ::after, so the tap target is
+     unchanged; only the PAINT shrinks. The disc is a 34px ::before centred
+     in the box: 4px clear of the inner border top and bottom and 5px from
+     the right, mirroring ＋ (same 44px box against the left inner edge).
+     The box itself paints nothing, so no fill can cross the border. This is
+     the third route to "a smaller painted circle inside a 44px box" the
+     note above weighs: neither background-clip nor a smaller box. */
+  .compose-input-area .compose-pill-send {
+    background: transparent !important;
+    isolation: isolate;
+  }
+
+  .compose-input-area .compose-pill-send::before {
+    content: "";
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    z-index: -1;
+  }
+
+  .compose-input-area .compose-pill-send:disabled::before {
+    background: transparent;
+  }
+
+  /* On a grown pill (typed lines, staged tray) the controls sit on the
+     bottom line, by the caret, rather than floating mid-height. On one line
+     the 44px boxes ARE the line, so this changes nothing there. */
+  .compose-input-area .compose-pill-attach,
+  .compose-input-area .compose-mention-button,
+  .compose-input-area .compose-pill-send {
+    align-self: flex-end;
+  }
+
+  /* The staged tray inset. The phone pill has no padding, so the tray's
+     first tile sat in the pill's corner and the curve cut into it. 4px in
+     from the inner border (the tray list's own pt-1 is the top 4px), so a
+     tile's 8px radius is the pill's 12px minus that inset: concentric. */
+  .compose-input-area [data-role="staged-area"] {
+    padding-inline: 4px;
+  }
+
   .compose-input-area .compose-pill-bar textarea:placeholder-shown,
   .compose-input-area .compose-pill-bar textarea::placeholder {
     white-space: nowrap;
@@ -3377,8 +3441,11 @@ body, .font-suite {
 @media (max-width: 1023.98px) {
   #chat-drop-zone:has(> .chat-dock--glass) {
     position: relative;
+    /* + --keyboard-inset: set only while the soft keyboard is up (see
+       the data-keyboard-open rule below), 0 otherwise. */
     --phone-chrome-bottom: calc(
-      var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) + 8px
+      var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) +
+        var(--keyboard-inset, 0px) + 8px
     );
   }
 
@@ -3395,6 +3462,20 @@ body, .font-suite {
 
   .chat-dock--glass > * {
     pointer-events: auto;
+  }
+
+  /* Soft keyboard up (2026-10-23; ChatDock's watchKeyboard, see
+     js/lib/keyboard_inset.js). The keyboard covers the tab bar's slot AND the
+     home-indicator inset, so the dock keeps only the 8px gap: the report measured
+     about 85px of dead ground between the pill and the iOS keyboard, which
+     is the bar's clearance at inset 34. `bottom` lifts the dock by whatever
+     part of the layout viewport the keyboard still hides after the browser's
+     own pan (0 when iOS pans all the way); the chat zone's
+     --phone-chrome-bottom above adds the same inset, so the last message
+     still ends 8px above the pill. */
+  :root[data-keyboard-open] .chat-dock.chat-dock--glass {
+    bottom: var(--keyboard-inset, 0px);
+    padding-bottom: 8px;
   }
 
   /* The gap comes from the dock. Embedded composers keep the

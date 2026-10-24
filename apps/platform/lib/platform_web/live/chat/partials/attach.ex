@@ -69,7 +69,7 @@ defmodule PlatformWeb.ChatLive.Partials.Attach do
             data-attach-pick="file"
             data-role="attach-add-more"
             aria-label="Add another"
-            class="flex h-[92px] w-16 items-center justify-center rounded-box border border-dashed border-edge text-subtle lg:hover:text-base-content focus-visible-ring"
+            class="flex h-[92px] w-16 items-center justify-center rounded-md border border-dashed border-edge text-subtle lg:hover:text-base-content focus-visible-ring"
           >
             <.icon name="hero-plus" class="size-6" />
           </button>
@@ -133,7 +133,7 @@ defmodule PlatformWeb.ChatLive.Partials.Attach do
       <div
         :if={@image?}
         class={[
-          "relative size-[72px] overflow-hidden rounded-box border border-edge bg-base-300 lg:h-[92px] lg:w-auto lg:min-w-16 lg:max-w-[200px]",
+          "relative size-[72px] overflow-hidden rounded-md border border-edge bg-base-300 lg:h-[92px] lg:w-auto lg:min-w-16 lg:max-w-[200px]",
           @failed? && "outline outline-2 -outline-offset-2 outline-error"
         ]}
       >
@@ -195,7 +195,7 @@ defmodule PlatformWeb.ChatLive.Partials.Attach do
     >
       <div
         :if={@image?}
-        class="relative size-[72px] overflow-hidden rounded-box border border-edge bg-base-300 outline outline-2 -outline-offset-2 outline-error lg:h-[92px] lg:w-auto lg:min-w-16 lg:max-w-[200px]"
+        class="relative size-[72px] overflow-hidden rounded-md border border-edge bg-base-300 outline outline-2 -outline-offset-2 outline-error lg:h-[92px] lg:w-auto lg:min-w-16 lg:max-w-[200px]"
       >
         <img
           id={"attach-failed-preview-#{@file.id}"}
@@ -269,7 +269,7 @@ defmodule PlatformWeb.ChatLive.Partials.Attach do
     <li id={"staged-canvas-#{@canvas.id}"} data-role="canvas-chip" class="relative shrink-0">
       <div
         title={canvas_title(@canvas)}
-        class="flex h-[72px] w-44 items-center gap-2 rounded-box border border-edge bg-base-300 pl-3 pr-8 lg:h-[92px] lg:w-52"
+        class="flex h-[72px] w-44 items-center gap-2 rounded-md border border-edge bg-base-300 pl-3 pr-8 lg:h-[92px] lg:w-52"
       >
         <.icon name="hero-squares-2x2" class="size-6 shrink-0 text-subtle" />
         <span class="flex min-w-0 flex-col">
@@ -310,7 +310,7 @@ defmodule PlatformWeb.ChatLive.Partials.Attach do
       data-role="file-chip"
       title={@name}
       class={[
-        "flex h-[72px] w-44 items-center gap-2 rounded-box border border-edge bg-base-300 pl-3 pr-8 lg:h-[92px] lg:w-52",
+        "flex h-[72px] w-44 items-center gap-2 rounded-md border border-edge bg-base-300 pl-3 pr-8 lg:h-[92px] lg:w-52",
         @failed? && "outline outline-2 -outline-offset-2 outline-error"
       ]}
     >

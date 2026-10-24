@@ -37,7 +37,10 @@
  *   - desk: the masters mark it demo only.
  *
  * SHAPE. --radius-box = the preset radius, --radius-field = round(radius x 0.71)
- * (Burrow's 14 gives 14/10, app.css's values). --font-sans is Georgia for sand
+ * (Burrow's 12 gives 12/9, app.css's values). Every preset radius was eased
+ * by 2-4px on 2026-10-23 (sponsor feedback: "back off on the rounded corners"), keeping
+ * their order: theme.js midnight 12 -> 10, sand 18 -> 14, forest 16 -> 12,
+ * Burrow 14 -> 12; high contrast stays 6. --font-sans is Georgia for sand
  * (theme.js) and Public Sans elsewhere: the masters name Inter, which the app
  * does not load, for the same presets Burrow uses it on, and Burrow paints
  * Public Sans. Never declare a font stack inside an @plugin daisyui-theme block;
@@ -128,8 +131,8 @@
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
   /* agent-slots:end */
-  --radius-box: 12px;
-  --radius-field: 9px;
+  --radius-box: 10px;
+  --radius-field: 7px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 3.2525:1 for the
@@ -218,8 +221,8 @@
      this value, on the same oklch hue line, measures 4.5314:1. */
   --ag-lime-text: #4d7802;
   /* agent-slots:end */
-  --radius-box: 12px;
-  --radius-field: 9px;
+  --radius-box: 10px;
+  --radius-field: 7px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.4535:1 for the
@@ -292,8 +295,8 @@
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
   /* agent-slots:end */
-  --radius-box: 18px;
-  --radius-field: 13px;
+  --radius-box: 14px;
+  --radius-field: 10px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.7400:1 for the
@@ -401,8 +404,8 @@
      this value, on the same oklch hue line, measures 4.5380:1. */
   --ag-lime-text: #4a7302;
   /* agent-slots:end */
-  --radius-box: 18px;
-  --radius-field: 13px;
+  --radius-box: 14px;
+  --radius-field: 10px;
   --font-sans: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.7447:1 for the
@@ -482,8 +485,8 @@
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
   /* agent-slots:end */
-  --radius-box: 16px;
-  --radius-field: 11px;
+  --radius-box: 12px;
+  --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 3.2033:1 for the
@@ -575,8 +578,8 @@
      this value, on the same oklch hue line, measures 4.5145:1. */
   --ag-lime-text: #4d7802;
   /* agent-slots:end */
-  --radius-box: 16px;
-  --radius-field: 11px;
+  --radius-box: 12px;
+  --radius-field: 9px;
   --font-sans: "Public Sans", system-ui, sans-serif;
   --density: 1;
   /* Glass floor (task 01a1557a-7a71 stage 1). theme.js 0.72 measures 2.5503:1 for the

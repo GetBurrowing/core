@@ -51,10 +51,14 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
   # lit in primary (no cyan literal, no glow) and rests as a subtle icon on
   # the composer's ground, really disabled, with no opacity fade; the light
   # theme's own disabled rule went with the literals (24 -> 23 rules).
+  #
+  # Deliberate change, 2026-10-23 (sponsor feedback: "back off on the rounded
+  # corners"): the pill's radius is --radius-box (12px) instead of 26px, and
+  # Send gains `touch-action: manipulation` and a transparent tap highlight.
   @desktop_snapshot [
     {".compose-input-area", [], "padding: 12px 20px 16px;"},
     {".compose-pill-bar", [],
-     "display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 10px;\n  container-type: inline-size;\n  background: oklch(0.21 0 0);\n  border: 1px solid rgba(255, 255, 255, 0.08);\n  border-radius: 26px;\n  padding: 8px 8px 8px 18px;\n  \n  transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
+     "display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 10px;\n  container-type: inline-size;\n  background: oklch(0.21 0 0);\n  border: 1px solid rgba(255, 255, 255, 0.08);\n  \n  border-radius: var(--radius-box);\n  padding: 8px 8px 8px 18px;\n  \n  transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
     {".compose-pill-bar .hidden", [],
      "position: absolute !important;\n  width: 1px !important;\n  height: 1px !important;\n  padding: 0 !important;\n  margin: -1px !important;\n  overflow: hidden !important;\n  clip: rect(0, 0, 0, 0) !important;\n  white-space: nowrap !important;\n  border: 0 !important;"},
     {".compose-pill-bar:focus-within", [],
@@ -84,7 +88,7 @@ defmodule Platform.Design.PhoneComposerCssGuardTest do
     {".compose-pill-send", ["@media (hover: none)"],
      "width: 44px !important;\n    height: 44px !important;\n    min-height: 44px !important;"},
     {".compose-pill-send", [],
-     "width: 36px;\n  height: 36px;\n  min-height: 36px;\n  border-radius: 50% !important;\n  background: var(--color-primary) !important;\n  color: var(--color-primary-content) !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0;\n  padding: 0 !important;\n  border: none !important;\n  box-shadow: none;\n  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              background 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
+     "width: 36px;\n  height: 36px;\n  min-height: 36px;\n  border-radius: 50% !important;\n  background: var(--color-primary) !important;\n  color: var(--color-primary-content) !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0;\n  padding: 0 !important;\n  border: none !important;\n  box-shadow: none;\n  \n  touch-action: manipulation;\n  -webkit-tap-highlight-color: transparent;\n  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),\n              background 200ms cubic-bezier(0.16, 1, 0.3, 1);"},
     {".compose-pill-send:hover:not(:disabled)", [], "transform: scale(1.05);"},
     {".compose-pill-send:active:not(:disabled)", [], "transform: scale(0.95);"},
     {".compose-pill-send:disabled", [],

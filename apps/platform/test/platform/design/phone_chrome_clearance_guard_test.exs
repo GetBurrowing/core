@@ -253,13 +253,15 @@ defmodule Platform.Design.PhoneChromeClearanceGuardTest do
       end
     end
 
+    # + --keyboard-inset (2026-10-23): unset, so 0, unless the soft keyboard
+    # is up; then the dock rises by it and the timeline's end follows.
     test "the chat override of --phone-chrome-bottom is the dock height plus 8px",
          %{rules: rules} do
       [zone] = Enum.filter(rules, &(&1.selector == @chat_zone and &1.at == [@phone]))
       [value] = declarations(zone.body, "--phone-chrome-bottom")
 
       assert normalise(value) ==
-               "calc(var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) + 8px)"
+               "calc(var(--chat-dock-h, calc(var(--bottom-nav-clearance) + 60px)) + var(--keyboard-inset, 0px) + 8px)"
     end
 
     test "the timeline's end padding is var(--phone-chrome-bottom), not a constant",

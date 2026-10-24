@@ -239,6 +239,10 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     // Task 01a15f2e stages 2 and 3 add the phone composer pill and the chat
     // dock at the same breakpoint (Saru's canvas 01a15f2f). Still no
     // `.chat-jump` selector: the jump chip floats over the dock unchanged.
+    //
+    // 2026-10-23 (sponsor feedback): Send's disc inside the pill, the controls'
+    // bottom alignment, the staged tray's inset, and the dock's soft-keyboard
+    // rule. Still no `.chat-jump` selector.
     expect(gated.map((r) => r.selector)).toEqual([
       ".compose-input-area",
       ":root .compose-input-area .compose-pill-bar",
@@ -246,11 +250,17 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       ".compose-input-area .compose-pill-attach,\n  .compose-input-area .compose-pill-send",
       ".compose-input-area .compose-pill-attach::after,\n  .compose-input-area .compose-pill-send::after",
       ".compose-input-area .compose-pill-send",
+      ".compose-input-area .compose-pill-send",
+      ".compose-input-area .compose-pill-send::before",
+      ".compose-input-area .compose-pill-send:disabled::before",
+      ".compose-input-area .compose-pill-attach,\n  .compose-input-area .compose-mention-button,\n  .compose-input-area .compose-pill-send",
+      '.compose-input-area [data-role="staged-area"]',
       ".compose-input-area .compose-pill-bar textarea:placeholder-shown,\n  .compose-input-area .compose-pill-bar textarea::placeholder",
       ":root .compose-input-area .compose-pill-bar",
       "#chat-drop-zone:has(> .chat-dock--glass)",
       ".chat-dock.chat-dock--glass",
       ".chat-dock--glass > *",
+      ":root[data-keyboard-open] .chat-dock.chat-dock--glass",
       ".chat-dock--glass .compose-input-area",
       '.chat-dock--glass > [data-role="typing-indicator"]',
       '.chat-dock--glass > [data-role="typing-indicator"]',

@@ -27,6 +27,12 @@
 // not move: `_measure` subtracts the list's height, so opening, filtering and
 // closing the list writes no new `--chat-dock-h` (nor `--phone-chrome-bottom`,
 // which is built on it) and dispatches no `chat:dock-resized`.
+import { watchKeyboard } from "../lib/keyboard_inset.js"
+
+// The soft keyboard (2026-10-23): `watchKeyboard` sets `data-keyboard-open`
+// and `--keyboard-inset` on <html> while it is up, and app.css drops the
+// dock's tab-bar and safe-area clearance to an 8px gap above the keyboard.
+// See lib/keyboard_inset.js for why focus alone could not.
 export const MENTION_LIST_SELECTOR = '[data-role="mention-list"]'
 export const DOCK_VAR = "--chat-dock-h"
 export const DOCK_EVENT = "chat:dock-resized"
@@ -39,6 +45,7 @@ const ChatDock = {
       this._observer.observe(this.el, { box: "border-box" })
     }
     this._measure()
+    this._unwatchKeyboard = watchKeyboard()
   },
 
   updated() {
@@ -46,6 +53,10 @@ const ChatDock = {
   },
 
   destroyed() {
+    if (this._unwatchKeyboard) {
+      this._unwatchKeyboard()
+      this._unwatchKeyboard = null
+    }
     if (this._observer) {
       this._observer.disconnect()
       this._observer = null
