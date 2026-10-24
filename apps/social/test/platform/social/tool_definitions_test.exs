@@ -6,18 +6,19 @@ defmodule Platform.Social.ToolDefinitionsTest do
 
   # Social 4/7's six, Social 5/7's social_clip_render and social_clip_list,
   # Social 6/7's social_task_request, and Clip Studio 1/9's social_clip_submit
-  # and five clip job tools.
+  # and five clip job tools, and Social authoring 2/11's two idea tools.
   @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_progress
                 social_clip_job_complete social_clip_job_fail)
 
-  @fifteen ~w(social_profile_list social_profile_get social_draft_create social_draft_update
+  @seventeen ~w(social_profile_list social_profile_get social_draft_create social_draft_update
               social_post_list social_clip_propose social_clip_submit social_clip_render
-              social_clip_list social_task_request) ++ @job_tools
+              social_clip_list social_task_request) ++
+               @job_tools ++ ~w(social_idea_create social_idea_list)
 
   @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  test "exactly the fifteen tools, names() and definitions() agree" do
-    assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@fifteen)
+  test "exactly the seventeen tools, names() and definitions() agree" do
+    assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@seventeen)
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
   end
 

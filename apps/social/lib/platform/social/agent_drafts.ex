@@ -34,6 +34,17 @@ defmodule Platform.Social.AgentDrafts do
   `Platform.Files`), never a Repo query on a core table. A `task_id` that
   names a social task (Social 6/7, `Platform.Social.TaskBridge`) must also
   be for the draft's profile, else `{:error, :task_profile_mismatch}`.
+
+  ## Ideas and the change log (Social authoring 2/11)
+
+  A create may name an `idea_id`: read through the scope (another org's is
+  `{:error, :not_found}`), refused archived (`:idea_archived`), and it must
+  be the draft's profile's idea, else `{:error, :idea_profile_mismatch}`.
+  Every create writes a `created` event (and `submitted` when it lands in
+  `needs_approval`); every update writes `edited` (with the body before and
+  after) and/or `submitted` (draft to needs_approval). The actor is the
+  calling agent (`opts[:agent_id]`). Each event is written in the
+  transaction that writes the post.
   """
 
   import Ecto.Query
@@ -49,9 +60,12 @@ defmodule Platform.Social.AgentDrafts do
     ClipMedia,
     ClipRender,
     Cover,
+    Idea,
+    Ideas,
     Links,
     OrgFiles,
     Post,
+    PostEvents,
     Profile
   }
 
@@ -69,6 +83,7 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :invalid_source | :source_not_in_project | :profile_needs_project}
           | {:error, :invalid_crop_x | {:invalid_platforms, [String.t()]}}
           | {:error, :task_profile_mismatch}
+          | {:error, :idea_profile_mismatch | :idea_archived}
           | {:error, :file_not_in_project | :not_a_video | :invalid_title}
           | {:error, :field_not_allowed, [String.t()]}
           | {:error, Ecto.Changeset.t()}
@@ -89,14 +104,17 @@ defmodule Platform.Social.AgentDrafts do
   `link_url`, the link is `Links.effective_link/4` (the profile's home_url,
   or the YouTube episode at `start_s`) and it is appended to the body once.
   """
-  @spec create_agent_drafts(Social.scope(), term(), map()) :: {:ok, [Post.t()]} | error()
-  def create_agent_drafts(scope, profile_id, attrs) do
+  @spec create_agent_drafts(Social.scope(), term(), map(), keyword()) ::
+          {:ok, [Post.t()]} | error()
+  def create_agent_drafts(scope, profile_id, attrs, opts \\ []) do
     attrs = normalize(attrs)
+    actor = {:agent, Keyword.get(opts, :agent_id)}
 
     with :ok <- refuse_forbidden(attrs),
          {:ok, status} <- create_status(attrs),
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
+         {:ok, idea_id} <- check_idea(scope, attrs["idea_id"], profile),
          :ok <- check_task_profile(attrs, profile),
          {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
          :ok <- require_channels(status, profile, accounts) do
@@ -105,17 +123,35 @@ defmodule Platform.Social.AgentDrafts do
       Repo.transaction(fn ->
         Enum.map(accounts, fn account ->
           changeset =
-            %Post{account_id: account.id}
+            %Post{account_id: account.id, idea_id: idea_id}
             |> agent_changeset(attrs, profile)
             |> put_effective_link(profile)
 
           case Repo.insert(changeset) do
-            {:ok, post} -> post
-            {:error, changeset} -> Repo.rollback(changeset)
+            {:ok, post} ->
+              PostEvents.record!(post, "created", actor)
+              if post.status == "needs_approval", do: PostEvents.record!(post, "submitted", actor)
+              post
+
+            {:error, changeset} ->
+              Repo.rollback(changeset)
           end
         end)
       end)
       |> after_commit()
+    end
+  end
+
+  # Social authoring 2/11: the idea a draft joins. Read through the scope
+  # (another org's idea is :not_found, like a missing id); it must be the
+  # draft's profile's idea.
+  defp check_idea(_scope, nil, _profile), do: {:ok, nil}
+
+  defp check_idea(scope, idea_id, %Profile{id: profile_id}) do
+    case Ideas.fetch_for_draft(scope, idea_id) do
+      {:ok, %Idea{profile_id: ^profile_id, id: id}} -> {:ok, id}
+      {:ok, %Idea{}} -> {:error, :idea_profile_mismatch}
+      error -> error
     end
   end
 
@@ -213,9 +249,11 @@ defmodule Platform.Social.AgentDrafts do
   `{:error, :post_locked}`, untouched. A needs_approval post cannot go back
   to draft. Rejection fields are never touched.
   """
-  @spec update_agent_draft(Social.scope(), term(), map()) :: {:ok, Post.t()} | error()
-  def update_agent_draft(scope, post_id, attrs) do
+  @spec update_agent_draft(Social.scope(), term(), map(), keyword()) ::
+          {:ok, Post.t()} | error()
+  def update_agent_draft(scope, post_id, attrs, opts \\ []) do
     attrs = normalize(attrs)
+    actor = {:agent, Keyword.get(opts, :agent_id)}
 
     with :ok <- refuse_forbidden(attrs),
          :ok <- refuse_status_value(attrs),
@@ -232,6 +270,7 @@ defmodule Platform.Social.AgentDrafts do
              :ok <-
                Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
              {:ok, updated} <- Repo.update(changeset) do
+          log_update(locked, updated, changeset, actor)
           updated
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -239,6 +278,20 @@ defmodule Platform.Social.AgentDrafts do
       end)
       |> after_commit()
     end
+  end
+
+  # Social authoring 2/11: `edited` when anything but the status changed
+  # (body before/after), `submitted` on draft -> needs_approval.
+  defp log_update(before, updated, changeset, actor) do
+    if changeset.changes |> Map.delete(:status) |> map_size() > 0 do
+      PostEvents.record!(updated, "edited", actor,
+        body_before: before.body,
+        body_after: updated.body
+      )
+    end
+
+    if before.status == "draft" and updated.status == "needs_approval",
+      do: PostEvents.record!(updated, "submitted", actor)
   end
 
   defp refuse_status_value(%{"status" => status}) when status not in @agent_statuses,

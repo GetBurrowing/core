@@ -64,7 +64,7 @@ defmodule Platform.Social.Approvals do
   alias Platform.Chat
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, Publishing}
+  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, PostEvents, Publishing}
 
   @kind "social_post_approval"
   @source_type "social_post"
@@ -426,6 +426,14 @@ defmodule Platform.Social.Approvals do
     end
   end
 
+  @doc """
+  The Social system participant of `space_id`, added on first use
+  (Social authoring 2/11: `Platform.Social.Ideas` posts the revision
+  message as it).
+  """
+  @spec system_participant(Ecto.UUID.t()) :: {:ok, map()} | {:error, term()}
+  def system_participant(space_id), do: ensure_system_participant(space_id)
+
   defp system_participant_id(space_id) do
     <<a::binary-8, b::binary-4, c::binary-4, d::binary-4, e::binary-12, _::binary>> =
       :crypto.hash(:sha256, "social_system:#{space_id}") |> Base.encode16(case: :lower)
@@ -504,6 +512,7 @@ defmodule Platform.Social.Approvals do
       with :ok <- refuse_draft_only(account),
            :ok <- claim(card),
            {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
+           _event = PostEvents.record!(approved, "approved", {:human, user_id}),
            {:ok, card} <-
              card |> ApprovalCard.decided_changeset("approve", user_id) |> Repo.update() do
         {card, approved, profile}
@@ -532,6 +541,11 @@ defmodule Platform.Social.Approvals do
 
     edit = fn card, post, _account, profile, user_id ->
       with {:ok, edited} <- post |> Post.human_edit_changeset(%{body: body}) |> Repo.update(),
+           _event =
+             PostEvents.record!(edited, "edited", {:human, user_id},
+               body_before: post.body,
+               body_after: edited.body
+             ),
            {:ok, card} <- card |> ApprovalCard.edited_changeset(user_id) |> Repo.update() do
         {card, edited, profile}
       end
@@ -564,6 +578,7 @@ defmodule Platform.Social.Approvals do
       reject = fn card, post, _account, profile, user_id ->
         with :ok <- claim(card),
              {:ok, rejected} <- post |> Post.reject_changeset(reason) |> Repo.update(),
+             _event = PostEvents.record!(rejected, "rejected", {:human, user_id}, note: reason),
              {:ok, card} <-
                card |> ApprovalCard.decided_changeset("reject", user_id) |> Repo.update() do
           {card, rejected, profile}
@@ -1160,6 +1175,10 @@ defmodule Platform.Social.Approvals do
             "Approved by #{user_name(post.approved_by_user_id)}, #{hhmm(post.approved_at)}. " <>
               "Publishing #{publishing_text(post)}"
         }
+
+      # Social authoring 2/11: a human asked the agent for a revision.
+      post.status == "needs_approval" and PostEvents.revision_open?(post.id) ->
+        %{tone: :warning, text: "Revision asked"}
 
       post.status == "needs_approval" ->
         %{tone: :warning, text: "Needs approval"}

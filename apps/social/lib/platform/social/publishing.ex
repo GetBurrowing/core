@@ -63,6 +63,7 @@ defmodule Platform.Social.Publishing do
     MediaRules,
     OrgFiles,
     Post,
+    PostEvents,
     Profile,
     Publisher,
     RateLimit
@@ -99,6 +100,7 @@ defmodule Platform.Social.Publishing do
           post
           |> attempt(org_id, now_ms)
           |> record_refusal(post, org_id, now_ms)
+          |> log_outcome(post)
         end
       end)
 
@@ -180,6 +182,7 @@ defmodule Platform.Social.Publishing do
         |> Post.refusal_changeset(code, readable(message), retry_after)
         |> Repo.update!()
 
+        PostEvents.record!(post, "refused", :system, note: code)
         error
     end
   end
@@ -508,6 +511,7 @@ defmodule Platform.Social.Publishing do
           post
           |> Changeset.change(status: "failed", error: "cancelled before publishing")
           |> update()
+          |> log_outcome(post)
         else
           {:ok, %Post{}} -> {:error, :not_scheduled}
           error -> error
@@ -615,7 +619,7 @@ defmodule Platform.Social.Publishing do
     {:ok, result} =
       Repo.transaction(fn ->
         post = Repo.one(from(p in Post, where: p.id == ^id, lock: "FOR UPDATE"))
-        transition(post, outcome)
+        post |> transition(outcome) |> log_outcome(post)
       end)
 
     terminal_written(result, id)
@@ -653,6 +657,26 @@ defmodule Platform.Social.Publishing do
   end
 
   defp transition(%Post{}, _outcome), do: {:error, :invalid_transition}
+
+  # Social authoring 2/11: the change log entry for a publish outcome, in
+  # the transaction that wrote it. A `scheduled` write and a `:noop` are not
+  # logged; a refusal before the vendor is logged by `record_refusal/4`.
+  defp log_outcome({:ok, %Post{status: "published"} = written} = result, _post) do
+    PostEvents.record!(written, "published", :system)
+    result
+  end
+
+  defp log_outcome({:ok, %Post{status: "failed"} = written} = result, _post) do
+    PostEvents.record!(written, "failed", :system, note: written.error)
+    result
+  end
+
+  defp log_outcome({:error, {:publish_failed, reason}} = result, %Post{} = post) do
+    PostEvents.record!(post, "failed", :system, note: readable(reason))
+    result
+  end
+
+  defp log_outcome(result, _post), do: result
 
   # ── Task write-back (Social 6/7) ─────────────────────────────────────
 

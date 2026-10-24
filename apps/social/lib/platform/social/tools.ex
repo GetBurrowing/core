@@ -37,7 +37,11 @@ defmodule Platform.Social.Tools do
     Clip,
     ClipJob,
     ClipJobs,
+    Idea,
+    Ideas,
     Post,
+    PostEvent,
+    PostEvents,
     Profile,
     TaskBridge,
     ToolDefinitions
@@ -48,6 +52,10 @@ defmodule Platform.Social.Tools do
   # Clip Studio 1/9: the clip job tools.
   @job_tools ~w(social_clip_job_list social_clip_job_claim social_clip_job_progress
                 social_clip_job_complete social_clip_job_fail)
+
+  # Social authoring 2/11: the tools that need the calling agent (the idea
+  # creator, and the change log's actor on a draft write).
+  @agent_tools ~w(social_idea_create social_idea_list social_draft_create social_draft_update)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -63,6 +71,9 @@ defmodule Platform.Social.Tools do
 
       tool in @job_tools ->
         with {:ok, scope} <- scope(context), do: job_tool(tool, args, scope, agent(context))
+
+      tool in @agent_tools ->
+        with {:ok, scope} <- scope(context), do: agent_tool(tool, args, scope, agent(context))
 
       tool in ToolDefinitions.names() ->
         with {:ok, scope} <- scope(context), do: run(tool, args, scope)
@@ -299,6 +310,128 @@ defmodule Platform.Social.Tools do
   defp job_reply({:ok, %ClipJob{} = job}), do: {:ok, %{job: job_json(job)}}
   defp job_reply(error), do: {:error, error_envelope(error)}
 
+  # ── Social authoring 2/11: ideas, and drafts that name one ────────────
+
+  @idea_keys ~w(title brief source_kind clip_id task_id meeting_id message_id source_url)
+
+  # The agent is ALWAYS the caller (context): it is the idea's creator and
+  # the change log's actor, never an argument.
+  defp agent_tool("social_draft_create", args, scope, agent) do
+    attrs = Map.drop(args, ["profile_id", "org_id"])
+
+    case AgentDrafts.create_agent_drafts(scope, args["profile_id"], attrs, agent_id: agent.id) do
+      {:ok, posts} -> {:ok, %{posts: Enum.map(posts, &post_json/1), count: length(posts)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_draft_update", args, scope, agent) do
+    attrs = Map.drop(args, ["post_id", "org_id"])
+
+    case AgentDrafts.update_agent_draft(scope, args["post_id"], attrs, agent_id: agent.id) do
+      {:ok, post} -> {:ok, %{post: post_json(post)}}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_idea_create", args, scope, agent) do
+    attrs = Map.take(args, @idea_keys)
+
+    case Ideas.create(scope, args["profile_id"], attrs, {:agent, agent.id}) do
+      {:ok, idea} -> {:ok, %{idea: idea_json(idea, [])}}
+      {:error, :not_found} -> {:error, not_found("profile")}
+      error -> {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_idea_list", args, scope, _agent) do
+    case Social.get_profile(scope, args["profile_id"]) do
+      %Profile{} = profile ->
+        {limit, offset} = ResultBound.page(args)
+        stage = blank_to_nil(args["stage"])
+
+        ideas = Ideas.list(scope, profile.id, archived: args["archived"] == true)
+        posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
+
+        rows =
+          ideas
+          |> Enum.map(&{&1, Map.get(posts, &1.id, [])})
+          |> Enum.filter(fn {_idea, ps} -> stage == nil or Ideas.stage(ps) == stage end)
+
+        page =
+          rows
+          |> Enum.drop(offset)
+          |> Enum.take(limit)
+          |> Enum.map(fn {idea, ps} -> idea_json(idea, ps) end)
+
+        {:ok,
+         ResultBound.paged(:ideas, page, length(rows), offset, %{limit: limit, offset: offset})}
+
+      nil ->
+        {:error, not_found("profile")}
+    end
+  end
+
+  defp idea_json(%Idea{} = idea, posts) do
+    events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
+
+    revisions =
+      for post <- posts,
+          %PostEvent{} = e <- [PostEvents.open_revision(Map.get(events, post.id, []))] do
+        %{
+          post_id: post.id,
+          note: e.note,
+          requested_by_user_id: e.actor_id,
+          requested_at: e.inserted_at
+        }
+      end
+
+    idea
+    |> Map.take([
+      :id,
+      :profile_id,
+      :title,
+      :brief,
+      :source_kind,
+      :clip_id,
+      :task_id,
+      :meeting_id,
+      :message_id,
+      :source_url,
+      :created_by_user_id,
+      :created_by_agent_id,
+      :archived_at,
+      :inserted_at
+    ])
+    |> Map.merge(%{
+      stage: Ideas.stage(posts),
+      posts: Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id))),
+      open_revisions: revisions
+    })
+  end
+
+  defp posts_with_events(posts) do
+    events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
+    Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id)))
+  end
+
+  defp events_json(events, post_id) do
+    events
+    |> Map.get(post_id, [])
+    |> Enum.map(
+      &Map.take(&1, [
+        :id,
+        :action,
+        :actor_kind,
+        :actor_id,
+        :body_before,
+        :body_after,
+        :note,
+        :inserted_at
+      ])
+    )
+  end
+
   # ── Scope ────────────────────────────────────────────────────────────
 
   defp scope(context) do
@@ -360,24 +493,6 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp run("social_draft_create", args, scope) do
-    attrs = Map.drop(args, ["profile_id", "org_id"])
-
-    case AgentDrafts.create_agent_drafts(scope, args["profile_id"], attrs) do
-      {:ok, posts} -> {:ok, %{posts: Enum.map(posts, &post_json/1), count: length(posts)}}
-      error -> {:error, error_envelope(error)}
-    end
-  end
-
-  defp run("social_draft_update", args, scope) do
-    attrs = Map.drop(args, ["post_id", "org_id"])
-
-    case AgentDrafts.update_agent_draft(scope, args["post_id"], attrs) do
-      {:ok, post} -> {:ok, %{post: post_json(post)}}
-      error -> {:error, error_envelope(error)}
-    end
-  end
-
   defp run("social_post_list", args, scope) do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
@@ -390,7 +505,7 @@ defmodule Platform.Social.Tools do
         ]
 
         posts = Social.list_posts(scope, filters)
-        page = posts |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&post_json/1)
+        page = posts |> Enum.drop(offset) |> Enum.take(limit) |> posts_with_events()
 
         {:ok,
          ResultBound.paged(:posts, page, length(posts), offset, %{limit: limit, offset: offset})}
@@ -651,6 +766,24 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :idea_profile_mismatch}) do
+    err(
+      :idea_profile_mismatch,
+      "that idea belongs to another profile; nothing was written",
+      false,
+      "Draft under the idea's own profile (social_idea_list shows it), or create an idea for this profile."
+    )
+  end
+
+  defp error_envelope({:error, :idea_archived}) do
+    err(
+      :idea_archived,
+      "that idea is archived and takes no new posts; nothing was written",
+      false,
+      "Create a new idea with social_idea_create, or drop idea_id."
+    )
+  end
+
   defp error_envelope({:error, :invalid_range}) do
     err(
       :invalid_range,
@@ -777,6 +910,7 @@ defmodule Platform.Social.Tools do
       :refused_at,
       :retry_after,
       :clip_id,
+      :idea_id,
       :platform_post_id,
       :publish_attempts,
       :published_at,

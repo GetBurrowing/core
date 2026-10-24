@@ -84,6 +84,12 @@ defmodule Platform.Social.Post do
     field(:publish_attempts, :integer, default: 0)
     field(:published_at, :utc_datetime_usec)
 
+    # Social authoring 2/11 (task 01a16c4e). In NO cast list: set only by
+    # `Platform.Social.AgentDrafts` (checked against the idea's org and
+    # profile) and `Platform.Social.ClipDecisions.approve_clip/5`. Nil is a
+    # post that is its own one-post group.
+    belongs_to(:idea, Platform.Social.Idea)
+
     timestamps()
   end
 
@@ -270,6 +276,7 @@ defmodule Platform.Social.Post do
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:generated_by_agent_id)
     |> foreign_key_constraint(:clip_id)
+    |> foreign_key_constraint(:idea_id)
     |> check_constraint(:publish_attempts,
       name: :social_posts_publish_attempts_check,
       message: "must not be negative"

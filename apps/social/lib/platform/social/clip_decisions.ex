@@ -10,7 +10,10 @@ defmodule Platform.Social.ClipDecisions do
   approved (`Platform.Social.Clip.review_changeset/3`), applies the human's
   title/caption edits (`Clip.human_edit_changeset/2`), writes one post per
   selected account (per-platform status is never rolled up), and approves
-  each with `Platform.Social.approve_post/4` as the SAME human. There is no
+  each with `Platform.Social.approve_post/4` as the SAME human. The posts
+  share the clip's ONE idea (Social authoring 2/11:
+  `Platform.Social.Ideas.find_or_create_for_clip!/3`), and each gets a
+  `created` and an `approved` change log entry naming that human. There is no
   approval card and no `needs_approval` step. Each post's `publish_after` is
   the decision time plus `Platform.Social.ClipPublish.window_ms/0`, and
   `ClipPublish` publishes it once the window closes. The window is
@@ -36,7 +39,19 @@ defmodule Platform.Social.ClipDecisions do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Clip, ClipMedia, ClipPublish, Links, Post, Profile, Publishing}
+
+  alias Platform.Social.{
+    Account,
+    Clip,
+    ClipMedia,
+    ClipPublish,
+    Ideas,
+    Links,
+    Post,
+    PostEvents,
+    Profile,
+    Publishing
+  }
 
   @max_note 2_000
 
@@ -115,9 +130,13 @@ defmodule Platform.Social.ClipDecisions do
   end
 
   defp write_posts(org_id, profile, clip, accounts, user_id, publish_after) do
+    idea = Ideas.find_or_create_for_clip!(clip, profile, user_id)
+
     Enum.reduce_while(accounts, {:ok, []}, fn account, {:ok, acc} ->
-      with {:ok, post} <- insert_post(profile, clip, account, publish_after),
+      with {:ok, post} <- insert_post(profile, clip, idea, account, publish_after),
+           _created = PostEvents.record!(post, "created", {:human, user_id}),
            {:ok, post} <- Social.approve_post(org_id, post, user_id, lock: true) do
+        PostEvents.record!(post, "approved", {:human, user_id})
         {:cont, {:ok, [post | acc]}}
       else
         error -> {:halt, error}
@@ -130,12 +149,17 @@ defmodule Platform.Social.ClipDecisions do
   end
 
   # A draft that is approved in the same transaction: never `needs_approval`,
-  # so no approval card is written. `clip_id` and `publish_after` are set on
-  # the struct, never cast.
-  defp insert_post(profile, clip, account, publish_after) do
+  # so no approval card is written. `clip_id`, `idea_id` and `publish_after`
+  # are set on the struct, never cast.
+  defp insert_post(profile, clip, idea, account, publish_after) do
     link = Links.effective_link(nil, profile.home_url, clip.source_url, clip.start_s)
 
-    %Post{account_id: account.id, clip_id: clip.id, publish_after: publish_after}
+    %Post{
+      account_id: account.id,
+      clip_id: clip.id,
+      idea_id: idea.id,
+      publish_after: publish_after
+    }
     |> Post.changeset(%{
       status: "draft",
       body: Links.append_to_body(clip.caption, link),
@@ -311,8 +335,12 @@ defmodule Platform.Social.ClipDecisions do
           |> Changeset.change(error: nil)
           |> Repo.update()
           |> case do
-            {:ok, approved} -> approved
-            {:error, changeset} -> Repo.rollback(changeset)
+            {:ok, approved} ->
+              PostEvents.record!(approved, "approved", {:human, user_id}, note: "retry")
+              approved
+
+            {:error, changeset} ->
+              Repo.rollback(changeset)
           end
 
         _ ->

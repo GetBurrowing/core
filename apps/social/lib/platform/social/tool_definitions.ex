@@ -13,7 +13,9 @@ defmodule Platform.Social.ToolDefinitions do
   queue a clip's render and list clips with their render and review state,
   (Social 6/7) file a social task for an ask heard in a meeting or chat,
   and (Clip Studio 1/9) five tools a clip runner uses to work Clip Studio's
-  job list (list, claim, progress, complete, fail). Fifteen in all. No tool
+  job list (list, claim, progress, complete, fail), and (Social authoring
+  2/11) create and list ideas, the record one post per account hangs off.
+  Seventeen in all. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -31,7 +33,8 @@ defmodule Platform.Social.ToolDefinitions do
   @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
             social_post_list social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
-            social_clip_job_progress social_clip_job_complete social_clip_job_fail)
+            social_clip_job_progress social_clip_job_complete social_clip_job_fail
+            social_idea_create social_idea_list)
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -121,7 +124,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   @privacy_null "title, caption, speaker and episode_code may be null (the clip tool's [privacy] mode = \"local\" sends nothing transcript-derived)."
 
-  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
+  @post_row "post: %{id, account_id, status, body, link_url, media_file_ids, scheduled_at, error, rejection_reason, rejected_at, refused_reason, refused_at, retry_after, clip_id, idea_id, platform_post_id, publish_attempts, published_at, approved_at, task_id, meeting_id, segment_ids, episode_url, start_s, end_s, cover_file_id, cover_offset_ms, cover_error, inserted_at, updated_at}"
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -173,11 +176,17 @@ defmodule Platform.Social.ToolDefinitions do
               required: true,
               description: "Ids of the profile's accounts to post on.",
               schema: %{type: "array", items: %{type: "string"}}
+            },
+            idea_id: %{
+              type: "string",
+              required: false,
+              description:
+                "The idea these posts belong to (social_idea_create / social_idea_list), one post per account. Must be an idea of the same profile."
             }
           }),
         returns: "%{posts: [#{@post_row}], count}",
         limitations:
-          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org.",
+          "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org. An idea_id outside your org is not_found; another profile's idea is idea_profile_mismatch; an archived idea is idea_archived.",
         when_to_use:
           "When you have post copy ready for a human to review. With no link_url, home_url is appended."
       },
@@ -216,9 +225,10 @@ defmodule Platform.Social.ToolDefinitions do
           limit: %{type: "integer", required: false, description: "Page size (default 50)."},
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
-        returns: "%{posts: [#{@post_row}], total, has_more, limit, offset}",
+        returns:
+          "%{posts: [#{@post_row} plus events: [%{id, action, actor_kind, actor_id, body_before, body_after, note, inserted_at}]], total, has_more, limit, offset}",
         limitations:
-          "not_found for a profile outside your org. Oldest first. clip_id, platform_post_id, publish_attempts and published_at are read-only and may be null (publish_attempts is 0 before any vendor call).",
+          "not_found for a profile outside your org. Oldest first. clip_id, idea_id, platform_post_id, publish_attempts and published_at are read-only and may be null (publish_attempts is 0 before any vendor call). events is the post's change log, oldest first: actor_kind says whether an agent, a human or the system made each change.",
         when_to_use:
           "To see what is waiting, what shipped, what was rejected and why, and (refused: true) what is stuck before the vendor. Only a human retries a refused post; a rate_limited one goes out by itself at retry_after."
       },
@@ -599,6 +609,82 @@ defmodule Platform.Social.ToolDefinitions do
         returns: "%{job: #{@job_row}}",
         limitations: "invalid_error for a blank error. " <> @job_errors <> " " <> @privacy_null,
         when_to_use: "When `clip` fails or the job cannot be done."
+      },
+      %{
+        name: "social_idea_create",
+        description:
+          "Create an idea under a profile: the record one post per account belongs to. Then draft its posts with social_draft_create idea_id=<id>. " <>
+            @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          title: %{
+            type: "string",
+            required: true,
+            description: "The idea in a few words (at most 200 characters)."
+          },
+          brief: %{type: "string", required: false, description: "What the posts should say."},
+          source_kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Where the idea came from: one of human, agent, chat, clip, task, meeting, url (default agent)."
+          },
+          clip_id: %{
+            type: "string",
+            required: false,
+            description: "Source clip, of this profile."
+          },
+          task_id: %{
+            type: "string",
+            required: false,
+            description: "Source task, in the profile's org."
+          },
+          meeting_id: %{
+            type: "string",
+            required: false,
+            description: "Source meeting, in the profile's org."
+          },
+          message_id: %{
+            type: "string",
+            required: false,
+            description: "Source chat message, in a space of the profile's org."
+          },
+          source_url: %{type: "string", required: false, description: "Source http or https URL."}
+        },
+        returns:
+          "%{idea: %{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts, open_revisions}}",
+        limitations:
+          "not_found for a profile outside your org. Refs outside the profile's org are invalid_argument. You are recorded as the creator. Creating an idea writes no post and asks no human.",
+        when_to_use:
+          "Before drafting the same idea for several accounts, so the drafts stay one group."
+      },
+      %{
+        name: "social_idea_list",
+        description:
+          "List a profile's ideas, newest first, each with its stage (derived from its posts: inbox, drafting, in_review, scheduled, live, failed), its posts with their change log, and any open revision notes a human left. " <>
+            @human_approves,
+        parameters: %{
+          profile_id: %{type: "string", required: true, description: "The profile id."},
+          stage: %{
+            type: "string",
+            required: false,
+            description:
+              "Only ideas at this stage: inbox, drafting, in_review, scheduled, live or failed."
+          },
+          archived: %{
+            type: "boolean",
+            required: false,
+            description: "true: include archived ideas. Default false."
+          },
+          limit: %{type: "integer", required: false, description: "Page size (default 50)."},
+          offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
+        },
+        returns:
+          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}]}], total, has_more, limit, offset}",
+        limitations:
+          "not_found for a profile outside your org. Posts with no idea are not listed here (social_post_list has them). A revision note stays open until you edit the post (social_draft_update) or a human decides it.",
+        when_to_use:
+          "To see where each idea stands and what a human asked you to revise. Revise with social_draft_update; the post stays waiting for the human."
       }
     ]
   end
