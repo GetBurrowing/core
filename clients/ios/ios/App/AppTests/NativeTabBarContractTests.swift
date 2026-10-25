@@ -56,11 +56,16 @@ final class NativeTabBarContractTests: XCTestCase {
         XCTAssertTrue(source.contains("cap.Plugins?.SuiteNative"))
     }
 
-    /// The four keys the hook's `stateOf` sends are the ones `applying` reads:
-    /// each one, applied alone, changes the state.
+    /// The six keys the hook's `stateOf` sends are the ones `applying` reads:
+    /// each one, applied alone, changes the state. `ink` carries the two
+    /// probe keys the hook reads (`INK_KEYS`).
     func testPayloadKeysMatchTheHook() throws {
         let source = try hook
-        for field in ["items: itemsOf(el)", "selected: active ? active : null", "more_dot: el.getAttribute(", "visible: barVisible("] {
+        for field in [
+            "items: itemsOf(el)", "selected: active ? active : null", "more_dot: el.getAttribute(", "visible: barVisible(",
+            "ink: inksOf(el, win, normalise)", "scheme: schemeOf(win, doc)",
+            "export const INK_KEYS = [\"selected\", \"unselected\"]",
+        ] {
             XCTAssertTrue(source.contains(field), field)
         }
         let start = NativeTabBarState()
@@ -69,6 +74,21 @@ final class NativeTabBarContractTests: XCTestCase {
         XCTAssertEqual(start.applying(["selected": "voice"], log: quiet).selected, "voice")
         XCTAssertTrue(start.applying(["more_dot": true], log: quiet).moreDot)
         XCTAssertTrue(start.applying(["visible": true], log: quiet).visible)
+        let ink = start.applying(["ink": ["selected": "#00000001", "unselected": "#00000002"]], log: quiet).ink
+        XCTAssertEqual(ink, NativeTabInk(selected: "#00000001", unselected: "#00000002"))
+        XCTAssertEqual(start.applying(["scheme": "dark"], log: quiet).scheme, "dark")
+    }
+
+    /// The probes the hook reads exist in the bridge span, and app.css paints
+    /// them with the bar's own inks behind the stage 3 token slots.
+    func testInkProbesExistAndReadTheBarTokens() throws {
+        let rail = try read("apps/platform/lib/platform_web/components/icon_rail.ex")
+        let css = try read("apps/platform/assets/css/app.css")
+        XCTAssertTrue(rail.contains("<span data-native-ink=\"selected\"></span>"))
+        XCTAssertTrue(rail.contains("<span data-native-ink=\"unselected\"></span>"))
+        XCTAssertTrue(css.contains("color: var(--native-tab-selected, var(--color-primary));"))
+        XCTAssertTrue(css.contains("color: var(--native-tab-unselected, var(--tab-ink));"))
+        XCTAssertTrue(try hook.contains("el.querySelector(`[data-native-ink=\"${key}\"]`)"))
     }
 
     func testTapDetailKeysMatchTheHook() throws {

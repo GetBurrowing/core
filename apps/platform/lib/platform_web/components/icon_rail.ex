@@ -157,7 +157,10 @@ defmodule PlatformWeb.Components.IconRail do
       <%!-- Bridge to the iOS app's native tab bar (task 01a1557b stage 3, the
            NativeTabBar hook). Inert outside a native build that has the bar.
            data-items is the bar's own tab keys in order, More last, so native
-           draws exactly what this bar draws. --%>
+           draws exactly what this bar draws. The two ink probes (task
+           01a174e8 stage 1) resolve the bar's selected and unselected inks
+           through app.css, so the hook can send them as plain colours. They
+           are NOT .bottom-nav-tab: tab_pill.js and other selectors match that. --%>
       <span
         id="native-tab-bridge"
         phx-hook="NativeTabBar"
@@ -167,6 +170,8 @@ defmodule PlatformWeb.Components.IconRail do
         data-more-unread={to_string(@more_unread?)}
         data-more-open={to_string(@more_open)}
       >
+        <span data-native-ink="selected"></span>
+        <span data-native-ink="unselected"></span>
       </span>
     </nav>
     """

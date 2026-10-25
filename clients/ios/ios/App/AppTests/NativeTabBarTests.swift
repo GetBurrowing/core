@@ -56,6 +56,33 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertNil(state(["selected": NSNull()], from: start).selected)
     }
 
+    /// `ink` (task 01a174e8 stage 1): stored as sent, per key; a key the web
+    /// left out, or a value of the wrong type, keeps the previous ink.
+    func testInkIsStoredPerKeyAndAWrongTypeLeavesItUnchanged() {
+        XCTAssertEqual(NativeTabBarState().ink, NativeTabInk(selected: nil, unselected: nil))
+        var next = state(["ink": ["selected": "#ad4b07ff", "unselected": "#0000008c"]])
+        XCTAssertEqual(next.ink, NativeTabInk(selected: "#ad4b07ff", unselected: "#0000008c"))
+        next = state(["ink": ["selected": "#f47721ff"]], from: next)
+        XCTAssertEqual(next.ink, NativeTabInk(selected: "#f47721ff", unselected: "#0000008c"), "a dropped key keeps its ink")
+        XCTAssertEqual(state(["ink": [:] as [String: Any]], from: next).ink, next.ink)
+        XCTAssertEqual(state(["ink": "#ffffffff"], from: next).ink, next.ink)
+        XCTAssertEqual(state(["ink": ["selected": 7, "unselected": NSNull()] as [String: Any]], from: next).ink, next.ink)
+        XCTAssertEqual(state(["items": five], from: next).ink, next.ink, "a payload without ink keeps it")
+    }
+
+    /// `scheme`: "light" or "dark"; anything else keeps the previous value.
+    func testSchemeIsLightOrDarkAndAnythingElseLeavesItUnchanged() {
+        XCTAssertNil(NativeTabBarState().scheme)
+        var next = state(["scheme": "dark"])
+        XCTAssertEqual(next.scheme, "dark")
+        next = state(["scheme": "light"], from: next)
+        XCTAssertEqual(next.scheme, "light")
+        XCTAssertEqual(state(["scheme": "sepia"], from: next).scheme, "light")
+        XCTAssertEqual(state(["scheme": true], from: next).scheme, "light")
+        XCTAssertEqual(state(["scheme": NSNull()], from: next).scheme, "light")
+        XCTAssertEqual(state(["visible": true], from: next).scheme, "light")
+    }
+
     func testReducerCoversSelectionDotAndVisibility() {
         var next = state(["items": five, "selected": "chat", "visible": true])
         next = state(["selected": "meetings"], from: next)

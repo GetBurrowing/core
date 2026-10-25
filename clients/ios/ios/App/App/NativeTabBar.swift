@@ -32,9 +32,17 @@ struct NativeTab: Equatable {
     }
 }
 
+/// The tab inks the web resolved from its theme (`ink` in
+/// `SuiteNative.tabBarState`, task 01a174e8): each a '#rrggbbaa' string,
+/// stored as sent. Nothing draws with them yet; nil until the web sends one.
+struct NativeTabInk: Equatable {
+    var selected: String?
+    var unselected: String?
+}
+
 /// What the web last said through `SuiteNative.tabBarState`
-/// (`{items, selected, more_dot, visible}`). The bar is hidden, has no items
-/// and carries no badge until the first state arrives.
+/// (`{items, selected, more_dot, visible, ink, scheme}`). The bar is hidden,
+/// has no items and carries no badge until the first state arrives.
 struct NativeTabBarState: Equatable {
     /// The keys to draw, in the web's order: known keys only, no repeats, at
     /// most `NativeTab.maxItems`.
@@ -42,6 +50,11 @@ struct NativeTabBarState: Equatable {
     var selected: String?
     var moreDot = false
     var visible = false
+    /// The web theme's tab inks. A key the web left out (it could not
+    /// resolve that colour) keeps its previous value.
+    var ink = NativeTabInk()
+    /// "light" or "dark": the web theme's scheme, nil until the web sends one.
+    var scheme: String?
 
     /// The bar shows only when the web asked for it AND there is something
     /// to draw.
@@ -75,6 +88,13 @@ struct NativeTabBarState: Equatable {
         }
         if let dot = payload["more_dot"] as? Bool { next.moreDot = dot }
         if let visible = payload["visible"] as? Bool { next.visible = visible }
+        if let ink = payload["ink"] as? [String: Any] {
+            if let selected = ink["selected"] as? String { next.ink.selected = selected }
+            if let unselected = ink["unselected"] as? String { next.ink.unselected = unselected }
+        }
+        if let scheme = payload["scheme"] as? String, scheme == "light" || scheme == "dark" {
+            next.scheme = scheme
+        }
         return next
     }
 

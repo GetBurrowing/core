@@ -5391,6 +5391,21 @@ body, .font-suite {
   background: var(--color-primary);
 }
 
+/* Native tab bar inks (task 01a174e8 stage 1). Two hidden probes inside
+   #native-tab-bridge resolve the inks this bar paints, so the NativeTabBar
+   hook can read them with getComputedStyle and send them to the iOS bar in
+   tabBarState.ink. --native-tab-selected / --native-tab-unselected are slots
+   the token layer may set (stage 3's contrast substitution); unset, the
+   probes follow the web bar exactly: --tab-ink at rest, --color-primary
+   active. Semantic tokens only, never qualified by data-theme. */
+.bottom-nav [data-native-ink="unselected"] {
+  color: var(--native-tab-unselected, var(--tab-ink));
+}
+
+.bottom-nav [data-native-ink="selected"] {
+  color: var(--native-tab-selected, var(--color-primary));
+}
+
 /* Desktop sidebar (Burrow redesign 22 stage 1; master-desktop.html #side,
    CSS L32-L45). Widths: 220px, 200px at or below 1100px. One custom
    property so the sidebar and everything that starts at its right edge (the

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { EVENT, ATTR, DESKTOP_QUERY, stateOf } from "../../js/hooks/native_tab_bar.js"
+import { EVENT, ATTR, DESKTOP_QUERY, INK_KEYS, stateOf } from "../../js/hooks/native_tab_bar.js"
 
 /**
  * CONTRACT SOURCE SCAN, web side (task 01a1557b stage 4). The native tab bar
@@ -65,8 +65,29 @@ describe("native tab bar contract: Swift sources vs the hook", () => {
     const doc = { documentElement: { matches: () => false }, querySelector: () => null }
     const sent = Object.keys(stateOf(span, win, doc)).sort()
     const read = [...tabBarSwift.matchAll(/payload\["(\w+)"\]/g)].map((m) => m[1])
-    expect(sent).toEqual(["items", "more_dot", "selected", "visible"])
+    expect(sent).toEqual(["ink", "items", "more_dot", "scheme", "selected", "visible"])
     expect([...new Set(read)].sort()).toEqual(sent)
+  })
+
+  it("the ink sub-keys the hook sends are the ones applying reads from payload[\"ink\"]", () => {
+    expect(INK_KEYS).toEqual(["selected", "unselected"])
+    const block = tabBarSwift.match(/if let ink = payload\["ink"\] as\? \[String: Any\] \{([\s\S]*?)\n {8}\}/)
+    expect(block).not.toBeNull()
+    const read = [...block[1].matchAll(/ink\["(\w+)"\] as\? String/g)].map((m) => m[1])
+    expect(read).toEqual(INK_KEYS)
+    expect(tabBarSwift).toMatch(/payload\["scheme"\] as\? String, scheme == "light" \|\| scheme == "dark"/)
+  })
+
+  it("the ink probes are in the bridge span, NOT bottom-nav-tab, and app.css paints them from tokens", () => {
+    const bridge = iconRail.match(/<span\s+id="native-tab-bridge"[\s\S]*?<\/span>\s*<\/span>/)
+    expect(bridge).not.toBeNull()
+    for (const key of INK_KEYS) {
+      expect(bridge[0]).toContain(`<span data-native-ink="${key}"></span>`)
+      expect(hookJs).toContain('el.querySelector(`[data-native-ink="${key}"]`)')
+    }
+    expect(bridge[0]).not.toMatch(/data-native-ink[^>]*bottom-nav-tab/)
+    expect(appCss).toContain('.bottom-nav [data-native-ink="selected"] {\n  color: var(--native-tab-selected, var(--color-primary));\n}')
+    expect(appCss).toContain('.bottom-nav [data-native-ink="unselected"] {\n  color: var(--native-tab-unselected, var(--tab-ink));\n}')
   })
 
   it("the tap detail native sends carries the key and reselect the hook reads", () => {
