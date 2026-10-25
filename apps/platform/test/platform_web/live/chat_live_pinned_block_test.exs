@@ -9,10 +9,12 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   Pinned also asserts absence from the home section.
 
   Burrow redesign 22 stage 2 deleted the desktop channel rail. Its Pinned
-  block's reorder (arrows, drag, edit-mode chrome), its label chrome, and the
-  task-first order went with it: inside every Chat list section rows sort by
-  recency and there is no manual order (`Partials.ChatList` `## Order`). Those
-  cases are deleted.
+  block's reorder (arrows, drag, edit-mode chrome) and its label chrome went
+  with it, and those cases are deleted. Task 01a1557b brought the saved order
+  back for Pinned only: task pins first by recency, then the pinned
+  conversations in the user's saved order, while every other section sorts by
+  recency (`Partials.ChatList` `## Order`). The reorder itself is covered in
+  `chat_live_pinned_order_test.exs`.
 
   `async: false`: the Agents row (first in Pinned) reads a feature flag from
   application env, held off here so Pinned holds only pins.

@@ -65,7 +65,14 @@ const ASSETS = resolve(HERE, "..");
 // transcript, floor release) and hooks/voice_context.js landed as first-party
 // code. livekit-client was already in the bundle via the meeting hooks, so
 // this is hook code, not an island; 976 KB still catches the ~8.2 MB leak.
-const MAX_BYTES = 976 * 1024;
+//
+// Raised from 976 KB to 992 KB by task 01a1557b-05ac (Burrow redesign 25:
+// desktop drag-reorder for pinned rows): the WITH-Play app.js measured
+// 1,001,643 bytes in CI run 40233103398, 2,219 over 976 KB, after
+// hooks/pinned_reorder.js (drag, Alt+arrow keys, undo burst) landed as
+// first-party hook code with no new dependency. 992 KB still catches the
+// ~8.2 MB leak.
+const MAX_BYTES = 992 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

@@ -620,6 +620,12 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   attr(:root_admin?, :boolean, default: false)
 
+  attr(:move, :any,
+    default: nil,
+    doc:
+      "nil unless the target is a pinned conversation, else its `%{index, count}` in the rendered conversation run (`PinnedReorderHooks.move_position/3`)"
+  )
+
   def row_actions_dialog(assigns) do
     ~H"""
     <div :if={@target} class="hidden lg:contents">
@@ -679,6 +685,32 @@ defmodule PlatformWeb.ChatLive.Partials do
                 >
                 </span>
                 <span>{if @target.pinned, do: "Unpin", else: "Pin"}</span>
+              </button>
+            </li>
+            <%!-- Move up / Move down (Burrow redesign 25 stage 2): the
+                 keyboard-free path to the pinned order, desktop only (the
+                 phone sheet has none). Disabled at the ends, never hidden, so
+                 the pair does not jump. The click closes the menu in
+                 `PinnedReorderHooks`. --%>
+            <li :if={@move} class="border-t border-edge">
+              <button
+                :for={
+                  {label, dir, icon, disabled?} <- [
+                    {"Move up", "up", "hero-arrow-up", @move.index == 0},
+                    {"Move down", "down", "hero-arrow-down", @move.index == @move.count - 1}
+                  ]
+                }
+                type="button"
+                class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors lg:hover:bg-base-200 disabled:cursor-not-allowed disabled:text-subtle focus-visible-ring"
+                phx-click="move_pinned_step"
+                phx-value-space_id={@target.space_id}
+                phx-value-direction={dir}
+                data-role={"row-actions-move-#{dir}"}
+                data-space-id={@target.space_id}
+                disabled={disabled?}
+              >
+                <span class={[icon, "size-4 flex-shrink-0"]} aria-hidden="true"></span>
+                <span>{label}</span>
               </button>
             </li>
             <li :if={@target.hideable} class="border-t border-edge">

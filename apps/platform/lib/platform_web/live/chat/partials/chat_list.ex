@@ -47,16 +47,24 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   conversations already removed, so no row appears twice) and ARCHIVED (only
   while `@archived_open`).
 
-  Inside every section rows sort by recency
+  Inside Spaces, Direct and Archived rows sort by recency
   (`ChatListData.sort_by_recency/3`, task 01a166bf stage 1): newest top-level
-  message first, rows with no message last by name. The Agents row stays
-  FIRST in Pinned: it is a derived entry, not a pin. The sort runs here, in
+  message first, rows with no message last by name. The sort runs here, in
   the component, over `@list_excerpts`, which `ChatListData.put_message/2`
   patches live, so an arriving message moves its row on the next render.
 
-  There is no manual order (the planner's decision: recency wins; pinning is
-  how you keep something at the top). The desktop rail's curated order and
-  edit mode went with the rail in Burrow redesign 22 stage 2.
+  Pinned is the exception (task 01a1557b): the Agents row stays FIRST (it is
+  a derived entry, not a pin), then the pinned TASK conversations by recency,
+  then the pinned conversations in the user's SAVED order
+  (`chat_pinned_spaces`, exactly as `ChatLive.pinned_rail_entries/2` returns
+  it). A message in a pinned conversation never moves it, and the hold does
+  not re-order that run. A new pin appends at its end.
+
+  The only manual order is that saved Pinned order, written by
+  `PlatformWeb.ChatLive.PinnedReorderHooks` on desktop. Everything else is
+  recency. The desktop rail's curated order and edit mode went with the rail
+  in Burrow redesign 22 stage 2, and the phone shows the saved order with no
+  reorder control.
 
   ## Holding the order (task 01a166bf stage 4)
 
@@ -147,6 +155,34 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   "channel"). A group (`kind: "group"`) draws `hero-user-group` in the disc,
   so "Sam, Alex" stops reading as a DM.
 
+  ## Pinned reorder (Burrow redesign 25 stage 2, canvas 01a17470)
+
+  Only a pinned CONVERSATION row with a link reorders (`reorder`): it
+  carries `data-reorder="true"`, `data-pinned-position` (its 0-based
+  `move_index` in the server's conversation run) and `data-pinned-count`.
+  A restricted pinned row carries `data-pinned-position` alone. Task rows,
+  the Agents row and every unpinned row get none of it, and a folded Pinned
+  renders no rows, so no grips.
+
+  The grip lives in the time column: `hidden` at rest and below lg, shown
+  only by `lg:group-hover/row` and `lg:group-focus-visible/row` on the row
+  link (every row link is `group/row relative`). The time (or, on a dense
+  row, the unread pill) goes `invisible` and keeps its box, so the name's
+  box is the same at rest and on hover. The row menu's Move up / Move down
+  push `move_pinned_step` (`Partials.row_actions_dialog/1`).
+
+  The drag and the Alt+arrow keys belong to the `PinnedReorder` hook
+  (`assets/js/hooks/pinned_reorder.js`), mounted on `#chat-list-rows-pinned`
+  and on no other section's rows. Desktop (lg) mouse and pen only. It draws
+  the lifted row, the origin-slot outline and the drop line into
+  `#pinned-reorder-overlay` (`phx-update="ignore"`), so a patch mid-drag
+  cannot strip them, and it pushes `move_pinned_row` or `move_pinned_step`.
+
+  `#pinned-reorder-announcer` is always rendered and speaks
+  `@pinned_announcement`. `#pinned-undo-toast` renders once while
+  `@pinned_undo` is set, desktop only, on the base-100 surface with no
+  primary.
+
   ## THE MASKING ATTRS ARE NOT OPTIONAL
 
   `ChatLive.masked_space_name/2` reads `:sidebar_sections`, `:mask_names?` and
@@ -222,6 +258,11 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:external_user, :any, default: nil)
   attr(:hidden_drawer_open, :boolean, default: false)
   attr(:resolved_mode, :string, default: "dark")
+  # Pinned reorder (Burrow redesign 25 stage 2, `## Pinned reorder`): the
+  # live-region text and the burst's undo state, both owned by
+  # `PinnedReorderHooks`.
+  attr(:pinned_announcement, :any, default: nil)
+  attr(:pinned_undo, :any, default: nil)
 
   @doc "The list. Renders nothing unless the gate in the moduledoc holds."
   def chat_list(assigns) do
@@ -346,7 +387,22 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             <.section_label id="chat-list-label-pinned" fold={@folds.pinned}>
               Pinned
             </.section_label>
-            <div id={@folds.pinned.controls} data-role="chat-list-section-rows">
+            <%!-- The drag and Alt+arrow keys (`## Pinned reorder`): the hook
+                 draws into its own ignored overlay, never into the rows. --%>
+            <div
+              id={@folds.pinned.controls}
+              data-role="chat-list-section-rows"
+              phx-hook="PinnedReorder"
+              class="relative"
+            >
+              <div
+                id="pinned-reorder-overlay"
+                data-role="pinned-reorder-overlay"
+                phx-update="ignore"
+                aria-hidden="true"
+                class="pointer-events-none absolute inset-x-0 top-0 z-10 h-0"
+              >
+              </div>
               <%= if !@folds.pinned.collapsed? do %>
                 <.agents_row
                   :if={@agents_block}
@@ -356,7 +412,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   list_excerpts={@list_excerpts}
                   mask_assigns={@mask_assigns}
                 />
-                <%= for %{kind: kind, space: space} <- @pinned_rows do %>
+                <%= for %{kind: kind, space: space} = entry <- @pinned_rows do %>
                   <.row
                     space={space}
                     kind={kind}
@@ -369,6 +425,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                     private?={MapSet.member?(@list_private_ids, space.id)}
                     long_press={kind != :task}
                     current={space.id == @active_id}
+                    reorder={kind != :task and not MapSet.member?(@restricted_channel_ids, space.id)}
+                    pinned_position={entry.move_index}
+                    pinned_count={entry.move_count}
                   />
                 <% end %>
               <% end %>
@@ -475,6 +534,14 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
       <.external_footer :if={@external?} external_user={@external_user} />
 
+      <%!-- Pinned reorder (`## Pinned reorder`): the live region every move
+           speaks through, always in the DOM so a screen reader is already
+           listening when the first move lands. --%>
+      <div id="pinned-reorder-announcer" role="status" aria-live="polite" class="sr-only">
+        {@pinned_announcement}
+      </div>
+      <.pinned_undo_toast :if={@pinned_undo} />
+
       <.search_sheet
         open={@list_sheet == :search}
         query={@list_search_query}
@@ -496,6 +563,32 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         archived_open={@archived_open}
       />
     </section>
+    """
+  end
+
+  # ONE toast per burst (`## Pinned reorder`): it renders while
+  # `@pinned_undo` is set, and a later move in the burst only re-arms the
+  # timer. Desktop only, since only desktop reorders. The base-100 surface
+  # and base-content ink, never primary or neutral (the direction's "no
+  # primary anywhere in this interaction"); 14px, the existing toast size.
+  defp pinned_undo_toast(assigns) do
+    ~H"""
+    <div
+      id="pinned-undo-toast"
+      data-role="pinned-undo-toast"
+      role="status"
+      class="fixed bottom-6 left-1/2 z-50 hidden -translate-x-1/2 items-center gap-3 rounded-box border border-edge bg-base-100 py-1 pl-4 pr-1 text-sm text-base-content shadow-md lg:flex"
+    >
+      <p class="whitespace-nowrap">Pinned order changed</p>
+      <button
+        type="button"
+        phx-click="undo_pinned_order"
+        data-role="pinned-undo-button"
+        class="min-h-11 shrink-0 rounded-box px-3 font-semibold text-base-content lg:hover:bg-base-300 focus-visible-ring"
+      >
+        Undo
+      </button>
+    </div>
     """
   end
 
@@ -1142,6 +1235,14 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:current, :boolean, default: false)
   # The desktop hover fill; nil on search results, whose `pressed` carries it.
   attr(:hover, :any, default: "lg:hover:bg-base-300")
+  # A pinned CONVERSATION row the user can reorder (`## Pinned reorder`): the
+  # grip and `data-reorder`. Never a task, Agents, restricted or unpinned row.
+  attr(:reorder, :boolean, default: false)
+  # Its `move_index` and `move_count` in the server's conversation run. A
+  # restricted pinned row carries the position too, so the stage 3 hook can
+  # index around it.
+  attr(:pinned_position, :any, default: nil)
+  attr(:pinned_count, :any, default: nil)
 
   # One row. The whole row is the link (at least 44px tall), with no
   # phx-click. Name `min-w-0 truncate`; time, dot and count never shrink.
@@ -1170,6 +1271,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         <div
           data-role="restricted-channel-row"
           data-space-id={@space.id}
+          data-pinned-position={@pinned_position}
           aria-disabled="true"
           class="flex min-h-11 items-center gap-2 pl-7 pr-4"
         >
@@ -1195,13 +1297,16 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             data-row-kind={@kind}
             data-row-shape="dense"
             data-unread={to_string(@unread > 0)}
+            data-reorder={@reorder && "true"}
+            data-pinned-position={@reorder && @pinned_position}
+            data-pinned-count={@reorder && @pinned_count}
             phx-hook={@long_press && "RowLongPress"}
             data-long-press-event={@long_press && "open_list_sheet"}
             data-long-press-sheet={@long_press && "row"}
             data-long-press-space-id={@long_press && @space.id}
             aria-current={@current && "page"}
             class={[
-              "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-7 pr-4 focus-visible-ring",
+              "chat-list-row group/row relative flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-7 pr-4 focus-visible-ring",
               @pressed,
               @hover,
               @current && "bg-base-300"
@@ -1231,11 +1336,18 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             <span
               :if={@unread_text}
               data-role="chat-list-unread-count"
-              class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-base-300 px-1.5 text-xs font-semibold tabular-nums text-base-content"
+              class={[
+                "flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-base-300 px-1.5 text-xs font-semibold tabular-nums text-base-content",
+                @reorder && "lg:group-hover/row:invisible lg:group-focus-visible/row:invisible"
+              ]}
             >
               <span aria-hidden="true">{@unread_text}</span>
               <span class="sr-only">{@unread_text} unread</span>
             </span>
+            <%!-- Over the pill slot when there is a pill (the pill goes
+                 invisible, keeping its box), else over the trailing padding:
+                 never over the name. --%>
+            <.row_grip :if={@reorder} class={if(@unread_text, do: "right-4", else: "right-0.5")} />
           </.link>
         </div>
       <% true -> %>
@@ -1247,13 +1359,16 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             data-space-id={@space.id}
             data-row-kind={@kind}
             data-unread={to_string(@unread > 0)}
+            data-reorder={@reorder && "true"}
+            data-pinned-position={@reorder && @pinned_position}
+            data-pinned-count={@reorder && @pinned_count}
             phx-hook={@long_press && "RowLongPress"}
             data-long-press-event={@long_press && "open_list_sheet"}
             data-long-press-sheet={@long_press && "row"}
             data-long-press-space-id={@long_press && @space.id}
             aria-current={@current && "page"}
             class={[
-              "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
+              "chat-list-row group/row relative flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
               @pressed,
               @hover,
               @current && "bg-base-300"
@@ -1267,7 +1382,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
               masked?={@name_masked?}
             />
             <span class="min-w-0 flex-1">
-              <span class="flex items-baseline gap-2">
+              <span class={["flex items-baseline gap-2", @reorder && "relative"]}>
                 <span
                   data-role="chat-list-row-name"
                   class={[
@@ -1286,11 +1401,16 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   data-role="chat-list-row-time"
                   class={[
                     "shrink-0 whitespace-nowrap tabular-nums text-xs",
-                    if(@unread > 0, do: "text-base-content", else: "text-subtle")
+                    if(@unread > 0, do: "text-base-content", else: "text-subtle"),
+                    @reorder && "lg:group-hover/row:invisible lg:group-focus-visible/row:invisible"
                   ]}
                 >
                   {Calendar.strftime(@excerpt.inserted_at, "%H:%M")}
                 </time>
+                <%!-- The time column (the direction's signature element):
+                     the time goes invisible and keeps its box, so the name
+                     never widens or moves. --%>
+                <.row_grip :if={@reorder} class="right-0" />
               </span>
               <span
                 :if={@excerpt}
@@ -1319,6 +1439,33 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           </.link>
         </div>
     <% end %>
+    """
+  end
+
+  attr(:class, :string, required: true)
+
+  # The 6-dot grip (`## Pinned reorder`). `hidden` at rest and below lg;
+  # shown only on desktop hover or keyboard focus of its row. Decorative: the
+  # row link is what keyboard and assistive tech reach.
+  defp row_grip(assigns) do
+    ~H"""
+    <span
+      data-role="chat-list-row-grip"
+      aria-hidden="true"
+      class={[
+        "pointer-events-none absolute top-1/2 hidden -translate-y-1/2 items-center justify-center text-subtle lg:group-hover/row:inline-flex lg:group-focus-visible/row:inline-flex",
+        @class
+      ]}
+    >
+      <svg viewBox="0 0 10 16" class="h-4 w-2.5" fill="currentColor">
+        <circle cx="2.5" cy="3" r="1.5" />
+        <circle cx="7.5" cy="3" r="1.5" />
+        <circle cx="2.5" cy="8" r="1.5" />
+        <circle cx="7.5" cy="8" r="1.5" />
+        <circle cx="2.5" cy="13" r="1.5" />
+        <circle cx="7.5" cy="13" r="1.5" />
+      </svg>
+    </span>
     """
   end
 
@@ -1559,8 +1706,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
         do: Enum.filter(List.wrap(assigns.channels), &(&1.id not in pinned_ids(pinned))),
         else: Platform.Chat.Sidebar.flatten_sections(assigns.sidebar_sections)
 
+    # Pinned (`## Order`): the task run by recency (and the hold), then the
+    # conversation run in the user's SAVED order, never re-sorted.
+    {tasks, conversations} = Enum.split_with(pinned, &(&1.kind == :task))
+
     %{
-      pinned: order.(pinned, :pinned, &row_name(&1.kind, &1.space, identities)),
+      pinned: order.(tasks, :pinned, &row_name(&1.kind, &1.space, identities)) ++ conversations,
       spaces: order.(spaces, :spaces, & &1.name),
       direct: order.(assigns.channel_sections.dms, :direct, &row_name(:dm, &1, identities)),
       archived: order.(assigns.archived_channels, :archived, & &1.name)
@@ -1621,9 +1772,14 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
   defp pinned_ids(pinned), do: Enum.map(pinned, & &1.space.id)
 
-  defp row_name(:channel, space, _identities), do: space.name
+  @doc """
+  A row's name before masking, as the row renders it: a channel's own name,
+  else the person's name from `@list_identities` (a DM), else the space name.
+  Mask it with `ChatLive.masked_space_name/2` to get what the row shows.
+  """
+  def row_name(:channel, space, _identities), do: space.name
 
-  defp row_name(_kind, space, identities) do
+  def row_name(_kind, space, identities) do
     case Map.get(identities, space.id) do
       %{name: name} -> name
       _ -> space.name || ""

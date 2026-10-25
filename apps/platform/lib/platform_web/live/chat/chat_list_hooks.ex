@@ -53,6 +53,7 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
   alias Platform.Chat.SidebarMask
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.Partials.ChatList
+  alias PlatformWeb.ChatLive.PinnedReorderHooks
 
   @sheets %{"search" => :search, "new" => :new, "options" => :options}
   @max_query 100
@@ -89,6 +90,7 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
     |> reset()
     |> assign(:list_collapsed, seed_collapsed(socket.assigns))
     |> release_hold()
+    |> PinnedReorderHooks.attach()
     |> attach_hook(:chat_list_events, :handle_event, &handle_event/3)
     |> attach_hook(:chat_list_info, :handle_info, &handle_info/2)
   end

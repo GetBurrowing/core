@@ -103,4 +103,26 @@ defmodule Platform.Chat.PinnedSpacesTest do
       assert PinnedSpaces.partition([a, b, c], MapSet.new([c.id, a.id])) == {[a, c], [b]}
     end
   end
+
+  # Task 01a1557b stage 1 (f): the anchor rule that keeps unrendered ids.
+  describe "destination_index/3" do
+    test "anchors on the next rendered neighbour, so a ghost id keeps its place" do
+      # G is stored but not rendered (an archived space). Moving C to the top
+      # of the rendered run [A, B, C] anchors on A.
+      stored = ["a", "g", "b", "c"]
+      assert PinnedSpaces.destination_index(stored, "c", ["c", "a", "b"]) == 0
+
+      # Between A and B: the anchor is B, index 2 in [a, g, b].
+      assert PinnedSpaces.destination_index(stored, "c", ["a", "c", "b"]) == 2
+    end
+
+    test "with no anchor after it the move appends" do
+      stored = ["a", "b", "g", "c"]
+      assert PinnedSpaces.destination_index(stored, "a", ["b", "c", "a"]) == 3
+    end
+
+    test "a space that is not stored gives nil" do
+      assert PinnedSpaces.destination_index(["a", "b"], "z", ["z", "a", "b"]) == nil
+    end
+  end
 end

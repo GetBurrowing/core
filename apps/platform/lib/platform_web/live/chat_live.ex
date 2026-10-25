@@ -633,10 +633,6 @@ defmodule PlatformWeb.ChatLive do
       # switcher's rows at RENDER time; the underlying assigns stay
       # unfiltered because the desktop rail renders from the same data.
       |> assign(:drawer_query, "")
-      # Text for the reorder announcer's polite aria-live region (the phone
-      # Chat list's Edit order, task 01a1557a-8562 stage 4), set after every
-      # row move so screen-reader users hear that it happened.
-      |> assign(:reorder_announcement, nil)
       # The desktop rail's row-actions dialog (task 019ff8ba; the phone's row
       # sheet opens from `@list_sheet` instead since task 01a1557a-8562): nil
       # when closed, else the space_id of the row whose trigger was clicked. Only
@@ -2550,16 +2546,21 @@ defmodule PlatformWeb.ChatLive do
     )
   end
 
-  # Re-read the pin list and rebuild every rail region that consumes it:
-  # `@channel_sections` (the Pinned block plus the DM and sub-org remainders
-  # a pin is lifted out of) and `@sidebar_sections` (the resolver-driven
-  # client sections, which exclude pinned channels).
-  #
-  # Reads back from preferences rather than patching `@pinned_space_ids` in
-  # place, so the render agrees with what was persisted — including the
-  # append-if-absent ordering `Sidebar.set_space_pinned/3` applies and the
-  # no-op it performs for an anonymous session with no user row.
-  defp recompute_pinned(socket) do
+  @doc """
+  Re-read the pin list and rebuild every rail region that consumes it:
+  `@channel_sections` (the Pinned block plus the DM and sub-org remainders
+  a pin is lifted out of) and `@sidebar_sections` (the resolver-driven
+  client sections, which exclude pinned channels).
+
+  Reads back from preferences rather than patching `@pinned_space_ids` in
+  place, so the render agrees with what was persisted, including the
+  append-if-absent ordering `Sidebar.set_space_pinned/3` applies and the
+  no-op it performs for an anonymous session with no user row.
+
+  Public for `PlatformWeb.ChatLive.PinnedReorderHooks`, which calls it after
+  every Pinned reorder and undo (task 01a1557b).
+  """
+  def recompute_pinned(socket) do
     pinned_space_ids = Sidebar.list_pinned_space_ids(socket.assigns.user_id)
 
     socket
@@ -4097,8 +4098,9 @@ defmodule PlatformWeb.ChatLive do
       be given a destination among them.
 
     * Rendered order and stored order have to be the SAME sequence for
-      `pinned_destination_index/3` to anchor on the right neighbour. They
-      are today, because `pinned_rail_entries/2` no longer reverses. Deriving
+      `Platform.Chat.PinnedSpaces.destination_index/3` to anchor on the
+      right neighbour. They are today, because `pinned_rail_entries/2` no
+      longer reverses. Deriving
       the baseline from the render rather than from the stored assign means a
       reversing render can never again make a drag up persist as a move down
       — the two would move together.

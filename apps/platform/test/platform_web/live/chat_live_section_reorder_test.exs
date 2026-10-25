@@ -6,8 +6,9 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
   Burrow redesign 22 stage 2 deleted the desktop channel rail; its drag
   reorder (and `ChatLive.compute_reorder/3`), saved-order hydration and
   per-section drag handles went with it, so the cases that exercised them are
-  deleted rather than retargeted
-  (the Chat list sorts by recency and has no manual order).
+  deleted rather than retargeted. The Chat list sorts by recency, except the
+  pinned conversations, which keep the user's saved order (task 01a1557b,
+  covered in `chat_live_pinned_order_test.exs`).
   """
 
   use PlatformWeb.ConnCase, async: false

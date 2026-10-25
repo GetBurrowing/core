@@ -194,7 +194,8 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       refute has_element?(view, "#chat-list[class*='lg:hidden']")
     end
 
-    test "each section orders by latest message, newest first", %{conn: conn} do
+    test "each section orders by latest message, newest first; Pinned keeps the saved order",
+         %{conn: conn} do
       w = world(conn)
       globex = Tenancy.get_org_by_slug!("globex")
       plain_member!(w.user, globex)
@@ -297,12 +298,13 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert dms_dom == dms_by_recency
       refute dms_dom == rail_dms_now
 
-      # Pinned order was PinOne, PinTwo; recency puts PinTwo first.
+      # Pinned is the exception (task 01a1557b): stored order PinOne, PinTwo
+      # wins over recency, which would put the newer PinTwo first.
       assert Sidebar.list_pinned_space_ids(w.user.id) |> keep([pin_one.id, pin_two.id]) ==
                [pin_one.id, pin_two.id]
 
       assert ids_in(html, "[data-role='chat-list-pinned'] [data-role='chat-list-row']") ==
-               [pin_two.id, pin_one.id]
+               [pin_one.id, pin_two.id]
     end
 
     test "a new message moves its conversation to the top of its section without reload",
@@ -1630,7 +1632,9 @@ defmodule PlatformWeb.ChatLiveChatListTest do
     end
   end
 
-  describe "no manual order" do
+  # The saved Pinned order is set on desktop only (task 01a1557b); the phone
+  # shows it and offers no reorder entry point.
+  describe "the phone has no Edit order" do
     test "no Edit order entry point in the phone list or row sheet", %{conn: conn} do
       w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")

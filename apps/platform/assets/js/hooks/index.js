@@ -62,6 +62,7 @@ import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
 import NativeInstallSwitch from "./native_install_switch"
 import NativeTabBar from "./native_tab_bar"
+import PinnedReorder from "./pinned_reorder"
 import PushSubscribe from "./push_subscribe"
 import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
@@ -145,6 +146,7 @@ export default {
   MessageEditor,
   NativeInstallSwitch,
   NativeTabBar,
+  PinnedReorder,
   PushSubscribe,
   ReactionPicker,
   ReactorPopover,

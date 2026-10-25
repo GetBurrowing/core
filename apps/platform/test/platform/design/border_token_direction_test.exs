@@ -115,11 +115,21 @@ defmodule Platform.Design.BorderTokenDirectionTest do
   # sameness is the point. Repointing these draws a ring that was never meant
   # to be there. Each one must also carry the reason at the site.
   #
-  # Empty since task 01a1557a stage 3, which deleted its only entry: the
-  # unreachable `Layouts.theme_toggle/1` pill (its 2px border was a structural
-  # gutter matched to the fill). The tests below still hold for an empty list:
-  # a new collision site has to be added here with its reason.
-  @allowed_live []
+  # Task 01a1557a stage 3 deleted the previous only entry: the unreachable
+  # `Layouts.theme_toggle/1` pill (its 2px border was a structural gutter
+  # matched to the fill).
+  #
+  # One site, and its test, is allowlisted on a DIFFERENT ground from the
+  # border-equals-fill rule above: the pinned drag's origin slot (Burrow
+  # redesign 25 stage 3). The design direction (canvas 01a17470) names a
+  # base-300 outline for it, and it is decorative: the drop line carries the
+  # position, and the pinned reorder contrast guard exempts exactly this pair.
+  @allowed_live [
+    {"assets/js/hooks/pinned_reorder.js", "const ORIGIN_CLASS =",
+     "the drag's origin-slot outline, base-300 by the design direction; decorative"},
+    {"assets/test/hooks/pinned_reorder.test.js", "expect(origin.className).toContain(",
+     "pins the origin-slot outline token above"}
+  ]
 
   # Prose convention in this repo: a class name discussed in a comment or a
   # docstring is wrapped in backticks. That is what separates a mention from a

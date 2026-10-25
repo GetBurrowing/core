@@ -507,7 +507,8 @@ defmodule Platform.Chat.Sidebar do
   Pinning APPENDS, so the block reads most-recently-pinned last. Re-pinning
   an already-pinned space keeps its existing position rather than moving it
   to the end, so a repeated event cannot shuffle the block. There is no
-  position field; reordering within the block is out of scope.
+  position field: the list's order IS the saved order, which the user sets
+  with `move_pinned_space/3` (task 01a1557b), and a new pin lands at its end.
 
   Returns `{:error, :not_found}` when the id matches no user row. Anonymous
   chat sessions carry a generated UUID, and callers treat that as a no-op.
@@ -537,7 +538,7 @@ defmodule Platform.Chat.Sidebar do
   `to_index` is an index into the list with `space_id` REMOVED, so it names
   the slot the pin lands in. `0` is the top of the block and
   `length(list) - 1` is the bottom. Callers derive it from the rendered
-  order; see `PlatformWeb.ChatLive`'s `pinned_destination_index/3`.
+  order with `Platform.Chat.PinnedSpaces.destination_index/3`.
 
   Tolerant on both arguments, matching the skip-unknown property the read
   side already holds (`PinnedSpaces` drops a pinned id that names no live
@@ -574,6 +575,25 @@ defmodule Platform.Chat.Sidebar do
     else
       current
     end
+  end
+
+  @doc """
+  Put the user's pin order back to `previous_ids` (the Pinned undo, task
+  01a1557b), without undoing a pin or unpin made since.
+
+  Writes `previous_ids` filtered to the ids pinned NOW, then the ids pinned
+  now that `previous_ids` lacks, in their current order. So a space unpinned
+  since the snapshot stays unpinned, and a space pinned since stays pinned,
+  at the end. Same return shape as `set_space_pinned/3`.
+  """
+  @spec restore_pinned_order(binary(), [binary()]) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def restore_pinned_order(user_id, previous_ids) when is_list(previous_ids) do
+    current = list_pinned_space_ids(user_id)
+    kept = Enum.filter(previous_ids, &(&1 in current))
+    next = Enum.uniq(kept ++ Enum.reject(current, &(&1 in kept)))
+
+    Accounts.update_user_preference(user_id, @pinned_spaces_key, next)
   end
 
   @doc """

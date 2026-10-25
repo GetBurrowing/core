@@ -138,6 +138,8 @@
     external_user={@external_user}
     hidden_drawer_open={@hidden_drawer_open}
     resolved_mode={PlatformWeb.Components.Sidebar.resolved_mode(assigns[:current_user_record])}
+    pinned_announcement={@pinned_announcement}
+    pinned_undo={@pinned_undo}
   />
 
   <%!-- Desktop still lands in a channel from /chat: this reports which side
@@ -677,6 +679,13 @@
 <.row_actions_dialog
   :if={!@embedded and !@external?}
   root_admin?={@root_admin?}
+  move={
+    PlatformWeb.ChatLive.PinnedReorderHooks.move_position(
+      @channel_sections.pinned,
+      @pinned_task_spaces,
+      @row_actions_space_id
+    )
+  }
   target={
     rail_row_actions_target(
       @row_actions_space_id,

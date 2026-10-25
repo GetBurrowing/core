@@ -62,6 +62,41 @@ defmodule Platform.Chat.PinnedSpaces do
     split(spaces, pins)
   end
 
+  @doc """
+  The `to_index` for `Platform.Chat.Sidebar.move_pinned_space/3` that puts
+  `space_id` where the user dropped it in the RENDERED list.
+
+  `stored_ids` is the pin list as stored (`Sidebar.list_pinned_space_ids/1`).
+  `rendered_ids_after_move` is the rendered conversation run with the move
+  already applied.
+
+  Anchor rule: `rest` is `stored_ids` without `space_id`. The anchor is the
+  first id AFTER `space_id` in `rendered_ids_after_move` that is also in
+  `rest`, and the result is the anchor's index in `rest`, so the pin lands
+  just in front of it. With no anchor (dropped last) the result is
+  `length(rest)`, the end. `nil` when `space_id` is not stored at all.
+
+  Why an anchor and not the rendered order written wholesale: the stored
+  list can hold ids the list does not render (an archived space, a space in
+  an org the user has left; see `## Skip-unknown`). Those keep their place
+  and are never dropped, because only the moved id changes position.
+  """
+  @spec destination_index([String.t()], String.t(), [String.t()]) :: non_neg_integer() | nil
+  def destination_index(stored_ids, space_id, rendered_ids_after_move)
+      when is_list(stored_ids) and is_list(rendered_ids_after_move) do
+    if space_id in stored_ids do
+      rest = Enum.reject(stored_ids, &(&1 == space_id))
+
+      anchor =
+        rendered_ids_after_move
+        |> Enum.drop_while(&(&1 != space_id))
+        |> Enum.drop(1)
+        |> Enum.find(&(&1 in rest))
+
+      if anchor, do: Enum.find_index(rest, &(&1 == anchor)), else: length(rest)
+    end
+  end
+
   defp split(spaces, pin_set) do
     Enum.split_with(spaces, fn %Space{id: id} -> MapSet.member?(pin_set, id) end)
   end

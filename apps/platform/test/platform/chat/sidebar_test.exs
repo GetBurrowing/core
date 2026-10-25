@@ -1162,4 +1162,28 @@ defmodule Platform.Chat.SidebarTest do
                channels
     end
   end
+
+  # Task 01a1557b stage 1 (j): the Pinned undo's write.
+  describe "restore_pinned_order/2" do
+    test "writes the snapshot back" do
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+      {:ok, _} = Sidebar.move_pinned_space(user.id, c.id, 0)
+
+      assert {:ok, _} = Sidebar.restore_pinned_order(user.id, [a.id, b.id, c.id])
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, b.id, c.id]
+    end
+
+    test "never re-pins an id unpinned since, never drops a pin made since" do
+      user = create_user!()
+      {a, b, c} = three_pins(user)
+      d = channel!()
+      {:ok, _} = Sidebar.move_pinned_space(user.id, c.id, 0)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, b.id, false)
+      {:ok, _} = Sidebar.set_space_pinned(user.id, d.id, true)
+
+      assert {:ok, _} = Sidebar.restore_pinned_order(user.id, [a.id, b.id, c.id])
+      assert Sidebar.list_pinned_space_ids(user.id) == [a.id, c.id, d.id]
+    end
+  end
 end

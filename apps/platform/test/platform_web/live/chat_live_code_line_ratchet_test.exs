@@ -663,7 +663,11 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # DM queries moved into `PlatformWeb.ChatLive.ReadScope.channels/1`,
   # `archived_channels/2` and `conversations/2`, which the palette's
   # `PlatformWeb.CommandPalette.Sources` reads too; chat_live delegates.
-  @chat_live_code_line_count 2002
+  # Burrow redesign 25 stage 1 (task 01a1557b, Pinned reorder): -1, measured
+  # by this guard (2002 -> 2001). The dead `:reorder_announcement` assign
+  # went; `recompute_pinned/1` became public (defp -> def, 0) for
+  # `PlatformWeb.ChatLive.PinnedReorderHooks`, which holds every new handler.
+  @chat_live_code_line_count 2001
 
   @doc """
   Count the CODE lines of a source file.
