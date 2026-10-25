@@ -4783,12 +4783,20 @@ defmodule Platform.Chat do
   (`Platform.Files.Browser`, task 01a1557a-b5f9 stage 1): live canvases
   across `space_ids`, most recently edited first, as plain maps WITHOUT
   `document`: `id`, `title`, `space_id`, `created_by_display_name`,
-  `cloned_from`, `updated_at`, `inserted_at` and `game?`.
+  `cloned_from`, `updated_at`, `inserted_at`, `game?`, `game_task_id` and
+  `game_review_sha`.
 
   `game?` is computed in SQL: true when the document holds a node of type
   `game_stream` anywhere in its tree (`jsonb_path_exists`), so a caller
   learns an item's type without loading a document. `game_stream` is an
   extension kind; core names only the string, never the extension's modules.
+
+  `game_task_id` and `game_review_sha` are the `task_id` and `review_sha`
+  props of the FIRST `game_stream` node (`jsonb_path_query_first` on the
+  same path, so "first" in the `.**` walk's order: document order among
+  siblings, but a shallower node can precede a deeper earlier one), also
+  computed in SQL; both are nil for a non-game, and either
+  is nil when that node lacks the prop (task 01a1557a-efdd stage 1).
 
   Like `list_recent_canvases/2` it is NOT cast-safe on `space_ids`: every
   id must be DB-derived. `:access_scope` drops every canvas a `canvas.read`
@@ -4823,7 +4831,21 @@ defmodule Platform.Chat do
           cloned_from: c.cloned_from,
           updated_at: c.updated_at,
           inserted_at: c.inserted_at,
-          game?: fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path)
+          game?: fragment("jsonb_path_exists(?, ?::text::jsonpath)", c.document, ^game_path),
+          # The FIRST game_stream node's props, read in SQL so the document
+          # never leaves the database. NULL (nil) for a canvas with no game.
+          game_task_id:
+            fragment(
+              "jsonb_path_query_first(?, ?::text::jsonpath) -> 'props' ->> 'task_id'",
+              c.document,
+              ^game_path
+            ),
+          game_review_sha:
+            fragment(
+              "jsonb_path_query_first(?, ?::text::jsonpath) -> 'props' ->> 'review_sha'",
+              c.document,
+              ^game_path
+            )
         }
       )
 

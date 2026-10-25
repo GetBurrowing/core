@@ -373,6 +373,32 @@ defmodule Platform.Orchestration.ExecutionSpace do
   end
 
   @doc """
+  The log-only messages in `space_id` whose `metadata` CONTAINS `match`
+  (jsonb `@>`: every key of `match` present with that value), newest first
+  (`inserted_at` DESC, then `id` DESC: ids are UUIDv7, so the tiebreak is
+  time order too). Deleted rows are excluded; `opts[:limit]` defaults to 50.
+
+  This is the public read for anything that records structured notes on a
+  task with `post_log/3` and its `:metadata` option, so no caller outside
+  this context queries `chat_messages` itself.
+
+  Returns maps with `:id`, `:content`, `:metadata` and `:inserted_at`.
+  """
+  @spec list_logs_by_metadata(binary(), map(), keyword()) :: [map()]
+  def list_logs_by_metadata(space_id, match, opts \\ []) when is_map(match) do
+    limit = Keyword.get(opts, :limit, 50)
+
+    from(m in Message,
+      where: m.space_id == ^space_id and is_nil(m.deleted_at) and m.log_only == true,
+      where: fragment("? @> ?", m.metadata, type(^match, :map)),
+      order_by: [desc: m.inserted_at, desc: m.id],
+      limit: ^limit,
+      select: %{id: m.id, content: m.content, metadata: m.metadata, inserted_at: m.inserted_at}
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Return the newest engagement the TaskRouter posted into `space_id`, or `nil`.
 
   "Engagement" here is narrower than "not log-only": the row must carry BOTH

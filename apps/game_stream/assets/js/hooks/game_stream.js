@@ -442,8 +442,17 @@ const GameStream = {
   // attributes on a re-render, so a status change on the server rewrote
   // data-state (e.g. back to "building" under a takeover panel). The hook
   // owns the rendered state: put it back.
+  //
+  // The same attribute patch carries a new `latency_warn_ms` (the Game view's
+  // Latency warning writes it, task 01a1557a-efdd stage 3): re-read it, so
+  // the readout warns at the new threshold without a reload.
   updated() {
     if (this.panel) this.el.dataset.state = this.panel
+    const warnMs = parseInt(this.el.dataset.latencyWarnMs, 10) || 50
+    if (warnMs !== this.warnMs) {
+      this.warnMs = warnMs
+      if (this.statsEl) this.renderFooter()
+    }
   },
 
   destroyed() {

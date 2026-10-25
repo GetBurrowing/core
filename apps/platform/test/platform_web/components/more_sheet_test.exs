@@ -1,6 +1,10 @@
 defmodule PlatformWeb.Components.MoreSheetTest.IconlessExtension do
   @moduledoc false
   # An extension whose rail item carries no hero_icon (Saru rule 5 fallback).
+  # No canvas kinds: the More sheet's Games row asks the kind registry
+  # (`Browser.games_enabled?/0`), which reads every extension's kinds.
+  def canvas_kinds, do: []
+
   def rail_items,
     do: [
       %{
@@ -11,6 +15,56 @@ defmodule PlatformWeb.Components.MoreSheetTest.IconlessExtension do
         root_only?: false
       }
     ]
+end
+
+defmodule PlatformWeb.Components.MoreSheetTest.GamesExtension.Kinds.GameStream do
+  @moduledoc false
+  # A test-only `game_stream` kind, so `Platform.Files.Browser.games_enabled?/0`
+  # is true while the extension below is registered. Core never names the
+  # real Play modules (extension_boundary_test.exs).
+  use Platform.Chat.Canvas.Kind
+
+  @impl true
+  def describe, do: "Test-only game_stream kind."
+
+  @impl true
+  def schema, do: %{"type" => "object", "properties" => %{}}
+
+  attr :node, :map, required: true
+  attr :viewer, :any, default: nil
+
+  @impl true
+  def render(assigns), do: ~H""
+end
+
+defmodule PlatformWeb.Components.MoreSheetTest.GamesExtension do
+  @moduledoc false
+  @behaviour Platform.Extension
+
+  @impl true
+  def canvas_kinds, do: [PlatformWeb.Components.MoreSheetTest.GamesExtension.Kinds.GameStream]
+  @impl true
+  def mcp_tool_bundles, do: []
+  @impl true
+  def runtime_channel_events, do: []
+  @impl true
+  def handle_runtime_event(_event, _runtime_id, _payload), do: :ok
+  @impl true
+  def runtime_disconnected(_runtime_id), do: :ok
+  @impl true
+  def live_hooks, do: []
+  @impl true
+  def experiment_surfaces, do: []
+  @impl true
+  def experiment_metrics, do: %{}
+  @impl true
+  def migrations_path, do: nil
+  @impl true
+  def routes, do: []
+  @impl true
+  def inbox_kinds, do: []
+  @impl true
+  def live_pages, do: []
 end
 
 defmodule PlatformWeb.Components.MoreSheetTest do
@@ -109,7 +163,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
              |> Enum.any?()
     end
 
-    test "the order list holds Canvases (now a row, after Files) and Games (still no row)" do
+    test "the order list holds Canvases (a row, after Files) and Games (a row only with games)" do
       assert IconRail.more_sheet_order() ==
                [
                  :inbox,
@@ -127,8 +181,45 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       keys = row_keys(render_more_sheet(%{root_user: true}))
       # Rung 16 stage 3: Canvases renders, directly after Files.
       assert Enum.take(Enum.drop_while(keys, &(&1 != "files")), 2) == ["files", "canvases"]
-      # Games still has no page (rung 21).
+      # Rung 21: no game_stream kind registered, so no Games row and no gap.
       refute "games" in keys
+      assert Enum.take(Enum.drop_while(keys, &(&1 != "canvases")), 2) == ["canvases", "skills"]
+    end
+
+    test "with games enabled, Games sits after Canvases and before Skills, linking the browser" do
+      Platform.FixtureExtension.register([__MODULE__.GamesExtension])
+      assert Platform.Files.Browser.games_enabled?()
+
+      html = render_more_sheet(%{root_user: false})
+      keys = row_keys(html)
+      assert Enum.take(Enum.drop_while(keys, &(&1 != "canvases")), 3) == ~w(canvases games skills)
+
+      [row] =
+        html
+        |> doc()
+        |> LazyHTML.query(~s(.more-sheet-list [data-destination="games"]))
+        |> Enum.to_list()
+
+      assert LazyHTML.attribute(row, "href") == ["/files?tab=browse&type=game"]
+      assert row |> LazyHTML.text() |> String.trim() == "Games"
+      assert row |> LazyHTML.query(".hero-puzzle-piece") |> Enum.count() == 1
+      refute row |> LazyHTML.attribute("phx-click") |> Enum.any?(& &1)
+    end
+
+    test "Games is current on the All-games view, and Canvases is not" do
+      Platform.FixtureExtension.register([__MODULE__.GamesExtension])
+
+      html = render_more_sheet(%{root_user: true, current_path: "/files?tab=browse&type=game"})
+      assert current_keys(html) == ["games"]
+
+      current =
+        html |> doc() |> LazyHTML.query(~s([data-destination="games"][aria-current="page"]))
+
+      assert current |> LazyHTML.query(".hero-check") |> Enum.count() == 1
+
+      # Positive control: on the All-canvases view Canvases is current instead.
+      html = render_more_sheet(%{root_user: true, current_path: "/files?tab=browse&type=canvas"})
+      assert current_keys(html) == ["canvases"]
     end
 
     test "Canvases links the browser filtered to canvases, with no phx-click" do

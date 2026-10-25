@@ -587,4 +587,211 @@ defmodule Platform.Files.BrowserTest do
                (Platform.Chat.Canvas.Kinds.get("game_stream") != nil)
     end
   end
+
+  # ── Game cards (task 01a1557a-efdd stage 1) ─────────────────────────────
+
+  @sha_a "a1b2c3d" <> String.duplicate("0", 33)
+  @sha_b "b2c3d4e" <> String.duplicate("1", 33)
+
+  defp task!(project, status) do
+    Repo.insert!(%Tasks.Task{project_id: project.id, title: "Game task #{n()}", status: status})
+  end
+
+  defp game_with!(space, participant, title, props) do
+    Repo.insert!(%Canvas{
+      space_id: space.id,
+      created_by: participant.id,
+      title: title,
+      document: %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "children" => [
+            %{
+              "id" => "card",
+              "type" => "card",
+              "children" => [
+                %{"id" => "g", "type" => "game_stream", "props" => props},
+                # A second game node after it: the listing reads the FIRST.
+                %{
+                  "id" => "g2",
+                  "type" => "game_stream",
+                  "props" => %{"task_id" => Ecto.UUID.generate(), "review_sha" => @sha_b}
+                }
+              ]
+            }
+          ]
+        }
+      }
+    })
+  end
+
+  defp by_id(items), do: Map.new(items, &{&1.id, &1})
+
+  # A test-only extension claiming the live page "games", as the Play
+  # extension does from apps/game_stream (stage 2). Core never names it.
+  defmodule GamePageExtension do
+    @moduledoc false
+    @behaviour Platform.Extension
+
+    @impl true
+    def canvas_kinds, do: []
+    @impl true
+    def mcp_tool_bundles, do: []
+    @impl true
+    def runtime_channel_events, do: []
+    @impl true
+    def handle_runtime_event(_event, _runtime_id, _payload), do: :ok
+    @impl true
+    def runtime_disconnected(_runtime_id), do: :ok
+    @impl true
+    def live_hooks, do: []
+    @impl true
+    def experiment_surfaces, do: []
+    @impl true
+    def experiment_metrics, do: %{}
+    @impl true
+    def migrations_path, do: nil
+    @impl true
+    def routes, do: []
+    @impl true
+    def inbox_kinds, do: []
+    @impl true
+    def live_pages,
+      do: [%{prefix: "games", live_view: __MODULE__, module: :chat, permission: "canvas.read"}]
+  end
+
+  describe "Chat.list_browser_canvases/2 game props" do
+    test "selects the first game node's task_id and review_sha; nil for a plain canvas", ctx do
+      task_id = Ecto.UUID.generate()
+
+      game =
+        game_with!(ctx.space_a, ctx.participant_a, "Runner", %{
+          "task_id" => task_id,
+          "review_sha" => @sha_a
+        })
+
+      plain = canvas!(ctx.space_a, ctx.participant_a, "Plain board")
+
+      rows = Map.new(Chat.list_browser_canvases([ctx.space_a.id]), &{&1.id, &1})
+
+      assert %{game?: true, game_task_id: ^task_id, game_review_sha: @sha_a} = rows[game.id]
+      assert %{game?: false, game_task_id: nil, game_review_sha: nil} = rows[plain.id]
+      # The listing never carries the document.
+      refute Map.has_key?(rows[game.id], :document)
+    end
+  end
+
+  describe "game items" do
+    setup ctx do
+      Platform.FixtureExtension.register([])
+      in_review = task!(ctx.project_a, "in_review")
+      in_progress = task!(ctx.project_a, "in_progress")
+
+      playable =
+        game_with!(ctx.space_a, ctx.participant_a, "Playable", %{
+          "task_id" => in_review.id,
+          "review_sha" => @sha_a
+        })
+
+      draft =
+        game_with!(ctx.space_a, ctx.participant_a, "Draft", %{
+          "task_id" => in_progress.id,
+          "review_sha" => @sha_b
+        })
+
+      orphan = game_with!(ctx.space_a, ctx.participant_a, "Orphan", %{})
+      plain = canvas!(ctx.space_a, ctx.participant_a, "Plain board")
+
+      %{playable: playable, draft: draft, orphan: orphan, plain: plain}
+    end
+
+    test "state is playable for an in_review task and draft otherwise; build is the sha7", ctx do
+      %{items: items} = Browser.of_type(viewer(ctx.user), :game)
+      items = by_id(items)
+
+      assert %Item{type: :game, game_state: :playable, build: "a1b2c3d"} = items[ctx.playable.id]
+      assert %Item{type: :game, game_state: :draft, build: "b2c3d4e"} = items[ctx.draft.id]
+      # No task_id and no review_sha: a draft with no build.
+      assert %Item{type: :game, game_state: :draft, build: nil} = items[ctx.orphan.id]
+
+      {:ok, space_items} = Browser.in_space(viewer(ctx.user), ctx.space_a.id)
+      plain = Enum.find(space_items, &(&1.id == ctx.plain.id))
+      assert %Item{type: :canvas, game_state: nil, build: nil} = plain
+    end
+
+    test "an unknown or malformed task_id is a draft", ctx do
+      unknown =
+        game_with!(ctx.space_a, ctx.participant_a, "Unknown", %{
+          "task_id" => Ecto.UUID.generate()
+        })
+
+      junk = game_with!(ctx.space_a, ctx.participant_a, "Junk", %{"task_id" => "not-a-uuid"})
+
+      items = by_id(Browser.of_type(viewer(ctx.user), :game).items)
+      assert items[unknown.id].game_state == :draft
+      assert items[junk.id].game_state == :draft
+      # Positive control in the same listing.
+      assert items[ctx.playable.id].game_state == :playable
+    end
+
+    test "href is /canvases/<id> unless an extension claims the live page games", ctx do
+      items = by_id(Browser.of_type(viewer(ctx.user), :game).items)
+      assert items[ctx.playable.id].href == "/canvases/#{ctx.playable.id}"
+
+      Platform.FixtureExtension.register([__MODULE__.GamePageExtension])
+      assert Platform.Extensions.live_page_for("games")
+
+      items = by_id(Browser.of_type(viewer(ctx.user), :game).items)
+      assert items[ctx.playable.id].href == "/m/games?canvas=#{ctx.playable.id}"
+      assert items[ctx.draft.id].href == "/m/games?canvas=#{ctx.draft.id}"
+
+      # A plain canvas keeps its canvas href whatever claims "games".
+      {:ok, space_items} = Browser.in_space(viewer(ctx.user), ctx.space_a.id)
+      assert Enum.find(space_items, &(&1.id == ctx.plain.id)).href == "/canvases/#{ctx.plain.id}"
+    end
+
+    test "one listing of several games resolves their tasks in ONE tasks query", ctx do
+      # Two more games on two more tasks: five games, four distinct task ids.
+      for status <- ["in_review", "blocked"] do
+        t = task!(ctx.project_a, status)
+        game_with!(ctx.space_a, ctx.participant_a, "More #{status}", %{"task_id" => t.id})
+      end
+
+      handler = "browser-task-queries-#{n()}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler,
+        [:platform, :repo, :query],
+        fn _event, _measurements, meta, _ ->
+          if meta[:source] == "tasks", do: send(test_pid, {:tasks_query, meta.query})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      %{items: items} = Browser.of_type(viewer(ctx.user), :game)
+      :telemetry.detach(handler)
+
+      assert length(items) == 5
+      assert Enum.count(items, &(&1.game_state == :playable)) == 2
+
+      queries = collect_task_queries([])
+      # Browser.context/1 reads projects; that query is on `projects`, not
+      # `tasks`. Exactly one tasks query is the batched status lookup.
+      assert length(queries) == 1, inspect(queries)
+    end
+  end
+
+  defp collect_task_queries(acc) do
+    receive do
+      {:tasks_query, q} -> collect_task_queries([q | acc])
+    after
+      0 -> acc
+    end
+  end
 end

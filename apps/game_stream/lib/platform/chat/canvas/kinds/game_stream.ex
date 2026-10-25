@@ -199,6 +199,26 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
 
   @panels ~w(unavailable building connecting live ended failed takeover elsewhere)
 
+  @doc """
+  The DOM id of the node's `phx-hook="GameStream"` wrapper for `node`
+  rendered with `dom_id_scope`. Public so a host page can target the
+  wrapper (the Game view's Restart dispatches a click to its
+  `[data-gs-restart]`, task 01a1557a-efdd stage 3).
+  """
+  @spec wrapper_id(map(), String.t() | nil) :: String.t()
+  def wrapper_id(node, dom_id_scope) do
+    props = node["props"] || %{}
+    node_id = node["id"] || "game-stream"
+
+    scope =
+      case dom_id_scope do
+        scope when is_binary(scope) and scope != "" -> "-" <> scope
+        _ -> ""
+      end
+
+    "game-stream-#{node_id}#{scope}-#{props["session_id"] || "none"}"
+  end
+
   @doc "The panel names the render emits, one per frame state."
   @spec panels() :: [String.t()]
   def panels, do: @panels
@@ -214,6 +234,12 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   # real render has no peer yet (opening always watches), so it is nil.
   attr(:roster, :any, default: :lookup)
   attr(:peer_id, :string, default: nil)
+  # Task 01a1557a-efdd stage 2: `:stage` is the Game view's chrome. The node
+  # sits on the page's stage colour with no frame of its own, and its title,
+  # branch and sha are hidden (the Game view's top bar names the build). The
+  # elements stay in the DOM because the hook still reads them. `:panel` (the
+  # default) is every other host: the chat card, the canvas page.
+  attr(:chrome, :atom, default: :panel, values: [:panel, :stage])
 
   @impl Platform.Chat.Canvas.Kind
   def render(assigns) do
@@ -240,15 +266,9 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
     running? = panel in ~w(building connecting live)
     view = roster_view(roster, assigns[:peer_id])
 
-    scope =
-      case assigns[:dom_id_scope] do
-        scope when is_binary(scope) and scope != "" -> "-" <> scope
-        _ -> ""
-      end
-
     assigns =
       assigns
-      |> assign(:wrapper_id, "game-stream-#{node_id}#{scope}-#{session_id || "none"}")
+      |> assign(:wrapper_id, wrapper_id(assigns.node, assigns[:dom_id_scope]))
       |> assign(:node_id, node_id)
       |> assign(:session_id, session_id)
       |> assign(:title, props["title"] || "Playable review build")
@@ -278,7 +298,14 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       data-latency-warn-ms={@warn_ms}
       data-state={@panel}
       data-elapsed-ms={@elapsed_ms}
-      class="game-stream-frame @container overflow-hidden rounded-xl border border-edge bg-base-100"
+      data-gs-chrome={@chrome}
+      class={[
+        "game-stream-frame @container overflow-hidden",
+        if(@chrome == :stage,
+          do: "bg-stage",
+          else: "rounded-xl border border-edge bg-base-100"
+        )
+      ]}
     >
       <div class="flex min-w-0 items-center gap-2 px-3 py-2">
         <span
@@ -290,11 +317,19 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           aria-hidden="true"
         >
         </span>
-        <span class="hidden min-w-0 truncate text-sm font-semibold @sm:inline">{@title}</span>
+        <span class={[
+          "hidden min-w-0 truncate text-sm font-semibold",
+          @chrome == :panel && "@sm:inline"
+        ]}>
+          {@title}
+        </span>
         <span
           :if={@branch}
           data-gs-branch
-          class="hidden min-w-0 truncate font-mono text-xs text-subtle @md:inline"
+          class={[
+            "hidden min-w-0 truncate font-mono text-xs text-subtle",
+            @chrome == :panel && "@md:inline"
+          ]}
         >
           {@branch}
         </span>
@@ -303,7 +338,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           data-gs-sha
           title={@review_sha}
           aria-label={"Review build " <> @review_sha}
-          class="ml-auto shrink-0 font-mono text-xs text-subtle"
+          class={["ml-auto shrink-0 font-mono text-xs text-subtle", @chrome == :stage && "hidden"]}
         >
           <span class="@xl:hidden">{@sha7}</span><span class="hidden @xl:inline">{@review_sha}</span>
         </span>

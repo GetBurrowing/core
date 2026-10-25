@@ -39,6 +39,8 @@ defmodule Platform.GameStream do
 
   require Logger
 
+  import Ecto.Query, only: [where: 3, order_by: 3, limit: 2]
+
   alias Platform.Experiments.Subject
   alias Platform.Experiments.Surfaces
   alias Platform.Experiments.Surfaces.GameStreamEncoder
@@ -48,7 +50,9 @@ defmodule Platform.GameStream do
   alias Platform.GameStream.Protocol
   alias Platform.GameStream.ReviewBuild
   alias Platform.GameStream.Session
+  alias Platform.GameStream.SessionRecord
   alias Platform.GameStream.Supervisor, as: GSSupervisor
+  alias Platform.Repo
   alias Platform.Types.UUIDv7
 
   @host_feature "game_stream_host"
@@ -429,6 +433,44 @@ defmodule Platform.GameStream do
   end
 
   def host_disconnected(_runtime_id), do: :ok
+
+  # ── Finished runs (task 01a1557a-efdd stage 3) ─────────────────────────
+
+  @doc """
+  The task's finished play sessions (`Platform.GameStream.SessionRecord`
+  rows, one per ENDED session), newest `ended_at` first, at most `limit`
+  (default 10). `[]` for a task id that is not a UUID. A read of history, so
+  it answers whatever `GAME_STREAM_ENABLED` says. The Game view's Insights
+  tab reads it; no LiveView queries the table itself.
+  """
+  @spec recent_runs(term(), pos_integer()) :: [%SessionRecord{}]
+  def recent_runs(task_id, limit \\ 10) when is_integer(limit) and limit > 0 do
+    if Platform.UUID.valid?(task_id) do
+      SessionRecord
+      |> where([r], r.task_id == ^task_id)
+      |> order_by([r], desc: r.ended_at, desc: r.id)
+      |> limit(^limit)
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  @doc """
+  How many of the task's sessions ended at or after `since` (a
+  `DateTime`): the Game view's "runs today" tile, with `since` 24 hours ago.
+  `0` for a task id that is not a UUID.
+  """
+  @spec runs_since(term(), DateTime.t()) :: non_neg_integer()
+  def runs_since(task_id, %DateTime{} = since) do
+    if Platform.UUID.valid?(task_id) do
+      SessionRecord
+      |> where([r], r.task_id == ^task_id and r.ended_at >= ^since)
+      |> Repo.aggregate(:count)
+    else
+      0
+    end
+  end
 
   # ── Internals ───────────────────────────────────────────────────────────
 

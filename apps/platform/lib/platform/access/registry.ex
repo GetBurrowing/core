@@ -294,9 +294,12 @@ defmodule Platform.Access.Registry do
         # Canvases row, which opens the Files browser filtered to canvases
         # (`/files?tab=browse&type=canvas`, FilesLive). Same permission as the
         # page it opens, so the row shows exactly when /files mounts.
+        # `:games` (task 01a1557a-efdd stage 1) is the same browser filtered
+        # to games (`/files?tab=browse&type=game`).
         rail: [
           %{key: :files, permission: "files.read"},
-          %{key: :canvases, permission: "files.read"}
+          %{key: :canvases, permission: "files.read"},
+          %{key: :games, permission: "files.read"}
         ]
       },
       %{

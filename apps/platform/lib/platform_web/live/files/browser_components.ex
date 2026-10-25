@@ -493,7 +493,10 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   # ── List ─────────────────────────────────────────────────────────────────
 
-  attr :items, :list, required: true
+  attr :browser, :map,
+    required: true,
+    doc: "`@browser`: its items, and its params for the `from` a game link carries"
+
   attr :labels, :map, required: true
   attr :show_location, :boolean, required: true
   attr :file_rows, :map, default: %{}, doc: "file_id => %Files.File{} in a project node"
@@ -501,10 +504,12 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   @doc "The list layout (default)."
   def item_list(assigns) do
+    assigns = assign_from(assigns)
+
     ~H"""
     <ul data-role="files-list" class="flex flex-col gap-1.5">
       <li
-        :for={item <- @items}
+        :for={item <- @browser.items}
         data-role={if Map.has_key?(@file_rows, item.id), do: "files-row", else: "browser-row"}
         data-item-id={item.id}
         data-kind={item.kind}
@@ -523,6 +528,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
              nested inside it. --%>
         <.item_link
           item={item}
+          from={@from}
           class="col-start-1 col-end-3 row-start-1 row-end-3 grid grid-cols-subgrid grid-rows-subgrid focus-visible-ring"
         >
           <span class="row-start-1 row-end-3 flex self-center" data-role="files-row-tile">
@@ -548,7 +554,15 @@ defmodule PlatformWeb.Files.BrowserComponents do
           item={item}
           labels={@labels}
           class="pointer-events-none relative z-10 col-start-2 col-end-4 row-start-2 self-start [&_a]:pointer-events-auto"
-        />
+        >
+          <span
+            :if={item.type == :game}
+            data-role="browser-game-meta"
+            class="shrink-0 whitespace-nowrap"
+          >
+            {game_meta(item)}
+          </span>
+        </.location_line>
         <div
           :if={Map.has_key?(@claims, item.id)}
           class="col-start-2 col-end-4 pt-1"
@@ -612,27 +626,40 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   # ── Grid ─────────────────────────────────────────────────────────────────
 
-  attr :items, :list, required: true
+  attr :browser, :map,
+    required: true,
+    doc: "`@browser`: its items, and its params for the `from` a game link carries"
+
   attr :labels, :map, required: true
   attr :show_location, :boolean, required: true
 
   @doc "The grid layout: base-100 tiles with border-edge, a thumbnail or the glyph."
   def item_grid(assigns) do
+    assigns = assign_from(assigns)
+
     ~H"""
     <ul
       data-role="files-grid"
       class="grid grid-cols-2 gap-3 px-4 py-2 sm:grid-cols-3 xl:grid-cols-4"
     >
       <li
-        :for={item <- @items}
+        :for={item <- @browser.items}
         data-role="browser-tile"
         data-item-id={item.id}
         data-kind={item.kind}
         data-type={item.type}
         class="flex min-w-0 flex-col overflow-hidden rounded-box border border-edge bg-base-100"
       >
-        <.item_link item={item} class="flex min-w-0 flex-col active:bg-base-200 focus-visible-ring">
-          <span class="flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-base-200 text-base-content">
+        <.item_link
+          item={item}
+          from={@from}
+          class="flex min-w-0 flex-col active:bg-base-200 focus-visible-ring"
+        >
+          <.game_thumb :if={item.type == :game} item={item} />
+          <span
+            :if={item.type != :game}
+            class="flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-base-200 text-base-content"
+          >
             <img
               :if={item.thumb_src}
               src={item.thumb_src}
@@ -665,6 +692,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   attr :item, Item, required: true
   attr :class, :string, default: nil
+  attr :from, :string, default: nil
   slot :inner_block, required: true
 
   # The item link. A project file patches (same LiveView), a canvas
@@ -678,8 +706,10 @@ defmodule PlatformWeb.Files.BrowserComponents do
   end
 
   defp item_link(%{item: %Item{kind: :canvas}} = assigns) do
+    assigns = assign(assigns, :to, canvas_link(assigns.item.href, assigns.from))
+
     ~H"""
-    <.link navigate={@item.href} data-role="files-item-link" data-item-id={@item.id} class={@class}>
+    <.link navigate={@to} data-role="files-item-link" data-item-id={@item.id} class={@class}>
       {render_slot(@inner_block)}
     </.link>
     """
@@ -697,6 +727,17 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   # 44px tile: an image's real thumbnail, else the type glyph. Never a fake
   # preview (Saru `rules`).
+  defp thumb(%{item: %Item{type: :game}} = assigns) do
+    ~H"""
+    <span
+      data-role="browser-game-icon"
+      class="browser-icon-game inline-flex size-11 shrink-0 items-center justify-center rounded-box border border-edge overflow-hidden text-on-viewer"
+    >
+      <.icon name="hero-puzzle-piece" class="size-5" />
+    </span>
+    """
+  end
+
   defp thumb(assigns) do
     ~H"""
     <span class="inline-flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-box border border-edge bg-base-200 text-base-content">
@@ -717,6 +758,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
   attr :labels, :map, required: true
   attr :class, :string, default: nil
   attr :compact, :boolean, default: false
+  slot :inner_block, doc: "a prefix rendered before the location (a game's build and state)"
 
   # 'Org > Project' or 'Org > #space', then ' · copy', ' · author', ' · age'
   # and ' · Not shared with agents'. The location keeps at least 5rem and
@@ -735,6 +777,7 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
     ~H"""
     <div class={["flex min-w-0 items-baseline gap-1 overflow-hidden text-xs text-subtle", @class]}>
+      {render_slot(@inner_block)}
       <.link
         patch={@item.location_href}
         data-role="files-location-link"
@@ -794,6 +837,64 @@ defmodule PlatformWeb.Files.BrowserComponents do
 
   defp title(%Item{title: title}) when is_binary(title) and title != "", do: title
   defp title(_item), do: "Untitled"
+
+  # Masters `.frow .tx small` (:1221): "build {sha7} · {state} · " before the
+  # location; the build part is absent when the node has no review_sha.
+  defp game_meta(%Item{build: build, game_state: state}) do
+    if(build, do: "build #{build} · ", else: "") <> "#{state} ·"
+  end
+
+  # The current browser URL. A game link into the Game view carries it as
+  # `from`, so the view's Back returns to exactly this list.
+  defp assign_from(assigns),
+    do: assign(assigns, :from, BrowserView.browser_path(assigns.browser.params, %{}))
+
+  # A game link into the Game view appends that URL, encoded.
+  defp canvas_link("/m/games?" <> _ = href, from) when is_binary(from),
+    do: href <> "&from=" <> URI.encode_www_form(from)
+
+  defp canvas_link(href, _from), do: href
+
+  attr :item, Item, required: true
+
+  # Masters `.fcard.game .th` (:432-443): the stage-to-teal thumb, a centred
+  # puzzle-piece glyph, the state tag bottom-left and the build tag
+  # bottom-right. No star (rung 16 shipped no Starred) and no still (none is
+  # stored).
+  defp game_thumb(assigns) do
+    ~H"""
+    <span
+      data-role="browser-game-thumb"
+      class="browser-thumb-game relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden text-on-viewer"
+    >
+      <.icon name="hero-puzzle-piece" class="size-10 text-on-viewer" />
+      <%!-- State tag bottom-left as in the masters. The build tag sits
+           TOP-right, not bottom-right: "build" plus a sha7 is wider than
+           the masters' "build 0.4.2", and on a two-column phone tile the
+           two tags cannot share the bottom edge without overlapping. --%>
+      <span
+        data-role="browser-game-state"
+        data-state={@item.game_state}
+        class={[
+          "absolute bottom-2 left-2 rounded-full px-[7px] py-0.5 text-xs font-bold tracking-[.05em]",
+          if(@item.game_state == :playable,
+            do: "bg-success text-success-content",
+            else: "bg-shade text-on-viewer"
+          )
+        ]}
+      >
+        {@item.game_state}
+      </span>
+      <span
+        :if={@item.build}
+        data-role="browser-game-build"
+        class="absolute right-2 top-2 rounded-full bg-shade px-[7px] py-0.5 text-xs font-bold tracking-[.05em] text-on-viewer"
+      >
+        build {@item.build}
+      </span>
+    </span>
+    """
+  end
 
   # ── Desktop tree ─────────────────────────────────────────────────────────
 

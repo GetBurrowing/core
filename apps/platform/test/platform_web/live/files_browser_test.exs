@@ -770,6 +770,138 @@ defmodule PlatformWeb.FilesBrowserTest do
     end
   end
 
+  # ── Game cards (task 01a1557a-efdd stage 1) ─────────────────────────────
+
+  @sha_a "a1b2c3d" <> String.duplicate("0", 33)
+  @sha_b "b2c3d4e" <> String.duplicate("1", 33)
+
+  defp game_task!(ctx, status) do
+    Repo.insert!(%Tasks.Task{project_id: ctx.project_a.id, title: "Task #{n()}", status: status})
+  end
+
+  defp game_canvas!(ctx, title, props) do
+    canvas!(ctx.design, ctx.p_design, title, %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "type" => "stack",
+        "children" => [%{"id" => "g", "type" => "game_stream", "props" => props}]
+      }
+    })
+  end
+
+  defp squish(text), do: text |> String.split() |> Enum.join(" ")
+
+  describe "game cards" do
+    setup ctx do
+      Platform.FixtureExtension.register([__MODULE__.GamesExtension])
+      a = game_task!(ctx, "in_review")
+      b = game_task!(ctx, "in_progress")
+      g1 = game_canvas!(ctx, "E2E Runner", %{"task_id" => a.id, "review_sha" => @sha_a})
+      g2 = game_canvas!(ctx, "E2E Draft", %{"task_id" => b.id, "review_sha" => @sha_b})
+      %{g1: g1, g2: g2}
+    end
+
+    test "grid tiles carry the state tag and the build tag", ctx do
+      {:ok, _} = Accounts.update_user_preference(ctx.user.id, "files_layout", "grid")
+      {:ok, _view, html} = live(ctx.conn, ~p"/files?tab=browse&type=game")
+
+      tile = fn id, role -> text(html, ~s(li[data-item-id="#{id}"] [data-role="#{role}"])) end
+
+      assert squish(tile.(ctx.g1.id, "browser-game-state")) == "playable"
+      assert squish(tile.(ctx.g1.id, "browser-game-build")) == "build a1b2c3d"
+      assert squish(tile.(ctx.g2.id, "browser-game-state")) == "draft"
+      assert squish(tile.(ctx.g2.id, "browser-game-build")) == "build b2c3d4e"
+
+      # The tag paint per INVENTORY: success pair for playable, shade otherwise.
+      [playable_class] =
+        html
+        |> q(~s(li[data-item-id="#{ctx.g1.id}"] [data-role="browser-game-state"]))
+        |> LazyHTML.attribute("class")
+
+      assert playable_class =~ "bg-success text-success-content"
+
+      [draft_class] =
+        html
+        |> q(~s(li[data-item-id="#{ctx.g2.id}"] [data-role="browser-game-state"]))
+        |> LazyHTML.attribute("class")
+
+      assert draft_class =~ "bg-shade text-on-viewer"
+
+      assert count(
+               html,
+               ~s(li[data-item-id="#{ctx.g1.id}"] .browser-thumb-game .hero-puzzle-piece)
+             ) ==
+               1
+    end
+
+    test "list rows: the second line begins with build and state", ctx do
+      {:ok, _view, html} = live(ctx.conn, ~p"/files?tab=browse&type=game")
+
+      line = fn id ->
+        html
+        |> text(~s(li[data-item-id="#{id}"] [data-role="browser-game-meta"]))
+        |> squish()
+      end
+
+      assert line.(ctx.g1.id) == "build a1b2c3d · playable ·"
+      assert line.(ctx.g2.id) == "build b2c3d4e · draft ·"
+
+      # The prefix opens the second line: first child, the location link next.
+      first =
+        ~s(li[data-item-id="#{ctx.g1.id}"] div > [data-role="browser-game-meta"]:first-child)
+
+      assert count(html, first) == 1
+      assert count(html, first <> ~s( + [data-role="files-location-link"])) == 1
+
+      assert count(
+               html,
+               ~s(li[data-item-id="#{ctx.g1.id}"] .browser-icon-game .hero-puzzle-piece)
+             ) ==
+               1
+    end
+
+    test "on the All-games view the More sheet's Games row is current, Canvases is not", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/files?tab=browse&type=game&sort=name")
+      html = render(view)
+
+      assert count(html, ~s(.more-sheet-list [data-destination="games"][aria-current="page"])) ==
+               1
+
+      assert count(html, ~s(.more-sheet-list [data-destination="canvases"][aria-current="page"])) ==
+               0
+
+      # A games view inside one space is a Files view, as for canvases.
+      {:ok, view, _html} = live(ctx.conn, ~p"/files?tab=browse&type=game&space=#{ctx.design.id}")
+      html = render(view)
+
+      assert count(html, ~s(.more-sheet-list [data-destination="games"][aria-current="page"])) ==
+               0
+    end
+
+    test "a game link carries from= the browser URL only when the Game view exists", ctx do
+      {:ok, _view, html} = live(ctx.conn, ~p"/files?tab=browse&type=game&sort=name")
+
+      [plain_href] =
+        html
+        |> q(~s(li[data-item-id="#{ctx.g1.id}"] [data-role="files-item-link"]))
+        |> LazyHTML.attribute("href")
+
+      assert plain_href == "/canvases/#{ctx.g1.id}"
+
+      Platform.FixtureExtension.register([__MODULE__.GamesWithPageExtension])
+      {:ok, _view, html} = live(ctx.conn, ~p"/files?tab=browse&type=game&sort=name")
+
+      [href] =
+        html
+        |> q(~s(li[data-item-id="#{ctx.g1.id}"] [data-role="files-item-link"]))
+        |> LazyHTML.attribute("href")
+
+      from = URI.encode_www_form("/files?sort=name&tab=browse&type=game")
+      assert href == "/m/games?canvas=#{ctx.g1.id}&from=#{from}"
+    end
+  end
+
   defmodule GamesExtension do
     @moduledoc false
     # Registers only a `game_stream` canvas kind, so `Browser.games_enabled?/0`
@@ -822,5 +954,38 @@ defmodule PlatformWeb.FilesBrowserTest do
     def inbox_kinds, do: []
     @impl true
     def live_pages, do: []
+  end
+
+  defmodule GamesWithPageExtension do
+    @moduledoc false
+    # GamesExtension's kind plus a claim on the live page "games", as the Play
+    # extension makes from apps/game_stream (stage 2).
+    @behaviour Platform.Extension
+
+    @impl true
+    def canvas_kinds, do: [PlatformWeb.FilesBrowserTest.GamesExtension.Kinds.GameStream]
+    @impl true
+    def mcp_tool_bundles, do: []
+    @impl true
+    def runtime_channel_events, do: []
+    @impl true
+    def handle_runtime_event(_event, _runtime_id, _payload), do: :ok
+    @impl true
+    def runtime_disconnected(_runtime_id), do: :ok
+    @impl true
+    def live_hooks, do: []
+    @impl true
+    def experiment_surfaces, do: []
+    @impl true
+    def experiment_metrics, do: %{}
+    @impl true
+    def migrations_path, do: nil
+    @impl true
+    def routes, do: []
+    @impl true
+    def inbox_kinds, do: []
+    @impl true
+    def live_pages,
+      do: [%{prefix: "games", live_view: __MODULE__, module: :chat, permission: "canvas.read"}]
   end
 end

@@ -40,7 +40,13 @@ defmodule Platform.Access.RegistryTest do
   # one-to-one.
   @destinationless_entries [:activity]
 
-  defp entry_keys, do: Enum.map(Registry.rail_entries(), & &1.key) -- @destinationless_entries
+  defp entry_keys,
+    do: Enum.map(Registry.rail_entries(), & &1.key) -- (@destinationless_entries ++ games_off())
+
+  # `:games` (task 01a1557a-efdd stage 1) is a destination only while an
+  # extension registers the game_stream kind (its `enabled?`, as Mail's is
+  # `:mail_enabled`); its registry entry is declared regardless.
+  defp games_off, do: if(Platform.Files.Browser.games_enabled?(), do: [], else: [:games])
 
   describe "core registry (no extensions)" do
     setup do

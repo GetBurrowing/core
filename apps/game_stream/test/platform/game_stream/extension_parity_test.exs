@@ -487,6 +487,16 @@ defmodule Platform.GameStream.ExtensionParityTest do
       assert digest(defs) == @main_tool_digest_on
     end
 
+    # The one rail change since main (task 01a1557a-efdd stage 1): More >
+    # Games, after Canvases, exists only while the game_stream kind is
+    # registered, i.e. with the flag on.
+    defp rail_for(false), do: @main_rail
+
+    defp rail_for(true) do
+      {before, after_canvases} = Enum.split_while(@main_rail, &(&1 != :canvases))
+      before ++ [:canvases, :games] ++ tl(after_canvases)
+    end
+
     test "bundles, kinds, metrics and rail are main's, flag off and on" do
       for flag <- [false, true] do
         Application.put_env(:game_stream, :enabled, flag)
@@ -494,7 +504,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
         assert RuntimeProfiles.valid_modules() == @main_valid_bundles
         assert Metrics.known_metrics() == @main_metrics
         assert digest(Metrics.catalog()) == @main_metrics_catalog_digest
-        assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
+        assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == rail_for(flag)
       end
 
       Application.delete_env(:game_stream, :enabled)

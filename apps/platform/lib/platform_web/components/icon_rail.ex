@@ -523,10 +523,11 @@ defmodule PlatformWeb.Components.IconRail do
   end
 
   # The More sheet's module rows, in order (task 01a1557a-807f stage 2;
-  # coverage row 5, master-mobile.html v3 :727-736). ONE list: a key with no
-  # destination yet (Games, until rung 21 adds a page), or one the actor may
-  # not see, is skipped and leaves no gap. Canvases opens the Files browser
-  # filtered to canvases (rung 16).
+  # coverage row 5, master-mobile.html v3 :727-736). ONE list: a key the
+  # actor may not see, or one switched off, is skipped and leaves no gap.
+  # Canvases opens the Files browser filtered to canvases (rung 16); Games
+  # opens it filtered to games (rung 21), and only while the game_stream
+  # kind is registered.
   @more_sheet_order [
     :inbox,
     :email,
@@ -1039,6 +1040,20 @@ defmodule PlatformWeb.Components.IconRail do
         hero_icon: "hero-rectangle-group",
         cluster: :sheet,
         root_only?: false
+      },
+      %{
+        # More > Games (rung 21, task 01a1557a-efdd stage 1): the Files
+        # browser at All, filtered to games. `:sheet` like Canvases, so the
+        # desktop rail does not grow (desktop reaches Games through the
+        # browser's Games chip). Present only while an extension registers
+        # the game_stream kind; core never names that extension.
+        key: :games,
+        label: "Games",
+        path: "/files?tab=browse&type=game",
+        hero_icon: "hero-puzzle-piece",
+        cluster: :sheet,
+        root_only?: false,
+        enabled?: &Platform.Files.Browser.games_enabled?/0
       },
       %{
         # T7 stage 2 (2026-05-20): renamed surface from "Context + Memory"

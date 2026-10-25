@@ -1297,6 +1297,10 @@ defmodule PlatformWeb.Components.IconRailExtensionMoreTest.SocialStub do
   @moduledoc false
   # Stands in for the Social module's extension, which the platform suite does
   # not load: one rail item at Social's real path.
+  # No canvas kinds: the More sheet's Games row asks the kind registry
+  # (`Browser.games_enabled?/0`), which reads every extension's kinds.
+  def canvas_kinds, do: []
+
   def rail_items,
     do: [
       %{

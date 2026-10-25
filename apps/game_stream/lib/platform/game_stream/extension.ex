@@ -186,4 +186,27 @@ defmodule Platform.GameStream.Extension do
   # (`0055-extension-contract-and-build-time-modules.md § 5. Rail items: which are core and which are module`).
   @impl true
   def rail_items, do: []
+
+  # The Game view (task 01a1557a-efdd stage 2), served by core's generic
+  # `/m/games` page. Claimed only while GAME_STREAM_ENABLED is set: with the
+  # flag unset `/m/games` is a 404 and core's file browser links a game
+  # canvas to `/canvases/<id>` instead (it asks `live_page_for("games")`).
+  # `canvas.read` on core's `:chat` module is CanvasLive's own gate; the
+  # page then authorizes the canvas itself through CanvasAccess.
+  @impl true
+  def live_pages do
+    if GameStream.enabled?() do
+      [
+        %{
+          prefix: "games",
+          live_view: PlatformWeb.GameViewLive,
+          title: "Game",
+          module: :chat,
+          permission: "canvas.read"
+        }
+      ]
+    else
+      []
+    end
+  end
 end

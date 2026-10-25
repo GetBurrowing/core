@@ -69,6 +69,11 @@ defmodule Platform.Files.Browser do
       * `thumb_src` — set for images only, nil otherwise, so a thumbnail is
         never invented for something that has none.
       * `location_href` — the Browse node the item lives under.
+      * `build` — games only: the first 7 characters of the game node's
+        `review_sha`, or nil when it has none.
+      * `game_state` — games only: `:playable` when the node's `task_id`
+        names a task in `in_review` (the only status a review build starts
+        for), else `:draft`; nil for everything that is not a game.
     """
 
     @type t :: %__MODULE__{
@@ -86,7 +91,9 @@ defmodule Platform.Files.Browser do
             at: DateTime.t() | nil,
             cloned?: boolean(),
             human_only?: boolean(),
-            ingest_status: String.t() | nil
+            ingest_status: String.t() | nil,
+            build: String.t() | nil,
+            game_state: :playable | :draft | nil
           }
 
     defstruct [
@@ -103,6 +110,8 @@ defmodule Platform.Files.Browser do
       :author,
       :at,
       :ingest_status,
+      :build,
+      :game_state,
       cloned?: false,
       human_only?: false
     ]
@@ -185,7 +194,7 @@ defmodule Platform.Files.Browser do
         limit: limit + 1,
         access_scope: viewer.access_scope
       )
-      |> Enum.map(&canvas_item(&1, ctx))
+      |> canvas_items(ctx)
 
     cap(sort(files ++ canvases, :recent), limit)
   end
@@ -232,7 +241,7 @@ defmodule Platform.Files.Browser do
         canvases =
           [space.id]
           |> Chat.list_browser_canvases(limit: @space_limit, access_scope: viewer.access_scope)
-          |> Enum.map(&canvas_item(&1, ctx))
+          |> canvas_items(ctx)
 
         {:ok, sort(canvases ++ space_files(viewer, space), :recent)}
     end
@@ -264,7 +273,7 @@ defmodule Platform.Files.Browser do
       limit: limit + 1,
       access_scope: viewer.access_scope
     )
-    |> Enum.map(&canvas_item(&1, ctx))
+    |> canvas_items(ctx)
     |> cap(limit)
   end
 
@@ -298,7 +307,7 @@ defmodule Platform.Files.Browser do
       # Classify each hit as canvas or game with one listing over the hit
       # ids, rather than loading documents. A hit the listing does not
       # return is dropped.
-      rows =
+      items =
         case Enum.map(hits, & &1.canvas.id) do
           [] ->
             %{}
@@ -306,14 +315,15 @@ defmodule Platform.Files.Browser do
           hit_ids ->
             ctx.space_ids
             |> Chat.list_browser_canvases([ids: hit_ids, limit: nil] ++ scope_opts)
+            |> canvas_items(ctx)
             |> Map.new(&{&1.id, &1})
         end
 
       canvases =
         Enum.flat_map(hits, fn %{canvas: canvas} ->
-          case Map.get(rows, canvas.id) do
+          case Map.get(items, canvas.id) do
             nil -> []
-            row -> [canvas_item(row, ctx)]
+            item -> [item]
           end
         end)
 
@@ -448,6 +458,21 @@ defmodule Platform.Files.Browser do
     }
   end
 
+  # One listing's rows to items. Every game's task status is resolved in ONE
+  # query for the whole listing (`Tasks.statuses_by_id/1`), never per item.
+  defp canvas_items(rows, ctx) do
+    statuses =
+      rows
+      |> Enum.filter(& &1.game?)
+      |> Enum.map(& &1.game_task_id)
+      |> Tasks.statuses_by_id()
+
+    game_page? = Platform.Extensions.live_page_for("games") != nil
+    ctx = Map.merge(ctx, %{task_statuses: statuses, game_page?: game_page?})
+
+    Enum.map(rows, &canvas_item(&1, ctx))
+  end
+
   defp canvas_item(row, ctx) do
     space = Map.get(ctx.spaces_by_id, row.space_id)
 
@@ -456,7 +481,9 @@ defmodule Platform.Files.Browser do
       kind: :canvas,
       type: if(row.game?, do: :game, else: :canvas),
       title: row.title,
-      href: "/canvases/#{row.id}",
+      href: canvas_href(row, ctx),
+      build: if(row.game?, do: build(row.game_review_sha)),
+      game_state: if(row.game?, do: game_state(row.game_task_id, ctx.task_statuses)),
       thumb_src: nil,
       org_id: space && space.org_id,
       project_id: nil,
@@ -468,6 +495,22 @@ defmodule Platform.Files.Browser do
       human_only?: false,
       ingest_status: nil
     }
+  end
+
+  # A game opens in the Game view (`/m/games`) only when an extension claims
+  # that live page; otherwise it is a canvas like any other.
+  defp canvas_href(%{game?: true, id: id}, %{game_page?: true}), do: "/m/games?canvas=#{id}"
+  defp canvas_href(%{id: id}, _ctx), do: "/canvases/#{id}"
+
+  defp build(sha) when is_binary(sha) and sha != "", do: String.slice(sha, 0, 7)
+  defp build(_sha), do: nil
+
+  # Playable iff the node's task is in review: a review build only starts for
+  # an `in_review` task. A missing, malformed or unknown task id is a draft.
+  defp game_state(task_id, statuses) do
+    if is_binary(task_id) and Map.get(statuses, String.downcase(task_id)) == "in_review",
+      do: :playable,
+      else: :draft
   end
 
   defp space_file_item(attachment, space) do

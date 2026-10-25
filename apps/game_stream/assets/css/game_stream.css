@@ -44,3 +44,96 @@
   max-height: 80svh;
   margin-inline: auto;
 }
+
+/* The Game view (task 01a1557a-efdd stage 2, PlatformWeb.GameViewLive).
+
+   The node in stage chrome sits on --stage, a dark ground in every theme, so
+   its own base-content and subtle text is re-pointed at --on-viewer for that
+   node only: body text on-viewer, subtle text on-viewer at 70%, and its edge
+   on-viewer at 15%. Guarded by test/platform/design/game_view_contrast_guard_test.exs.
+
+   The node's popovers (the overflow menu, the players sheet) paint base-100,
+   not the stage, so they get the page's own three tokens back. .game-view
+   captures them: a custom property's var() resolves where it is declared,
+   so these inherit as the page's values, not the stage chrome's. */
+.game-view {
+  --gs-page-ink: var(--color-base-content);
+  --gs-page-subtle: var(--subtle);
+  --gs-page-edge: var(--edge);
+}
+
+.game-stream-frame[data-gs-chrome="stage"] {
+  --color-base-content: var(--on-viewer);
+  --subtle: color-mix(in oklab, var(--on-viewer) 70%, transparent);
+  --edge: color-mix(in oklab, var(--on-viewer) 15%, transparent);
+}
+
+.game-stream-frame[data-gs-chrome="stage"] :is([data-gs-overflow-menu], [data-gs-sheet]) {
+  --color-base-content: var(--gs-page-ink);
+  --subtle: var(--gs-page-subtle);
+  --edge: var(--gs-page-edge);
+}
+
+/* Fill: the desktop toggle (JS.toggle_class on #game-stage) and phone
+   landscape. The stage takes the column, the node takes the stage and the
+   video well takes what the node's own rows leave. Every property the
+   portrait well rule sets is reset, as the fullscreen rule does. */
+.game-stage.game-stage--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.game-stage.game-stage--fill .game-stream-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.game-stage.game-stage--fill [data-gs-well] {
+  flex: 1 1 auto;
+  aspect-ratio: auto;
+  min-height: 0;
+  margin-inline: 0;
+  max-height: none;
+}
+
+/* Phone landscape: the stage only. The top bar, status line, caption and
+   drawer go, and the stage fills the viewport edge to edge. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .game-view [data-game-landscape-hide] {
+    display: none;
+  }
+
+  .game-view .game-stage-column,
+  .game-view .game-stage-box {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .game-view .game-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .game-view .game-stage .game-stream-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .game-view .game-stage [data-gs-well] {
+    flex: 1 1 auto;
+    aspect-ratio: auto;
+    min-height: 0;
+    margin-inline: 0;
+    max-height: none;
+  }
+}

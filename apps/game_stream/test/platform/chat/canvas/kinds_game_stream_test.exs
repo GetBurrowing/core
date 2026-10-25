@@ -722,4 +722,81 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       refute end_hidden?(html)
     end
   end
+
+  # ── Task 01a1557a-efdd stage 2: the Game view's stage chrome ─────────────
+
+  describe "chrome (Game view, 01a1557a-efdd stage 2)" do
+    setup do
+      enable!()
+      :ok
+    end
+
+    defp render_chrome(chrome) do
+      node = %{
+        "id" => "game-stream",
+        "type" => "game_stream",
+        "props" => %{
+          "session_id" => "s-chrome",
+          "review_sha" => @sha,
+          "branch" => "task/chrome",
+          "title" => "Chrome title"
+        }
+      }
+
+      opts = [node: node, canvas_id: "canvas-x", status: status("building"), roster: nil]
+      opts = if chrome, do: Keyword.put(opts, :chrome, chrome), else: opts
+      render_component(&GameStreamKind.render/1, opts) |> LazyHTML.from_fragment()
+    end
+
+    defp classes(doc, selector) do
+      [class] = doc |> LazyHTML.query(selector) |> LazyHTML.attribute("class")
+      String.split(class)
+    end
+
+    defp title_classes(doc) do
+      [title] =
+        doc
+        |> LazyHTML.query(".game-stream-frame > div:first-child > span")
+        |> Enum.filter(&(LazyHTML.text(&1) =~ "Chrome title"))
+
+      [class] = LazyHTML.attribute(title, "class")
+      String.split(class)
+    end
+
+    test ":panel (the default) keeps the framed card and shows title, branch and sha" do
+      doc = render_chrome(nil)
+      frame = classes(doc, "[phx-hook=GameStream]")
+      assert ~w(rounded-xl border border-edge bg-base-100) -- frame == []
+      refute "bg-stage" in frame
+      assert "@sm:inline" in title_classes(doc)
+      assert "@md:inline" in classes(doc, "[data-gs-branch]")
+      refute "hidden" in classes(doc, "[data-gs-sha]")
+      assert render_chrome(:panel) |> LazyHTML.to_html() == doc |> LazyHTML.to_html()
+    end
+
+    test ":stage paints the stage, drops the frame and hides title, branch and sha (still in the DOM)" do
+      doc = render_chrome(:stage)
+      frame = classes(doc, "[phx-hook=GameStream]")
+      assert "bg-stage" in frame
+
+      assert ~w(rounded-xl border border-edge bg-base-100) -- frame ==
+               ~w(rounded-xl border border-edge bg-base-100)
+
+      assert LazyHTML.attribute(LazyHTML.query(doc, "[phx-hook=GameStream]"), "data-gs-chrome") ==
+               ["stage"]
+
+      title = title_classes(doc)
+      assert "hidden" in title
+      refute "@sm:inline" in title
+
+      branch = classes(doc, "[data-gs-branch]")
+      assert "hidden" in branch
+      refute "@md:inline" in branch
+
+      assert "hidden" in classes(doc, "[data-gs-sha]")
+      # The hook still finds the panels and the restart control.
+      assert LazyHTML.query(doc, "[data-gs-panel=building]") |> Enum.count() == 1
+      assert LazyHTML.query(doc, "[data-gs-restart]") |> Enum.count() == 2
+    end
+  end
 end

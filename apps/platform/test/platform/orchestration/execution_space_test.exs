@@ -439,6 +439,39 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     end
   end
 
+  describe "list_logs_by_metadata/3" do
+    test "log-only rows containing the match, newest first, limited" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      note = %{"kind" => "note", "sha" => "a"}
+
+      {:ok, first} = ExecutionSpace.post_log(space.id, "first", metadata: note)
+      {:ok, _other_sha} = ExecutionSpace.post_log(space.id, "b", metadata: %{note | "sha" => "b"})
+      {:ok, _plain} = ExecutionSpace.post_log(space.id, "plain log")
+      # Same metadata, but routed: not a log.
+      {:ok, _routed} = ExecutionSpace.post_engagement(space.id, "routed", metadata: note)
+      {:ok, second} = ExecutionSpace.post_log(space.id, "second", metadata: note)
+
+      assert [%{id: id2, content: "second"}, %{id: id1, content: "first"}] =
+               ExecutionSpace.list_logs_by_metadata(space.id, note)
+
+      assert {id2, id1} == {second.id, first.id}
+
+      assert [%{content: "second"}] =
+               ExecutionSpace.list_logs_by_metadata(space.id, note, limit: 1)
+
+      assert [%{metadata: %{"kind" => "note", "sha" => "a", "log_only" => true}}] =
+               ExecutionSpace.list_logs_by_metadata(space.id, %{"sha" => "a"}, limit: 1)
+    end
+
+    test "another space's rows are not listed" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, other} = ExecutionSpace.find_or_create(Ecto.UUID.generate())
+      {:ok, _} = ExecutionSpace.post_log(other.id, "elsewhere", metadata: %{"kind" => "note"})
+
+      assert ExecutionSpace.list_logs_by_metadata(space.id, %{"kind" => "note"}) == []
+    end
+  end
+
   describe "add_participant is deleted (task 019fb90f stage 3)" do
     # The deleted function had zero production call sites; the test that used
     # to live here was the only caller in the repo, which is precisely why its

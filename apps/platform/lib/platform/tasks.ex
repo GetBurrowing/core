@@ -1719,6 +1719,30 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  @doc """
+  `%{task_id => status}` for the live (not deleted) tasks among `ids`, in ONE
+  query. Ids that are not UUIDs are dropped before the query, so a caller may
+  pass ids read from untyped data (a canvas node's `task_id` prop); an id
+  with no live task is simply absent from the map.
+  """
+  @spec statuses_by_id([term()]) :: %{binary() => String.t()}
+  def statuses_by_id(ids) when is_list(ids) do
+    case ids
+         |> Enum.filter(&Platform.UUID.valid?/1)
+         |> Enum.map(&String.downcase/1)
+         |> Enum.uniq() do
+      [] ->
+        %{}
+
+      uuids ->
+        Task
+        |> where([t], t.id in ^uuids and is_nil(t.deleted_at))
+        |> select([t], {t.id, t.status})
+        |> Repo.all()
+        |> Map.new()
+    end
+  end
+
   def list_tasks_by_status(status) do
     Task
     |> where([t], t.status == ^status)

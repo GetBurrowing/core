@@ -996,15 +996,15 @@ defmodule PlatformWeb.FilesLive do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # The shell's `:track_path` hook sets `:current_path` to the bare URI path
-  # on every navigation. The More sheet lights Canvases only on the browser's
-  # All-canvases view, so that view passes its query through in ONE canonical
-  # form (`/files?tab=browse&type=canvas`, whatever the sort); every other
-  # view keeps the bare path and lights Files.
-  defp current_path(%{"tab" => "browse"} = params, :canvas) do
+  # on every navigation. The More sheet lights Canvases (Games) only on the
+  # browser's All-canvases (All-games) view, so that view passes its query
+  # through in ONE canonical form (`/files?tab=browse&type=canvas|game`,
+  # whatever the sort); every other view keeps the bare path and lights Files.
+  defp current_path(%{"tab" => "browse"} = params, type) when type in [:canvas, :game] do
     if Map.has_key?(params, "org") or Map.has_key?(params, "project_id") or
          Map.has_key?(params, "space"),
        do: "/files",
-       else: "/files?tab=browse&type=canvas"
+       else: "/files?tab=browse&type=#{type}"
   end
 
   defp current_path(%{"project_id" => id}, _type) when is_binary(id), do: "/files/" <> id
@@ -1319,13 +1319,13 @@ defmodule PlatformWeb.FilesLive do
         <BrowserComponents.empty_state browser={@browser} labels={@labels} />
       <% @layout == :grid -> %>
         <BrowserComponents.item_grid
-          items={@browser.items}
+          browser={@browser}
           labels={@labels}
           show_location={@show_location}
         />
       <% true -> %>
         <BrowserComponents.item_list
-          items={@browser.items}
+          browser={@browser}
           labels={@labels}
           show_location={@show_location}
           file_rows={@file_rows}

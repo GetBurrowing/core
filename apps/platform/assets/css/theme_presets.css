@@ -80,6 +80,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #070b14;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-midnight dark. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -163,6 +164,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #0b0b10;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-midnight light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -254,6 +256,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #120f0a;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-sand dark. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -337,6 +340,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #0b0b10;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-sand light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -449,6 +453,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #0a100d;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-forest dark. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -536,6 +541,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #0b0b10;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js burrow-forest light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -631,6 +637,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #000000;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js high-contrast dark. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -716,6 +723,7 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  --stage: #000000;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js high-contrast light. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */

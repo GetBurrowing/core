@@ -82,6 +82,10 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Game stage (rung 21): the backdrop behind a game card's thumb and
+     the Game view, from the masters' theme.js. Declared --stage, never
+     --color-stage; see the @theme inline block. */
+  --stage: #0b0b10;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -296,6 +300,10 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Game stage (rung 21): the backdrop behind a game card's thumb and
+     the Game view, from the masters' theme.js. Declared --stage, never
+     --color-stage; see the @theme inline block. */
+  --stage: #0b0b10;
   /* Scrim behind sheets and Shade under overlay chips (rung 18),
      theme.js BURROW_DARK. Declared --scrim/--shade, never --color-*;
      see the @theme inline block. */
@@ -423,6 +431,8 @@
   /* Rung 13: bg-viewer / text-on-viewer for the in-app viewer. */
   --color-viewer: var(--viewer);
   --color-on-viewer: var(--on-viewer);
+  /* Rung 21: bg-stage for game thumbs and the Game view. */
+  --color-stage: var(--stage);
   /* Rung 18: bg-scrim behind sheets, bg-shade under overlay chips. */
   --color-scrim: var(--scrim);
   --color-shade: var(--shade);
@@ -5952,6 +5962,24 @@ body, .font-suite {
   [data-role="files-chips"] [aria-current="false"]:hover {
     background: var(--color-base-200);
   }
+}
+
+/* Game cards in the Files browser (rung 21, task 01a1557a-efdd stage 1;
+   masters .fcard.game .th :432 and .frow .ic.game :459). The grid thumb runs
+   from the stage tinted 30% toward ag-teal down to the stage; the list's
+   44px icon tile is that lighter stop, flat. Both carry on-viewer glyphs and
+   tags (bg-shade text-on-viewer, or the success pair for "playable"). Pinned
+   by test/platform/design/game_card_contrast_guard_test.exs. */
+.browser-thumb-game {
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--stage) 70%, var(--ag-teal)),
+    var(--stage)
+  );
+}
+
+.browser-icon-game {
+  background: color-mix(in oklab, var(--stage) 70%, var(--ag-teal));
 }
 
 /* The shared rule hides the bottom-sheet handle at 768px and up; a handle
