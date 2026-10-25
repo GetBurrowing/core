@@ -328,6 +328,40 @@ defmodule PlatformWeb.Components.SidebarTest do
     end
   end
 
+  # ── Command palette affordances (rung 23 stage 3) ───────────────────────
+
+  describe "command palette affordances" do
+    test "#cmdk-btn sits in the brand row, after the name, and pushes palette_open to #command-palette" do
+      d = render_sidebar(%{}) |> doc()
+
+      assert d |> q("#sidebar-brand > button#cmdk-btn") |> Enum.count() == 1
+      assert d |> q("#sidebar-brand > button#cmdk-btn:last-child") |> Enum.count() == 1
+      assert d |> q("#cmdk-btn") |> LazyHTML.attribute("type") == ["button"]
+      assert d |> q("#cmdk-btn") |> LazyHTML.attribute("title") == ["Jump anywhere (⌘K)"]
+      assert d |> q("#cmdk-btn") |> LazyHTML.attribute("aria-label") == ["Command palette"]
+      assert d |> q("#cmdk-btn .hero-magnifying-glass") |> Enum.count() == 1
+
+      [click] = d |> q("#cmdk-btn") |> LazyHTML.attribute("phx-click")
+
+      assert [["push", %{"event" => "palette_open", "target" => "#command-palette"}]] =
+               Jason.decode!(click)
+    end
+
+    test "#sidebar-cmdk-hint follows #sidebar-user as the footer's last child, verbatim" do
+      d = render_sidebar(%{}) |> doc()
+
+      assert d |> q("#sidebar-user + #sidebar-cmdk-hint") |> Enum.count() == 1
+      assert d |> q("#sidebar-cmdk-hint:last-child") |> Enum.count() == 1
+
+      assert d |> q(~s(#sidebar-cmdk-hint[data-role="sidebar-cmdk-hint"])) |> Enum.count() == 1
+
+      [hint] = d |> q("#sidebar-cmdk-hint") |> Enum.map(&text/1)
+      assert String.replace(hint, ~r/\s+/, " ") == "⌘K jump · Esc close"
+
+      assert d |> q("#sidebar-cmdk-hint kbd") |> Enum.map(&text/1) == ["⌘K", "Esc"]
+    end
+  end
+
   # ── The shell at lg ─────────────────────────────────────────────────────
 
   describe "the shell" do
@@ -394,6 +428,15 @@ defmodule PlatformWeb.Components.SidebarTest do
 
       render_click(view, "toggle_theme_picker", %{})
       assert has_element?(view, "#sidebar #theme-picker #theme-picker-popover.lg\\:block")
+    end
+
+    test "clicking #cmdk-btn on /tasks opens the command palette", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/tasks")
+      assert has_element?(view, ~s(#command-palette[data-open="false"]))
+
+      view |> element("#sidebar #cmdk-btn") |> render_click()
+
+      assert has_element?(view, ~s(#command-palette[data-open="true"]))
     end
 
     test "the user row is the sidebar's link to /settings, where Sign out lives", %{conn: conn} do

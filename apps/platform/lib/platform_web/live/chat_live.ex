@@ -57,6 +57,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.PinHooks
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.PrototypeUpload
+  alias PlatformWeb.ChatLive.ReadScope
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SpaceSheetHooks
   alias PlatformWeb.ChatLive.MembersComponent
@@ -374,29 +375,25 @@ defmodule PlatformWeb.ChatLive do
     access_scope = socket.assigns[:access_scope]
 
     {external_scope, external?} =
-      PlatformWeb.ChatLive.ReadScope.resolve(access_scope, user_id, embedded?)
+      ReadScope.resolve(access_scope, user_id, embedded?)
 
-    readable_channels =
-      if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)
+    readable_channels = if embedded?, do: [], else: ReadScope.channels(external_scope)
 
     listed_channels =
       if embedded?,
         do: [],
         else:
           Chat.list_spaces(kind: "channel", scope: channel_listing_scope(external?, user_id))
-          |> PlatformWeb.ChatLive.ReadScope.within_org_fence(access_scope)
+          |> ReadScope.within_org_fence(access_scope)
 
     # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
     # collapsed "Archived" group — they are deliberately kept out of
     # `channels` / `channel_sections/4` so no active bucket renders them.
     # External users get NONE: the archived group is an internal discovery
     # surface (design canvas §1 non-goals).
-    archived_scope = PlatformWeb.ChatLive.ReadScope.fenced_scope(access_scope)
+    archived_scope = ReadScope.fenced_scope(access_scope)
 
-    archived_channels =
-      if embedded? or external?,
-        do: [],
-        else: Chat.list_spaces(kind: "channel", archived: true, scope: archived_scope)
+    archived_channels = ReadScope.archived_channels(archived_scope, embedded? or external?)
 
     restricted_channel_ids =
       restricted_channel_ids(
@@ -1044,7 +1041,7 @@ defmodule PlatformWeb.ChatLive do
           kind: "channel",
           scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
         )
-        |> PlatformWeb.ChatLive.ReadScope.within_org_fence(socket.assigns[:access_scope])
+        |> ReadScope.within_org_fence(socket.assigns[:access_scope])
 
       archived_channels = rail_archived_channels(socket)
 
@@ -2590,67 +2587,23 @@ defmodule PlatformWeb.ChatLive do
     |> recompute_sidebar()
   end
 
-  # The rail's channel list, scoped to the acting user. rbac-external-users M5:
-  # every reload of `:channels` after mount (nav, `:space_created` broadcast,
-  # org-archive refresh, unarchive) must re-apply `@external_scope` or a
-  # workspace-wide `list_spaces` would re-broaden an external user's rail past
-  # their allowlist. For internal / anonymous sessions `@external_scope` is nil
-  # and this is a pass-through — the internal rail is byte-for-byte unchanged.
-  defp rail_channels(socket) do
-    Chat.list_spaces(
-      kind: "channel",
-      scope: socket.assigns[:access_scope] || socket.assigns[:external_scope]
-    )
-  end
+  # The rail's three lists, one derivation each in `PlatformWeb.ChatLive.ReadScope`
+  # (the command palette reads the same functions). Every reload of `:channels`
+  # after mount must re-apply the read-scope or a workspace-wide read would
+  # re-broaden a guest's rail past their allowlist (rbac-external-users M5).
+  defp rail_channels(socket),
+    do: ReadScope.channels(socket.assigns[:access_scope] || socket.assigns[:external_scope])
 
-  # The rail's ARCHIVED channel list. Sibling of `rail_channels/1` above, and
-  # deliberately a separate function rather than an `archived: true` flag on it:
-  # the two lists treat an external user differently, and a boolean parameter
-  # would bury that asymmetry at every call site. The live list is FILTERED to
-  # the allowlist; this one is EMPTIED outright, because the collapsed
-  # "Archived" group is an internal discovery surface (design canvas §1
-  # non-goals) and an external user has no archived view at all. That is the
-  # same reason `do_mount/3` already states where it seeds the assign.
-  #
-  # Latent, not live, at the time of writing (task 019ffebf-4745): both
-  # renderings of the archived group sit inside `!@external?` gates in
-  # `chat_live.html.heex`, and `@external?` is assigned once in `do_mount/3`
-  # and never reassigned, so the gate cannot flip mid-session and an unrendered
-  # assign never reaches the wire. Routed through here anyway so that deleting
-  # one of those template gates cannot silently turn an unscoped read into a
-  # leak.
-  defp rail_archived_channels(socket) do
-    if socket.assigns[:external?],
-      do: [],
-      else:
-        Chat.list_spaces(kind: "channel", archived: true, scope: socket.assigns[:access_scope])
-  end
+  # EMPTIED, not filtered, for a guest. Latent at the time of writing (task
+  # 019ffebf-4745): both archived renderings sit inside `!@external?` gates,
+  # and this keeps a deleted gate from turning an unscoped read into a leak.
+  defp rail_archived_channels(socket),
+    do: ReadScope.archived_channels(socket.assigns[:access_scope], socket.assigns[:external?])
 
-  # The rail's DM and group conversation list, scoped to the acting user.
-  # Third sibling of `rail_channels/1` and `rail_archived_channels/1` above,
-  # and the single derivation behind every site that needs one: `do_mount/3`
-  # seeds the assign, `handle_params/3` re-reads it on each navigation, and
-  # `:sidebar_changed` re-reads it when someone is added to a conversation
-  # mid-session (task 01a01ccf).
-  #
-  # That third site is why this function exists. The same query-and-filter was
-  # already written out twice, and the two copies had drifted — only
-  # `do_mount/3` carried the embedded / nil-user short-circuit — so a third
-  # literal copy would have had to pick which of the two was the rule. One
-  # function, one answer, and a fourth caller inherits it.
-  #
-  # `Chat.list_user_conversations/2` returns every space the user holds a
-  # participant row in, which includes execution and meeting spaces. The `kind`
-  # filter is what narrows that to the two kinds the rail's "Direct Messages"
-  # section renders, and it belongs here rather than in the query: that
-  # function's other consumers want the unfiltered list.
-  #
-  # Split across two heads because `do_mount/3` derives this BEFORE any of the
-  # three inputs reaches `socket.assigns` — `:user_id`, `:external_scope` and
-  # `:embedded` are all assigned further down that same function — so the
-  # socket-shaped sibling cannot serve it. `dm_conversations_for/3` holds the
-  # rule; the socket wrapper is the post-mount door to it, which is what keeps
-  # mount and every later refresh reading the same one.
+  # Mount, `handle_params/3` and `:sidebar_changed` (task 01a01ccf) all read
+  # this. `do_mount/3` derives it BEFORE `:user_id`, `:external_scope` and
+  # `:embedded` reach `socket.assigns`, so it calls `dm_conversations_for/3`
+  # directly; this wrapper is the post-mount door to the same rule.
   defp rail_dm_conversations(socket) do
     dm_conversations_for(
       socket.assigns[:user_id],
@@ -2665,11 +2618,8 @@ defmodule PlatformWeb.ChatLive do
   defp dm_conversations_for(_user_id, _scope, true), do: []
   defp dm_conversations_for(nil, _scope, _embedded?), do: []
 
-  defp dm_conversations_for(user_id, scope, _embedded?) do
-    user_id
-    |> Chat.list_user_conversations(scope: scope)
-    |> Enum.filter(&(&1.kind in ["dm", "group"]))
-  end
+  defp dm_conversations_for(user_id, scope, _embedded?),
+    do: ReadScope.conversations(user_id, scope)
 
   # Coerce a hide/show flag (boolean or "true"/"false" string from the
   # client) into a boolean. Anything other than a truthy marker is false.

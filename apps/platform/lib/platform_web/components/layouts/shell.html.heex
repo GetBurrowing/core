@@ -288,6 +288,18 @@
       on_meeting_page={@on_meeting_page}
     />
 
+    <%!-- Desktop command palette (Burrow redesign 23 stage 2; master-desktop
+         #cmdk). Mounted once, here, for every shell page; it loads its
+         Sources only when opened and sends nothing to the page. --%>
+    <.live_component
+      module={PlatformWeb.CommandPaletteLive}
+      id="command-palette"
+      access_scope={assigns[:access_scope]}
+      current_user_record={assigns[:current_user_record]}
+      root_user={@root_user}
+      mask_names?={assigns[:mask_names?] == true}
+    />
+
     <%!-- Shell-level LiveKit reconnect supervisor (task 019ee06b stage 2).
          The watchdog is a slim sibling of MeetingClient that owns ONLY
          network-survival (idempotent reconnect listener bind + breadcrumb)

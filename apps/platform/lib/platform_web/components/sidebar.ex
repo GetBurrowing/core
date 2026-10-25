@@ -19,6 +19,12 @@ defmodule PlatformWeb.Components.Sidebar do
   the longest-prefix rule decides (`/control/usage` is Settings, not
   Agents), and Settings is current on `IconRail.settings_paths/0`.
 
+  ## Brand row
+
+  The mark, the install's name and, at the right end, `#cmdk-btn`
+  (rung 23 stage 3): a 34px round icon button that pushes `palette_open` to
+  the shell's `PlatformWeb.CommandPaletteLive` (`#command-palette`).
+
   ## Footer
 
   Settings, the theme mode row (`#mode-toggle`), the "Names masked" chip
@@ -26,7 +32,8 @@ defmodule PlatformWeb.Components.Sidebar do
   lives). The mode row flips light/dark through the theme picker's own
   path: `window.burrowTheme.apply/1`, then `set_theme` (the `ModeToggle`
   hook). Presets stay in Settings > Appearance, whose Theme row opens the
-  picker popover rendered here, beside the mode row.
+  picker popover rendered here, beside the mode row. Under the user row, the
+  `#sidebar-cmdk-hint` line: "⌘K jump · Esc close".
 
   ## Paint
 
@@ -44,6 +51,7 @@ defmodule PlatformWeb.Components.Sidebar do
   import PlatformWeb.Components.ThemePicker, only: [theme_picker: 1]
   import PlatformWeb.Components.MaskNamesChip, only: [mask_names_chip: 1]
 
+  alias Phoenix.LiveView.JS
   alias Platform.Accounts
   alias PlatformWeb.Components.IconRail
 
@@ -94,6 +102,19 @@ defmodule PlatformWeb.Components.Sidebar do
         <span class="min-w-0 truncate text-sm font-semibold text-base-content">
           {@brand_name}
         </span>
+        <span class="flex-1"></span>
+        <%!-- masters #cmdk-btn (L570, .icon-btn L65): opens the palette
+             mounted once in the shell (CommandPaletteLive, #command-palette). --%>
+        <button
+          id="cmdk-btn"
+          type="button"
+          title="Jump anywhere (⌘K)"
+          aria-label="Command palette"
+          phx-click={JS.push("palette_open", target: "#command-palette")}
+          class="inline-flex size-[34px] shrink-0 items-center justify-center rounded-full text-subtle lg:hover:bg-base-300 lg:hover:text-base-content focus-visible-ring"
+        >
+          <.icon name="hero-magnifying-glass" class="size-4" />
+        </button>
       </div>
 
       <nav
@@ -231,10 +252,23 @@ defmodule PlatformWeb.Components.Sidebar do
             </small>
           </span>
         </.link>
+
+        <%!-- masters .side .ck (L590, CSS L46; kbd CSS L25). The kbd is
+             text-xs, not masters' 11px: subtle text under 12px is frozen
+             (subtle_text_ratchet_test.exs, ADR 0050). --%>
+        <div
+          id="sidebar-cmdk-hint"
+          data-role="sidebar-cmdk-hint"
+          class="flex items-center gap-1.5 px-2 py-1 text-xs text-subtle"
+        >
+          <kbd class={kbd_class()}>⌘K</kbd> jump · <kbd class={kbd_class()}>Esc</kbd> close
+        </div>
       </div>
     </aside>
     """
   end
+
+  defp kbd_class, do: "rounded border border-edge px-[5px] font-mono text-xs text-subtle"
 
   attr :dest, :map, required: true
   attr :icon, :string, required: true

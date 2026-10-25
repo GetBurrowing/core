@@ -61,7 +61,9 @@ defmodule PlatformWeb.SettingsLive do
   ## Sheet state
 
   One `@sheet` assign (`nil | :notifications | :admin | :sign_out`), set to
-  nil in `mount/3`.
+  nil in `mount/3` unless `?sheet=notifications` or `?sheet=admin` names one;
+  `?sheet=appearance` opens the theme picker instead. Any other value is
+  ignored.
   Every link here carries NO phx-click (a bare-string phx-click on a
   `navigate` link throws in LiveView, and a `JS.push` on a redirect link never
   arrives), so navigating away remounts and that is what closes a sheet.
@@ -116,7 +118,7 @@ defmodule PlatformWeb.SettingsLive do
   ]
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     scope = socket.assigns[:access_scope]
 
     zone =
@@ -133,8 +135,21 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:level_error, nil)
      |> assign(:mask_names?, Accounts.mask_names?(socket.assigns[:current_user_record]))
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
-     |> assign(:admin_rows, visible_admin_rows(scope))}
+     |> assign(:admin_rows, visible_admin_rows(scope))
+     |> open_from_params(params)}
   end
+
+  # `?sheet=` (the command palette's Settings items, Burrow redesign 23):
+  # opens what the matching row's click opens. Anything else is ignored.
+  defp open_from_params(socket, %{"sheet" => "notifications"}),
+    do: assign(socket, :sheet, :notifications)
+
+  defp open_from_params(socket, %{"sheet" => "admin"}), do: assign(socket, :sheet, :admin)
+
+  defp open_from_params(socket, %{"sheet" => "appearance"}),
+    do: assign(socket, :theme_picker_open, true)
+
+  defp open_from_params(socket, _params), do: socket
 
   @doc false
   # Public for the test that checks each row against a real mount.

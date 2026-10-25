@@ -18,6 +18,7 @@ import ChatViewer from "./chat_viewer"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
+import CommandPalette from "./command_palette"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DoneColumnState from "./done_column_state"
@@ -99,6 +100,7 @@ export default {
   ChatScrollToMessage,
   MessageContextPopover,
   CodeBlock,
+  CommandPalette,
   ComposeInput,
   CopyToClipboard,
   DoneColumnState,

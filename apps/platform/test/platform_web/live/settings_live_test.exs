@@ -790,6 +790,39 @@ defmodule PlatformWeb.SettingsLiveTest do
     end
   end
 
+  describe "?sheet= (the command palette's Settings items)" do
+    @sheets ~w(settings-notifications-sheet settings-admin-sheet settings-sign-out-sheet)
+
+    defp open_sheets(html),
+      do: Enum.filter(@sheets, &(query(html, "##{&1}[data-open=true]") |> Enum.count() == 1))
+
+    test "?sheet=notifications renders the notifications sheet open" do
+      {:ok, _view, html} = live(authed(member!()), "/settings?sheet=notifications")
+      assert open_sheets(html) == ["settings-notifications-sheet"]
+    end
+
+    test "?sheet=admin renders the admin sheet open" do
+      {:ok, _view, html} = live(authed(root!()), "/settings?sheet=admin")
+      assert open_sheets(html) == ["settings-admin-sheet"]
+    end
+
+    test "?sheet=appearance opens the theme picker and no sheet" do
+      {:ok, _view, html} = live(authed(member!()), "/settings?sheet=appearance")
+      assert open_sheets(html) == []
+
+      assert query(html, "#theme-picker-popover") |> LazyHTML.attribute("class") |> hd() =~
+               "lg:block"
+    end
+
+    test "?sheet=bogus renders no sheet and no picker" do
+      {:ok, _view, html} = live(authed(member!()), "/settings?sheet=bogus")
+      assert open_sheets(html) == []
+
+      refute query(html, "#theme-picker-popover") |> LazyHTML.attribute("class") |> hd() =~
+               "lg:block"
+    end
+  end
+
   describe "sheet handles (touch swipe-down)" do
     # A bare `.sheet-handle` div is `touch-action: auto`, so a touch drag on it
     # is claimed by the browser (pointercancel) and swipe_dismiss never fires.

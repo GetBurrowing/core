@@ -51,6 +51,27 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
   | pressed Details glyph: primary on base-300             | 3        |
   | ghost border: --edge on base-100                       | recorded |
 
+  ## Pairs and floors (rung 23 stage 2, the command palette)
+
+  | pair                                                   | floor    |
+  |--------------------------------------------------------|----------|
+  | row label: base-content on base-100                    | 4.5      |
+  | selected / hovered row label: base-content on base-300 | 4.5      |
+  | kind: --subtle on base-100 (painted)                   | 4.5      |
+  | kind on the selected row: --subtle on base-300 (painted) | 4.5    |
+  | placeholder: --subtle on base-100 (painted)            | 4.5      |
+  | "No match.": --subtle on base-100 (painted)            | 4.5      |
+  | box border and input rule: --edge on base-100          | recorded |
+
+  ## Pairs and floors (rung 23 stage 3, the sidebar ⌘K button and hint)
+
+  | pair                                                   | floor    |
+  |--------------------------------------------------------|----------|
+  | #cmdk-btn glyph at rest: --subtle on base-200 (painted) | 3       |
+  | #cmdk-btn glyph on hover: base-content on base-300     | 3        |
+  | hint text: --subtle on base-200 (painted)              | 4.5      |
+  | kbd border: --edge on base-200                         | recorded |
+
   `--subtle` is `color-mix(in oklab, base-content N%, transparent)`, alpha
   over the ground, so its pair is PAINTED: the worst pixel
   `Platform.Design.PaintedComposite` allows at the block's declared strength.
@@ -96,6 +117,8 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
                        "../../../lib/platform_web/live/chat/partials/list_popover.ex",
                        __DIR__
                      )
+
+  @palette_path Path.expand("../../../lib/platform_web/live/command_palette_live.ex", __DIR__)
 
   @aa_text 4.5
   @non_text 3.0
@@ -227,6 +250,28 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
       {"ghost label (subtle) / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text},
       {"pressed Details glyph primary / base-300",
        ratio(b, "--color-primary", "--color-base-300"), @non_text}
+    ]
+  end
+
+  defp palette_pairs(b) do
+    [
+      {"row label / base-100", ratio(b, "--color-base-content", "--color-base-100"), @aa_text},
+      {"row label / base-300 (selected, hover)",
+       ratio(b, "--color-base-content", "--color-base-300"), @aa_text},
+      {"kind (subtle) / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text},
+      {"kind (subtle) / base-300 (painted)", subtle_on(b, "--color-base-300"), @aa_text},
+      {"placeholder (subtle) / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text},
+      {"No match. (subtle) / base-100 (painted)", subtle_on(b, "--color-base-100"), @aa_text}
+    ]
+  end
+
+  defp cmdk_pairs(b) do
+    [
+      {"cmdk-btn glyph (subtle) / base-200 (painted)", subtle_on(b, "--color-base-200"),
+       @non_text},
+      {"cmdk-btn glyph hover / base-300", ratio(b, "--color-base-content", "--color-base-300"),
+       @non_text},
+      {"cmdk hint (subtle) / base-200 (painted)", subtle_on(b, "--color-base-200"), @aa_text}
     ]
   end
 
@@ -469,6 +514,78 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
     refute desktop <> ghost =~ @colour_literal
   end
 
+  test "rung 23 stage 2: the command palette pairs clear their floors in all ten variants; edge recorded",
+       %{blocks: blocks} do
+    assert length(blocks) == 10
+    rows = for b <- blocks, do: {b, palette_pairs(b)}
+
+    assert print_and_check(
+             "Command palette AA table (WCAG 2.x; painted rows on the worst pixel)",
+             rows
+           ) == []
+
+    IO.puts(
+      "Command palette box border and input rule (recorded, not claimed):\n" <>
+        Enum.map_join(blocks, "\n", fn b ->
+          "| #{b.id} #{b.mode} | edge / base-100 #{f4(ratio(b, "--edge", "--color-base-100"))} |"
+        end)
+    )
+  end
+
+  test "rung 23 stage 2: the command palette paints what the table measures, and nothing else" do
+    src = File.read!(@palette_path)
+    [_, render] = String.split(src, "  def render(assigns) do", parts: 2)
+
+    # Anti-vacuity: the classes the pairs above stand for are really painted.
+    for token <-
+          ~w(bg-base-100 bg-base-300 lg:hover:bg-base-300 text-base-content text-subtle placeholder:text-subtle border-edge bg-scrim) do
+      assert render =~ token, "command_palette_live.ex does not paint #{token} (stale pair?)"
+    end
+
+    # masters #cmdk .box: 560px, 92vw, the modal shadow token.
+    assert render =~ "w-[560px] max-w-[92vw]"
+    assert render =~ "shadow-[var(--shadow-modal)]"
+
+    # Hover is desktop only.
+    assert render =~ "lg:hover:"
+    refute render =~ ~r/(?<!lg:)hover:/
+
+    # Text is base-content or subtle; sizes and alignment aside.
+    text_classes =
+      Regex.scan(
+        ~r/(?<![\w:-])text-(?!xs\b|sm\b|base(?!-)|left\b|center\b|\[)[a-z][\w-]*/,
+        render
+      )
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert text_classes == ["text-base-content", "text-subtle"]
+    assert render =~ "placeholder:text-subtle"
+    refute render =~ ~r/placeholder:text-(?!subtle\b)/
+
+    # No colour literal anywhere in the component.
+    refute src =~ @colour_literal
+  end
+
+  test "rung 23 stage 3: the sidebar ⌘K button and hint pairs clear their floors in all ten variants; kbd edge recorded",
+       %{blocks: blocks} do
+    assert length(blocks) == 10
+    rows = for b <- blocks, do: {b, cmdk_pairs(b)}
+
+    assert print_and_check(
+             "Sidebar ⌘K button + hint AA table (WCAG 2.x; painted rows on the worst pixel)",
+             rows
+           ) == []
+
+    IO.puts(
+      "Sidebar hint kbd border (recorded, not claimed):\n" <>
+        Enum.map_join(blocks, "\n", fn b ->
+          "| #{b.id} #{b.mode} | edge / base-200 #{f4(ratio(b, "--edge", "--color-base-200"))} |"
+        end)
+    )
+  end
+
   # ── structure ──────────────────────────────────────────────────────────
 
   test "the sidebar row's rules are exactly the expected set (sliced before read)",
@@ -513,5 +630,33 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
       |> Enum.sort()
 
     assert text_classes == ["text-base-content", "text-primary-content", "text-subtle"]
+
+    # Rung 23 stage 3: #cmdk-btn and the hint paint exactly what cmdk_pairs/1
+    # measures (sliced before read, so a match elsewhere cannot stand in).
+    [_, btn] = String.split(src, ~s(id="cmdk-btn"), parts: 2)
+    [btn | _] = String.split(btn, "</button>", parts: 2)
+
+    for token <-
+          ~w(text-subtle lg:hover:bg-base-300 lg:hover:text-base-content size-[34px] rounded-full focus-visible-ring hero-magnifying-glass) do
+      assert btn =~ token, "#cmdk-btn does not paint #{token}"
+    end
+
+    refute btn =~ ~r/(?<!lg:)hover:/
+
+    [_, hint] = String.split(src, ~s(id="sidebar-cmdk-hint"), parts: 2)
+    [hint | _] = String.split(hint, "</div>", parts: 2)
+
+    for token <- ~w(flex items-center gap-1.5 px-2 py-1 text-xs text-subtle) do
+      assert hint =~ token, "#sidebar-cmdk-hint does not paint #{token}"
+    end
+
+    assert hint =~ "<kbd class={kbd_class()}>"
+    [_, kbd] = String.split(src, "defp kbd_class, do: ", parts: 2)
+    [kbd | _] = String.split(kbd, "\n", parts: 2)
+
+    assert kbd ==
+             ~s("rounded border border-edge px-[5px] font-mono text-xs text-subtle")
+
+    refute src =~ @colour_literal
   end
 end

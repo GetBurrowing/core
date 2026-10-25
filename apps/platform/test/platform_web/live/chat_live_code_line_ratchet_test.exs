@@ -658,7 +658,12 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # reveal (reveal_section, remask_all), the undo-hide and move-to-org
   # toasts, and the chat-side org lifecycle kebab and its delete modal. The
   # list pane lives in `Partials.ChatList` and `Partials.ListPopover`.
-  @chat_live_code_line_count 2016
+  # Burrow redesign 23 stage 1 (2026-10-25, command palette sources): -14,
+  # measured by this guard (2016 -> 2002). The rail's channel, archived and
+  # DM queries moved into `PlatformWeb.ChatLive.ReadScope.channels/1`,
+  # `archived_channels/2` and `conversations/2`, which the palette's
+  # `PlatformWeb.CommandPalette.Sources` reads too; chat_live delegates.
+  @chat_live_code_line_count 2002
 
   @doc """
   Count the CODE lines of a source file.

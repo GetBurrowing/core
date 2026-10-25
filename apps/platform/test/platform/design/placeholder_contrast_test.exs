@@ -81,7 +81,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/partials/overlays.ex",
     # The Voice tab's context sheet search (task 01a1557a-eab7 stage 2).
     "platform_web/components/voice/voice_components.ex",
-    "platform_web/live/meeting_live.html.heex"
+    "platform_web/live/meeting_live.html.heex",
+    # The desktop command palette's input (Burrow redesign 23 stage 2).
+    "platform_web/live/command_palette_live.ex"
   ]
 
   # Every OTHER file under lib/platform_web that renders a `placeholder=`

@@ -32,6 +32,7 @@ defmodule PlatformWeb.ChatLive.ReadScope do
   """
 
   alias Platform.Access.Scope
+  alias Platform.Chat
   alias Platform.Chat.ExternalScope
 
   @doc "The `{read_scope, external?}` pair for a ChatLive mount. See the moduledoc."
@@ -82,6 +83,45 @@ defmodule PlatformWeb.ChatLive.ReadScope do
   @spec fenced_scope(term()) :: Scope.t() | nil
   def fenced_scope(access_scope) do
     if Platform.Access.org_fence(access_scope) == :unfenced, do: nil, else: access_scope
+  end
+
+  @doc """
+  The live channels the reader's list shows: `Chat.list_spaces/1` of kind
+  `"channel"` under `scope`. Every reload of the list must pass the same
+  read-scope the mount resolved, or a workspace-wide read re-broadens a
+  guest's list past their allowlist (rbac-external-users M5). A nil scope is
+  a pass-through. ChatLive's rail and the command palette's sources both
+  read this one function.
+  """
+  @spec channels(term()) :: [Chat.Space.t()]
+  def channels(scope), do: Chat.list_spaces(kind: "channel", scope: scope)
+
+  @doc """
+  The ARCHIVED channels, or `[]` for a guest. A separate function rather
+  than a flag on `channels/1` because the two treat a guest differently:
+  the live list is FILTERED to the allowlist, this one is EMPTIED, since
+  the collapsed "Archived" group is an internal discovery surface (design
+  canvas section 1 non-goals). The second argument is the guest flag
+  (`guest?/1`, or ChatLive's `@external?`); embedded callers pass true too.
+  """
+  @spec archived_channels(term(), boolean()) :: [Chat.Space.t()]
+  def archived_channels(_scope, true), do: []
+
+  def archived_channels(scope, _guest?),
+    do: Chat.list_spaces(kind: "channel", archived: true, scope: scope)
+
+  @doc """
+  The reader's DM and group conversations. `Chat.list_user_conversations/2`
+  returns every space the user holds a participant row in, execution and
+  meeting spaces included; the `kind` filter narrows that to the two kinds
+  the list's Direct section renders, and it lives here rather than in the
+  query because that function's other consumers want the unfiltered list.
+  """
+  @spec conversations(binary(), term()) :: [Chat.Space.t()]
+  def conversations(user_id, scope) do
+    user_id
+    |> Chat.list_user_conversations(scope: scope)
+    |> Enum.filter(&(&1.kind in ["dm", "group"]))
   end
 
   # LiveAuth builds `@access_scope` from `:current_user_record`; ChatLive
