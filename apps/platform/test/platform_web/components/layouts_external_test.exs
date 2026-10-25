@@ -44,6 +44,8 @@ defmodule PlatformWeb.LayoutsExternalTest do
     # None of the auth-shell chrome the `:shell` layout injects.
     refute html =~ "icon_rail"
     refute html =~ "icon-rail"
+    refute html =~ ~s(id="sidebar")
+    refute html =~ "phone-top-bar"
     refute html =~ "bottom_rail"
     refute html =~ "bottom-rail"
     refute html =~ "data-rail"

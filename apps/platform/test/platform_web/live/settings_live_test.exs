@@ -167,13 +167,15 @@ defmodule PlatformWeb.SettingsLiveTest do
                settings-mask-names settings-usage settings-admin settings-sign-out)
     end
 
-    test "the utility bar's account menu and theme trigger are hidden below lg" do
+    # Burrow redesign 22 stage 1: the account menu is gone (the sidebar's
+    # user row links here, where Sign out lives) and the theme picker's lg
+    # popover lives in the sidebar, still hidden below lg.
+    test "no account menu; the theme picker's lg popover is hidden below lg" do
       {:ok, _view, html} = live(authed(member!()), "/settings")
 
-      for id <- ~w(account-menu theme-picker) do
-        [el] = query(html, "##{id}") |> Enum.to_list()
-        assert LazyHTML.attribute(el, "class") |> hd() =~ "max-lg:hidden", id
-      end
+      assert query(html, "#account-menu") |> Enum.to_list() == []
+      [el] = query(html, "#sidebar #theme-picker") |> Enum.to_list()
+      assert LazyHTML.attribute(el, "class") |> hd() =~ "max-lg:hidden"
     end
   end
 

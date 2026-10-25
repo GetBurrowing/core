@@ -202,32 +202,34 @@ defmodule PlatformWeb.BurrowMarkTest do
   # ── Rendered call sites ─────────────────────────────────────────────────
 
   describe "rendered call sites" do
-    test "the shell rail header shows the Burrow mark, alt = the install's app name",
+    test "the shell sidebar header shows the Burrow mark, alt = the install's app name",
          %{conn: conn} do
       user = root_admin!()
       {:ok, _view, html} = conn |> init_test_session(current_user_id: user.id) |> live("/chat")
 
-      assert [src] = img_srcs(html, ".icon-rail-header img")
+      assert [src] = img_srcs(html, "#sidebar-brand img")
       assert_burrow_mark!(src)
-      assert img_alts(html, ".icon-rail-header img") == [Branding.app_name()]
+      assert img_alts(html, "#sidebar-brand img") == [Branding.app_name()]
 
       refute html =~ ~s(alt="Startup Suite")
       refute html =~ "/images/logo.svg"
     end
 
-    test "the external rail and its switcher show the Burrow mark", %{conn: conn} do
+    # Burrow redesign 22 stage 2 deleted the desktop external rail and its
+    # brand chip; the phone switcher's chip is the one left.
+    test "the external switcher shows the Burrow mark", %{conn: conn} do
       ext = external_user!()
 
       # No allowlisted space: /chat is the landing, where the flat switcher
-      # (external_rail.ex's second brand chip) is open by default.
+      # (external_rail.ex's brand chip) is open by default.
       {:ok, _view, html} =
         %{conn | host: "chat.localhost"}
         |> init_test_session(current_user_id: ext.id)
         |> live("/chat")
 
       srcs = img_srcs(html, "[data-role=brand-chip] img")
-      # Desktop rail chip + the landing switcher's chip.
-      assert length(srcs) == 2
+      # The landing switcher's chip only.
+      assert length(srcs) == 1
       Enum.each(srcs, &assert_burrow_mark!/1)
       assert Enum.uniq(img_alts(html, "[data-role=brand-chip] img")) == [Branding.app_name()]
       refute html =~ "/images/logo.svg"

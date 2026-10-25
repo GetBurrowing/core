@@ -190,11 +190,12 @@ defmodule PlatformWeb.ChatLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/chat")
 
-    # Shell layout + sectioned channel sidebar should be present.
-    # The flat "Channels" header was replaced by per-section labels in
-    # chat plan v2 Stage 2 (Pinned / Direct Messages / sub-org sections);
-    # the DMs label is the cheapest stable hook on the desktop sidebar.
-    assert html =~ "Direct Messages"
+    # Shell layout + the Chat list should be present. Burrow redesign 22
+    # stage 2 deleted the desktop channel rail (and its "Direct Messages"
+    # label); the Chat list's header counts line is the stable hook now
+    # (a user with no conversations gets the empty state, no sections).
+    assert html =~ ~s(id="chat-list")
+    assert html =~ ~s(data-role="chat-list-counts")
     # The rail label is the install's app name, "Burrow" on a migrated DB
     # (task 01a120c5 stage 3).
     assert html =~ "Burrow"
@@ -1178,11 +1179,11 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    # The chat surface mounts the shell layout (icon-rail present); the
+    # The chat surface mounts the shell layout (desktop sidebar present); the
     # roster button "Agents" text is async-resolved, so we assert on the
     # rail's stable marker rather than the old sidebar's "Agent Resources"
     # link text (removed in task 019e389b Stage 3 — icon-rail rev).
-    assert html =~ ~s(data-icon-rail)
+    assert html =~ ~s(id="sidebar")
     refute html =~ "Zip online"
   end
 
@@ -1228,9 +1229,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    # Smoke-check: shell layout mounted (icon-rail present). Old sidebar
+    # Smoke-check: shell layout mounted (desktop sidebar present). Old sidebar
     # text-match on "Agent Resources" was dropped in task 019e389b Stage 3.
-    assert html =~ ~s(data-icon-rail)
+    assert html =~ ~s(id="sidebar")
     assert is_pid(AgentServer.whereis("zip"))
     assert AgentServer.whereis("sidecar") == nil
   end
@@ -1262,9 +1263,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    # Smoke-check: shell layout mounted (icon-rail present). Old sidebar
+    # Smoke-check: shell layout mounted (desktop sidebar present). Old sidebar
     # text-match on "Agent Resources" was dropped in task 019e389b Stage 3.
-    assert html =~ ~s(data-icon-rail)
+    assert html =~ ~s(id="sidebar")
     assert is_pid(AgentServer.whereis(agent.id))
   end
 
@@ -1281,14 +1282,22 @@ defmodule PlatformWeb.ChatLiveTest do
       |> form("#compose-form", compose: %{text: "Other chat note"})
       |> render_submit()
 
+      # The desktop search is the details panel's Search page (Burrow
+      # redesign 22 stage 4 deleted the header form and its drawer).
+      render_click(view, "details_open", %{"page" => "search"})
+
       html =
         view
-        |> form("#chat-search-form", search: %{query: "phoenix"})
+        |> form("#details-search-form", search: %{query: "phoenix"})
         |> render_change()
 
-      assert html =~ "Search Results"
-      assert html =~ "<mark>Phoenix</mark>"
-      assert html =~ "match"
+      results =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(#details-panel [data-role="details-search-result"]))
+
+      assert Enum.count(results) == 1
+      assert LazyHTML.to_html(results) =~ "<mark>Phoenix</mark>"
     end
 
     test "opening a threaded search result expands the inline thread", %{conn: conn} do
@@ -1319,12 +1328,16 @@ defmodule PlatformWeb.ChatLiveTest do
         )
         |> List.first()
 
-      html =
-        view
-        |> form("#chat-search-form", search: %{query: "phoenix"})
-        |> render_change()
+      render_click(view, "details_open", %{"page" => "search"})
 
-      assert html =~ "Thread"
+      view
+      |> form("#details-search-form", search: %{query: "phoenix"})
+      |> render_change()
+
+      assert has_element?(
+               view,
+               ~s(#details-panel [data-role="details-search-result"][data-message-id="#{thread_message.id}"])
+             )
 
       html = render_click(view, "search_open_result", %{"message-id" => thread_message.id})
 
@@ -2915,7 +2928,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # ── Pins ─────────────────────────────────────────────────────────────────────
 
   describe "pins" do
-    test "pinning a message shows it in the pins panel", %{conn: conn} do
+    test "pinning a message shows it on the details panel's Pinned page", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -2929,14 +2942,18 @@ defmodule PlatformWeb.ChatLiveTest do
       # Toggle pin
       render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
 
-      # Toggle pins panel open
-      html = render_click(view, "pin_panel_toggle", %{})
+      # The desktop pins drawer left in Burrow redesign 22 stage 4; the
+      # details panel's Pinned page lists the pin.
+      render_click(view, "details_open", %{"page" => "pinned"})
 
-      assert html =~ "Pinned Messages"
-      assert html =~ String.slice(msg.id, 0, 8)
+      assert has_element?(
+               view,
+               ~s(#details-panel [data-page="pinned"] [data-role="details-pin"][data-message-id="#{msg.id}"]),
+               "pin me please"
+             )
     end
 
-    test "pin_panel_toggle shows and hides the panel", %{conn: conn} do
+    test "the details panel's Pinned page opens and closes", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -2949,11 +2966,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
 
-      html_open = render_click(view, "pin_panel_toggle", %{})
-      assert html_open =~ "Pinned Messages"
+      render_click(view, "details_open", %{"page" => "pinned"})
+      assert has_element?(view, ~s(#details-panel [data-role="details-pin"]))
 
-      html_closed = render_click(view, "pin_panel_toggle", %{})
-      refute html_closed =~ "Pinned Messages"
+      render_click(view, "details_close", %{})
+      refute has_element?(view, "#details-panel")
+      refute render(view) =~ "Pinned Messages"
     end
 
     # NOTE: Same LiveViewTest limitation as the edit-message describe block —
@@ -3432,47 +3450,73 @@ defmodule PlatformWeb.ChatLiveTest do
       refute has_element?(view, "#archived-banner button", "Unarchive")
     end
 
-    test "sidebar shows the Archived section when an archived channel exists", %{conn: conn} do
-      active = insert_channel()
-      _archived = insert_archived_channel(%{name: "Old Reports"})
-      conn = authenticated_conn(conn)
+    # Burrow redesign 22 stage 2 deleted the desktop channel rail and its
+    # Archived section; the Chat list shows Archived only behind the Options
+    # popover's "Show archived" switch (`toggle_archived_section`).
+    @list_archived "#chat-list-scroller [data-role='chat-list-archived']"
 
-      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
-
-      assert has_element?(view, "[data-section-key='archived']")
-      # Collapsed by default — the rows only render after the toggle.
-      refute render(view) =~ "Old Reports"
+    defp show_archived(view) do
+      view |> element("#list-more") |> render_click()
 
       view
-      |> element("button[phx-click='toggle_archived_section']")
+      |> element("#chat-list-popover [data-role='chat-list-pop-option-archived']")
       |> render_click()
-
-      assert render(view) =~ "Old Reports"
     end
 
-    test "sidebar hides the Archived section when no archived channels exist", %{conn: conn} do
-      active = insert_channel()
-      conn = authenticated_conn(conn)
-
-      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
-
-      refute has_element?(view, "[data-section-key='archived']")
-    end
-
-    # Receive-side coverage for the cross-session freshness the Recovery hub
-    # relies on (task 019f7600, V4). A restore in ANOTHER session broadcasts
-    # :sidebar_changed on this user's topic; without a manual reload the sidebar
-    # must drop the no-longer-archived row. Pre-019f7600 the handler recomputed
-    # only @sidebar_sections off the stale @channels and never re-read
-    # @archived_channels, so the Archived group lingered until reload.
-    test "sidebar drops the Archived section live on a :sidebar_changed broadcast", %{conn: conn} do
+    test "the list shows the Archived section when an archived channel exists", %{conn: conn} do
       active = insert_channel()
       archived = insert_archived_channel(%{name: "Old Reports"})
       conn = authenticated_conn(conn)
 
       {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
 
-      assert has_element?(view, "[data-section-key='archived']")
+      # Hidden by default — the rows only render after the switch.
+      refute has_element?(view, @list_archived)
+
+      show_archived(view)
+
+      assert has_element?(
+               view,
+               "#{@list_archived} a[data-role='chat-list-row'][data-space-id='#{archived.id}']",
+               "Old Reports"
+             )
+    end
+
+    test "the list renders no Archived section when no archived channels exist", %{conn: conn} do
+      active = insert_channel()
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      show_archived(view)
+
+      # Positive control: the switch did flip, and the list is rendering.
+      assert has_element?(
+               view,
+               "#chat-list-popover [data-role='chat-list-pop-option-archived'][aria-checked='true']"
+             )
+
+      assert has_element?(view, "#chat-list-scroller a[data-space-id='#{active.id}']")
+      refute has_element?(view, @list_archived)
+    end
+
+    # Receive-side coverage for the cross-session freshness the Recovery hub
+    # relies on (task 019f7600, V4). A restore in ANOTHER session broadcasts
+    # :sidebar_changed on this user's topic; without a manual reload the list
+    # must drop the no-longer-archived row. Pre-019f7600 the handler recomputed
+    # only @sidebar_sections off the stale @channels and never re-read
+    # @archived_channels, so the Archived group lingered until reload.
+    test "the list drops the Archived section live on a :sidebar_changed broadcast", %{
+      conn: conn
+    } do
+      active = insert_channel()
+      archived = insert_archived_channel(%{name: "Old Reports"})
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      show_archived(view)
+      assert has_element?(view, "#{@list_archived} a[data-space-id='#{archived.id}']")
 
       # Another session reactivates the channel and broadcasts the invalidation.
       archived
@@ -3484,7 +3528,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       # No manual reload — the handler re-reads @archived_channels, so the now
       # empty Archived group disappears.
-      refute has_element?(view, "[data-section-key='archived']")
+      refute has_element?(view, @list_archived)
     end
   end
 
@@ -3675,6 +3719,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
   # ── Pin-to-Chat stage 4 (task 019f62a1): Pinned rail section ───────────
   #
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail; these tests
+  # read the Chat list's Pinned section (task rows are
+  # `a[data-row-kind=task]`), and open a row's menu with `open_row_actions`,
+  # the event the list's right-click hook pushes, instead of the rail's
+  # deleted per-row trigger.
+  #
   # Rail section only surfaces when the current user has pinned at least
   # one task's execution space. `list_pinned_task_spaces_for/1` joins
   # `task_chat_pins → chat_spaces` on `metadata->>'task_id'`, so both
@@ -3714,7 +3764,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/chat")
 
-      refute has_element?(view, "[aria-label='Pinned']")
+      refute has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
     end
 
     test "section renders one row per pinned task-exec space", %{conn: conn} do
@@ -3729,29 +3779,30 @@ defmodule PlatformWeb.ChatLiveTest do
 
       conn = init_test_session(conn, current_user_id: user.id)
 
-      {:ok, view, html} = live(conn, ~p"/chat")
+      {:ok, view, _html} = live(conn, ~p"/chat")
 
-      assert has_element?(view, "[aria-label='Pinned']")
+      assert has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
 
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space1.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space1.id}']"
              )
 
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space2.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space2.id}']"
              )
 
-      # Per-row task glyph rendered (Saru:
-      # hero-clipboard-document-list-mini marks a task-scoped conversation).
-      #
-      # The `hero-map-pin-mini` header icon this used to assert went with the
-      # separate "Pinned Tasks" section (task 019feec6-73d9). One block holds
-      # pinned channels, DMs and task conversations now, and it carries no
-      # header icon at all — see "the PINNED label carries no icon, no fill
-      # and no collapse control" in chat_live_pinned_block_test.exs.
-      assert html =~ "hero-clipboard-document-list-mini"
+      # Per-row task glyph rendered: the Chat list marks a task-scoped
+      # conversation with its task avatar (the rail's
+      # hero-clipboard-document-list-mini went with the rail in Burrow
+      # redesign 22 stage 2).
+      for space <- [space1, space2] do
+        assert has_element?(
+                 view,
+                 "#chat-list-scroller a[data-row-kind='task'][data-space-id='#{space.id}'] [data-role='chat-list-avatar'][data-avatar='task']"
+               )
+      end
     end
 
     # Stage-4 review feedback (Alex): the rail row label was the cryptic
@@ -3773,7 +3824,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
       row_html =
         view
-        |> element("[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']")
+        |> element(
+          "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
+        )
         |> render()
 
       assert row_html =~ "My cool task"
@@ -3784,7 +3837,7 @@ defmodule PlatformWeb.ChatLiveTest do
       label_html =
         view
         |> element(
-          "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}'] span.truncate"
+          "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}'] [data-role='chat-list-row-name']"
         )
         |> render()
 
@@ -3801,7 +3854,7 @@ defmodule PlatformWeb.ChatLiveTest do
       conn = init_test_session(conn, current_user_id: user.id)
 
       {:ok, view, _html} = live(conn, ~p"/chat")
-      refute has_element?(view, "[aria-label='Pinned']")
+      refute has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
 
       # Pin AFTER mount → the handle_info clause + refresh should fold
       # the new row in without a page refresh.
@@ -3813,7 +3866,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
     end
 
@@ -3832,7 +3885,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
 
       {:ok, :removed} = ChatPins.unpin(task.id, %{kind: "user", id: user.email}, user.email)
@@ -3841,7 +3894,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       refute has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
     end
 
@@ -3871,19 +3924,19 @@ defmodule PlatformWeb.ChatLiveTest do
 
       refute has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{b_space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{b_space.id}']"
              )
 
       # Sanity: no Pinned tasks section for user_a either (they still
       # have zero pins of their own).
-      refute has_element?(view, "[aria-label='Pinned']")
+      refute has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
 
       # Sanity: a stray broadcast that isn't wearing the "user" kind at
       # all (e.g. an agent pin) also doesn't crash the handler or
       # surface a row for user_a.
       _ = ChatPubSub.broadcast_space_event({:task_pin_added, %{participant_kind: "agent"}})
       Process.sleep(50)
-      refute has_element?(view, "[aria-label='Pinned']")
+      refute has_element?(view, "#chat-list-scroller [data-role='chat-list-pinned']")
     end
 
     # ── Stage 4 fixup #2 (Alex review): every viewer that sees a row can
@@ -3909,21 +3962,14 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/chat")
 
-      # The row and its trigger are both present at initial render; the unpin
-      # itself is one menu-open away.
+      # The row is present at initial render; the unpin itself is one
+      # menu-open away.
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
 
-      assert has_element?(
-               view,
-               "button[data-role='row-actions-trigger'][data-space-id='#{space.id}']"
-             )
-
-      view
-      |> element("button[data-role='row-actions-trigger'][data-space-id='#{space.id}']")
-      |> render_click()
+      render_hook(view, "open_row_actions", %{"space_id" => space.id})
 
       assert has_element?(
                view,
@@ -3945,7 +3991,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       refute has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
     end
 
@@ -3983,12 +4029,10 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
 
-      view
-      |> element("button[data-role='row-actions-trigger'][data-space-id='#{space.id}']")
-      |> render_click()
+      render_hook(view, "open_row_actions", %{"space_id" => space.id})
 
       view
       |> element("button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']")
@@ -3998,7 +4042,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       refute has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{space.id}']"
              )
 
       # Sponsor's pin row survives — participant-scoped unpin is the whole
@@ -4267,7 +4311,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # resolves cleanly for them.
       assert has_element?(
                view,
-               "[data-role='pinned-task-rail-row'][data-space-id='#{exec.id}']"
+               "#chat-list-scroller [data-role='chat-list-pinned'] a[data-role='chat-list-row'][data-row-kind='task'][data-space-id='#{exec.id}']"
              )
     end
 

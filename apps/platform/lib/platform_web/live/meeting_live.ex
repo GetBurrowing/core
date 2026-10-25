@@ -574,9 +574,8 @@ defmodule PlatformWeb.MeetingLive do
      # gone (task 01a084bf stage 3) and so is that assign; the `<lg`
      # equivalent for the rail is `:call_rail_open`, assigned just below.
      # `:chat_panel_collapsed` flips the desktop rail between
-     # the wide 312px pane and a slim 44px collapsed strip. Same
-     # default-expanded posture as `:sidebar_collapsed` in
-     # `shell_live.ex` — first-time users see the full layout. The
+     # the wide 312px pane and a slim 44px collapsed strip, expanded by
+     # default so first-time users see the full layout. The
      # `SidebarCollapse` JS hook (parameterized via `data-*` attrs in
      # stage 3) hydrates from localStorage so the preference survives
      # navigation + reload.

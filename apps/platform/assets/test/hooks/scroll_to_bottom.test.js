@@ -830,14 +830,16 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     expect(hook.pushEvent).toHaveBeenCalledTimes(0);
   });
 
-  it("does NOT hold the reading anchor on a distance edge, but still holds it for the sidebar", () => {
+  it("does NOT hold the reading anchor on a distance edge, and has no pin left to hold", () => {
     const { el, hook } = mountedAtBottom();
-    // INVERTED from the v2 assertion that used to stand here, which asserted
-    // this call FIRED on both edges. Its stated reason was the desktop in-flow
-    // chip changing the scroller's clientHeight; task 01a0419a stage 1 deleted
-    // that path, and stage 2 measured the pin freezing a MOVING reader for
-    // 400ms after every edge.
-    const hold = vi.spyOn(hook, "holdAnchorThroughReflow");
+    // History: v2 asserted a per-frame distance pin FIRED on both edges; task
+    // 01a0419a stage 1 deleted that call (it froze a moving reader for 400ms),
+    // and the pin's last caller, the shell's `sidebar_collapsed_changed` for
+    // the icon rail's collapse animation, went with the rail in Burrow
+    // redesign 22 stage 1. The method no longer exists and nothing listens
+    // for that event.
+    expect(hook.holdAnchorThroughReflow).toBeUndefined();
+    expect(hook.serverEvents["sidebar_collapsed_changed"]).toBeUndefined();
 
     // Distance 200 → past the `away` band's entry at NEAR_BOTTOM_PX + 24.
     scrollTo(el, 3200);
@@ -846,12 +848,11 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
     scrollTo(el, 3350);
     hook._reportDistance();
 
-    expect(hold).toHaveBeenCalledTimes(0);
-
-    // ANTI-VACUITY, in the same block and not a separate test: zero calls is
-    // also what a typo in the spy target produces. These prove both edges
-    // really fired, so the refute above is about the hold and not about the
-    // gesture never happening.
+    // ANTI-VACUITY: both edges really fired, so the absences above are not
+    // about the gesture never happening, and the registry the second
+    // absence reads is populated (the distance edges register nothing, but
+    // the hook's own server events do).
+    expect(Object.keys(hook.serverEvents).length).toBeGreaterThan(0);
     expect(hook.pushEvent).toHaveBeenCalledTimes(2);
     expect(hook.pushEvent).toHaveBeenNthCalledWith(
       1,
@@ -869,17 +870,6 @@ describe("ScrollToBottom — jump-to-latest distance signal", () => {
         deep: false,
       },
     );
-
-    // POSITIVE CONTROL — the method is still LIVE, on its original caller.
-    // Dropping the `_reportDistance` call site leaves exactly one caller, not
-    // zero, and a later reader deleting `holdAnchorThroughReflow()` as dead
-    // code breaks the rail-collapse anchoring from task 019f51d1 silently.
-    // This is the assertion that catches that.
-    hook.serverEvents["sidebar_collapsed_changed"]();
-    expect(hold).toHaveBeenCalledTimes(1);
-
-    hold.mockRestore();
-    if (hook._holdFrame) cancelAnimationFrame(hook._holdFrame);
   });
 
   // Geometry for the band cases: scrollHeight 4000, clientHeight 600, so

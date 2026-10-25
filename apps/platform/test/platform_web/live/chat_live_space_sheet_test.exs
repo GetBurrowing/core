@@ -345,7 +345,11 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
 
       {view, _html} = open_as(conn, user, channel)
 
-      assert has_element?(view, "[data-role='agents-open']")
+      # The desktop entry is the details panel's Agents row (Burrow redesign
+      # 22 stage 4 deleted the header button).
+      assert render_click(view, "details_open", %{"page" => "space"}) =~
+               ~s(data-role="details-agents")
+
       open_sheet(view)
       # The masters' entry meta: '<awake>/<total> awake · <policy>'.
       assert view |> element(@row_agents) |> render() =~ "1/2 awake · on-mention"
@@ -366,7 +370,10 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       {view, _html} = open_as(conn, user, channel)
       open_sheet(view)
       assert has_element?(view, @row_settings)
-      refute has_element?(view, "[data-role='agents-open']")
+
+      refute render_click(view, "details_open", %{"page" => "space"}) =~
+               ~s(data-role="details-agents")
+
       refute has_element?(view, @row_agents)
 
       dm = space!("dm")
@@ -375,7 +382,10 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       {view, _html} = open_as(conn, user, dm)
       open_sheet(view)
       assert has_element?(view, @row_settings)
-      refute has_element?(view, "[data-role='agents-open']")
+
+      refute render_click(view, "details_open", %{"page" => "space"}) =~
+               ~s(data-role="details-agents")
+
       refute has_element?(view, @row_agents)
     end
   end
@@ -383,7 +393,8 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
   describe "calls" do
     setup :with_meetings
 
-    test "Call and Start a call carry the Meet gate; Meet is desktop-only", %{conn: conn} do
+    test "Call and Start a call carry the Meet gate; the desktop Call is desktop-only",
+         %{conn: conn} do
       user = user!("call")
       channel = space!("channel")
       seat_user(channel, user)
@@ -398,9 +409,9 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       open_sheet(view)
       assert has_element?(view, @row_call)
 
-      # The Meet button stays, at lg and up only.
-      meet = fragment(html, ~s(button[title="Start or join a meeting in this space"]))
-      assert meet =~ "hidden lg:flex"
+      # The desktop Call (Burrow redesign 22 stage 4) sits in the lg-only
+      # main-pane header.
+      assert fragment(html, ~s([data-role="main-head"].hidden.lg\\:flex #chat-call)) =~ "Call"
     end
 
     test "Start a call closes the sheet and reaches MeetingHooks; both go while in the call",
@@ -640,9 +651,9 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
              )
 
       assert render(view) =~ "quokka"
-      # The desktop drawer is not painted below lg.
-      assert render(view) =~
-               ~r/class="[^"]*max-lg:hidden[^"]*"[^>]*>\s*<div class="flex items-center justify-between gap-3">/
+      # No second results list: the desktop drawer was deleted (Burrow
+      # redesign 22 stage 4).
+      refute render(view) =~ "Search Results"
 
       view
       |> element(
@@ -857,10 +868,10 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       seat_user(channel, user)
       {view, _html} = open_as(conn, user, channel)
 
-      # Below lg the strip is CSS-hidden; at lg it renders as it always did.
-      strip = fragment(render(view), "[data-role='agents-goal-strip']")
-      assert strip =~ "max-lg:hidden"
-      assert strip =~ "Ship the space sheet"
+      # The desktop strip is gone (Burrow redesign 22 stage 4): the goal
+      # renders only on a Goal page.
+      refute render(view) =~ ~s(data-role="agents-goal-strip")
+      refute render(view) =~ ~s(data-role="agents-goal-sentence")
 
       open_sheet(view)
       row = row_preview(view, "space-sheet-goal")
@@ -924,10 +935,11 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       go_page(view, "goal")
       render_click(view, "edit_goal", %{})
 
-      html = render(view)
-      # Both copies are in the DOM (the strip CSS-hidden below lg); the
-      # sheet's carries the prefixed ids.
-      assert html =~ ~s(id="agents-goal-cadence")
+      # With the details panel's Goal page open too, both copies carry
+      # their own prefix.
+      html = render_click(view, "details_open", %{"page" => "goal"})
+      html = if html =~ ~s(id="details-agents-goal-cadence"), do: html, else: render(view)
+      assert html =~ ~s(id="details-agents-goal-cadence")
       assert html =~ ~s(id="space-sheet-agents-goal-cadence")
       assert duplicate_ids(html) == []
     end
@@ -1059,7 +1071,7 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
   end
 
   describe "phone header" do
-    test "below lg: no mobile scope pill, and the icon row is lg-only", %{conn: conn} do
+    test "below lg: no mobile scope pill, and the desktop header is lg-only", %{conn: conn} do
       user = user!("header")
       {channel, _org} = scoped_channel!(user)
       seat_agent(channel, agent!("Eye"))
@@ -1068,22 +1080,27 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       Repo.insert!(%Pin{space_id: channel.id, message_id: m.id, pinned_by: p.id})
       {view, html} = open_as(conn, user, channel)
 
-      header = fragment(html, "header")
-      refute header =~ "chat-header-scope-pill-mobile"
-      # The desktop pill is still there.
-      assert header =~ "chat-header-scope-pill"
+      header = fragment(html, "header:has(#chat-title)")
+      refute header =~ "chat-header-scope-pill"
+
+      # Burrow redesign 22 stage 4: the desktop controls are the main-pane
+      # header's controls, all inside the lg-only branch (Call is covered in
+      # "calls", it needs meetings on), and none of the old icon row is left.
+      for selector <- ["#chat-title", "#chat-search", "#chat-details"] do
+        assert fragment(html, ~s([data-role="main-head"].hidden.lg\\:flex ) <> selector) != "",
+               "#{selector} must be lg-only"
+      end
 
       for selector <- [
             "[data-role='agents-open']",
             "[data-role='members-open']",
-            ~s(button[phx-click="settings_open"]),
-            ~s(button[phx-click="pin_panel_toggle"])
+            ~s(header button[phx-click="settings_open"]),
+            ~s(button[phx-click="pin_panel_toggle"]),
+            "#chat-search-form"
           ] do
-        assert fragment(html, "header " <> selector) =~ "hidden lg:flex",
-               "#{selector} must be lg-only"
+        assert fragment(html, selector) == "", "#{selector} must be gone"
       end
 
-      assert fragment(html, "#chat-search-form") =~ "hidden lg:block"
       _ = view
     end
   end
@@ -1453,22 +1470,6 @@ defmodule PlatformWeb.ChatLiveSpaceSheetTest do
       # The expand rides a message to self, handled after the re-entry.
       _ = render(view)
       assert MapSet.member?(lv_assigns(view).expanded_threads, parent.id)
-    end
-
-    test "desktop's search drawer is unchanged: its result pushes no scroll", %{conn: conn} do
-      user = user!("jump-desktop")
-      channel = space!("channel")
-      p = seat_user(channel, user)
-      hit = post!(channel, p, "the okapi number")
-      {view, _html} = open_as(conn, user, channel)
-
-      view
-      |> form("#chat-search-form", %{"search" => %{"query" => "okapi"}})
-      |> render_change()
-
-      render_click(view, "search_open_result", %{"message-id" => hit.id})
-      assert lv_assigns(view).highlighted_message_id == hit.id
-      refute_push_event(view, "chat:scroll-to-message", %{id: _})
     end
   end
 end

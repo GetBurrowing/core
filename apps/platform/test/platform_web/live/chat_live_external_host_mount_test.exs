@@ -104,10 +104,10 @@ defmodule PlatformWeb.ChatLiveExternalHostMountTest do
       # Shell-less :external app layout wrapper (see Layouts.external/1).
       assert html =~ ~s(class="h-dvh bg-base-100 text-base-content")
 
-      # NONE of the `:shell` layout chrome (icon-rail / shell sidebar /
+      # NONE of the `:shell` layout chrome (desktop sidebar /
       # route-resume singleton hook) leaked onto the external surface.
-      refute html =~ "data-icon-rail"
-      refute html =~ ~s(id="shell-sidebar")
+      refute html =~ ~s(id="sidebar")
+      refute html =~ ~s(id="sidebar")
       refute html =~ ~s(id="route-resume")
     end
 
@@ -119,18 +119,18 @@ defmodule PlatformWeb.ChatLiveExternalHostMountTest do
         |> live_settled("/chat/#{space.slug}")
 
       assert html =~ ~s(class="h-dvh bg-base-100 text-base-content")
-      refute html =~ "data-icon-rail"
+      refute html =~ ~s(id="sidebar")
     end
 
     test "CONTROL: GET /chat on the default host still mounts under :authenticated with full shell chrome",
          %{conn: conn} do
       {:ok, _view, html} = live_settled(conn, "/chat")
 
-      # Default host keeps the `:shell` layout — icon-rail + shell sidebar
+      # Default host keeps the `:shell` layout — desktop sidebar
       # render exactly as before this change (the chat. scope does not
       # shadow default-host routing).
-      assert html =~ "data-icon-rail"
-      assert html =~ ~s(id="shell-sidebar")
+      assert html =~ ~s(id="sidebar")
+      assert html =~ ~s(id="sidebar")
       # And it is NOT wrapped in the shell-less external <main>.
       refute html =~ ~s(class="h-dvh bg-base-100 text-base-content")
     end

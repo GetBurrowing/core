@@ -45,14 +45,6 @@
        See PlatformWeb.Components.ScopeColorStyles for why this is a style
        element and not a Tailwind utility. --%>
   <.scope_color_styles viewer={assigns[:current_user_record]} />
-  <%!-- Sidebar collapse persistence hook (localStorage) --%>
-  <div
-    id="sidebar-collapse-hook"
-    phx-hook="SidebarCollapse"
-    data-collapsed={if @sidebar_collapsed, do: "true", else: "false"}
-    class="hidden"
-  >
-  </div>
   <%!-- Per-module route resume: persists window.location.pathname on every
        LV nav under `route_resume:<module>` in localStorage, and intercepts
        clicks on any `<a data-module-id=…>` (top-nav tiles) to route to the
@@ -92,21 +84,29 @@
     class="hidden"
   >
   </div>
-  <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
-       list lives in PlatformWeb.Components.IconRail.destinations/1; the
-       template here just hands off current_path / root_user /
-       sidebar_collapsed and lets the component own the rendering. Mobile
-       gets the matching `<.bottom_rail>` below. Admin tiles are gated by
-       `root_user` and never render in the DOM for non-root users (task
-       019e389b Stage 3 — replaces the inline 11-link sidebar). --%>
-  <.icon_rail
+  <%!-- Desktop sidebar (Burrow redesign 22 stage 1; master-desktop.html
+       #side). At lg the shell is sidebar | main: this replaced the icon rail,
+       its collapse control and the utility bar. Its rows are the phone's own
+       lists (the tab bar's link tabs, then the More sheet's rows), so phone
+       and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
+       `hidden lg:flex` inside the component. --%>
+  <.sidebar
     current_path={@current_path}
     root_user={@root_user}
     access_scope={assigns[:access_scope]}
-    sidebar_collapsed={@sidebar_collapsed}
     inbox_unread_count={@inbox_unread_count}
     chat_unread_count={@chat_unread_count}
+    meeting_active={@meeting_active}
     brand_name={@brand_name}
+    current_user={@current_user}
+    user={assigns[:current_user_record]}
+    org_name={sidebar_org_name(assigns)}
+    theme_picker_open={assigns[:theme_picker_open] == true}
+    masked?={assigns[:mask_names?] == true}
+    mask_until={Platform.Accounts.mask_names_until(assigns[:current_user_record])}
+    mask_zone={assigns[:mask_zone]}
+    connected?={shell_connected?(assigns)}
+    mask_chip_open={assigns[:mask_chip_open] == true}
   />
 
   <%!-- Main content area. min-w-0 + min-h-0: this column is flex-1 inside
@@ -116,8 +116,11 @@
        content height, which on long chat threads pushes the bottom-tab
        nav out of the visible viewport on iOS. --%>
   <div class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0">
-    <%!-- Top bar --%>
-    <%!-- Task 01a1557a-8f80 stage 3 took the agents dropdown and the
+    <%!-- Phone top strip (was #utility-bar; renamed in place by Burrow
+         redesign 22 stage 1). `lg:hidden`: at lg the sidebar carries what
+         this strip carried (the mask chip, the theme mode, the account), and
+         each page's own heading names the module. Below lg it is unchanged.
+         Task 01a1557a-8f80 stage 3 took the agents dropdown and the
          people-online badge out of this bar: a space's people and agents are
          read in its Members sheet and its agents are switched in its Agents
          sheet, both inside the space.
@@ -127,8 +130,8 @@
          would have taken taps from the controls at y=42 on /chat and
          /meetings (measured; see MaskNamesChip's "Hit area"). --%>
     <header
-      id="utility-bar"
-      class="relative flex h-11 items-center justify-between border-b border-edge bg-base-200/60 px-4"
+      id="phone-top-bar"
+      class="relative flex h-11 items-center justify-between border-b border-edge bg-base-200/60 px-4 lg:hidden"
     >
       <%!-- min-w-0 + flex-1 here and shrink-0 on the right cluster (task
            01a1261e stage 3): when the native install switcher shows at
@@ -137,9 +140,9 @@
       <div class="flex min-w-0 flex-1 items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
              hamburger + drawer pattern was deleted in task 019e0d4b Stage 2. --%>
-        <%!-- Active module name — desktop too since task 019f575e stage 3:
-             the brand moved into the rail header, so the bar carries the
-             current-module context instead of a second brand mark. --%>
+        <%!-- Active module name (task 019f575e stage 3). Phone only since
+             Burrow redesign 22: at lg the sidebar's current row and each
+             page's own heading carry the module. --%>
         <%!-- Native install switcher (task 01a1261e stage 3). Rendered
              `hidden` for EVERY client; only the NativeInstallSwitch hook
              reveals it, and only inside the Burrow app on a build whose
@@ -179,9 +182,11 @@
       </div>
       <div class="flex shrink-0 items-center gap-2">
         <%!-- "Names masked" chip (task 01a1600d stage 2; direction canvas
-             01a1616c). Rendered once here by the shell, on every page, per
-             the architect's one-shell-component rule. It renders nothing
-             unless `@mask_names?`, the same assign the page masks from. --%>
+             01a1616c). Rendered by the shell on every page, per the
+             architect's one-shell-component rule: here below lg, and in the
+             sidebar footer at lg (prefixed ids, so the two never collide).
+             It renders nothing unless `@mask_names?`, the same assign the
+             page masks from. --%>
         <.mask_names_chip
           masked?={assigns[:mask_names?] == true}
           until={Platform.Accounts.mask_names_until(assigns[:current_user_record])}
@@ -189,80 +194,6 @@
           connected?={shell_connected?(assigns)}
           open={assigns[:mask_chip_open] == true}
         />
-        <%!-- Theme picker (task 01a1557a stage 4): replaces the dark/light
-              toggle in the same place. At lg it opens a popover here; below
-              lg the same body opens in the bottom sheet rendered beside the
-              More sheet. --%>
-        <.theme_picker
-          open={assigns[:theme_picker_open] == true}
-          user={assigns[:current_user_record]}
-        />
-
-        <%!-- Account menu: one avatar button on every width (the burrow switcher
-              took the top bar's spare room on mobile). Log out keeps the exact
-              control it replaced: a plain GET link to /auth/logout. --%>
-        <div
-          id="account-menu"
-          class="relative max-lg:hidden"
-          phx-click-away={
-            JS.hide(to: "#account-menu-list")
-            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
-          }
-          phx-window-keydown={
-            JS.hide(to: "#account-menu-list")
-            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
-          }
-          phx-key="Escape"
-        >
-          <button
-            id="account-menu-trigger"
-            type="button"
-            aria-label="Account menu"
-            aria-haspopup="menu"
-            aria-expanded="false"
-            aria-controls="account-menu-list"
-            phx-click={
-              JS.toggle(to: "#account-menu-list", display: "flex")
-              |> JS.toggle_attribute({"aria-expanded", "true", "false"})
-            }
-            class="flex items-center rounded-full focus-visible-ring"
-          >
-            <.human_avatar
-              name={@current_user}
-              avatar_url={Map.get(assigns[:current_user_record] || %{}, :avatar_url)}
-              seed={Map.get(assigns[:current_user_record] || %{}, :id) || @current_user}
-              size="sm"
-            />
-          </button>
-          <div
-            id="account-menu-list"
-            role="menu"
-            aria-label="Account"
-            class="absolute right-0 top-full z-50 mt-1 hidden w-56 max-w-[calc(100vw-1rem)] flex-col rounded-field border border-edge bg-base-100 p-1 shadow-lg"
-          >
-            <div class="min-w-0 px-2.5 py-2">
-              <p class="truncate text-sm font-medium text-base-content">{@current_user}</p>
-              <p
-                :if={
-                  is_binary(Map.get(assigns[:current_user_record] || %{}, :email)) &&
-                    @current_user_record.email != @current_user
-                }
-                class="truncate text-xs text-subtle"
-              >
-                {@current_user_record.email}
-              </p>
-            </div>
-            <.link
-              href="/auth/logout"
-              role="menuitem"
-              data-role="account-menu-logout"
-              class="flex min-h-11 items-center gap-2 rounded-field px-2.5 text-sm text-base-content hover:bg-base-200 sm:min-h-8"
-            >
-              <span class="hero-arrow-right-on-rectangle size-4" aria-hidden="true"></span>
-              <span>Log out</span>
-            </.link>
-          </div>
-        </div>
       </div>
     </header>
     <%!-- Flash messages --%>
@@ -297,9 +228,9 @@
     <%!-- Mobile tab bar (task 019e389b Stage 3; five tabs since task
          01a1557a-eab7 stage 2: Chat, Voice, Tasks, Meetings, More) — keys off
          `current_path` + the Scope from the same single source of truth as
-         the desktop icon-rail above. More lights while its sheet is open and
+         the desktop sidebar above. More lights while its sheet is open and
          carries a dot while the Inbox has unread items. lg:hidden inside the
-         component itself so desktop continues to use the icon-rail. --%>
+         component itself; desktop uses the sidebar. --%>
     <.bottom_rail
       current_path={@current_path}
       root_user={@root_user}
@@ -323,16 +254,17 @@
       access_scope={assigns[:access_scope]}
     />
 
-    <%!-- Theme picker, below lg (task 01a1557a stage 4). Outside the utility
-         bar so its fixed positioning is not trapped by the header. lg:hidden
-         inside the component. --%>
+    <%!-- Theme picker, below lg (task 01a1557a stage 4), opened from
+         Settings > Appearance. Outside the top strip so its fixed positioning
+         is not trapped by the header. lg:hidden inside the component; at lg
+         the same body opens as a popover in the sidebar. --%>
     <.theme_picker_sheet
       open={assigns[:theme_picker_open] == true}
       user={assigns[:current_user_record]}
     />
 
     <%!-- "Names masked" confirm, below lg (task 01a1600d stage 2; direction
-         canvas 01a1616c). Outside the utility bar so its fixed positioning is
+         canvas 01a1616c). Outside the top strip so its fixed positioning is
          not trapped, per the architect's one-shell-component rule. lg:hidden
          inside the component. --%>
     <.mask_names_chip_sheet
@@ -354,7 +286,6 @@
       meeting_slug={@meeting_slug}
       meeting_started_at={@meeting_started_at}
       on_meeting_page={@on_meeting_page}
-      sidebar_collapsed={@sidebar_collapsed}
     />
 
     <%!-- Shell-level LiveKit reconnect supervisor (task 019ee06b stage 2).

@@ -68,7 +68,7 @@ defmodule PlatformWeb.ExternalHoldingLiveTest do
 
       # No shell / icon rail / bottom nav — the discovery leak the separate
       # live_session + chrome-less layout exist to prevent.
-      refute has_element?(view, "#shell-sidebar")
+      refute has_element?(view, "#sidebar")
       refute has_element?(view, "nav")
     end
   end

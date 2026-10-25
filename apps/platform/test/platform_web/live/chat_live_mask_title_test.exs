@@ -43,6 +43,7 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
   alias Platform.Repo
 
   @org "Vandelay-Ind"
+  @mask_switch ~s(#chat-list-popover [data-role="chat-list-pop-option-mask"])
 
   defp authenticated_conn(conn, suffix) do
     user =
@@ -74,10 +75,13 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
     {view, html}
   end
 
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail and its eye
+  # toggle; the mask switch lives in the Chat list's Options popover.
   defp toggle_mask(view) do
-    view
-    |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-    |> render_click()
+    unless has_element?(view, @mask_switch),
+      do: view |> element("#list-more") |> render_click()
+
+    view |> element(@mask_switch) |> render_click()
   end
 
   defp header(html) do
@@ -112,47 +116,8 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
              "expected a `# workspace-<letter>` tab title, got #{inspect(title)}"
     end
 
-    test "the title follows a per-section reveal and the re-mask after it", %{conn: conn} do
-      {view, html} = fixture(conn, "title-reveal")
-
-      # Read the org's own section id off the UNMASKED render rather than
-      # assuming a rail position — the letter is a position, so hardcoding one
-      # would make this test a statement about seed order.
-      section_id = section_id_named(html, @org)
-
-      toggle_mask(view)
-      refute_name_anywhere(page_title(view), @org)
-
-      view
-      |> element(
-        ~s(#chat-sidebar button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"])
-      )
-      |> render_click()
-
-      # Revealing the org's own section must bring the tab back with it.
-      # Otherwise the reveal is a half-measure: the rail shows the name while
-      # the tab still says `workspace-b`, and the two disagree on screen.
-      assert_name_anywhere(page_title(view), @org)
-
-      view |> element(~s(button[phx-click="remask_all"])) |> render_click()
-      refute_name_anywhere(page_title(view), @org)
-    end
-  end
-
-  # Attribute ORDER inside the tag is not asserted — the open tag is found by
-  # its key and the id read out of it, so a template reshuffle cannot turn this
-  # into a silent nil and a MatchError three lines later.
-  defp section_id_named(html, name) do
-    tag =
-      ~r/<section[^>]*>/
-      |> Regex.scan(html)
-      |> Enum.map(&hd/1)
-      |> Enum.find(&String.contains?(&1, ~s(data-section-key="#{name}")))
-
-    assert tag, "no rail section carries data-section-key=#{inspect(name)}"
-
-    [_, id] = Regex.run(~r/data-section-id="([^"]+)"/, tag)
-    id
+    # Burrow redesign 22 stage 2 deleted the desktop channel rail; its
+    # per-section reveal went with it, so the reveal/re-mask title test is gone.
   end
 
   describe "chat header" do
@@ -181,13 +146,15 @@ defmodule PlatformWeb.ChatLiveMaskTitleTest do
     end
   end
 
-  # The Members popover renders INSIDE the header and the phone sheet outside
-  # it; both titles read "Members · <space name>" (task 01a1557a-8f80 stage
-  # 3). The first cut built that from `space.name`, so masking hid the header
-  # title and the popover beside it spelled the channel out.
+  # The Members popover renders INSIDE the details panel (under its Members
+  # row since Burrow redesign 22 stage 4; the header before) and the phone
+  # sheet outside it; both titles read "Members · <space name>" (task
+  # 01a1557a-8f80 stage 3). The first cut built that from `space.name`, so
+  # masking hid the title and the popover beside it spelled the channel out.
   describe "Members sheet title" do
     defp members(view) do
-      view |> element(~s(button[data-role="members-open"])) |> render_click()
+      render_click(view, "details_open", %{"page" => "space"})
+      view |> element(~s(#details-panel button[data-role="details-members"])) |> render_click()
 
       ["#chat-members-popover", "#chat-members"]
       |> Enum.map(fn id -> view |> element(id) |> render() end)

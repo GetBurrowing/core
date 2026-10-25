@@ -116,16 +116,20 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
       # Default (suite) host, no chat_mode session key, CHAT_HOST unset so the
       # stage-2 fence does not intercept — this exercises the stage-1 scope
       # guarantee in isolation (the seam the leak lived on).
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(testerson)
         |> live("/chat/#{atlas.slug}")
 
       assert html =~ atlas.name
       refute html =~ general.name
-      # Identity-derived external branch, discovery chrome off.
-      assert html =~ ~s(data-role="external-rail")
-      refute html =~ "New channel"
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{atlas.id}"]))
+      refute has_element?(view, ~s(#chat-list a[data-space-id="#{general.id}"]))
+      # Identity-derived external branch, discovery chrome off. (Burrow
+      # redesign 22 stage 2 replaced the external rail with the Chat list.)
+      assert has_element?(view, ~s(#chat-list [data-role="external-identity"]))
+      refute has_element?(view, "#list-more")
+      refute html =~ ~s(phx-click="new_channel_open")
     end
   end
 
@@ -135,15 +139,15 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
       internal = create_user!("Ingrid Internal")
       join!(general, internal)
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(internal)
         |> live("/chat/#{general.slug}")
 
       assert html =~ general.name
-      assert html =~ ~s(id="chat-sidebar")
-      assert html =~ "New channel"
-      refute html =~ ~s(data-role="external-rail")
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{general.id}"]))
+      assert has_element?(view, "#list-more")
+      refute html =~ ~s(data-role="external-identity")
     end
   end
 

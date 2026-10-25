@@ -18,7 +18,7 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
       the row read): "an admin-set name wins on every surface" goes red, on
       `app_name/0` first and on every surface after it.
     * Put the literal "Startup Suite" back in the rail label
-      (`icon_rail.ex`): both shell tests go red.
+      (`sidebar.ex`): both shell tests go red.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -71,7 +71,7 @@ defmodule PlatformWeb.BurrowDefaultNameTest do
   defp rail_label(html) do
     html
     |> LazyHTML.from_document()
-    |> LazyHTML.query(".icon-rail-header .icon-rail-label")
+    |> LazyHTML.query("#sidebar-brand span")
     |> LazyHTML.text()
     |> String.trim()
   end

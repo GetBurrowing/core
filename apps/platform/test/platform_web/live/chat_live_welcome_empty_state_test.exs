@@ -15,6 +15,13 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
 
   Both directions matter — the welcome must still appear for a genuinely new
   user, or fixing this would just break onboarding instead.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail, and with it the
+  only render site of the "Welcome to Burrow." block. The Chat list's own empty
+  state (`[data-role="chat-list-empty"]`) is the brand-new-user surface now,
+  so this file pins the same two directions on the list: empty for a new user,
+  and an archived channel still reachable (never a dead "no channels" end)
+  for someone who archived everything.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -70,65 +77,76 @@ defmodule PlatformWeb.ChatLiveWelcomeEmptyStateTest do
 
   # `/chat` live-redirects to the first ACTIVE channel when one exists, so a
   # bare live/2 returns {:error, {:live_redirect, ...}} rather than a view.
-  # Follow it — the sidebar (and therefore the welcome block) renders either
-  # way, and that's what we're asserting on.
+  # Follow it — the Chat list renders on both routes.
   defp mount_chat(conn) do
     case live(conn, ~p"/chat") do
-      {:ok, _view, html} -> html
-      {:error, {:live_redirect, %{to: path}}} -> live(conn, path) |> elem(2)
+      {:ok, view, _html} -> view
+      {:error, {:live_redirect, %{to: path}}} -> live(conn, path) |> elem(1)
     end
   end
 
-  describe "\"Welcome to Suite\" empty state" do
+  @empty ~s(#chat-list [data-role="chat-list-empty"])
+
+  defp list_row?(view, space),
+    do:
+      has_element?(
+        view,
+        ~s(#chat-list-scroller a[data-role="chat-list-row"][data-space-id="#{space.id}"])
+      )
+
+  defp show_archived(view) do
+    render_click(view, "toggle_archived_section", %{})
+    view
+  end
+
+  describe "the brand-new-user empty state (Chat list)" do
     test "still shows for a genuinely new user — no channels, no DMs, nothing archived",
          %{conn: conn} do
       {conn, _user} = admin_conn(conn)
 
-      {:ok, _view, html} = live(conn, ~p"/chat")
+      view = mount_chat(conn)
 
-      assert html =~ @welcome
-      assert html =~ "— no spaces yet —"
+      assert has_element?(view, @empty)
+      assert has_element?(view, ~s([data-role="chat-list-empty-new-channel"]))
+
+      # Nothing archived either: showing archived adds no section.
+      show_archived(view)
+      assert has_element?(view, @empty)
+      refute has_element?(view, ~s(#chat-list [data-role="chat-list-archived"]))
     end
 
-    test "does NOT show once a channel is archived — an archive proves you're not new",
+    test "an archived channel stays reachable — an archive proves you're not new",
          %{conn: conn} do
       {conn, admin} = admin_conn(conn)
       space = channel!("hooli")
 
-      # Active channel: no welcome (there are spaces).
-      refute mount_chat(conn) =~ @welcome
+      # Active channel: a list row, no empty state.
+      view = mount_chat(conn)
+      assert list_row?(view, space)
+      refute has_element?(view, @empty)
 
       # Archive it — @channels goes empty, but @archived_channels does not.
       {:ok, _} = Chat.archive_space(admin, space)
 
-      refute mount_chat(conn) =~ @welcome,
-             "the brand-new-user welcome must not render above an ARCHIVED section"
+      view = conn |> mount_chat() |> show_archived()
+
+      assert has_element?(view, ~s(#chat-list [data-role="chat-list-archived"])),
+             "with everything archived, Show archived must still reveal the Archived section"
+
+      assert list_row?(view, space)
     end
 
-    test "does NOT show when an ORG archive cascade-hides the only channel",
-         %{conn: conn} do
-      # Robin's exact path: archive the org, not the channel.
-      {conn, admin} = admin_conn(conn)
-      _space = channel!("hooli")
-
-      {:ok, _} = Tenancy.archive_org(admin, Tenancy.get_org_by_slug!("hooli"))
-
-      refute mount_chat(conn) =~ @welcome
-    end
-
-    test "restoring the channel leaves the welcome hidden — there IS a space again",
+    test "restoring the channel puts it back in the list — there IS a space again",
          %{conn: conn} do
       {conn, admin} = admin_conn(conn)
       space = channel!("hooli")
       {:ok, archived} = Chat.archive_space(admin, space)
 
-      refute mount_chat(conn) =~ @welcome
-
-      # Unarchived -> an active channel again, so still no welcome. The welcome
-      # is only for having NOTHING at all, active or archived.
       {:ok, _} = Chat.unarchive_space(admin, archived)
 
-      refute mount_chat(conn) =~ @welcome
+      view = mount_chat(conn)
+      assert list_row?(view, space)
+      refute has_element?(view, @empty)
     end
   end
 end

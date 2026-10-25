@@ -40,26 +40,25 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert Enum.any?(Chat.list_participants(finance.id), &(&1.participant_id == member.id))
     assert {:ok, _} = Restrictions.restrict_space(finance, ["admin"], admin.id)
 
-    {:ok, member_view, html} = live(member_conn, ~p"/chat/#{lobby.id}")
-
-    section_ids =
-      html
-      |> Floki.parse_document!()
-      |> Floki.find(~s(button[phx-click="toggle_section_collapsed"][phx-value-collapsed="false"]))
-      |> Enum.flat_map(&Floki.attribute(&1, "phx-value-section_id"))
-
-    Enum.each(section_ids, fn section_id ->
-      render_click(member_view, "toggle_section_collapsed", %{
-        "section_id" => section_id,
-        "collapsed" => "false"
-      })
-    end)
+    # Burrow redesign 22 stage 2 deleted the desktop channel rail (and its
+    # collapsible org sections); the desktop restricted row is the Chat list's.
+    {:ok, member_view, _html} = live(member_conn, ~p"/chat/#{lobby.id}")
 
     html = render(member_view)
-    assert html =~ ~s(data-role="restricted-channel-row")
-    assert html =~ ~s(data-space-id="#{finance.id}")
+
+    assert has_element?(
+             member_view,
+             ~s(#chat-list-scroller [data-role="restricted-channel-row"][data-space-id="#{finance.id}"])
+           )
+
+    refute has_element?(member_view, ~s(#chat-list-scroller a[data-space-id="#{finance.id}"]))
     assert html =~ "Restricted, ask an admin"
-    assert html =~ "hero-lock-closed-mini"
+    # The no-entry marker, never the lock (the lock means "private, and yours").
+    assert has_element?(
+             member_view,
+             ~s([data-role="restricted-channel-row"][data-space-id="#{finance.id}"] [data-glyph="restricted"])
+           )
+
     refute html =~ marker
 
     [restricted_row] =
@@ -68,16 +67,15 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
         html
       )
 
-    # The name stays readable (Saru, 2026-10-21, task 01a15902 stage 4): the
-    # lock and the wording carry "restricted"; the row is subtle text, not
-    # the WCAG-exempt disabled colour.
-    [row_tag] = Regex.run(~r/<div[^>]*data-role="restricted-channel-row"[^>]*>/, restricted_row)
-    assert row_tag =~ "text-subtle"
-    refute row_tag =~ "text-disabled"
+    # The name stays readable (task 01a15902 stage 4): the marker and the
+    # wording carry "restricted"; the name is ordinary text and nothing in the
+    # row uses the WCAG-exempt disabled colour.
+    assert restricted_row =~ ~r/<span class="[^"]*text-base-content[^"]*">\s*Finance/
+    refute restricted_row =~ "text-disabled"
 
     refute restricted_row =~ "<a "
     refute restricted_row =~ "<button "
-    refute restricted_row =~ "channel-row-unread-pill"
+    refute restricted_row =~ "chat-list-unread-count"
 
     # The phone's restricted row lives on the Chat list since task
     # 01a1557a-8562 (the drawer and pills that carried it here were deleted):

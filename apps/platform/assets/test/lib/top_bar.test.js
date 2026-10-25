@@ -76,7 +76,7 @@ describe("topBarDelay", () => {
 describe("controlOwnsNavigation", () => {
   it("keys on the stage-2 pending mark and on phx-click-loading nav controls", () => {
     expect(CONTROL_OWNED_SELECTOR).toContain("[data-nav-pending]")
-    for (const c of [".bottom-nav-tab", ".icon-rail-tab", ".more-sheet-row", ".chat-list-row"]) {
+    for (const c of [".bottom-nav-tab", ".sidebar-row", ".more-sheet-row", ".chat-list-row"]) {
       expect(CONTROL_OWNED_SELECTOR).toContain(`${c}[href].phx-click-loading`)
     }
     expect(controlOwnsNavigation(fakeDoc({ owned: true }))).toBe(true)

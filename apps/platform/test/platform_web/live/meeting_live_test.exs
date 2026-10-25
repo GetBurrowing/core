@@ -9790,8 +9790,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn = with_meet_host(conn)
       %{resp_body: body} = get(conn, "/#{meeting.slug}/#{token}")
 
-      refute body =~ "shell-sidebar"
-      refute body =~ "icon-rail"
+      refute body =~ ~s(id="sidebar")
+      refute body =~ "sidebar-row"
       refute body =~ "bottom-nav"
       refute body =~ "chat-sidebar"
     end

@@ -91,8 +91,10 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
     assigns = %{access_scope: scope}
 
     desktop =
-      rendered_to_string(~H"<IconRail.icon_rail access_scope={@access_scope} />")
-      |> keys("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
+      rendered_to_string(
+        ~H"<PlatformWeb.Components.Sidebar.sidebar access_scope={@access_scope} />"
+      )
+      |> keys("[data-sidebar] #sidebar-nav .sidebar-row")
 
     mobile =
       rendered_to_string(~H"<IconRail.bottom_rail access_scope={@access_scope} />")
@@ -138,7 +140,7 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
         conn = get(authed(ctx.guest), path)
         assert conn.status == 403
         assert conn.resp_body =~ "You don't have access, ask an admin"
-        refute conn.resp_body =~ "data-icon-rail"
+        refute conn.resp_body =~ ~s(id="sidebar")
         refute conn.resp_body =~ "data-bottom-rail"
       end
 

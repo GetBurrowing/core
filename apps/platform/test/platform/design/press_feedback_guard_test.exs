@@ -2,13 +2,15 @@ defmodule Platform.Design.PressFeedbackGuardTest do
   @moduledoc """
   Holds the press feedback contract (task 01a166be-b5b9, design canvas
   01a167b0 "Press and pending feedback"): hover, pressed and current never
-  share a look on the bottom tabs, the desktop rail tiles, the More sheet
-  rows and the menu items.
+  share a look on the bottom tabs, the More sheet rows and the menu items.
+  The desktop rail it also covered was replaced by the sidebar (Burrow
+  redesign 22 stage 1), painted per master-desktop.html: there hover and
+  current share the raised fill and the 3px primary bar tells current apart.
 
   | control         | hover (hover: hover) | pressed (:active)          | current                     |
   |-----------------|----------------------|----------------------------|-----------------------------|
   | bottom tab      | ink to base-content  | cell scale(0.92) + ink     | primary ink + tinted pill   |
-  | rail tile       | icon ink to body     | icon scale(0.92) + ink     | base-300 tile + primary bar |
+  | sidebar row     | base-300 + body ink  | (none)                     | base-300 + primary bar      |
   | More sheet row  | base-200 fill        | base-300 fill              | no fill, 3px bar, weight 600 |
   | menu item       | base-200 (utility)   | base-300                   | (none exists)               |
 
@@ -117,55 +119,27 @@ defmodule Platform.Design.PressFeedbackGuardTest do
     end
   end
 
-  describe "desktop rail" do
-    test "hover is ink-only and no longer shares the current tile's base-300", %{rules: rules} do
-      hovers = for r <- rules, r.selector =~ ".icon-rail-tab", r.selector =~ ":hover", do: r
-      assert hovers != []
+  # Burrow redesign 22 stage 1 replaced the desktop icon rail with the
+  # sidebar, painted per master-desktop.html (`#side .nav`): rest subtle,
+  # hover and current both the raised base-300 with body ink, current told
+  # apart by its 3px primary bar. The fills and inks are utilities on the
+  # row (sidebar.ex); app.css carries only the geometry and the bar.
+  describe "desktop sidebar" do
+    test "the row rule paints nothing; the current bar is 3px primary outside the row",
+         %{rules: rules} do
+      row = one!(rules, [], ".sidebar-row")
+      assert decl(row, "color") == nil, "an unlayered colour would beat lg:hover: utilities"
+      assert decl(row, "background") == nil
+      assert decl(row, "background-color") == nil
 
-      for r <- hovers do
-        assert r.at == @hover, "#{r.selector} must be media-gated"
-        assert decl(r.body, "background") == nil, "#{r.selector} paints a fill"
-        assert decl(r.body, "background-color") == nil, "#{r.selector} paints a fill"
-      end
-
-      hover =
-        one!(rules, @hover, ".icon-rail-tab:not(.icon-rail-tab--active):hover .icon-rail-icon")
-
-      pressed_ink =
-        one!(rules, [], ".icon-rail-tab:not(.icon-rail-tab--active):active .icon-rail-icon")
-
-      pressed_icon = one!(rules, [], ".icon-rail-tab:active .icon-rail-icon")
-      rest = one!(rules, [], ".icon-rail-tab:not(.icon-rail-tab--active) .icon-rail-icon")
-      current = one!(rules, [], ".icon-rail-tab--active")
-      bar = one!(rules, [], ".icon-rail-tab--active::before")
-
-      assert decl(rest, "color") == "var(--color-subtle)"
-      assert decl(hover, "color") == "var(--color-base-content)"
-      assert decl(pressed_ink, "color") == "var(--color-base-content)"
-      assert decl(pressed_icon, "transform") == "scale(0.92)"
+      bar = one!(rules, [], ".sidebar-row--current::before")
       assert decl(bar, "width") == "3px"
+      assert decl(bar, "left") == "-8px"
+      assert decl(bar, "background") == "var(--color-primary)"
 
-      assert_distinct(
-        rest: look(rest),
-        hover: look(hover),
-        pressed: MapSet.union(look(pressed_ink), look(pressed_icon)),
-        current: MapSet.union(look(current), look(bar))
-      )
-    end
-
-    test "the badge halo stays the tile's own paint", %{rules: rules} do
-      tile = one!(rules, [], ".icon-rail-tab")
-      assert decl(tile, "--icon-rail-badge-halo") == "var(--color-base-200)"
-      current = one!(rules, [], ".icon-rail-tab--active")
-      assert decl(current, "--icon-rail-badge-halo") == "var(--color-base-300)"
-
-      # Any rule that fills a tile must move the halo with it.
-      for r <- rules,
-          r.selector =~ ~r/^\.icon-rail-tab[^ ]*$/,
-          not String.contains?(r.selector, "::"),
-          fill = decl(r.body, "background") || decl(r.body, "background-color") do
-        assert decl(r.body, "--icon-rail-badge-halo") == fill, r.selector
-      end
+      # No unconditional :hover on a sidebar row in CSS: hover is the
+      # lg:hover: utility pair.
+      refute Enum.any?(rules, &(&1.selector =~ ".sidebar-row" and &1.selector =~ ":hover"))
     end
   end
 
@@ -204,14 +178,13 @@ defmodule Platform.Design.PressFeedbackGuardTest do
             r.at == [],
             r.selector =~ ":active" or r.selector =~ ".is-pressed",
             # The controls this contract covers; other components own theirs.
-            r.selector =~ ~r/bottom-nav|icon-rail|more-sheet|menuitem/,
+            r.selector =~ ~r/bottom-nav|sidebar-row|more-sheet|menuitem/,
             t = decl(r.body, "transform"),
             t =~ "scale(",
             do: r.selector
 
-      # Anti-vacuity: the tab's cell press and the rail's icon press are listed.
+      # Anti-vacuity: the tab's cell press is listed.
       assert ".bottom-nav-tab.is-pressed" in scales
-      assert ".icon-rail-tab:active .icon-rail-icon" in scales
 
       for sel <- scales do
         assert decl(one!(rules, @reduced, sel), "transform") == "none", sel
@@ -264,18 +237,19 @@ defmodule Platform.Design.PressFeedbackGuardTest do
              ) == "400"
     end
 
-    test "the rail tile and its bar move to the tapped tile", %{rules: rules} do
-      assert decl(one!(rules, [], ".icon-rail-tab[data-nav-pending]"), "background-color") ==
+    test "the sidebar row's fill and bar move to the tapped row", %{rules: rules} do
+      assert decl(one!(rules, [], ".sidebar-row[data-nav-pending]"), "background-color") ==
                "var(--color-base-300)"
 
-      bar = one!(rules, [], ".icon-rail-tab[data-nav-pending]::before")
+      bar = one!(rules, [], ".sidebar-row[data-nav-pending]::before")
       assert decl(bar, "width") == "3px"
       assert decl(bar, "animation") == @pulse
 
-      assert decl(one!(rules, [], ".icon-rail-tab--active[data-nav-yielded]"), "background-color") ==
-               "var(--color-base-200)"
+      yielded = one!(rules, [], ".sidebar-row--current[data-nav-yielded]")
+      assert decl(yielded, "background-color") == "transparent"
+      assert decl(yielded, "color") == "var(--color-subtle)"
 
-      assert decl(one!(rules, [], ".icon-rail-tab--active[data-nav-yielded]::before"), "content") ==
+      assert decl(one!(rules, [], ".sidebar-row--current[data-nav-yielded]::before"), "content") ==
                "none"
     end
 
@@ -301,7 +275,7 @@ defmodule Platform.Design.PressFeedbackGuardTest do
     } do
       for sel <- [
             ".bottom-nav-tab[data-nav-pending] .bottom-nav-icon",
-            ".icon-rail-tab[data-nav-pending]::before",
+            ".sidebar-row[data-nav-pending]::before",
             ".chat-list-row[data-nav-pending]::before"
           ] do
         anim = decl(one!(rules, @reduced, sel), "animation")

@@ -225,8 +225,10 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # affix to the masters' 13px and replaced the old version-history modal's
   # 11px meta line: 108 -> 106. Rung 8 (task 01a1557a-8f80 stage 3) deleted
   # the utility bar's agents dropdown and people-online panel, which carried
-  # three of them (the 10px panel labels): 106 -> 103.
-  @small_subtle_ceiling 103
+  # three of them (the 10px panel labels): 106 -> 103. Burrow redesign 22
+  # stage 4 (2026-10-25) deleted the desktop search drawer, whose 11px and
+  # 10px result meta carried three: 103 -> 100.
+  @small_subtle_ceiling 100
   @small_size ~r/(?<![\w-])text-\[(?:\d|1[01])(?:\.\d+)?px\]|(?<![\w-])text-\[0\.(?:[0-6]\d*|7[0-4]\d*)rem\]/
   @tier_collapses [
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex", ">unassigned<"},

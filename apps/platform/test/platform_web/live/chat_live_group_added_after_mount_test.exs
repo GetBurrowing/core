@@ -249,34 +249,37 @@ defmodule PlatformWeb.ChatLiveGroupAddedAfterMountTest do
     |> Enum.count(fn {pid, _meta} -> pid == view.pid end)
   end
 
-  # The conversation's row in the desktop rail's Direct Messages section.
-  # Scoped to `#chat-sidebar` and to `[data-section-key="dms"]` because the
-  # same space id renders again in the mobile drawer and the switcher, and an
-  # unscoped query would answer "somewhere on the page" instead of "on the
-  # rail".
+  # The conversation's row in the Chat list's Direct section (Burrow redesign
+  # 22 stage 2 deleted the desktop channel rail). Scoped to
+  # `#chat-list-scroller` and to `[data-role="chat-list-direct"]` because the
+  # search sheet and popover rows carry the same data-role, and an unscoped
+  # query would answer "somewhere on the page" instead of "in the list".
   defp rail_row?(html, space) do
     html
     |> LazyHTML.from_document()
-    |> LazyHTML.query(~s(#chat-sidebar [data-section-key="dms"] [data-space-id="#{space.id}"]))
+    |> LazyHTML.query(direct_row_selector(space))
     |> LazyHTML.to_tree()
     |> Enum.any?()
   end
 
-  # The unread pill ON that rail row, or nil when the row carries none. Read
-  # from the row itself rather than the page so a badge rendered by the mobile
-  # chrome cannot stand in for the one the report is about.
+  defp direct_row_selector(space) do
+    ~s(#chat-list-scroller [data-role="chat-list-direct"] a[data-role="chat-list-row"][data-space-id="#{space.id}"])
+  end
+
+  # The unread marker ON that list row, or nil when the row carries none. A
+  # conversation row draws a dot whose aria-label carries the count ("1
+  # unread"); read the count from there. Read from the row itself rather than
+  # the page so a badge rendered by the mobile chrome cannot stand in for it.
   defp unread_pill(html, space) do
-    pills =
+    dots =
       html
       |> LazyHTML.from_document()
-      |> LazyHTML.query(
-        ~s(#chat-sidebar [data-section-key="dms"] [data-space-id="#{space.id}"] .channel-row-unread-pill)
-      )
+      |> LazyHTML.query(direct_row_selector(space) <> ~s( [data-role="chat-list-unread-dot"]))
 
-    case LazyHTML.to_tree(pills) do
+    case LazyHTML.attribute(dots, "aria-label") do
       [] -> nil
-      [_single] -> pills |> LazyHTML.text() |> String.trim()
-      many -> flunk("expected at most one rail pill for #{space.id}, found #{length(many)}")
+      [label] -> label |> String.replace_suffix(" unread", "") |> String.trim()
+      many -> flunk("expected at most one list badge for #{space.id}, found #{length(many)}")
     end
   end
 end

@@ -8,6 +8,12 @@ defmodule PlatformWeb.MaskNamesChipTest do
   the page renders masked names. Every absence of the chip is paired with a
   render of the same page where it IS present, and every refute of a real
   name has an unmasked control that asserts the name is there.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail (its eye toggle
+  and mode strip). On /chat the toggle is the Chat list's Options popover
+  switch, the page's own masked signal is the list's counts line ("names
+  masked"), and the org names reach the document through one channel NAMED
+  after each org in @chat_orgs.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -22,7 +28,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.MaskNamesLabel
 
-  @chip "[data-role=mask-names-chip]"
+  @chip "#mask-names-chip"
   @chat_orgs ["Vandelay-Ind", "Globex", "Initech"]
   @tenants ~w(initech vandelay_ind globex)
   @machine_attrs ~w(value)
@@ -88,11 +94,21 @@ defmodule PlatformWeb.MaskNamesChipTest do
 
   defp chip_label(html), do: html |> query(@chip) |> LazyHTML.attribute("aria-label") |> hd()
 
-  defp sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
+  defp masked_line?(html) do
+    html
+    |> query(~s(#chat-list [data-role="chat-list-counts"]))
+    |> LazyHTML.text()
+    |> String.trim()
+    |> Kernel.==("names masked")
+  end
+
+  @mask_switch ~s(#chat-list-popover [data-role="chat-list-pop-option-mask"])
+
+  defp popover_toggle_mask(view) do
+    unless has_element?(view, @mask_switch),
+      do: view |> element("#list-more") |> render_click()
+
+    view |> element(@mask_switch) |> render_click()
   end
 
   defp seed_projects do
@@ -125,6 +141,15 @@ defmodule PlatformWeb.MaskNamesChipTest do
 
   setup do
     {:ok, _} = Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
+
+    for name <- @chat_orgs do
+      slug = String.downcase(name)
+      org = Tenancy.get_org_by_slug(String.replace(slug, "-", "_"))
+
+      {:ok, _} =
+        Chat.create_space(%{name: name, slug: slug, kind: "channel", org_id: org && org.id})
+    end
+
     :ok
   end
 
@@ -180,29 +205,24 @@ defmodule PlatformWeb.MaskNamesChipTest do
   end
 
   describe "agreement on one page" do
-    test "/chat: the rail's toggle shows and hides the chip in the same render" do
+    test "/chat: the list's mask switch shows and hides the chip in the same render" do
       user = insert_user("agree-chat")
       {view, html} = mount!(user, "/chat")
       refute chip?(html)
       for name <- @chat_orgs, do: assert_name_anywhere(html, name)
 
-      html =
-        view
-        |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-        |> render_click(%{"masked" => "true"})
+      html = popover_toggle_mask(view)
 
       assert chip?(html)
-      assert sidebar(html) =~ "channel-mask-strip"
+      assert masked_line?(html)
       assert chip_label(html) =~ "Names masked #{expected_until(user)}."
       assert html =~ "· #{expected_until(user)}"
       for name <- @chat_orgs, do: refute_name_anywhere(html, name)
 
-      html =
-        view
-        |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-        |> render_click(%{"masked" => "false"})
+      html = popover_toggle_mask(view)
 
       refute chip?(html)
+      refute masked_line?(html)
       for name <- @chat_orgs, do: assert_name_anywhere(html, name)
     end
 
@@ -256,7 +276,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
       assert html |> query(@chip) |> LazyHTML.attribute("aria-expanded") == ["true"]
       assert html |> query("#mask-names-sheet") |> LazyHTML.attribute("data-open") == ["true"]
       assert stored_until(user) == before
-      assert sidebar(html) =~ "channel-mask-strip"
+      assert masked_line?(html)
       for name <- @chat_orgs, do: refute_name_anywhere(html, name)
 
       # Positive control: the observation above can see an unmask.
@@ -402,7 +422,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
         |> Path.expand(__DIR__)
         |> File.read!()
 
-      [bar] = Regex.run(~r/id="utility-bar"\s+class="([^"]*)"/, shell, capture: :all_but_first)
+      [bar] = Regex.run(~r/id="phone-top-bar"\s+class="([^"]*)"/, shell, capture: :all_but_first)
       bar_px = spacing_px(bar, "h")
       bar_border = if bar =~ ~r/(^|\s)border-b(\s|$)/, do: 1, else: 0
 

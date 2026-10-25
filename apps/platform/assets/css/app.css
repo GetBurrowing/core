@@ -14,32 +14,6 @@
 @source "../../lib/platform/access/change_card.ex";
 
 /*
- * #chat-sidebar width — carried by a root-level custom property, NOT an
- * inline style (task 01a05873).
- *
- * `ResizableSidebar` (assets/js/hooks/resizable_sidebar.js) writes
- * `--suite-sidebar-width` onto `document.documentElement` from the stored
- * preference. It deliberately does NOT write `el.style.width` on the aside:
- * LiveView's morphdom resets inline styles when it patches an element, and
- * between that reset and the hook's `updated()` re-apply the aside rendered
- * at its INTRINSIC width (468px on a 1440px desktop instead of the
- * configured 224px) — squeezing the chat column ~244px narrower mid-patch.
- * Because the aside precedes #message-list in document order, morphdom
- * hit the aside before firing ScrollToBottom's beforeUpdate, so that hook's
- * pre-patch distance capture measured the rewrap-inflated scrollHeight and
- * desktop chat silently stopped following new messages (the exact defect
- * this rule exists to prevent). A custom property on <html> is outside
- * everything LiveView patches, so the width cannot be stripped mid-patch.
- *
- * The fallback MUST stay 224px: it matches the expanded icon-rail
- * (w-56) so the channel rail visually aligns with the primary nav on
- * first paint, before the hook has run.
- */
-#chat-sidebar {
-  width: var(--suite-sidebar-width, 224px);
-}
-
-/*
  * Force-include hero icon classes used in dynamic expressions (if/else)
  * so Tailwind's scanner picks them up even when not statically present:
  * hero-eye hero-eye-slash hero-user-group hero-sun
@@ -1682,7 +1656,6 @@ body, .font-suite {
   border-radius: 0.375rem;
   padding: 2px 4px;
 }
-
 
 /* ═══ THREAD & REPLY SYSTEM — exact-match to thread-reply-prototype.html ═══ */
 
@@ -3691,7 +3664,6 @@ body, .font-suite {
   }
 }
 
-
 /* -- Meeting Panel ------------------------------------------------- */
 
 /* Quick-meet participant grid.
@@ -5349,187 +5321,51 @@ body, .font-suite {
   background: var(--color-primary);
 }
 
-/* Desktop icon-rail clusters stack their tiles vertically. Without this,
-   the `<.link>` children render as default-inline `<a>` tags and flow
-   horizontally + wrap when the rail is expanded. */
-.icon-rail-cluster {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
+/* Desktop sidebar (Burrow redesign 22 stage 1; master-desktop.html #side,
+   CSS L32-L45). Widths: 220px, 200px at or below 1100px. One custom
+   property so the sidebar and everything that starts at its right edge (the
+   meeting bar) read the same number. */
+:root {
+  --sidebar-width: 220px;
 }
 
-/* Desktop icon-rail active-tile accent — 3px LEFT-bar. (The mobile tab
-   bar's TOP-bar it once mirrored was retired by task 01a1557a-7a71 stage 1.)
-   Sits alongside the `bg-base-300 text-primary` pill applied by
-   icon_rail.ex's `desktop_active_class/2`. */
-.icon-rail-tab {
+@media (max-width: 1100px) {
+  :root {
+    --sidebar-width: 200px;
+  }
+}
+
+/* A row: control height, field radius. Ink and fill are utilities on the
+   row in sidebar.ex (rest `text-subtle`; `lg:hover:bg-base-300
+   lg:hover:text-base-content`; current `bg-base-300 text-base-content`), so
+   this rule sets neither: an unlayered colour here would beat the layered
+   hover utilities. */
+.sidebar-row {
   position: relative;
   display: flex;
   align-items: center;
-  /* 8px grid (re-skin Phase 3a stage 5) — was 0.625rem gap/inline pad */
   gap: 0.5rem;
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  color: var(--color-base-content);
-  text-decoration: none;
-  /* Halo colour for an unread badge sitting on this tile (task 01a01b29
-     stage 2). Declared on the TILE, not on the badge, and overridden below
-     for the active tile, because the halo has to be whatever the tile
-     itself is painted: base-200 at rest, hover and press (none of them
-     fill since task 01a166be-b5b9), base-300 on the current tile. A
-     hardcoded base-200 ring would read as a seam on the active tile. */
-  --icon-rail-badge-halo: var(--color-base-200);
-}
-
-/* Four states, never sharing a look (task 01a166be-b5b9, canvas 01a167b0).
-   Hover used to paint base-300, the same fill as the current tile, so hover
-   and current read alike. Now: rest icon ink is subtle; hover lifts it to
-   body (ink only, hover-capable pointers only); pressed scales the icon to
-   0.92 and lifts it to body, instantly, easing back over 120ms; current
-   keeps `bg-base-300 text-primary` and the leading bar. The icon is the
-   only thing that moves; the label never changes size or weight. */
-.icon-rail-icon {
-  transition: color 120ms ease-out, transform 120ms ease-out;
-}
-
-.icon-rail-tab:not(.icon-rail-tab--active) .icon-rail-icon {
-  color: var(--color-subtle);
-}
-
-@media (hover: hover) {
-  .icon-rail-tab:not(.icon-rail-tab--active):hover .icon-rail-icon {
-    color: var(--color-base-content);
-  }
-}
-
-.icon-rail-tab:not(.icon-rail-tab--active):active .icon-rail-icon {
-  color: var(--color-base-content);
-}
-
-.icon-rail-tab:active .icon-rail-icon {
-  transform: scale(0.92);
-  transition-duration: 0ms;
-}
-
-/* Child rows carry no icon, so their press is the row ruling for a base-200
-   root: base-100 fill, one step from the sidebar (canvas 01a167b0). */
-.icon-rail-tab--child:not(.icon-rail-tab--active):active {
-  background: var(--color-base-100);
-  --icon-rail-badge-halo: var(--color-base-100);
-}
-
-/* Same fill as desktop_active_class/2's `bg-base-300`, so the halo tracks it.
-   Declared after the base rule because the two selectors tie on specificity. */
-.icon-rail-tab--active {
-  --icon-rail-badge-halo: var(--color-base-300);
-}
-
-/* Reduced motion (canvas 01a167b0 rule 8): no scale on press. The ink change
-   stays. The universal reduce block already zeroes the durations. */
-@media (prefers-reduced-motion: reduce) {
-  .icon-rail-tab:active .icon-rail-icon {
-    transform: none;
-  }
-}
-
-/* Unread badge on a rail tile (task 01a01b29 stage 2). Shared by the Inbox
-   pill and the Chat pill; only the daisyUI fill class differs between them
-   (`badge-error` vs `badge-primary`), which is the point — two pills two
-   tiles apart in one column that also ring or set type differently would read
-   as a rendering fault rather than as a distinction.
-
-   Unlayered on purpose. daisyUI's `.badge-xs` lands in the `components`
-   layer, and an unlayered rule beats a layered one in the Tailwind v4
-   cascade, so the 10px numeral here wins without an `!important`. */
-.icon-rail-badge {
-  font-size: 10px;
-  font-weight: 700;
-  /* Tabular so 1 -> 2 cannot resize the pill and jitter the glyph beside it. */
-  font-variant-numeric: tabular-nums;
-  /* 2px ring in the tile's own background, so the pill punches out of the
-     icon it overlaps instead of smearing into it. box-shadow rather than a
-     border: a border would eat into the pill's 16px min-width. */
-  box-shadow: 0 0 0 2px var(--icon-rail-badge-halo);
-  /* Appearance only, never increment. The node is INSERTED when the count
-     crosses zero and then persists across every later increment (LiveView
-     patches the text node, not the element), so this animation runs exactly
-     once, on 0 -> 1, with no Elixir-side logic deciding that. 2 -> 3
-     twitching in peripheral vision is a distraction; the badge showing up at
-     all is the event worth announcing.
-
-     No prefers-reduced-motion rule here, deliberately: the universal reduce
-     block near the top of this file already forces
-     `animation-duration: 0.01ms !important` on every element, this one
-     included. A second rule would be dead code. */
-  animation: icon-rail-badge-in var(--duration-base) var(--ease-standard);
-}
-
-@keyframes icon-rail-badge-in {
-  from {
-    opacity: 0;
-    transform: scale(0.7);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.icon-rail-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  width: 100%;
+  height: 2.25rem;
+  flex-shrink: 0;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-field);
   font-size: 0.875rem;
+  text-align: left;
+  text-decoration: none;
 }
 
-.icon-rail-tab--active::before {
+/* Current: a 3px primary bar 8px outside the row's left edge (masters: left
+   -8px, top/bottom 8px), in the sidebar's own 8px inset. */
+.sidebar-row--current::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
-  height: 28px;
+  border-radius: 2px;
   background: var(--color-primary);
-  border-radius: 0 3px 3px 0;
-}
-
-/* Group eyebrows + indent-only child rows — re-skin Phase 3a stage 4
-   (task 019f575e). The eyebrow's left padding matches the tab's text
-   inset so the label column reads as one edge. The child row's left
-   padding equals tab padding-left + icon width + gap, so child text
-   aligns exactly with parent labels; parents get weight 500 so depth
-   reads through weight, not just indent. All three insets move to the
-   8px grid together with the tab padding in stage 5. */
-.icon-rail-eyebrow {
-  padding: 1rem 0.5rem 0.25rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  /* The secondary-text tier (task 01a15902 stage 6; was base-content at
-     50%, 3.80:1 on sand light). */
-  color: var(--color-subtle);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.icon-rail-tab:not(.icon-rail-tab--child) .icon-rail-label {
-  font-weight: 500;
-}
-
-.icon-rail-tab--child {
-  padding-left: 2.25rem; /* 0.5rem pad + 1.25rem icon + 0.5rem gap = 36px */
-}
-
-.icon-rail-tab--child .icon-rail-label {
-  font-weight: 400;
-  color: var(--color-base-content);
-}
-
-.icon-rail-tab--child.icon-rail-tab--active .icon-rail-label {
-  color: inherit;
 }
 
 .bottom-nav-icon {
@@ -5721,42 +5557,31 @@ body, .font-suite {
   font-weight: 400;
 }
 
-/* Desk rail: the base-300 tile and the leading bar move to the tapped tile.
-   Unlayered, so they also beat the yielded tile's `bg-base-300` utility. */
-.icon-rail-tab[data-nav-pending] {
+/* Desktop sidebar: the raised fill and the leading bar move to the tapped
+   row, and the yielded current row drops both in the same frame. */
+.sidebar-row[data-nav-pending] {
   background-color: var(--color-base-300);
-  --icon-rail-badge-halo: var(--color-base-300);
-}
-
-.icon-rail-tab[data-nav-pending]:not(.icon-rail-tab--active) .icon-rail-icon {
   color: var(--color-base-content);
 }
 
-.icon-rail-tab[data-nav-pending]::before {
+.sidebar-row[data-nav-pending]::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
-  height: 28px;
+  border-radius: 2px;
   background: var(--color-primary);
-  border-radius: 0 3px 3px 0;
   animation: nav-pending-pulse 900ms ease-in-out 150ms infinite;
 }
 
-/* The rail's own base-200 (what a resting tile shows through), so the badge
-   halo keeps matching the tile. */
-.icon-rail-tab--active[data-nav-yielded] {
-  background-color: var(--color-base-200);
-  --icon-rail-badge-halo: var(--color-base-200);
-}
-
-.icon-rail-tab--active[data-nav-yielded] .icon-rail-icon {
+.sidebar-row--current[data-nav-yielded] {
+  background-color: transparent;
   color: var(--color-subtle);
 }
 
-.icon-rail-tab--active[data-nav-yielded]::before {
+.sidebar-row--current[data-nav-yielded]::before {
   content: none;
 }
 
@@ -5810,7 +5635,7 @@ body, .font-suite {
     animation: nav-pending-steady 1ms linear 150ms forwards;
   }
 
-  .icon-rail-tab[data-nav-pending]::before {
+  .sidebar-row[data-nav-pending]::before {
     animation: nav-pending-steady 1ms linear 150ms forwards;
   }
 
@@ -6179,7 +6004,6 @@ body, .font-suite {
     padding: 0.5rem 0.375rem 0.375rem;
   }
 }
-
 
 /* ----------------------------------------------------------------------------
  * <.sheet> component (PlatformWeb.Components.Sheet)
@@ -6862,13 +6686,6 @@ body, .font-suite {
    structure is stable across stages.
    --------------------------------------------------------------------- */
 @layer components {
-  .channel-section {
-    @apply px-2 py-2 border-b border-edge/60;
-  }
-
-  .channel-section-header {
-    @apply flex items-center gap-2 px-2 pb-1.5;
-  }
 
   /* Screen-share name masking (task 01a00c66).
 
@@ -6918,28 +6735,15 @@ body, .font-suite {
      EXCEPTION to the mode rather than as a normal row, in the same warning
      colour as the strip so the two read as one system. The label itself stays
      untouched — see `.channel-section-label`. */
-  .channel-section--revealed {
-    border-left: 2px solid var(--color-warning);
-  }
 
   /* Collapse toggle in a client section header (019fd80f stage 2). It is the
      header's first child, not a wrapper around it — the Hide control and drag
      handle are siblings, so nesting would put a button inside a button. The
      button is a bare hit target: it adds NO type of its own, so the section
      name keeps `.channel-section-label` exactly as it was. */
-  .channel-section-collapse-toggle {
-    @apply inline-flex min-w-0 items-center gap-1.5 rounded text-left;
-  }
 
   /* Decorative chevron (aria-hidden in the markup). `--color-base-content` per
      the design direction — no new colour token. */
-  .channel-section-chevron {
-    @apply flex-shrink-0 text-subtle;
-  }
-
-  .channel-section-label {
-    @apply text-xs font-semibold uppercase tracking-widest text-base-content;
-  }
 
   /* Color-only section swatch in the section header. Communicates the section's
      scope COLOR (via `data-scope` and `--scope-fill`) and nothing else — the section
@@ -6986,13 +6790,6 @@ body, .font-suite {
 
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
-  .channel-section-drag-handle {
-    @apply ml-auto cursor-grab opacity-0 text-subtle transition-opacity duration-150 group-hover:opacity-100;
-  }
-
-  .channel-section-drag-handle:active {
-    cursor: grabbing;
-  }
 
   /* Full-screen list footer (the external switcher's "+ New conversation"):
      normal spacing-3 bottom
@@ -7007,21 +6804,12 @@ body, .font-suite {
   /* Drag-in-progress state on the source section (chat plan v2 Stage 3).
      Fades the section while the user drags so the drop target reads as
      the active surface. */
-  .channel-section--dragging {
-    @apply opacity-50;
-  }
 
   /* Drop-target highlight (chat plan v2 Stage 3). A primary-color border
      on the top edge of the hovered section signals "drop above here"
      without re-laying out the rail. */
-  .channel-section--drop-target {
-    @apply border-t-2 border-t-primary;
-  }
 
   /* Empty-state hint inside a sub-org section that has no channels yet. */
-  .channel-section-empty {
-    @apply px-2 py-1 text-xs italic text-subtle leading-snug;
-  }
 
   /* Single channel / DM row — shared across all sections so we don't
      introduce a parallel row style. Active state mirrors the previous
@@ -7037,23 +6825,9 @@ body, .font-suite {
      hover/active background so the highlight spans the whole row — including
      the button. The scoped overrides below only touch rows INSIDE a wrapper,
      so bare Pinned/DM `.channel-row`s are unaffected. */
-  .channel-row-wrap {
-    @apply flex items-center mx-1 rounded transition-colors hover:bg-base-300;
-  }
-
-  .channel-row-wrap > .channel-row {
-    @apply mx-0 flex-1 min-w-0 rounded-none hover:bg-transparent;
-  }
-
-  .channel-row-wrap--active {
-    @apply bg-primary/10;
-  }
 
   /* Active tint lives on the wrapper; the inner link keeps only its text +
      left-border treatment so the background isn't painted twice. */
-  .channel-row-wrap > .channel-row--active {
-    @apply bg-transparent;
-  }
 
   /* The rail row's ONE trailing control: the row-actions overflow trigger
      (task 019ff8ba stage 1). Renders on sub-org channel rows, Direct
@@ -7093,9 +6867,6 @@ body, .font-suite {
      the MENU states in words, so the row no longer has to say it in an icon.
 
      `transition` covers colour and background on hover/focus. */
-  .channel-row-actions-button {
-    @apply relative flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-subtle hover:text-primary hover:bg-base-200 focus-visible:text-primary transition duration-75;
-  }
 
   /* 44x44 touch target from a hit-area pseudo-element, not from the box.
      WCAG 2.5.5 wants 44px; a 44px BUTTON in a 32px rail row would either
@@ -7104,15 +6875,6 @@ body, .font-suite {
      centred on the 24px icon, so it reaches ~10px into the row link on each
      side — blank truncation space on a channel row, and the cost of making
      the control tappable at all. */
-  .channel-row-actions-button::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 44px;
-    height: 44px;
-    transform: translate(-50%, -50%);
-  }
 
   /* Dismiss control on the chat notification opt-in banner (task 019ffb7b
      stage 5, Design review 2026-08-13: "dismissal could take the form of an 'x' in
@@ -7180,10 +6942,6 @@ body, .font-suite {
     outline-offset: 2px;
   }
 
-  .channel-row--active {
-    @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
-  }
-
   /* ── Edit-layout mode (chat sidebar Stage 5) ──────────────────────────
      Desktop-only per-user arrangement affordances. None of these alter the
      normal-mode rail: every control is gated behind @sidebar_edit in the
@@ -7199,13 +6957,6 @@ body, .font-suite {
      (Normal mode no longer renders this — the entry point is the overflow
      "More" menu below.) Reused for the admin "Done (admin)" via its own
      accented rule. */
-  .channel-edit-toggle {
-    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content hover:text-primary hover:bg-base-300 transition-colors;
-  }
-
-  .channel-edit-toggle[aria-pressed="true"] {
-    @apply text-primary bg-primary/10;
-  }
 
   /* ── Sidebar layout overflow menu (chat sidebar header) ───────────────
      The ~260px rail can't fit two text toggles, so both edit entry points
@@ -7215,97 +6966,45 @@ body, .font-suite {
 
   /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
      hover/open so it doesn't compete with the CHANNELS label. */
-  .channel-sidebar-menu-button {
-    @apply inline-flex items-center justify-center w-7 h-7 rounded text-subtle hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-  }
-
-  .channel-sidebar-menu-button[aria-expanded="true"] {
-    @apply text-base-content bg-base-300;
-  }
 
   /* The popover itself. Absolutely positioned and anchored to the header's
      position:relative wrapper (`.channel-sidebar-menu`), pinned to the right
      edge so it stays WITHIN / over the sidebar and never floats over the chat
      pane. Containment comes from `right-0` + the rail being wider than the
      fixed `w-48` (192px) menu. */
-  .channel-sidebar-menu-popover {
-    @apply absolute right-0 top-full z-30 mt-1 flex w-48 flex-col overflow-hidden rounded-lg border border-base-content/10 bg-base-100 py-1 shadow-lg;
-  }
 
   /* One menu row. Left-aligned, full-width tap target, hover highlight. */
-  .channel-sidebar-menu-item {
-    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
-  }
 
   /* The admin entry point — warning accent so "Edit company default" reads as
      a company-wide action, consistent with the admin-edit mode chrome. */
-  .channel-sidebar-menu-item--admin {
-    @apply text-warning/90 hover:text-warning;
-  }
 
   /* Quiet mode label shown beside "Done" while in an edit mode, so the row
      states which layout is being edited without a second control. Truncates
      rather than overflowing at narrow widths. */
-  .channel-edit-mode-label {
-    @apply min-w-0 truncate text-xs font-medium text-subtle;
-  }
 
   /* Admin variant of the mode label — admin accent to match admin-edit chrome. */
-  .channel-edit-mode-label--admin {
-    @apply text-warning/90;
-  }
 
   /* Grab handle on each channel row (edit mode). Cursor signals draggable;
      the actual drag is owned by the ChannelMembershipDrag hook, which only
      starts on this element so a row-link click still navigates. */
-  .channel-row-grab {
-    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-subtle leading-none;
-  }
-
-  .channel-row-grab:active {
-    cursor: grabbing;
-  }
 
   /* Keyboard move-up / move-down controls (edit mode) — the WCAG 2.1.1
      keyboard alternative to drag. Always visible in edit mode (not
      hover-gated) so keyboard users can reach them by tabbing. */
-  .channel-row-move-controls {
-    @apply flex-shrink-0 inline-flex items-center;
-  }
-
-  .channel-row-move-button {
-    @apply inline-flex items-center justify-center w-5 h-5 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
-  }
-
-  .channel-row-move-button:disabled {
-    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-disabled;
-  }
 
   /* Per-section Hide control in the section header (edit mode). Mirrors the
      section drag handle's quiet treatment but stays visible in edit mode. */
-  .channel-section-hide-button {
-    @apply inline-flex items-center justify-center w-6 h-6 rounded text-subtle hover:text-base-content hover:bg-base-200 transition-colors;
-  }
 
   /* Dragged channel row — faded while a drag is in flight (mirrors the
      section-drag treatment for visual consistency). */
-  .channel-row-wrap--dragging {
-    @apply opacity-50;
-  }
 
   /* Drop-target highlight on a section receiving a channel drop. Distinct
      class from the section-reorder drop-target so a channel drag and a
      section drag never share highlight state. */
-  .channel-section--channel-drop-target {
-    @apply bg-primary/5 rounded;
-  }
 
   /* "Reset to default layout" button at the rail foot (edit mode). Reuses
      the "+ New channel" visual vocabulary so the rail's chrome stays
      consistent. */
-  .channel-reset-layout-button {
-    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors;
-  }
 
   /* ── Root-admin "Edit default" mode (chat sidebar Stage 6) ────────────
      Curate the company-wide default sidebar. Visually DISTINCT from the
@@ -7317,42 +7016,17 @@ body, .font-suite {
   /* "Done (admin)" exit button shown in the sidebar header while in admin-edit
      mode (the entry point is now the overflow "More" menu). Warning-tinted so
      it never reads as the neutral personal "Done". */
-  .channel-admin-edit-toggle {
-    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-warning/80 hover:text-warning hover:bg-warning/10 transition-colors;
-  }
-
-  .channel-admin-edit-toggle[aria-pressed="true"] {
-    @apply text-warning bg-warning/15;
-  }
 
   /* Inline rename form + input in a section header (admin-edit). The input
      stretches to fill the label slot; submit-on-Enter persists the rename. */
-  .channel-section-rename-form {
-    @apply flex-1 min-w-0;
-  }
-
-  .channel-section-rename-input {
-    @apply w-full rounded border border-warning/40 bg-base-100 px-1.5 py-0.5 text-sm font-medium text-base-content focus:border-warning focus:outline-none;
-  }
 
   /* Compact recolor palette under a section header (admin-edit). The org
      rows with a colour are the only choices — no free-form picker. */
-  .channel-section-palette {
-    @apply flex items-center gap-1.5 px-3 pb-1;
-  }
 
   /* One color swatch. Active token gets a ring so the current color reads.
      Each swatch is coloured from its org's row through `data-scope` (task
      01a14dd9 stage 2; the own-org swatch since 01a116de stage 3), and is
      hollow when that org has no colour. */
-  .channel-section-swatch {
-    @apply inline-block size-4 rounded-full ring-1 ring-base-content/15 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-warning;
-    background-color: var(--scope-fill, transparent);
-  }
-
-  .channel-section-swatch--active {
-    @apply ring-2 ring-warning ring-offset-1 ring-offset-base-200;
-  }
 
   /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"
      drawer + supporting undo toast. The v2 per-section chip/footer rows
@@ -7364,9 +7038,6 @@ body, .font-suite {
   /* Drawer wrapper sits as a regular flex child at the sidebar bottom
      (no absolute positioning — so the toast above and the resize handle
      to the right can't collide with it). */
-  .channel-hidden-drawer {
-    @apply flex flex-col rounded overflow-hidden;
-  }
 
   /* The panel ALWAYS renders so the CSS height transition can animate
      smoothly in BOTH directions. When closed, height: 0 + overflow hidden
@@ -7378,50 +7049,10 @@ body, .font-suite {
      predictable footprint (per the 2026-05-29 design review: "fixed height
      that gets adjusted appropriately to mobile"). Responsive by design
      — caps at 360px on tall viewports, scales to 50vh on short ones. */
-  .channel-hidden-drawer-panel {
-    @apply overflow-y-auto transition-[height] duration-200 ease-out;
-    height: 0;
-  }
-
-  .channel-hidden-drawer--open .channel-hidden-drawer-panel {
-    height: min(50vh, 360px);
-    @apply mb-1;
-  }
-
-  .channel-hidden-drawer-group {
-    @apply px-1 py-1.5 space-y-1;
-  }
-
-  .channel-hidden-drawer-group-label {
-    @apply px-2 flex items-center;
-  }
-
-  .channel-hidden-drawer-group-list {
-    @apply space-y-0.5;
-  }
-
-  .channel-hidden-drawer-item {
-    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content rounded hover:bg-base-300/60;
-  }
-
-  .channel-hidden-drawer-show {
-    @apply ml-auto flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-[0.7rem] font-medium rounded text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-  }
 
   /* Trigger row — silent at N=0 (the wrapper :if guards that). Visually
      quiet by default so it reads as "rail chrome" not "actionable noise".
      No leading eye icon — design review explicitly removed it. */
-  .channel-hidden-drawer-trigger {
-    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-subtle hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring;
-  }
-
-  .channel-hidden-drawer-caret {
-    @apply inline-block text-[0.65rem] leading-none flex-shrink-0 transition-transform duration-150;
-  }
-
-  .channel-hidden-drawer--open .channel-hidden-drawer-caret {
-    @apply rotate-180;
-  }
 
   /* Undo toast — ephemeral 4-second affordance shown after a hide. Lives
      IN-FLOW as a flex-shrink-0 child of <aside>, sitting between the
@@ -7440,10 +7071,6 @@ body, .font-suite {
      role=status + aria-live=polite preserved — hiding a channel is
      non-destructive (nothing deleted, only user-filtered), so a polite
      SR announcement is the right WCAG choice. */
-  .channel-undo-toast {
-    @apply flex-shrink-0 flex items-center gap-3 mx-2 mb-2 px-3 py-2 rounded-md bg-base-300 text-base-content text-sm shadow-md;
-    animation: channel-undo-toast-enter 200ms ease-out;
-  }
 
   /* Soft fade-in entrance. No slide — the element is in-flow, so the
      real visual change is the flex layout absorbing its height (which
@@ -7465,13 +7092,6 @@ body, .font-suite {
      prefer reduced motion. The toast still announces via aria-live and
      is visible immediately, just without any fade. */
   @media (prefers-reduced-motion: reduce) {
-    .channel-undo-toast {
-      animation: none;
-    }
-  }
-
-  .channel-undo-toast-message {
-    @apply flex-1 min-w-0 truncate;
   }
 
   /* The move confirmation's message slot (task 019ffcad stage 4). The hide
@@ -7487,9 +7107,6 @@ body, .font-suite {
      No colour, no type, no surface of its own: it sits inside
      `.channel-undo-toast`, which already carries text-sm / --color-base-content
      on --color-base-300. Hide's toast is not touched by this rule. */
-  .channel-move-toast-message {
-    @apply flex-1 min-w-0;
-  }
 
   /* A filled pill, not a bare text link.
      ------------------------------------------------------------------
@@ -7511,9 +7128,6 @@ body, .font-suite {
      reads as nothing once the button is filled, so it becomes the house
      filled-button hover — `hover:bg-primary/90`, the same one
      `chat_message_editor.ex` uses. The toast SURFACE is untouched. */
-  .channel-undo-toast-button {
-    @apply flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-xs font-semibold rounded bg-primary text-primary-content hover:bg-primary/90 transition-colors;
-  }
 
   /* Unread-count pill on a channel row. Identical sizing to the previous
      inline classes but lifted out so we don't repeat the long utility
@@ -7543,31 +7157,11 @@ body, .font-suite {
      "Gen-migration" truncated to "Gen-migra…" while ajar and fit whole while
      expanded (93px of text into an 83px box). A row whose name you cannot read
      is a poor reward for keeping it on screen. */
-  .channel-ajar-group {
-    @apply ml-1 border-l-2 border-edge;
-  }
 
   /* The only new type in the feature: xs at 60% base-content, quiet enough to
      stay a utility line and loud enough to be read before the section is
      dismissed as broken. A real <button> in the markup, so focus-visible is the
      browser's and the tab order is the DOM's. */
-  .channel-ajar-show-all {
-    @apply block w-full px-3 py-1 mx-1 text-left text-xs rounded font-medium text-base-content hover:text-base-content hover:bg-base-300 transition-colors;
-  }
-
-  /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).
-     The inner <.scope_pill> renders a button at xs size by default; the
-     wrapper bumps the pill to sm, gives it a softer ml gap from the
-     channel name, and a subtle ring so it reads as the chat-level
-     filter affordance rather than blending into the title. */
-  .chat-header-scope-pill {
-    @apply ml-2 inline-flex items-center;
-  }
-
-  .chat-header-scope-pill button[phx-click="scope_filter"],
-  .chat-header-scope-pill > span {
-    @apply px-2.5 py-1 text-sm gap-2;
-  }
 
   /* Compact + clickable scope pill (scope_pill size={:compact} clickable={true}).
      Keeps the visual ~16px-tall chip but expands the tap target past the WCAG
@@ -7927,7 +7521,6 @@ body, .font-suite {
   :root:not([data-theme="light"]) .chip-primary { --chip-tint: var(--color-primary); --chip-tint-pct: 16%; }
   :root:not([data-theme="light"]) .dropdown-content { background: var(--color-base-300); }
 }
-
 
 /* ── Read-only canvas rendering — the standalone /canvases/:id page ─────────
    Task 019e2c4b, stage 4.

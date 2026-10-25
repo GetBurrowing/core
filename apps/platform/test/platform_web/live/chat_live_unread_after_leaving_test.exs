@@ -184,22 +184,21 @@ defmodule PlatformWeb.ChatLiveUnreadAfterLeavingTest do
 
   # ── Assertions ──────────────────────────────────────────────────────────
 
-  # The unread pill on one channel's desktop rail row, or nil when the row
-  # carries no pill. Scoped to `#chat-sidebar` because the same row renders
-  # again in the mobile drawer and the switcher, and an unscoped query would
-  # concatenate their texts into a number that is not the badge.
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail: the badge is
+  # now the Chat list row's unread count, scoped to `#chat-list-scroller`
+  # because the search sheet and popover rows carry the same data-role.
   defp unread_pill(html, space) do
-    href = "/chat/#{Chat.space_path_segment(space)}"
-
     pills =
       html
       |> LazyHTML.from_document()
-      |> LazyHTML.query(~s(#chat-sidebar a[href="#{href}"] .channel-row-unread-pill))
+      |> LazyHTML.query(
+        ~s(#chat-list-scroller a[data-role="chat-list-row"][data-space-id="#{space.id}"] [data-role="chat-list-unread-count"] [aria-hidden="true"])
+      )
 
     case LazyHTML.to_tree(pills) do
       [] -> nil
       [_single] -> pills |> LazyHTML.text() |> String.trim()
-      many -> flunk("expected at most one rail pill for #{href}, found #{length(many)}")
+      many -> flunk("expected at most one list badge for #{space.id}, found #{length(many)}")
     end
   end
 end

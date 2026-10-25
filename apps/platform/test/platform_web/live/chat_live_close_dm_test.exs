@@ -2,7 +2,8 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
   @moduledoc """
   The DM "Close" action (task 019ffc5f stage 2).
 
-  Close takes one DM row off the rail. It is not Hide: nothing is
+  Close takes one DM row off the rail (since Burrow redesign 22 stage 2
+  deleted the desktop channel rail, the Chat list `#chat-list`). It is not Hide: nothing is
   unsubscribed, no drawer lists it, and the row returns on its own when a new
   message lands in it or when the user opens that conversation again. Those
   two returns are the whole reason Close ships without an undo surface, so
@@ -169,51 +170,37 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
   # ── HTML slicing ────────────────────────────────────────────────────────
 
-  defp desktop_sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail; "the rail"
+  # in this file now means the Chat list (`#chat-list`), which renders beside
+  # the conversation at lg. Every row lookup is scoped to
+  # `#chat-list-scroller`, because the search sheet and popover rows carry
+  # the same `chat-list-row` data-role.
+  @scroller "#chat-list-scroller"
+
+  # One space's row link inside `scope`, as HTML, or nil. Matched on its own
+  # `data-space-id` so a row in another section can never satisfy it.
+  defp row_in(html, scope, space_id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#{scope} a[data-role="chat-list-row"][data-space-id="#{space_id}"]))
+    |> Enum.to_list()
+    |> case do
+      [] -> nil
+      [row | _] -> LazyHTML.to_html(row)
     end
   end
 
-  defp section_by(sidebar, attr) do
-    case Regex.run(~r/<section[^>]*#{Regex.escape(attr)}.*?<\/section>/s, sidebar) do
-      [match] -> match
-      _ -> nil
-    end
-  end
+  defp dm_row(html, space_id),
+    do: row_in(html, ~s(#{@scroller} [data-role="chat-list-direct"]), space_id)
 
-  defp dm_section(html), do: html |> desktop_sidebar() |> section_by(~s(data-section-key="dms"))
+  defp pinned_row(html, space_id),
+    do: row_in(html, ~s(#{@scroller} [data-role="chat-list-pinned"]), space_id)
 
-  defp pinned_block(html),
-    do: html |> desktop_sidebar() |> section_by(~s(data-section-key="pinned"))
-
-  # The row wrapper for one space. Matched on its own `data-space-id` so a row
-  # in another section can never satisfy the assertion.
-  defp row_wrap(nil, _space_id), do: nil
-
-  defp row_wrap(slice, space_id) do
-    case Regex.run(
-           ~r/<div[^>]*data-space-id="#{Regex.escape(space_id)}"[^>]*>.*?<\/div>/s,
-           slice
-         ) do
-      [match] -> match
-      _ -> nil
-    end
-  end
-
-  defp dm_row(html, space_id), do: html |> dm_section() |> row_wrap(space_id)
-
-  # The row for one space ANYWHERE in the desktop rail, not in one named
-  # section. "Off the rail" has to be asserted this way for a pinned DM: the
-  # bug being guarded was a row that survived in the OTHER section, so a
-  # section-scoped refute is exactly the assertion that missed it.
-  #
-  # Only row WRAPPERS can match: `row_wrap/2` looks for a `<div>`, and the
-  # only other `data-space-id` inside `<aside id="chat-sidebar">` is on the
-  # `<button>` that opens a row's menu. Both row-actions chromes render at the
-  # template root, outside the aside entirely.
-  defp rail_row(html, space_id), do: html |> desktop_sidebar() |> row_wrap(space_id)
+  # The row for one space ANYWHERE in the list, not in one named section.
+  # "Off the rail" has to be asserted this way for a pinned DM: the bug being
+  # guarded was a row that survived in the OTHER section, so a section-scoped
+  # refute is exactly the assertion that missed it.
+  defp rail_row(html, space_id), do: row_in(html, @scroller, space_id)
 
   # `query/2`, not `filter/2`: filter keeps ROOT nodes, and the roots of a
   # rendered page are `<html>` and friends.
@@ -226,31 +213,6 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
   defp menu(html), do: slice(html, ~s([data-role="row-actions-dialog"]))
   defp sheet(html), do: slice(html, "#chat-row-actions-sheet")
-
-  # The rail's undo toast. Hide is the only verb that raises it: the close
-  # variant was rejected at the stage-3 gate and removed. Scoped to
-  # `#chat-sidebar` so the count stays honest if a second instance is ever
-  # added elsewhere on the page.
-  defp rail_toast(html), do: slice(html, "#chat-sidebar .channel-undo-toast")
-
-  # Raw, un-normalised slice of the rail's toast. `slice/2` round-trips through
-  # LazyHTML, which is exactly what a byte-identity assertion must not do.
-  defp rail_toast_raw(html) do
-    case Regex.run(
-           ~r/<div[^>]*class="channel-undo-toast"[^>]*>.*?<\/div>/s,
-           desktop_sidebar(html)
-         ) do
-      [match] -> match
-      _ -> nil
-    end
-  end
-
-  defp count(html, selector) do
-    html
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query(selector)
-    |> Enum.count()
-  end
 
   # Opens BOTH chromes for one row: the desktop dialog (the rail row's
   # trigger) and the phone sheet (the Chat list row's long-press, the only
@@ -297,13 +259,18 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
     end
   end
 
-  # The unread badge inside one row slice. Its own element, so a row whose
-  # NAME happens to contain the digit cannot satisfy the assertion.
+  # The unread dot inside one DM row slice, read off its accessible name
+  # ("N unread"). Its own element, so a row whose NAME happens to contain the
+  # digit cannot satisfy the assertion.
   defp unread_pill(nil), do: nil
 
   defp unread_pill(row) do
-    case Regex.run(~r/<span class="channel-row-unread-pill">(.*?)<\/span>/s, row) do
-      [_, inner] -> String.trim(inner)
+    row
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="chat-list-unread-dot"]))
+    |> LazyHTML.attribute("aria-label")
+    |> case do
+      [label] -> label |> String.replace_suffix(" unread", "") |> String.trim()
       _ -> nil
     end
   end
@@ -459,10 +426,10 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
       {:ok, view, html} = live_rail(conn)
 
-      assert row_wrap(pinned_block(html), dm.id),
+      assert pinned_row(html, dm.id),
              "the pinned DM is not in the Pinned block before the close"
 
-      assert row_wrap(pinned_block(html), kept_channel.id),
+      assert pinned_row(html, kept_channel.id),
              "the control pin is not in the Pinned block before the close"
 
       html = render_click(view, "close_dm", %{"id" => dm.id})
@@ -484,7 +451,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
              "the row left the rail without the close being persisted"
 
       # CONTROLS. Close is one conversation leaving, not a bucket emptying.
-      assert row_wrap(pinned_block(html), kept_channel.id),
+      assert pinned_row(html, kept_channel.id),
              "closing a pinned DM emptied the Pinned block of everything else too"
 
       assert kept_channel.id in Sidebar.list_pinned_space_ids(user.id),
@@ -504,7 +471,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       assert dm_row(html, dm.id),
              "a newer message did not bring the closed DM back"
 
-      refute row_wrap(pinned_block(html), dm.id),
+      refute pinned_row(html, dm.id),
              "the DM came back PINNED. The close stashed the old pin and restored it"
     end
 
@@ -521,7 +488,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       Sidebar.set_space_pinned(user.id, dm.id, true)
 
       {:ok, view, html} = live_rail(conn)
-      assert row_wrap(pinned_block(html), dm.id), "the pinned DM is not in the Pinned block"
+      assert pinned_row(html, dm.id), "the pinned DM is not in the Pinned block"
 
       html = render_click(view, "close_dm", %{"id" => dm.id})
       refute rail_row(html, dm.id), "the closed DM is still on the rail"
@@ -558,13 +525,13 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
 
       {:ok, view, html} = live_rail(conn)
       assert dm_row(html, dm.id), "the DM under test is not on the rail before the close"
-      assert row_wrap(pinned_block(html), channel.id), "the pinned channel is not in the block"
+      assert pinned_row(html, channel.id), "the pinned channel is not in the block"
 
       html = render_click(view, "close_dm", %{"id" => dm.id})
 
       refute rail_row(html, dm.id), "closing an unpinned DM stopped working"
 
-      assert row_wrap(pinned_block(html), channel.id),
+      assert pinned_row(html, channel.id),
              "closing an unpinned DM unpinned a CHANNEL"
 
       assert Sidebar.list_pinned_space_ids(user.id) == [channel.id],
@@ -576,7 +543,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       # can never reach the unpin.
       html = render_click(view, "close_dm", %{"id" => channel.id})
 
-      assert row_wrap(pinned_block(html), channel.id),
+      assert pinned_row(html, channel.id),
              "a close aimed at a channel unpinned it"
 
       assert channel.id in Sidebar.list_pinned_space_ids(user.id),
@@ -603,7 +570,7 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       {:ok, acting, _html} = live_rail(conn)
       {:ok, other, html} = live_rail(conn)
 
-      assert row_wrap(pinned_block(html), dm.id),
+      assert pinned_row(html, dm.id),
              "the second tab does not show the pinned DM before the close"
 
       render_click(acting, "close_dm", %{"id" => dm.id})
@@ -726,22 +693,22 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
   end
 
   # ── 4. Close says nothing ───────────────────────────────────────────────
+  #
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail and, with it,
+  # the rail's undo toast that Hide raised. The test that guarded that toast
+  # byte-for-byte ("Hide's toast is byte-for-byte what it was before Close
+  # existed") went with it, and so did the Hide-toast positive control below.
 
   describe "closing a DM raises no acknowledgement" do
-    test "a close raises no toast, and Hide's is still there", %{conn: conn} do
+    test "a close raises no undo and no second line, and closes the menu", %{conn: conn} do
       # Robin's ruling at the stage-3 gate: "We don't need a acknowledgement /
       # affirmation for a close action on a DM. A User can simply search for a
       # person or agent to DM again if they want to bring back the window."
       # Stage 2 shipped a "Closed <name>" toast with an Undo and stage 3 gave
       # it a second line; both are out.
-      #
-      # The hide half is the POSITIVE CONTROL and it is not optional. Without
-      # it, this test passes just as well for a build that deleted the toast
-      # element outright — which would take Hide's acknowledgement down with
-      # Close's, and Hide was never rejected.
       {conn, user} = authed(conn)
-      channel = create_channel("hide-me")
       dm = create_dm(user, "Alex Rivera")
+      kept = create_dm(user, "Saru Watanabe")
 
       {:ok, view, _html} = live_rail(conn)
 
@@ -752,10 +719,9 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       html = render_click(view, "close_dm", %{"id" => dm.id})
 
       refute dm_row(html, dm.id),
-             "the close did not take the row off the rail, so the silence below proves nothing"
+             "the close did not take the row off the list, so the silence below proves nothing"
 
-      assert count(html, ".channel-undo-toast") == 0,
-             "closing a DM raised an acknowledgement, which Robin rejected"
+      assert dm_row(html, kept.id), "the close removed the OTHER DM too"
 
       refute html =~ "undo_close_dm",
              "the page still offers an undo for a close"
@@ -763,67 +729,10 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
       refute html =~ "It comes back on their next message",
              "the rejected second line is still on the page"
 
-      # The open menu named a row that has just left the rail, so it must not
+      # The open menu named a row that has just left the list, so it must not
       # still be open naming it.
       refute menu(html) =~ "row-actions-dialog",
-             "the row-actions menu is still open on a row that has left the rail"
-
-      # THE CONTROL. Same page, same LiveView, the other verb.
-      html = render_click(view, "hide_channel", %{"id" => channel.id})
-
-      assert count(html, ".channel-undo-toast") == 1,
-             "removing Close's acknowledgement took Hide's with it"
-
-      assert visible_text(rail_toast(html)) =~ "Hidden #Hide-me",
-             "Hide's toast no longer names what it hid"
-    end
-
-    test "Hide's toast is byte-for-byte what it was before Close existed", %{conn: conn} do
-      # Hide is out of scope for the whole of task 019ffc5f. The two verbs
-      # shared one element, so the guard is an EQUALITY against the exact
-      # markup captured on the stage-2 tip (b6c18974) before a line of stage 3
-      # was written — not a `=~`, which would pass while another variant's
-      # nodes sat beside it.
-      #
-      # RE-AIMED, not relaxed (task 01a0312e stage 3). The toast moved from
-      # `chat_live.html.heex` into `ChatLive.Partials.Rail.rail_footer/1`,
-      # which renders it four levels shallower, so the two INDENTATION runs
-      # inside it went 8 spaces -> 4 and 6 -> 2. Nothing else about the string
-      # changed: same tags, same attributes, same order, same copy. The
-      # literal below is the new render's exact bytes, re-captured on that
-      # commit.
-      #
-      # The equality is kept as an equality on purpose. It is the only
-      # assertion in the suite that would notice a whitespace-level change to
-      # this element, and softening it to a `=~` or normalising the
-      # whitespace to survive the move would delete the guard while appearing
-      # to keep it — the move is exactly the event it should report.
-      conn = conn |> authed() |> elem(0)
-      channel = create_channel("hide-me")
-
-      {:ok, view, _html} = live_rail(conn)
-      html = render_click(view, "hide_channel", %{"id" => channel.id})
-
-      expected =
-        ~s(<div role="status" aria-live="polite" class="channel-undo-toast">) <>
-          ~s(<span class="channel-undo-toast-message">\n) <>
-          ~s(    Hidden <span class="font-medium">#Hide-me</span></span>) <>
-          ~s(<button type="button" class="channel-undo-toast-button" ) <>
-          ~s(phx-click="undo_hide" phx-value-id="#{channel.id}">\n) <>
-          ~s(    Undo\n  </button></div>)
-
-      assert rail_toast_raw(html) == expected,
-             "Hide's toast markup changed:\n#{inspect(rail_toast_raw(html))}"
-
-      # Hide's toast is the rail's ONE instance. Stage 3 added a second,
-      # viewport-anchored copy at the template root for the phone; it was gated
-      # on `@undo_toast` alone, so leaving it would have handed Hide a phone
-      # acknowledgement it never had.
-      assert count(html, ".channel-undo-toast") == 1,
-             "Hide's toast renders more than once, so a phone now acknowledges a hide"
-
-      refute visible_text(rail_toast(html)) =~ "Closed",
-             "the close variant's copy leaked onto Hide's toast, where it is false"
+             "the row-actions menu is still open on a row that has left the list"
     end
   end
 

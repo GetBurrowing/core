@@ -1,12 +1,16 @@
 defmodule PlatformWeb.ChatLiveMarkAllReadTest do
   @moduledoc """
-  "Mark all as read" in the Chat sidebar header menu (task
-  `01a02491-a407-794f-a13e-d18398e4b092` stage 3).
+  "Mark all as read" (task `01a02491-a407-794f-a13e-d18398e4b092` stage 3).
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail and its header
+  kebab; the item now lives in the Chat list's Options popover
+  (`[data-role=chat-list-pop-mark-all-read]`, opened by `#list-more`), on the
+  same `mark_all_read` handler.
 
   The context-level guarantees live in
   `test/platform/chat/member_space_ids_test.exs`, where the clearing query is
   tested against the counting query it has to agree with. This file covers the
-  two things only a mounted LiveView can show: the item is in the menu, and
+  two things only a mounted LiveView can show: the item is in the popover, and
   pressing it takes the icon rail's Chat badge NODE off the page rather than
   merely taking a number to zero somewhere in the context.
   """
@@ -48,28 +52,26 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
     %{conn: init_test_session(conn, current_user_id: user.id), user: user, root: root}
   end
 
-  describe "the sidebar header menu" do
-    test "offers Mark all as read above the layout items", %{conn: conn, root: root} do
+  describe "the Options popover" do
+    test "offers Mark all read as an ordinary row", %{conn: conn, root: root} do
       channel!("general", root)
       {:ok, view, _html} = live_following_redirect(conn)
 
-      sidebar = desktop_sidebar(open_sidebar_menu(view))
+      # Positive control: closed, the item is not on the page.
+      refute has_element?(view, ~s([data-role="chat-list-pop-mark-all-read"]))
 
-      assert sidebar =~ ~s(phx-click="mark_all_read")
-      assert sidebar =~ "Mark all as read"
+      popover = open_options(view)
 
-      # First in the menu: this item acts on the conversations, the other two
-      # act on how the rail is arranged.
-      assert index(sidebar, "Mark all as read") < index(sidebar, "Edit my layout")
+      assert popover =~ ~s(phx-click="mark_all_read")
+      assert popover =~ "Mark all read"
 
-      # An ordinary menu row, styled IDENTICALLY to its sibling. Asserted as an
-      # equality rather than as the absence of a modifier class, so a warning
-      # or destructive treatment added later fails here: reading a conversation
-      # undoes this action, and hesitation is the wrong thing to invite.
-      assert menu_item_class(sidebar, "mark_all_read") ==
-               menu_item_class(sidebar, "toggle_sidebar_edit")
-
-      assert menu_item_class(sidebar, "mark_all_read") == "channel-sidebar-menu-item"
+      # An ordinary popover row, styled IDENTICALLY to its sibling. Asserted as
+      # an equality rather than as the absence of a modifier class, so a
+      # warning or destructive treatment added later fails here: reading a
+      # conversation undoes this action, and hesitation is the wrong thing to
+      # invite.
+      assert role_class(popover, "chat-list-pop-mark-all-read") ==
+               role_class(popover, "chat-list-pop-appearance")
     end
   end
 
@@ -91,8 +93,11 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
       assert Chat.total_unread_for_viewer(ctx.user) > 0
       assert render(view) =~ @chat_badge
 
-      open_sidebar_menu(view)
-      view |> element(~s(button[phx-click="mark_all_read"])) |> render_click()
+      open_options(view)
+
+      view
+      |> element(~s(#chat-list-popover button[data-role="chat-list-pop-mark-all-read"]))
+      |> render_click()
 
       # `render/1` again on purpose: ShellLive recomputes the badge on the next
       # mailbox turn, and this call is processed after that message.
@@ -175,28 +180,24 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
     end
   end
 
-  defp desktop_sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
+  defp open_options(view) do
+    view |> element("#list-more") |> render_click()
+
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#chat-list-popover")
+    |> LazyHTML.to_html()
   end
 
-  defp open_sidebar_menu(view) do
-    view |> element(~s(button[phx-click="toggle_sidebar_menu"])) |> render_click()
-  end
-
-  defp menu_item_class(sidebar, event) do
-    case Regex.run(~r/<button[^>]*phx-click="#{event}"[^>]*class="([^"]*)"/, sidebar) do
-      [_, class] -> class
-      _ -> flunk("no menu item found for phx-click=#{event}")
-    end
-  end
-
-  defp index(haystack, needle) do
-    case :binary.match(haystack, needle) do
-      {at, _} -> at
-      :nomatch -> flunk("expected to find #{inspect(needle)} in the rendered sidebar")
+  defp role_class(html, role) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(button[data-role="#{role}"]))
+    |> LazyHTML.attribute("class")
+    |> case do
+      [class] -> class
+      other -> flunk("expected one button[data-role=#{role}], got #{inspect(other)}")
     end
   end
 end

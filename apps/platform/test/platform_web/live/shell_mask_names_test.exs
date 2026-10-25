@@ -183,6 +183,19 @@ defmodule PlatformWeb.ShellMaskNamesTest do
 
   setup do
     {:ok, _} = Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
+
+    # Burrow redesign 22 stage 2 deleted the desktop channel rail, whose
+    # section headers spelled every org on /chat. The Chat list has no org
+    # headers, so one channel NAMED after each org carries the names into the
+    # chat document, where the org-derived rule masks them.
+    for name <- @chat_orgs do
+      slug = String.downcase(name)
+      org = Tenancy.get_org_by_slug(String.replace(slug, "-", "_"))
+
+      {:ok, _} =
+        Chat.create_space(%{name: name, slug: slug, kind: "channel", org_id: org && org.id})
+    end
+
     :ok
   end
 
@@ -287,12 +300,12 @@ defmodule PlatformWeb.ShellMaskNamesTest do
   end
 
   describe "the masking pages own the event" do
-    test "/chat: one event writes exactly once and unmasks the rail" do
+    test "/chat: one event writes exactly once and unmasks the Chat list" do
       user = insert_user("chat-once")
       {:ok, _} = Accounts.put_mask_names(user.id, true)
       {view, before} = mount!(user, "/chat")
 
-      # Positive control: the rail is masked before the event.
+      # The list is masked before the event; the unmask below is its pair.
       for name <- @chat_orgs, do: refute_name_anywhere(before, name)
 
       {{html, updates}, writes} =

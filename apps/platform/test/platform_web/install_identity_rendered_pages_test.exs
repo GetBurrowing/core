@@ -71,8 +71,9 @@ defmodule PlatformWeb.InstallIdentityRenderedPagesTest do
 
       for {label, html} <- [document: document, live: live_html] do
         # not vacuous: a real shell page, with the theme picker in it
-        # (task 01a1557a stage 4 replaced the theme toggle)
-        assert html =~ ~s(id="theme-picker-trigger"), "#{label} render has no shell"
+        # (task 01a1557a stage 4 replaced the theme toggle; Burrow redesign
+        # 22 moved it into the desktop sidebar)
+        assert html =~ ~s(id="mode-toggle"), "#{label} render has no shell"
         assert html =~ ~s(data-theme-chip), "#{label} render has no theme picker chips"
 
         assert Scanner.hits(html) == [],

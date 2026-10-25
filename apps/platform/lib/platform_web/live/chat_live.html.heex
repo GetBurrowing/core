@@ -79,72 +79,6 @@
      PR #333 rooted the shell chrome but the chat surface was still
      blowing the layout from the inside. --%>
 <div class="flex h-full min-h-0 overflow-hidden">
-  <%!-- Desktop sidebar — sectioned channel rail (chat plan v2 Stage 2).
-
-       The `hidden lg:flex` responsive gate keeps this whole rail invisible
-       on mobile; the phone's surface is the Chat list (`chat_list/1`, task
-       01a1557a-8562), which replaced the drawer overlay. Same pattern as the
-       icon-rail / bottom-rail split in shell.html.heex.
-
-       Section order:
-         1. Pinned   (renders only when non-empty; locked at top)
-         2. DMs      (always shown; renders empty-state when no DMs)
-         3. Sub-orgs (one per org, the root org included, ALWAYS
-                      rendered as section headers — empty buckets get an
-                      empty-state hint instead of being suppressed)
-
-       Stage 3 will wire drag-and-drop on the `.channel-section-drag-handle`
-       affordance; today it's a static `☰` glyph that fades in on hover. --%>
-  <%!-- rbac-external-users M5: the chrome-less external space rail — markup
-       lives in `ChatLive.Partials.ExternalRail.external_rail/1` (task 01a0312e
-       stage 2). Rendered INSTEAD of the internal `#chat-sidebar` below; the
-       `:if={@external?}` gate moved inside the component with it. --%>
-  <.external_rail
-    external?={@external?}
-    external_user={@external_user}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    active_space={@active_space}
-    unread_counts={@unread_counts}
-    user_id={@user_id}
-    sidebar_sections={@sidebar_sections}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-  />
-
-  <%!-- The internal desktop channel rail — markup lives in
-       `ChatLive.Partials.Rail.rail/1` (task 01a0312e stage 3). The
-       `:if={!@embedded and !@external?}` gate moved inside the component with
-       it, so this call states no render condition of its own. --%>
-  <.rail
-    restricted_channel_ids={@restricted_channel_ids}
-    embedded={@embedded}
-    external?={@external?}
-    sidebar_edit={@sidebar_edit}
-    sidebar_admin_edit={@sidebar_admin_edit}
-    sidebar_menu_open={@sidebar_menu_open}
-    root_admin?={@root_admin?}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-    sidebar_sections={@sidebar_sections}
-    channel_sections={@channel_sections}
-    pinned_task_spaces={@pinned_task_spaces}
-    agents_block={@agents_block}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    archived_channels={@archived_channels}
-    archived_open={@archived_open}
-    active_space={@active_space}
-    unread_counts={@unread_counts}
-    user_id={@user_id}
-    scope_filter={@scope_filter}
-    tenant_org_ids={@tenant_org_ids}
-    lifecycle_menu_key={@lifecycle_menu_key}
-    hidden_drawer_open={@hidden_drawer_open}
-    undo_toast={@undo_toast}
-    move_toast={@move_toast}
-  />
-
   <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
        `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
        01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
@@ -164,9 +98,12 @@
     revealed_section_ids={@revealed_section_ids}
   />
 
-  <%!-- The phone Chat tab: the conversation list at /chat (task 01a1557a-8562
-       stage 2). Markup and its gate (`:index`, not embedded, not external)
-       live in `ChatLive.Partials.ChatList.chat_list/1`; it is `lg:hidden`. --%>
+  <%!-- The Chat list (task 01a1557a-8562 stage 2): the phone Chat tab at
+       /chat, and since Burrow redesign 22 stage 2 the desktop list pane
+       beside the conversation on /chat and /chat/:slug, for internal and
+       external users alike (it replaced the desktop channel rail and the
+       external rail). Markup, gate and widths live in
+       `ChatLive.Partials.ChatList.chat_list/1`. --%>
   <%!-- `:if` short-circuits attribute evaluation, which is what keeps the
        embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
        (ShellLive's on_mount seeds it on routed mounts only). --%>
@@ -197,6 +134,10 @@
     list_sheet={@list_sheet}
     list_search_query={@list_search_query}
     list_search_results={@list_search_results}
+    active_space={@active_space}
+    external_user={@external_user}
+    hidden_drawer_open={@hidden_drawer_open}
+    resolved_mode={PlatformWeb.Components.Sidebar.resolved_mode(assigns[:current_user_record])}
   />
 
   <%!-- Desktop still lands in a channel from /chat: this reports which side
@@ -239,46 +180,18 @@
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
-        active_space_scope={@active_space_scope}
-        active_space_org={@active_space_org}
-        scope_filter={@scope_filter}
         meetings_enabled={@meetings_enabled}
         in_meeting={@in_meeting}
-        search_form={@search_form}
-        search_query={@search_query}
-        canvases={@canvases}
-        show_canvases={@show_canvases}
-        pins={@pins}
-        show_pins={@show_pins}
-        agent_presence={@agent_presence}
-        has_agent_participant={@has_agent_participant}
-        agents_sheet_open={@agents_sheet_open}
-        agent_attention={@agent_attention}
-        show_members={@show_members}
-        current_user_record={assigns[:current_user_record]}
         goal_panel={@goal_panel}
-        goal_edit={@goal_edit}
-        can_edit_goal?={@can_edit_goal?}
-        goal_invite?={@goal_invite?}
-        goal_scope_options={@goal_scope_options}
-        goal_scope_error={@goal_scope_error}
-        goal_cadence_form={@goal_cadence_form}
-        goal_time_zone={@goal_time_zone}
+        details_panel={@details_panel}
       />
 
-      <%!-- The three drawers open and close (and the pins drawer appears
-           when someone pins while it is shown) inside one always-rendered,
-           box-less slot, so they are never new siblings ahead of #chat-dock
-           (rung 10 stage 5; see the slot note at the top of this file). --%>
+      <%!-- The canvases drawer opens and closes inside one always-rendered,
+           box-less slot, so it is never a new sibling ahead of #chat-dock
+           (rung 10 stage 5; see the slot note at the top of this file). The
+           desktop search and pins drawers were deleted in Burrow redesign 22
+           stage 4: the details panel's Search and Pinned pages replace them. --%>
       <div id="chat-drawers-slot" class="contents">
-        <.search_drawer
-          search_query={@search_query}
-          search_results={@search_results}
-          participants_map={@participants_map}
-        />
-
-        <.pins_drawer active_space={@active_space} pins={@pins} show_pins={@show_pins} />
-
         <.canvases_drawer
           active_canvas={@active_canvas}
           current_participant={@current_participant}
@@ -610,7 +523,60 @@
       captions_available={@meetings_enabled}
     />
   </div>
+
+  <%!-- The desktop details panel (Burrow redesign 22 stage 3): the space
+       sheet's sections at lg, a flex sibling after the conversation column
+       so it pushes the main pane. Closed renders nothing.
+       `DetailsPanelHooks` owns it. --%>
+  <PlatformWeb.ChatLive.Partials.DetailsPanel.details_panel
+    :if={@active_space && !@embedded}
+    details_panel={@details_panel}
+    active_space={@active_space}
+    space_participants={@space_participants}
+    user_id={@user_id}
+    mask_names?={@mask_names?}
+    revealed_section_ids={@revealed_section_ids}
+    sidebar_sections={@sidebar_sections}
+    external?={@external?}
+    canvases={@canvases}
+    show_canvases={@show_canvases}
+    meetings_enabled={@meetings_enabled}
+    in_meeting={@in_meeting}
+    agent_presence={@agent_presence}
+    has_agent_participant={@has_agent_participant}
+    agent_attention={@agent_attention}
+    search_query={@search_query}
+    search_results={@search_results}
+    participants_map={@participants_map}
+    pins={@pins}
+    details_pins={@details_pins}
+    details_threads={@details_threads}
+    goal_panel={@goal_panel}
+    goal_edit={@goal_edit}
+    can_edit_goal?={@can_edit_goal?}
+    goal_invite?={@goal_invite?}
+    goal_scope_options={@goal_scope_options}
+    goal_scope_error={@goal_scope_error}
+    goal_cadence_form={@goal_cadence_form}
+    goal_time_zone={@goal_time_zone}
+    active_space_scope={@active_space_scope}
+    active_space_org={@active_space_org}
+    scope_filter={@scope_filter}
+    details_files={@details_files}
+    details_links={@details_links}
+    agents_sheet_open={@agents_sheet_open}
+    show_members={@show_members}
+    current_user_record={assigns[:current_user_record]}
+  />
 </div>
+
+<%!-- The details panel's client state (restore at >= 1280px, Escape, F6);
+     always rendered so the hook outlives the panel. --%>
+<PlatformWeb.ChatLive.Partials.DetailsPanel.details_panel_state
+  :if={!@embedded}
+  user_id={@user_id}
+  open={@details_panel != nil}
+/>
 
 <%!-- Standalone-only modals: settings, new-channel, new-conversation.
      The embedded surface (e.g. meeting chat panel) scopes to one space
@@ -761,13 +727,6 @@
   mobile?={@message_context_mobile?}
 />
 
-<%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
-     instant + reversible with no modal; only this destructive step confirms. --%>
-<.schedule_delete_modal
-  resource={@delete_modal}
-  retention_days={Platform.Tenancy.Lifecycle.retention_days()}
-/>
-
 <%!-- "Move to organisation…" confirmation (task 019fd76a stage 1). Rendered
      ONCE for the surface, as a top-level sibling: a dialog nested inside the
      rail's scrolling `<nav>` would be clipped by its `overflow-y-auto`. The
@@ -775,11 +734,6 @@
      this markup carries no channel or destination id of its own. --%>
 <.move_to_org_picker picker={@reassign_picker} />
 <.move_to_org_dialog confirm={@reassign_confirm} />
-
-<%!-- Archive undo toast (task 019f4eaa). Archive is instant + dialog-free by
-     design; this says what it took and keeps the reversal one click away.
-     Top-level sibling — pinned chrome must never nest in an :if region. --%>
-<.archive_undo_toast undo={@undo_archive} />
 
 <.junk_batch_modal
   show_junk_batch_modal={@show_junk_batch_modal}

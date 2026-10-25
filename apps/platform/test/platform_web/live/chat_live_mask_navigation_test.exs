@@ -30,10 +30,17 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   masked for one call must not return the next morning to a rail where their
   orgs appear to be missing. Do not back the flag with sessionStorage: it would
   outlive the expiry.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail (its eye
+  toggle, mode strip and per-org reveal). The surviving surface is the Chat
+  list: its rows are the patch links, its counts line reads "names masked"
+  while masked, and an org-named channel row (`Globex`) is the name the mask
+  must keep off the list. The per-org reveal test went with the rail.
   """
 
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
+  import Platform.MaskAssertions
 
   alias Platform.Accounts.User
   alias Platform.Chat
@@ -53,31 +60,56 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   # user, which would test "a different person's first visit" instead.
   defp authenticated_conn(conn, user), do: init_test_session(conn, current_user_id: user.id)
 
-  defp create_channel(slug) do
-    {:ok, ch} = Chat.create_space(%{name: String.capitalize(slug), slug: slug, kind: "channel"})
+  defp create_channel(slug, org_slug \\ nil) do
+    org = org_slug && Platform.Tenancy.get_org_by_slug(org_slug)
+
+    {:ok, ch} =
+      Chat.create_space(%{
+        name: String.capitalize(slug),
+        slug: slug,
+        kind: "channel",
+        org_id: org && org.id
+      })
+
     ch
   end
 
-  defp desktop_sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
-  end
+  @mask_switch ~s(#chat-list-popover [data-role="chat-list-pop-option-mask"])
 
   defp toggle_mask(view) do
-    view |> element(~s(button[phx-click="toggle_mask_names"])) |> render_click()
+    unless has_element?(view, @mask_switch),
+      do: view |> element("#list-more") |> render_click()
+
+    view |> element(@mask_switch) |> render_click()
   end
 
-  defp first_section_id(html) do
-    [_, id] = Regex.run(~r/data-section-id="([^"]+)"/, desktop_sidebar(html))
-    id
+  defp list(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#chat-list-scroller")
+    |> LazyHTML.to_html()
   end
 
-  defp reveal_section(view, section_id) do
-    view
-    |> element(~s(button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"]))
-    |> render_click()
+  defp counts_line(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#chat-list [data-role="chat-list-counts"]))
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
+  # Masked as the person sees it: the counts line says so AND the org-named
+  # row no longer spells its org. Unmasked is the opposite of both, and each
+  # caller asserts the half it needs, so neither direction is vacuous.
+  defp assert_masked(html, message) do
+    assert counts_line(html) == "names masked", message
+    assert list(html) =~ ~s(data-space-id=)
+    refute_name_anywhere(list(html), "Globex")
+  end
+
+  defp assert_unmasked(html) do
+    refute counts_line(html) == "names masked"
+    assert_name_anywhere(list(html), "Globex")
   end
 
   defp live_following_redirect(conn, path) do
@@ -89,59 +121,39 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
 
   setup %{conn: conn} do
     create_channel("general")
-    create_channel("random")
+    random = create_channel("random")
+    create_channel("globex", "globex")
     user = create_user()
     {:ok, view, html} = live_following_redirect(authenticated_conn(conn, user), ~p"/chat")
-    %{conn: conn, user: user, view: view, html: html}
+    # Positive control for every test below: mask off on first mount.
+    assert_unmasked(html)
+    %{conn: conn, user: user, view: view, html: html, random: random}
   end
 
   describe "in-session navigation" do
-    test "clicking a rail channel row keeps the mask ON and keeps the mode strip",
-         %{view: view} do
-      masked = toggle_mask(view)
-      assert desktop_sidebar(masked) =~ "channel-mask-strip"
-      assert desktop_sidebar(masked) =~ ~s(aria-pressed="true")
+    test "clicking a Chat list row keeps the mask ON", %{view: view, random: random} do
+      view |> toggle_mask() |> assert_masked("toggle did not mask")
 
-      # A rail row is an ordinary anchor. On the pre-fix tree this is a
-      # `navigate` and `render_click/1` returns a live_redirect tuple, so
-      # `after_nav` is not HTML and the first `=~` raises.
+      # A list row is an ordinary anchor. Were it a `navigate`,
+      # `render_click/1` would return a live_redirect tuple, so `after_nav`
+      # would not be HTML and the first assertion would raise.
       after_nav =
         view
-        |> element(~s(#chat-sidebar a[href="/chat/random"]))
+        |> element(~s(#chat-list a[data-role="chat-list-row"][data-space-id="#{random.id}"]))
         |> render_click()
 
-      sidebar = desktop_sidebar(after_nav)
-
-      assert sidebar =~ "channel-mask-strip",
-             "the mode strip vanished on channel switch — mount/3 re-ran"
-
-      assert sidebar =~ ~s(aria-pressed="true"),
-             "the mask toggle reset to off on channel switch"
+      assert_masked(after_nav, "the mask reset to off on channel switch — mount/3 re-ran")
     end
 
-    test "a per-org reveal survives the same navigation", %{view: view, html: html} do
-      toggle_mask(view)
-      section_id = first_section_id(html)
-      revealed = reveal_section(view, section_id)
+    # Burrow redesign 22 stage 2 deleted the desktop channel rail; the per-org
+    # reveal survival test went with it (nothing in chat reveals a section).
 
-      # Sanity: the reveal took effect before we navigate. A test that
-      # navigates from a state it never established proves nothing.
-      assert desktop_sidebar(revealed) =~ "1 showing"
-
-      after_nav =
-        view
-        |> element(~s(#chat-sidebar a[href="/chat/random"]))
-        |> render_click()
-
-      assert desktop_sidebar(after_nav) =~ "1 showing",
-             "the revealed org was dropped on channel switch"
-    end
-
-    test "the URL really changed — this is navigation, not a no-op click", %{view: view} do
+    test "the URL really changed — this is navigation, not a no-op click",
+         %{view: view, random: random} do
       toggle_mask(view)
 
       view
-      |> element(~s(#chat-sidebar a[href="/chat/random"]))
+      |> element(~s(#chat-list a[data-role="chat-list-row"][data-space-id="#{random.id}"]))
       |> render_click()
 
       assert_patched(view, "/chat/random")
@@ -151,20 +163,17 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
   describe "full page reload" do
     test "within 12 hours returns MASKED: the mount reads the person's preference",
          %{conn: conn, user: user, view: view} do
-      masked = toggle_mask(view)
-      assert desktop_sidebar(masked) =~ "channel-mask-strip"
+      view |> toggle_mask() |> assert_masked("toggle did not mask")
 
       # A reload is a NEW LiveView process on the same browser session.
       {:ok, _reloaded, html} = live_following_redirect(authenticated_conn(conn, user), ~p"/chat")
 
-      assert desktop_sidebar(html) =~ "channel-mask-strip"
-      assert desktop_sidebar(html) =~ ~s(aria-pressed="true")
+      assert_masked(html, "a reload within 12 hours came back unmasked")
     end
 
     test "after the 12-hour expiry returns UNMASKED: the next-morning rule",
          %{conn: conn, user: user, view: view} do
-      masked = toggle_mask(view)
-      assert desktop_sidebar(masked) =~ "channel-mask-strip"
+      view |> toggle_mask() |> assert_masked("toggle did not mask")
 
       # Age the stored instant past now, as the next morning would.
       expired = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.to_iso8601()
@@ -178,8 +187,7 @@ defmodule PlatformWeb.ChatLiveMaskNavigationTest do
 
       {:ok, _reloaded, html} = live_following_redirect(authenticated_conn(conn, user), ~p"/chat")
 
-      refute desktop_sidebar(html) =~ "channel-mask-strip"
-      refute desktop_sidebar(html) =~ "Names hidden"
+      assert_unmasked(html)
     end
   end
 end

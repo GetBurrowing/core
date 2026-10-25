@@ -14,6 +14,17 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
   name is NOT the title-cased slug ("New Client"), so a pill that fell back to
   `scope_label/1` instead of reading the row's name renders the wrong text and
   fails here.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail and the
+  hidden-channels drawer at its foot, whose org group label carried the
+  drawer chip. The drawer assertions are deleted; the header pill and the
+  space sheet's Scope switch keep theirs.
+
+  Burrow redesign 22 stage 4 deleted the desktop header pill (coverage row
+  49). Its job, the filter labelled from the org ROW with the stored slug as
+  the `scope_filter` payload, is the details panel's Scope row and switch,
+  which these tests now read. The panel draws no coloured chip, so the
+  chip-byte and colour-rule assertions left with the pill.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -22,13 +33,16 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
   alias Platform.Accounts.User
   alias Platform.{Chat, Repo, Tenancy}
   alias Platform.Tenancy.{Org, OrgMembership}
-  alias PlatformWeb.Components.ScopePill
 
-  @drawer_label ".channel-hidden-drawer-group-label"
-  # The compact mobile header pill was deleted in task 01a1557a-8a6d stage 3
-  # (its place is the space sheet's Scope row, asserted in the shipped-org
-  # regression below).
-  @header_pills [".chat-header-scope-pill"]
+  # The desktop filter: the details panel's Scope row and switch.
+  @scope_row ~s(#details-panel [data-role="details-scope"])
+  @scope_switch ~s(#details-panel [data-role="details-scope-switch"])
+
+  defp panel_scope(view) do
+    row = extract(render_click(view, "details_open", %{"page" => "space"}), @scope_row)
+    switch = extract(render_click(view, "details_open", %{"page" => "scope"}), @scope_switch)
+    {row, switch}
+  end
 
   # An Acme member: `ScopeColorStyles` emits a rule for every org the VIEWER
   # can see, and a user with no membership sees none, which would leave the
@@ -96,145 +110,81 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
     |> LazyHTML.to_html()
   end
 
-  # The chip element alone, with inter-tag whitespace collapsed on BOTH sides
-  # of the comparison. `render_component/2` keeps the template's whitespace
-  # text nodes (outside the chip and between its child spans), while the
-  # `live/2` document arrives with them already stripped. Whitespace-only
-  # text between the children of an `inline-flex` chip is not rendered, so it
-  # is not part of what "the same bytes" is protecting. Attributes, element
-  # order and text content are still compared exactly.
-  defp chip(html), do: html |> extract("[data-scope]") |> squeeze()
-
-  defp squeeze(html), do: String.replace(html, ~r/>\s+</, "><")
-
   describe "a runtime-created org" do
-    test "renders a coloured pill named from the org row on the drawer and both headers",
-         %{conn: conn} do
+    test "the panel's Scope row and switch are named from the org row", %{conn: conn} do
       {conn, user} = member_conn(conn)
       org = insert_newclient()
       visible = org_fixture(org, user, "newclient")
 
-      {:ok, _view, html} = live(conn, ~p"/chat/#{visible.id}")
+      {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
+      refute html =~ "chat-header-scope-pill"
 
-      drawer = extract(html, @drawer_label)
-      assert drawer =~ ~s(data-scope="new_client"), "drawer chip has no data-scope"
-      assert drawer =~ ">Newclient</span>"
-      assert drawer =~ ~s(aria-label="Newclient scope")
-      assert drawer =~ "scope-tint-200"
-      refute drawer =~ "New Client"
-
-      for selector <- @header_pills do
-        pill = extract(html, selector)
-        assert pill =~ ~s(data-scope="new_client"), "#{selector} has no data-scope"
-        assert pill =~ ">Newclient</span>", "#{selector} is not labelled from the org name"
-        assert pill =~ ~s(aria-label="Filter by Newclient scope")
-        assert pill =~ ~s(phx-value-scope="new_client")
-        assert pill =~ ~r/class="[^"]*\bscope-tint\b/
-        refute pill =~ "New Client"
-      end
-
-      # The rule the chip's colour comes from. Without it every assertion
-      # above passes on an uncoloured chip.
-      assert html =~ ~s|[data-scope="new_client"]{|
+      {row, switch} = panel_scope(view)
+      assert row =~ "Newclient · filter off", "the Scope row is not labelled from the org name"
+      assert switch =~ "Filter to Newclient scope"
+      assert switch =~ ~s(phx-value-scope="new_client")
+      refute row <> switch =~ "New Client"
     end
 
-    test "clicking the runtime org's header pill applies the filter to that org", %{conn: conn} do
+    test "the runtime org's switch applies the filter to that org", %{conn: conn} do
       {conn, user} = member_conn(conn)
       org = insert_newclient()
       visible = org_fixture(org, user, "newclient")
 
       {:ok, view, _html} = live(conn, ~p"/chat/#{visible.id}")
 
-      # Stage 1 named a limitation here: `parse_scope/1` knew only five
-      # compiled slugs, so this click CLEARED the filter. Since task 01a14dd9
-      # stage 2 `parse_scope/2` accepts any slug in the loaded org index, so
-      # a runtime org filters like any other.
-      view
-      |> element(~s(.chat-header-scope-pill button[phx-click="scope_filter"]))
-      |> render_click()
+      # Since task 01a14dd9 stage 2 `parse_scope/2` accepts any slug in the
+      # loaded org index, so a runtime org filters like any other.
+      {_row, _switch} = panel_scope(view)
+      view |> element(@scope_switch) |> render_click()
 
-      pill = extract(render(view), ".chat-header-scope-pill")
-      assert pill =~ ~s(data-scope="new_client")
-      assert pill =~ ~s(aria-pressed="true")
+      switch = extract(render(view), @scope_switch)
+      assert switch =~ ~s(phx-value-scope="new_client")
+      assert switch =~ ~s(aria-checked="true")
     end
 
-    test "a rename reaches every pill, with the slug and colour unchanged", %{conn: conn} do
+    test "a rename reaches the Scope row and switch, with the slug unchanged", %{conn: conn} do
       {conn, user} = member_conn(conn)
       org = insert_newclient()
       visible = org_fixture(org, user, "newclient")
 
-      {:ok, _view, before} = live(conn, ~p"/chat/#{visible.id}")
-      assert extract(before, @drawer_label) =~ ">Newclient</span>"
+      {:ok, view, _before} = live(conn, ~p"/chat/#{visible.id}")
+      {row, _switch} = panel_scope(view)
+      assert row =~ "Newclient"
 
       # A name that does not CONTAIN the old one, so the absence check below
       # can fail ("Newclient Labs" would satisfy it vacuously).
       {:ok, _} = org |> Org.changeset(%{name: "Brightwater"}) |> Repo.update()
 
-      {:ok, _view, html} = live(conn, ~p"/chat/#{visible.id}")
-
-      for selector <- [@drawer_label | @header_pills] do
-        pill = extract(html, selector)
-        assert pill =~ ">Brightwater</span>", "#{selector} kept the old name"
-        assert pill =~ ~s(data-scope="new_client")
-        refute pill =~ "Newclient"
-      end
-
-      assert html =~ ~s|[data-scope="new_client"]{|
-      refute html =~ "Newclient"
+      {:ok, view, _html} = live(conn, ~p"/chat/#{visible.id}")
+      {row, switch} = panel_scope(view)
+      assert row =~ "Brightwater", "the Scope row kept the old name"
+      assert switch =~ "Filter to Brightwater scope"
+      assert switch =~ ~s(phx-value-scope="new_client")
+      refute render(view) =~ "Newclient"
     end
   end
 
   describe "the six shipped orgs (regression)" do
-    test "Vandelay-Ind's header pills and drawer chip keep their spelling and bytes",
+    test "Vandelay-Ind keeps its spelling and slug on the panel and the phone sheet",
          %{conn: conn} do
       {conn, user} = member_conn(conn)
       vandelay_ind = Tenancy.get_org_by_slug!("vandelay_ind")
 
-      # The contract labels from the org row, so the shipped bytes survive
+      # The contract labels from the org row, so the shipped spelling survives
       # only if the row carries the compiled label. Assert that rather than
       # assume it.
       assert vandelay_ind.name == "Vandelay-Ind"
 
       visible = org_fixture(vandelay_ind, user, "pt")
-      {:ok, view, html} = live(conn, ~p"/chat/#{visible.id}")
+      {:ok, view, _html} = live(conn, ~p"/chat/#{visible.id}")
 
-      drawer = extract(html, @drawer_label)
-      assert drawer =~ ~s(data-scope="vandelay_ind")
-      assert drawer =~ ">Vandelay-Ind</span>"
-      assert drawer =~ ~s(aria-label="Vandelay-Ind scope")
+      {row, switch} = panel_scope(view)
+      assert row =~ "Vandelay-Ind · filter off"
+      assert switch =~ ~s(phx-value-scope="vandelay_ind")
+      assert switch =~ "Filter to Vandelay-Ind scope"
 
-      for selector <- @header_pills do
-        pill = extract(html, selector)
-        assert pill =~ ~s(data-scope="vandelay_ind")
-        assert pill =~ ~s(phx-value-scope="vandelay_ind")
-        assert pill =~ ">Vandelay-Ind</span>"
-        assert pill =~ ~s(aria-label="Filter by Vandelay-Ind scope")
-      end
-
-      # Byte-for-byte against the chip the org-row contract renders from the
-      # bare component: the stored slug as `scope` and `value`, the row's name
-      # as `label` (task 01a14dd9 stage 2 removed the compiled atom the bare
-      # call used to take).
-      %{slug: shipped_slug, name: shipped_name} = vandelay_ind
-
-      expected = fn attrs ->
-        (&ScopePill.scope_pill/1)
-        |> render_component(
-          Map.merge(
-            %{scope: shipped_slug, value: shipped_slug, label: shipped_name, active: false},
-            attrs
-          )
-        )
-        |> chip()
-      end
-
-      assert squeeze(extract(html, "#{@drawer_label} > [data-scope]")) ==
-               expected.(%{surface: :base_200, clickable: false})
-
-      assert squeeze(extract(html, ".chat-header-scope-pill > [data-scope]")) ==
-               expected.(%{surface: :base_100, clickable: true})
-
-      # The phone's scope control is now the space sheet's Scope switch: the
+      # The phone's scope control is the space sheet's Scope switch: the
       # org's name on the label, its stored slug as the `scope_filter` payload.
       view |> element(~s(button[data-role="space-title"])) |> render_click()
       # The title opens on the All segment; the Scope row is on Space.

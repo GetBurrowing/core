@@ -21,11 +21,9 @@ import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js";
  * THE ZEROES NEED A GUARD AND THEY HAVE ONE. Every `CURED:` case asserts an
  * absence — the reader was not pinned — which is also what a broken harness
  * reports. `POSITIVE CONTROL: the harness can still see a pin` drives
- * `holdAnchorThroughReflow()` directly and asserts the pre-fix profile still
- * shows up for it. That case is doing double duty: it keeps the instrument
- * honest, and it is one of the two places that catch the method being deleted
- * as dead code when its only remaining caller is a `handleEvent`
- * registration (the other is `scroll_to_bottom.test.js`).
+ * a pin directly (the test's own copy of the deleted
+ * `holdAnchorThroughReflow()`) and asserts the pre-fix profile still shows up
+ * for it, which keeps the instrument honest.
  *
  * THE OBSERVABLE, AND WHY IT IS NOT `scrollTop`.
  *
@@ -211,6 +209,20 @@ function gesture(el, frames, clock) {
   };
 }
 
+// The deleted `holdAnchorThroughReflow`, reproduced for the positive
+// control only: capture the reader's distance once and write it back every
+// animation frame until `ms` have passed.
+function pin(hook, ms) {
+  const dist = hook.distanceFromBottom();
+  const deadline = performance.now() + ms;
+  const hold = () => {
+    hook.scrollEl.scrollTop =
+      hook.scrollEl.scrollHeight - hook.scrollEl.clientHeight - dist;
+    if (performance.now() < deadline) requestAnimationFrame(hold);
+  };
+  hold();
+}
+
 describe("ScrollToBottom — a threshold crossing no longer pins a scrolling reader", () => {
   let priorMO, priorRO, priorRAF, priorCAF, priorNow, clock, drain;
 
@@ -324,31 +336,17 @@ describe("ScrollToBottom — a threshold crossing no longer pins a scrolling rea
     // Every assertion above is "the reader was NOT pinned". A harness that had
     // stopped being able to observe a pin at all — a broken clock, a drained
     // frame queue, a fixture outside the band — would satisfy all of them.
-    // This drives the pin DIRECTLY, by the one caller that survives stage 3
-    // (`sidebar_collapsed_changed` -> `holdAnchorThroughReflow`), and asserts
-    // the harness still reports the pre-fix profile for it.
-    //
-    // It is therefore two proofs in one: the instrument works, AND the method
-    // is still live and still does its job for the rail-collapse reflow it was
-    // written for in task 019f51d1.
+    // This drives a pin DIRECTLY and asserts the harness still reports the
+    // pre-fix profile for it. The hook's own pin
+    // (`holdAnchorThroughReflow`) was deleted with its last caller in Burrow
+    // redesign 22 stage 1, so the pin is the test's: the same algorithm,
+    // capture the distance once and write it back every frame for 400ms.
     const { el, hook } = readerAt(900, { drain });
-    hook.holdAnchorThroughReflow();
+    pin(hook, 400);
     const run = gesture(el, HOLD_FRAMES, clock);
 
     expect(Math.abs(run.netTravel)).toBeLessThanOrEqual(WHEEL_PX * 2);
     expect(run.nonAdvancing).toBeGreaterThan(run.frames * 0.3);
-  });
-
-  it("the pin still releases after REFLOW_HOLD_MS", () => {
-    // The hold remains BOUNDED for its surviving caller: a rail collapse
-    // costs the reader 400ms of anchoring, not a permanent freeze.
-    const { el, hook } = readerAt(900, { drain });
-    hook.holdAnchorThroughReflow();
-    gesture(el, HOLD_FRAMES + 2, clock);
-    const after = gesture(el, HOLD_FRAMES, clock);
-
-    expect(after.netTravel).toBe(-FREE_TRAVEL);
-    expect(after.nonAdvancing).toBe(0);
   });
 
   it("CURED: width-independent — the 390px case is clean too", () => {

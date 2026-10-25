@@ -181,7 +181,7 @@ defmodule Platform.Design.MaskChipContrastGuardTest do
     test "present first: grounds, inks and the pressed step", %{source: src} do
       assert length(class_attrs(src)) > 0
 
-      chip = Regex.run(~r/id="mask-names-chip".*?class="([^"]*)"/s, src) |> List.last()
+      chip = Regex.run(~r/data-role="mask-names-chip".*?class="([^"]*)"/s, src) |> List.last()
       assert chip =~ "bg-base-200"
       assert chip =~ "active:bg-base-100"
       assert chip =~ "border-edge"

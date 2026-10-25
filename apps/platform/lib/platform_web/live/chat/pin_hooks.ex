@@ -2,12 +2,16 @@ defmodule PlatformWeb.ChatLive.PinHooks do
   @moduledoc """
   Lifecycle hook module for the Pins feature in `PlatformWeb.ChatLive`.
 
-  See ADR 0035. Pins has distributed UI (topbar button, panel overlay,
-  inline per-message pin button) so it lives as a LifecycleHook, not a
-  LiveComponent. This module owns:
+  See ADR 0035. Pins has distributed UI (the space sheet's and the details
+  panel's Pinned pages, the inline per-message pin button) so it lives as a
+  LifecycleHook, not a LiveComponent. This module owns:
 
-    * Assigns: `:pins`, `:show_pins`, `:pinned_message_ids`
-    * Events:  `"pin_toggle"`, `"pin_panel_toggle"`
+    * Assigns: `:pins`, `:pinned_message_ids`
+    * Events:  `"pin_toggle"`
+
+  The desktop pins drawer and its `pin_panel_toggle` / `:show_pins` were
+  deleted in Burrow redesign 22 stage 4 (the details panel's Pinned page
+  replaced them).
     * Info:    `{:pin_added, pin}`, `{:pin_removed, %{message_id: ...}}`
 
   PubSub subscription is handled by the parent LiveView's
@@ -39,7 +43,6 @@ defmodule PlatformWeb.ChatLive.PinHooks do
   def attach(socket) do
     socket
     |> assign(:pins, [])
-    |> assign(:show_pins, false)
     |> assign(:pinned_message_ids, MapSet.new())
     |> attach_hook(:pin_events, :handle_event, &handle_event/3)
     |> attach_hook(:pin_info, :handle_info, &handle_info/2)
@@ -60,7 +63,6 @@ defmodule PlatformWeb.ChatLive.PinHooks do
 
     socket
     |> assign(:pins, pins)
-    |> assign(:show_pins, false)
     |> assign(:pinned_message_ids, pinned_message_ids)
   end
 
@@ -94,10 +96,6 @@ defmodule PlatformWeb.ChatLive.PinHooks do
     end
 
     {:halt, socket}
-  end
-
-  defp handle_event("pin_panel_toggle", _params, socket) do
-    {:halt, assign(socket, :show_pins, !socket.assigns.show_pins)}
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}

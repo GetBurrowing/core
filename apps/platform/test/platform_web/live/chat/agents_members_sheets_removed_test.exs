@@ -160,9 +160,11 @@ defmodule PlatformWeb.ChatLive.AgentsMembersSheetsRemovedTest do
         _ = render_async(view)
         html = render(view)
 
-        # Positive control: the utility bar itself rendered.
-        assert has_element?(view, "#utility-bar"), "no utility bar on #{path}"
-        assert has_element?(view, "#utility-bar #account-menu-trigger")
+        # Positive control: the shell chrome itself rendered (the phone top
+        # strip, renamed from the utility bar by Burrow redesign 22, and the
+        # desktop sidebar's user row, which replaced the account menu).
+        assert has_element?(view, "#phone-top-bar"), "no top strip on #{path}"
+        assert has_element?(view, "#sidebar #sidebar-user")
 
         refute has_element?(view, "[data-test-id=shell-roster-button]")
         refute has_element?(view, "[data-test-id=shell-presence-badge]")
@@ -173,9 +175,11 @@ defmodule PlatformWeb.ChatLive.AgentsMembersSheetsRemovedTest do
       end
 
       # Positive control for the eye refute: the space has an agent, so its
-      # replacement entry renders where the eye did.
+      # replacement entry renders: the details panel's Agents row (the
+      # header button until Burrow redesign 22 stage 4).
       {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
-      assert has_element?(view, "[data-role=agents-open]")
+      render_click(view, "details_open", %{"page" => "space"})
+      assert has_element?(view, "#details-panel [data-role=details-agents]")
     end
   end
 

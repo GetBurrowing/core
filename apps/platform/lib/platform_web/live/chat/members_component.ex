@@ -13,13 +13,15 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
 
     * `:sheet` — the phone bottom sheet (`<.sheet>`, `lg:hidden`), rendered by
       `chat_live.html.heex` and opened from the space sheet's Members row.
-    * `:popover` — the desktop popover (`hidden lg:flex`), rendered inside the
-      header beside the `members-open` button it is anchored under, closed by
-      a click outside or Esc.
+    * `:popover` — the desktop popover (`hidden lg:flex`), rendered in the
+      details panel right under its Members row (Burrow redesign 22 stage 4;
+      it sat under a header button before), closed by a click outside or Esc.
+      It drops into the panel's flow rather than floating: the panel body
+      scrolls, and a floating popover inside it would be clipped.
 
   A LiveComponent renders in one place, and the popover has to sit in the
-  header while the sheet cannot (the header's icon row is `lg`-only), so the
-  two are two instances (`instance_ids/0`). Each reads only while open.
+  desktop panel while the sheet cannot (the panel is `lg`-only), so the two
+  are two instances (`instance_ids/0`). Each reads only while open.
 
   ## Presence
 
@@ -280,7 +282,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         phx-window-keydown="members_close"
         phx-key="Escape"
         phx-target={@myself}
-        class="absolute right-0 top-full z-40 mt-1 hidden max-h-[70vh] w-80 min-w-[280px] max-w-[360px] flex-col overflow-y-auto rounded-box border border-edge bg-base-100 py-2 shadow lg:flex"
+        class="relative z-10 mx-1 my-1 hidden max-h-[70vh] flex-col overflow-y-auto rounded-box border border-edge bg-base-100 py-2 shadow lg:flex"
       >
         <p id="members-popover-title" class="px-4 pb-1 text-base font-semibold text-base-content">
           {title(@space_name)}

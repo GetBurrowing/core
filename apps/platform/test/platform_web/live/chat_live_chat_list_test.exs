@@ -188,7 +188,10 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert list =~ "Chat"
       assert has_element?(view, "#chat-list [data-role='chat-list-subtitle']")
       assert has_element?(view, "#chat-list #chat-list-scroller.clears-tab-bar")
-      assert has_element?(view, "#chat-list[class*='lg:hidden']")
+      # Burrow redesign 22 stage 2: the list is the desktop list pane too, so
+      # `/chat` no longer hides it at lg (it was `lg:hidden` while the desktop
+      # channel rail existed).
+      refute has_element?(view, "#chat-list[class*='lg:hidden']")
     end
 
     test "each section orders by latest message, newest first", %{conn: conn} do
@@ -825,7 +828,9 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert LazyHTML.query(doc, "[data-phx-link][phx-click]") |> Enum.count() == 0
     end
 
-    test "no hover: class inside #chat-list (positive control: active:bg-base-100)",
+    # Burrow redesign 22 stage 2: the desktop list pane hovers, at lg only.
+    # Below lg there is still no hover state anywhere in the list.
+    test "no phone hover: class inside #chat-list (positive control: active:bg-base-100)",
          %{conn: conn} do
       w = world(conn)
       {:ok, view, _} = live(w.conn, ~p"/chat")
@@ -840,7 +845,9 @@ defmodule PlatformWeb.ChatLiveChatListTest do
         |> Enum.flat_map(&String.split/1)
 
       assert "active:bg-base-100" in classes
-      assert Enum.filter(classes, &String.contains?(&1, "hover:")) == []
+
+      assert Enum.filter(classes, &String.contains?(&1, "hover:"))
+             |> Enum.reject(&String.starts_with?(&1, "lg:hover:")) == []
     end
 
     test "every row link is at least 44px tall and a whole-row patch", %{conn: conn} do

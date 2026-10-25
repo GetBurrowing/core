@@ -33,7 +33,9 @@ defmodule PlatformWeb.ChatLiveMembersTest do
 
   @popover "#members-popover"
   @sheet "#members-sheet [data-role=members-sheet-body]"
-  @open_button "[data-role=members-open]"
+  # The desktop entry is the details panel's Members row (Burrow redesign 22
+  # stage 4 deleted the header button); `live_as/3` opens the panel.
+  @open_button "#details-panel [data-role=details-members]"
   @add_form "#members-popover [data-role=members-add-agent]"
   @remove_button "[data-role=members-remove-agent]"
 
@@ -85,6 +87,7 @@ defmodule PlatformWeb.ChatLiveMembersTest do
   defp live_as(conn, user, path) do
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, view, _html} = live(conn, path)
+    render_click(view, "details_open", %{"page" => "space"})
     view
   end
 
@@ -353,7 +356,7 @@ defmodule PlatformWeb.ChatLiveMembersTest do
 
     channel_view = live_as(conn, a, ~p"/chat/#{channel.slug}")
     assert has_element?(channel_view, @open_button)
-    assert has_element?(channel_view, "#{@open_button}[aria-label=Members]", "1 person")
+    assert has_element?(channel_view, @open_button, "1 person")
 
     group_view =
       live_as(Phoenix.ConnTest.build_conn(), a, "/chat/#{Chat.space_path_segment(group)}")

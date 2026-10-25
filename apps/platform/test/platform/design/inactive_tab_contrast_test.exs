@@ -204,7 +204,7 @@ defmodule Platform.Design.InactiveTabContrastTest do
     assert [{_, []}] = tab_expressions(~s|class={["tab", @on && "tab-active font-semibold"]}|)
     assert [{_, []}] = tab_expressions(~s|class="tab tab-active text-sm"|)
     assert [] = tab_expressions(~s|class="tabs tabs-box text-subtle"|)
-    assert [] = tab_expressions(~s|class="icon-rail-tab text-subtle"|)
+    assert [] = tab_expressions(~s|class="sidebar-row text-subtle"|)
   end
 
   test "no .tab element carries its own text colour class" do

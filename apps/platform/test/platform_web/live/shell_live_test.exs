@@ -315,67 +315,27 @@ defmodule PlatformWeb.ShellLiveTest do
     assert html =~ ~s(phx-hook="RouteResume")
   end
 
-  test "sidebar collapse hook element advertises current collapsed state", %{conn: conn} do
+  # Burrow redesign 22 stage 1 deleted the shell's collapsible rail: no
+  # SidebarCollapse host, no toggle_sidebar / sidebar_hydrate handlers.
+  test "the shell carries no sidebar-collapse machinery", %{conn: conn} do
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/tasks")
+    {:ok, view, html} = live(conn, ~p"/tasks")
 
-    assert html =~ ~s(id="sidebar-collapse-hook")
-    assert html =~ ~s(phx-hook="SidebarCollapse")
-    # Default is expanded → data-collapsed="false"
-    assert html =~ ~s(data-collapsed="false")
-  end
-
-  test "sidebar_hydrate event collapses the sidebar when stored value is true", %{conn: conn} do
-    conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/tasks")
-
-    # Hook reports a stored "collapsed" preference from localStorage.
-    render_hook(view, "sidebar_hydrate", %{"collapsed" => true})
-
-    html = render(view)
-    # Hook element re-renders with the new state.
-    assert html =~ ~s(data-collapsed="true")
-    # Sidebar nav now renders in collapsed mode (lg:w-14 instead of w-56).
-    assert html =~ "lg:w-14"
-    refute html =~ ~s(class=\"text-sm font-medium\">Chat</span>)
-  end
-
-  test "sidebar_hydrate event with false leaves sidebar expanded", %{conn: conn} do
-    conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/tasks")
-
-    render_hook(view, "sidebar_hydrate", %{"collapsed" => false})
-
-    html = render(view)
-    assert html =~ ~s(data-collapsed="false")
-    assert html =~ "w-56"
-  end
-
-  test "toggle_sidebar pushes sidebar_collapsed_changed event for the hook to persist", %{
-    conn: conn
-  } do
-    conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/tasks")
-
-    # Render the toggle click; the LV should both flip the assign and push an
-    # event the hook listens for.
-    html = render_click(view, "toggle_sidebar", %{})
-    assert html =~ ~s(data-collapsed="true")
-    assert_push_event(view, "sidebar_collapsed_changed", %{collapsed: true})
-
-    html = render_click(view, "toggle_sidebar", %{})
-    assert html =~ ~s(data-collapsed="false")
-    assert_push_event(view, "sidebar_collapsed_changed", %{collapsed: false})
+    # Positive control: the sidebar itself rendered.
+    assert html =~ ~s(id="sidebar")
+    refute html =~ ~s(id="sidebar-collapse-hook")
+    refute html =~ ~s(phx-click="toggle_sidebar")
+    refute Map.has_key?(:sys.get_state(view.pid).socket.assigns, :sidebar_collapsed)
   end
 
   # ---------------------------------------------------------------------
-  # Icon-rail integration (task 019e389b Stage 3)
+  # Sidebar and bottom-rail integration (task 019e389b Stage 3; the desktop
+  # sidebar replaced the icon rail in Burrow redesign 22 stage 1)
   #
-  # The component-level rendering contract is covered by IconRailTest.
-  # These tests check the *wiring*: shell layout passes the right assigns
-  # (current_path, root_user, sidebar_collapsed) to the icon-rail and
-  # bottom-rail at both breakpoints, and the Admin slot's DOM presence
-  # respects the root_user gate end-to-end.
+  # The component-level rendering contracts are covered by SidebarTest and
+  # IconRailTest. These tests check the *wiring*: the shell layout passes the
+  # right assigns (current_path, root_user) to the sidebar and the bottom
+  # rail, and Admin stays a Settings page end-to-end.
   # ---------------------------------------------------------------------
 
   # Task 01a1557a-807f stage 4: two of the More sheet's ways out, through the
@@ -430,13 +390,13 @@ defmodule PlatformWeb.ShellLiveTest do
     end
   end
 
-  describe "icon-rail integration" do
-    test "renders the desktop icon-rail wrapper", %{conn: conn} do
+  describe "sidebar integration" do
+    test "renders the desktop sidebar", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      assert html =~ ~s(data-icon-rail)
-      assert html =~ ~s(id="shell-sidebar")
+      assert html =~ ~s(data-sidebar)
+      assert html =~ ~s(id="sidebar")
       assert html =~ ~s(aria-label="Main navigation")
     end
 
@@ -447,14 +407,14 @@ defmodule PlatformWeb.ShellLiveTest do
       assert html =~ ~s(data-bottom-rail)
     end
 
-    test "active-state marker tracks current_path on the desktop rail", %{conn: conn} do
+    test "active-state marker tracks current_path on the desktop sidebar", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # The Tasks tile carries the active class + aria-current=page when on /tasks.
+      # The Tasks row carries the current class + aria-current=page on /tasks.
       # Attribute order between `data-destination` and `aria-current` is not
       # guaranteed by the renderer, so accept either order.
-      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="tasks"/
+      assert html =~ ~r/sidebar-row--current[^"]*"[^>]*data-destination="tasks"/
 
       assert html =~ ~r/data-destination="tasks"[^>]*aria-current="page"/s or
                html =~ ~r/aria-current="page"[^>]*data-destination="tasks"/s
@@ -514,20 +474,19 @@ defmodule PlatformWeb.ShellLiveTest do
              |> Enum.count() == 1
     end
 
-    test "Admin tile renders on the desktop rail for an admin user", %{
+    test "Admin is a Settings page, not a sidebar row, even for an admin", %{
       conn: conn
     } do
       conn = authenticated_conn(conn, role: "admin")
-      {:ok, _view, html} = live(conn, ~p"/tasks")
+      {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # After MT/RBAC stack 2 (task 019e3c4a), the Admin tile is gated on
-      # `Tenancy.root_admin_preloaded?/1` instead of the
-      # `Accounts.root_user?/1` stub. Default test conn seeds an admin
-      # membership so the tile renders.
-      assert html =~ ~s(data-destination="admin")
+      # The sidebar lists exactly the phone's rows (Burrow redesign 22), and
+      # Admin left those for /settings in task 01a1557a-807f stage 2.
+      assert has_element?(view, ~s(#sidebar [data-destination="settings"][href="/settings"]))
+      refute has_element?(view, ~s(#sidebar [data-destination="admin"]))
     end
 
-    test "Admin tile is absent from the desktop rail for a non-admin (member) user", %{
+    test "Admin tile is absent from the shell for a non-admin (member) user", %{
       conn: conn
     } do
       conn = authenticated_conn(conn, role: "member")
@@ -549,18 +508,6 @@ defmodule PlatformWeb.ShellLiveTest do
       refute html =~ ~s(phx-hook="LastChatLink")
       refute html =~ ~s(data-default-chat-path)
     end
-
-    test "sidebar collapse flips the rail to lg:w-14", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/tasks")
-
-      render_hook(view, "sidebar_hydrate", %{"collapsed" => true})
-      html = render(view)
-
-      # Collapsed rail keeps the data-icon-rail marker but switches width class.
-      assert html =~ ~s(data-icon-rail)
-      assert html =~ "lg:w-14"
-    end
   end
 
   describe "Admin gate (root_admin? + root_user)" do
@@ -578,13 +525,13 @@ defmodule PlatformWeb.ShellLiveTest do
       assert :sys.get_state(view.pid).socket.assigns.root_user == false
     end
 
-    test "More sheet renders the Admin section for an admin user", %{conn: conn} do
+    test "Settings renders the Admin row for an admin user", %{conn: conn} do
       conn = authenticated_conn(conn, role: "admin")
-      {:ok, _view, html} = live(conn, ~p"/tasks")
+      {:ok, _view, html} = live(conn, ~p"/settings")
 
-      # Admin section header text + the data-destination on the admin tile both
-      # appear in the rendered More sheet (which is lg:hidden but still in the
-      # DOM at all breakpoints — the hide is CSS-only).
+      # Admin left the More sheet for /settings (task 01a1557a-807f stage 2),
+      # and the desktop sidebar that replaced the icon rail lists only the
+      # sheet's rows (Burrow redesign 22), so /settings is its one home.
       assert html =~ ">Admin<"
     end
 
@@ -2124,38 +2071,26 @@ defmodule PlatformWeb.ShellLiveTest do
     end
   end
 
-  describe "top bar account menu" do
-    test "collapses the username and log out into one avatar button", %{conn: conn} do
+  # Burrow redesign 22 stage 1 deleted the account menu: at lg the
+  # sidebar's user row links /settings, where Sign out lives; below lg the
+  # More sheet's Settings row does the same.
+  describe "account (the menu's replacement)" do
+    test "no account menu and no logout link in the shell; the user row links /settings",
+         %{conn: conn} do
       {conn, user} = authenticated_conn_with_user(conn)
       {:ok, view, _html} = live(conn, "/changelog")
       html = render(view)
 
-      assert has_element?(
-               view,
-               ~s(#account-menu-trigger[aria-label="Account menu"][aria-haspopup="menu"][aria-expanded="false"])
-             )
+      refute has_element?(view, "#account-menu")
+      refute has_element?(view, "#account-menu-trigger")
+      refute html =~ ~s(href="/auth/logout")
 
-      assert has_element?(view, ~s(#account-menu-trigger [data-avatar-kind="human"]))
+      assert has_element?(view, ~s(#sidebar-user[href="/settings"]))
+      assert has_element?(view, ~s(#sidebar-user [data-avatar-kind="human"]))
+      assert has_element?(view, "#sidebar-user", user.name)
 
-      # The Log out item is the SAME control as before: a plain GET link to
-      # /auth/logout, no data-method, inside the menu.
-      assert has_element?(
-               view,
-               ~s(#account-menu-list[role="menu"] a[role="menuitem"][href="/auth/logout"]),
-               "Log out"
-             )
-
-      refute has_element?(view, ~s(#account-menu-list a[data-method]))
-      assert has_element?(view, "#account-menu-list", user.name)
-      assert has_element?(view, "#account-menu-list", user.email)
-
-      # Exactly one logout link in the top bar, and it lives in the menu: the
-      # old inline icon link and bare username span are gone.
-      header = view |> element("header#utility-bar") |> render()
-      assert length(Regex.scan(~r{href="/auth/logout"}, header)) == 1
-      refute header =~ ~s(title="Log out")
-      refute header =~ ~s(<span class="text-xs text-base-content/50">#{user.name}</span>)
-      assert html =~ "account-menu-list"
+      top = view |> element("header#phone-top-bar") |> render()
+      refute top =~ "account-menu"
     end
   end
 

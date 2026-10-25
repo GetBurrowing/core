@@ -155,6 +155,15 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
     end
   end
 
+  # An external user's list has no Options (mask names and archived are
+  # internal chrome, Burrow redesign 22 stage 2), so a forged open is ignored.
+  defp handle_event(
+         "open_list_sheet",
+         %{"sheet" => "options"},
+         %{assigns: %{external?: true}} = socket
+       ),
+       do: {:halt, socket}
+
   defp handle_event("open_list_sheet", %{"sheet" => key}, socket) do
     case Map.fetch(@sheets, key) do
       {:ok, :search} ->
@@ -244,9 +253,12 @@ defmodule PlatformWeb.ChatLive.ChatListHooks do
       |> Enum.filter(&(&1.kind == :channel))
       |> list_filter_pinned_masked(assigns, query)
 
+    # Never for an external user: the Agents space is internal (their list
+    # has no Agents row either).
     agents =
-      case assigns.agents_block do
-        %{space: space} -> masked_matches([space], assigns, query)
+      case {assigns[:external?], assigns.agents_block} do
+        {true, _} -> []
+        {_, %{space: space}} -> masked_matches([space], assigns, query)
         _ -> []
       end
 

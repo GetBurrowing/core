@@ -1021,11 +1021,13 @@ defmodule PlatformWeb.Components.ChatMessage do
           <span aria-hidden="true">·</span>
           <%!-- Task 01a0fd62 stage 3: the members panel is where admins are
                identifiable, so it is the next step. Channels only; the panel
-               button exists only there. --%>
+               button exists only there. `details: "space"` (Burrow redesign
+               22 stage 4): the desktop Members popover lives under the
+               details panel's Members row, so the panel opens with it. --%>
           <button
             :if={@space_kind == "channel"}
             type="button"
-            phx-click="members_open"
+            phx-click={Phoenix.LiveView.JS.push("members_open", value: %{details: "space"})}
             data-role="refused-summon-view-members"
             class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >

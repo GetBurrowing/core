@@ -65,7 +65,6 @@ defmodule PlatformWeb.MeetingBarLive do
           {:meeting_slug, :meeting_slug},
           {:meeting_started_at, :started_at},
           {:on_meeting_page, :on_meeting_page},
-          {:sidebar_collapsed, :sidebar_collapsed},
           {:id, :id},
           {:mic_on, :mic_on},
           {:camera_on, :camera_on},
@@ -86,6 +85,8 @@ defmodule PlatformWeb.MeetingBarLive do
   end
 
   @impl true
+  # At lg the bar starts at the desktop sidebar's right edge: 220px, 200px
+  # at or below 1100px (`--sidebar-width` in app.css, Burrow redesign 22).
   def render(assigns) do
     ~H"""
     <div
@@ -94,7 +95,7 @@ defmodule PlatformWeb.MeetingBarLive do
       data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
       class={[
         "fixed bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px))] inset-x-0 z-40 h-12 bg-base-100 border-t border-edge shadow-lg flex items-center gap-3 px-4",
-        if(@sidebar_collapsed, do: "lg:left-14", else: "lg:left-56"),
+        "lg:left-[var(--sidebar-width)]",
         if(!@meeting_active || @on_meeting_page, do: "hidden")
       ]}
     >

@@ -1,17 +1,42 @@
 defmodule PlatformWeb.ChatLive.Partials.ChatList do
   @moduledoc """
-  The phone Chat tab: `<section id="chat-list">`, the conversation list at
-  `/chat` (task 01a1557a-8562, Burrow redesign rung 6, stage 2).
+  The Chat list: `<section id="chat-list">`. The phone Chat tab at `/chat`
+  (task 01a1557a-8562, Burrow redesign rung 6, stage 2), and since Burrow
+  redesign 22 stage 2 also the desktop list pane (see `## Desktop list pane`).
 
-  Same split as `ChatLive.Partials`, `Partials.Rail` and
-  `Partials.ExternalRail` (ADR 0035): function components, no state, each
-  taking a declared set of attrs. The render gate lives INSIDE `chat_list/1`
-  (`@live_action == :index and !@embedded and !@external?`), so the call site
-  in `chat_live.html.heex` states no condition of its own.
+  Same split as `ChatLive.Partials` and `Partials.ExternalRail` (ADR 0035):
+  function components, no state, each taking a declared set of attrs. The
+  render gate lives INSIDE `chat_list/1` (`:index` or `:show`, not
+  embedded), so the call site in `chat_live.html.heex` states no condition
+  of its own.
 
-  Mobile only: the root carries `lg:hidden`. Desktop keeps the rail, and a
-  desktop `/chat` patches into a channel once `ViewportBreakpoint` reports the
-  side of `lg` it is on (`ChatLive.handle_event("chat_viewport", ...)`).
+  ## Desktop list pane (Burrow redesign 22 stage 2)
+
+  master-desktop.html `#list` (L594, CSS L46-52, L563). At lg the list sits
+  beside the conversation on `/chat` and `/chat/:slug`: 280px, 240px at or
+  below 1100px, base-200 with a right `border-edge` (`pane_class/2`). It
+  replaced the desktop channel rail (`Partials.Rail`) and the external rail,
+  both deleted. Below lg nothing changed: `/chat` is the full-width list and
+  `/chat/:slug` hides it (`hidden lg:flex`), so the phone sees only the
+  conversation. A desktop `/chat` still patches into a channel once
+  `ViewportBreakpoint` reports the side of `lg` it is on.
+
+    * The open conversation's row carries `aria-current="page"` and the
+      base-300 fill; rows fill base-300 on hover, at lg only.
+    * The header grows to 52px with a bottom edge; under "Chat" the line
+      reads "{n} spaces · {m} direct" (the rows under Spaces and Direct), or
+      "names masked" while masked.
+    * The three header buttons open `Partials.ListPopover` at lg (the bottom
+      sheets keep `lg:hidden`), from the same `@list_sheet`.
+    * Right-clicking a row opens `row_actions_dialog/1` (`RowContextMenu` on
+      the root pushes `open_row_actions`), on the rows that offer the phone's
+      long-press sheet.
+    * An external user gets the list at lg only, holding just their own
+      channels and conversations: no Agents row, no pinned tasks, no
+      Archived, no New channel, no Options. Their identity and Log out sit at
+      its foot, because the external layout has no sidebar.
+
+  Rows keep the phone's metrics on desktop (one rendering model).
 
   ## Order
 
@@ -29,9 +54,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   the component, over `@list_excerpts`, which `ChatListData.put_message/2`
   patches live, so an arriving message moves its row on the next render.
 
-  There is no manual order on the phone (the planner's decision: recency
-  wins; pinning is how you keep something at the top). The desktop rail
-  keeps its curated order and its own edit mode.
+  There is no manual order (the planner's decision: recency wins; pinning is
+  how you keep something at the top). The desktop rail's curated order and
+  edit mode went with the rail in Burrow redesign 22 stage 2.
 
   ## Holding the order (task 01a166bf stage 4)
 
@@ -48,7 +73,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   (`ChatListData.order_rows/4`); excerpt, time, weight and dot keep reading
   the live assigns, so ONLY order freezes. On release the list re-sorts once
   and the hook slides moved rows over 200ms (FLIP), or jumps them under
-  `prefers-reduced-motion`. The desktop rail is untouched.
+  `prefers-reduced-motion`.
 
   ## Folding (task 01a166bf stage 3)
 
@@ -59,11 +84,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   the user's `chat_collapsed_sections` preference and its broadcast converges
   the user's other sessions. No new event, preference key or store.
 
-  The phone's keys are `"chat-list:pinned"`, `"chat-list:spaces"`,
+  The keys are `"chat-list:pinned"`, `"chat-list:spaces"`,
   `"chat-list:direct"` and `"chat-list:archived"`. Spaces folds as ONE (the
-  phone has one Spaces header). The desktop rail keys the same preference by
-  section id, so `Sidebar.resolve/3` never matches a phone key and the two
-  surfaces fold independently. `ChatLive` reads the set into
+  list has one Spaces header). `ChatLive` reads the set into
   `@list_collapsed` at mount and in every `recompute_sidebar/1`.
 
   A folded section renders no rows (nor its empty state). Its header shows
@@ -86,9 +109,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
   ## Paint (Saru's ruling, canvas 01a15d7c `ground`)
 
-  The list ground is base-200. A pressed row paints base-100 (`active:`), and
-  there is NO hover state on anything in the list: it renders only on the
-  phone. The notification banner lifts off the list on base-100 with
+  The list ground is base-200. A pressed row paints base-100 (`active:`).
+  Hover exists only at lg (`lg:hover:`), on the desktop list pane. The notification banner lifts off the list on base-100 with
   `border-edge`, as a sheet does. Text is body or `text-subtle`, nothing else.
   The pairs are measured in all ten variants by
   `test/platform/design/chat_list_contrast_guard_test.exs`.
@@ -96,8 +118,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   Weight, not colour, marks unread: a row's name is `font-semibold` when it
   has unread and `font-normal` when read, always `text-base-content`. The
   excerpt and time follow the same flag, `text-base-content` unread and
-  `text-subtle` read. Two weights only (400, 600). The desktop rail applies
-  the same weight rule to its names (`Partials.Rail`).
+  `text-subtle` read. Two weights only (400, 600).
 
   ## Channel rows (dense, Slack # / lock)
 
@@ -132,10 +153,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   `:revealed_section_ids` through TOLERANT access, so a component that forgets
   to declare them renders REAL names with the mask on and passes every markup
   assertion. `chat_list/1` declares all three and hands `Map.take(assigns,
-  @mask_keys)` down, as `Partials.Rail` and `Partials.ExternalRail` do.
+  @mask_keys)` down, as `Partials.ExternalRail` does.
 
   What the mask covers here is EXACTLY the existing org-derived rule
-  (`SidebarMask.space_label/3`), the same toggle the rail and the drawer obey:
+  (`SidebarMask.space_label/3`), the same toggle every chat surface obeys:
   an org-derived channel name masks, a project-code channel (`#atlas`) and a
   person's name do not. On top of that, while masked:
 
@@ -196,47 +217,99 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:list_sheet, :any, required: true)
   attr(:list_search_query, :string, required: true)
   attr(:list_search_results, :map, required: true)
+  # The desktop list pane (Burrow redesign 22 stage 2, `## Desktop list pane`).
+  attr(:active_space, :any, default: nil)
+  attr(:external_user, :any, default: nil)
+  attr(:hidden_drawer_open, :boolean, default: false)
+  attr(:resolved_mode, :string, default: "dark")
 
   @doc "The list. Renders nothing unless the gate in the moduledoc holds."
   def chat_list(assigns) do
     assigns =
       assigns
       |> assign(:mask_assigns, Map.take(assigns, @mask_keys))
+      |> external_scrub()
+      |> assign(:active_id, active_id(assigns.active_space))
       |> assign_sorted_rows()
       |> assign_folds()
 
     ~H"""
     <section
-      :if={@live_action == :index and !@embedded and !@external?}
+      :if={@live_action in [:index, :show] and !@embedded}
       id="chat-list"
       data-role="chat-list"
-      class="flex min-h-0 min-w-0 flex-1 flex-col bg-base-200 text-base-content lg:hidden"
+      phx-hook="RowContextMenu"
+      data-context-event="open_row_actions"
+      class={pane_class(@live_action, @external?)}
       aria-label="Chat"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-1 pl-4 pr-2">
-        <h1 class="text-lg font-semibold">Chat</h1>
-        <span data-role="chat-list-subtitle" class="min-w-0 flex-1 truncate text-xs text-subtle">
-          {if @mask_names?, do: "names masked"}
-        </span>
+      <header class="relative flex h-12 flex-shrink-0 items-center gap-1 pl-4 pr-2 lg:h-[52px] lg:border-b lg:border-edge lg:px-3">
+        <div class="contents lg:flex lg:min-w-0 lg:flex-1 lg:flex-col">
+          <h1 class="text-lg font-semibold">Chat</h1>
+          <span
+            data-role="chat-list-subtitle"
+            class="min-w-0 flex-1 truncate text-xs text-subtle lg:hidden"
+          >
+            {if @mask_names?, do: "names masked"}
+          </span>
+          <%!-- master-desktop.html L712: "{n} spaces · {m} direct", or
+               "names masked" while masked. Desktop only. --%>
+          <span
+            data-role="chat-list-counts"
+            class="hidden truncate text-xs text-subtle lg:block"
+          >
+            {counts_line(@mask_names?, @space_rows, @dm_rows)}
+          </span>
+        </div>
         <%!-- Prototype master-mobile.html v3 :542-544, aria-labels verbatim.
-             Buttons, never links: a bare event is fine on them. --%>
+             Buttons, never links: a bare event is fine on them. One button
+             serves both widths: the phone opens the bottom sheet, desktop
+             the anchored popover (`Partials.ListPopover`), from the one
+             `@list_sheet`. --%>
         <.header_button
+          id="list-search"
           role="chat-list-search"
           sheet="search"
+          open={@list_sheet == :search}
           icon="hero-magnifying-glass"
           label="Search channels and DMs"
         />
         <.header_button
+          id="list-new"
           role="chat-list-new"
           sheet="new"
+          open={@list_sheet == :new}
           icon="hero-plus"
           label="New channel or conversation"
         />
         <.header_button
+          :if={!@external?}
+          id="list-more"
           role="chat-list-options"
           sheet="options"
+          open={@list_sheet == :options}
           icon="hero-ellipsis-horizontal"
           label="List options: mask names, archived"
+        />
+        <PlatformWeb.ChatLive.Partials.ListPopover.list_popover
+          sheet={@list_sheet}
+          external?={@external?}
+          query={@list_search_query}
+          results={@list_search_results}
+          channels={@channels}
+          dm_conversations={@dm_conversations}
+          archived_channels={@archived_channels}
+          restricted_channel_ids={@restricted_channel_ids}
+          list_private_ids={@list_private_ids}
+          unread_counts={@unread_counts}
+          list_excerpts={@list_excerpts}
+          list_identities={@list_identities}
+          mask_assigns={@mask_assigns}
+          mask_names?={@mask_names?}
+          archived_open={@archived_open}
+          hidden_drawer_open={@hidden_drawer_open}
+          hidden_channels={hidden_channels(@channel_sections)}
+          resolved_mode={@resolved_mode}
         />
       </header>
 
@@ -250,11 +323,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
           dismissed={@notification_banner_dismissed}
         />
 
-        <%= if @channels == [] and @dm_conversations == [] and @pinned_task_spaces == [] and is_nil(@agents_block) do %>
+        <%= if @channels == [] and @dm_conversations == [] and @pinned_task_spaces == [] and is_nil(@agents_block) and not (@archived_open and @archived_channels != []) do %>
           <div data-role="chat-list-empty" class="px-8 py-16 text-center">
             <p class="text-sm text-subtle">No channels yet.</p>
             <p class="text-sm text-subtle">Create one or ask someone to add you.</p>
             <button
+              :if={!@external?}
               type="button"
               phx-click="new_channel_open"
               class="btn btn-primary btn-sm mt-4"
@@ -276,6 +350,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
               <%= if !@folds.pinned.collapsed? do %>
                 <.agents_row
                   :if={@agents_block}
+                  active_id={@active_id}
                   agents_block={@agents_block}
                   unread_counts={@unread_counts}
                   list_excerpts={@list_excerpts}
@@ -293,6 +368,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                     restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
                     private?={MapSet.member?(@list_private_ids, space.id)}
                     long_press={kind != :task}
+                    current={space.id == @active_id}
                   />
                 <% end %>
               <% end %>
@@ -306,7 +382,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             <div id={@folds.spaces.controls} data-role="chat-list-section-rows">
               <%= if @folds.spaces.collapsed? do %>
               <% else %>
-                <%= if @space_rows == [] do %>
+                <%= if @space_rows == [] and !@external? do %>
                   <.section_empty
                     role="chat-list-spaces-empty"
                     copy="You're not in any channels yet."
@@ -326,6 +402,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
                       private?={MapSet.member?(@list_private_ids, space.id)}
                       long_press
+                      current={space.id == @active_id}
                     />
                   <% end %>
                 <% end %>
@@ -359,6 +436,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                       mask_assigns={@mask_assigns}
                       restricted?={false}
                       long_press
+                      current={space.id == @active_id}
                     />
                   <% end %>
                 <% end %>
@@ -387,12 +465,15 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   restricted?={MapSet.member?(@restricted_channel_ids, space.id)}
                   private?={MapSet.member?(@list_private_ids, space.id)}
                   long_press={false}
+                  current={space.id == @active_id}
                 />
               <% end %>
             </div>
           </section>
         <% end %>
       </div>
+
+      <.external_footer :if={@external?} external_user={@external_user} />
 
       <.search_sheet
         open={@list_sheet == :search}
@@ -418,22 +499,29 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     """
   end
 
+  attr(:id, :string, required: true)
   attr(:role, :string, required: true)
   attr(:sheet, :string, required: true)
+  attr(:open, :boolean, required: true)
   attr(:icon, :string, required: true)
   attr(:label, :string, required: true)
 
+  # 44px on the phone; 34px at lg, `text-subtle` at rest (master-desktop.html
+  # L65-66), base-300 on hover. `aria-expanded` tracks the sheet or popover.
   defp header_button(assigns) do
     ~H"""
     <button
+      id={@id}
       type="button"
       phx-click="open_list_sheet"
       phx-value-sheet={@sheet}
       data-role={@role}
       aria-label={@label}
-      class="flex size-11 shrink-0 items-center justify-center rounded-full text-base-content active:bg-base-100 focus-visible-ring"
+      aria-haspopup="dialog"
+      aria-expanded={to_string(@open)}
+      class="flex size-11 shrink-0 items-center justify-center rounded-full text-base-content active:bg-base-100 focus-visible-ring lg:size-[34px] lg:text-subtle lg:hover:bg-base-300 lg:hover:text-base-content"
     >
-      <span class={[@icon, "size-6"]} aria-hidden="true"></span>
+      <span class={[@icon, "size-6 lg:size-5"]} aria-hidden="true"></span>
     </button>
     """
   end
@@ -460,16 +548,6 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:mask_assigns, :map, required: true)
 
   defp search_sheet(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :spaces_by_id,
-        Map.new(
-          assigns.channels ++ assigns.dm_conversations ++ assigns.archived_channels,
-          &{&1.id, &1}
-        )
-      )
-
     ~H"""
     <.sheet
       id="chat-list-search-sheet"
@@ -484,103 +562,175 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       <%!-- Rendered only while open, so `SearchFocus` mounts with the sheet
            and focuses the field then (data-search-intent), not once at page
            load while the sheet is shut. --%>
-      <div :if={@open} class="flex min-h-0 flex-col">
-        <form
-          class="relative px-4 pb-2"
-          role="search"
-          phx-change="list_search"
-          phx-submit="list_search"
-        >
-          <span
-            class="hero-magnifying-glass pointer-events-none absolute left-7 top-1/2 size-4 -translate-y-1/2 text-subtle"
-            aria-hidden="true"
-          >
-          </span>
-          <input
-            id="chat-list-search-input"
-            type="search"
-            name="value"
-            value={@query}
-            phx-hook="SearchFocus"
-            data-search-intent="true"
-            data-blur-on-scroll="chat-list-search-results"
-            phx-debounce="200"
-            maxlength="100"
-            placeholder="Find channel, DM or message"
-            autocomplete="off"
-            autocorrect="off"
-            autocapitalize="none"
-            spellcheck="false"
-            enterkeyhint="go"
-            aria-label="Find channel, DM or message"
-            class="h-11 w-full rounded-lg border border-edge bg-base-200 pl-9 pr-3 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
-          />
-        </form>
-
-        <div id="chat-list-search-results" data-role="chat-list-search-results">
-          <%= if @query == "" do %>
-            <section :if={@results.recent != []} data-role="chat-list-search-recent">
-              <.section_label id="chat-list-search-label-recent">Recent</.section_label>
-              <.search_space_row
-                :for={space <- @results.recent}
-                space={space}
-                unread_counts={@unread_counts}
-                list_excerpts={@list_excerpts}
-                list_identities={@list_identities}
-                mask_assigns={@mask_assigns}
-                restricted_channel_ids={@restricted_channel_ids}
-                list_private_ids={@list_private_ids}
-              />
-            </section>
-          <% else %>
-            <section :if={@results.channels != []} data-role="chat-list-search-channels">
-              <.section_label id="chat-list-search-label-channels">Channels</.section_label>
-              <.search_space_row
-                :for={space <- @results.channels}
-                space={space}
-                unread_counts={@unread_counts}
-                list_excerpts={@list_excerpts}
-                list_identities={@list_identities}
-                mask_assigns={@mask_assigns}
-                restricted_channel_ids={@restricted_channel_ids}
-                list_private_ids={@list_private_ids}
-              />
-            </section>
-            <section :if={@results.dms != []} data-role="chat-list-search-direct">
-              <.section_label id="chat-list-search-label-direct">Direct</.section_label>
-              <.search_space_row
-                :for={space <- @results.dms}
-                space={space}
-                unread_counts={@unread_counts}
-                list_excerpts={@list_excerpts}
-                list_identities={@list_identities}
-                mask_assigns={@mask_assigns}
-                restricted_channel_ids={@restricted_channel_ids}
-                list_private_ids={@list_private_ids}
-              />
-            </section>
-            <section :if={@results.messages != []} data-role="chat-list-search-messages">
-              <.section_label id="chat-list-search-label-messages">Messages</.section_label>
-              <.message_hit
-                :for={msg <- @results.messages}
-                :if={Map.has_key?(@spaces_by_id, msg.space_id)}
-                msg={msg}
-                space={Map.fetch!(@spaces_by_id, msg.space_id)}
-                list_identities={@list_identities}
-                mask_assigns={@mask_assigns}
-              />
-            </section>
-            <p
-              :if={@results.channels == [] and @results.dms == [] and @results.messages == []}
-              data-role="chat-list-search-no-matches"
-              class="px-4 py-6 text-sm text-subtle"
-            >
-              No matches for “{@query}”
-            </p>
-          <% end %>
-        </div>
-      </div>
+      <.search_body
+        :if={@open}
+        query={@query}
+        results={@results}
+        channels={@channels}
+        dm_conversations={@dm_conversations}
+        archived_channels={@archived_channels}
+        restricted_channel_ids={@restricted_channel_ids}
+        list_private_ids={@list_private_ids}
+        unread_counts={@unread_counts}
+        list_excerpts={@list_excerpts}
+        list_identities={@list_identities}
+        mask_assigns={@mask_assigns}
+      />
     </.sheet>
+    """
+  end
+
+  attr(:query, :string, required: true)
+  attr(:results, :map, required: true)
+  attr(:channels, :list, required: true)
+  attr(:dm_conversations, :list, required: true)
+  attr(:archived_channels, :list, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
+  attr(:list_private_ids, :any, required: true)
+  attr(:unread_counts, :map, required: true)
+  attr(:list_excerpts, :map, required: true)
+  attr(:list_identities, :map, required: true)
+  attr(:mask_assigns, :map, required: true)
+  # Every id and data-role in the body derives from this, so the phone sheet
+  # ("chat-list-search") and the desktop popover ("chat-list-pop-search") can
+  # both be in the DOM without a collision.
+  attr(:prefix, :string, default: "chat-list-search")
+  # The search field's frame: base-200 inside the base-100 sheet and popover.
+  attr(:form_class, :string, default: "relative px-4 pb-2")
+
+  attr(:input_class, :string,
+    default:
+      "h-11 w-full rounded-lg border border-edge bg-base-200 pl-9 pr-3 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
+  )
+
+  attr(:icon_class, :string,
+    default:
+      "hero-magnifying-glass pointer-events-none absolute left-7 top-1/2 size-4 -translate-y-1/2 text-subtle"
+  )
+
+  attr(:pressed, :string, default: "active:bg-base-200")
+  attr(:results_class, :string, default: nil)
+
+  @doc """
+  The search field and its result groups: the phone search sheet's body and
+  the desktop list popover's (`Partials.ListPopover`). Fires `list_search`.
+  """
+  def search_body(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :spaces_by_id,
+        Map.new(
+          assigns.channels ++ assigns.dm_conversations ++ assigns.archived_channels,
+          &{&1.id, &1}
+        )
+      )
+
+    ~H"""
+    <div class="flex min-h-0 flex-col">
+      <form
+        class={@form_class}
+        role="search"
+        phx-change="list_search"
+        phx-submit="list_search"
+      >
+        <span class={@icon_class} aria-hidden="true"></span>
+        <input
+          id={"#{@prefix}-input"}
+          type="search"
+          name="value"
+          value={@query}
+          phx-hook="SearchFocus"
+          data-search-intent="true"
+          data-blur-on-scroll={"#{@prefix}-results"}
+          phx-debounce="200"
+          maxlength="100"
+          placeholder="Find channel, DM or message"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          enterkeyhint="go"
+          aria-label="Find channel, DM or message"
+          class={@input_class}
+        />
+      </form>
+
+      <div id={"#{@prefix}-results"} data-role={"#{@prefix}-results"} class={@results_class}>
+        <%= if @query == "" do %>
+          <section :if={@results.recent != []} data-role={"#{@prefix}-recent"}>
+            <.section_label id={"#{@prefix}-label-recent"}>Recent</.section_label>
+            <.search_space_row
+              :for={space <- @results.recent}
+              space={space}
+              prefix={@prefix}
+              pressed={@pressed}
+              unread_counts={@unread_counts}
+              list_excerpts={@list_excerpts}
+              list_identities={@list_identities}
+              mask_assigns={@mask_assigns}
+              restricted_channel_ids={@restricted_channel_ids}
+              list_private_ids={@list_private_ids}
+            />
+          </section>
+        <% else %>
+          <section :if={@results.channels != []} data-role={"#{@prefix}-channels"}>
+            <.section_label id={"#{@prefix}-label-channels"}>Channels</.section_label>
+            <.search_space_row
+              :for={space <- @results.channels}
+              space={space}
+              prefix={@prefix}
+              pressed={@pressed}
+              unread_counts={@unread_counts}
+              list_excerpts={@list_excerpts}
+              list_identities={@list_identities}
+              mask_assigns={@mask_assigns}
+              restricted_channel_ids={@restricted_channel_ids}
+              list_private_ids={@list_private_ids}
+            />
+          </section>
+          <section :if={@results.dms != []} data-role={"#{@prefix}-direct"}>
+            <.section_label id={"#{@prefix}-label-direct"}>Direct</.section_label>
+            <.search_space_row
+              :for={space <- @results.dms}
+              space={space}
+              prefix={@prefix}
+              pressed={@pressed}
+              unread_counts={@unread_counts}
+              list_excerpts={@list_excerpts}
+              list_identities={@list_identities}
+              mask_assigns={@mask_assigns}
+              restricted_channel_ids={@restricted_channel_ids}
+              list_private_ids={@list_private_ids}
+            />
+          </section>
+          <section :if={@results.messages != []} data-role={"#{@prefix}-messages"}>
+            <.section_label id={"#{@prefix}-label-messages"}>Messages</.section_label>
+            <.message_hit
+              :for={msg <- @results.messages}
+              :if={Map.has_key?(@spaces_by_id, msg.space_id)}
+              msg={msg}
+              role={
+                if @prefix == "chat-list-search",
+                  do: "chat-list-message-hit",
+                  else: "#{@prefix}-message-hit"
+              }
+              pressed={@pressed}
+              space={Map.fetch!(@spaces_by_id, msg.space_id)}
+              list_identities={@list_identities}
+              mask_assigns={@mask_assigns}
+            />
+          </section>
+          <p
+            :if={@results.channels == [] and @results.dms == [] and @results.messages == []}
+            data-role={"#{@prefix}-no-matches"}
+            class="px-4 py-6 text-sm text-subtle"
+          >
+            No matches for “{@query}”
+          </p>
+        <% end %>
+      </div>
+    </div>
     """
   end
 
@@ -591,6 +741,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:mask_assigns, :map, required: true)
   attr(:restricted_channel_ids, :any, required: true)
   attr(:list_private_ids, :any, required: true)
+  attr(:prefix, :string, default: "chat-list-search")
+  attr(:pressed, :string, default: "active:bg-base-200")
 
   # A channel or conversation result: the list's own row, with the sheet's
   # pressed paint and its own DOM ids.
@@ -609,8 +761,9 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       mask_assigns={@mask_assigns}
       restricted?={MapSet.member?(@restricted_channel_ids, @space.id)}
       private?={MapSet.member?(@list_private_ids, @space.id)}
-      pressed="active:bg-base-200"
-      id_prefix="chat-list-search"
+      pressed={@pressed}
+      hover={nil}
+      id_prefix={@prefix}
     />
     """
   end
@@ -619,6 +772,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:space, :map, required: true)
   attr(:list_identities, :map, required: true)
   attr(:mask_assigns, :map, required: true)
+  attr(:role, :string, default: "chat-list-message-hit")
+  attr(:pressed, :string, default: "active:bg-base-200")
 
   # A message hit: a plain patch link to the existing `?message=` deep link,
   # no phx-click. The snippet goes through `RenderHelpers.search_headline/1`,
@@ -639,10 +794,14 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     ~H"""
     <.link
       patch={~p"/chat/#{ChatLive.space_nav_target(@space)}?message=#{@msg.id}"}
-      data-role="chat-list-message-hit"
+      data-role={@role}
       data-space-id={@space.id}
       data-message-id={@msg.id}
-      class="flex min-h-11 flex-col justify-center gap-0.5 px-4 py-2 active:bg-base-200 focus-visible-ring"
+      class={[
+        "flex min-h-11 flex-col justify-center gap-0.5 px-4 py-2",
+        @pressed,
+        "focus-visible-ring"
+      ]}
     >
       <span class="flex min-w-0 items-baseline gap-2">
         <span class="min-w-0 truncate text-[15px] font-semibold text-base-content">
@@ -762,10 +921,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:meta, :any, required: true)
 
   # A toggle row: `role="switch"` with `aria-checked`, the whole row the
-  # control. It fires the rail's own events (`toggle_mask_names`,
-  # `toggle_archived_section`) through `JS.push`, so the rail's literal
-  # `phx-click="toggle_mask_names"` control stays the only element carrying
-  # that attribute (the mask suites select it by that literal). Track primary when on (measured >= 3:1 on base-100), base-300
+  # control. It fires the existing events (`toggle_mask_names`,
+  # `toggle_archived_section`) through `JS.push`. Track primary when on (measured >= 3:1 on base-100), base-300
   # when off, with the knob carrying the boundary.
   defp switch_row(assigns) do
     ~H"""
@@ -924,6 +1081,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:unread_counts, :map, required: true)
   attr(:list_excerpts, :map, required: true)
   attr(:mask_assigns, :map, required: true)
+  attr(:active_id, :any, default: nil)
 
   # The Agents row: the agents space, with its leader's avatar in the leader's
   # rung-3 slot. It patches to the agents space exactly as the drawer's
@@ -953,6 +1111,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       excerpt={Map.get(@list_excerpts, @agents_block.space.id)}
       mask_assigns={@mask_assigns}
       restricted?={false}
+      current={@agents_block.space.id == @active_id}
     />
     """
   end
@@ -977,6 +1136,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   # sheet. Off for the Agents row (its membership is derived, so pin, hide
   # and order are all wrong for it), pinned tasks, Archived and search rows.
   attr(:long_press, :boolean, default: false)
+  # The open conversation, on the desktop list pane (`## Desktop list pane`):
+  # `aria-current="page"` and the base-300 fill. Never true on the phone,
+  # where the list renders only at `/chat`, with no space open.
+  attr(:current, :boolean, default: false)
+  # The desktop hover fill; nil on search results, whose `pressed` carries it.
+  attr(:hover, :any, default: "lg:hover:bg-base-300")
 
   # One row. The whole row is the link (at least 44px tall), with no
   # phx-click. Name `min-w-0 truncate`; time, dot and count never shrink.
@@ -1034,9 +1199,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             data-long-press-event={@long_press && "open_list_sheet"}
             data-long-press-sheet={@long_press && "row"}
             data-long-press-space-id={@long_press && @space.id}
+            aria-current={@current && "page"}
             class={[
               "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-2 pl-7 pr-4 focus-visible-ring",
-              @pressed
+              @pressed,
+              @hover,
+              @current && "bg-base-300"
             ]}
           >
             <span
@@ -1083,9 +1251,12 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
             data-long-press-event={@long_press && "open_list_sheet"}
             data-long-press-sheet={@long_press && "row"}
             data-long-press-space-id={@long_press && @space.id}
+            aria-current={@current && "page"}
             class={[
               "chat-list-row flex min-h-11 min-w-0 flex-1 items-center gap-3 px-4 py-3 focus-visible-ring",
-              @pressed
+              @pressed,
+              @hover,
+              @current && "bg-base-300"
             ]}
           >
             <.avatar
@@ -1232,6 +1403,91 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     """
   end
 
+  attr(:external_user, :any, required: true)
+
+  # The external layout is chrome-less (no shell sidebar), so the identity
+  # and the way out that `external_rail/1` carried live at the foot of the
+  # list pane. Desktop only: below lg an external user is on
+  # `external_mobile_switcher/1`, which has its own. No org label: that would
+  # leak the internal structure.
+  defp external_footer(assigns) do
+    ~H"""
+    <footer
+      data-role="external-identity"
+      class="flex flex-shrink-0 items-center gap-2 border-t border-edge px-3 py-2"
+    >
+      <PlatformWeb.AvatarComponents.human_avatar
+        :if={@external_user}
+        name={@external_user.name || @external_user.email || "You"}
+        avatar_url={@external_user.avatar_url}
+        seed={@external_user.oidc_sub || @external_user.email || @external_user.id}
+        size="sm"
+        class="flex-shrink-0"
+      />
+      <span class="min-w-0 flex-1 truncate text-sm text-base-content">
+        {@external_user && (@external_user.name || @external_user.email)}
+      </span>
+      <a
+        href={~p"/auth/logout"}
+        class="flex size-[34px] shrink-0 items-center justify-center rounded-full text-subtle lg:hover:bg-base-300 lg:hover:text-base-content focus-visible-ring"
+        aria-label="Log out"
+        data-role="external-logout"
+      >
+        <span class="hero-arrow-right-start-on-rectangle size-5" aria-hidden="true"></span>
+      </a>
+    </footer>
+    """
+  end
+
+  # ── desktop list pane (Burrow redesign 22 stage 2) ────────────────────
+
+  # Phone `/chat`: the full-width list, as before. Phone `/chat/:slug`: not
+  # shown (`hidden`), so the conversation has the screen. At lg, on both
+  # routes, the 280px pane (240px at or below 1100px) beside the
+  # conversation (master-desktop.html L46, L563). An external user's list is
+  # desktop only on both routes: below lg they keep `external_mobile_switcher/1`.
+  @pane_base "min-h-0 min-w-0 flex-1 flex-col bg-base-200 text-base-content"
+  @pane_lg "lg:w-[280px] lg:max-[1100px]:w-[240px] lg:flex-none lg:border-r lg:border-edge"
+
+  @doc false
+  def pane_class(:index, false), do: "flex #{@pane_base} #{@pane_lg}"
+  def pane_class(_action, _external?), do: "hidden lg:flex #{@pane_base} #{@pane_lg}"
+
+  # master-desktop.html L712: spaces.length and dms.length, the rows the list
+  # draws under Spaces and Direct.
+  defp counts_line(true, _spaces, _dms), do: "names masked"
+
+  defp counts_line(false, spaces, dms) do
+    n = length(spaces)
+    m = length(dms)
+    "#{n} #{if n == 1, do: "space", else: "spaces"} · #{m} direct"
+  end
+
+  defp active_id(%{id: id}), do: id
+  defp active_id(_), do: nil
+
+  # An external user's list holds only their own channels and conversations:
+  # no Agents row, no pinned task conversations, no Archived section. The
+  # mount already scopes `@channels` and `@dm_conversations` to them.
+  defp external_scrub(%{external?: true} = assigns) do
+    assigns
+    |> assign(:agents_block, nil)
+    |> assign(:pinned_task_spaces, [])
+    |> assign(:archived_open, false)
+    |> assign(:archived_channels, [])
+  end
+
+  defp external_scrub(assigns), do: assigns
+
+  # The channels the reader hid (`hidden_channel_ids`), flattened from their
+  # sub-org buckets: the Options popover's "Show hidden" list.
+  @doc false
+  def hidden_channels(%{hidden_sub_orgs: buckets}) when is_map(buckets) do
+    buckets |> Map.values() |> List.flatten() |> Enum.sort_by(&String.downcase(&1.name || ""))
+  end
+
+  def hidden_channels(_), do: []
+
   @doc false
   def masked_excerpt, do: @masked_excerpt
 
@@ -1298,7 +1554,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
     pinned =
       ChatLive.pinned_rail_entries(assigns.channel_sections.pinned, assigns.pinned_task_spaces)
 
-    spaces = Platform.Chat.Sidebar.flatten_sections(assigns.sidebar_sections)
+    spaces =
+      if assigns[:external?],
+        do: Enum.filter(List.wrap(assigns.channels), &(&1.id not in pinned_ids(pinned))),
+        else: Platform.Chat.Sidebar.flatten_sections(assigns.sidebar_sections)
 
     %{
       pinned: order.(pinned, :pinned, &row_name(&1.kind, &1.space, identities)),
@@ -1359,6 +1618,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
 
     assign(assigns, :folds, folds)
   end
+
+  defp pinned_ids(pinned), do: Enum.map(pinned, & &1.space.id)
 
   defp row_name(:channel, space, _identities), do: space.name
 

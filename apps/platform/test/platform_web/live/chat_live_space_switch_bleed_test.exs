@@ -195,11 +195,12 @@ defmodule PlatformWeb.ChatLiveSpaceSwitchBleedTest do
     end
   end
 
-  # The rail row is an ordinary `<.link patch=…>` anchor, so this is the
-  # click the reporter made, not a `render_patch/2` shortcut past the markup.
+  # The Chat list row (Burrow redesign 22 stage 2 deleted the desktop channel
+  # rail) is an ordinary `<.link patch=…>` anchor, so this is the click the
+  # reporter made, not a `render_patch/2` shortcut past the markup.
   defp switch_to(view, space) do
     view
-    |> element(~s(#chat-sidebar a[href="#{path(space)}"]))
+    |> element(~s(#chat-list-scroller a[data-role="chat-list-row"][data-space-id="#{space.id}"]))
     |> render_click()
   end
 

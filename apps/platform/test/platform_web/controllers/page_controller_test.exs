@@ -33,15 +33,13 @@ defmodule PlatformWeb.PageControllerTest do
 
     conn = init_test_session(conn, current_user_id: user.id)
 
-    {:ok, _view, html} = live(conn, ~p"/chat")
+    {:ok, view, html} = live(conn, ~p"/chat")
 
-    # Shell layout and channel sidebar should be present. The sectioned
-    # rail (chat plan v2 Stage 2/3) replaced the flat "Channels" label
-    # with per-section headers — assert the rail's aria-label instead of
-    # the old top-level label that no longer exists.
-    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # Shell layout and the Chat list should be present (Burrow redesign 22
+    # stage 2 deleted the desktop channel rail; the Chat list replaces it).
+    # The shell brand is the install's app name, "Burrow" on a migrated DB
     # (task 01a120c5 stage 3).
     assert html =~ "Burrow"
-    assert html =~ ~s(aria-label="Channel sections")
+    assert has_element?(view, ~s(section#chat-list[aria-label="Chat"]))
   end
 end

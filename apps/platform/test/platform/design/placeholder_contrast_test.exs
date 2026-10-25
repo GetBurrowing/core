@@ -70,7 +70,6 @@ defmodule Platform.Design.PlaceholderContrastTest do
   @template_sites [
     "platform_web/live/chat/partials/external_rail.ex",
     "platform_web/live/chat/partials/chat_list.ex",
-    "platform_web/live/chat/partials/rail.ex",
     # The briefing detail's fields (task 01a15ee1 stage 6), from main.
     "platform_web/live/inbox_live/briefing_component.ex",
     # The meeting briefing detail's fields (task 01a1694a), from main.
@@ -114,6 +113,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
     "platform_web/live/chat/new_conversation_component.ex" => :global_default,
     "platform_web/live/chat/partials/composer.ex" => :rule_painted,
     "platform_web/live/chat/partials/conversation.ex" => :global_default,
+    # The panel's Promote to channel field (Burrow redesign 22 stage 4).
+    "platform_web/live/chat/partials/details_panel.ex" => :global_default,
     "platform_web/live/chat/settings_component.ex" => :global_default,
     "platform_web/live/control_center/agent_detail.ex" => :global_default,
     "platform_web/live/control_center/native_files.ex" => :global_default,

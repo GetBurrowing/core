@@ -213,10 +213,16 @@ defmodule PlatformWeb.ChatLive.ComposerAncestryGuardTest do
       staged = render(view)
       assert count(staged, "[data-role=staged-tray]") == 1
 
+      # The desktop search and pins drawers left in Burrow redesign 22 stage
+      # 4; their jobs are the details panel's Search and Pinned pages, so
+      # those are the states checked (the panel is the conversation column's
+      # sibling AFTER it, never a preceding one).
+      render_click(view, "details_open", %{"page" => "search"})
       render_submit(view, "search_submit", %{"search" => %{"query" => "pin"}})
       search = render(view)
-      assert count(search, "#chat-drawers-slot > *") > 0
+      assert count(search, ~s(#details-panel [data-role="details-search-result"])) > 0
       render_click(view, "search_clear", %{})
+      render_click(view, "details_close", %{})
 
       render_click(view, "canvas_panel_toggle", %{})
       canvases = render(view)
@@ -225,10 +231,10 @@ defmodule PlatformWeb.ChatLive.ComposerAncestryGuardTest do
 
       render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => space.id})
       _ = render(view)
-      render_click(view, "pin_panel_toggle", %{})
+      render_click(view, "details_open", %{"page" => "pinned"})
       pins = render(view)
-      assert count(pins, "#chat-drawers-slot > *") > 0
-      render_click(view, "pin_panel_toggle", %{})
+      assert count(pins, ~s(#details-panel [data-page="pinned"] [data-role="details-pin"])) > 0
+      render_click(view, "details_close", %{})
 
       render_hook(view, "push_permission_state", %{"state" => "prompt"})
       banner = render(view)
@@ -243,9 +249,9 @@ defmodule PlatformWeb.ChatLive.ComposerAncestryGuardTest do
           {:mention_list, mention},
           {:attach_menu, attach},
           {:staged_tray, staged},
-          {:search_drawer, search},
+          {:details_search, search},
           {:canvases_drawer, canvases},
-          {:pins_drawer, pins},
+          {:details_pinned, pins},
           {:notification_banner, banner}
         ],
         "compose_text"

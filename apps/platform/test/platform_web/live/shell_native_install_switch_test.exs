@@ -6,7 +6,7 @@ defmodule PlatformWeb.ShellNativeInstallSwitchTest do
   The server renders the button for every client but HIDDEN; only the
   `NativeInstallSwitch` hook reveals it, inside the Burrow app. So what the
   server must guarantee is exactly: the element exists on a shell route, in
-  the utility bar, carries `hidden` and the hook, names the install, and
+  the phone top strip (the utility bar until Burrow redesign 22), carries `hidden` and the hook, names the install, and
   holds the dot element (itself hidden) in the `bg-primary` slot.
   """
   use PlatformWeb.ConnCase, async: true
@@ -38,18 +38,18 @@ defmodule PlatformWeb.ShellNativeInstallSwitchTest do
   end
 
   defp utility_bar(html) do
-    case Regex.run(~r/(<header[^>]*id="utility-bar".*?<\/header>)/s, html) do
+    case Regex.run(~r/(<header[^>]*id="phone-top-bar".*?<\/header>)/s, html) do
       [_, bar] -> bar
-      nil -> flunk("the utility bar never rendered")
+      nil -> flunk("the phone top strip never rendered")
     end
   end
 
-  test "the shell renders the switcher hidden, in the utility bar, with the hook, brand and dot",
+  test "the shell renders the switcher hidden, in the phone top strip, with the hook, brand and dot",
        %{conn: conn} do
     {:ok, view, html} = live(signed_in(conn), ~p"/tasks")
 
     assert has_element?(view, "#native-install-switch")
-    assert has_element?(view, "#utility-bar #native-install-switch")
+    assert has_element?(view, "#phone-top-bar #native-install-switch")
 
     button = view |> element("#native-install-switch") |> render()
     [class] = Regex.run(~r/<button[^>]*\bclass="([^"]*)"/, button, capture: :all_but_first)

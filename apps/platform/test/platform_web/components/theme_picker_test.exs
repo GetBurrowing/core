@@ -49,10 +49,16 @@ defmodule PlatformWeb.Components.ThemePickerTest do
   end
 
   describe "markup (inventory I1-I10)" do
-    test "I1: one trigger, in the utility bar where the toggle sat", %{html: html} do
+    # Burrow redesign 22 stage 1 deleted the utility bar and its swatch
+    # trigger: at lg the sidebar's mode row flips light/dark, and the picker
+    # opens from Settings > Appearance as a popover in the sidebar.
+    test "I1: no swatch trigger; the lg popover lives in the sidebar beside the mode row",
+         %{html: html} do
       doc = doc(html)
 
-      assert doc |> q("#utility-bar #theme-picker-trigger") |> Enum.count() == 1
+      assert doc |> q("#theme-picker-trigger") |> Enum.count() == 0
+      assert doc |> q("#sidebar #mode-toggle") |> Enum.count() == 1
+      assert doc |> q("#sidebar #theme-picker #theme-picker-popover") |> Enum.count() == 1
       assert doc |> q("#theme-toggle") |> Enum.count() == 0
       assert doc |> q(~s([phx-hook="ThemeToggle"])) |> Enum.count() == 0
     end
@@ -192,13 +198,12 @@ defmodule PlatformWeb.Components.ThemePickerTest do
 
   describe "open and close" do
     test "toggle opens the popover (lg) and the sheet; close shuts both", %{view: view} do
-      html = view |> element("#theme-picker-trigger") |> render_click()
+      html = render_click(view, "toggle_theme_picker", %{})
       doc = doc(html)
 
       [popover_class] = doc |> q("#theme-picker-popover") |> LazyHTML.attribute("class")
       assert "lg:block" in String.split(popover_class)
       assert doc |> q("#theme-picker-sheet") |> LazyHTML.attribute("data-open") == ["true"]
-      assert doc |> q("#theme-picker-trigger") |> LazyHTML.attribute("aria-expanded") == ["true"]
 
       html = render_hook(view, "close_theme_picker", %{})
       doc = doc(html)
@@ -249,7 +254,7 @@ defmodule PlatformWeb.Components.ThemePickerTest do
     test "a malformed preset is a no-op and keeps the view alive", %{view: view, user: user} do
       render_hook(view, "set_theme", %{"preset" => ["burrow-sand"]})
       assert Repo.get!(User, user.id).preferences["theme"] == nil
-      assert render(view) =~ "theme-picker-trigger"
+      assert render(view) =~ "theme-picker-popover"
     end
 
     test "an anonymous shell (no user record) writes nothing and keeps its socket" do

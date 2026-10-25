@@ -62,7 +62,7 @@ defmodule PlatformWeb.ActivityRetiredTest do
 
     desktop =
       rendered_to_string(~H"""
-      <IconRail.icon_rail current_path="/chat" root_user={true} />
+      <PlatformWeb.Components.Sidebar.sidebar current_path="/chat" root_user={true} />
       """)
 
     mobile =

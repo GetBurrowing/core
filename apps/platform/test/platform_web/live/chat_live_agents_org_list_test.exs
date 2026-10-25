@@ -1,8 +1,14 @@
 defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
   @moduledoc """
-  The agents space renders ONCE in the chat rail (task
-  `01a0ca8b-a9f6-7001-8b5e-3de9de0f6c43` stage 1): in the agents block
-  above Pinned, and not also under its org heading.
+  The agents space renders ONCE in the chat list (task
+  `01a0ca8b-a9f6-7001-8b5e-3de9de0f6c43` stage 1): as the Agents row at the
+  head of Pinned, and not also among the Spaces rows.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail (its org
+  section headers and its agents block); the same rule is asserted on the
+  Chat list that replaced it, which renders beside the conversation at lg.
+  "Org list" below means the list's Spaces section (every sub-org channel,
+  flattened) and "block" means the Agents row.
 
   Every absence is asserted in the SAME render as the presence that makes
   it meaningful. An absence from the org section on its own passes for an
@@ -29,7 +35,6 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Chat.Sidebar
   alias Platform.Repo
   alias Platform.Tenancy
 
@@ -70,10 +75,6 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
   end
 
   defp acme_org, do: Tenancy.get_org_by_slug!("acme")
-
-  defp acme_section do
-    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == acme_org().id))
-  end
 
   defp create_space(name, attrs) do
     n = System.unique_integer([:positive])
@@ -121,50 +122,52 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     sibling = create_space("design", %{})
     add_user(agents, user)
     add_user(sibling, user)
-    %{conn: conn, user: user, agents: agents, sibling: sibling, section: acme_section()}
+    %{conn: conn, user: user, agents: agents, sibling: sibling}
   end
 
-  defp in_org_section?(html, section, space) do
+  defp found?(html, selector) do
     html
-    |> Floki.parse_document!()
-    |> Floki.find(~s(section[data-section-id="#{section.id}"] [data-space-id="#{space.id}"]))
-    |> Kernel.!=([])
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.any?()
+  end
+
+  # The list's Spaces section, scoped to the scroller so a search sheet or
+  # popover row (same data-role) can never stand in for it.
+  defp in_org_section?(html, space) do
+    found?(
+      html,
+      ~s(#chat-list-scroller [data-role="chat-list-spaces"] a[data-role="chat-list-row"][data-space-id="#{space.id}"])
+    )
   end
 
   defp in_rail_block?(html, space) do
-    html
-    |> Floki.parse_document!()
-    |> Floki.find(~s([data-role="agents-rail-block"] [data-space-id="#{space.id}"]))
-    |> Kernel.!=([])
+    found?(
+      html,
+      ~s(#chat-list-scroller [data-role="chat-list-pinned"] a[data-row-kind="agents"][data-space-id="#{space.id}"])
+    )
   end
 
   defp rail_block_rendered?(html) do
-    html
-    |> Floki.parse_document!()
-    |> Floki.find(~s([data-role="agents-rail-block"]))
-    |> Kernel.!=([])
+    found?(html, ~s(#chat-list-scroller a[data-role="chat-list-row"][data-row-kind="agents"]))
   end
 
   test "(a) flag on + goal: the space leaves its org list and shows in the block, in one render",
        %{conn: conn} do
     enable_flag()
 
-    %{conn: conn, agents: agents, sibling: sibling, section: section} =
+    %{conn: conn, agents: agents, sibling: sibling} =
       seed(conn, goal: "Close backlog items in Suite")
-
-    # Positive control for the section selector: the fixture org's section
-    # must exist, or every `refute in_org_section?` below passes vacuously.
-    assert section, "the Acme org has no default channel section"
 
     {:ok, _view, html} = live_at(conn, "/chat/#{sibling.slug}")
 
-    refute in_org_section?(html, section, agents),
+    refute in_org_section?(html, agents),
            "the agents space is listed under its org AND in the block"
 
     assert in_rail_block?(html, agents),
-           "the agents space is not in the rail block — it is reachable nowhere"
+           "the agents space is not the Agents row — it is reachable nowhere"
 
-    assert in_org_section?(html, section, sibling),
+    assert in_org_section?(html, sibling),
            "the no-goal sibling was filtered out of its org too"
 
     # Only the listing changed: the row keeps its org.
@@ -174,24 +177,24 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
   test "(b) flag off: the space lists under its org and no block renders", %{conn: conn} do
     disable_flag()
 
-    %{conn: conn, agents: agents, sibling: sibling, section: section} =
+    %{conn: conn, agents: agents, sibling: sibling} =
       seed(conn, goal: "Close backlog items in Suite")
 
     {:ok, _view, html} = live_at(conn, "/chat/#{sibling.slug}")
 
-    assert in_org_section?(html, section, agents)
-    assert in_org_section?(html, section, sibling)
+    assert in_org_section?(html, agents)
+    assert in_org_section?(html, sibling)
     refute rail_block_rendered?(html)
   end
 
   test "(c) flag on, no goal anywhere: the space lists under its org", %{conn: conn} do
     enable_flag()
-    %{conn: conn, agents: agents, sibling: sibling, section: section} = seed(conn, %{})
+    %{conn: conn, agents: agents, sibling: sibling} = seed(conn, %{})
 
     {:ok, _view, html} = live_at(conn, "/chat/#{sibling.slug}")
 
-    assert in_org_section?(html, section, agents)
-    assert in_org_section?(html, section, sibling)
+    assert in_org_section?(html, agents)
+    assert in_org_section?(html, sibling)
     refute rail_block_rendered?(html)
   end
 
@@ -199,14 +202,14 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
        %{conn: conn} do
     enable_flag()
 
-    %{conn: conn, user: user, agents: agents, sibling: sibling, section: section} =
+    %{conn: conn, user: user, agents: agents, sibling: sibling} =
       seed(conn, %{})
 
     make_acme_admin(user)
 
     {:ok, view, html} = live_at(conn, "/chat/#{agents.slug}")
 
-    assert in_org_section?(html, section, agents)
+    assert in_org_section?(html, agents)
     refute rail_block_rendered?(html)
 
     # The same event the header goal editor submits (the `save_goal` path).
@@ -215,20 +218,20 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     assert Repo.reload!(agents).goal == "Close backlog items in Suite",
            "save_goal was refused — the viewer is not an Acme admin"
 
-    refute in_org_section?(html, section, agents),
+    refute in_org_section?(html, agents),
            "a saved goal left the space listed under its org beside the block"
 
     assert in_rail_block?(html, agents)
-    assert in_org_section?(html, section, sibling)
+    assert in_org_section?(html, sibling)
 
     html = render_change(view, "save_goal", %{"goal" => ""})
 
     assert Repo.reload!(agents).goal in [nil, ""]
     refute rail_block_rendered?(html)
 
-    assert in_org_section?(html, section, agents),
+    assert in_org_section?(html, agents),
            "a cleared goal left the space missing from both the block and its org"
 
-    assert in_org_section?(html, section, sibling)
+    assert in_org_section?(html, sibling)
   end
 end

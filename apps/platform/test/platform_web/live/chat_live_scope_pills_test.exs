@@ -9,9 +9,21 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     * Chat header renders a prominent `<.scope_pill>` (size variant via
       `.chat-header-scope-pill` wrapper) when a channel is active.
     * Clicking the header pill pushes a `scope_filter` event with the
-      channel's scope and narrows the sub-org rail to that bucket only.
+      channel's scope and the pill reads as the active filter
+      (`aria-pressed="true"`); a second click clears it.
     * Header pill not rendered when no channel is active (e.g. on a DM /
       group conversation surface).
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail: its sub-org
+  section headers and colour dots, and the rail narrowing that
+  `scope_filter` used to drive. The section-dot test is deleted; the row test
+  is retargeted to the Chat list; the filter tests now read the header
+  pill's own pressed state, which is what `@scope_filter` still drives.
+
+  Burrow redesign 22 stage 4 deleted the desktop header pill (coverage row
+  49: the header is title + people subtitle). The desktop filter is the
+  details panel's Scope page switch, the same `scope_filter` event and
+  `phx-value-scope` payload; these tests read that switch's `aria-checked`.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -68,11 +80,27 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     end
   end
 
-  defp desktop_sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
+  defp chat_list(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#chat-list-scroller")
+    |> LazyHTML.to_html()
+  end
+
+  @header_pill ~s(#details-panel button[data-role="details-scope-switch"][phx-click="scope_filter"][phx-value-scope="initech"])
+
+  # Opens the details panel's Scope page, where the desktop filter lives.
+  defp open_scope(view) do
+    render_click(view, "details_open", %{"page" => "scope"})
+    view
+  end
+
+  defp header_pill_pressed(view) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(@header_pill)
+    |> LazyHTML.attribute("aria-checked")
   end
 
   describe "per-channel-row scope-pill removal (task 019e464d)" do
@@ -94,84 +122,54 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       create_channel("hooli")
 
       {:ok, _view, html} = live_at(conn, ~p"/chat/hooli")
-      sidebar = desktop_sidebar(html)
+      list = chat_list(html)
 
-      refute sidebar =~ "channel-row-scope-pill",
+      # Positive control: the active row is in the list being refuted over.
+      assert list =~ ~s(aria-current="page")
+
+      refute list =~ "channel-row-scope-pill",
              "Active channel row should no longer render the per-channel scope-pill wrapper"
+
+      refute list =~ "scope-pill"
     end
 
-    test "the section-header color dot is retained (color-only, no text label)",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      # Removing the per-channel pill must NOT remove the section-header grouping
-      # cue. Post-019e467d that cue is a COLOR-ONLY dot (`bg-<token>-dot`), not a
-      # text-bearing scope pill — recoloring a section must change only its dot,
-      # never any name/label. So the Hooli section header carries the
-      # `bg-hooli-dot` swatch but NO "Hooli scope" pill text.
-      create_channel("hooli")
-
-      {:ok, _view, html} = live_at(conn, ~p"/chat/hooli")
-      sidebar = desktop_sidebar(html)
-
-      assert sidebar =~ "channel-section-color-dot",
-             "Section header should render a color-only dot as the grouping cue"
-
-      assert sidebar =~ ~r/channel-section-color-dot--scope"\s+data-scope="hooli"/,
-             "Hooli section dot should carry the hooli color utility"
-
-      # The old color-derived pill text is gone from the section header — the
-      # dot is decorative (aria-hidden) and the only identity text is the name.
-      refute sidebar =~ ~s(aria-label="Hooli scope"),
-             "Section header must no longer render a text-bearing scope pill"
-    end
+    # "the section-header color dot is retained" was deleted: Burrow redesign
+    # 22 stage 2 deleted the desktop channel rail and its section headers.
   end
 
-  describe "chat-header scope-pill" do
-    test "header renders prominent scope-pill when a channel is active", %{conn: conn} do
+  describe "desktop scope filter (the details panel's Scope page)" do
+    test "the header has no pill; the panel's Scope page carries the clickable filter",
+         %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("initech")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/initech")
+      {:ok, view, html} = live_at(conn, ~p"/chat/initech")
 
-      # The `.chat-header-scope-pill` wrapper is the load-bearing CSS hook
-      # for the prominent size variant.
-      assert html =~ "chat-header-scope-pill",
-             "Chat header should render the prominent scope-pill wrapper for an active channel"
+      refute html =~ "chat-header-scope-pill"
 
-      # And it's the clickable variant, not the static read-only one —
-      # i.e. it carries the `phx-click="scope_filter"` button.
+      html = view |> open_scope() |> render()
+      assert has_element?(view, @header_pill)
       assert html =~ ~s(phx-click="scope_filter")
     end
 
-    test "header pill click pushes scope_filter event and narrows the sub-org rail", %{conn: conn} do
+    test "header pill click pushes scope_filter and the pill reads as the active filter",
+         %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("acme")
       create_channel("hooli")
       create_channel("initech")
 
       {:ok, view, _html} = live_at(conn, ~p"/chat/initech")
+      open_scope(view)
 
-      # Click the chat-header scope-pill — it pushes `scope_filter` with
-      # the channel's scope ("initech"). The active channel is Initech,
-      # so the filter narrows the rail to the Initech bucket only.
-      html_after =
-        view
-        |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
-        )
-        |> render_click()
+      assert header_pill_pressed(view) == ["false"]
 
-      sidebar = desktop_sidebar(html_after)
+      # Click the chat-header scope-pill — it pushes `scope_filter` with the
+      # channel's scope ("initech"), and `@scope_filter` marks the pill
+      # active.
+      view |> element(@header_pill) |> render_click()
 
-      # Initech bucket header is still present…
-      assert sidebar =~ "Initech"
-
-      # …but Hooli and Acme sub-org headers are filtered out.
-      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
-             "Hooli sub-org section should be hidden by the Initech scope filter"
-
-      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Acme\s*</,
-             "Acme sub-org section should be hidden by the Initech scope filter"
+      assert header_pill_pressed(view) == ["true"]
     end
 
     test "header pill is not rendered when no channel is active (DM surface)", %{conn: conn} do
@@ -198,7 +196,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       {:ok, view, html} = live_at(conn, ~p"/chat/initech")
 
       refute html =~ "chat-header-scope-pill-mobile"
-      assert html =~ "chat-header-scope-pill"
+      refute html =~ "chat-header-scope-pill"
 
       view |> element(~s(button[data-role="space-title"])) |> render_click()
       # The title opens on the All segment; the Scope row is on Space.
@@ -232,35 +230,17 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       create_channel("initech")
 
       {:ok, view, _} = live_at(conn, ~p"/chat/initech")
+      open_scope(view)
 
-      # First click → narrows to Initech.
-      html1 =
-        view
-        |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
-        )
-        |> render_click()
+      # First click → the Initech filter is on.
+      view |> element(@header_pill) |> render_click()
+      assert header_pill_pressed(view) == ["true"], "After first click, the filter should be on"
 
-      sidebar1 = desktop_sidebar(html1)
+      # Second click on the same pill → clears the filter.
+      view |> element(@header_pill) |> render_click()
 
-      refute sidebar1 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
-             "After first click, Hooli bucket should be hidden"
-
-      # Second click on the same pill → clears the filter, both buckets
-      # render again.
-      html2 =
-        view
-        |> element(
-          ~s(.chat-header-scope-pill button[phx-click="scope_filter"][phx-value-scope="initech"])
-        )
-        |> render_click()
-
-      sidebar2 = desktop_sidebar(html2)
-
-      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Hooli\s*</,
-             "After second click on the same pill, Hooli bucket should re-appear"
-
-      assert sidebar2 =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Initech\s*</
+      assert header_pill_pressed(view) == ["false"],
+             "After second click on the same pill, the filter should be cleared"
     end
   end
 end

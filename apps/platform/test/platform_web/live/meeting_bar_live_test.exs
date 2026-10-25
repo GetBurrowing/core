@@ -18,7 +18,6 @@ defmodule PlatformWeb.MeetingBarLiveTest do
     meeting_slug: "engineering-standup-2026-06-19",
     meeting_started_at: ~U[2026-04-14 08:00:00Z],
     on_meeting_page: false,
-    sidebar_collapsed: false,
     id: "meeting-bar"
   }
 
@@ -134,17 +133,15 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert html =~ "hero-video-camera-slash"
     end
 
-    test "renders with sidebar collapsed class" do
-      assigns = Map.put(@meeting_assigns, :sidebar_collapsed, true)
-      html = render_component(MeetingBarLive, assigns)
-
-      assert html =~ "lg:left-14"
-    end
-
-    test "renders with sidebar expanded class" do
+    # Burrow redesign 22 stage 1: the collapsible rail is gone, so the bar
+    # starts at the sidebar's right edge, one width read from app.css's
+    # `--sidebar-width` (220px, 200px at or below 1100px).
+    test "starts at the desktop sidebar's right edge, with no collapsed variant" do
       html = render_component(MeetingBarLive, @meeting_assigns)
 
-      assert html =~ "lg:left-56"
+      assert html =~ "lg:left-[var(--sidebar-width)]"
+      refute html =~ "lg:left-14"
+      refute html =~ "lg:left-56"
     end
 
     test "includes data-bar attributes for JS hook binding" do

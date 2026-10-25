@@ -1,13 +1,18 @@
 defmodule PlatformWeb.Components.ThemePicker do
   @moduledoc """
-  The utility bar's theme picker (task 01a1557a, Burrow redesign 2, stage 4).
-  It replaces the dark/light toggle that sat in the same place.
+  The theme picker (task 01a1557a, Burrow redesign 2, stage 4). It replaced
+  the dark/light toggle in the old utility bar.
 
-  Two function components, both self-contained so a later surface (Settings >
-  Appearance, the desktop shell) can move them without editing this module:
+  Opened by Settings > Appearance > Theme (`toggle_theme_picker`). Burrow
+  redesign 22 stage 1 deleted the utility bar's swatch trigger: at `lg` the
+  sidebar's mode row (`#mode-toggle`) flips light/dark in one click, and the
+  presets live behind Settings > Appearance.
 
-    * `theme_picker/1`: the trigger plus, at `lg` and above, a popover
-      anchored under it.
+  Two function components:
+
+    * `theme_picker/1`: at `lg` and above, a popover. The desktop sidebar
+      renders it inside the mode row's positioned wrapper, so it opens above
+      that row.
     * `theme_picker_sheet/1`: below `lg`, the same body in a bottom
       `<.sheet>`. It carries `lg:hidden`, so at `lg` it is `display: none`
       even while the shared `open` flag is true. Render it outside any
@@ -54,31 +59,13 @@ defmodule PlatformWeb.Components.ThemePicker do
     assigns = assign(assigns, :pref, Accounts.theme_preference(assigns.user))
 
     ~H"""
-    <div id="theme-picker" class="relative max-lg:hidden">
-      <%!-- While the popover is open the trigger pushes nothing: the
-            popover's click-away closes it, and a toggle here would reopen it
-            in the same click. Below lg the sheet's backdrop covers the
-            trigger. --%>
-      <button
-        id="theme-picker-trigger"
-        type="button"
-        phx-click={!@open && "toggle_theme_picker"}
-        class="rounded-lg p-1 text-subtle hover:bg-base-300 hover:text-base-content transition-colors"
-        aria-label="Theme"
-        title="Theme"
-        aria-haspopup="dialog"
-        aria-expanded={to_string(@open)}
-        aria-controls="theme-picker-popover"
-      >
-        <span class="hero-swatch size-4 align-middle" aria-hidden="true"></span>
-      </button>
-
+    <div id="theme-picker" class="max-lg:hidden">
       <div
         id="theme-picker-popover"
         role="dialog"
         aria-label="Theme"
         class={[
-          "absolute right-0 top-full mt-1 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-3 shadow-lg",
+          "absolute left-0 bottom-full mb-1 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-3 shadow-lg",
           if(@open, do: "hidden lg:block", else: "hidden")
         ]}
         phx-click-away={@open && "close_theme_picker"}

@@ -5,10 +5,11 @@ defmodule PlatformWeb.Layouts do
   """
   use PlatformWeb, :html
 
-  # Imported so the embedded shell.html.heex can call `<.icon_rail .../>` and
-  # `<.bottom_rail .../>` directly. The icon-rail replaces the inline desktop
-  # sidebar links + the previous `<.bottom_nav>` component (task 019e389b).
-  import PlatformWeb.Components.IconRail
+  # Imported so the embedded shell.html.heex can call `<.sidebar .../>` and
+  # `<.bottom_rail .../>` directly. The desktop sidebar replaced the icon rail
+  # and the utility bar at lg (Burrow redesign 22 stage 1).
+  import PlatformWeb.Components.IconRail, only: [bottom_rail: 1]
+  import PlatformWeb.Components.Sidebar, only: [sidebar: 1]
   import PlatformWeb.Components.MoreSheet
   import PlatformWeb.Components.ThemePicker
   import PlatformWeb.Components.MaskNamesChip
@@ -172,7 +173,7 @@ defmodule PlatformWeb.Layouts do
   Application layout for the guest meeting ingress (task 019f2483 stage 3).
 
   Null-ish outer wrapper — deliberately does NOT render `<.shell_layout>`,
-  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome.
+  `<.sidebar>`, `<.bottom_rail>`, or any auth-side chrome.
 
   ## Definite viewport height
 
@@ -229,7 +230,7 @@ defmodule PlatformWeb.Layouts do
   Structurally identical to the guest-meeting `guest/1` layout above (which
   the `meet.` guest scope pairs with `chrome_mode: "none"`): a null-ish
   outer wrapper that deliberately does NOT render `<.shell_layout>`,
-  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome — that chrome
+  `<.sidebar>`, `<.bottom_rail>`, or any auth-side chrome — that chrome
   lives in `shell.html.heex`, and omitting the `:shell` layout is exactly
   what makes the external surface chrome-less.
 
@@ -290,7 +291,7 @@ defmodule PlatformWeb.Layouts do
   `PlatformWeb.ExternalHoldingLive` at `/welcome` to an incompletely-
   provisioned external user. Structurally mirrors the guest-meeting
   `guest/1` layout above: a null-ish outer wrapper that deliberately does
-  NOT render `<.shell_layout>`, `<.icon_rail>`, `<.bottom_rail>`, or any
+  NOT render `<.shell_layout>`, `<.sidebar>`, `<.bottom_rail>`, or any
   auth-side chrome. Omitting the `:shell` layout is exactly what makes the
   holding surface zero-access by construction — no space list, no
   discovery, no path to another surface (the brand chip + logout are the
@@ -501,6 +502,17 @@ defmodule PlatformWeb.Layouts do
           %Platform.Accounts.User{} = user -> user
           _ -> nil
         end
+    end
+  end
+
+  # The sidebar user row's small line (Burrow redesign 22 stage 1): the
+  # viewer's org name when LiveAuth's `:current_user_org_membership` carries
+  # one, else nil and the line is omitted.
+  @doc false
+  def sidebar_org_name(assigns) do
+    case assigns[:current_user_org_membership] do
+      %{org: %{name: name}} when is_binary(name) and name != "" -> name
+      _ -> nil
     end
   end
 end

@@ -86,13 +86,20 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
     participant
   end
 
+  # The desktop entry is the details panel's Agents row (Burrow redesign 22
+  # stage 4 deleted the header button), so every mount opens the panel.
+  @entry "#details-panel [data-role='details-agents']"
+
   defp live_at(conn, user, space) do
     conn = init_test_session(conn, current_user_id: user.id)
 
-    case live(conn, ~p"/chat/#{space.slug}") do
-      {:error, {:live_redirect, %{to: redirect}}} -> live(conn, redirect)
-      ok -> ok
-    end
+    {:ok, view, _html} =
+      case live(conn, ~p"/chat/#{space.slug}") do
+        {:error, {:live_redirect, %{to: redirect}}} -> live(conn, redirect)
+        ok -> ok
+      end
+
+    {:ok, view, render_click(view, "details_open", %{"page" => "space"})}
   end
 
   # A channel with a member and three agents (Ada teal, Bo amber, Cy purple),
@@ -109,7 +116,7 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
     %{user: user, space: space, view: view, ada: ada, bo: bo, cy: cy}
   end
 
-  defp open_agents(view), do: view |> element("[data-role='agents-open']") |> render_click()
+  defp open_agents(view), do: view |> element(@entry) |> render_click()
 
   defp row(view, surface, participant) do
     view
@@ -120,14 +127,12 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
   defp silenced?(participant), do: Repo.get!(Participant, participant.id).silenced
 
   describe "opening" do
-    test "the header entry opens the phone sheet and the desktop popover with every inventory string",
+    test "the panel entry opens the phone sheet and the desktop popover with every inventory string",
          %{conn: conn} do
       %{view: view} = seeded(conn)
 
-      button = view |> element("[data-role='agents-open']") |> render()
-      assert button =~ ~s(aria-label="Agents")
-      assert button =~ ~s(aria-haspopup="dialog")
-      assert button =~ "min-h-11 min-w-11"
+      button = view |> element(@entry) |> render()
+      assert button =~ "Agents"
       assert button =~ "hero-cpu-chip"
       assert button =~ "2/3 awake"
 
@@ -273,7 +278,7 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
       assert html =~ "Agents cleared"
       refute Repo.get!(Space, space.id).agents_awake
       assert {silenced?(ada), silenced?(bo), silenced?(cy)} == {false, true, false}
-      assert view |> element("[data-role='agents-open']") |> render() =~ "0/3 awake"
+      assert view |> element(@entry) |> render() =~ "0/3 awake"
 
       assert has_element?(
                view,
@@ -401,7 +406,7 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
       %{view: view} = seeded(conn)
       html = open_agents(view)
 
-      assert html =~ ~s(data-role="agents-open")
+      assert html =~ ~s(data-role="details-agents")
 
       doc = LazyHTML.from_document(html)
       assert LazyHTML.query(doc, "[data-phx-link][phx-click]") |> Enum.count() == 0
@@ -414,8 +419,8 @@ defmodule PlatformWeb.ChatLiveAgentsSheetTest do
       add_agent(space, "Dm")
       {:ok, _view, html} = live_at(conn, user, space)
 
-      assert html =~ ~s(phx-click="settings_open")
-      refute html =~ ~s(data-role="agents-open")
+      assert html =~ ~s(data-role="details-settings")
+      refute html =~ ~s(data-role="details-agents")
     end
   end
 

@@ -4,6 +4,11 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
   `01a0b491-0718-7001-8bba-bf50f119bb13`): the rail block above Pinned and
   the space-header goal strip.
 
+  Burrow redesign 22 stage 2 deleted the desktop channel rail and its agents
+  block; the surviving list surface is the Chat list's Agents row
+  (`a[data-row-kind="agents"]` at the head of Pinned), which renders beside
+  the conversation at lg. "Rail block" below asserts that row.
+
   Assertions address `data-role` hooks, not Tailwind classes, so a restyle
   does not read as a behaviour regression. The two exceptions are
   deliberate and are the two visual claims the stage is actually making:
@@ -95,12 +100,46 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     :ok
   end
 
-  defp live_at(conn, path) do
-    case live(conn, path) do
-      {:error, {:live_redirect, %{to: redirect}}} -> live(conn, redirect)
-      ok -> ok
-    end
+  # The Chat list's Agents row (the rail block's replacement), scoped to the
+  # list scroller so a search or popover row can never stand in for it.
+  defp agents_row?(html, space \\ nil) do
+    space_sel = if space, do: ~s([data-space-id="#{space.id}"]), else: ""
+
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      ~s(#chat-list-scroller [data-role="chat-list-pinned"] a[data-role="chat-list-row"][data-row-kind="agents"]#{space_sel})
+    )
+    |> Enum.any?()
   end
+
+  # The desktop goal strip was deleted in Burrow redesign 22 stage 4: the
+  # goal now renders on the details panel's Goal page (the same
+  # `goal_panel/1` the strip rendered, ids prefixed "details-"). So every
+  # mount here opens the panel on that page and returns its html.
+  defp live_at(conn, path) do
+    {:ok, view, _html} =
+      case live(conn, path) do
+        {:error, {:live_redirect, %{to: redirect}}} -> live(conn, redirect)
+        ok -> ok
+      end
+
+    {:ok, view, render_click(view, "details_open", %{"page" => "goal"})}
+  end
+
+  # What the strip's presence used to prove: the goal UI renders (a goal
+  # sentence, the admin's invitation or the editor), on the panel's Goal page.
+  defp goal_line?(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(
+      ~s{#details-panel [data-page="goal"] :is([data-role="agents-goal-sentence"], [data-role="agents-goal-invite"], [data-role="agents-goal-form"])}
+    )
+    |> Enum.any?()
+  end
+
+  defp goal_page(html),
+    do: html |> Floki.parse_document!() |> Floki.find(~s(#details-panel [data-page="goal"]))
 
   describe "the flag gates both surfaces" do
     test "with the flag unset nothing renders, even though the columns hold values", %{conn: conn} do
@@ -114,8 +153,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
 
-      refute html =~ ~s(data-role="agents-rail-block")
-      refute html =~ ~s(data-role="agents-goal-strip")
+      refute agents_row?(html)
+      refute goal_line?(html)
       refute html =~ ~s(data-role="agents-goal-sentence")
       refute html =~ "Close backlog items in Suite"
     end
@@ -133,9 +172,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
 
-      assert html =~ ~s(data-role="agents-rail-block")
-      assert html =~ ~s(data-role="agents-rail-row")
-      assert html =~ ~s(data-role="agents-goal-strip")
+      assert agents_row?(html, space)
+      assert goal_line?(html)
       assert html =~ "Close backlog items in Suite"
     end
   end
@@ -156,17 +194,17 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, plain_html} = live_at(conn, "/chat/#{plain.slug}")
 
-      refute plain_html =~ ~s(data-role="agents-goal-strip")
+      refute goal_line?(plain_html)
       refute plain_html =~ ~s(data-role="agents-goal-leader")
       refute plain_html =~ ~s(data-role="agents-goal-measurement")
       # The topic still renders exactly as it did before this feature: the
       # suppression below is scoped to spaces that HAVE a goal.
       assert plain_html =~ "ordinary topic"
 
-      # The rail block is global, so it appears on the control channel too —
-      # that is the block saying which space the agents serve, not a claim
+      # The Agents row is global, so it appears on the control channel too —
+      # that is the list saying which space the agents serve, not a claim
       # about the space being read.
-      assert plain_html =~ ~s(data-role="agents-rail-block")
+      assert agents_row?(plain_html, goal_space)
     end
   end
 
@@ -403,7 +441,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     defp role_nodes(html, role),
       do: html |> Floki.parse_document!() |> Floki.find(~s([data-role="#{role}"]))
 
-    defp strip_fragment(html), do: html |> role_nodes("agents-goal-strip") |> Floki.raw_html()
+    defp strip_fragment(html), do: html |> goal_page() |> Floki.raw_html()
 
     test "admin: invitation -> form -> saved goal and rail block, all with no remount", %{
       conn: conn
@@ -418,7 +456,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       # No placeholder leader face, and no form until the admin asks for it.
       assert role_nodes(html, "agents-goal-leader") == []
       assert role_nodes(html, "agents-goal-form") == []
-      refute html =~ ~s(data-role="agents-rail-block")
+      refute agents_row?(html)
 
       html = view |> element(~s([data-role="agents-goal-invite"])) |> render_click()
 
@@ -439,10 +477,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert role_nodes(html, "agents-goal-invite") == []
       assert role_nodes(html, "agents-goal-form") == []
 
-      # The rail block now names THIS space — same view, no remount.
-      assert html
-             |> role_nodes("agents-rail-block")
-             |> Floki.find(~s([data-space-id="#{space.id}"])) != []
+      # The Agents row now names THIS space — same view, no remount.
+      assert agents_row?(html, space)
     end
 
     test "cancel returns the line to the invitation", %{conn: conn} do
@@ -468,7 +504,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
       refute html =~ ~s(data-role="agents-goal-invite")
-      refute html =~ ~s(data-role="agents-goal-strip")
+      refute goal_line?(html)
 
       {admin_conn, admin} = authenticated_conn(build_conn())
       make_acme_admin(admin)
@@ -476,7 +512,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, admin_html} = live_at(admin_conn, "/chat/#{space.slug}")
       assert admin_html =~ ~s(data-role="agents-goal-invite")
-      assert admin_html =~ ~s(data-role="agents-goal-strip")
+      assert goal_line?(admin_html)
     end
 
     test "scope: no invitation while another space carries a goal; archive it and it returns",
@@ -487,7 +523,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
       refute html =~ ~s(data-role="agents-goal-invite")
-      refute html =~ ~s(data-role="agents-goal-strip")
+      refute goal_line?(html)
 
       other |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
 
@@ -502,7 +538,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       {conn, _user, space} = invite_fixture(conn, true)
 
       {:ok, _view, html} = live_at(conn, "/chat/#{space.slug}")
-      refute html =~ ~s(data-role="agents-goal-strip")
+      refute goal_line?(html)
       refute html =~ ~s(data-role="agents-goal-invite")
 
       enable_flag()
@@ -735,7 +771,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert class_of(html, "agents-goal-number") =~ "font-mono"
 
       # No raw hex anywhere on the strip itself.
-      strip = class_of(html, "agents-goal-strip")
+      strip = html |> goal_page() |> Floki.attribute("class") |> List.first()
       refute strip =~ ~r/#[0-9a-fA-F]{3,8}\b/
     end
   end
@@ -1070,7 +1106,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       f = cadence_fixture(conn, :admin)
 
       {:ok, _view, html} = live_at(f.conn, "/chat/#{f.space.id}")
-      assert role_nodes(html, "agents-goal-strip") != []
+      assert goal_line?(html)
       assert tail_nodes(html) == []
 
       set_as_admin!(:off)
@@ -1087,7 +1123,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
          %{conn: conn} do
       f = cadence_fixture(conn, :member)
       {:ok, view, html} = live_at(f.conn, "/chat/#{f.space.id}")
-      assert role_nodes(html, "agents-goal-strip") != []
+      assert goal_line?(html)
       assert role_nodes(html, "agents-goal-cadence") == []
 
       before = heartbeat()

@@ -184,15 +184,20 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
     # User Access) AND the **Prompts** working-cluster tile (root_only?:
     # true as of 2026-05-20 — was false until then, which rendered the tile
     # for members but redirected on click; that bug is fixed).
-    test "admin user sees the Admin cluster tile in shell", %{conn: conn} do
+    # Burrow redesign 22 stage 1: the desktop sidebar that replaced the icon
+    # rail lists the phone's rows, and Admin is a Settings row there (task
+    # 01a1557a-807f stage 2). So an admin reaches it through /settings.
+    test "admin user reaches Admin through the shell's Settings row", %{conn: conn} do
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "admin")
 
-      {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
+      conn = authenticated_conn(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert has_element?(view, ~s(#sidebar [data-destination="settings"][href="/settings"]))
 
-      assert html =~ ~s(data-destination="admin")
-      assert html =~ ~s(href="/admin")
+      {:ok, settings, _html} = live(conn, ~p"/settings")
+      assert has_element?(settings, ~s([data-role="settings-admin"]), "Admin")
     end
 
     test "member user does NOT see the Admin cluster tile in shell", %{conn: conn} do

@@ -160,18 +160,25 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
     )
   end
 
-  # The rail slice, lifted from `ChatLiveCloseDmTest` — `<aside
-  # id="chat-sidebar">` is the only place a DM row's `data-space-id` lives on
-  # a `<div>`, so this is unambiguous.
+  # The list slice: Burrow redesign 22 stage 2 deleted the desktop channel
+  # rail, so the recipient's DM row lives in the Chat list's Direct section.
+  # Scoped to `#chat-list-scroller` because the search sheet and popover rows
+  # carry the same data-role.
   defp sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query(~s(#chat-list-scroller [data-role="chat-list-direct"]))
+    |> LazyHTML.to_html()
   end
 
   defp rail_has_space?(html, space_id) do
-    sidebar(html) =~ ~s(data-space-id="#{space_id}")
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query(
+      ~s(#chat-list-scroller [data-role="chat-list-direct"] a[data-role="chat-list-row"][data-space-id="#{space_id}"])
+    )
+    |> LazyHTML.to_tree()
+    |> Enum.any?()
   end
 
   defp live_rail(conn) do

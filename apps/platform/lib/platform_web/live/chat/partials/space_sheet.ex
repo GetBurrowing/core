@@ -78,6 +78,7 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   alias Platform.Chat.SidebarMask
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.MembersComponent
+  alias PlatformWeb.ChatLive.Partials.DetailsPanel
   alias PlatformWeb.ChatLive.Partials.AgentsSheet
   alias PlatformWeb.ChatLive.PresenceHooks
 
@@ -124,20 +125,12 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   @doc "The space sheet. The caller gates it on `@active_space && !@embedded`."
   def space_sheet(assigns) do
-    name =
-      title_prefix(assigns.active_space) <>
-        space_header_name(
-          assigns.active_space,
-          assigns.space_participants,
-          assigns.user_id,
-          space_mask(assigns)
-        )
+    name = display_name(assigns)
 
     assigns =
       assigns
       |> assign(:name, name)
       |> assign(:title, page_title(assigns.space_sheet, name))
-      |> assign(:scope_label, scope_label(assigns))
 
     ~H"""
     <.sheet
@@ -150,198 +143,436 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       swipe_dismiss
     >
       <:title>{@title}</:title>
-      <p
-        :if={strip_page?(@space_sheet)}
-        class="truncate px-4 pb-2 text-lg font-semibold text-base-content"
-        aria-hidden="true"
-        data-role="space-sheet-title"
-      >
-        {@title}
-      </p>
-      <div
-        :if={!strip_page?(@space_sheet)}
-        class="flex min-w-0 items-center gap-1 px-2 pb-2"
-      >
-        <button
-          type="button"
-          phx-click="space_sheet_back"
-          data-role="space-sheet-back"
-          aria-label="Back"
-          class="flex size-11 shrink-0 items-center justify-center rounded-lg text-base-content active:bg-base-200 focus-visible-ring"
-        >
-          <span class="hero-arrow-left size-5" aria-hidden="true"></span>
-        </button>
-        <p
-          class="min-w-0 truncate text-lg font-semibold text-base-content"
-          aria-hidden="true"
-          data-role="space-sheet-title"
-        >
-          {@title}
-        </p>
-      </div>
-      <.segment_strip :if={strip_page?(@space_sheet)} space_sheet={@space_sheet} />
-      <.links_page
-        :if={match?({:links, _}, @space_sheet)}
-        seg={elem(@space_sheet, 1)}
-        canvases={@canvases}
-        files={@space_sheet_files || []}
-        links={@space_sheet_links || []}
-      />
-      <div
-        :if={@space_sheet == :space}
-        class="flex flex-col pb-2"
-        data-role="space-sheet-page"
-        data-page="space"
-      >
-        <.sheet_row
-          role="space-sheet-search"
-          icon="hero-magnifying-glass"
-          label="Search in space"
-          click={JS.push("space_sheet_page", value: %{page: "search"})}
-        />
-        <%!-- Opens the existing canvases drawer. Already open: just shut the
-             sheet, because `canvas_panel_toggle` would close the drawer. --%>
-        <.sheet_row
-          role="space-sheet-canvases"
-          icon="hero-puzzle-piece"
-          label="Canvases in this space"
-          preview={count_preview(@canvases)}
-          click={
-            if @show_canvases,
-              do: JS.push("close_space_sheet"),
-              else: JS.push("close_space_sheet") |> JS.push("canvas_panel_toggle")
-          }
-        />
-        <%!-- The phone way into the Members sheet (task 01a1557a-8f80 stage
-             3): every space but a DM, like the header entry; the meta is the
-             people count. --%>
-        <.sheet_row
-          :if={@active_space.kind != "dm"}
-          role="space-sheet-members"
-          icon="hero-users"
-          label="Members"
-          preview={MembersComponent.people_label(@space_participants)}
-          click={JS.push("close_space_sheet") |> JS.push("members_open")}
-        />
-        <%!-- The phone way into the Agents sheet (task 01a1557a-8f80 stage
-             2): the header entry's condition (`agents_entry?/3`); the meta is
-             the masters' '2/4 awake · on-mention'. --%>
-        <.sheet_row
-          :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
-          role="space-sheet-agents"
-          icon="hero-cpu-chip"
-          label="Agents"
-          preview={AgentsSheet.entry_meta(@agent_attention, @active_space)}
-          click={JS.push("close_space_sheet") |> JS.push("agents_open")}
-        />
-        <.sheet_row
-          role="space-sheet-threads"
-          icon="hero-chat-bubble-left-right"
-          label="Threads"
-          preview={count_preview(@space_sheet_threads)}
-          click={JS.push("space_sheet_page", value: %{page: "threads"})}
-        />
-        <.sheet_row
-          role="space-sheet-pinned"
-          icon="hero-bookmark"
-          label="Pinned"
-          preview={count_preview(@pins)}
-          click={JS.push("space_sheet_page", value: %{page: "pinned"})}
-        />
-        <%!-- The goal strip's own condition. No goal yet (an admin's
-             invitation): "Add a goal" in body text, no number. --%>
-        <.sheet_row
-          :if={@goal_panel || @goal_invite?}
-          role="space-sheet-goal"
-          icon="hero-flag"
-          label="Goal"
-          preview={if @goal_panel, do: @goal_panel.goal, else: "Add a goal"}
-          preview_body={is_nil(@goal_panel)}
-          click={JS.push("space_sheet_page", value: %{page: "goal"})}
-        />
-        <%!-- The mobile header pill's condition (internal users, a channel
-             with an org scope). The preview is the pill's masked label. --%>
-        <.sheet_row
-          :if={!@external? && @active_space_scope}
-          role="space-sheet-scope"
-          icon="hero-tag"
-          label="Scope"
-          preview={scope_preview(@scope_label, @scope_filter == @active_space_scope)}
-          click={JS.push("space_sheet_page", value: %{page: "scope"})}
-        />
-        <%!-- Notifications (task 01a14a91) goes here, once a per-space
-             notification setting exists for it to open. --%>
-        <.sheet_row
-          :if={@meetings_enabled && !@in_meeting && !@external?}
-          role="space-sheet-call"
-          icon="hero-phone"
-          label="Start a call"
-          click={JS.push("close_space_sheet") |> JS.push("meeting_join")}
-        />
-        <.sheet_row
-          role="space-sheet-settings"
-          icon="hero-cog-6-tooth"
-          label="Space settings"
-          click={JS.push("close_space_sheet") |> JS.push("settings_open")}
-        />
-      </div>
-
-      <.search_page
-        :if={@space_sheet == :search}
+      <.sections
+        surface={:sheet}
+        prefix="space-sheet"
+        page={@space_sheet}
         name={@name}
-        query={@search_query}
-        results={@search_results}
+        active_space={@active_space}
+        space_participants={@space_participants}
+        user_id={@user_id}
+        mask_names?={@mask_names?}
+        revealed_section_ids={@revealed_section_ids}
+        sidebar_sections={@sidebar_sections}
+        external?={@external?}
+        canvases={@canvases}
+        show_canvases={@show_canvases}
+        meetings_enabled={@meetings_enabled}
+        in_meeting={@in_meeting}
+        agent_presence={@agent_presence}
+        has_agent_participant={@has_agent_participant}
+        agent_attention={@agent_attention}
+        search_query={@search_query}
+        search_results={@search_results}
         participants_map={@participants_map}
-      />
-      <.pinned_page
-        :if={@space_sheet == :pinned}
-        pins={@space_sheet_pins}
-        archived?={not is_nil(@active_space.archived_at)}
-      />
-      <.threads_page
-        :if={@space_sheet == :threads}
-        threads={@space_sheet_threads}
-      />
-      <%!-- Rendered only on this page, with prefixed ids, so it never
-           duplicates the (phone-hidden) strip's ids. --%>
-      <div
-        :if={@space_sheet == :goal}
-        class="flex items-start gap-2 px-4 pb-3"
-        data-role="space-sheet-page"
-        data-page="goal"
-      >
-        <.goal_panel
-          active_space={@active_space}
-          goal_panel={@goal_panel}
-          goal_edit={@goal_edit}
-          can_edit_goal?={@can_edit_goal?}
-          goal_invite?={@goal_invite?}
-          goal_scope_options={@goal_scope_options}
-          goal_scope_error={@goal_scope_error}
-          goal_cadence_form={@goal_cadence_form}
-          goal_time_zone={@goal_time_zone}
-          id_prefix="space-sheet-"
-        />
-      </div>
-      <.scope_page
-        :if={@space_sheet == :scope && !@external? && @active_space_scope}
-        label={@scope_label}
-        on?={@scope_filter == @active_space_scope}
-        value={scope_value(assigns)}
+        pins={@pins}
+        page_pins={@space_sheet_pins}
+        page_threads={@space_sheet_threads}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
+        active_space_scope={@active_space_scope}
+        active_space_org={@active_space_org}
+        scope_filter={@scope_filter}
+        page_files={@space_sheet_files}
+        page_links={@space_sheet_links}
       />
     </.sheet>
     """
   end
 
-  defp page_title(:search, name), do: "Search in " <> name
-  defp page_title(:pinned, _name), do: "Pinned"
-  defp page_title(:threads, _name), do: "Threads"
-  defp page_title(:goal, _name), do: "Goal"
-  defp page_title(:scope, _name), do: "Scope"
-  defp page_title(_page, name), do: name
+  @doc """
+  The space name both surfaces title themselves with: the "#" prefix for a
+  channel, then `space_header_name/4` through `space_mask/1`, so a masked
+  space shows its mask on the sheet and on the desktop panel alike.
+  """
+  def display_name(assigns) do
+    title_prefix(assigns.active_space) <>
+      space_header_name(
+        assigns.active_space,
+        assigns.space_participants,
+        assigns.user_id,
+        space_mask(assigns)
+      )
+  end
+
+  @doc "The heading a page shows: the page's name, or the space's on a strip page."
+  def page_title(:search, name), do: "Search in " <> name
+  def page_title(:pinned, _name), do: "Pinned"
+  def page_title(:threads, _name), do: "Threads"
+  def page_title(:goal, _name), do: "Goal"
+  def page_title(:scope, _name), do: "Scope"
+  def page_title(_page, name), do: name
+
+  # ── Sections: one body for the phone sheet and the desktop panel ──────
+
+  attr(:surface, :atom, required: true, values: [:sheet, :panel])
+  # Every id and data-role below is "<prefix>-...": "space-sheet" on the
+  # sheet, "details" on the panel, so both can be in the DOM at once.
+  attr(:prefix, :string, required: true)
+  # The page shown: `@space_sheet` on the sheet, `@details_panel` on the
+  # panel. Same shapes (`:space`, `{:links, seg}`, `:search`, `:pinned`,
+  # `:threads`, `:goal`, `:scope`).
+  attr(:page, :any, required: true)
+  attr(:name, :string, required: true)
+  attr(:active_space, :any, required: true)
+  attr(:space_participants, :list, required: true)
+  attr(:user_id, :any, required: true)
+  attr(:mask_names?, :boolean, required: true)
+  attr(:revealed_section_ids, :any, required: true)
+  attr(:sidebar_sections, :list, required: true)
+  attr(:external?, :boolean, required: true)
+  attr(:canvases, :list, required: true)
+  attr(:show_canvases, :boolean, required: true)
+  attr(:meetings_enabled, :boolean, required: true)
+  attr(:in_meeting, :boolean, required: true)
+  attr(:agent_presence, :map, required: true)
+  attr(:has_agent_participant, :boolean, required: true)
+  attr(:agent_attention, :any, required: true)
+  attr(:search_query, :any, required: true)
+  attr(:search_results, :list, required: true)
+  attr(:participants_map, :map, required: true)
+  attr(:pins, :list, required: true)
+  attr(:page_pins, :list, required: true)
+  attr(:page_threads, :list, required: true)
+  attr(:goal_panel, :any, required: true)
+  attr(:goal_edit, :boolean, required: true)
+  attr(:can_edit_goal?, :boolean, required: true)
+  attr(:goal_invite?, :boolean, default: false)
+  attr(:goal_scope_options, :list, default: [])
+  attr(:goal_scope_error, :atom, default: nil)
+  attr(:goal_cadence_form, :map, default: nil)
+  attr(:goal_time_zone, :string, default: nil)
+  attr(:active_space_scope, :any, required: true)
+  attr(:active_space_org, :any, default: nil)
+  attr(:scope_filter, :any, required: true)
+  attr(:page_files, :any, default: nil)
+  attr(:page_links, :any, default: nil)
+  # Panel only (Burrow redesign 22 stage 4): the desktop Members and Agents
+  # popovers, rendered right under their rows so the row is their anchor.
+  # The sheet passes neither; its rows open the phone sheets.
+  slot(:members_popover)
+  slot(:agents_popover)
+
+  @doc """
+  The space sheet's body (Burrow redesign 22 stage 3): the title line or the
+  back row, the segment strip, the Links & files segments, the Space rows and
+  the pushed pages. `space_sheet/1` renders it with `surface={:sheet}`; the
+  desktop details panel (`Partials.DetailsPanel`) with `surface={:panel}`.
+
+  What the surface changes, and nothing else:
+
+    * ids and data-roles take `prefix`;
+    * the page events: `space_sheet_page` / `space_sheet_back` on the sheet,
+      `details_page` / `details_back` on the panel;
+    * an action row on the sheet pushes `close_space_sheet` first; on the
+      panel it fires the existing event alone and the panel stays open;
+    * the sheet draws its own title line on a strip page (the panel's header
+      already carries the name);
+    * the panel omits "Search in space" and ends the Space rows with "Hide
+      channel" (channels) or "Close conversation" (DMs and groups), with
+      "Promote to channel" before it on a group conversation;
+    * the panel renders the desktop Members and Agents popovers (the
+      `members_popover` / `agents_popover` slots) under their rows;
+    * paint: the sheet's 44px phone rows with `active:` press; the panel's
+      compact desktop rows on base-200, whose paint (hover included) is
+      `DetailsPanel.paint/1`'s, so this phone file carries no hover utility.
+
+  The jump rows (a Search result, a Pinned row, a Threads row) keep
+  `from=space_sheet` on both surfaces: that names `SpaceSheetHooks`' jump,
+  which both use.
+  """
+  def sections(assigns) do
+    assigns =
+      assigns
+      |> assign(:title, page_title(assigns.page, assigns.name))
+      |> assign(:scope_label, scope_label(assigns))
+
+    ~H"""
+    <p
+      :if={@surface == :sheet and strip_page?(@page)}
+      class="truncate px-4 pb-2 text-lg font-semibold text-base-content"
+      aria-hidden="true"
+      data-role={@prefix <> "-title"}
+    >
+      {@title}
+    </p>
+    <div
+      :if={!strip_page?(@page)}
+      class={
+        pick(
+          @surface,
+          "flex min-w-0 items-center gap-1 px-2 pb-2",
+          "flex min-w-0 items-center gap-1 px-1 pb-1"
+        )
+      }
+    >
+      <button
+        type="button"
+        phx-click={back_event(@surface)}
+        data-role={@prefix <> "-back"}
+        aria-label="Back"
+        class={
+          pick(
+            @surface,
+            "flex size-11 shrink-0 items-center justify-center rounded-lg text-base-content active:bg-base-200 focus-visible-ring",
+            DetailsPanel.paint(:back)
+          )
+        }
+      >
+        <span
+          class={pick(@surface, "hero-arrow-left size-5", "hero-arrow-left size-4")}
+          aria-hidden="true"
+        >
+        </span>
+      </button>
+      <p
+        class={
+          pick(
+            @surface,
+            "min-w-0 truncate text-lg font-semibold text-base-content",
+            "min-w-0 truncate text-sm font-semibold text-base-content"
+          )
+        }
+        aria-hidden={pick(@surface, "true", nil)}
+        data-role={@prefix <> "-title"}
+      >
+        {@title}
+      </p>
+    </div>
+    <.segment_strip :if={strip_page?(@page)} surface={@surface} prefix={@prefix} page={@page} />
+    <.links_page
+      :if={match?({:links, _}, @page)}
+      surface={@surface}
+      prefix={@prefix}
+      seg={elem(@page, 1)}
+      canvases={@canvases}
+      files={@page_files || []}
+      links={@page_links || []}
+    />
+    <div
+      :if={@page == :space}
+      class={pick(@surface, "flex flex-col pb-2", "flex flex-col gap-px pb-2")}
+      data-role={@prefix <> "-page"}
+      data-page="space"
+    >
+      <.sheet_row
+        :if={@surface == :sheet}
+        surface={@surface}
+        role={@prefix <> "-search"}
+        icon="hero-magnifying-glass"
+        label="Search in space"
+        click={JS.push(page_event(@surface), value: %{page: "search"})}
+      />
+      <%!-- Opens the existing canvases drawer. Already open: the sheet just
+           shuts, because `canvas_panel_toggle` would close the drawer; the
+           panel does nothing. --%>
+      <.sheet_row
+        surface={@surface}
+        role={@prefix <> "-canvases"}
+        icon="hero-puzzle-piece"
+        label="Canvases in this space"
+        preview={count_preview(@canvases)}
+        click={
+          if @show_canvases,
+            do: lead(@surface),
+            else: lead(@surface) |> JS.push("canvas_panel_toggle")
+        }
+      />
+      <%!-- The phone way into the Members sheet (task 01a1557a-8f80 stage
+           3): every space but a DM, like the header entry; the meta is the
+           people count. --%>
+      <.sheet_row
+        :if={@active_space.kind != "dm"}
+        surface={@surface}
+        role={@prefix <> "-members"}
+        icon="hero-users"
+        label="Members"
+        preview={MembersComponent.people_label(@space_participants)}
+        click={lead(@surface) |> JS.push("members_open")}
+      />
+      <%= if @active_space.kind != "dm" do %>
+        {render_slot(@members_popover)}
+      <% end %>
+      <%!-- The phone way into the Agents sheet (task 01a1557a-8f80 stage
+           2): the header entry's condition (`agents_entry?/3`); the meta is
+           the masters' '2/4 awake · on-mention'. --%>
+      <.sheet_row
+        :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
+        surface={@surface}
+        role={@prefix <> "-agents"}
+        icon="hero-cpu-chip"
+        label="Agents"
+        preview={AgentsSheet.entry_meta(@agent_attention, @active_space)}
+        click={lead(@surface) |> JS.push("agents_open")}
+      />
+      <%= if agents_entry?(@agent_presence, @has_agent_participant, @active_space) do %>
+        {render_slot(@agents_popover)}
+      <% end %>
+      <.sheet_row
+        surface={@surface}
+        role={@prefix <> "-threads"}
+        icon="hero-chat-bubble-left-right"
+        label="Threads"
+        preview={count_preview(@page_threads)}
+        click={JS.push(page_event(@surface), value: %{page: "threads"})}
+      />
+      <.sheet_row
+        surface={@surface}
+        role={@prefix <> "-pinned"}
+        icon="hero-bookmark"
+        label="Pinned"
+        preview={count_preview(@pins)}
+        click={JS.push(page_event(@surface), value: %{page: "pinned"})}
+      />
+      <%!-- The goal strip's own condition. No goal yet (an admin's
+           invitation): "Add a goal" in body text, no number. --%>
+      <.sheet_row
+        :if={@goal_panel || @goal_invite?}
+        surface={@surface}
+        role={@prefix <> "-goal"}
+        icon="hero-flag"
+        label="Goal"
+        preview={if @goal_panel, do: @goal_panel.goal, else: "Add a goal"}
+        preview_body={is_nil(@goal_panel)}
+        click={JS.push(page_event(@surface), value: %{page: "goal"})}
+      />
+      <%!-- The mobile header pill's condition (internal users, a channel
+           with an org scope). The preview is the pill's masked label. --%>
+      <.sheet_row
+        :if={!@external? && @active_space_scope}
+        surface={@surface}
+        role={@prefix <> "-scope"}
+        icon="hero-tag"
+        label="Scope"
+        preview={scope_preview(@scope_label, @scope_filter == @active_space_scope)}
+        click={JS.push(page_event(@surface), value: %{page: "scope"})}
+      />
+      <%!-- Notifications (task 01a14a91) goes here, once a per-space
+           notification setting exists for it to open. --%>
+      <.sheet_row
+        :if={@meetings_enabled && !@in_meeting && !@external?}
+        surface={@surface}
+        role={@prefix <> "-call"}
+        icon="hero-phone"
+        label="Start a call"
+        click={lead(@surface) |> JS.push("meeting_join")}
+      />
+      <.sheet_row
+        surface={@surface}
+        role={@prefix <> "-settings"}
+        icon="hero-cog-6-tooth"
+        label="Space settings"
+        click={lead(@surface) |> JS.push("settings_open")}
+      />
+      <%!-- Panel only, not in canvas (Burrow redesign 22 stage 4): a group
+           conversation's "Promote to channel", moved here from the old
+           desktop header with its form and event, so the feature stays. --%>
+      <DetailsPanel.promote_row :if={
+        @surface == :panel and @active_space.kind == "group" and !@active_space.is_direct
+      } />
+      <%!-- Panel only, last (master-desktop.html L843): the row menu's own
+           events. A DM or a group closes (`close_dm`); a channel hides
+           (`hide_channel`). Archive is in Space settings, not a second row. --%>
+      <.sheet_row
+        :if={@surface == :panel and @active_space.kind in ["dm", "group"]}
+        surface={@surface}
+        role={@prefix <> "-close-dm"}
+        icon="hero-x-circle"
+        label="Close conversation"
+        click={JS.push("close_dm", value: %{id: @active_space.id})}
+      />
+      <.sheet_row
+        :if={@surface == :panel and @active_space.kind not in ["dm", "group"]}
+        surface={@surface}
+        role={@prefix <> "-hide"}
+        icon="hero-eye-slash"
+        label="Hide channel"
+        click={JS.push("hide_channel", value: %{id: @active_space.id})}
+      />
+    </div>
+
+    <.search_page
+      :if={@page == :search}
+      surface={@surface}
+      prefix={@prefix}
+      name={@name}
+      query={@search_query}
+      results={@search_results}
+      participants_map={@participants_map}
+    />
+    <.pinned_page
+      :if={@page == :pinned}
+      surface={@surface}
+      prefix={@prefix}
+      pins={@page_pins}
+      archived?={not is_nil(@active_space.archived_at)}
+    />
+    <.threads_page
+      :if={@page == :threads}
+      surface={@surface}
+      prefix={@prefix}
+      threads={@page_threads}
+    />
+    <%!-- Rendered only on this page, with prefixed ids. Gated on the Goal
+         row's own condition (the deleted desktop strip's, Burrow redesign 22
+         stage 4), so a page pushed with no goal and no invitation shows no
+         goal UI. --%>
+    <div
+      :if={@page == :goal and (@goal_panel || @goal_invite?)}
+      class={pick(@surface, "flex items-start gap-2 px-4 pb-3", "flex items-start gap-2 px-2 pb-3")}
+      data-role={@prefix <> "-page"}
+      data-page="goal"
+    >
+      <.goal_panel
+        active_space={@active_space}
+        goal_panel={@goal_panel}
+        goal_edit={@goal_edit}
+        can_edit_goal?={@can_edit_goal?}
+        goal_invite?={@goal_invite?}
+        goal_scope_options={@goal_scope_options}
+        goal_scope_error={@goal_scope_error}
+        goal_cadence_form={@goal_cadence_form}
+        goal_time_zone={@goal_time_zone}
+        id_prefix={@prefix <> "-"}
+      />
+    </div>
+    <.scope_page
+      :if={@page == :scope && !@external? && @active_space_scope}
+      surface={@surface}
+      prefix={@prefix}
+      label={@scope_label}
+      on?={@scope_filter == @active_space_scope}
+      value={scope_value(assigns)}
+    />
+    """
+  end
+
+  # The surface's own class string or value: the sheet's first, the panel's
+  # second.
+  defp pick(:sheet, sheet, _panel), do: sheet
+  defp pick(:panel, _sheet, panel), do: panel
+
+  defp page_event(:sheet), do: "space_sheet_page"
+  defp page_event(:panel), do: "details_page"
+
+  defp back_event(:sheet), do: "space_sheet_back"
+  defp back_event(:panel), do: "details_back"
+
+  # What an action row does before its own event: the sheet shuts, the panel
+  # stays open.
+  defp lead(:sheet), do: JS.push("close_space_sheet")
+  defp lead(:panel), do: %JS{}
 
   # ── Search ────────────────────────────────────────────────────────────
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:name, :string, required: true)
   attr(:query, :any, required: true)
   attr(:results, :list, required: true)
@@ -352,65 +583,80 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   # with the page, so `SearchFocus` focuses the field on open.
   defp search_page(assigns) do
     ~H"""
-    <div class="flex min-h-0 flex-col pb-2" data-role="space-sheet-page" data-page="search">
+    <div class="flex min-h-0 flex-col pb-2" data-role={@prefix <> "-page"} data-page="search">
       <form
-        id="space-sheet-search-form"
+        id={@prefix <> "-search-form"}
         role="search"
         phx-change="search_submit"
         phx-submit="search_submit"
-        class="relative px-4 pb-2"
+        class={pick(@surface, "relative px-4 pb-2", "relative px-2 pb-2")}
       >
         <span
-          class="hero-magnifying-glass pointer-events-none absolute left-7 top-1/2 size-4 -translate-y-1/2 text-subtle"
+          class={
+            pick(
+              @surface,
+              "hero-magnifying-glass pointer-events-none absolute left-7 top-1/2 size-4 -translate-y-1/2 text-subtle",
+              "hero-magnifying-glass pointer-events-none absolute left-5 top-1/2 size-4 -translate-y-1/2 text-subtle"
+            )
+          }
           aria-hidden="true"
         >
         </span>
         <input
-          id="space-sheet-search-input"
+          id={@prefix <> "-search-input"}
           type="search"
           name="search[query]"
           value={@query}
           phx-hook="SearchFocus"
           data-search-intent="true"
-          data-blur-on-scroll="space-sheet-search-results"
+          data-blur-on-scroll={@prefix <> "-search-results"}
           phx-debounce="250"
           maxlength="200"
           placeholder={"Search in " <> @name}
           autocomplete="off"
           enterkeyhint="search"
           aria-label={"Search messages in " <> @name}
-          class="h-11 w-full rounded-lg border border-edge bg-base-200 pl-9 pr-3 text-base placeholder:text-subtle focus:border-primary focus:outline-none"
+          class={
+            pick(
+              @surface,
+              "h-11 w-full rounded-lg border border-edge bg-base-200 pl-9 pr-3 text-base placeholder:text-subtle focus:border-primary focus:outline-none",
+              "h-9 w-full rounded-field border border-edge bg-base-100 pl-9 pr-3 text-sm placeholder:text-subtle focus:border-primary focus:outline-none"
+            )
+          }
         />
       </form>
-      <div id="space-sheet-search-results" class="flex flex-col">
-        <p :if={!present?(@query)} class="px-4 py-3 text-sm text-subtle">
+      <div id={@prefix <> "-search-results"} class="flex flex-col">
+        <p
+          :if={!present?(@query)}
+          class={pick(@surface, "px-4 py-3 text-sm text-subtle", "px-2 py-3 text-sm text-subtle")}
+        >
           Type to search this space's messages.
         </p>
         <p
           :if={present?(@query) and @results == []}
-          class="px-4 py-3 text-sm text-subtle"
-          data-role="space-sheet-search-empty"
+          class={pick(@surface, "px-4 py-3 text-sm text-subtle", "px-2 py-3 text-sm text-subtle")}
+          data-role={@prefix <> "-search-empty"}
         >
           No messages match.
         </p>
         <button
           :for={result <- @results}
           type="button"
-          data-role="space-sheet-search-result"
+          data-role={@prefix <> "-search-result"}
           data-message-id={result.id}
           phx-click={
-            JS.push("close_space_sheet")
+            lead(@surface)
             |> JS.push("search_open_result",
               value: %{"message-id" => result.id, "from" => "space_sheet"}
             )
           }
-          class="flex min-h-11 w-full flex-col gap-0.5 px-4 py-2 text-left active:bg-base-200 focus-visible-ring"
+          class={item_class(@surface)}
         >
           <span class="flex min-w-0 items-center gap-2 text-xs text-subtle">
             <span class="truncate">
               {PresenceHooks.sender_name(@participants_map, result.participant_id)}
             </span>
-            <.local_time id={"space-sheet-search-time-#{result.id}"} timestamp={result.inserted_at} />
+            <.local_time id={"#{@prefix}-search-time-#{result.id}"} timestamp={result.inserted_at} />
           </span>
           <span class="min-w-0 truncate text-sm text-base-content">{search_headline(result)}</span>
         </button>
@@ -421,6 +667,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   # ── Pinned ────────────────────────────────────────────────────────────
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:pins, :list, required: true)
   attr(:archived?, :boolean, required: true)
 
@@ -430,41 +678,57 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   # unpinning removes nothing anyone wrote.
   defp pinned_page(assigns) do
     ~H"""
-    <div class="flex flex-col pb-2" data-role="space-sheet-page" data-page="pinned">
-      <p :if={@pins == []} class="px-4 py-3 text-sm text-subtle" data-role="space-sheet-pins-empty">
+    <div class="flex flex-col pb-2" data-role={@prefix <> "-page"} data-page="pinned">
+      <p
+        :if={@pins == []}
+        class={pick(@surface, "px-4 py-3 text-sm text-subtle", "px-2 py-3 text-sm text-subtle")}
+        data-role={@prefix <> "-pins-empty"}
+      >
         Nothing pinned yet. Long-press a message to pin it.
       </p>
       <div
         :for={pin <- @pins}
         class="flex min-w-0 items-center"
-        data-role="space-sheet-pin"
+        data-role={@prefix <> "-pin"}
         data-message-id={pin.message_id}
       >
         <button
           type="button"
-          data-role="space-sheet-pin-open"
+          data-role={@prefix <> "-pin-open"}
           phx-click={
-            JS.push("close_space_sheet")
+            lead(@surface)
             |> JS.push("search_open_result",
               value: %{"message-id" => pin.message_id, "from" => "space_sheet"}
             )
           }
-          class="flex min-h-11 min-w-0 flex-1 flex-col gap-0.5 px-4 py-2 text-left active:bg-base-200 focus-visible-ring"
+          class={
+            pick(
+              @surface,
+              "flex min-h-11 min-w-0 flex-1 flex-col gap-0.5 px-4 py-2 text-left active:bg-base-200 focus-visible-ring",
+              DetailsPanel.paint(:pin_open)
+            )
+          }
         >
           <span class="min-w-0 truncate text-sm text-base-content">{excerpt(pin.content)}</span>
           <span class="flex min-w-0 items-center gap-2 text-xs text-subtle">
             <span class="truncate">{pin.author || "Unknown"}</span>
-            <.local_time id={"space-sheet-pin-time-#{pin.pin_id}"} timestamp={pin.inserted_at} />
+            <.local_time id={"#{@prefix}-pin-time-#{pin.pin_id}"} timestamp={pin.inserted_at} />
           </span>
         </button>
         <button
           :if={!@archived?}
           type="button"
-          data-role="space-sheet-unpin"
+          data-role={@prefix <> "-unpin"}
           phx-click="pin_toggle"
           phx-value-message-id={pin.message_id}
           phx-value-space-id={pin.space_id}
-          class="flex min-h-11 shrink-0 items-center px-4 text-sm text-base-content active:bg-base-200 focus-visible-ring"
+          class={
+            pick(
+              @surface,
+              "flex min-h-11 shrink-0 items-center px-4 text-sm text-base-content active:bg-base-200 focus-visible-ring",
+              DetailsPanel.paint(:unpin)
+            )
+          }
         >
           Unpin
         </button>
@@ -475,6 +739,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   # ── Threads ───────────────────────────────────────────────────────────
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:threads, :list, required: true)
 
   # A row fires `space_sheet_open_thread`, not `open_inline_thread`: that one
@@ -483,24 +749,24 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   # window on it when it is not loaded) and expands the thread if it is shut.
   defp threads_page(assigns) do
     ~H"""
-    <div class="flex flex-col pb-2" data-role="space-sheet-page" data-page="threads">
+    <div class="flex flex-col pb-2" data-role={@prefix <> "-page"} data-page="threads">
       <p
         :if={@threads == []}
-        class="px-4 py-3 text-sm text-subtle"
-        data-role="space-sheet-threads-empty"
+        class={pick(@surface, "px-4 py-3 text-sm text-subtle", "px-2 py-3 text-sm text-subtle")}
+        data-role={@prefix <> "-threads-empty"}
       >
         No threads yet.
       </p>
       <button
         :for={thread <- @threads}
         type="button"
-        data-role="space-sheet-thread"
+        data-role={@prefix <> "-thread"}
         data-message-id={thread.parent_message_id}
         phx-click={
-          JS.push("close_space_sheet")
+          lead(@surface)
           |> JS.push("space_sheet_open_thread", value: %{"message-id" => thread.parent_message_id})
         }
-        class="flex min-h-11 w-full flex-col gap-0.5 px-4 py-2 text-left active:bg-base-200 focus-visible-ring"
+        class={item_class(@surface)}
       >
         <span class="min-w-0 truncate text-sm text-base-content">
           {excerpt(thread.excerpt) || "Message deleted"}
@@ -538,7 +804,9 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     {"space", "Space"}
   ]
 
-  attr(:space_sheet, :any, required: true)
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
+  attr(:page, :any, required: true)
 
   # Prototype v3's strip (master-mobile.html:666-671): All, Canvases, Files,
   # Sites, Videos, Space. `role="tablist"`; scrolls sideways at 375px. The
@@ -551,23 +819,20 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     <div
       role="tablist"
       aria-label="Space sections"
-      class="flex gap-2 overflow-x-auto px-4 pb-2"
-      data-role="space-sheet-segments"
+      id={pick(@surface, nil, @prefix <> "-segs")}
+      class={
+        pick(@surface, "flex gap-2 overflow-x-auto px-4 pb-2", "flex flex-wrap gap-1.5 px-1 pb-2")
+      }
+      data-role={@prefix <> "-segments"}
     >
       <button
         :for={{key, label} <- @tabs}
         type="button"
         role="tab"
-        aria-selected={to_string(segment_selected?(@space_sheet, key))}
+        aria-selected={to_string(segment_selected?(@page, key))}
         data-seg={key}
-        phx-click={segment_click(key)}
-        class={[
-          "h-8 shrink-0 rounded-full border px-3 text-sm text-base-content active:bg-base-200 focus-visible-ring",
-          if(segment_selected?(@space_sheet, key),
-            do: "border-base-content bg-base-200 font-medium",
-            else: "border-subtle"
-          )
-        ]}
+        phx-click={segment_click(@surface, key)}
+        class={segment_class(@surface, segment_selected?(@page, key))}
       >
         {label}
       </button>
@@ -579,11 +844,39 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   defp segment_selected?({:links, seg}, key), do: Atom.to_string(seg) == key
   defp segment_selected?(_page, _key), do: false
 
-  defp segment_click("space"), do: JS.push("space_sheet_page", value: %{page: "space"})
-  defp segment_click(seg), do: JS.push("space_sheet_page", value: %{page: "links", seg: seg})
+  defp segment_click(surface, "space"), do: JS.push(page_event(surface), value: %{page: "space"})
+
+  defp segment_click(surface, seg),
+    do: JS.push(page_event(surface), value: %{page: "links", seg: seg})
+
+  # Sheet: the base-content border and base-200 fill (prototype v3). Panel:
+  # master-desktop.html `.seg` L75-76, a 28px pill, base-300 when selected
+  # (its border transparent over the fill: base-300 is a fill token),
+  # an --edge hairline and --subtle label otherwise.
+  defp segment_class(:sheet, selected?) do
+    [
+      "h-8 shrink-0 rounded-full border px-3 text-sm text-base-content active:bg-base-200 focus-visible-ring",
+      if(selected?,
+        do: "border-base-content bg-base-200 font-medium",
+        else: "border-subtle"
+      )
+    ]
+  end
+
+  defp segment_class(:panel, selected?) do
+    [
+      "h-7 shrink-0 rounded-full border px-3 text-sm focus-visible-ring",
+      if(selected?,
+        do: "border-transparent bg-base-300 text-base-content",
+        else: DetailsPanel.paint(:seg_rest)
+      )
+    ]
+  end
 
   # ── Links & files (stage 4) ───────────────────────────────────────────
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:seg, :atom, required: true)
   attr(:canvases, :list, required: true)
   attr(:files, :list, required: true)
@@ -618,18 +911,33 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     ~H"""
     <div
       class="flex flex-col pb-2"
-      data-role="space-sheet-page"
+      data-role={@prefix <> "-page"}
       data-page="links"
       data-seg={@seg}
     >
-      <p :if={@groups == []} class="px-4 py-3 text-sm text-subtle" data-role="space-sheet-links-empty">
+      <p
+        :if={@groups == []}
+        class={
+          pick(@surface, "px-4 py-3 text-sm text-subtle", "px-2 py-6 text-center text-sm text-subtle")
+        }
+        data-role={@prefix <> "-links-empty"}
+      >
         Nothing shared here yet.
       </p>
       <section :for={{key, label, items} <- @groups} data-group={key}>
-        <p :if={@all?} class="px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-subtle">
+        <p
+          :if={@all?}
+          class={
+            pick(
+              @surface,
+              "px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-subtle",
+              "px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-[.08em] text-subtle"
+            )
+          }
+        >
           {label}
         </p>
-        <.link_row :for={item <- items} item={item} />
+        <.link_row :for={item <- items} surface={@surface} prefix={@prefix} item={item} />
       </section>
     </div>
     """
@@ -638,6 +946,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   defp video?(%{content_type: "video/" <> _}), do: true
   defp video?(_file), do: false
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:item, :any, required: true)
 
   defp link_row(%{item: {:canvas, canvas}} = assigns) do
@@ -646,21 +956,21 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     ~H"""
     <button
       type="button"
-      data-role="space-sheet-link-row"
+      data-role={@prefix <> "-link-row"}
       data-kind="canvas"
       data-canvas-id={@canvas.id}
       phx-click={
-        JS.push("close_space_sheet")
+        lead(@surface)
         |> JS.push("canvas_open_mobile", value: %{"canvas-id" => @canvas.id})
       }
-      class={row_class()}
+      class={row_class(@surface)}
     >
       <span class="hero-puzzle-piece size-5 shrink-0" aria-hidden="true"></span>
       <span class="flex min-w-0 flex-1 flex-col">
-        <span class="min-w-0 truncate text-base">{@canvas.title || "Untitled canvas"}</span>
+        <span class={link_label_class(@surface)}>{@canvas.title || "Untitled canvas"}</span>
         <span class="min-w-0 truncate text-xs text-subtle">
           <.local_time
-            id={"space-sheet-canvas-time-#{@canvas.id}"}
+            id={"#{@prefix}-canvas-time-#{@canvas.id}"}
             timestamp={@canvas.updated_at || @canvas.inserted_at}
           />
         </span>
@@ -677,17 +987,17 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       href={attachment_url(@file)}
       target="_blank"
       rel="noopener noreferrer"
-      data-role="space-sheet-link-row"
+      data-role={@prefix <> "-link-row"}
       data-kind={if video?(@file), do: "video", else: "file"}
-      class={row_class()}
+      class={row_class(@surface)}
     >
       <span class={[file_icon(@file), "size-5 shrink-0"]} aria-hidden="true"></span>
       <span class="flex min-w-0 flex-1 flex-col">
-        <span class="min-w-0 truncate text-base">{@file.filename}</span>
+        <span class={link_label_class(@surface)}>{@file.filename}</span>
         <span class="flex min-w-0 items-center gap-1 truncate text-xs text-subtle">
           <span class="truncate">{@file.author || "Unknown"}</span>
           <span aria-hidden="true">·</span>
-          <.local_time id={"space-sheet-file-time-#{@file.id}"} timestamp={@file.inserted_at} />
+          <.local_time id={"#{@prefix}-file-time-#{@file.id}"} timestamp={@file.inserted_at} />
           <span aria-hidden="true">·</span>
           <span class="shrink-0">{format_bytes(@file.byte_size)}</span>
         </span>
@@ -704,9 +1014,9 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       href={@link.url}
       target="_blank"
       rel="noopener noreferrer"
-      data-role="space-sheet-link-row"
+      data-role={@prefix <> "-link-row"}
       data-kind={@link.kind}
-      class={row_class()}
+      class={row_class(@surface)}
     >
       <span
         class={[
@@ -717,12 +1027,12 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
       >
       </span>
       <span class="flex min-w-0 flex-1 flex-col">
-        <span class="min-w-0 truncate text-base">{link_title(@link.url)}</span>
+        <span class={link_label_class(@surface)}>{link_title(@link.url)}</span>
         <span class="flex min-w-0 items-center gap-1 truncate text-xs text-subtle">
           <span class="truncate">{@link.author || "Unknown"}</span>
           <span aria-hidden="true">·</span>
           <.local_time
-            id={"space-sheet-link-time-#{:erlang.phash2(@link.url)}"}
+            id={"#{@prefix}-link-time-#{:erlang.phash2(@link.url)}"}
             timestamp={@link.inserted_at}
           />
         </span>
@@ -731,9 +1041,21 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     """
   end
 
-  defp row_class,
+  defp row_class(:sheet),
     do:
       "flex min-h-11 w-full items-center gap-3 px-4 py-2 text-left text-base-content active:bg-base-200 focus-visible-ring"
+
+  defp row_class(:panel), do: DetailsPanel.paint(:link_row)
+
+  defp link_label_class(:sheet), do: "min-w-0 truncate text-base"
+  defp link_label_class(:panel), do: "min-w-0 truncate text-sm"
+
+  # A two-line item (a search result, a thread).
+  defp item_class(:sheet),
+    do:
+      "flex min-h-11 w-full flex-col gap-0.5 px-4 py-2 text-left active:bg-base-200 focus-visible-ring"
+
+  defp item_class(:panel), do: DetailsPanel.paint(:item)
 
   defp file_icon(%{content_type: "video/" <> _}), do: "hero-film"
   defp file_icon(%{content_type: "image/" <> _}), do: "hero-photo"
@@ -752,6 +1074,8 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
 
   # ── Scope ─────────────────────────────────────────────────────────────
 
+  attr(:surface, :atom, required: true)
+  attr(:prefix, :string, required: true)
   attr(:label, :string, required: true)
   attr(:on?, :boolean, required: true)
   attr(:value, :string, required: true)
@@ -763,21 +1087,33 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   # would put the same string into `phx-click` instead.
   defp scope_page(assigns) do
     ~H"""
-    <div class="flex flex-col pb-2" data-role="space-sheet-page" data-page="scope">
+    <div class="flex flex-col pb-2" data-role={@prefix <> "-page"} data-page="scope">
       <button
         type="button"
         role="switch"
         aria-checked={to_string(@on?)}
         phx-click="scope_filter"
         phx-value-scope={@value}
-        data-role="space-sheet-scope-switch"
-        class="flex min-h-11 w-full items-center gap-3 px-4 py-2 text-left active:bg-base-200 focus-visible-ring"
+        data-role={@prefix <> "-scope-switch"}
+        class={
+          pick(
+            @surface,
+            "flex min-h-11 w-full items-center gap-3 px-4 py-2 text-left active:bg-base-200 focus-visible-ring",
+            DetailsPanel.paint(:switch)
+          )
+        }
       >
-        <span class="min-w-0 flex-1 truncate text-base text-base-content">
+        <span class={
+          pick(
+            @surface,
+            "min-w-0 flex-1 truncate text-base text-base-content",
+            "min-w-0 flex-1 truncate text-sm text-base-content"
+          )
+        }>
           Filter to {@label} scope
         </span>
         <span
-          data-role="space-sheet-scope-track"
+          data-role={@prefix <> "-scope-track"}
           class={[
             "relative inline-flex h-6 w-10 shrink-0 items-center rounded-full",
             if(@on?, do: "bg-primary", else: "bg-base-300")
@@ -830,6 +1166,7 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
     to_string(value || assigns.active_space_scope)
   end
 
+  attr(:surface, :atom, required: true)
   attr(:role, :string, required: true)
   attr(:icon, :string, required: true)
   attr(:label, :string, required: true)
@@ -837,8 +1174,28 @@ defmodule PlatformWeb.ChatLive.Partials.SpaceSheet do
   attr(:preview_body, :boolean, default: false)
   attr(:click, :any, required: true)
 
-  # An action row: at least 44px, pressed base-200, body label, subtle
-  # preview that truncates before the label does.
+  # An action row. Sheet: at least 44px, pressed base-200, body label,
+  # subtle preview that truncates before the label does. Panel
+  # (master-desktop.html `.opt` L125-129): a compact desktop row,
+  # `DetailsPanel.paint(:opt)` on base-200, the meta right-aligned in xs.
+  defp sheet_row(%{surface: :panel} = assigns) do
+    ~H"""
+    <button type="button" phx-click={@click} data-role={@role} class={DetailsPanel.paint(:opt)}>
+      <span class={[@icon, "size-4 shrink-0"]} aria-hidden="true"></span>
+      <span class="min-w-0 flex-1 truncate">{@label}</span>
+      <span
+        :if={@preview}
+        class={[
+          "ml-auto min-w-0 max-w-[50%] truncate text-xs",
+          if(@preview_body, do: "text-base-content", else: "text-subtle")
+        ]}
+      >
+        {@preview}
+      </span>
+    </button>
+    """
+  end
+
   defp sheet_row(assigns) do
     ~H"""
     <button

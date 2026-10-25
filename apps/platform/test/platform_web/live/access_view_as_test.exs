@@ -12,7 +12,7 @@ defmodule PlatformWeb.AccessViewAsTest do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
-  alias PlatformWeb.Components.IconRail
+  alias PlatformWeb.Components.Sidebar
 
   defp user!(name) do
     n = System.unique_integer([:positive])
@@ -33,7 +33,7 @@ defmodule PlatformWeb.AccessViewAsTest do
   defp rail_keys(html) do
     html
     |> Floki.parse_document!()
-    |> Floki.find("[data-icon-rail] [data-destination]")
+    |> Floki.find("#sidebar-nav [data-destination]")
     |> Enum.map(&Floki.attribute(&1, "data-destination"))
     |> List.flatten()
     |> MapSet.new()
@@ -64,7 +64,11 @@ defmodule PlatformWeb.AccessViewAsTest do
     {:ok, _member_real, member_html} = conn_for(ctx.member) |> live("/tasks")
     root_keys = rail_keys(root_html)
     member_keys = rail_keys(member_html)
-    assert root_keys != member_keys
+    # Positive control: both real sidebars rendered their rows. (They no
+    # longer differ: Admin and Prompts are Settings pages since the desktop
+    # sidebar replaced the icon rail, Burrow redesign 22 stage 1.)
+    assert MapSet.member?(root_keys, "chat")
+    assert MapSet.size(member_keys) > 4
 
     {:ok, _root_view, root_view_html} =
       conn_for(ctx.root) |> live("/access/view-as/user/#{ctx.root.id}")
@@ -86,12 +90,11 @@ defmodule PlatformWeb.AccessViewAsTest do
     {:ok, _role_view, role_html} =
       conn_for(ctx.root) |> live("/access/view-as/role/#{ctx.org.id}/member")
 
+    # View-as previews the desktop sidebar: the tab bar's link tabs then the
+    # More sheet's rows (Burrow redesign 22 stage 1).
     expected =
-      IconRail.destinations(root_user: false)
-      # View-as previews the desktop rail; `:sheet` destinations (Changelog,
-      # task 01a1557a-807f stage 2) are More-sheet only.
-      |> Enum.filter(&(&1.cluster in IconRail.desktop_clusters()))
-      |> Enum.map(&to_string(&1.key))
+      Sidebar.row_keys(nil, false)
+      |> Enum.map(&to_string/1)
       |> MapSet.new()
 
     assert view_rail_keys(role_html) == expected

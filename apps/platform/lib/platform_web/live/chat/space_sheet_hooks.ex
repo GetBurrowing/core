@@ -58,8 +58,20 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
   Without the scroll the sheet closed onto a highlight nobody could see: the
   hit stayed where it was, often far above the viewport.
 
-  `reset/1` is called from `ChatLive.handle_params/3` for `:show`, so moving
-  to another space always shuts the sheet. The sheet's action rows push
+  `enter_space/1` is called from `ChatLive.handle_params/3` for `:show`, so
+  moving to another space always shuts the sheet (`reset/1`), and hands the
+  desktop details panel its own space change
+  (`DetailsPanelHooks.enter_space/1`, Burrow redesign 22 stage 3).
+
+  ## The desktop details panel shares the loaders
+
+  `PlatformWeb.ChatLive.DetailsPanelHooks` renders the same sections at lg
+  and reads the same data through `load_pins/2`, `load_threads/2` and
+  `load_links/3` here, into its own assigns (`@details_pins`, ...), so
+  closing the phone sheet never empties the open panel. It is attached from
+  `attach/1` below, after this module's hooks and so before `PinHooks`
+  (the open Pinned page re-reads on the same pin broadcasts), which keeps
+  `chat_live.ex` free of a new line. The sheet's action rows push
   `close_space_sheet` before their own event (`JS.push |> JS.push`), so the
   existing handler (members, settings, canvases, the meeting join, the agent
   mutex) runs unchanged.
@@ -69,6 +81,7 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
   import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, push_patch: 2]
 
   alias Platform.Chat
+  alias PlatformWeb.ChatLive.DetailsPanelHooks
   alias PlatformWeb.ChatLive.MessagesHooks
 
   @pages %{
@@ -98,6 +111,17 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
     |> reset()
     |> attach_hook(:space_sheet_events, :handle_event, &handle_event/3)
     |> attach_hook(:space_sheet_info, :handle_info, &handle_info/2)
+    |> DetailsPanelHooks.attach()
+  end
+
+  @doc """
+  Entering a space (`ChatLive.handle_params/3`, `:show`): shut the sheet and
+  let the desktop details panel follow the new space.
+  """
+  def enter_space(socket) do
+    socket
+    |> reset()
+    |> DetailsPanelHooks.enter_space()
   end
 
   @doc "Shut the space sheet and drop what its pages loaded."
@@ -249,31 +273,35 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
   defp load_page(socket, :threads), do: load_threads(socket)
   defp load_page(socket, _page), do: socket
 
-  # Once per open sheet: `reset/1` drops both lists, so the next open reads
-  # them again.
-  defp load_links(%{assigns: %{space_sheet_links: links}} = socket) when is_list(links),
-    do: socket
+  @doc """
+  The open space's files and links into `files_key` / `links_key` (the
+  sheet's by default). Once per open surface: a list already there is kept,
+  and the surface's reset drops it, so the next open reads again.
+  """
+  def load_links(socket, files_key \\ :space_sheet_files, links_key \\ :space_sheet_links) do
+    case {socket.assigns[links_key], socket.assigns[:active_space]} do
+      {links, _space} when is_list(links) ->
+        socket
 
-  defp load_links(socket) do
-    case socket.assigns[:active_space] do
-      %{id: id} ->
+      {_none, %{id: id}} ->
         scope = socket.assigns[:access_scope]
 
         socket
-        |> assign(:space_sheet_files, Chat.list_space_attachments(id, scope: scope))
-        |> assign(:space_sheet_links, Chat.list_space_links(id, scope: scope))
+        |> assign(files_key, Chat.list_space_attachments(id, scope: scope))
+        |> assign(links_key, Chat.list_space_links(id, scope: scope))
 
       _ ->
         socket
     end
   end
 
-  defp load_pins(socket) do
+  @doc "The open space's pins with their messages into `key` (the sheet's by default)."
+  def load_pins(socket, key \\ :space_sheet_pins) do
     case socket.assigns[:active_space] do
       %{id: id} ->
         assign(
           socket,
-          :space_sheet_pins,
+          key,
           Chat.list_pins_with_messages(id, scope: socket.assigns[:access_scope])
         )
 
@@ -282,12 +310,13 @@ defmodule PlatformWeb.ChatLive.SpaceSheetHooks do
     end
   end
 
-  defp load_threads(socket) do
+  @doc "The open space's thread summaries into `key` (the sheet's by default)."
+  def load_threads(socket, key \\ :space_sheet_threads) do
     case socket.assigns[:active_space] do
       %{id: id} ->
         assign(
           socket,
-          :space_sheet_threads,
+          key,
           Chat.list_thread_summaries(id, scope: socket.assigns[:access_scope])
         )
 

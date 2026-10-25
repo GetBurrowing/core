@@ -1,12 +1,12 @@
 // Optimistic navigation feedback (task 01a166be-b5b9 stage 2; design canvas
 // 01a167b0 "Press and pending feedback", m2 + rules 2, 3, 4, 7, 8).
 //
-// WHAT IT DOES. A tap on a nav-shell link (bottom tab, desk rail tile, More
+// WHAT IT DOES. A tap on a nav-shell link (bottom tab, desktop sidebar row, More
 // sheet row, Settings row, chat list row) marks that control
 // `data-nav-pending` in the same task as the click, before LiveView's round
 // trip starts. CSS in app.css ("Optimistic navigation") keys on it:
 //
-//   * the tapped tab/tile takes the current look at once, and the group's
+//   * the tapped tab/row takes the current look at once, and the group's
 //     current control is marked `data-nav-yielded` and drops it in the same
 //     frame, so only one control ever looks current;
 //   * the indicator pulses only after 150ms (CSS animation-delay);
@@ -47,10 +47,10 @@
 export const NAV_PENDING_TIMEOUT_MS = 8000
 
 export const NAV_CONTROL_SELECTOR =
-  ".bottom-nav-tab[href], .icon-rail-tab[href], .more-sheet-row[href], .more-sheet-settings[href], .chat-list-row[href]"
+  ".bottom-nav-tab[href], .sidebar-row[href], .more-sheet-row[href], .more-sheet-settings[href], .chat-list-row[href]"
 
-const GROUP_SELECTOR = ".bottom-nav, [data-icon-rail]"
-const CURRENT_SELECTOR = ".bottom-nav-tab--active, .icon-rail-tab--active"
+const GROUP_SELECTOR = ".bottom-nav, [data-sidebar]"
+const CURRENT_SELECTOR = ".bottom-nav-tab--active, .sidebar-row--current"
 const SHEET_ROW_SELECTOR = ".more-sheet-row, .more-sheet-settings"
 const MORE_TAB_SELECTOR = '.bottom-nav-tab[data-destination="more"]'
 const TOAST_ID = "nav-rollback-toast"

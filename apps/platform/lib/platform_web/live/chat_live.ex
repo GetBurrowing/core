@@ -29,7 +29,6 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.Partials.ExternalRail
   import PlatformWeb.ChatLive.Partials.Overlays
   import PlatformWeb.ChatLive.Partials.MessageContext, only: [message_context_overlay: 1]
-  import PlatformWeb.ChatLive.Partials.Rail
   import PlatformWeb.ChatLive.Partials.SpaceSheet
   import PlatformWeb.ChatLive.RenderHelpers
 
@@ -65,7 +64,6 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.AttachHooks
   alias PlatformWeb.ChatLive.LargeUploadHooks
   alias PlatformWeb.Extensions
-  alias PlatformWeb.LifecycleActions
   alias PlatformWeb.ShellLive
   alias PlatformWeb.SpaceTopics
 
@@ -108,11 +106,6 @@ defmodule PlatformWeb.ChatLive do
   """
   @spec max_upload_size() :: pos_integer()
   def max_upload_size, do: @max_upload_size
-
-  # How long the move confirmation stays at the foot of the rail (task 019ffcad
-  # stage 4). The same 4s the hide toast uses, because it is the same element in
-  # the same place and the stage asks for the same dismissal.
-  @move_toast_ms 4_000
 
   @impl true
   def mount(_params, session, socket) do
@@ -580,26 +573,6 @@ defmodule PlatformWeb.ChatLive do
       # `:hidden_visible_sections` MapSet — there's only one drawer now,
       # not one expand-state per sub-org bucket.)
       |> assign(:hidden_drawer_open, false)
-      # Stage 3 (chat sidebar v3): ephemeral undo affordance shown for 4s
-      # after a hide. `%{space_id: <uuid>, name: <channel name>}` while
-      # active, `nil` otherwise. Cleared by `{:clear_undo_toast, space_id}`
-      # handle_info scheduled via `Process.send_after/3` when the toast
-      # is set. The space_id-match guard in the clear handler means a
-      # second hide arriving inside the 4s window replaces the toast
-      # cleanly — the older timer's clear becomes a no-op.
-      |> assign(:undo_toast, nil)
-      # Task 019ffcad stage 4: the move confirmation at the foot of the rail.
-      # `%{channel_id: <uuid>, channel_name: <name>, section_name: <name>}` while
-      # active, `nil` otherwise. Cleared by `{:clear_move_toast, channel_id}` on
-      # the same guarded-late-fire pattern as the hide toast above.
-      #
-      # A SEPARATE assign from `:undo_toast` rather than a second variant of it.
-      # The two lines are raised by different verbs that a person can perform
-      # seconds apart, and on one assign whichever came second would silently
-      # blank the first. Task 019ffc5f already tried sharing this element between
-      # two verbs and the designer rejected the result, so the shared surface stays and
-      # the state does not.
-      |> assign(:move_toast, nil)
       # Per-user sub-org section order (chat plan v2 Stage 3) is stored in
       # `users.preferences["chat_section_order"]` as a list of section IDS and
       # read fresh by `Sidebar.resolve_for_user/2` whenever the rail is
@@ -624,54 +597,21 @@ defmodule PlatformWeb.ChatLive do
           agents_block
         )
       )
-      # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter, all
-      # sub-org sections render. An org slug (a binary, see `parse_scope/2`)
-      # narrows the rail to the sections wearing that org's token. Toggled by clicking a
-      # scope-pill via the `scope_filter` handler below.
+      # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter. An org
+      # slug (a binary, see `parse_scope/2`) is the scope the header pill and
+      # the space sheet's Scope row toggle through the `scope_filter` handler.
       |> assign(:scope_filter, nil)
-      # Desktop "Edit layout" mode (chat sidebar Stage 5). When true the
-      # sub-org rail shows per-channel grab handles, per-section Hide/Show
-      # controls, and a "Reset to default layout" button; channel rows
-      # become draggable (ChannelMembershipDrag hook) and gain keyboard
-      # move-up/move-down controls. Default off — the rail navigates as
-      # normal until the user opts into editing. Desktop only (the whole
-      # rail is `hidden lg:flex`); mobile is out of scope for this stack.
-      |> assign(:sidebar_edit, false)
-      # root-admin "Edit default" mode (chat sidebar Stage 6). A SEPARATE mode
-      # from the personal "Edit layout" (@sidebar_edit): admin-edit routes the
-      # same gestures to the GLOBAL org default (Sidebar Stage 2 API) instead
-      # of the acting user's prefs, so a root-org admin curates what every user
-      # sees by default. Visible ONLY to root-org admins (@root_admin? gate) and
-      # mutually exclusive with @sidebar_edit — entering one exits the other.
-      #
-      # We compute @root_admin? here from the resolved user_id (rather than
+      # `@root_admin?` is computed here from the resolved user_id (rather than
       # relying solely on the LiveAuth `:default` on_mount that also assigns it
-      # on the /chat route) so the assign is guaranteed present on BOTH mount
-      # paths — the standalone surface AND the embedded child LV (which mounts
-      # via `embedded_mount/3` and does not run the LiveAuth on_mount chain).
-      # The actor we pass to every Sidebar.* admin write is `%{id: user_id}`,
-      # the same shape root_admin?/1 authorizes, so the client-side toggle and
-      # the server-side gate agree. Desktop only — the whole rail is
-      # `hidden lg:flex`; the admin toggle lives inside that aside.
+      # on the /chat route) so the assign is present on BOTH mount paths: the
+      # standalone surface AND the embedded child LV (which mounts via
+      # `embedded_mount/3` and does not run the LiveAuth on_mount chain).
       |> assign(:root_admin?, Platform.Tenancy.root_admin?(%{id: user_id}))
       # Who may edit the goal. root-org admin only, mirroring
       # `:can_cancel_deletion?` above: the goal is org-wide state with a
       # daily heartbeat behind it, not a per-user preference. This is an
       # AFFORDANCE — `save_goal` re-checks it server-side before writing.
       |> assign(:can_edit_goal?, Platform.Tenancy.root_admin?(%{id: user_id}))
-      # Container-lifecycle affordances on the org section headers (task
-      # 019f4eaa stage 6). `:tenant_org_ids` is the set of NON-root org ids —
-      # the root section never gets archive controls (the lifecycle
-      # refuses it). `:lifecycle_menu_key` is the single open kebab menu;
-      # `:delete_modal` is `nil` or the `%{type:, id:, name:}` the confirm
-      # dialog targets.
-      |> assign(:tenant_org_ids, MapSet.new(Platform.Tenancy.list_tenants(), & &1.id))
-      |> assign(:lifecycle_menu_key, nil)
-      |> assign(:delete_modal, nil)
-      # `:undo_archive` is nil (no toast) or the %{type:, id:, name:, hidden:}
-      # the archive undo toast targets.
-      |> assign(:undo_archive, nil)
-      |> assign(:sidebar_admin_edit, false)
       # Explicit "Move to organisation…" (task 019fd76a stage 1).
       # `:reassign_picker` is nil or the `%{channel_id:, channel_name:,
       # destinations:}` the destination chooser renders (one row at a time);
@@ -681,13 +621,6 @@ defmodule PlatformWeb.ChatLive do
       # the confirm event fires.
       |> assign(:reassign_picker, nil)
       |> assign(:reassign_confirm, nil)
-      # Sidebar layout overflow menu (chat sidebar header). The "CHANNELS"
-      # header is a ~260px rail that can't fit two text toggles (personal
-      # "Edit layout" + admin "Edit default"), so both entry points collapse
-      # into ONE kebab/"More" button that opens this popover. `false` = closed.
-      # Entering either edit mode (toggle_sidebar_edit / _admin_edit) closes it
-      # so the header never shows both the menu and an active edit mode at once.
-      |> assign(:sidebar_menu_open, false)
       |> assign_active_space(nil)
       |> assign(:current_participant, nil)
       # M5b (task 019f6e2c) Stage 4 — junk-batch confirmation modal state.
@@ -1158,7 +1091,7 @@ defmodule PlatformWeb.ChatLive do
        |> enter_space_window(anchor, space, participant)
        |> SearchHooks.reset_for_space()
        |> ChatListHooks.leave_list()
-       |> SpaceSheetHooks.reset()
+       |> SpaceSheetHooks.enter_space()
        |> MentionsHooks.reset_for_space()
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)
@@ -1189,6 +1122,10 @@ defmodule PlatformWeb.ChatLive do
          )
        )
        |> clear_unread(space.id)
+       # The desktop list pane renders beside the conversation (Burrow
+       # redesign 22 stage 2): a socket that mounted straight into a space
+       # loads the list's excerpts and names once here.
+       |> ChatListData.ensure_loaded()
        # AFTER `SearchHooks.reset_for_space/1`, which clears
        # `:highlighted_message_id` — setting the arrival highlight any
        # earlier in this pipeline would be wiped a line later.
@@ -1595,32 +1532,9 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("hide_channel", %{"id" => space_id}, socket) when is_binary(space_id) do
     user_id = socket.assigns.user_id
 
-    # Capture the channel name from the current assigns BEFORE we re-derive
-    # @channel_sections (which drops the hidden one from the visible map).
-    # Stage 3 surfaces this in the undo-toast — "Hidden #foo — [Undo]".
-    channel_name =
-      case Enum.find(socket.assigns.channels, fn ch -> ch.id == space_id end) do
-        %{name: name} -> name
-        _ -> nil
-      end
-
     _ = Accounts.hide_channel(user_id, space_id)
     hidden = Accounts.get_hidden_channel_ids(user_id)
 
-    # Schedule auto-clear of the undo toast in 4s. The :clear_undo_toast
-    # handler only nils the assign when the toast still points at THIS
-    # space_id, so a second hide arriving inside the 4s window simply
-    # replaces the toast and the earlier timer's fire becomes a no-op —
-    # no need to track / cancel timer refs.
-    if channel_name, do: Process.send_after(self(), {:clear_undo_toast, space_id}, 4_000)
-
-    # Note: do NOT auto-collapse the hidden-channels drawer here. An earlier
-    # iteration did, because the toast was absolute-positioned and could
-    # overlap an expanded drawer panel. The toast is now in-flow above
-    # "+ New channel" (the 2026-05-29 design review), so the toast and an
-    # expanded drawer panel occupy different vertical bands and never
-    # collide — collapsing the drawer here would just yank the user's
-    # browsing context away for no UX win.
     {:noreply,
      socket
      |> assign(:hidden_channel_ids, hidden)
@@ -1643,11 +1557,6 @@ defmodule PlatformWeb.ChatLive do
          socket.assigns.agents_block
        )
      )
-     # Hide is the only action that raises this toast. Stage 2 of task
-     # 019ffc5f added a `:kind` so DM Close could share it; the designer rejected
-     # that acknowledgement at the stage-3 gate, so the map is back to the
-     # two fields the one remaining verb needs.
-     |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})
      # Dismiss the mobile row-actions sheet if the hide came from there (task
      # 019fe998). Mandatory rather than cosmetic: the hidden row is gone from
      # the rail, so a sheet left open would name a conversation that is no
@@ -1695,10 +1604,6 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, do_unhide(socket, space_id)}
   end
 
-  def handle_event("undo_hide", %{"id" => space_id}, socket) when is_binary(space_id) do
-    {:noreply, do_unhide(socket, space_id)}
-  end
-
   # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
   # sectioned rail (or the chat-header pill) narrows the visible sub-org
   # sections to just that scope. Clicking the same scope again clears the
@@ -1738,44 +1643,6 @@ defmodule PlatformWeb.ChatLive do
   # on the user's own topic (so other tabs of the same user converge) and
   # recomputes `@sidebar_sections` locally for an immediate optimistic update.
 
-  # Flip the rail between normal (navigate) and personal-edit (rearrange) mode.
-  # Entering personal-edit always exits admin-edit (Stage 6) — the two modes
-  # are mutually exclusive so the admin can never have both sets of gestures
-  # routing at once (personal → user prefs, admin → org default).
-  def handle_event("toggle_sidebar_edit", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:sidebar_edit, !socket.assigns.sidebar_edit)
-     |> assign(:sidebar_admin_edit, false)
-     # Entering (or leaving) personal-edit always closes the overflow menu —
-     # the header shows the menu OR an active mode's "Done" control, never both.
-     |> assign(:sidebar_menu_open, false)
-     # Clear any active scope filter so editing always sees the full rail —
-     # otherwise a filtered-out section is unreachable (and a recolor could
-     # make the section being edited vanish from the filtered view).
-     |> assign(:scope_filter, nil)
-     # Same principle for the mobile drawer's search (Stage 1 guard rail):
-     # edit mode and search are mutually exclusive — reordering a FILTERED
-     # list would persist an order computed against a partial view.
-     |> assign(:drawer_query, "")}
-  end
-
-  # Open/close the sidebar layout overflow menu (chat sidebar header). The
-  # menu is the SINGLE entry point that fans out to personal-edit and (for
-  # root-org admins) admin-edit, so the ~260px rail header only ever hosts one
-  # control. Closing on phx-click-away / Escape is handled in the template;
-  # this handler is the explicit toggle on the "More" button itself.
-  def handle_event("toggle_sidebar_menu", _params, socket) do
-    {:noreply, assign(socket, :sidebar_menu_open, !socket.assigns.sidebar_menu_open)}
-  end
-
-  # Close the sidebar overflow menu without toggling a mode. Bound to the
-  # menu container's phx-click-away and a phx-window-keydown Escape so a
-  # click outside or the Escape key dismisses the popover.
-  def handle_event("close_sidebar_menu", _params, socket) do
-    {:noreply, assign(socket, :sidebar_menu_open, false)}
-  end
-
   # "Mark all as read" (sidebar header menu, task
   # `01a02491-a407-794f-a13e-d18398e4b092` stage 3). Clears exactly the set the
   # left rail's Chat badge counts, through the one query that defines that set.
@@ -1792,7 +1659,6 @@ defmodule PlatformWeb.ChatLive do
 
     {:noreply,
      socket
-     |> assign(:sidebar_menu_open, false)
      # The per-channel pills read the WIDE unread map, so recompute it rather
      # than emptying it: a pinned task conversation renders a pill the rail
      # badge deliberately does not count, and this action does not clear it.
@@ -1814,71 +1680,6 @@ defmodule PlatformWeb.ChatLive do
   # `{:error, :unauthorized}` and we no-op (with a flash). On success we
   # recompute the acting admin's own `@sidebar_sections` and broadcast
   # `:sidebar_defaults_changed` so every OTHER connected session refreshes.
-
-  # Flip the rail between normal and admin-edit (curate org default) mode.
-  # Entering admin-edit always exits personal-edit (mutual exclusivity). We
-  # re-check `@root_admin?` here too so a forged toggle from a non-admin
-  # client can't even open the mode (the per-gesture Sidebar gate is the real
-  # backstop, but refusing to flip the assign keeps the UI honest).
-  def handle_event("toggle_sidebar_admin_edit", _params, socket) do
-    if socket.assigns.root_admin? do
-      {:noreply,
-       socket
-       |> assign(:sidebar_admin_edit, !socket.assigns.sidebar_admin_edit)
-       |> assign(:sidebar_edit, false)
-       # Entering (or leaving) admin-edit always closes the overflow menu.
-       |> assign(:sidebar_menu_open, false)
-       # Clear any active scope filter so the admin always curates the full
-       # rail — a recolor must never make the edited section drop out of view.
-       |> assign(:scope_filter, nil)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  # Set or clear an org-default section's sidebar label (admin-edit). A blank
-  # name CLEARS the label so the header follows the org again (task 01a08212);
-  # the "Use organisation name" reset sends exactly that.
-  def handle_event("rename_section_default", %{"section_id" => section_id} = params, socket)
-      when is_binary(section_id) do
-    name = String.trim(params["name"] || "")
-
-    case Sidebar.rename_section(%{id: socket.assigns.user_id}, section_id, name) do
-      {:ok, _section} ->
-        {:noreply, recompute_sidebar_after_admin_write(socket)}
-
-      {:error, :unauthorized} ->
-        {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
-
-      {:error, _other} ->
-        {:noreply, put_flash(socket, :error, "Could not rename the section.")}
-    end
-  end
-
-  # Recolor an org-default section (admin-edit). `color` is one of the five
-  # sibling scope tokens (initech / vandelay-ind / globex / hooli / wonka) or
-  # the section's OWN org token — the compact palette in the section header.
-  def handle_event(
-        "recolor_section_default",
-        %{"section_id" => section_id, "color" => color},
-        socket
-      )
-      when is_binary(section_id) and is_binary(color) do
-    if valid_scope_token?(color, section_id, socket.assigns[:sidebar_sections] || []) do
-      case Sidebar.recolor_section(%{id: socket.assigns.user_id}, section_id, color) do
-        {:ok, _section} ->
-          {:noreply, recompute_sidebar_after_admin_write(socket)}
-
-        {:error, :unauthorized} ->
-          {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
-
-        {:error, _other} ->
-          {:noreply, put_flash(socket, :error, "Could not recolor the section.")}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
 
   # ── Explicit "Move to organisation…" (task 019fd76a stage 1) ────────────
   #
@@ -1956,13 +1757,12 @@ defmodule PlatformWeb.ChatLive do
   # purpose; see the block comment above.
   def handle_event("confirm_channel_reassign", _params, socket) do
     case socket.assigns.reassign_confirm do
-      # `destination` and `confirm` are bound alongside the fields rather than
-      # destructuring `section_id` / `channel_name` into the head: the head
-      # decides whether the MOVE happens, and those two are only needed for the
-      # rail-expansion and the confirmation line below it. Adding either to the
-      # pattern would mean an assign shape missing one presentation field
-      # silently cancels the write instead of merely skipping the cosmetic half.
-      %{channel_id: channel_id, to: %{org_id: org_id, name: to_name} = destination} = confirm ->
+      # `destination` is bound alongside the fields rather than destructuring
+      # `section_id` into the head: the head decides whether the MOVE happens,
+      # and the section is only needed for the expansion below it. Adding it
+      # to the pattern would mean an assign shape missing that presentation
+      # field silently cancels the write instead of merely skipping it.
+      %{channel_id: channel_id, to: %{org_id: org_id, name: to_name} = destination} ->
         socket = assign(socket, :reassign_confirm, nil)
 
         # The destination is re-checked for archival here, not just when the
@@ -1980,8 +1780,7 @@ defmodule PlatformWeb.ChatLive do
               {:noreply,
                socket
                |> expand_destination_section(destination[:section_id])
-               |> recompute_sidebar_after_admin_write()
-               |> raise_move_toast(channel_id, confirm[:channel_name], to_name)}
+               |> recompute_sidebar_after_admin_write()}
 
             {:error, :unauthorized} ->
               {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
@@ -2042,215 +1841,9 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :reassign_picker, nil)}
   end
 
-  # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────
-  # root-admin-only archive / schedule-deletion on the org section headers.
-  # The controls only render behind `@root_admin?` and only for tenant orgs
-  # (never the root), and every call re-authorizes underneath in
-  # `Platform.Tenancy.Lifecycle`, so a forged event still gets refused.
-
-  def handle_event("toggle_lifecycle_menu", %{"key" => key}, socket) do
-    next = if socket.assigns.lifecycle_menu_key == key, do: nil, else: key
-    {:noreply, assign(socket, :lifecycle_menu_key, next)}
-  end
-
-  def handle_event("archive_container", %{"type" => type, "id" => id} = params, socket) do
-    case LifecycleActions.archive(%{id: socket.assigns.user_id}, type, id) do
-      {:ok, resource} ->
-        # Undo toast rather than a flash (design review, 2026-07-16) — archive stays
-        # instant + dialog-free, but says what it took. See
-        # PlatformWeb.LifecycleControls.archive_undo_toast/1.
-        {:noreply,
-         socket
-         |> assign(:lifecycle_menu_key, nil)
-         |> refresh_chat_containers()
-         |> assign(:undo_archive, %{
-           type: type,
-           id: id,
-           name: params["name"] || Map.get(resource, :name, "it"),
-           hidden: LifecycleActions.cascade_hidden_labels(type, id)
-         })}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:lifecycle_menu_key, nil)
-         |> put_flash(:error, LifecycleActions.error_message(reason))}
-    end
-  end
-
-  def handle_event("undo_archive", _params, socket) do
-    case socket.assigns[:undo_archive] do
-      nil ->
-        {:noreply, socket}
-
-      %{type: type, id: id} ->
-        case LifecycleActions.unarchive(%{id: socket.assigns.user_id}, type, id) do
-          {:ok, _resource} ->
-            {:noreply,
-             socket
-             |> assign(:undo_archive, nil)
-             |> refresh_chat_containers()
-             |> put_flash(:info, "Restored.")}
-
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:undo_archive, nil)
-             |> put_flash(:error, LifecycleActions.error_message(reason))}
-        end
-    end
-  end
-
-  def handle_event("dismiss_undo_archive", _params, socket) do
-    {:noreply, assign(socket, :undo_archive, nil)}
-  end
-
-  # Orgs open the "surface & choose" checklist (task 019f7600 stage 5): every
-  # child — active, cascade-hidden, or hand-archived — is enumerated so the admin
-  # can keep any of them from the org's purge.
-  def handle_event(
-        "open_delete_modal",
-        %{"type" => "org" = type, "id" => id, "name" => name},
-        socket
-      ) do
-    modal = build_org_delete_modal(id, name, PlatformWeb.LifecycleActions.purge_preview(type, id))
-
-    {:noreply, socket |> assign(:lifecycle_menu_key, nil) |> assign(:delete_modal, modal)}
-  end
-
-  # Channels/projects have no children — the simple confirm (empty `preview`).
-  def handle_event("open_delete_modal", %{"type" => type, "id" => id, "name" => name}, socket) do
-    {:noreply,
-     socket
-     |> assign(:lifecycle_menu_key, nil)
-     |> assign(:delete_modal, %{
-       type: type,
-       id: id,
-       name: name,
-       preview: PlatformWeb.LifecycleActions.cascade_preview(type, id)
-     })}
-  end
-
-  def handle_event("close_delete_modal", _params, socket) do
-    {:noreply, assign(socket, :delete_modal, nil)}
-  end
-
-  def handle_event("delete_modal_change", params, socket) do
-    {:noreply, update_delete_modal(socket, &delete_modal_apply_change(&1, params))}
-  end
-
-  def handle_event("delete_keep_all", _params, socket) do
-    {:noreply, update_delete_modal(socket, &delete_modal_keep_all/1)}
-  end
-
-  def handle_event("delete_include_all", _params, socket) do
-    {:noreply, update_delete_modal(socket, &delete_modal_include_all/1)}
-  end
-
-  def handle_event("confirm_schedule_deletion", _params, socket) do
-    actor = %{id: socket.assigns.user_id}
-
-    case socket.assigns.delete_modal do
-      # Org: honor the include/keep choices, gated on the acknowledgement.
-      %{type: "org", acknowledged: true, id: id, kept: kept} ->
-        result = LifecycleActions.schedule_deletion(actor, "org", id, MapSet.to_list(kept))
-        {:noreply, finish_schedule_deletion(socket, result)}
-
-      # Gate not armed — ignore the submit, leave the modal open.
-      %{type: "org"} ->
-        {:noreply, socket}
-
-      %{type: type, id: id} ->
-        result = LifecycleActions.schedule_deletion(actor, type, id)
-        {:noreply, finish_schedule_deletion(socket, result)}
-
-      _ ->
-        {:noreply, assign(socket, :delete_modal, nil)}
-    end
-  end
-
-  # Channel row drag-drop — a WITHIN-SECTION reorder, and nothing else (task
-  # 019fd76a stage 2). The hook emits the section's resulting channel-id
-  # order and `Sidebar.put_channel_order/3` records it.
-  #
-  # THIS IS THE GATE, not the hook. `put_channel_order/3` writes whatever ids
-  # it is handed into `section_id` and strips them from every other section,
-  # so an unguarded `channel_moved` is a complete cross-org filing primitive
-  # for any client that can send an event. Refiling a channel is a
-  # company-wide act (it re-points `CanvasAccess.org_readable_space?/2` at
-  # the destination org) and belongs to `request_channel_reassign` /
-  # `confirm_channel_reassign` alone.
-  #
-  # So both halves of the payload are checked against the render state, and
-  # the second half is the one that is easy to miss: guarding `channel_id`
-  # while trusting `ordered_ids` leaves the hole wide open, because the
-  # ordered list is itself a placement instruction. A channel absent from
-  # `@sidebar_sections` (pinned, or hidden) has no current section and so
-  # cannot be dragged anywhere — matching the rail, where those rows render
-  # outside the drag hook's element and carry no handle.
-  def handle_event(
-        "channel_moved",
-        %{"channel_id" => channel_id, "target_section_id" => section_id, "ordered_ids" => ids},
-        socket
-      )
-      when is_binary(channel_id) and is_binary(section_id) and is_list(ids) do
-    current_ids = section_channel_ids(socket.assigns.sidebar_sections, section_id)
-
-    if channel_id in current_ids do
-      # Keep only ids that already live in this section. A legitimate drop
-      # sends exactly those (it is read off the section's own rows), so this
-      # is a no-op for the real gesture and a hard stop for a forged one.
-      retained = Enum.filter(ids, &(&1 in current_ids))
-
-      {:noreply,
-       socket
-       |> apply_channel_move(section_id, retained)
-       |> announce_channel_move(channel_id, nil)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  # Keyboard alternative to the drag (WCAG 2.1.1 — no drag-only affordance).
-  # Each channel row in edit mode renders focusable Up/Down buttons that
-  # post `move_channel` with the channel id, its current section, and the
-  # direction. We recompute the section's order from the live resolver,
-  # swap the channel with its neighbour, and persist the new order via the
-  # same `put_channel_order/3` path the drag uses.
-  def handle_event(
-        "move_channel",
-        %{"channel_id" => channel_id, "section_id" => section_id, "direction" => direction},
-        socket
-      )
-      when is_binary(channel_id) and is_binary(section_id) and direction in ["up", "down"] do
-    current_ids = section_channel_ids(socket.assigns.sidebar_sections, section_id)
-    new_ids = move_in_list(current_ids, channel_id, direction)
-
-    if new_ids == current_ids do
-      {:noreply, socket}
-    else
-      {:noreply,
-       socket
-       |> apply_channel_move(section_id, new_ids)
-       |> announce_channel_move(channel_id, direction)}
-    end
-  end
-
-  # Hide or show a whole section in the user's view. `hidden` arrives as the
-  # DESIRED next state ("true"/"false" or a boolean) so the toggle is
-  # idempotent regardless of client-side render races.
-  def handle_event("toggle_section_hidden", %{"section_id" => section_id} = params, socket)
-      when is_binary(section_id) do
-    hidden? = truthy?(params["hidden"])
-    _ = Sidebar.set_section_hidden(socket.assigns.user_id, section_id, hidden?)
-    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
-    {:noreply, recompute_sidebar(socket)}
-  end
-
-  # Collapse or expand a section in the user's view. Like `toggle_section_hidden`
-  # above, `collapsed` arrives as the DESIRED next state so a render race can't
-  # flip it twice. Unlike hide, the section stays in the rail: the resolver only
-  # stamps `collapsed?` on it, and the template decides whether to draw the rows.
+  # Collapse or expand a section in the user's view (the Chat list's fold
+  # keys). `collapsed` arrives as the DESIRED next state so a render race
+  # can't flip it twice.
   # Broadcast so the user's other tabs converge on the same fold state.
   def handle_event("toggle_section_collapsed", %{"section_id" => section_id} = params, socket)
       when is_binary(section_id) do
@@ -2290,32 +1883,11 @@ defmodule PlatformWeb.ChatLive do
      |> refresh_page_title()}
   end
 
-  # Reveal exactly one section's real name while the mode stays on — the
-  # "walk this client through their own channel" case. One click, no menu.
-  def handle_event("reveal_section", %{"section_id" => section_id}, socket)
-      when is_binary(section_id) do
-    {:noreply,
-     socket
-     |> assign(
-       :revealed_section_ids,
-       MapSet.put(socket.assigns.revealed_section_ids, section_id)
-     )
-     |> refresh_page_title()}
-  end
-
-  # Re-mask everything in one action, leaving the mode on.
-  def handle_event("remask_all", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:revealed_section_ids, MapSet.new())
-     |> refresh_page_title()}
-  end
-
   # Pin or unpin one conversation for this user (task 019fd80f stage 3).
   #
   # `pinned` arrives as the DESIRED next state ("true"/"false") rather than as
   # a flip, so a duplicated event from a client-side render race is idempotent
-  # instead of a silent unpin. Same contract as `toggle_section_hidden` above.
+  # instead of a silent unpin. Same contract as `toggle_section_collapsed` above.
   #
   # The param is `space_id`, not `channel_id`: the Pinned block holds channels
   # AND direct messages, and both are `chat_spaces` rows.
@@ -2333,104 +1905,6 @@ defmodule PlatformWeb.ChatLive do
     # path, and leaving it open would leave a menu on screen describing a row
     # that has just moved between sections.
     {:noreply, socket |> assign(:row_actions_space_id, nil) |> recompute_pinned()}
-  end
-
-  # Reorder within the Pinned block, DRAG path (task 019fe987). Modelled on
-  # `section_reordered` below: the client sends the order it just drew, the
-  # server owns persistence and re-renders from what it wrote.
-  #
-  # The param is `space_id`, not `channel_id`: pinned rows carry DM ids too,
-  # and a `channel_id` name here would invite a `kind` check that empties the
-  # block of people while passing every channel-only test.
-  #
-  # Pinning stays out of this path. Dragging INTO or OUT OF the block is not
-  # a thing the hook can express — the pinned drag scope contains only pinned
-  # rows — so a reorder can never change WHAT is pinned, only its order.
-  def handle_event(
-        "pinned_reordered",
-        %{"space_id" => space_id, "ordered_ids" => ordered_ids},
-        socket
-      )
-      when is_binary(space_id) and is_list(ordered_ids) do
-    {:noreply, apply_pinned_move(socket, space_id, ordered_ids, nil)}
-  end
-
-  # Reorder within the Pinned block, KEYBOARD and screen-reader path (WCAG
-  # 2.1.1). Not a touch fallback: drag alone is operable by one kind of user
-  # with one kind of input, and this rail already carries a logged defect
-  # where a hover-gated control was unreachable without a pointer.
-  #
-  # Shares every line of persistence with the drag above. The direction is
-  # resolved against the RENDERED block (what the user is looking at), then
-  # translated to a stored index by `pinned_destination_index/3`.
-  def handle_event(
-        "move_pinned",
-        %{"space_id" => space_id, "direction" => direction},
-        socket
-      )
-      when is_binary(space_id) and direction in ["up", "down"] do
-    rendered = rendered_pinned_ids(socket)
-    reordered = move_in_list(rendered, space_id, direction)
-
-    if reordered == rendered do
-      {:noreply, socket}
-    else
-      {:noreply, apply_pinned_move(socket, space_id, reordered, direction)}
-    end
-  end
-
-  # Reset the user's entire personal arrangement (section order, channel
-  # placement, hidden sections) back to the org default. Resetting clears the
-  # explicit personal order, so the rail snaps back to the ADMIN DEFAULT order
-  # (`Section.position`) in the same patch — we pass `{:default, ...}` so the
-  # resolver's position ordering is honored rather than re-sorted. The next
-  # personal drag re-derives its baseline order from the rendered
-  # `@sidebar_sections` ids, so there's no cached order assign to reset.
-  def handle_event("reset_sidebar", _params, socket) do
-    _ = Sidebar.reset_to_default(socket.assigns.user_id)
-    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
-
-    {:noreply,
-     assign(
-       socket,
-       :sidebar_sections,
-       resolve_sidebar_sections(
-         socket.assigns.user_id,
-         socket.assigns.channels,
-         socket.assigns.hidden_channel_ids,
-         socket.assigns.agents_block
-       )
-     )}
-  end
-
-  # Sectioned-rail drag-reorder (chat plan v2 Stage 3 + Stage 6). The JS hook
-  # (`section_reorder.js`) emits `{from: <section_id>, to: <section_id>}` after
-  # a drop onto another sub-org section. Reordering moves `from` into `to`'s
-  # slot in the list — the displaced section and everything after it shift one
-  # position toward `from`'s former slot (standard reorder semantics).
-  #
-  # Identity is the section `id`, NOT its `color` token. Stage 6 made `color`
-  # an admin-editable, non-unique cosmetic attribute (two sections can share a
-  # color after a recolor), so keying drag identity off `color` would make a
-  # drag onto a duplicate-color section ambiguous and resolve to the wrong (or
-  # no) section. Section `id` is stable and unique, so both the admin and the
-  # personal reorder paths resolve `from`/`to` by id against the currently
-  # rendered `@sidebar_sections`.
-  #
-  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle and
-  # the server-side guard rejects payloads whose ids aren't in the rendered
-  # sub-org sections, so both branches no-op on a bogus/stale id.
-  def handle_event("section_reordered", %{"from" => from_id, "to" => to_id}, socket)
-      when is_binary(from_id) and is_binary(to_id) do
-    # Stage 6: in admin-edit mode the same section-header drag persists to the
-    # GLOBAL org default (channel_sections.position) via Sidebar.reorder_sections
-    # instead of the per-user section_order. Branch here so the SectionReorder
-    # hook stays mode-agnostic — the server decides which layer to write.
-    if socket.assigns.sidebar_admin_edit do
-      reorder_sections_default(socket, from_id, to_id)
-    else
-      reorder_sections_personal(socket, from_id, to_id)
-    end
   end
 
   # ── Mobile drawer row actions (task 019fe998) ─────────────────────────────
@@ -2928,17 +2402,9 @@ defmodule PlatformWeb.ChatLive do
     _ = Accounts.unhide_channel(user_id, space_id)
     hidden = Accounts.get_hidden_channel_ids(user_id)
 
-    cleared_toast =
-      case socket.assigns.undo_toast do
-        %{space_id: ^space_id} -> nil
-        other -> other
-      end
-
-    # Stage 3 v3: collapse the global Hidden drawer when the user has
-    # just unhidden the last remaining channel — the drawer trigger goes
-    # silent (template-level :if guard), so leaving `:hidden_drawer_open`
-    # stuck at true would cause the panel to re-pop expanded the next
-    # time the user hides something. Reset to closed instead.
+    # Collapse "Show hidden" (the list Options popover, Burrow redesign 22
+    # stage 2) when the user has just unhidden the last remaining channel,
+    # so it does not re-pop expanded the next time something is hidden.
     drawer_open =
       if MapSet.size(hidden) == 0, do: false, else: socket.assigns.hidden_drawer_open
 
@@ -2963,7 +2429,6 @@ defmodule PlatformWeb.ChatLive do
         socket.assigns.agents_block
       )
     )
-    |> assign(:undo_toast, cleared_toast)
     |> assign(:hidden_drawer_open, drawer_open)
   end
 
@@ -2972,9 +2437,7 @@ defmodule PlatformWeb.ChatLive do
   # stage-3 gate: "We don't need a acknowledgement / affirmation for a close
   # action on a DM. A User can simply search for a person or agent to DM again
   # if they want to bring back the window." The row leaves and that is the
-  # whole feedback. `@undo_toast` is therefore untouched here — a hide toast
-  # raised moments earlier is still true and still has its own timer running,
-  # so clearing it would be a second unasked-for behaviour change.
+  # whole feedback.
   defp do_close_dm(socket, space) do
     user_id = socket.assigns.user_id
 
@@ -3065,149 +2528,7 @@ defmodule PlatformWeb.ChatLive do
 
   defp maybe_reopen_dm(socket, _space), do: socket.assigns.closed_dm_at
 
-  # Only orgs carry the include/keep modal state; a channel modal is a no-op here.
-  defp update_delete_modal(socket, fun) do
-    case socket.assigns.delete_modal do
-      %{type: "org"} = modal -> assign(socket, :delete_modal, fun.(modal))
-      _ -> socket
-    end
-  end
-
-  defp finish_schedule_deletion(socket, {:ok, _resource}) do
-    socket
-    |> assign(:delete_modal, nil)
-    |> refresh_chat_containers()
-    |> put_flash(:info, "Scheduled for deletion. You can still restore it before then.")
-  end
-
-  defp finish_schedule_deletion(socket, {:error, reason}) do
-    socket
-    |> assign(:delete_modal, nil)
-    |> put_flash(:error, LifecycleActions.error_message(reason))
-  end
-
-  # Shared body for drag + keyboard channel moves: persist the target
-  # section's order (best-effort — anonymous user ids fail-soft), broadcast
-  # the invalidation, and recompute the rail locally.
-  # Screen-reader confirmation for a row move (channel-row reorder
-  # Stage 3). Both the ▲▼ buttons (direction known) and the touch drag
-  # (position change only) funnel here; the drawer renders the text into a
-  # polite aria-live region. Sighted users never see it (sr-only).
-  defp announce_channel_move(socket, channel_id, direction) do
-    name =
-      case Enum.find(socket.assigns.channels, fn ch -> ch.id == channel_id end) do
-        %{name: name} -> name
-        _ -> nil
-      end
-
-    text =
-      case {name, direction} do
-        {nil, _} -> nil
-        {name, "up"} -> "Moved ##{name} up"
-        {name, "down"} -> "Moved ##{name} down"
-        {name, nil} -> "Moved ##{name}"
-      end
-
-    assign(socket, :reorder_announcement, text)
-  end
-
-  defp apply_channel_move(socket, section_id, ids) do
-    _ = Sidebar.put_channel_order(socket.assigns.user_id, section_id, ids)
-    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
-    recompute_sidebar(socket)
-  end
-
   # ── Pinned-block reorder (task 019fe987) ──────────────────────────────
-
-  # The ▲▼ baseline: the block AS RENDERED, filtered to the rows a
-  # conversation may legally move among. Derived from
-  # `pinned_conversation_entries/2` rather than read off
-  # `@channel_sections.pinned`, so the arrows and the screen can never
-  # describe two different lists. See that function for why.
-  defp rendered_pinned_ids(socket) do
-    socket.assigns.channel_sections.pinned
-    |> pinned_conversation_entries(socket.assigns.pinned_task_spaces)
-    |> Enum.map(& &1.space.id)
-  end
-
-  # Persist, broadcast so the user's other tabs converge, then re-render from
-  # what was written. `recompute_pinned/1` re-reads preferences rather than
-  # patching the assign, so a write that did not land shows as a block that
-  # did not move instead of a rail that disagrees with the database.
-  defp apply_pinned_move(socket, space_id, ordered_ids, direction) do
-    stored = Sidebar.list_pinned_space_ids(socket.assigns.user_id)
-
-    case pinned_destination_index(stored, space_id, ordered_ids) do
-      nil ->
-        # Not pinned any more (a second tab unpinned it mid-drag), or a stale
-        # payload from a client that has since re-rendered. Ignore silently,
-        # the same way the section reorder ignores an unknown id.
-        socket
-
-      to_index ->
-        _ = Sidebar.move_pinned_space(socket.assigns.user_id, space_id, to_index)
-        ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
-
-        socket
-        |> recompute_pinned()
-        |> announce_pinned_move(space_id, direction)
-    end
-  end
-
-  # Translate a RENDERED order into an index in the STORED pin list.
-  #
-  # The two lists are not the same. `PinnedSpaces.partition/2` drops a pinned
-  # id that names no loaded space (archived, or in an org the viewer has left),
-  # and states that skip-unknown property in its own moduledoc, so the block
-  # can render a strict SUBSET of what is stored. Writing the rendered order
-  # back wholesale would unpin every conversation it could not see.
-  #
-  # So resolve one anchor instead: the first id after `space_id` in the new
-  # rendered order that is still stored. The pin lands immediately before that
-  # anchor, leaving unrendered pins where they are. No anchor means the pin was
-  # moved to the end of the block, so it appends.
-  #
-  # Returns nil when `space_id` is not pinned at all, which the caller treats
-  # as "ignore this event".
-  defp pinned_destination_index(stored, space_id, ordered_ids) do
-    if space_id in stored do
-      rest = Enum.reject(stored, &(&1 == space_id))
-
-      successor =
-        ordered_ids
-        |> Enum.drop_while(&(&1 != space_id))
-        |> Enum.drop(1)
-        |> Enum.find(&(&1 in rest))
-
-      case successor do
-        nil -> length(rest)
-        id -> Enum.find_index(rest, &(&1 == id))
-      end
-    end
-  end
-
-  # Feeds the drawer's existing sr-only aria-live region. The name comes from
-  # `sidebar_row_label/2`, the same helper the row's visible label uses, so a
-  # DM announces the person's name rather than a nil `space.name`. No "#"
-  # prefix: the block holds channels and people, and a hash on a person is
-  # the wrong object type.
-  defp announce_pinned_move(socket, space_id, direction) do
-    name =
-      case Enum.find(socket.assigns.channel_sections.pinned, &(&1.id == space_id)) do
-        nil -> nil
-        space -> sidebar_row_label(space, socket.assigns.user_id)
-      end
-
-    text =
-      case {name, direction} do
-        {nil, _} -> nil
-        {name, "up"} -> "Moved #{name} up"
-        {name, "down"} -> "Moved #{name} down"
-        {name, nil} -> "Moved #{name}"
-      end
-
-    assign(socket, :reorder_announcement, text)
-  end
 
   # Recompute `@sidebar_sections` from the current channel list + saved
   # prefs (section order + channel placement + hidden sections all live in
@@ -3350,128 +2671,11 @@ defmodule PlatformWeb.ChatLive do
     |> Enum.filter(&(&1.kind in ["dm", "group"]))
   end
 
-  # Current ordered channel ids for a section, read from the already-resolved
-  # `@sidebar_sections` (the live render state). Used by the keyboard move
-  # handler to compute the new order without a DB round-trip.
-  defp section_channel_ids(sidebar_sections, section_id) do
-    case Enum.find(sidebar_sections, fn %{section: s} -> s.id == section_id end) do
-      %{channels: channels} -> Enum.map(channels, & &1.id)
-      _ -> []
-    end
-  end
-
-  # Swap `id` one slot toward the head ("up") or tail ("down") of `ids`.
-  # Returns the list unchanged when the move would fall off either end or
-  # the id isn't present (defensive against a stale render).
-  defp move_in_list(ids, id, direction) do
-    case Enum.find_index(ids, &(&1 == id)) do
-      nil ->
-        ids
-
-      idx ->
-        target = if direction == "up", do: idx - 1, else: idx + 1
-
-        if target < 0 or target >= length(ids) do
-          ids
-        else
-          neighbour = Enum.at(ids, target)
-
-          Enum.map(ids, fn
-            ^id -> neighbour
-            ^neighbour -> id
-            other -> other
-          end)
-        end
-    end
-  end
-
   # Coerce a hide/show flag (boolean or "true"/"false" string from the
   # client) into a boolean. Anything other than a truthy marker is false.
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
   defp truthy?(_), do: false
-
-  # Personal section-reorder (Stage 3). Persist the per-user `chat_section_order`
-  # as a list of section IDS (not names). IDs are stable across admin
-  # rename/recolor, so a personally-reordered user keeps their arrangement even
-  # after an admin renames a section — the previous name-keyed store silently
-  # dumped a renamed section to the rail's tail because the saved order still
-  # held the OLD name (HIGH audit finding #3). The baseline order is derived
-  # from the rendered `@sidebar_sections` (the same id-driven source the admin
-  # reorder path uses), so there's no separate name-keyed `@section_order`
-  # assign to keep in sync.
-  defp reorder_sections_personal(socket, from_id, to_id) do
-    current_ids = Enum.map(socket.assigns.sidebar_sections, fn %{section: s} -> s.id end)
-
-    cond do
-      from_id not in current_ids or to_id not in current_ids ->
-        # Unknown id (Pinned/DMs aren't reorderable, and any other bogus
-        # payload is a client/version mismatch). Ignore silently.
-        {:noreply, socket}
-
-      true ->
-        new_ids = compute_reorder(current_ids, from_id, to_id)
-
-        if new_ids == current_ids do
-          {:noreply, socket}
-        else
-          # Best-effort persistence — anonymous / deleted user rows return
-          # :not_found. We DON'T re-read prefs to render: a fail-soft write
-          # would otherwise snap the rail back to position order. Instead we
-          # apply `new_ids` to the already-resolved sections in-memory so the UI
-          # reflects the drag immediately whether or not the write landed.
-          _ = Sidebar.put_section_order(socket.assigns.user_id, new_ids)
-
-          # Stage 5: invalidate the user's other connected tabs so a section
-          # reorder converges everywhere, not just the tab that did the drag.
-          ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
-
-          reordered =
-            order_resolved_by_ids(
-              resolve_sidebar_sections(
-                socket.assigns.user_id,
-                socket.assigns.channels,
-                socket.assigns.hidden_channel_ids,
-                socket.assigns.agents_block
-              ),
-              new_ids
-            )
-
-          {:noreply, assign(socket, :sidebar_sections, reordered)}
-        end
-    end
-  end
-
-  # Admin section-reorder (Stage 6): persist the GLOBAL default order to
-  # `channel_sections.position`. The SectionReorder hook's `from`/`to` are
-  # section ids (data-section-id); we resolve them against the currently
-  # rendered `@sidebar_sections` to confirm they're real, build the new
-  # ordered id list, and write it via `Sidebar.reorder_sections/2` (which
-  # gates on root_admin?). On success we broadcast `:sidebar_defaults_changed`
-  # so all other sessions converge, then recompute this admin's view.
-  defp reorder_sections_default(socket, from_id, to_id) do
-    current_ids = Enum.map(socket.assigns.sidebar_sections, fn %{section: s} -> s.id end)
-
-    cond do
-      from_id not in current_ids or to_id not in current_ids ->
-        {:noreply, socket}
-
-      true ->
-        new_ids = compute_reorder(current_ids, from_id, to_id)
-
-        if new_ids == current_ids do
-          {:noreply, socket}
-        else
-          case Sidebar.reorder_sections(%{id: socket.assigns.user_id}, new_ids) do
-            {:ok, _count} ->
-              {:noreply, recompute_sidebar_after_admin_write(socket)}
-
-            {:error, :unauthorized} ->
-              {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
-          end
-        end
-    end
-  end
 
   # One rendered section flattened into what the "Move to organisation…"
   # dialog and the write both need: the human-readable name, the colour dot
@@ -3564,29 +2768,6 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp reassign_error_message(_reason, _to_name), do: "Could not move the channel."
-
-  # The scope tokens are the recolor palette — whitelist-validate the
-  # inbound color so a forged payload can't write an arbitrary string onto a
-  # section's `color` (defense-in-depth on top of the admin gate).
-  #
-  # The palette is computed from the org ROWS (`Tenancy.scope_palette/0`:
-  # every non-archived org with a colour) plus the section's OWN org token,
-  # so an admin can always put a section back on its own org's colour (task
-  # 01a14dd9 stage 2; it was five compiled tokens before). Read fresh at
-  # event time rather than from the rendered assign, so a palette that went
-  # stale on screen can neither admit an archived org's token nor refuse a
-  # new org's.
-  defp valid_scope_token?(color, section_id, sidebar_sections) do
-    color == own_scope_token(sidebar_sections, section_id) or
-      Enum.any?(Platform.Tenancy.scope_palette(), &(&1.token == color))
-  end
-
-  defp own_scope_token(sidebar_sections, section_id) do
-    Enum.find_value(sidebar_sections, fn
-      %{section: %{id: ^section_id} = section} -> section_own_token(section)
-      _ -> nil
-    end)
-  end
 
   @doc """
   The swatches a section's recolor palette renders: `palette` (from
@@ -3732,46 +2913,6 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp expand_destination_section(socket, _section_id), do: socket
-
-  # Say what just happened, at the foot of the rail (task 019ffcad stage 4,
-  # design canvas "Type" and "Layout").
-  #
-  # Stages 1 to 3 put the row in its new section and make it visible there. The
-  # admin is looking at the SOURCE section they filed the channel out of, where
-  # the only observable event is a row leaving, and a row leaving reads as a
-  # deletion before it reads as a relocation. So the rail says the sentence.
-  #
-  # BOTH names or nothing. "Moved #gen-migration." leaves the reader checking
-  # where it went, which is the work this line exists to save, and the
-  # destination half is the half a person actually needs.
-  #
-  # No action button. The move already carries a two-step confirmation and the
-  # row's own menu moves the channel back in one click, so this stage renders the
-  # reused toast shape with the message alone. The designer's separate decision to offer
-  # an Undo here is task 01a01052-3155-7c15-8c48-9ff8955b9b70.
-  #
-  # Auto-clears on the hide toast's pattern exactly: a `Process.send_after/3`
-  # paired with a `{:clear_move_toast, channel_id}` handler that only nils the
-  # assign while the toast still names THIS channel, so a second move inside the
-  # window replaces the line and the earlier timer's fire becomes a no-op. No
-  # timer refs to track or cancel.
-  #
-  # The guard is the degrade path, and it degrades to silence rather than to a
-  # half-sentence: `request_channel_reassign` populates both names, so a missing
-  # one means the confirm assign was not built by that handler, and "Moved  to
-  # ." is worse than no line at all.
-  defp raise_move_toast(socket, channel_id, channel_name, section_name)
-       when is_binary(channel_name) and is_binary(section_name) do
-    Process.send_after(self(), {:clear_move_toast, channel_id}, @move_toast_ms)
-
-    assign(socket, :move_toast, %{
-      channel_id: channel_id,
-      channel_name: channel_name,
-      section_name: section_name
-    })
-  end
-
-  defp raise_move_toast(socket, _channel_id, _channel_name, _section_name), do: socket
 
   defp apply_save_edit(socket, message_id, body) do
     participant = socket.assigns.current_participant
@@ -4018,15 +3159,10 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, put_flash(socket, kind, msg)}
   end
 
-  # Stage 3 (chat sidebar v3). Auto-clear the undo toast 4s after a hide.
-  # Only clear when the toast still points at this space_id — a later hide
-  # inside the 4s window replaces the toast, and the earlier timer firing
-  # here would otherwise wipe the newer toast prematurely.
   # Expiry of the `?message=` arrival ring (task 019fabe8 stage 2).
   # Guarded on the highlight STILL pointing at the anchor: a search jump
   # landing inside the window would otherwise have its own highlight
-  # stolen when this timer fires. Same shape as `:clear_undo_toast`
-  # below — the guard makes the late fire a no-op, so no timer refs need
+  # stolen when this timer fires. The guard makes the late fire a no-op, so no timer refs need
   # tracking or cancelling.
   #
   # `:anchor_message_id` deliberately survives: the scroll hook (stage 3)
@@ -4038,27 +3174,6 @@ defmodule PlatformWeb.ChatLive do
       {:noreply, SearchHooks.set_highlights(socket, nil)}
     else
       {:noreply, socket}
-    end
-  end
-
-  def handle_info({:clear_undo_toast, space_id}, socket) do
-    case socket.assigns.undo_toast do
-      %{space_id: ^space_id} -> {:noreply, assign(socket, :undo_toast, nil)}
-      _ -> {:noreply, socket}
-    end
-  end
-
-  # Auto-clear the move confirmation 4s after a move (task 019ffcad stage 4).
-  # Guarded on the line still naming THIS channel, same reason as the hide
-  # toast's clear above: a second move inside the window replaces the line, and
-  # the first timer firing here would otherwise wipe the newer one early.
-  #
-  # Keyed on `channel_id` and reading `:move_toast`, so this and the hide toast's
-  # clear cannot reach each other's state even when both timers are in flight.
-  def handle_info({:clear_move_toast, channel_id}, socket) do
-    case socket.assigns.move_toast do
-      %{channel_id: ^channel_id} -> {:noreply, assign(socket, :move_toast, nil)}
-      _ -> {:noreply, socket}
     end
   end
 
@@ -5124,21 +4239,6 @@ defmodule PlatformWeb.ChatLive do
     |> recompute_sidebar()
   end
 
-  # Apply an explicit section-id order to already-resolved sections IN-MEMORY,
-  # used only by the personal-reorder handler so the rail reflects a drag even
-  # when persistence fail-softs (anonymous / deleted user row). The persisted
-  # prefs remain the source of truth for every other recompute path; this is a
-  # one-shot overlay for the dragging tab. Sections absent from `ids` sort to
-  # the tail in their resolver order.
-  defp order_resolved_by_ids(resolved, ids) when is_list(ids) do
-    rank = ids |> Enum.with_index() |> Map.new()
-    fallback = length(ids)
-
-    Enum.sort_by(resolved, fn %{section: section} ->
-      Map.get(rank, section.id, fallback)
-    end)
-  end
-
   # ── The one org index (task 01a00910 stage 3) ──────────────────────────
   #
   # SOURCE OF TRUTH for sub-org bucketing is the orgs table, reached through
@@ -5239,12 +4339,6 @@ defmodule PlatformWeb.ChatLive do
 
   defp new_channel_org_options(_user_id), do: []
 
-  @spec bucket_slug_index() :: %{String.t() => String.t()}
-  defp bucket_slug_index do
-    Platform.Tenancy.list_orgs()
-    |> Map.new(fn org -> {css_slug(org.slug), org.name} end)
-  end
-
   defp css_slug(slug), do: Platform.Tenancy.css_slug(slug)
 
   # Every bucket key the rail can render: one per org, plus the default bucket
@@ -5292,46 +4386,6 @@ defmodule PlatformWeb.ChatLive do
   def sub_org_order do
     {org_buckets, _bucket_orgs, default_bucket} = org_indexes()
     org_buckets |> bucket_names(default_bucket) |> Enum.sort()
-  end
-
-  # ── Per-user section order (chat plan v2 Stage 3) ──────────────────────
-  #
-  # The per-user `chat_section_order` is a list of section IDS (HIGH audit
-  # finding #3 — IDs are stable across admin rename/recolor, names are not).
-  # ORDER RESOLUTION lives entirely in `Sidebar.resolve_for_user/2` +
-  # `Sidebar.order_sections/2` (id-keyed, skip-unknown, append-unplaced): no
-  # pref → `Section.position` (admin default); a saved order → those sections in
-  # the saved id order, the rest appended by position. Writes go through
-  # `Sidebar.put_section_order/2` (also id-keyed). There's no LiveView-side
-  # validation gate or re-ordering pass anymore — that was a holdover from the
-  # name-keyed era when Sidebar's id resolver couldn't interpret the prefs.
-
-  @doc """
-  Move `from` to `to`'s slot in `order`. The displaced item and everything
-  between shifts one position toward `from`'s former slot — standard
-  drag-reorder semantics.
-
-  Generic over the element type — both the personal and admin reorder paths
-  pass section IDS. Returns the input list unchanged when:
-    * `from == to` (drop on self)
-    * either id is absent from `order` (defensive — JS shouldn't emit
-      this, but a stale render could)
-  """
-  @spec compute_reorder([String.t()], String.t(), String.t()) :: [String.t()]
-  def compute_reorder(order, from, to)
-      when is_list(order) and is_binary(from) and is_binary(to) do
-    cond do
-      from == to ->
-        order
-
-      from not in order or to not in order ->
-        order
-
-      true ->
-        without_from = Enum.reject(order, &(&1 == from))
-        target_idx = Enum.find_index(without_from, &(&1 == to))
-        List.insert_at(without_from, target_idx, from)
-    end
   end
 
   # Map a Space to the scope value the `scope_pill` component takes: its
@@ -5471,29 +4525,6 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def parse_scope(_raw, _bucket_orgs), do: nil
-
-  # `section_slug/1` (bucket-name → slug) was retired in Stage 4: the
-  # resolver-driven rail sets `data-section-slug` directly from a section's
-  # `color` token (already in CSS slug form, e.g. "vandelay-ind"), so the
-  # name→slug mapping is no longer needed. Its inverse `bucket_from_slug/1`
-  # is kept below — the Stage 3 `section_reordered` handler still translates
-  # the JS hook's slug payload back to the section name.
-
-  # `bucket_from_slug/1`: translates the SectionReorder hook's slug payload
-  # back to the bucket display name used by the `section_reordered` handler.
-  # Task 01a00910 stage 3: reads `bucket_slug_index/0` — the SAME orgs-table
-  # read `channel_scope/2` buckets on — instead of the deleted
-  # `@sub_org_slug_to_bucket` attribute. This was the second consumer of that
-  # map (the architecture review flagged it); leaving it behind would have kept
-  # the stale hardcoded list alive in the reorder path while the tests went
-  # green on the bucketing path.
-  @doc false
-  @spec bucket_from_slug(String.t()) :: String.t() | nil
-  def bucket_from_slug(slug) when is_binary(slug) do
-    Map.get(bucket_slug_index(), css_slug(slug))
-  end
-
-  def bucket_from_slug(_), do: nil
 
   # ── Pin-to-Chat helpers (task 019f62a1 stage 4) ────────────────────────
   #

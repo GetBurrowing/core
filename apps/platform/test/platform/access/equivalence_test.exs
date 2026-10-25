@@ -532,7 +532,7 @@ defmodule Platform.Access.EquivalenceTest do
 
     html
     |> LazyHTML.from_document()
-    |> LazyHTML.query("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
+    |> LazyHTML.query("[data-sidebar] #sidebar-nav .sidebar-row")
     |> LazyHTML.attribute("data-destination")
     |> Enum.map(&String.to_existing_atom/1)
     |> Enum.sort()
@@ -549,12 +549,10 @@ defmodule Platform.Access.EquivalenceTest do
   # ── The Scope's side ────────────────────────────────────────────────────
 
   defp scope_rail(user) do
-    # The desktop rail's tiles only: a More-sheet-only (`:sheet`) destination
-    # such as Changelog is never on the rendered rail (task 01a1557a-807f).
-    installed =
-      IconRail.destinations(root_user: true)
-      |> Enum.filter(&(&1.cluster in IconRail.desktop_clusters()))
-      |> Enum.map(& &1.key)
+    # The desktop sidebar's rows only (Burrow redesign 22 stage 1): the tab
+    # bar's link tabs and the More sheet's rows. Admin and Prompts are
+    # Settings pages, never sidebar rows, so they drop out of both sides.
+    installed = PlatformWeb.Components.Sidebar.row_keys(nil, true)
 
     user
     |> loaded()

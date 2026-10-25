@@ -2,11 +2,15 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
   @moduledoc """
   Lifecycle hook module for the Search feature in `PlatformWeb.ChatLive`.
 
-  See ADR 0035. Search has distributed UI (topbar form + body results
-  panel) so it lives as a LifecycleHook. Owns:
+  See ADR 0035. Search has distributed UI (the space sheet's and the details
+  panel's Search pages, and the message highlight) so it lives as a
+  LifecycleHook. Owns:
 
-    * Assigns: `:search_query`, `:search_results`, `:search_form`,
-      `:highlighted_message_id`
+    * Assigns: `:search_query`, `:search_results`, `:highlighted_message_id`
+
+  The desktop header's `#chat-search-form` and its `:search_form` assign were
+  deleted in Burrow redesign 22 stage 4; both Search pages are plain forms
+  reading `:search_query`.
     * Events:  `"search_submit"`, `"search_clear"`
 
   ## Cross-feature note (search_open_result)
@@ -31,7 +35,7 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
       socket = PlatformWeb.ChatLive.SearchHooks.maybe_refresh(socket)
   """
 
-  import Phoenix.Component, only: [assign: 3, to_form: 2]
+  import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4]
 
   alias Platform.Chat
@@ -44,7 +48,6 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
     |> assign(:search_query, "")
     |> assign(:search_results, [])
     |> assign(:highlighted_message_id, nil)
-    |> assign_form("")
     |> attach_hook(:search_events, :handle_event, &handle_event/3)
   end
 
@@ -131,7 +134,6 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
     |> assign(:search_query, trimmed)
     |> assign(:search_results, results)
     |> assign(:highlighted_message_id, nil)
-    |> assign_form(trimmed)
     |> reinsert_for_highlight_change(old_id, nil)
   end
 
@@ -142,12 +144,7 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
     |> assign(:search_query, "")
     |> assign(:search_results, [])
     |> assign(:highlighted_message_id, nil)
-    |> assign_form("")
     |> reinsert_for_highlight_change(old_id, nil)
-  end
-
-  defp assign_form(socket, query) do
-    assign(socket, :search_form, to_form(%{"query" => query}, as: :search))
   end
 
   # Reinsert the rows whose highlight glow needs to flip (old to clear,

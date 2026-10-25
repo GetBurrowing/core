@@ -80,8 +80,11 @@ defmodule PlatformWeb.ChatLivePresenceGuardTest do
     p
   end
 
+  # The desktop popover sits under the details panel's Members row (Burrow
+  # redesign 22 stage 4).
   defp open_presence_panel(view) do
-    view |> element(~s([data-role="members-open"])) |> render_click()
+    render_click(view, "details_open", %{"page" => "space"})
+    view |> element(~s(#details-panel [data-role="details-members"])) |> render_click()
   end
 
   # The presence facts the desktop popover renders: each person row's

@@ -93,16 +93,20 @@ defmodule Platform.Access.DelegationLiveAcceptanceTest do
   end
 
   describe "view-as matches the real user's rail" do
-    test "root and member rails agree with their view-as result and differ from each other" do
+    test "root and member sidebars agree with their view-as result" do
       org = Tenancy.get_org_by_slug!("acme")
       root = member!(user!("Root"), org, "admin")
       member = member!(user!("Member"), org, "member")
 
       {:ok, _root_live, root_html} = conn_for(root) |> live("/tasks")
       {:ok, _member_live, member_html} = conn_for(member) |> live("/tasks")
-      real_root = rail_keys(root_html, "[data-icon-rail] [data-destination]")
-      real_member = rail_keys(member_html, "[data-icon-rail] [data-destination]")
-      assert real_root != real_member
+      real_root = rail_keys(root_html, "#sidebar-nav [data-destination]")
+      real_member = rail_keys(member_html, "#sidebar-nav [data-destination]")
+      # Positive control: the sidebar rendered rows for both. (Root and
+      # member no longer differ here: Admin and Prompts are Settings pages
+      # since the sidebar replaced the icon rail, Burrow redesign 22.)
+      assert MapSet.member?(real_root, "chat")
+      assert MapSet.size(real_member) > 4
 
       for {target, real} <- [{root, real_root}, {member, real_member}] do
         {:ok, _view, html} = conn_for(root) |> live("/access/view-as/user/#{target.id}")

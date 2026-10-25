@@ -101,7 +101,6 @@ defmodule Platform.ProductNameGuardTest do
     {"apps/platform/assets/js/hooks/lazy_inline_canvas.js", "Suite.ClientState", @client_state},
     {"apps/platform/assets/js/hooks/meeting_captions.js", "Suite.ClientState", @client_state},
     {"apps/platform/assets/js/hooks/meeting_soundboard.js", "Suite.ClientState", @client_state},
-    {"apps/platform/assets/js/hooks/resizable_sidebar.js", "Suite.ClientState", @client_state},
     {"apps/platform/assets/js/hooks/sidebar_collapse.js", "Suite.ClientState", @client_state},
     {"apps/platform/assets/js/hooks/tasks_status_filter.js", "Suite.ClientState", @client_state},
     {"apps/platform/lib/mix/tasks/suite.deploy.scope_gate.ex", "Mix.Tasks.Suite.",

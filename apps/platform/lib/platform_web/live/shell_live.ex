@@ -50,7 +50,7 @@ defmodule PlatformWeb.ShellLive do
     # `root_admin_preloaded?/1` variant so this lookup costs zero extra
     # Repo queries — `Accounts.get_user/1` (called a few lines above)
     # preloaded `:org_memberships` with the nested `:org`.
-    # Both assigns are kept so existing components (icon_rail, bottom_rail,
+    # Both assigns are kept so existing components (sidebar, bottom_rail,
     # more_sheet) that read `root_user` continue to render correctly
     # while new code adopts `root_admin?` via the LiveAuth hook.
     root_user = Platform.Tenancy.root_admin_preloaded?(user_record)
@@ -146,12 +146,11 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
       |> assign(:more_sheet_open, false)
-      |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
       |> assign(:root_user, root_user)
       # The install's app name, read once per mount from the branding row:
       # the alt text of the Burrow mark (task 01a120c5 stage 2) and the label
-      # text (stage 3) in the rail header, never a compiled product name.
+      # text (stage 3) in the sidebar header, never a compiled product name.
       |> assign(:brand_name, Platform.Branding.app_name())
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
@@ -543,7 +542,7 @@ defmodule PlatformWeb.ShellLive do
         _msg, socket ->
           {:cont, socket}
       end)
-      # Inbox PubSub (inbox:<user_id>) → keep the icon-rail unread badge live.
+      # Inbox PubSub (inbox:<user_id>) → keep the sidebar Inbox badge live.
       # On ANY inbox event, RECOMPUTE the count from the DB via
       # `Inbox.unread_count/1` (one indexed COUNT) and re-assign — exactly like
       # the Tasks badge (`compute_tasks_count`). The old running +1 / -1 counter
@@ -666,26 +665,6 @@ defmodule PlatformWeb.ShellLive do
 
         "close_more_sheet", _params, socket ->
           {:halt, assign(socket, :more_sheet_open, false)}
-
-        "toggle_sidebar", _params, socket ->
-          next = !socket.assigns.sidebar_collapsed
-
-          socket =
-            socket
-            |> assign(:sidebar_collapsed, next)
-            |> push_event("sidebar_collapsed_changed", %{collapsed: next})
-
-          {:halt, socket}
-
-        "sidebar_hydrate", %{"collapsed" => collapsed}, socket
-        when is_boolean(collapsed) ->
-          # Idempotent: only re-assign if the hook's localStorage value differs
-          # from the current default, to avoid an unnecessary re-render.
-          if collapsed == socket.assigns.sidebar_collapsed do
-            {:halt, socket}
-          else
-            {:halt, assign(socket, :sidebar_collapsed, collapsed)}
-          end
 
         "toggle_theme_picker", _params, socket ->
           {:halt, assign(socket, :theme_picker_open, !socket.assigns[:theme_picker_open])}
@@ -1215,7 +1194,7 @@ defmodule PlatformWeb.ShellLive do
       0
   end
 
-  # Unread count for the desktop icon-rail Inbox badge. Fail-open like
+  # Unread count for the desktop sidebar Inbox badge. Fail-open like
   # compute_tasks_count — a count error renders 0 (badge hidden) rather than
   # blocking the shell mount. Anonymous/non-user mounts (nil id) are 0 too.
   #
@@ -1235,7 +1214,7 @@ defmodule PlatformWeb.ShellLive do
 
   defp compute_inbox_count(_), do: 0
 
-  # Task 01a01b29 stage 1. Chat-unread total for the icon-rail Chat tile.
+  # Task 01a01b29 stage 1. Chat-unread total for the sidebar Chat row.
   # Same fail-open posture as `compute_inbox_count/1`: a count error renders 0
   # rather than failing a shell mount. Takes the loaded user struct because
   # that is what `Chat.total_unread_for_viewer/1` accepts; since task 01a01f4c

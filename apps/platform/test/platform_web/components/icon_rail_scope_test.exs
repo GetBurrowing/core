@@ -1,7 +1,8 @@
 defmodule PlatformWeb.Components.IconRailScopeTest do
   @moduledoc """
-  Task 01a1386d-fb6e stage 1: the shell rail (desktop icon rail, mobile
-  bottom rail, More sheet) rendered from the permission registry and
+  Task 01a1386d-fb6e stage 1: the shell rail (desktop sidebar, which
+  replaced the icon rail in Burrow redesign 22, mobile bottom rail, More
+  sheet) rendered from the permission registry and
   filtered by the actor's `%Platform.Access.Scope{}` through
   `Platform.Access.module_access?/3`.
 
@@ -38,7 +39,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
-  alias PlatformWeb.Components.{IconRail, MoreSheet}
+  alias PlatformWeb.Components.{IconRail, MoreSheet, Sidebar}
 
   @router PlatformWeb.Router
 
@@ -121,13 +122,20 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       assert diffs == []
     end
 
-    test "root admin keeps the Admin and Prompts tiles; a sub-org admin does not", ctx do
+    test "Admin and Prompts are Settings pages on every surface, for a root admin too", ctx do
       root = scope_of(ctx.internal[:root_admin])
       sub = scope_of(ctx.internal[:sub_admin])
 
-      assert :admin in desktop_keys(%{access_scope: root})
-      assert :prompts in desktop_keys(%{access_scope: root})
-      # Admin left the More sheet for /settings (task 01a1557a-807f stage 2).
+      # Positive control: the Scope admits both for the root admin, so their
+      # absence below is placement, not filtering.
+      assert :admin in scope_destination_keys(root)
+      assert :prompts in scope_destination_keys(root)
+
+      # Admin left the More sheet for /settings (task 01a1557a-807f stage 2),
+      # and the desktop sidebar lists exactly the sheet's rows (Burrow
+      # redesign 22 stage 1), so neither is a sidebar row either.
+      refute :admin in desktop_keys(%{access_scope: root})
+      refute :prompts in desktop_keys(%{access_scope: root})
       refute :admin in more_sheet_keys(%{access_scope: root})
 
       refute :admin in desktop_keys(%{access_scope: sub})
@@ -185,13 +193,13 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert more_sheet_keys(%{access_scope: member}) != []
 
-      # Desktop: no Working eyebrow over an empty cluster for a guest; the
-      # member's rail carries it (control).
-      assert desktop_html(%{access_scope: member}) =~ "icon-rail-eyebrow\">Working<"
+      # Desktop: no "More" label over an empty group for a guest; the
+      # member's sidebar carries it (control).
+      assert desktop_html(%{access_scope: member}) =~ ~s(data-role="sidebar-more-label")
 
       for {row, user} <- ctx.guests do
-        refute desktop_html(%{access_scope: scope_of(user)}) =~ ">Working<",
-               "#{row}'s rail renders an empty Working eyebrow"
+        refute desktop_html(%{access_scope: scope_of(user)}) =~ "sidebar-more-label",
+               "#{row}'s sidebar renders an empty More label"
       end
     end
 
@@ -400,13 +408,13 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
     do:
       assigns
       |> desktop_html()
-      |> keys("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
+      |> keys("[data-sidebar] #sidebar-nav .sidebar-row")
 
   defp desktop_html(assigns) do
     assigns = Map.merge(%{current_path: "/chat", root_user: false, access_scope: nil}, assigns)
 
     rendered_to_string(~H"""
-    <IconRail.icon_rail
+    <Sidebar.sidebar
       current_path={@current_path}
       root_user={@root_user}
       access_scope={@access_scope}
@@ -455,7 +463,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
   defp rendered_tiles(html) do
     html
     |> LazyHTML.from_document()
-    |> LazyHTML.query("[data-icon-rail] .icon-rail-tab, [data-bottom-rail] .bottom-nav-tab")
+    |> LazyHTML.query("[data-sidebar] .sidebar-row, [data-bottom-rail] .bottom-nav-tab")
     |> LazyHTML.attribute("data-destination")
     |> Enum.uniq()
   end

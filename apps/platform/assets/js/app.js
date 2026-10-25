@@ -260,7 +260,9 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
     composeInput: "#compose-form input[type='text'], #compose-form textarea",
     composeForm: "#compose-form",
     canvasTitleInput: "input[name='canvas[title]']",
-    chatSearchInput: "#chat-search-form input[type='text']",
+    // The Search pages' inputs (Burrow redesign 22 stage 4 deleted the desktop
+    // header's #chat-search-form): the details panel's, else the phone sheet's.
+    chatSearchInput: "#details-search-input, #space-sheet-search-input",
     spaceHeader: "header .truncate.font-semibold",
     sidebarSpaceLinks: "nav a[href^='/chat/']",
   };
@@ -353,7 +355,7 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
       if (!input) return errorResult("Search input not found");
       setNativeValue(input, query);
       await new Promise(r => setTimeout(r, 500));
-      const results = document.querySelectorAll("[phx-click='search_open_result']").length;
+      const results = document.querySelectorAll("[data-role$='-search-result']").length;
       return { content: [{ type: "text", text: JSON.stringify({ query, resultCount: results }) }] };
     }
   });

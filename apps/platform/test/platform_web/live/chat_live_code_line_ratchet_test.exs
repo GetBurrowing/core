@@ -108,7 +108,9 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   @chat_live_path Path.join(@app_root, "lib/platform_web/live/chat_live.ex")
   @render_helpers_path Path.join(@app_root, "lib/platform_web/live/chat/render_helpers.ex")
   @external_rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/external_rail.ex")
-  @rail_path Path.join(@app_root, "lib/platform_web/live/chat/partials/rail.ex")
+  # `partials/rail.ex` left this list with the desktop channel rail (Burrow
+  # redesign 22 stage 2); its successor on desktop is the list popover.
+  @list_popover_path Path.join(@app_root, "lib/platform_web/live/chat/partials/list_popover.ex")
   # The phone Chat list (task 01a1557a-8562) took the deleted drawer's slot.
   @chat_list_path Path.join(@app_root, "lib/platform_web/live/chat/partials/chat_list.ex")
   @conversation_path Path.join(
@@ -129,7 +131,7 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
     @chat_live_path,
     @render_helpers_path,
     @external_rail_path,
-    @rail_path,
+    @list_popover_path,
     @chat_list_path,
     @conversation_path,
     @composer_path,
@@ -644,7 +646,19 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `{:members_flash, _, _}` clauses and the `:show_members` seed moved to
   # `PlatformWeb.ChatLive.MembersSheetHooks` (attached fully qualified, so no
   # alias line).
-  @chat_live_code_line_count 2515
+  # Burrow redesign 22 stage 2 (2026-10-25, the desktop channel rail and the
+  # external rail deleted): -499, measured by this guard (2515 -> 2016). Out
+  # went the `Partials.Rail` import and every handler, assign and helper only
+  # the rail used: edit layout and admin "Edit default" (toggle_sidebar_edit,
+  # toggle_sidebar_admin_edit, the sidebar menu, rename/recolor section
+  # defaults, reset_sidebar, toggle_section_hidden), the manual order
+  # (channel_moved, move_channel, pinned_reordered, move_pinned,
+  # section_reordered, their move/announce helpers, `compute_reorder/3` and
+  # `bucket_from_slug/1`), the per-section
+  # reveal (reveal_section, remask_all), the undo-hide and move-to-org
+  # toasts, and the chat-side org lifecycle kebab and its delete modal. The
+  # list pane lives in `Partials.ChatList` and `Partials.ListPopover`.
+  @chat_live_code_line_count 2016
 
   @doc """
   Count the CODE lines of a source file.

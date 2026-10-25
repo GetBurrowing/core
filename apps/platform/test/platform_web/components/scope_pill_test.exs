@@ -1033,7 +1033,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
       for {selector, property, value} <- [
             {".channel-section-color-dot--scope", "background-color",
              "var(--scope-fill, transparent)"},
-            {".channel-section-swatch", "background-color", "var(--scope-fill, transparent)"},
+            # `.channel-section-swatch` (the rail's recolor palette) left with
+            # the desktop channel rail in Burrow redesign 22 stage 2.
             {".scope-dot-current", "background-color", "var(--scope-fill, currentColor)"},
             {".scope-fill-text", "color", "var(--scope-fill)"}
           ] do
@@ -1067,8 +1068,12 @@ defmodule PlatformWeb.Components.ScopePillTest do
     #
     # Three since task 01a1557a-8a6d stage 3 deleted the compact mobile header
     # pill (the phone reaches the scope through the space sheet's Scope
-    # switch, which is not a scope pill).
-    test "the inventory is exactly these three sites, each with its declared surface" do
+    # switch, which is not a scope pill). Two since Burrow redesign 22 stage 2
+    # deleted the desktop channel rail (`partials/rail.ex`, `:base_200`). One
+    # since Burrow redesign 22 stage 4 deleted the desktop chat header pill
+    # (`partials/conversation.ex`; the details panel's Scope switch is not a
+    # scope pill).
+    test "the inventory is exactly this one site, with its declared surface" do
       sites =
         "lib/**/*.{ex,heex}"
         |> Path.wildcard()
@@ -1084,12 +1089,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
         end)
         |> Enum.sort()
 
-      assert sites ==
-               Enum.sort([
-                 {"live/chat/partials/conversation.ex", ":base_100"},
-                 {"live/chat/partials/rail.ex", ":base_200"},
-                 {"live/tasks/filters_component.ex", ":base_100"}
-               ])
+      assert sites == [{"live/tasks/filters_component.ex", ":base_100"}]
     end
   end
 

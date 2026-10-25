@@ -2,8 +2,9 @@
 // in ChatLive (`apps/platform/lib/platform_web/live/chat/partials.ex`
 // `canvas_overlay/1`, desktop `hidden lg:flex` branch).
 //
-// This hook mirrors the shape of `resizable_sidebar.js` (left channel rail
-// handle) with three deliberate deviations:
+// This hook began as a copy of the channel rail's `resizable_sidebar.js`
+// (deleted with that rail, Burrow redesign 22 stage 2), with three
+// deliberate deviations:
 //
 //   1. Left-edge handle → inverted delta. The channel rail sits on the LEFT
 //      of the chat surface with its drag handle on its RIGHT edge; widening
@@ -51,8 +52,8 @@
 //   reconciles attributes and clears the inline `style="width: Xpx"` we
 //   set at mount / mousemove — snapping the panel back to the Tailwind
 //   `w-96` fallback. The `updated()` callback re-applies the persisted
-//   width through `_applyWidth()` on every patch. Mirrors the pattern in
-//   `apps/platform/assets/js/hooks/resizable_sidebar.js` (channel rail).
+//   width through `_applyWidth()` on every patch (the pattern the deleted
+//   channel rail's resize hook used).
 //   Guarded on `_active` (mobile bail) and on the `sidebar-resizing` body
 //   class (mid-drag: the in-flight mousemove is authoritative and must
 //   not be clobbered back to the last persisted value).

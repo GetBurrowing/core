@@ -7,8 +7,10 @@ defmodule PlatformWeb.Components.MaskNamesChip do
 
   Two function components, mirroring `PlatformWeb.Components.ThemePicker`:
 
-    * `mask_names_chip/1`: the chip, first in the utility bar's right
-      cluster, plus at `lg` and above a popover anchored under it.
+    * `mask_names_chip/1`: the chip, plus at `lg` and above a popover
+      anchored to it. The shell renders it in the phone top strip's right
+      cluster (below lg) and in the desktop sidebar's footer (at lg, with
+      `id_prefix="sidebar-mask-names"` and the popover opening upward).
     * `mask_names_chip_sheet/1`: below `lg`, the same body in a bottom
       `<.sheet>`. It carries `lg:hidden`. Render it outside the header so the
       sheet's `position: fixed` is not trapped.
@@ -38,7 +40,7 @@ defmodule PlatformWeb.Components.MaskNamesChip do
   ## Hit area
 
   The pill is 28px (`h-7`, a 1px border, so its padding box is 26px) in the
-  44px `#utility-bar` (`h-11`, including its 1px bottom border, so the
+  44px `#phone-top-bar` (`h-11`, including its 1px bottom border, so the
   pill's top sits 7.5px below the viewport top). The `before:` box is positioned from the
   pill's padding box: 8.5px above it and 9.5px below, so it runs from the
   top of the viewport to the bottom of the bar, 44px, entirely inside the
@@ -77,11 +79,22 @@ defmodule PlatformWeb.Components.MaskNamesChip do
   attr :connected?, :boolean, default: false
   attr :open, :boolean, default: false
 
+  attr :id_prefix, :string,
+    default: "mask-names",
+    doc:
+      "prefix for the chip's ids. The shell renders the chip twice (the phone top strip " <>
+        "below lg, the desktop sidebar at lg), so the sidebar passes its own prefix and " <>
+        "the two never share a DOM id"
+
+  attr :popover_class, :string,
+    default: "right-0 top-full mt-1",
+    doc: "where the lg popover sits against the chip; the sidebar opens it upward"
+
   def mask_names_chip(assigns) do
     assigns = assign(assigns, :until_text, until_text(assigns))
 
     ~H"""
-    <div :if={@masked?} id="mask-names-chip-root" class="relative z-30 shrink-0">
+    <div :if={@masked?} id={"#{@id_prefix}-chip-root"} class="relative z-30 shrink-0">
       <%!-- While the popover is open the chip pushes nothing: the popover's
             click-away closes it, and a toggle here would reopen it in the
             same click. Below lg the sheet's backdrop covers the chip. The
@@ -89,12 +102,12 @@ defmodule PlatformWeb.Components.MaskNamesChip do
             "Hit area" in the moduledoc for why it is asymmetric. --%>
       <button
         type="button"
-        id="mask-names-chip"
+        id={"#{@id_prefix}-chip"}
         data-role="mask-names-chip"
         phx-click={!@open && "toggle_mask_chip"}
         aria-haspopup="dialog"
         aria-expanded={to_string(@open)}
-        aria-controls="mask-names-popover"
+        aria-controls={"#{@id_prefix}-popover"}
         aria-label={accessible_name(@until_text)}
         class="relative flex h-7 items-center gap-1.5 rounded-selector border border-edge bg-base-200 px-2.5 active:bg-base-100 focus-visible-ring before:absolute before:-inset-x-1 before:-top-[8.5px] before:-bottom-[9.5px]"
       >
@@ -116,18 +129,19 @@ defmodule PlatformWeb.Components.MaskNamesChip do
       </button>
 
       <div
-        id="mask-names-popover"
+        id={"#{@id_prefix}-popover"}
         role="dialog"
         aria-label="Names masked"
         class={[
-          "absolute right-0 top-full mt-1 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-3 shadow-lg",
+          "absolute z-50 w-72 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-3 shadow-lg",
+          @popover_class,
           if(@open, do: "hidden lg:block", else: "hidden")
         ]}
         phx-click-away={@open && "close_mask_chip"}
         phx-window-keydown={@open && "close_mask_chip"}
         phx-key={@open && "Escape"}
       >
-        <.confirm_body id="mask-names-popover-body" until_text={@until_text} />
+        <.confirm_body id={"#{@id_prefix}-popover-body"} until_text={@until_text} />
       </div>
     </div>
     """

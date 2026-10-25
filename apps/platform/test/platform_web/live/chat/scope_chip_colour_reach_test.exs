@@ -1,7 +1,9 @@
 defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
   @moduledoc """
-  The chat header's scope chip is coloured for an Acme member who is not an
-  admin (task 01a09333-d374 stage 5).
+  A Globex scope chip is coloured for an Acme member who is not an admin
+  (task 01a09333-d374 stage 5). The chat header's chip this was first written
+  for left in Burrow redesign 22 stage 4; the colour rule's reach is what
+  stays asserted.
 
   Since stage 5 a chip's colour comes only from the `<style>` block's rule
   for its `data-scope`. Chat shows every root member every org's channels,
@@ -40,7 +42,7 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  test "an Globex channel's header chip has a colour rule for an Acme member", %{conn: conn} do
+  test "an Globex channel has a colour rule for an Acme member", %{conn: conn} do
     {conn, user} = acme_member_conn(conn)
 
     {:ok, channel} =
@@ -63,11 +65,9 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
     {:ok, view, _html} = live(conn, ~p"/chat/#{channel.id}")
     html = render(view)
 
-    # The chip: the header pill carries the stored slug.
-    assert html =~ ~s(data-scope="globex" class=), "no header chip for the Globex channel"
-
-    # The rule it needs, at Globex's shipped fill. Without it the chip above is
-    # uncoloured, and nothing errors.
+    # The header chip itself left in Burrow redesign 22 stage 4 (coverage row
+    # 49); the rule a Globex chip needs is still emitted for this member, at
+    # Globex's shipped fill, so any chip that reads it is coloured.
     assert html =~ ~s|[data-scope="globex"]{--scope-fill:oklch(70% 0.15 162);|
   end
 end

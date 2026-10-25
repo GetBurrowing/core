@@ -11,7 +11,6 @@ import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
-import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
 import ChatDock from "./chat_dock"
 import ChatClip from "./chat_clip"
@@ -65,13 +64,14 @@ import NativeInstallSwitch from "./native_install_switch"
 import PushSubscribe from "./push_subscribe"
 import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
-import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
 import RowLongPress from "./row_long_press"
+import RowContextMenu from "./row_context_menu"
+import DetailsPanelState from "./details_panel_state"
 import ChatListSettle from "./chat_list_settle"
 import ScrollToBottom from "./scroll_to_bottom"
-import SectionReorder from "./section_reorder"
 import Sheet from "./sheet"
+import ModeToggle from "./mode_toggle"
 import SidebarCollapse from "./sidebar_collapse"
 import TabPill from "./tab_pill"
 import VoiceContext from "./voice_context"
@@ -93,7 +93,6 @@ export default {
   ChatClip,
   ChatViewer,
   CanvasSidebarResize,
-  ChannelMembershipDrag,
   ChannelPicker,
   ChatDock,
   ChatScrollToMessage,
@@ -147,14 +146,15 @@ export default {
   PushSubscribe,
   ReactionPicker,
   ReactorPopover,
-  ResizableSidebar,
   RouteResume,
   RowLongPress,
+  RowContextMenu,
+  DetailsPanelState,
   ChatListSettle,
   ScrollToBottom,
-  SectionReorder,
   Sheet,
   SheetHandleClock,
+  ModeToggle,
   SidebarCollapse,
   TabPill,
   VoiceContext,

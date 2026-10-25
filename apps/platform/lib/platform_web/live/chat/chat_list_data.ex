@@ -39,6 +39,7 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   """
   def assign_all(socket) do
     socket
+    |> assign(:list_data_loaded?, true)
     |> assign(:list_excerpts, load_excerpts(socket.assigns))
     |> assign(:list_identities, load_identities(socket.assigns))
     |> assign(:list_private_ids, load_private_ids(socket.assigns))
@@ -63,16 +64,24 @@ defmodule PlatformWeb.ChatLive.ChatListData do
   end
 
   @doc """
-  Reload both assigns after the rail's inputs changed, but only while the
-  list is what is on screen (`:index`, not embedded, not external). A `:show`
-  socket reloads on its way back to `:index`, in `handle_params/3`.
+  Reload the assigns after the list's inputs changed, on every routed
+  surface: since Burrow redesign 22 stage 2 the list is also the desktop list
+  pane beside an open conversation (`:show`), for internal and external users.
+  Embedded surfaces render no list.
   """
   def maybe_refresh(socket) do
-    a = socket.assigns
+    if socket.assigns[:embedded], do: socket, else: assign_all(socket)
+  end
 
-    if a[:live_action] == :index and not a[:embedded] and not a[:external?],
-      do: assign_all(socket),
-      else: socket
+  @doc """
+  Load the assigns once for a `:show` socket that mounted straight into a
+  space, so the desktop list pane has its excerpts and names. A socket that
+  came from `/chat` already has them, and live updates keep them current.
+  """
+  def ensure_loaded(socket) do
+    if socket.assigns[:embedded] or socket.assigns[:list_data_loaded?],
+      do: socket,
+      else: assign_all(socket)
   end
 
   @doc """

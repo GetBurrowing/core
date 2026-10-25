@@ -12,12 +12,15 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   The regions, in template order:
 
-    * `space_header/1` — the `<header>` space bar: the mobile and desktop
-      title branches, the group promote form, the Meet button, the search
-      form, the canvas/pin counters, the agent eye and settings
-    * `search_drawer/1` — the search-results drawer
-    * `pins_drawer/1` — the pinned-messages drawer
+    * `space_header/1` — the `<header>` space bar: the phone branch (back,
+      title into the space sheet, Call) and the desktop main-pane header
+      (title into the details panel, subtitle, Search, Call, Details)
     * `canvases_drawer/1` — the live-canvases drawer and its new-canvas form
+
+  The desktop search and pins drawers, the goal strip and the header's
+  promote form, scope pill, counters, Agents, Members and settings controls
+  were deleted in Burrow redesign 22 stage 4: the details panel's Search,
+  Pinned and Goal pages and its Space rows do those jobs.
 
   ## WHAT DELIBERATELY STAYED BEHIND
 
@@ -33,8 +36,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   The space name is rendered TWICE in `space_header/1` — a `lg:hidden`
   mobile branch and a `hidden lg:flex` desktop branch — and each applies
-  screen-share masking through `space_header_name/4` + `space_mask/1`, with
-  its own `scope_pill` label masked through `SidebarMask.label_for_bucket/3`.
+  screen-share masking through `space_header_name/4` + `space_mask/1`.
   A mask applied to only one of the two breakpoints is the exact bug shape
   task 01a00c66 existed to find, and a desktop-only test cannot see a
   mobile-only leak. Both branches are preserved identically.
@@ -68,11 +70,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
-  import PlatformWeb.ChatLive.RenderHelpers,
-    only: [
-      search_headline: 1,
-      space_header_name: 4
-    ]
+  import PlatformWeb.ChatLive.RenderHelpers, only: [space_header_name: 4]
 
   # `relative_time/1` left this list in task 01a0740d stage 3 along with the
   # flat canvas rows that used it. The explorer's browse row is title-only by
@@ -82,9 +80,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   import PlatformWeb.Components.ChatHelpers, only: [present?: 1]
   import PlatformWeb.Components.Canvases.CanvasExplorer, only: [canvas_explorer: 1]
   import PlatformWeb.CoreComponents, only: [icon: 1, input: 1]
-  import PlatformWeb.Components.ChatMessage, only: [local_time: 1]
-  import PlatformWeb.Components.EmptyState, only: [empty_state: 1]
-  import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias Phoenix.LiveView.JS
@@ -92,9 +87,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.CanvasHooks
-  alias PlatformWeb.ChatLive.MembersComponent
-  alias PlatformWeb.ChatLive.Partials.AgentsSheet
-  alias PlatformWeb.ChatLive.PresenceHooks
 
   attr(:active_space, :any, required: true)
   attr(:embedded, :boolean, required: true)
@@ -102,54 +94,20 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:space_participants, :list, required: true)
   attr(:user_id, :any, required: true)
   # The three masking attrs. BOTH breakpoint branches below call
-  # `space_header_name/4` with `space_mask(assigns)` and build a
-  # `SidebarMask.context/3` for their scope pill; all of that reads these
-  # three through tolerant access, so a missing declaration unmasks silently
-  # on whichever branch the test in hand cannot see.
+  # `space_header_name/4` with `space_mask(assigns)`, which reads these three
+  # through tolerant access, so a missing declaration unmasks silently on
+  # whichever branch the test in hand cannot see.
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
-  attr(:active_space_scope, :any, required: true)
-  # The org row behind `@active_space_scope`, `%{slug, name}` or nil (task
-  # 01a0938b). Both header pills label from its NAME and pass its SLUG as
-  # `value`; see the call-site contract on the desktop pill below.
-  attr(:active_space_org, :any, default: nil)
-  attr(:scope_filter, :any, required: true)
   attr(:meetings_enabled, :boolean, required: true)
   attr(:in_meeting, :boolean, required: true)
-  attr(:search_form, :any, required: true)
-  attr(:search_query, :any, required: true)
-  attr(:canvases, :list, required: true)
-  attr(:show_canvases, :boolean, required: true)
-  attr(:pins, :list, required: true)
-  attr(:show_pins, :boolean, required: true)
-  attr(:agent_presence, :map, required: true)
-  attr(:has_agent_participant, :boolean, required: true)
-  # The Agents sheet (task 01a1557a-8f80 stage 2): its open flag and
-  # `Chat.agent_attention_state/1`, for the header entry and the popover.
-  attr(:agents_sheet_open, :boolean, required: true)
-  attr(:agent_attention, :any, required: true)
-  # The Members sheet (task 01a1557a-8f80 stage 3): its open flag and the
-  # viewer whose presence union decides online/away, for the popover instance.
-  attr(:show_members, :boolean, required: true)
-  attr(:current_user_record, :any, default: nil)
+  # The goal decides whether the desktop subtitle shows the topic (task
+  # 01a0b491): a goal replaces it.
   attr(:goal_panel, :any, required: true)
-  attr(:goal_edit, :boolean, required: true)
-  attr(:can_edit_goal?, :boolean, required: true)
-  # Task 01a0ca99: true only for an admin on the one channel where
-  # `Sidebar.first_goal_offered?/1` holds. With `@goal_panel` nil it is the
-  # strip's empty-and-admin state: the same line, carrying the invitation.
-  attr(:goal_invite?, :boolean, default: false)
-  # Task 01a0cef1: the editor's project options, `{label, value}` pairs from
-  # `Sidebar.goal_scope_options/1`, and the inline refusal of a scope the
-  # channel's org cannot see (`:unknown_project`, else nil).
-  attr(:goal_scope_options, :list, default: [])
-  attr(:goal_scope_error, :atom, default: nil)
-  # Task 01a0e882 stage 3: the Check progress selection while the editor
-  # is open (`GoalCadenceForm.selection/0`, else nil) and the viewer's
-  # resolved IANA zone (nil renders UTC).
-  attr(:goal_cadence_form, :map, default: nil)
-  attr(:goal_time_zone, :string, default: nil)
+  # Burrow redesign 22 stage 4: the details panel's page (nil = closed), for
+  # the Details toggle's `aria-pressed` and click.
+  attr(:details_panel, :any, default: nil)
   # Task 01a1557a-8a6d stage 1 (rung 7): the phone title button opens the
   # space sheet (`SpaceSheetHooks`). `@space_sheet` drives its
   # `aria-expanded`; `@agent_status` (PresenceHooks) is the agent-DM
@@ -158,8 +116,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:agent_status, :any, default: nil)
 
   @doc """
-  The conversation `<header>` — space title, meeting entry, search, the
-  canvas/pin counters, the agent eye and settings.
+  The conversation `<header>`. Phone: back link, the title button into the
+  space sheet, Call. Desktop (Burrow redesign 22 stage 4): masters' main-pane
+  header, the title button into the details panel on All, the people
+  subtitle, Search, Call and the Details toggle.
 
   The `@active_space && !@embedded` gate travelled INTO the component with
   the markup (same convention as `Rail.rail/1` and `ChatList.chat_list/1`),
@@ -169,7 +129,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     ~H"""
     <header
       :if={@active_space && !@embedded}
-      class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-content/10 px-5"
+      class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-content/10 px-5 lg:h-[52px] lg:gap-2 lg:border-edge lg:bg-base-100 lg:px-4"
     >
       <%!-- Screen-share masking (task 01a00c66 stage 5). The open channel's
            own name sits in this header at the top of the screen; masking the
@@ -179,10 +139,10 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            Applied to BOTH breakpoint branches below — the mobile and desktop
            titles are separate nodes, and a mask applied to one of them is the
            shape of bug this stage exists to find. --%>
-      <%!-- `max-lg:` only (task 01a1557a-8a6d stage 1): on the phone the
-           title takes the row's spare width, so the name truncates last.
-           At lg the row lays out exactly as before. --%>
-      <div class="flex items-center gap-2 overflow-hidden max-lg:min-w-0 max-lg:flex-1">
+      <%!-- On the phone the title takes the row's spare width, so the name
+           truncates last (task 01a1557a-8a6d stage 1); at lg the main-pane
+           header does the same (Burrow redesign 22 stage 4). --%>
+      <div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         <%!-- Mobile: static channel name. Channel switching on the phone is the
              Chat list (task 01a1557a-8562), reached through the back chevron
              below or the tab bar's Chat tab; the pills strip and the drawer
@@ -236,263 +196,86 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                sheet's Scope row (task 01a1557a-8a6d stage 3), with the same
                masked label and the same `scope_filter` event. --%>
         </div>
-        <%!-- Desktop: static title --%>
-        <span class="hidden lg:flex items-center gap-2 overflow-hidden">
-          <span
-            :if={@active_space.kind == "channel"}
-            class="text-subtle text-lg font-bold"
-          >
-            #
-          </span>
-          <span class="truncate font-bold text-base">
-            {space_header_name(
-              @active_space,
-              @space_participants,
-              @user_id,
-              space_mask(assigns)
-            )}
-          </span>
-          <%!-- Prominent chat-header scope-pill (chat plan v2 Stage 4).
-               Only rendered for channels (DMs/groups have no scope). The
-               wrapper class drives the larger-size visual variant; the
-               inner pill remains clickable and pushes the `scope_filter`
-               event with the channel's scope. Active state is implied
-               from `@scope_filter` so a clicked-again pill reads as the
-               currently-selected filter. --%>
-          <% header_scope = !@external? && @active_space_scope %>
-          <span :if={header_scope} class="chat-header-scope-pill">
-            <%!-- Declared surface, as on the mobile pill above.
-
-                 Call-site contract (task 01a0938b), identical on the mobile
-                 pill and the rail's hidden-drawer group label:
-                   scope = `@active_space_scope` (a compiled atom, or the slug
-                           binary for an org created at runtime)
-                   label = masked ? placeholder : `@active_space_org.name`
-                   value = masked ? nil : `@active_space_org.slug`
-                 The masked label is looked up by the org's NAME, never
-                 through a closed scope->name map: `label_for_bucket/3` returns
-                 nil for a nil bucket, and a nil label falls back to the
-                 title-cased slug in text and aria-label and to the real slug
-                 in `data-scope`, which is a leak in all three spellings. The
-                 unmasked `value` is what keeps `data-scope` (and so the
-                 colour rule) on a chip whose label is a binary. --%>
-            <.scope_pill
-              scope={header_scope}
-              surface={:base_100}
-              clickable={true}
-              active={@scope_filter == header_scope}
-              label={
-                if @mask_names?,
-                  do:
-                    Platform.Chat.SidebarMask.label_for_bucket(
-                      Platform.Chat.SidebarMask.context(
-                        @sidebar_sections,
-                        @mask_names?,
-                        @revealed_section_ids
-                      ),
-                      @sidebar_sections,
-                      @active_space_org && @active_space_org.name
-                    ),
-                  else: @active_space_org && @active_space_org.name
-              }
-              value={if !@mask_names? && @active_space_org, do: @active_space_org.slug}
-            />
-          </span>
-          <%!-- DECISION (task 01a0b491, stage 4): `topic` is SUPPRESSED while a
-               goal renders. Two strings answering "what is this space about"
-               in one header will diverge, and the goal is the one with an
-               owner, a measurement and a daily heartbeat behind it — the
-               topic is free text nothing checks. So the goal REPLACES the
-               topic rather than sitting beside it, and on every space
-               without a goal (which is all but one) the topic renders
-               exactly as it always did. Recorded here rather than inherited
-               silently. --%>
-          <span
-            :if={@active_space.kind == "channel" && @active_space.topic && is_nil(@goal_panel)}
-            class="truncate text-xs text-subtle"
-          >
-            — {@active_space.topic}
-          </span>
-          <span
-            :if={@active_space.kind == "group"}
-            class="text-xs text-subtle"
-          >
-            — {length(@space_participants)} members
-          </span>
-        </span>
-
-        <%!-- Promote to channel button for groups --%>
-        <form
-          :if={@active_space.kind == "group" && !@active_space.is_direct}
-          id="promote-to-channel-form"
-          phx-hook="ButtonLoading"
-          phx-submit="promote_to_channel"
-          class="hidden lg:flex items-center gap-1 ml-2"
-        >
-          <input
-            name="name"
-            type="text"
-            aria-label="Channel name"
-            placeholder="Channel name…"
-            class="input input-bordered input-xs w-32"
-            required
-          />
-          <button type="submit" class="btn btn-xs btn-ghost">
-            Convert to Channel
-          </button>
-        </form>
-      </div>
-
-      <%!-- Join Meeting button.
-
-         `!@external?` (task 019fb955-f8b1 stage 5): the LiveKit room is
-         keyed off the space, so this button offered an external user in
-         a meeting's bound chat space the very join `MeetingHooks`
-         refuses server-side as of stage 4 — "chat is chat only". THE
-         SERVER REFUSAL IS THE GATE; this is cosmetics over it. Removing
-         the condition here re-exposes a dead button, not a hole. A
-         button that does nothing when clicked is quiet degradation, and
-         that is the whole reason this line exists.
-
-         Desktop only since task 01a1557a-8a6d stage 1: below lg the Call
-         button at the end of the header carries the same gate and event. --%>
-      <button
-        :if={@meetings_enabled && !@in_meeting && !@external?}
-        phx-click="meeting_join"
-        class="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content hover:text-primary hover:bg-primary/10 transition-colors"
-        title="Start or join a meeting in this space"
-      >
-        <span class="hero-video-camera size-4"></span>
-        <span class="hidden md:inline">Meet</span>
-      </button>
-
-      <div class="flex flex-shrink-0 items-center gap-3 text-xs text-subtle">
-        <.form
-          for={@search_form}
-          id="chat-search-form"
-          phx-change="search_submit"
-          phx-submit="search_submit"
-          class="hidden lg:block"
-        >
-          <div class="flex items-center gap-2">
-            <.input
-              field={@search_form[:query]}
-              type="text"
-              aria-label="Search messages in this space"
-              placeholder="Search messages…"
-              autocomplete="off"
-              phx-debounce="250"
-              class="input input-sm w-64 text-sm"
-            />
-
+        <%!-- Desktop: the main-pane header (Burrow redesign 22 stage 4,
+             master-desktop.html `.mhead` L732, CSS L54-57). The title button
+             opens the details panel on All; the subtitle counts people and
+             adds the topic under the goal-suppression rule below; Search,
+             Call and the Details toggle sit at the right. Everything the old
+             desktop header carried (scope pill, promote form, search form,
+             canvas and pin counters, Agents, Members, settings) is a details
+             panel row now. --%>
+        <div class="hidden min-w-0 flex-1 items-center gap-2 lg:flex" data-role="main-head">
+          <% desktop_title =
+            title_prefix(@active_space) <>
+              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns)) %>
+          <h1 class="flex min-w-0 items-center overflow-hidden whitespace-nowrap">
             <button
-              :if={present?(@search_query)}
               type="button"
-              phx-click="search_clear"
-              class="rounded px-2 py-1 text-xs hover:bg-base-300"
+              id="chat-title"
+              phx-click={JS.push("details_open", value: %{page: "links", seg: "all"})}
+              aria-controls="details-panel"
+              class="flex h-8 min-w-0 shrink items-center gap-1 rounded-field px-1.5 font-semibold text-base-content lg:hover:bg-base-300 focus-visible-ring"
             >
-              Clear
+              <span class="min-w-0 truncate">{desktop_title}</span>
+              <.icon name="hero-chevron-down" class="size-3.5 shrink-0" />
             </button>
-          </div>
-        </.form>
-
-        <button
-          :if={@canvases != []}
-          phx-click="canvas_panel_toggle"
-          class={[
-            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
-            @show_canvases && "!bg-base-300 !text-primary"
-          ]}
-        >
-          <span class="hero-puzzle-piece size-4"></span>
-          <span class="hidden md:inline">{length(@canvases)}</span>
-        </button>
-
-        <button
-          :if={@pins != []}
-          phx-click="pin_panel_toggle"
-          class={[
-            "hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300",
-            @show_pins && "!bg-base-300 !text-primary"
-          ]}
-        >
-          <span class="hero-bookmark-solid size-4"></span>
-          <span>{length(@pins)} pinned</span>
-        </button>
-
-        <%!-- The Agents entry (task 01a1557a-8f80 stage 2). It replaces the
-             header agent eye: the eye toggled the ephemeral mutex, which a
-             mention re-armed, so it could not hold "agents off". The Agents
-             popover anchored here (the phone sheet is opened from the space
-             sheet's Agents row) writes the persisted master switch, policy and
-             per-agent silence. Rendered under `agents_entry?/3`: an agent is
-             present and the space is not a DM (`attention_router.ex` makes
-             DMs unconditionally `:directed`). `min-h-11 min-w-11` is the
-             44px touch target, released at `md`. --%>
-        <div
-          :if={agents_entry?(@agent_presence, @has_agent_participant, @active_space)}
-          class="relative hidden lg:block"
-        >
+            <%!-- DECISION (task 01a0b491, stage 4): `topic` is SUPPRESSED
+                 while a goal renders. Two strings answering "what is this
+                 space about" will diverge, and the goal is the one with an
+                 owner, a measurement and a daily heartbeat behind it. So the
+                 goal REPLACES the topic, and on every space without a goal
+                 the topic shows as it always did. `desktop_subtitle/5`
+                 carries the rule. --%>
+            <small class="ml-2 min-w-0 truncate text-sm text-subtle" data-role="chat-subtitle">
+              {desktop_subtitle(@active_space, @space_participants, @user_id, @goal_panel)}
+            </small>
+          </h1>
+          <span class="flex-1"></span>
           <button
             type="button"
-            phx-click="agents_open"
-            data-role="agents-open"
-            aria-label="Agents"
-            aria-haspopup="dialog"
-            aria-expanded={to_string(@agents_sheet_open)}
-            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
+            id="chat-search"
+            phx-click={JS.push("details_open", value: %{page: "search"})}
+            aria-controls="details-panel"
+            class={ghost_class()}
           >
-            <.icon name="hero-cpu-chip" class="size-4" />
-            <span class="hidden md:inline">{AgentsSheet.awake_label(@agent_attention)}</span>
+            <.icon name="hero-magnifying-glass" class="size-4" /> Search
           </button>
-          <AgentsSheet.agents_sheet
-            surface={:popover}
-            open={@agents_sheet_open}
-            state={@agent_attention}
-            active_space={@active_space}
-          />
-        </div>
-
-        <%!-- The Members entry (task 01a1557a-8f80 stage 3): every space but a
-             DM. The popover instance of `MembersComponent` is anchored under
-             it; the phone opens the sheet instance from the space sheet's
-             Members row. `min-h-11 min-w-11` is the Agents entry's touch
-             target, released at `md`. --%>
-        <div :if={@active_space.kind != "dm"} class="relative hidden lg:block">
+          <%!-- `!@external?` (task 019fb955-f8b1 stage 5): the LiveKit room
+               is keyed off the space, and `MeetingHooks` refuses an external
+               join server-side. THE SERVER REFUSAL IS THE GATE; this keeps a
+               dead button off their header. --%>
+          <button
+            :if={@meetings_enabled && !@in_meeting && !@external?}
+            type="button"
+            id="chat-call"
+            phx-click="meeting_join"
+            class={ghost_class()}
+          >
+            <.icon name="hero-phone" class="size-4" /> Call
+          </button>
           <button
             type="button"
-            phx-click="members_open"
-            data-role="members-open"
-            aria-label="Members"
-            aria-haspopup="dialog"
-            aria-expanded={to_string(@show_members)}
-            class="hidden lg:flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-subtle transition-colors active:bg-base-200 lg:hover:bg-base-200 lg:hover:text-base-content md:min-h-0 md:min-w-0"
-          >
-            <.icon name="hero-users" class="size-4" />
-            <span class="hidden md:inline">{MembersComponent.people_label(@space_participants)}</span>
-          </button>
-          <.live_component
-            module={MembersComponent}
-            id="chat-members-popover"
-            surface={:popover}
-            open={@show_members}
-            space={@active_space}
-            space_name={
-              space_header_name(@active_space, @space_participants, @user_id, space_mask(assigns))
+            id="chat-details"
+            title="Details"
+            aria-label="Details"
+            aria-controls="details-panel"
+            aria-pressed={to_string(@details_panel != nil)}
+            phx-click={
+              if @details_panel,
+                do: JS.push("details_close"),
+                else: JS.push("details_open", value: %{page: "space"})
             }
-            current_user_id={@user_id}
-            viewer={@current_user_record}
-          />
+            class={[
+              "flex size-[34px] flex-none items-center justify-center rounded-full focus-visible-ring",
+              if(@details_panel,
+                do: "bg-base-300 text-primary",
+                else: "text-subtle lg:hover:bg-base-300 lg:hover:text-base-content"
+              )
+            ]}
+          >
+            <.icon name="hero-view-columns" class="size-[18px]" />
+          </button>
         </div>
-
-        <button
-          phx-click="settings_open"
-          class="hidden lg:flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium text-base-content hover:text-base-content transition-colors hover:bg-base-300"
-          title="Space settings"
-        >
-          <span class="hero-cog-6-tooth size-4"></span>
-          <span class="hidden md:inline">settings</span>
-        </button>
       </div>
 
       <%!-- Phone Call (task 01a1557a-8a6d stage 1): the Meet button's gate
@@ -509,45 +292,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
         <span class="hero-phone size-5 text-primary" aria-hidden="true"></span>
       </button>
     </header>
-    <%!-- The agents goal strip (task 01a0b491, stage 4).
-
-         A SIBLING of the header, not a child of it: the header is `h-12`
-         and the goal needs its own line, so nesting it would either
-         squeeze the title row or force the header taller for every space
-         in the product. Rendered only when `@goal_panel` is present —
-         flag off, no goal on this space, or embedded mode, and this is
-         zero DOM. An ordinary channel's header is byte-for-byte what it
-         was before this feature existed, which is the positive control
-         for every claim below.
-
-         NO stat tile, NO delta colour, NO progress bar, NO agent roster.
-         "Close backlog items" has no denominator, and a bar would have to
-         invent one; an invented denominator is a number that looks
-         measured. `--color-warning` appears in exactly ONE place on this
-         surface — the FAULT no-measurement state (an unknown project scope,
-         a failed count) — and nowhere else, not on the delta, not on a
-         falling count, and not on an uncounted goal, which is a normal
-         state the heartbeat fires for (task 01a0ca9f stage 3). --%>
-    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 3): below lg the goal
-         lives on the space sheet's Goal page, which renders the SAME
-         `goal_panel/1`. Desktop is unchanged. --%>
-    <div
-      :if={(@goal_panel || @goal_invite?) && !@embedded}
-      class="flex flex-shrink-0 items-start gap-2 border-b border-base-content/10 px-5 py-2 max-lg:hidden"
-      data-role="agents-goal-strip"
-    >
-      <.goal_panel
-        active_space={@active_space}
-        goal_panel={@goal_panel}
-        goal_edit={@goal_edit}
-        can_edit_goal?={@can_edit_goal?}
-        goal_invite?={@goal_invite?}
-        goal_scope_options={@goal_scope_options}
-        goal_scope_error={@goal_scope_error}
-        goal_cadence_form={@goal_cadence_form}
-        goal_time_zone={@goal_time_zone}
-      />
-    </div>
     """
   end
 
@@ -897,139 +641,6 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   defp cadence_of(%{cadence: cadence}), do: cadence
   defp cadence_of(_), do: nil
-
-  attr(:search_query, :any, required: true)
-  attr(:search_results, :list, required: true)
-  attr(:participants_map, :map, required: true)
-
-  @doc """
-  The search-results drawer, gated on `present?(@search_query)`.
-  """
-  def search_drawer(assigns) do
-    ~H"""
-    <%!-- `max-lg:hidden` (task 01a1557a-8a6d stage 2): below lg the space
-         sheet's Search page lists the results, so a phone search must not
-         also paint this drawer above the messages. Desktop is unchanged. --%>
-    <div
-      :if={present?(@search_query)}
-      class="border-b border-edge bg-base-200 px-5 py-3 max-lg:hidden"
-    >
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content">
-            Search Results
-          </p>
-          <p class="text-sm text-base-content">
-            “{@search_query}” · {length(@search_results)} match{if length(@search_results) == 1,
-              do: "",
-              else: "es"}
-          </p>
-        </div>
-
-        <button phx-click="search_clear" class="btn btn-ghost btn-xs">
-          Clear
-        </button>
-      </div>
-
-      <div class="mt-3 space-y-2">
-        <button
-          :for={result <- @search_results}
-          type="button"
-          phx-click="search_open_result"
-          phx-value-message-id={result.id}
-          class="block w-full rounded-xl border border-edge bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
-        >
-          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-subtle">
-            <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
-            <.local_time
-              id={"search-time-#{result.id}"}
-              timestamp={result.inserted_at}
-            />
-            <span
-              :if={is_binary(result.thread_id)}
-              class="rounded-full bg-base-300 px-2 py-0.5 normal-case tracking-normal text-[10px]"
-            >
-              Thread
-            </span>
-            <span
-              :if={result.search_rank}
-              class="font-mono normal-case tracking-normal text-[10px] text-subtle"
-            >
-              rank {Float.round(result.search_rank, 3)}
-            </span>
-          </div>
-
-          <p class="mt-1 text-sm leading-6 text-base-content">
-            {search_headline(result)}
-          </p>
-        </button>
-
-        <%!-- Empty state per docs/design-system/03-voice.md §5.5 — search
-             no-results uses :standard with the magnifying-glass icon. --%>
-        <.empty_state
-          :if={@search_results == [] and present?(@search_query)}
-          variant={:standard}
-          icon_name="hero-magnifying-glass"
-        >
-          <:title>No matches</:title>
-          <:body>No messages match "{@search_query}".</:body>
-          <:actions>
-            <button
-              type="button"
-              phx-click="search_clear"
-              class="btn btn-ghost btn-sm w-full"
-            >
-              Clear search
-            </button>
-          </:actions>
-        </.empty_state>
-      </div>
-    </div>
-    """
-  end
-
-  attr(:active_space, :any, required: true)
-  attr(:pins, :list, required: true)
-  attr(:show_pins, :boolean, required: true)
-
-  @doc """
-  The pinned-messages drawer, gated on `@show_pins && @pins != []`.
-  """
-  def pins_drawer(assigns) do
-    ~H"""
-    <div
-      :if={@show_pins && @pins != []}
-      class="border-b border-edge bg-base-200 px-5 py-2"
-    >
-      <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content">
-        Pinned Messages
-      </p>
-      <div class="flex flex-col gap-1 max-h-40 overflow-y-auto">
-        <div
-          :for={pin <- @pins}
-          class="flex items-center justify-between rounded bg-base-100 px-3 py-1.5 text-sm"
-        >
-          <span class="truncate text-base-content text-xs">
-            <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
-            pinned message
-            <span class="font-mono text-subtle text-[10px]">
-              {String.slice(pin.message_id, 0, 8)}…
-            </span>
-          </span>
-          <button
-            :if={@active_space && is_nil(@active_space.archived_at)}
-            phx-click="pin_toggle"
-            phx-value-message-id={pin.message_id}
-            phx-value-space-id={pin.space_id}
-            class="ml-2 text-xs font-medium text-base-content hover:text-error"
-          >
-            Unpin
-          </button>
-        </div>
-      </div>
-    </div>
-    """
-  end
 
   attr(:active_canvas, :any, required: true)
   attr(:current_participant, :any, required: true)
@@ -1463,6 +1074,33 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
 
   def space_subtitle(_space, participants, _user_id, _agent_status),
     do: people_count(length(participants))
+
+  @doc """
+  The desktop header's subtitle (Burrow redesign 22 stage 4,
+  master-desktop.html `.mhead h1 small`): a DM with an agent reads "agent",
+  one with a person "direct"; every other kind counts its people, and a
+  channel adds " · {topic}" only while no goal renders (task 01a0b491: the
+  goal replaces the topic).
+  """
+  def desktop_subtitle(%{kind: "dm"}, participants, user_id, _goal_panel) do
+    case Enum.find(participants, &(&1.participant_id != user_id)) do
+      %{participant_type: "agent"} -> "agent"
+      _ -> "direct"
+    end
+  end
+
+  def desktop_subtitle(space, participants, _user_id, goal_panel) do
+    people = people_count(length(participants))
+
+    if space.kind == "channel" and present?(space.topic) and is_nil(goal_panel),
+      do: people <> " · " <> space.topic,
+      else: people
+  end
+
+  # Masters' `.ghost` (CSS L68-69): a 30px pill with the `--edge` hairline.
+  defp ghost_class,
+    do:
+      "flex h-[30px] flex-none items-center gap-1.5 whitespace-nowrap rounded-full border border-edge px-3 text-sm text-subtle lg:hover:bg-base-300 lg:hover:text-base-content focus-visible-ring"
 
   defp people_count(1), do: "1 person"
   defp people_count(n), do: "#{n} people"

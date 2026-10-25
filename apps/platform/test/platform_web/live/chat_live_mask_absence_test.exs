@@ -47,6 +47,13 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
   section-header surface (`data-section-key`, `data-section-slug`, the section
   `aria-label`, the collapse toggle, the visible label, the reorder handle).
   No collisions, so it stays.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail, which was the
+  surface that spelled the seeded orgs (as section headers) on any page. The
+  Chat list has no org headers, so the fixture now seeds one channel NAMED
+  after each org in @orgs — the org-derived rule masks those rows — and every
+  refute still runs against the full document beside its unmasked pair. The
+  per-item reveal test went with the rail (nothing in chat reveals a section).
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -104,17 +111,28 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
     end
   end
 
-  defp mounted_view(conn) do
+  # `general` is first so the desktop landing opens a channel named after
+  # no org; one channel per org in @orgs is what carries the names into the
+  # Chat list.
+  defp seed_channels do
     create_channel("general")
+    for name <- @orgs, do: create_channel(String.downcase(name), name)
+  end
+
+  defp mounted_view(conn) do
+    seed_channels()
     {:ok, view, html} = live_following_redirect(conn)
     {view, html}
   end
 
-  # The rail's control, scoped to the sidebar to keep `element/2` unambiguous.
+  @mask_switch ~s(#chat-list-popover [data-role="chat-list-pop-option-mask"])
+
+  # The Chat list's Options popover switch (the rail's eye went with the rail).
   defp toggle_mask(view) do
-    view
-    |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-    |> render_click()
+    unless has_element?(view, @mask_switch),
+      do: view |> element("#list-more") |> render_click()
+
+    view |> element(@mask_switch) |> render_click()
   end
 
   defp extract(html, selector) do
@@ -124,19 +142,7 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
     |> LazyHTML.to_html()
   end
 
-  defp first_section_id(html) do
-    [_, id] = Regex.run(~r/data-section-id="([^"]+)"/, html)
-    id
-  end
-
-  defp section_name(html, section_id) do
-    html
-    |> extract(~s(section[data-section-id="#{section_id}"]))
-    |> then(&Regex.run(~r/data-section-key="([^"]+)"/, &1))
-    |> then(fn [_, name] -> name end)
-  end
-
-  describe "absence — desktop rail" do
+  describe "absence — desktop Chat list" do
     test "no spelling of any seeded org name survives anywhere in the document",
          %{conn: conn} do
       {view, _html} = conn |> authenticated_conn("desktop") |> mounted_view()
@@ -162,45 +168,12 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
   # chat_live_chat_list_test.exs "masked: no org-derived name and no excerpt
   # text anywhere in #chat-list".
 
-  describe "per-item reveal leaks exactly one name" do
-    test "revealing one org brings back that org and leaves the others absent",
-         %{conn: conn} do
-      {view, _html} = conn |> authenticated_conn("reveal") |> mounted_view()
-
-      masked = toggle_mask(view)
-      section_id = first_section_id(masked)
-
-      # The revealed section is identified by its position in the rail, and
-      # its REAL name is read from the unmasked render — never assumed.
-      {:ok, _peek, unmasked} =
-        Phoenix.ConnTest.build_conn()
-        |> authenticated_conn("reveal-peek")
-        |> live_following_redirect()
-
-      revealed_name = section_name(unmasked, section_id)
-
-      assert revealed_name in @orgs or revealed_name == "Acme" or revealed_name == "Hooli",
-             "expected the first rail section to be a seeded org, got #{inspect(revealed_name)}"
-
-      html =
-        view
-        |> element(
-          ~s(#chat-sidebar button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"])
-        )
-        |> render_click()
-
-      assert_name_anywhere(html, revealed_name)
-
-      # One reveal must not leak the rest.
-      for name <- @orgs, name != revealed_name do
-        refute_name_anywhere(html, name)
-      end
-    end
-  end
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail; the
+  # "per-item reveal leaks exactly one name" test went with its reveal control.
 
   describe "masking is view state and never crosses sessions" do
     test "a second user's live session still shows the real names", %{conn: conn} do
-      create_channel("general")
+      seed_channels()
 
       first = conn |> authenticated_conn("session-one") |> live_following_redirect()
       {:ok, first_view, _} = first
@@ -233,18 +206,22 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
       # Scoped to THIS feature's surfaces. A document-wide refute would trip
       # on `id="meeting-client"` and LiveView's own upload `entry.client_name`,
       # neither of which is this feature and neither of which this stage may
-      # rename.
+      # rename. The rail's strip, eye and reveal controls are gone; the
+      # surviving surfaces are the popover's mask switch, the list's counts
+      # line and the masked rows.
       surfaces =
         [
-          ".channel-mask-strip",
-          ".channel-mask-toggle",
-          ~s([phx-click="reveal_section"]),
-          ~s([phx-click="remask_all"])
+          ~s([data-role="chat-list-pop-option-mask"]),
+          ~s(#chat-list [data-role="chat-list-counts"]),
+          "#chat-list-scroller"
         ]
         |> Enum.map_join(" ", &extract(html, &1))
 
-      assert surfaces =~ "Hide workspace names for sharing",
-             "expected the eye control's accessible name in the scoped surfaces"
+      assert surfaces =~ "Mask names",
+             "expected the mask switch's label in the scoped surfaces"
+
+      assert surfaces =~ "names masked"
+      assert surfaces =~ ~r/workspace-[a-z]+/
 
       refute String.downcase(surfaces) =~ "client",
              """

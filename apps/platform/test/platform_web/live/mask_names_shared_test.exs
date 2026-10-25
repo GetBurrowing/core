@@ -9,6 +9,12 @@ defmodule PlatformWeb.MaskNamesSharedTest do
   Every refute of a real name runs over the WHOLE rendered document and has an
   unmasked control in the same test that asserts the name IS there, so a
   refute cannot pass against an empty render.
+
+  Burrow redesign 22 stage 2 deleted the desktop channel rail (its mode strip
+  and per-section reveal). Chat's masked state is now read off the Chat
+  list's counts line ("names masked"), and the org names reach the chat
+  document through one channel NAMED after each org in @chat_orgs. The
+  reveal-does-not-survive-a-mount test went with the reveal control.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -66,12 +72,15 @@ defmodule PlatformWeb.MaskNamesSharedTest do
 
   defp tasks(user), do: live(conn_for(user), ~p"/tasks")
 
-  defp sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
+  defp counts_line(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s(#chat-list [data-role="chat-list-counts"]))
+    |> LazyHTML.text()
+    |> String.trim()
   end
+
+  defp masked_line?(html), do: counts_line(html) == "names masked"
 
   defp seed_projects do
     for {slug, name} <- [
@@ -119,6 +128,15 @@ defmodule PlatformWeb.MaskNamesSharedTest do
 
   setup do
     {:ok, _} = Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
+
+    for name <- @chat_orgs do
+      slug = String.downcase(name)
+      org = Tenancy.get_org_by_slug(String.replace(slug, "-", "_"))
+
+      {:ok, _} =
+        Chat.create_space(%{name: name, slug: slug, kind: "channel", org_id: org && org.id})
+    end
+
     :ok
   end
 
@@ -132,10 +150,10 @@ defmodule PlatformWeb.MaskNamesSharedTest do
 
     # Control: the same render for B, who stored nothing, carries every name.
     for name <- @chat_orgs, do: assert_name_anywhere(unmasked, name)
-    refute sidebar(unmasked) =~ "channel-mask-strip"
+    refute masked_line?(unmasked)
 
-    assert sidebar(masked) =~ "channel-mask-strip"
-    assert masked =~ "Workspace A"
+    assert masked_line?(masked)
+    assert masked =~ ~r/workspace-[a-z]+/
     for name <- @chat_orgs, do: refute_name_anywhere(masked, name)
   end
 
@@ -160,11 +178,17 @@ defmodule PlatformWeb.MaskNamesSharedTest do
     a = insert_user("cross", true)
 
     {:ok, chat_view, before} = chat(a)
-    refute sidebar(before) =~ "channel-mask-strip"
+    refute masked_line?(before)
+
+    # The Chat list's Options popover switch (the rail's eye left with the
+    # rail).
+    chat_view |> element("#list-more") |> render_click()
 
     chat_view
-    |> element(~s(#chat-sidebar button[phx-click="toggle_mask_names"]))
-    |> render_click(%{"masked" => "true"})
+    |> element(~s(#chat-list-popover [data-role="chat-list-pop-option-mask"]))
+    |> render_click()
+
+    assert Accounts.mask_names?(Repo.get!(User, a.id))
 
     {:ok, tasks_view, tasks_html} = tasks(a)
     tasks_html = without_scope_stylesheet(tasks_html)
@@ -177,8 +201,8 @@ defmodule PlatformWeb.MaskNamesSharedTest do
     refute Accounts.mask_names?(Repo.get!(User, a.id))
 
     {:ok, _view, after_off} = chat(a)
-    refute sidebar(after_off) =~ "channel-mask-strip"
-    assert sidebar(after_off) =~ ~s(aria-pressed="false")
+    refute masked_line?(after_off)
+    for name <- @chat_orgs, do: assert_name_anywhere(after_off, name)
 
     {:ok, _view, tasks_after} = tasks(a)
     for name <- tasks_names(projects), do: assert_name_anywhere(tasks_after, name)
@@ -189,35 +213,17 @@ defmodule PlatformWeb.MaskNamesSharedTest do
     set_until(a, DateTime.add(DateTime.utc_now(), -1, :second))
 
     {:ok, _view, html} = chat(a)
-    refute sidebar(html) =~ "channel-mask-strip"
+    refute masked_line?(html)
     for name <- @chat_orgs, do: assert_name_anywhere(html, name)
 
     # Control: one hour in the future, same user, same fixture, is masked.
     set_until(a, DateTime.add(DateTime.utc_now(), 3600, :second))
     {:ok, _view, masked} = chat(a)
-    assert sidebar(masked) =~ "channel-mask-strip"
+    assert masked_line?(masked)
     for name <- @chat_orgs, do: refute_name_anywhere(masked, name)
   end
 
-  test "(5) a reveal in one mount does not survive the next mount" do
-    a = insert_user("reveal", false)
-    {:ok, _} = Accounts.put_mask_names(a.id, true)
-
-    {:ok, view, html} = chat(a)
-    [_, section_id] = Regex.run(~r/data-section-id="([^"]+)"/, sidebar(html))
-
-    revealed =
-      view
-      |> element(
-        ~s(#chat-sidebar button[phx-click="reveal_section"][phx-value-section_id="#{section_id}"])
-      )
-      |> render_click()
-
-    assert sidebar(revealed) =~ "1 showing"
-
-    {:ok, _view, next} = chat(a)
-    assert sidebar(next) =~ "channel-mask-strip"
-    refute sidebar(next) =~ "1 showing"
-    for name <- @chat_orgs, do: refute_name_anywhere(next, name)
-  end
+  # (5) "a reveal in one mount does not survive the next mount" was deleted:
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail and its
+  # per-section reveal, so nothing in chat reveals a section any more.
 end

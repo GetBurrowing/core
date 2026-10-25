@@ -4,8 +4,8 @@ defmodule PlatformWeb.Components.NavPendingMarkupTest do
   stage 2; `assets/js/lib/nav_pending.js`, canvas 01a167b0 m2 and rules 3, 7).
 
   The module reads `NAV_CONTROL_SELECTOR` to find a tapped control, the group
-  (`.bottom-nav`, `[data-icon-rail]`) to find the control that yields, the
-  current classes (`bottom-nav-tab--active`, `icon-rail-tab--active`), the
+  (`.bottom-nav`, `[data-sidebar]`) to find the control that yields, the
+  current classes (`bottom-nav-tab--active`, `sidebar-row--current`), the
   More tab (`.bottom-nav-tab[data-destination="more"]`) for a More row's
   pending cue, and `data-nav-label` for the rollback toast's wording. Each of
   those is asserted against the rendered components here, and the selector is
@@ -16,6 +16,7 @@ defmodule PlatformWeb.Components.NavPendingMarkupTest do
   import Phoenix.Component
   import Phoenix.LiveViewTest
   import PlatformWeb.Components.IconRail
+  import PlatformWeb.Components.Sidebar
   import PlatformWeb.Components.MoreSheet
 
   @nav_pending_path Path.expand("../../../assets/js/lib/nav_pending.js", __DIR__)
@@ -33,12 +34,7 @@ defmodule PlatformWeb.Components.NavPendingMarkupTest do
     assigns = %{current_path: current_path}
 
     rendered_to_string(~H"""
-    <.icon_rail
-      current_path={@current_path}
-      root_user={false}
-      sidebar_collapsed={false}
-      brand_name="Acme"
-    />
+    <.sidebar current_path={@current_path} root_user={false} brand_name="Acme" />
     """)
     |> LazyHTML.from_fragment()
   end
@@ -99,19 +95,20 @@ defmodule PlatformWeb.Components.NavPendingMarkupTest do
     assert nodes(more, "svg, .bottom-nav-icon") != []
   end
 
-  test "rail tiles and child rows: destination, toast label, current class" do
+  test "sidebar rows: destination, toast label (the visible label), current class" do
     doc = rail("/chat")
-    assert [_] = nodes(doc, "[data-icon-rail]")
-    tiles = nodes(doc, ".icon-rail-tab[href]")
-    assert tiles != []
+    assert [_] = nodes(doc, "[data-sidebar]")
+    rows = nodes(doc, ".sidebar-row[href]")
+    assert length(rows) > 4
 
-    for tile <- tiles do
-      assert attr_of(tile, "data-phx-link") == "redirect"
-      assert attr_of(tile, "data-destination") not in [nil, ""]
-      assert attr_of(tile, "data-nav-label") == attr_of(tile, "aria-label")
+    for row <- rows do
+      assert attr_of(row, "data-phx-link") == "redirect"
+      assert attr_of(row, "data-destination") not in [nil, ""]
+      label = row |> LazyHTML.query("span.truncate") |> LazyHTML.text() |> String.trim()
+      assert attr_of(row, "data-nav-label") == label
     end
 
-    assert [current] = nodes(doc, ".icon-rail-tab--active[href]")
+    assert [current] = nodes(doc, ".sidebar-row--current[href]")
     assert attr_of(current, "data-destination") == "chat"
   end
 

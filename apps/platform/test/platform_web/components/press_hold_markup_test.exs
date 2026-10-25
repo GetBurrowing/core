@@ -75,30 +75,6 @@ defmodule PlatformWeb.Components.PressHoldMarkupTest do
       assert LazyHTML.attribute(more, "phx-click") == ["open_more_sheet"]
     end
 
-    test "both sidebar toggles hold a base-100 press on the base-200 rail" do
-      for collapsed <- [false, true] do
-        assigns = %{collapsed: collapsed}
-
-        html =
-          rendered_to_string(~H"""
-          <.icon_rail
-            current_path="/chat"
-            root_user={false}
-            sidebar_collapsed={@collapsed}
-            brand_name="Acme"
-          />
-          """)
-
-        toggle = only!(doc(html), ~s(button[phx-click="toggle_sidebar"]))
-
-        assert_hold(toggle, [
-          "active:bg-base-100",
-          "phx-click-loading:bg-base-100!",
-          "phx-click-loading:text-base-content"
-        ])
-      end
-    end
-
     test "the sheet's close controls hold" do
       assigns = %{}
 

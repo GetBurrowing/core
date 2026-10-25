@@ -301,28 +301,11 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
     end
   end
 
-  # ── Task 01a00910 stage 3: the SECOND consumer ──────────────────────────
-  #
-  # `bucket_from_slug/1` (the SectionReorder hook's slug -> bucket-name
-  # translation) read the same `@sub_org_slug_to_bucket` attribute that
-  # `channel_scope/1` did. Fixing only `channel_scope` would have left this
-  # path on the stale hardcoded list with every test above still green. The
-  # attribute is now deleted outright, so no reader can go stale; these
-  # assertions cover the behaviour the deletion had to preserve.
-  describe "bucket_from_slug/1 — derived from the orgs table" do
-    test "resolves a CSS-form slug to the org's display name" do
-      globex = Platform.Tenancy.get_org_by_slug!("globex")
-
-      assert ChatLive.bucket_from_slug("globex") == globex.name
-    end
-
-    test "resolves an underscore-slugged org through its hyphen CSS token" do
-      # The one org that catches a missing `_` -> `-` normalization.
-      vandelay_ind = Platform.Tenancy.get_org_by_slug!("vandelay_ind")
-
-      assert ChatLive.bucket_from_slug("vandelay-ind") == vandelay_ind.name
-    end
-
+  # Task 01a00910 stage 3 also covered `bucket_from_slug/1`, the
+  # SectionReorder hook's slug translation. Burrow redesign 22 stage 2 deleted
+  # that hook with the desktop channel rail, and the function with it; the
+  # orgs-table derivation it shared with bucketing is still pinned here.
+  describe "a new org buckets from the orgs table" do
     test "an org created after this code shipped resolves with no code change" do
       # The point of the whole stage: a brand-new org must bucket without
       # anyone editing a literal list. `Newclient` is not one of the six
@@ -340,7 +323,6 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
           })
         )
 
-      assert ChatLive.bucket_from_slug("new-client") == "Newclient"
       assert "Newclient" in ChatLive.sub_org_order()
 
       ch = org_channel("anything-at-all", org.id)
@@ -348,11 +330,6 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
 
       assert ChatLive.channel_sections([ch], []).bucket_orgs["Newclient"] ==
                %{slug: "new_client", name: "Newclient", scope: "new_client"}
-    end
-
-    test "an unknown slug resolves to nil" do
-      assert ChatLive.bucket_from_slug("not-an-org") == nil
-      assert ChatLive.bucket_from_slug(nil) == nil
     end
   end
 end

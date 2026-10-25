@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   @moduledoc """
-  The external-user chat chrome: the desktop rail and its mobile switcher.
+  The external-user chat chrome below lg: the mobile switcher.
 
   Same split as `ChatLive.Partials` (ADR 0035) — function components, no
   state, each taking a declared set of attrs. These two regions render ONLY
@@ -9,8 +9,12 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
 
   Extracted here (task 01a0312e stage 2, markup unchanged):
 
-    * `external_rail/1` — the chrome-less desktop space rail (`hidden lg:flex`)
-    * `external_mobile_switcher/1` — its full-screen mobile counterpart
+    * `external_mobile_switcher/1` — the full-screen phone space switcher
+
+  The desktop external rail (`external_rail/1`) was deleted in Burrow
+  redesign 22 stage 2: at lg an external user gets the Chat list pane
+  (`Partials.ChatList`), scoped to their own channels and conversations,
+  with their identity and Log out at its foot.
 
   `masked_space_name/2` stays in `PlatformWeb.ChatLive` — stage 1 left it
   there because it reads LiveView assigns by key — so it is called
@@ -32,153 +36,6 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   alias PlatformWeb.ChatLive
 
   @mask_keys [:sidebar_sections, :mask_names?, :revealed_section_ids]
-
-  attr(:external?, :boolean, required: true)
-  attr(:external_user, :any, required: true)
-  attr(:channels, :list, required: true)
-  attr(:dm_conversations, :list, required: true)
-  attr(:active_space, :any, required: true)
-  attr(:unread_counts, :map, required: true)
-  attr(:user_id, :any, required: true)
-  attr(:sidebar_sections, :list, default: [])
-  attr(:mask_names?, :boolean, default: false)
-  attr(:revealed_section_ids, :any, default: nil)
-
-  @doc """
-  rbac-external-users M5: the chrome-less external space rail.
-
-  When `@external?` (M4 merges `chat_mode: "external"` into the connect session
-  on the `chat.` host), ChatLive renders THIS branch INSTEAD of the internal
-  discovery rail — a single flat allowlisted-space list with NO sub-org section
-  headers, NO pinned-task / archived sections, and NO new-channel / scope-pill
-  / edit-layout / admin chrome (each of which leaks the internal workspace org
-  tree). M4's `:external` app layout is chrome-less, so the brand +
-  identity chip + logout that the icon-rail normally carries are rendered here
-  at the rail head. Two paths, one ChatLive — mirrors the shipped `meet.` guest
-  branch. Semantic DaisyUI tokens only (brand cyan primary is themed in
-  app.css); mobile-first single column with env(safe-area-inset-*) padding.
-
-  `hidden lg:flex` (task 019f9257-a83e): the external rail is desktop-only,
-  mirroring the internal `#chat-sidebar` gate. On mobile it collapses entirely
-  so the conversation pane spans the full viewport; the mobile substitute is
-  the pills strip + `external_mobile_switcher/1` (both `lg:hidden`).
-  """
-  def external_rail(assigns) do
-    assigns =
-      assigns
-      |> assign(:external_spaces, assigns.channels ++ assigns.dm_conversations)
-      |> assign(:mask_assigns, Map.take(assigns, @mask_keys))
-      |> assign_brand_name()
-
-    ~H"""
-    <aside
-      :if={@external?}
-      id="chat-external-rail"
-      data-role="external-rail"
-      class="hidden lg:flex w-72 max-w-[80vw] flex-shrink-0 flex-col border-r border-edge bg-base-200 lg:w-64"
-    >
-      <header
-        class="flex-shrink-0 border-b border-edge"
-        style="padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left);"
-        data-role="external-rail-header"
-      >
-        <div class="flex items-center justify-between px-3 py-2.5">
-          <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
-            <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
-            <span class="truncate text-sm font-semibold tracking-tight text-base-content">
-              {@brand_name}
-            </span>
-          </div>
-          <a
-            href={~p"/auth/logout"}
-            class="btn btn-ghost btn-sm btn-square"
-            aria-label="Log out"
-            data-role="external-logout"
-          >
-            <span class="hero-arrow-right-start-on-rectangle size-5"></span>
-          </a>
-        </div>
-        <%!-- Identity chip: who the external user is signed in as. Avatar + name
-             only — NO org label (that would leak internal structure per canvas
-             §7). --%>
-        <div
-          :if={@external_user}
-          class="flex items-center gap-2 border-t border-edge px-3 py-2"
-          data-role="external-identity"
-        >
-          <.human_avatar
-            name={@external_user.name || @external_user.email || "You"}
-            avatar_url={@external_user.avatar_url}
-            seed={@external_user.oidc_sub || @external_user.email || @external_user.id}
-            size="sm"
-            class="flex-shrink-0"
-          />
-          <span class="truncate text-sm text-base-content">
-            {@external_user.name || @external_user.email}
-          </span>
-        </div>
-      </header>
-
-      <nav
-        class="flex-1 overflow-y-auto py-2"
-        aria-label="Your spaces"
-        data-role="external-space-list"
-      >
-        <%= if @external_spaces == [] do %>
-          <%!-- Calm zero-allowlist empty state (Saru direction). NEVER the internal
-               "browse other channels" new-user hint — that would advertise a
-               discovery surface that does not exist for this user. --%>
-          <div
-            class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center"
-            data-role="external-empty"
-          >
-            <span class="hero-chat-bubble-left-right size-8 text-subtle"></span>
-            <p class="text-sm font-medium text-base-content">Nothing here yet</p>
-            <p class="text-xs text-subtle">
-              Your conversations will appear here.
-            </p>
-          </div>
-        <% else %>
-          <.link
-            :for={space <- @external_spaces}
-            patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-            class={[
-              "channel-row",
-              @active_space && @active_space.id == space.id && "channel-row--active"
-            ]}
-          >
-            <span :if={space.kind == "channel"} class="text-subtle">#</span>
-            <span class="truncate flex-1">
-              {if space.kind == "channel",
-                do: ChatLive.masked_space_name(@mask_assigns, space.name),
-                else: sidebar_display_name(space, @user_id)}
-            </span>
-            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-              <span class="channel-row-unread-pill">
-                {unread_label(Map.get(@unread_counts, space.id, 0))}
-              </span>
-            <% end %>
-          </.link>
-        <% end %>
-      </nav>
-
-      <%!-- External users MAY start DMs to allowlisted humans (the picker is
-           filtered to exactly that set in stage 3), so this one affordance stays —
-           it is NOT internal-discovery chrome. --%>
-      <button
-        type="button"
-        phx-click="new_conversation_open"
-        aria-label="New conversation"
-        data-role="external-new-conversation"
-        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-edge px-3 py-2 text-sm text-base-content hover:text-primary hover:bg-base-300 transition-colors"
-        style="padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));"
-      >
-        <span class="hero-plus size-4"></span>
-        <span>New conversation</span>
-      </button>
-    </aside>
-    """
-  end
 
   attr(:external?, :boolean, required: true)
   attr(:embedded, :boolean, required: true)

@@ -139,8 +139,11 @@ defmodule Platform.Design.FocusRingCensusTest do
   # sheet.ex's), so the file leaves this map (1 -> 0). It gave the focusable
   # message root its keyboard-entry ring (chat_message.ex 8 -> 9). Total
   # 29 -> 27.
+  # Burrow redesign 22 stage 2 deleted the desktop channel rail and its CSS,
+  # which carried app.css's three ringed controls (the section hide button,
+  # the hidden drawer's Show button and its trigger), so app.css leaves this
+  # map (3 -> 0). Total 30 -> 27.
   @expected_required_sites %{
-    "assets/css/app.css" => 3,
     # +2 in rung 12 (task 01a1557a-a30a stage 2): the pill's +@ and the
     # "+@ add someone" button.
     "lib/platform_web/components/chat_message.ex" => 11,
@@ -153,7 +156,7 @@ defmodule Platform.Design.FocusRingCensusTest do
     "lib/platform_web/live/chat/partials/overlays.ex" => 4
   }
 
-  @expected_required_total 30
+  @expected_required_total 27
 
   # ── (a) the scan surface ──────────────────────────────────────────────────
 

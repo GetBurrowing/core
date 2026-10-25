@@ -342,7 +342,9 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     # Each class is asserted present before anything is refuted, so an empty
     # or moved source fails here rather than passing every refute below.
     assert src =~ ~s(id="chat-list")
-    assert src =~ "flex-col bg-base-200 text-base-content lg:hidden"
+    # Burrow redesign 22 stage 2: the list is also the desktop list pane, so
+    # the ground is shared by both widths and no longer ends in `lg:hidden`.
+    assert src =~ "flex-col bg-base-200 text-base-content"
     assert src =~ "active:bg-base-100"
     assert src =~ "border border-edge bg-base-100"
     assert src =~ "bg-primary"
@@ -350,8 +352,11 @@ defmodule Platform.Design.ChatListContrastGuardTest do
     assert src =~ "active:bg-base-200"
     assert src =~ ~S|if(@on?, do: "bg-primary", else: "bg-base-300")|
 
-    # No hover anywhere in the list, and no opacity-suffixed body colour.
-    refute src =~ "hover:"
+    # No phone hover anywhere in the list (Burrow redesign 22 stage 2 added
+    # the desktop list pane's `lg:hover:` fills, measured in
+    # desktop_shell_contrast_guard_test.exs), and no opacity-suffixed body
+    # colour.
+    refute src =~ ~r/(?<!lg:)hover:/
     refute src =~ ~r/text-base-content\/\d/
     refute src =~ "bg-info"
   end

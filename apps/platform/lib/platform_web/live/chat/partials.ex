@@ -11,8 +11,8 @@ defmodule PlatformWeb.ChatLive.Partials do
     * `move_to_org_picker/1` — the admin destination chooser for a channel
     * `move_to_org_dialog/1` — the confirmation a chosen destination opens
     * `row_actions_sheet/1` — the phone Chat list's row sheet (long-press)
-    * `row_actions_trigger/1` — per-row overflow control in the desktop rail
-    * `row_actions_dialog/1` — the centred menu that trigger opens
+    * `row_actions_dialog/1` — the desktop row menu, opened by right-clicking
+      a Chat list row (`RowContextMenu`, Burrow redesign 22 stage 2)
     * `canvas_overlay/1` — active-canvas side panel + mobile full-screen
     * `meeting_panel/1` — in-meeting UI (desktop sidebar + mobile overlay)
     * `brand_new_user_empty_state/1` — the §5.1 "no spaces yet" state, in
@@ -500,83 +500,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   defp pin_label(_target), do: "Pin to top"
 
   @doc """
-  Overflow trigger for one DESKTOP RAIL conversation row (task 019ff8ba stage 1).
-
-  The desktop row control. It began as the counterpart to the deleted drawer's
-  row control (same event, same payload); the rail opens
-  `row_actions_dialog/1`.
-
-  ## Why the row's controls moved behind it
-
-  A sub-org row carried three trailing controls — pin, "Move to
-  organisation…", hide — and the pin was visible at rest on every row of the
-  rail, all the time. Design review, 2026-08-13, choosing Option C off the design
-  canvas: the pin leaves the row in EVERY mode, not only while arranging. One
-  trigger replaces the set.
-
-  The cost, stated rather than discovered later: pinning is two clicks now
-  instead of one.
-
-  ## Every row, including the pinned task rows
-
-  Design review, 2026-08-13: "let's simplify and make it consistent where 3-dots brings
-  up additional actions for a row in the Chat page (channel - unpin/pin, task -
-  unpin since it gets pinned from a diff page)." So the trigger is the one
-  trailing control on every row of the rail, and what varies is what its menu
-  holds.
-
-  Stage 1 shipped this control on every row EXCEPT the pinned task rows, on the
-  reasoning that a task row's menu would be empty: a task pin comes off through
-  `unpin_task_from_chat` rather than `toggle_pinned`, and it carries no hide and
-  no org filing. The design answer is that the unpin IS the item, and it is the
-  only one because a task is pinned from another page.
-
-  ## Chrome
-
-  `.channel-row-actions-button` in app.css: a 24px box at
-  `--color-base-content` 60% at rest, with the 44x44 hit area coming from a
-  pseudo-element so the touch target costs the conversation name no width.
-  The declarations were the per-row pin's, shared by both selectors while
-  both controls existed. Stage 3 dropped the pin's selector when the pin's
-  markup went; nothing about the trigger's chrome changed with it.
-
-  `hero-ellipsis-horizontal` rather than the drawer's vertical ellipsis: the
-  rail row is a horizontal strip of controls, and the drawer's control is a
-  44px touch target in a full-bleed list.
-
-  ## `JS.push_focus/0`
-
-  Escape must return focus to the trigger, and the dialog is server-rendered:
-  closing it REMOVES the focused element from the DOM, which drops focus to
-  `<body>`. `JS.push_focus/0` with no `:to` pushes this element (the client
-  reads `sourceEl`), and every close path in `row_actions_dialog/1` pops it.
-  The event name and the `phx-value-space_id` payload are unchanged from the
-  drawer's control — `JS.push/2` merges the element's `phx-value-*`
-  attributes, so the contract on the wire is identical.
-  """
-  attr(:space_id, :string, required: true)
-  attr(:name, :string, required: true)
-
-  def row_actions_trigger(assigns) do
-    ~H"""
-    <button
-      type="button"
-      class="channel-row-actions-button"
-      phx-click={JS.push_focus() |> JS.push("open_row_actions")}
-      phx-value-space_id={@space_id}
-      data-role="row-actions-trigger"
-      data-space-id={@space_id}
-      aria-haspopup="dialog"
-      aria-label={"More actions for #{@name}"}
-      title="More actions"
-    >
-      <span class="hero-ellipsis-horizontal size-3.5"></span>
-    </button>
-    """
-  end
-
-  @doc """
-  The menu `row_actions_trigger/1` opens on DESKTOP (task 019ff8ba stage 1).
+  The desktop row menu (task 019ff8ba stage 1). Since Burrow redesign 22
+  stage 2 it opens from a right-click on a Chat list row at lg: the
+  `RowContextMenu` hook on `#chat-list` pushes `open_row_actions` with the
+  row's space id. The rail's per-row trigger that opened it before is gone
+  with the rail.
 
   ## A centred dialog, not a dropdown
 
@@ -763,7 +691,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                 data-space-id={@target.space_id}
               >
                 <span class="hero-eye-slash size-4 flex-shrink-0" aria-hidden="true"></span>
-                <span>Hide from my rail</span>
+                <span>Hide channel</span>
               </button>
             </li>
             <%!-- Closes this dialog on the way, client-side, so the

@@ -183,8 +183,8 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
       # The specific rail element, not a substring search for "/tasks" —
       # a page can contain a string from somewhere else entirely.
-      refute has_element?(view, "#shell-sidebar")
-      refute has_element?(view, "[data-icon-rail]")
+      refute has_element?(view, "#sidebar")
+      refute has_element?(view, "[data-sidebar]")
       refute has_element?(view, "[data-role=chat-panel-toggle]")
 
       # The breadcrumb back to /meetings is shell-only too: on this surface
@@ -432,7 +432,7 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
 
       assert html =~ meeting.name
       refute :sys.get_state(view.pid).socket.assigns.shell?
-      refute has_element?(view, "#shell-sidebar")
+      refute has_element?(view, "#sidebar")
       assert has_element?(view, "[data-role=member-identity-badge]")
       refute has_element?(view, "[data-role=guest-identity-badge]")
     end

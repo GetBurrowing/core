@@ -259,7 +259,12 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
              LiveView's delegated listener lives — killing EVERY phx-click
              inside the modal in real browsers while LiveViewTest's direct
              socket events kept passing (task 019e95ea). --%>
+        <%!-- role + aria-modal: the details panel's Escape (Burrow
+             redesign 22 stage 3) leaves the panel alone while this is open. --%>
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={title_for(@space.kind)}
           class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6 max-h-[80vh] overflow-y-auto"
           phx-click-away="settings_close"
           phx-target={@myself}

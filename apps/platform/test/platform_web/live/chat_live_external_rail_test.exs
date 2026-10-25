@@ -99,56 +99,69 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       %{conn: conn, ext: ext, allowed: allowed, off_limits: off_limits}
     end
 
-    test "rail lists ONLY the allowlisted channel and none of the discovery chrome",
+    # Burrow redesign 22 stage 2 deleted the external rail; the external
+    # user's desktop list is now the Chat list (`#chat-list`) at lg.
+    test "list lists ONLY the allowlisted channel and none of the discovery chrome",
          %{conn: conn, ext: ext, allowed: allowed, off_limits: off_limits} do
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> with_chat_host()
         |> authed(ext)
         |> live("/chat/#{allowed.slug}")
 
-      # The external rail rendered, listing the allowlisted channel only.
-      assert html =~ ~s(data-role="external-rail")
+      # The external Chat list rendered, listing the allowlisted channel only.
+      assert has_element?(
+               view,
+               ~s(#chat-list a[data-role="chat-list-row"][data-space-id="#{allowed.id}"])
+             )
+
+      refute has_element?(view, ~s(#chat-list a[data-space-id="#{off_limits.id}"]))
       assert html =~ allowed.name
       refute html =~ off_limits.name
 
-      # Branding + identity chip + logout are KEPT (M4's :external layout is
-      # chrome-less, so ChatLive renders them).
-      # The brand chip names the install's app from the branding row, not a
-      # compiled product name (task 01a116de stage 3).
-      assert html =~ ~s(alt="#{Platform.Branding.app_name()}")
-
+      # Identity chip + logout are KEPT at the foot of the list (M4's
+      # :external layout is chrome-less, so ChatLive renders them). The
+      # desktop brand chip went with the external rail (Burrow redesign 22
+      # stage 2); no org name may stand in for it.
       refute html =~
                ~r/alt="#{Platform.Regression.InstallIdentityScanner.published_org_token()}"/i
 
-      assert html =~ ~s(data-role="external-identity")
+      assert has_element?(view, ~s(#chat-list [data-role="external-identity"]))
       assert html =~ ext.name
-      assert html =~ ~p"/auth/logout"
+      assert has_element?(view, ~s(#chat-list [data-role="external-logout"][href="/auth/logout"]))
 
-      # NONE of the internal discovery chrome leaks.
-      refute html =~ ~s(id="chat-sidebar")
+      # NONE of the internal discovery chrome leaks: no Agents row, no
+      # Options, and the New popover offers a conversation but no channel.
       refute html =~ "channel-section-header"
       refute html =~ "Edit my layout"
       refute html =~ "Edit company default"
-      refute html =~ "New channel"
       refute html =~ "chat-header-scope-pill"
+      refute has_element?(view, ~s(#chat-list a[data-row-kind="agents"]))
+      refute has_element?(view, "#list-more")
+      assert has_element?(view, "#list-new")
+
+      view |> element("#list-new") |> render_click()
+      assert has_element?(view, ~s([data-role="chat-list-pop-new-conversation"]))
+      refute has_element?(view, ~s([data-role="chat-list-pop-new-channel"]))
+      refute render(view) =~ ~s(phx-click="new_channel_open")
     end
 
     test "empty allowlist renders the calm empty state, no crash and no leak", %{conn: conn} do
       org = tenant_org!()
       zero = external_user!(org)
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> with_chat_host()
         |> authed(zero)
         |> live("/chat")
 
-      assert html =~ ~s(data-role="external-rail")
-      assert html =~ ~s(data-role="external-empty")
+      # The desktop list shows its empty state; the phone switcher its own.
+      assert has_element?(view, ~s(#chat-list [data-role="chat-list-empty"]))
       assert html =~ "Nothing here yet"
+      refute has_element?(view, ~s(#chat-list a[data-role="chat-list-row"]))
       # Never the internal brand-new-user "browse channels" discovery hint.
-      refute html =~ "id=\"chat-sidebar\""
+      refute has_element?(view, ~s([data-role="chat-list-empty-new-channel"]))
       refute html =~ "channel-section-header"
     end
   end
@@ -159,16 +172,20 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       channel = channel!("General Chat")
       join!(channel, internal)
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(internal)
         |> live("/chat/#{channel.slug}")
 
-      # Full internal rail: the resizable sidebar aside + new-channel affordance.
-      assert html =~ ~s(id="chat-sidebar")
-      assert html =~ "New channel"
+      # Full internal list: the channel row, Options, and New channel in the
+      # New popover.
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{channel.id}"]))
+      assert has_element?(view, "#list-more")
+      view |> element("#list-new") |> render_click()
+      assert has_element?(view, ~s([data-role="chat-list-pop-new-channel"]))
       # The external branch is fully dormant on the default host.
-      refute html =~ ~s(data-role="external-rail")
+      refute html =~ ~s(data-role="external-identity")
+      refute html =~ ~s(data-role="external-logout")
       refute html =~ ~s(data-role="external-empty")
     end
   end
@@ -267,31 +284,36 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
          %{conn: conn, ext: ext, granted: granted, off_limits: off_limits} do
       # Default host (no with_chat_host), no chat_mode session — exactly the
       # internal `:authenticated` path the leak lived on.
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(ext)
         |> live("/chat/#{granted.slug}")
 
-      # Scope is derived from identity → the rail lists ONLY the granted space.
+      # Scope is derived from identity → the list holds ONLY the granted space.
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{granted.id}"]))
+      refute has_element?(view, ~s(#chat-list a[data-space-id="#{off_limits.id}"]))
       assert html =~ granted.name
       refute html =~ off_limits.name
 
-      # And because the identity is external, the chrome-less rail renders even
+      # And because the identity is external, the external list renders even
       # here — the discovery chrome that would enumerate all channels is off.
-      assert html =~ ~s(data-role="external-rail")
-      refute html =~ "New channel"
+      assert has_element?(view, ~s(#chat-list [data-role="external-identity"]))
+      refute has_element?(view, "#list-more")
+      refute html =~ ~s(phx-click="new_channel_open")
     end
 
     test "the /chat index on the suite host is likewise scoped, no all-channels leak",
          %{conn: conn, ext: ext, granted: granted, off_limits: off_limits} do
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(ext)
         |> live_settled("/chat")
 
       assert html =~ granted.name
       refute html =~ off_limits.name
-      assert html =~ ~s(data-role="external-rail")
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{granted.id}"]))
+      refute has_element?(view, ~s(#chat-list a[data-space-id="#{off_limits.id}"]))
+      assert has_element?(view, ~s(#chat-list [data-role="external-identity"]))
     end
 
     test "an INTERNAL user on the suite host is completely unaffected (sees General)",
@@ -299,16 +321,17 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       internal = create_user!("Ingrid Internal")
       join!(off_limits, internal)
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> authed(internal)
         |> live("/chat/#{off_limits.slug}")
 
-      # Identity-derived scope is a no-op for internal users: full internal rail,
-      # General visible, external branch dormant.
+      # Identity-derived scope is a no-op for internal users: full internal
+      # list, General visible, external branch dormant.
       assert html =~ off_limits.name
-      assert html =~ ~s(id="chat-sidebar")
-      refute html =~ ~s(data-role="external-rail")
+      assert has_element?(view, ~s(#chat-list a[data-space-id="#{off_limits.id}"]))
+      assert has_element?(view, "#list-more")
+      refute html =~ ~s(data-role="external-identity")
     end
   end
 
@@ -333,14 +356,16 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       %{conn: conn, ext: ext, chan_a: chan_a, chan_b: chan_b, off_limits: off_limits}
     end
 
-    test "external rail carries the hidden lg:flex gate so it collapses on mobile",
+    test "external list carries the hidden lg:flex gate so it collapses on mobile",
          %{conn: conn, ext: ext, chan_a: chan_a} do
-      {:ok, view, _html} =
-        conn |> with_chat_host() |> authed(ext) |> live("/chat/#{chan_a.slug}")
+      for path <- ["/chat/#{chan_a.slug}", "/chat"] do
+        {:ok, view, _html} =
+          conn |> with_chat_host() |> authed(ext) |> live(path)
 
-      rail = view |> element(~s([data-role="external-rail"])) |> render()
-      # Mirrors the internal #chat-sidebar gate: desktop-only, hidden < lg.
-      assert rail =~ "hidden lg:flex"
+        list = view |> element("#chat-list") |> render()
+        # Desktop-only on both routes, hidden < lg (the phone has the switcher).
+        assert list =~ ~r/<section[^>]*class="hidden lg:flex/
+      end
     end
 
     # Task 01a1557a-8562 stage 5 deleted the pills strip and the search button

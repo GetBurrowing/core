@@ -104,7 +104,7 @@ const AppBadge = {
     this.badgeCount = Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0
 
     // `label` is the server's already-capped string ("99+" past 99), so the
-    // Dock badge, the title prefix and the icon-rail pill share one cap.
+    // Dock badge, the title prefix and the sidebar Inbox pill share one cap.
     const label = payload && payload.label
     this.badgeLabel = typeof label === "string" && label.length > 0 ? label : null
 

@@ -1,26 +1,26 @@
 defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   @moduledoc """
-  The channels rail names the ROOT org by its own row, never by a compiled
-  org name (task 01a116de stage 3).
+  Chat names the ROOT org by its own row, never by a compiled org name (task
+  01a116de stage 3).
 
-  The rail's section headers render from `Platform.Chat.Sidebar`'s resolved
-  sections (`@sidebar_sections`), whose header text is the org row's `name`.
-  `ChatLive.channel_sections/5` feeds the hidden-channels drawer, and its
-  default bucket (where an `org_id: nil` channel lands) is the root org's
-  `name` too. Both are exercised here through the rendered page:
+  Burrow redesign 22 stage 2 deleted the desktop channel rail and its
+  per-org section headers and dots; the Chat list flattens every sub-org
+  channel into one Spaces section. What survives, exercised through the
+  rendered page:
 
-    (a) a fresh install whose root is `Root Org` renders no /legacy/i anywhere,
-        and an unscoped channel sits under `Root Org` (visible in the rail,
-        and in the hidden drawer when hidden);
-    (b) an install whose root is literally `Legacy` (Alex's install shape) still
-        renders a `Legacy` section from DATA, beside the tenant sections, each
-        holding its own channels, with the root's dot and header pill.
+    (a) a fresh install whose root is `Root Org` renders no compiled org name,
+        an unscoped channel is a Chat list row, and a hidden one is listed in
+        the options popover's hidden list instead;
+    (b) an install whose root is literally `Legacy` lists the root's, a
+        tenant's and an unscoped channel side by side, and the open channel's
+        Scope page switch (the header pill until Burrow redesign 22 stage 4)
+        is named and keyed from the row;
+    (c) a non-root internal member gets the root's fill rule (an unseen
+        tenant's is not emitted).
 
   The test database's root row is the neutral `acme|Acme` fixture (task
-  01a116de stage 4). Both cases rename it INSIDE the sandbox transaction,
-  which rolls back: (a) to a fresh install's `root|Root Org`, (b) to the
-  legacy `legacy|Legacy` shape Alex's installs carry, on purpose. No real
-  install's rows are touched.
+  01a116de stage 4). Cases rename it INSIDE the sandbox transaction, which
+  rolls back. No real install's rows are touched.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -65,29 +65,8 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
     end
   end
 
-  defp desktop_sidebar(html) do
-    case Regex.run(~r/<aside[^>]*id="chat-sidebar".*?<\/aside>/s, html) do
-      [match] -> match
-      _ -> ""
-    end
-  end
-
-  # The rendered `<section>` for one org-default section, by its header name.
-  defp section_html(html, name) do
-    html
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query(~s(section[aria-label="#{name} channels"]))
-    |> LazyHTML.to_html()
-  end
-
-  # Every section header label in rail order.
-  defp section_labels(html) do
-    html
-    |> desktop_sidebar()
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query("section.channel-section .channel-section-label")
-    |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
-  end
+  defp list_row_selector(space_id),
+    do: ~s(#chat-list-scroller a[data-role="chat-list-row"][data-space-id="#{space_id}"])
 
   # Turn the test database's root row into what a fresh install seeds
   # (`Root Org` / `root`), inside the sandbox. Its section follows the org
@@ -146,7 +125,7 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   end
 
   describe "(a) a fresh root named Root Org" do
-    test "renders the rail with no /legacy/i anywhere and files an unscoped channel under Root Org",
+    test "renders no compiled org name, lists an unscoped channel and the hidden one in the popover",
          %{conn: conn} do
       root = make_fresh_root!()
       assert {root.slug, root.name} == {"root", "Root Org"}
@@ -161,7 +140,7 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
       user = insert_user()
       {:ok, _} = Accounts.hide_channel(user.id, hidden.id)
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> init_test_session(current_user_id: user.id)
         |> live_following_redirect()
@@ -169,20 +148,23 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
       refute html =~ ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()}/i,
              "the page carries a compiled org name"
 
-      assert "Root Org" in section_labels(html)
+      # The unscoped channel is a list row; the hidden one is not.
+      assert has_element?(view, list_row_selector(visible.id))
+      refute has_element?(view, list_row_selector(hidden.id))
 
-      root_section = section_html(desktop_sidebar(html), "Root Org")
-      assert root_section =~ ~s(data-space-id="#{visible.id}")
+      # ...and the hidden one is listed in the options popover's hidden list.
+      view |> element("#list-more") |> render_click()
+      view |> element(~s([data-role="chat-list-pop-option-hidden"])) |> render_click()
 
-      drawer =
-        html
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query("#hidden-drawer-panel .channel-hidden-drawer-group")
-        |> Enum.map(&LazyHTML.to_html/1)
+      assert has_element?(
+               view,
+               ~s(#chat-list-pop-hidden [data-role="chat-list-pop-hidden-row"][data-space-id="#{hidden.id}"])
+             )
 
-      assert [group] = drawer
-      assert group =~ "Root Org"
-      assert group =~ "Scratch"
+      refute has_element?(
+               view,
+               ~s(#chat-list-pop-hidden [data-role="chat-list-pop-hidden-row"][data-space-id="#{visible.id}"])
+             )
     end
 
     test "the default bucket is the root's name, and `Channels` with no root row" do
@@ -200,7 +182,8 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
   end
 
   describe "(b) a root that is literally Legacy, from data" do
-    test "renders Initech and Legacy sections, each with its own channels", %{conn: conn} do
+    test "lists the Legacy, Initech and unscoped channels, and pills the open one from the row",
+         %{conn: conn} do
       legacy = make_legacy_legacy_root!()
       initech = Tenancy.get_org_by_slug!("initech")
       assert {legacy.slug, legacy.name} == {"legacy", "Legacy"}
@@ -211,55 +194,44 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
 
       user = insert_user()
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> init_test_session(current_user_id: user.id)
         |> live_following_redirect(
           "/chat/" <> PlatformWeb.ChatLive.space_nav_target(legacy_channel)
         )
 
-      labels = section_labels(html)
-      assert "Legacy" in labels
-      assert "Initech" in labels
-
-      sidebar = desktop_sidebar(html)
-      legacy_section = section_html(sidebar, "Legacy")
-      initech_section = section_html(sidebar, "Initech")
-
-      assert legacy_section =~ ~s(data-space-id="#{legacy_channel.id}")
-      assert legacy_section =~ ~s(data-space-id="#{unscoped.id}")
-      refute legacy_section =~ ~s(data-space-id="#{initech_channel.id}")
-
-      assert initech_section =~ ~s(data-space-id="#{initech_channel.id}")
-      refute initech_section =~ ~s(data-space-id="#{legacy_channel.id}")
-
-      # The root's dot is coloured from its row through `data-scope`, with
-      # no compiled class.
-      assert legacy_section =~
-               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="legacy"/
+      for space <- [legacy_channel, initech_channel, unscoped] do
+        assert has_element?(view, list_row_selector(space.id)),
+               "#{space.name} is missing from the Chat list"
+      end
 
       refute html =~ "bg-legacy-dot"
 
-      # The chat header pill for the open Legacy channel still renders, named
-      # and keyed from the row.
-      pill =
-        html
+      # The open Legacy channel's scope is named and keyed from the row. The
+      # header pill that said so left in Burrow redesign 22 stage 4; the
+      # details panel's Scope page carries the same name and slug.
+      switch =
+        view
+        |> render_click("details_open", %{"page" => "scope"})
         |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-scope="legacy"] .scope-pill-label))
+        |> LazyHTML.query(
+          ~s(#details-panel [data-role="details-scope-switch"][phx-value-scope="legacy"])
+        )
         |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
 
-      assert "Legacy" in pill
+      assert ["Filter to Legacy scope"] = switch
     end
   end
 
-  describe "(c) a non-root internal member sees the root coloured" do
+  describe "(c) a non-root internal member gets the root's colour rule" do
     # Gate case 01a116e6-cd0e-700a, measured at 4c221b7d0: an internal
     # (external=false) initech member saw the root section dot with no fill,
     # because the per-viewer `org-scope-colors` block emitted rules only for
     # orgs that viewer could see, and stage 3 had moved the root onto that
     # var path. The root's rule is now emitted for every viewer; other
     # tenants' rules still are not.
-    test "the root dot's data-scope has a fill rule, and an unseen tenant has none",
+    test "the root's data-scope has a fill rule, and an unseen tenant has none",
          %{conn: conn} do
       root = make_fresh_root!()
 
@@ -294,29 +266,21 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
           joined_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} =
+      {:ok, view, html} =
         conn
         |> init_test_session(current_user_id: user.id)
         |> live_following_redirect()
 
-      root_section = section_html(desktop_sidebar(html), "Root Org")
-      assert root_section =~ ~s(data-space-id="#{root_channel.id}")
-
-      [dot_scope] =
-        root_section
-        |> LazyHTML.from_fragment()
-        |> LazyHTML.query(".channel-section-color-dot")
-        |> LazyHTML.attribute("data-scope")
-
-      assert dot_scope == root.slug
+      # Positive control: the root channel is inside this viewer's fence.
+      assert has_element?(view, list_row_selector(root_channel.id))
 
       [styles] =
         Regex.run(~r/<style[^>]*data-role="org-scope-colors"[^>]*>(.*?)<\/style>/s, html,
           capture: :all_but_first
         )
 
-      assert styles =~ ~s([data-scope="#{dot_scope}"]{--scope-fill:),
-             "the root dot's data-scope has no fill rule for this viewer"
+      assert styles =~ ~s([data-scope="#{root.slug}"]{--scope-fill:),
+             "the root's data-scope has no fill rule for this viewer"
 
       assert styles =~ ~s([data-scope="#{initech.slug}"]{)
 

@@ -8,8 +8,11 @@ defmodule PlatformWeb.ChatLive.Partials.AgentsSheet do
 
     * `surface={:sheet}` — the phone bottom sheet (`<.sheet>`, `lg:hidden`),
       opened from the space sheet's Agents row.
-    * `surface={:popover}` — the desktop popover (`hidden lg:block`), anchored
-      under the header `agents-open` button, closed by a click outside or Esc.
+    * `surface={:popover}` — the desktop popover (`hidden lg:flex`), rendered
+      in the details panel right under its Agents row (Burrow redesign 22
+      stage 4; it sat under a header button before), in the panel's flow so
+      the scrolling panel body does not clip it. Closed by a click outside or
+      Esc.
 
   Every control applies at once through `PlatformWeb.ChatLive.AgentsSheetHooks`;
   there is no Save button.
@@ -79,7 +82,7 @@ defmodule PlatformWeb.ChatLive.Partials.AgentsSheet do
       phx-click-away="agents_close"
       phx-window-keydown="agents_close"
       phx-key="Escape"
-      class="absolute right-0 top-full z-40 mt-1 hidden w-80 min-w-[280px] max-w-[360px] flex-col rounded-box border border-edge bg-base-100 py-2 shadow lg:flex"
+      class="relative z-10 mx-1 my-1 hidden flex-col rounded-box border border-edge bg-base-100 py-2 shadow lg:flex"
     >
       <p id="agents-popover-title" class="px-4 pb-1 text-base font-semibold text-base-content">
         {title()}

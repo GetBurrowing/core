@@ -201,6 +201,11 @@ defmodule PlatformWeb.RecoveryLive do
     end
   end
 
+  # Catch-all (Burrow redesign 22 stage 4): every LiveView in the shell
+  # ignores a message it does not know rather than crashing (rung 20's
+  # `{:new_message}` crash).
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   # ── Restore orchestration ──────────────────────────────────────────────
 
   # Restore a batch of items, then reload. `mode` is `:items` (leaf selective

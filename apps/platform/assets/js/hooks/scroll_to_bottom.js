@@ -35,14 +35,14 @@
 //    an absent attribute or an unresolvable row leaves the existing
 //    behaviour exactly as it was.
 //
-// 4. Rail collapse is reflow-anchored. Toggling the sidebar animates a
-//    168px width change; chat text rewraps, scrollHeight changes, and the
-//    browser clamps/re-anchors scrollTop — observed in prod as the pane
-//    snapping to bottom. On `sidebar_collapsed_changed` this hook holds the
-//    user's distance-from-bottom constant on every animation frame for the
-//    duration of the width transition. The scroller also carries
-//    `[overflow-anchor:none]` (chat_live.html.heex) so native anchoring
-//    doesn't fight this hook or InfiniteScroll's manual prepend anchoring.
+// 4. The scroller carries `[overflow-anchor:none]` (chat_live.html.heex) so
+//    native anchoring doesn't fight this hook or InfiniteScroll's manual
+//    prepend anchoring. (A per-frame distance pin armed by the shell's
+//    `sidebar_collapsed_changed` used to live here for the icon rail's 168px
+//    collapse animation, task 019f51d1. Burrow redesign 22 stage 1 deleted
+//    the rail and its collapse control, nothing pushes that event any more,
+//    and the pin went with it. One-shot width changes are the viewport
+//    observer's: see `_connectViewportObserver`.)
 
 // 5. Jump-to-latest distance is EDGE-triggered (task 01a03c76). The server
 //    owns the chip's visibility, so it needs to know where the reader is —
@@ -212,9 +212,6 @@ const SETTLE_QUIET_MS = 250;
 // resizing (a live-updating embed, a pathological image) cannot hold the
 // reader pinned forever.
 const SETTLE_MAX_MS = 3000;
-// The rail width transition is 200ms (icon_rail.ex). Hold a little past it
-// to cover post-transition layout settle; also covers reduced-motion (0ms).
-const REFLOW_HOLD_MS = 400;
 
 const ScrollToBottom = {
   mounted() {
@@ -229,7 +226,6 @@ const ScrollToBottom = {
       this.el.closest("[data-scroll-container]") ||
       this.el.closest("main") ||
       this.el;
-    this._holdFrame = null;
     // Seed the viewport dimensions BEFORE arming the observer below. A
     // ResizeObserver delivers one callback for the CURRENT size the moment it
     // starts observing; with nothing seeded that first delivery would read as
@@ -250,10 +246,6 @@ const ScrollToBottom = {
     // conversation changes, so there is exactly one definition of what
     // "entering a conversation" means and the two entry paths cannot drift.
     this._beginConversation(this.el.dataset.spaceId ?? null);
-
-    this.handleEvent("sidebar_collapsed_changed", () =>
-      this.holdAnchorThroughReflow(),
-    );
 
     // A reader who takes control during the arrival phase must keep it.
     // Deliberately NOT the "scroll" event: our own `scrollTop` assignments
@@ -466,8 +458,6 @@ const ScrollToBottom = {
   //   * the arrival `ResizeObserver` does watch this same box, but it is torn
   //     down the moment the arrival phase ends (`_endInitialPhase`) — 250ms of
   //     quiet layout after the conversation lands, long before any of this.
-  //   * `holdAnchorThroughReflow` is armed only by `sidebar_collapsed_changed`,
-  //     a WIDTH change, and holds a distance rather than the bottom.
   //
   // So this is a SECOND, PERMANENT observer answering a different question:
   // not "has the content finished arriving" but "did the viewport itself
@@ -577,17 +567,12 @@ const ScrollToBottom = {
 
     // A WIDTH change rewraps every message, so `scrollHeight` moved in the
     // same frame and the height path's substitution — NEW scrollHeight
-    // against OLD height — is not comparable. The width case has TWO
-    // owners now, answering different questions:
+    // against OLD height — is not comparable. The width case has ONE owner
+    // since Burrow redesign 22 deleted the icon rail's collapse animation and
+    // the per-frame pin it armed (task 019f51d1):
     //
-    //   * `holdAnchorThroughReflow`, armed from `sidebar_collapsed_changed`,
-    //     pins the reader's DISTANCE through the rail's 200ms width
-    //     animation (task 019f51d1). Deliberately NOT re-armed broadly —
-    //     pinning a moving reader for 400ms is the stutter task 01a0419a
-    //     stage 2 measured and stage 3 removed; see the KEEP-OR-DROP note
-    //     in `_reportDistance`.
-    //   * THIS path, added by task 01a05873, owns the ONE-SHOT resizes the
-    //     pin was never armed for: window resizes and the sidebar drag,
+    //   * THIS path, added by task 01a05873, owns the ONE-SHOT resizes:
+    //     window resizes and the sidebar drag,
     //     both desktop-only (mobile has no resizable sidebar or window).
     //     It re-anchors the same way the height path does — snap when the
     //     PRE-resize distance was within NEAR_BOTTOM_PX, preserve the
@@ -970,7 +955,6 @@ const ScrollToBottom = {
       cancelAnimationFrame(this._scrollFrame);
       this._scrollFrame = null;
     }
-    if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
     this._disconnectResizeObserver();
     this._disconnectViewportObserver();
     this._disconnectRealignObserver();
@@ -1063,14 +1047,9 @@ const ScrollToBottom = {
     // WORST in the table. Harness and captures:
     // `priv/measurements/01a0419a-scroll-stutter/`.
     //
-    // THE METHOD IS RETAINED AND IS STILL LIVE. Its remaining caller is the
-    // `handleEvent("sidebar_collapsed_changed", ...)` registration in
-    // `mounted()` — the original task 019f51d1 reason, a 168px rail width
-    // animation that rewraps text and makes the browser re-anchor scrollTop.
-    // That caller is untouched by this task. Do not delete
-    // `holdAnchorThroughReflow()` as dead code: dropping this call site leaves
-    // exactly one caller, not zero, and `scroll_to_bottom.test.js` asserts it
-    // still fires on the sidebar event for precisely that reason.
+    // The method itself went with Burrow redesign 22 stage 1: its last
+    // caller was the shell's `sidebar_collapsed_changed`, pushed only by the
+    // icon rail's collapse control, which that stage deleted.
   },
   distanceFromBottom() {
     return (
@@ -1128,25 +1107,6 @@ const ScrollToBottom = {
     if (distance <= NEAR_BOTTOM_PX) {
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     }
-  },
-  // Pin the user's distance-from-bottom through the rail width transition.
-  // At the bottom the pin degenerates to bottom-stick (dist 0), which is
-  // what a bottom-anchored reader expects during a reflow.
-  holdAnchorThroughReflow() {
-    const dist = this.distanceFromBottom();
-    const deadline = performance.now() + REFLOW_HOLD_MS;
-    if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
-
-    const hold = () => {
-      this.scrollEl.scrollTop =
-        this.scrollEl.scrollHeight - this.scrollEl.clientHeight - dist;
-      if (performance.now() < deadline) {
-        this._holdFrame = requestAnimationFrame(hold);
-      } else {
-        this._holdFrame = null;
-      }
-    };
-    hold();
   },
   // Walk visible message rows and mark where each author's RUN starts and
   // ends. A run is a maximal block of consecutive rows from one participant.
