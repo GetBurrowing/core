@@ -4,6 +4,19 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.2: native tab bar
+New in this build: the tabs at the bottom of the app (Chat, Voice, Tasks, Meetings, More) are now the system's own tab bar, so on iOS 26 and later they are drawn in Liquid Glass and feel like the rest of the phone. The tabs still come from your install: the app only draws them.
+
+Please try:
+1. Move between Chat, Voice, Tasks and Meetings. The selected tab should follow the page, and the bar should not blink when you switch.
+2. Scroll down a long list and tap the tab you are on: the page scrolls back to the top. Tap it again at the top: it goes back to that tab's first page.
+3. Tap More: the More sheet opens and closes. When something under More is unread, More shows a red dot.
+4. Start typing a message, open a picture full screen, or join a call: the bar slides away, and comes back when you are done. A sheet other than More also hides it.
+5. Light and dark mode both.
+6. On an iPad held so the app is wide (a 13-inch iPad, or any iPad in landscape), the app shows its sidebar instead and the bottom bar stays hidden.
+
+Known gaps: the bar needs the matching web update on your install. An install that does not have it yet keeps the old bottom bar inside the page, which still works.
+
 ## v1.2
 New in build 9: meetings show when you are talking. On the call screen, your own "You" row now lights up while you speak and are not muted. Your voice always reached the others; only the indicator was missing. The meeting page inside the app can now mute and unmute the call: tap its mic and it shows the call's confirmed state. Camera and screen share are not in the app yet, so the page reads "Audio only in the app".
 

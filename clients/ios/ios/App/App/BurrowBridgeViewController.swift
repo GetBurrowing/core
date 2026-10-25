@@ -51,6 +51,19 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// Set by SceneDelegate when a widget's deep link cold-launched the app.
     var pendingDeepLink: DeepLink?
 
+    /// The native tab bar (task 01a1557b), hidden until the web's first
+    /// `tabBarState`.
+    private var tabBarHost: NativeTabBarHosting?
+    private(set) var tabBarState = NativeTabBarState()
+    /// Bumped by the document-start script for every new main-frame
+    /// document; a document that sends no state by didFinish (plus a grace)
+    /// hides the bar.
+    private var documentGeneration = 0
+    private var documentSentState = false
+    /// Hosts that already have the document-start script.
+    private var tabBarScriptHosts = Set<String>()
+    private var pushedTabBarHeight: CGFloat?
+
     /// DEBUG only: `-BurrowLoginProbe <host>` loads that host's `/auth/login`
     /// with no navigation policy at all, to measure a plain in-WKWebView
     /// pocket-id login (README, Login).
@@ -92,6 +105,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         cover.isHidden = true
         webView.addSubview(cover)
+        installTabBar()
+        webView.configuration.userContentController.add(
+            WeakScriptMessageHandler(self), name: NativeTabBarDocument.messageName)
 
         refresh.tintColor = BurrowColor.onSurface.uiColor
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
@@ -105,6 +121,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 self?.refresh.endRefreshing()
                 self?.syncStatusBarWithWebTheme()
                 self?.uncoverIfOnCurrentInstall(webView.url)
+                self?.hideTabBarUnlessDocumentSendsState()
             }
         }
 
@@ -165,6 +182,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         #if DEBUG
             DebugVoIPSeam.applyLaunchArgument()
             if startMeetingProbe() { return }
+            if startTabBarFixture() { return }
         #endif
 
         if let host = loginProbeHost {
@@ -264,6 +282,121 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         }
     #endif
 
+    // MARK: Native tab bar (task 01a1557b)
+
+    private func installTabBar() {
+        guard tabBarHost == nil else { return }
+        let host = NativeTabBarFactory.make()
+        host.install(in: self)
+        host.onTap = { [weak self] key in self?.tabTapped(key) }
+        host.render(tabBarState)
+        tabBarHost = host
+    }
+
+    /// `SuiteNative.tabBarState` from the web.
+    func applyTabBarState(_ payload: [String: Any]) {
+        documentSentState = true
+        tabBarState = tabBarState.applying(payload)
+        tabBarHost?.render(tabBarState)
+        #if DEBUG
+            reportTabBarFixture()
+        #endif
+    }
+
+    /// A tap: `burrowNativeTab` with `{key, reselect}`. Tapping the selected
+    /// tab is a reselect; the web decides what that does.
+    private func tabTapped(_ key: String) {
+        let detail: [String: Any] = ["key": key, "reselect": tabBarState.isReselect(key)]
+        guard let data = try? JSONSerialization.data(withJSONObject: ["detail": detail]), let json = String(data: data, encoding: .utf8) else { return }
+        bridge?.triggerWindowJSEvent(eventName: NativeTabBarDocument.tapEvent, data: json)
+    }
+
+    /// The document-start script for `host`: marks `<html data-native-tab-bar>`
+    /// and sets `--native-tab-bar-height` on that host's pages only. Added
+    /// once per host; each copy checks its own host.
+    private func addTabBarScript(host: String) {
+        let key = host.lowercased()
+        guard let webView, tabBarScriptHosts.insert(key).inserted else { return }
+        let script = WKUserScript(
+            source: NativeTabBarDocument.script(host: key, height: currentTabBarHeight()),
+            injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        webView.configuration.userContentController.addUserScript(script)
+    }
+
+    /// A new main-frame document started (any host).
+    fileprivate func tabBarDocumentStarted() {
+        documentGeneration += 1
+        documentSentState = false
+        pushedTabBarHeight = nil
+        pushTabBarHeight()
+    }
+
+    /// didFinish: a document that has sent no state after the LiveView
+    /// connect grace (sign-in, guest pages, pages with no rail) hides the bar.
+    /// A document that does send one keeps it, with no hide/show blink.
+    private func hideTabBarUnlessDocumentSendsState() {
+        let generation = documentGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + NativeTabBarDocument.stateGrace) { [weak self] in
+            guard let self, self.documentGeneration == generation, !self.documentSentState, self.tabBarState.visible else { return }
+            self.tabBarState.visible = false
+            self.tabBarHost?.render(self.tabBarState)
+            #if DEBUG
+                self.reportTabBarFixture()
+            #endif
+        }
+    }
+
+    private func currentTabBarHeight() -> CGFloat {
+        guard let bar = tabBarHost?.bar else { return 0 }
+        return NativeTabBarFactory.heightAboveSafeArea(barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom)
+    }
+
+    /// Keeps `--native-tab-bar-height` current on layout and rotation.
+    private func pushTabBarHeight() {
+        let height = currentTabBarHeight()
+        guard height > 0, height != pushedTabBarHeight else { return }
+        pushedTabBarHeight = height
+        webView?.evaluateJavaScript(NativeTabBarDocument.heightUpdate(height))
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        pushTabBarHeight()
+    }
+
+    #if DEBUG
+        /// DEBUG only: `-BurrowTabBarFixture YES` loads the bundled
+        /// `tabbar-fixture.html` (a fake web side) in place of an install,
+        /// under the native tab bar. `-BurrowTabBarFixtureAppearance
+        /// light|dark` pins the appearance for screenshots.
+        private func startTabBarFixture() -> Bool {
+            let defaults = UserDefaults.standard
+            guard defaults.string(forKey: "BurrowTabBarFixture") != nil else { return false }
+            switch defaults.string(forKey: "BurrowTabBarFixtureAppearance") {
+            case "dark": view.window?.overrideUserInterfaceStyle = .dark
+            case "light": view.window?.overrideUserInterfaceStyle = .light
+            default: break
+            }
+            guard let base = bridge?.config.serverURL else { return true }
+            view.layoutIfNeeded()
+            addTabBarScript(host: base.host ?? "localhost")
+            webView?.load(URLRequest(url: base.appendingPathComponent("tabbar-fixture.html")))
+            return true
+        }
+
+        /// Hands the fixture page the probe of what the system drew.
+        private func reportTabBarFixture() {
+            guard UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil, let host = tabBarHost, let root = webView else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                var report = NativeTabBarProbe.report(bar: host.bar, root: root)
+                report["hosting"] = "standalone"
+                report["rendered"] = NativeTabBarProbe.rendered(bar: host.bar, keys: host.renderedKeys)
+                guard let data = try? JSONSerialization.data(withJSONObject: report), let json = String(data: data, encoding: .utf8) else { return }
+                self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))")
+            }
+        }
+    #endif
+
     // MARK: Install lifecycle
 
     /// Loads an install. With a bearer in the Keychain the web view is
@@ -279,6 +412,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         currentInstall = install
         signingOutHost = nil
         policy = NavigationPolicy(installHost: install.host)
+        addTabBarScript(host: install.host)
         let switched = store.selectedHost != install.host
         store.select(install.host)
         store.confirmSelection()
@@ -476,5 +610,55 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         syncStatusBarWithWebTheme()
+    }
+}
+
+// MARK: Native tab bar document contract (task 01a1557b)
+
+/// The strings the web side matches (clients/ios/README.md, "Native tab bar").
+enum NativeTabBarDocument {
+    static let attribute = "data-native-tab-bar"
+    static let heightVariable = "--native-tab-bar-height"
+    static let tapEvent = "burrowNativeTab"
+    static let messageName = "burrowNativeDocument"
+    /// After didFinish, how long a new document has to send its first
+    /// `tabBarState` (the LiveView connect) before the bar hides.
+    static let stateGrace: TimeInterval = 2.5
+
+    /// Runs at document start in every main frame: pings native that a new
+    /// document began, then marks the page only when it is on `host`.
+    static func script(host: String, height: CGFloat) -> String {
+        let literal = (try? JSONSerialization.data(withJSONObject: [host])).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        return """
+            (function () {
+              try { window.webkit.messageHandlers.\(messageName).postMessage(1); } catch (e) {}
+              if (location.host.toLowerCase() !== \(literal)[0]) return;
+              var root = document.documentElement;
+              root.setAttribute("\(attribute)", "");
+              root.style.setProperty("\(heightVariable)", "\(Int(height))px");
+            })();
+            """
+    }
+
+    /// Updates the variable on a page that carries the attribute.
+    static func heightUpdate(_ height: CGFloat) -> String {
+        """
+        (function (root) {
+          if (root && root.hasAttribute("\(attribute)")) root.style.setProperty("\(heightVariable)", "\(Int(height))px");
+        })(document.documentElement);
+        """
+    }
+}
+
+/// Holds the shell weakly, so the user content controller does not retain it.
+@MainActor
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var shell: BurrowBridgeViewController?
+
+    init(_ shell: BurrowBridgeViewController) { self.shell = shell }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame else { return }
+        shell?.tabBarDocumentStarted()
     }
 }

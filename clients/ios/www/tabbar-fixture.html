@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tab bar fixture</title>
+    <!-- DEBUG fixture (task 01a1557b): a fake web side for the native tab
+         bar, loaded only by a Debug build launched with -BurrowTabBarFixture.
+         Buttons send SuiteNative.tabBarState ({items, selected, more_dot,
+         visible}); every burrowNativeTab event is written into #events.
+         ?mode=silent is a document that never sends a state (the bar must
+         hide after didFinish); ?mode=auto sends one on load (it must stay). Rows under the bar give the glass something
+         to refract. -->
+    <style>
+      :root { color-scheme: light dark; --ink: #221f1b; --ground: #fbfaf9; --edge: #d9d3c9; }
+      @media (prefers-color-scheme: dark) { :root { --ink: #eeeff1; --ground: #191b20; --edge: #383b42; } }
+      html, body { margin: 0; background: var(--ground); color: var(--ink); font: 16px -apple-system, system-ui, sans-serif; }
+      main { padding: calc(env(safe-area-inset-top) + 12px) 16px 160px; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+      button { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--edge); background: transparent; color: var(--ink); }
+      #events { margin: 0 0 12px; padding-left: 20px; min-height: 24px; }
+      #native { font: 11px ui-monospace, monospace; white-space: pre-wrap; margin: 0 0 12px; }
+      .row { height: 64px; margin: 8px 0; border-radius: 12px; display: flex; align-items: center; padding: 0 16px; color: #fff; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Tab bar fixture</h1>
+      <div class="controls">
+        <button data-state='{"items":["chat","voice","tasks","meetings","more"],"selected":"chat","more_dot":true,"visible":true}'>Chat, dot on</button>
+        <button data-state='{"selected":"tasks"}'>Select tasks</button>
+        <button data-state='{"selected":null}'>Select none</button>
+        <button data-state='{"more_dot":true}'>Dot on</button>
+        <button data-state='{"more_dot":false}'>Dot off</button>
+        <button data-state='{"visible":false}'>Hide bar</button>
+        <button data-state='{"visible":true}'>Show bar</button>
+        <button data-state='{"items":["more","meetings","tasks","voice","chat"]}'>Reorder</button>
+        <button data-state='{"items":["chat","games","voice","tasks","meetings","more"]}'>Unknown key</button>
+        <button data-state='{"items":[],"selected":"chat"}'>Empty items</button>
+        <button data-state='{"selected":"voice","more_dot":true}'>No items field</button>
+        <a href="tabbar-fixture.html?mode=silent">Silent page</a>
+        <a href="tabbar-fixture.html?mode=auto">Stateful page</a>
+      </div>
+      <p id="plugin">plugin: checking</p>
+      <ol id="events"></ol>
+      <p id="doc">doc: checking</p>
+      <p id="viewport">viewport: checking</p>
+      <p id="rendered">rendered: waiting for the first state</p>
+      <p id="glass">glass: waiting for the first state</p>
+      <div id="rows"></div>
+      <pre id="native"></pre>
+    </main>
+    <script>
+      (function () {
+        var colours = ["#ad4b07", "#0e7382", "#635b53", "#f1383e", "#221f1b", "#f47721", "#22d3ee"];
+        var rows = document.getElementById("rows");
+        for (var i = 0; i < 28; i++) {
+          var row = document.createElement("div");
+          row.className = "row";
+          row.style.background = colours[i % colours.length];
+          row.textContent = "Row " + (i + 1);
+          rows.appendChild(row);
+        }
+
+        function plugin() {
+          var cap = window.Capacitor;
+          return cap && cap.Plugins && (cap.Plugins.BurrowNative || cap.Plugins.SuiteNative);
+        }
+        var p = plugin();
+        document.getElementById("plugin").textContent =
+          "plugin: " + (p && typeof p.tabBarState === "function" ? "tabBarState present" : "tabBarState missing");
+
+        function docLine() {
+          var root = document.documentElement;
+          var height = getComputedStyle(root).getPropertyValue("--native-tab-bar-height").trim() || "unset";
+          document.getElementById("doc").textContent =
+            "doc: attr=" + root.hasAttribute("data-native-tab-bar") + " height=" + height;
+        }
+        docLine();
+
+        // The web hook's desktop breakpoint (native_tab_bar.js DESKTOP_QUERY):
+        // at or past it the web shows its rail and keeps the native bar hidden.
+        function viewportLine() {
+          document.getElementById("viewport").textContent =
+            "viewport: width=" + window.innerWidth + " desktop=" + window.matchMedia("(min-width: 1024px)").matches;
+        }
+        viewportLine();
+        window.addEventListener("resize", viewportLine);
+
+        var mode = (location.search.match(/mode=(\w+)/) || [])[1] || "buttons";
+        if (mode === "auto" && p && typeof p.tabBarState === "function") {
+          p.tabBarState({ items: ["chat", "voice", "tasks", "meetings", "more"], selected: "tasks", more_dot: false, visible: true })
+            .catch(function () {});
+        }
+        var modeLine = document.createElement("p");
+        modeLine.textContent = "mode: " + mode;
+        document.querySelector("main").insertBefore(modeLine, document.getElementById("plugin"));
+
+        document.querySelectorAll("button[data-state]").forEach(function (button) {
+          button.addEventListener("click", function () {
+            var target = plugin();
+            if (!target || typeof target.tabBarState !== "function") return;
+            target.tabBarState(JSON.parse(button.getAttribute("data-state"))).catch(function () {});
+          });
+        });
+
+        window.addEventListener("burrowNativeTab", function (event) {
+          var detail = event.detail || {};
+          var item = document.createElement("li");
+          item.textContent = detail.key + " reselect=" + (detail.reselect === true);
+          document.getElementById("events").appendChild(item);
+        });
+
+        // DEBUG probe from BurrowBridgeViewController.reportTabBarFixture.
+        window.burrowFixtureNative = function (report) {
+          docLine();
+          document.getElementById("rendered").textContent = "rendered: " + report.rendered;
+          document.getElementById("glass").textContent =
+            "glass: hosting=" + report.hosting + " effect=" + report.glass_effect + " class=" + report.glass_class +
+            " floating=" + report.floating + " platter=" + report.platter + " bar=" + report.bar + " os=" + report.os;
+          document.getElementById("native").textContent = report.tree;
+        };
+      })();
+    </script>
+  </body>
+</html>

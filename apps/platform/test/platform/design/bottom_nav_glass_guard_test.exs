@@ -119,6 +119,8 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {[], ".bottom-nav"},
     {[], Enum.map_join(@hide_selectors, ", ", &(&1 <> " .bottom-nav"))},
     {[], ":root:has(#more-sheet.sheet-open) .bottom-nav"},
+    # Task 01a1557b stage 3: inside the iOS app the native tab bar replaces it.
+    {[], ":root[data-native-tab-bar] .bottom-nav"},
     {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav"},
     {[], ~s([data-preset="high-contrast"] .bottom-nav)},
     {["@media (prefers-reduced-transparency: reduce)"], ".bottom-nav"},
@@ -499,7 +501,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
 
     test "exactly the three hide selectors zero the clearance and hide the bar", %{rules: rules} do
       zeroing = Enum.filter(rules, &(declaration(&1.body, "--bottom-nav-height") == "0px"))
-      [token_rule] = Enum.filter(zeroing, &(&1.selector =~ ":has("))
+      [token_rule] = Enum.filter(zeroing, &(&1.selector =~ ":has(" and &1.context == []))
 
       assert token_rule.context == []
       assert split_selectors(token_rule.selector) == @hide_selectors
@@ -522,6 +524,32 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       bar = top_level_body!(rules, ".bottom-nav")
       transition = normalise(declaration(bar, "transition"))
       assert transition =~ "transform 150ms" and transition =~ "opacity 150ms"
+    end
+
+    # Task 01a1557b stage 3: inside the iOS app the clearance follows
+    # --native-tab-bar-height at (0,3,0), which ties or beats the viewer and
+    # in-call hide rules above (0,2,0). The same three hide selectors are
+    # restated under the native attribute so the clearance still drops to 0.
+    test "the native tab bar's clearance and its restated hide rules", %{rules: rules} do
+      native = ":root[data-native-tab-bar]:has([data-bottom-rail])"
+      phone = ["@media (max-width: 1023.98px)"]
+
+      [clearance] = Enum.filter(rules, &(&1.selector == native and &1.context == phone))
+
+      assert normalise(declaration(clearance.body, "--bottom-nav-height")) =~
+               "var(--native-tab-bar-height"
+
+      [restated] =
+        Enum.filter(
+          rules,
+          &(&1.context == phone and &1.selector =~ native and
+              declaration(&1.body, "--bottom-nav-height") == "0px")
+        )
+
+      assert split_selectors(restated.selector) ==
+               Enum.map(@hide_selectors, &String.replace(&1, ":root", native, global: false))
+
+      assert declaration(restated.body, "--bottom-nav-gap") == "0px"
     end
 
     test "no rule hides the bar or zeroes its clearance on scroll", %{rules: rules} do

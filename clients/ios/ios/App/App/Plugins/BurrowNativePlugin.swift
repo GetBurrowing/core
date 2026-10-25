@@ -339,6 +339,7 @@ public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "switchInstall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "donate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "installBadges", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "tabBarState", returnType: CAPPluginReturnPromise),
     ]
 
     /// The shell's navigation policy, consulted for every web view
@@ -421,6 +422,17 @@ public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
     /// contract owned by stage 3). Re-asked on `burrowInstallBadges`.
     @objc func installBadges(_ call: CAPPluginCall) {
         call.resolve(["others_unread": Self.othersUnread()])
+    }
+
+    /// `{items, selected, more_dot, visible}` for the native tab bar (task
+    /// 01a1557b). Missing or malformed fields leave the bar's state unchanged;
+    /// see `NativeTabBarState.applying`.
+    @objc func tabBarState(_ call: CAPPluginCall) {
+        let payload = Dictionary(uniqueKeysWithValues: call.options.compactMap { key, value in (key as? String).map { ($0, value) } })
+        DispatchQueue.main.async {
+            self.shell?.applyTabBarState(payload)
+            call.resolve()
+        }
     }
 
     static func othersUnread(store: InstallUnreadStore = .shared, selectedHost: String? = InstallStore.shared.selectedHost) -> Bool {

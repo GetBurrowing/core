@@ -9,6 +9,10 @@ options:
     iOS: "17.0"
   developmentLanguage: en
   createIntermediateGroups: true
+  # No xcodegen setting presets: every default is spelled out under
+  # settings.base, so a Homebrew xcodegen (CI) and one without its presets
+  # (the mac host) generate the same project.
+  settingPresets: none
 
 packages:
   CapApp-SPM:
@@ -257,6 +261,21 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.evidence
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_TARGET_NAME: App
+  # The native tab bar on the -BurrowTabBarFixture page (task 01a1557b).
+  # An assertion suite in the App scheme; also writes the spike PNGs to
+  # TEST_RUNNER_EVIDENCE_DIR.
+  TabBarUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: TabBarUITests
+    dependencies:
+      - target: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.tabbaruitests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: App
 
   # iOS 27 messages domain through AppIntentsTesting (task 01a111bb). Its own
   # target and scheme because AppIntentsTesting is iOS 27 only, and the App
@@ -284,9 +303,11 @@ schemes:
       targets:
         App: all
         AppTests: [test]
+        TabBarUITests: [test]
     test:
       targets:
         - AppTests
+        - TabBarUITests
       gatherCoverageData: false
     run:
       config: Debug

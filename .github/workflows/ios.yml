@@ -1,0 +1,142 @@
+# iOS shell build and tests on a GitHub-hosted macOS runner (task 01a1557b).
+# Unsigned (CODE_SIGNING_ALLOWED=NO): no secrets, team IDs or identities.
+# Suites that need a signed entitlement (Keychain access group, App Group)
+# cannot run here; they are skipped by name below and listed in
+# clients/ios/README.md ("Native tab bar", CI).
+name: iOS
+
+on:
+  push:
+    branches: [main, "task/**"]
+    paths:
+      - "clients/ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Xcode 27 image: the App target compiles iOS 27 SDK symbols behind
+    # #available, which the Xcode 26 images cannot build.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    # The App scheme on an iPhone and on a 13-inch iPad (1032pt portrait:
+    # past the web's 1024px desktop breakpoint, where the web shows its rail
+    # and keeps the native bar hidden).
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iphone, ipad]
+    defaults:
+      run:
+        working-directory: clients/ios
+    env:
+      OUT: ${{ github.workspace }}/ios-out
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          mkdir -p "$OUT/shots"
+
+      - name: npm ci and cap sync
+        run: |
+          npm ci
+          npx cap sync ios
+
+      - name: xcodegen generate
+        working-directory: clients/ios/ios/App
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          git diff --stat -- App.xcodeproj || true
+          cp App.xcodeproj/project.pbxproj "$OUT/project.pbxproj"
+
+      # A fresh iPhone N Pro (or 13-inch iPad Pro) on the newest iOS runtime
+      # that has one. Created rather than picked: the image's iOS 27.1
+      # runtime ships only a foldable, whose width gives UITabBarController
+      # a sidebar layout.
+      - name: Create a ${{ matrix.device }} simulator on the newest iOS runtime
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          xcrun simctl list devicetypes | grep -iE 'iphone|ipad'
+          read -r RUNTIME DEVTYPE < <(xcrun simctl list -j runtimes devicetypes | python3 -c '
+          import json, os, re, sys
+          data = json.load(sys.stdin)
+          rts = [r for r in data["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
+          ipad = os.environ["DEVICE"] == "ipad"
+          def rank(t):
+              if ipad:
+                  m = re.search(r"iPad-Pro-13-inch-M(\d+)", t)
+              else:
+                  m = re.search(r"iPhone-(\d+)-Pro$", t)
+              return int(m.group(1)) if m else -1
+          # Newest runtime that runs a numbered model of the kind (a point
+          # release can ship for one new model only).
+          for rt in sorted(rts, key=lambda r: tuple(int(p) for p in r["version"].split(".")), reverse=True):
+              supported = [d["identifier"] for d in rt.get("supportedDeviceTypes", [])]
+              best = max(supported, key=rank, default=None)
+              if best and rank(best) > 0:
+                  break
+          print(rt["identifier"], best)
+          ')
+          echo "runtime=$RUNTIME devicetype=$DEVTYPE"
+          UDID=$(xcrun simctl create "CI $DEVICE" "$DEVTYPE" "$RUNTIME")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+
+      # Unsigned, $(AppIdentifierPrefix) is empty; a placeholder keeps the
+      # Info.plist keychain group well formed (KeychainTokenStore asserts on
+      # it). The entitlement itself is still absent, so the ten tests that
+      # need a real Keychain access group (or the team prefix) are skipped
+      # below; README "Native tab bar" lists them. They run on the mac host.
+      - name: App scheme (AppTests + TabBarUITests)
+        working-directory: clients/ios/ios/App
+        env:
+          TEST_RUNNER_EVIDENCE_DIR: ${{ github.workspace }}/ios-out/shots
+        run: |
+          set -o pipefail
+          xcodebuild test -project App.xcodeproj -scheme App \
+            -destination "id=$UDID" \
+            -resultBundlePath "$OUT/App.xcresult" \
+            CODE_SIGNING_ALLOWED=NO AppIdentifierPrefix=UNSIGNED. \
+            -skip-testing:AppTests/KeychainTokenStoreTests/testAccessGroupIsTheTeamPrefixedSharedGroup \
+            -skip-testing:AppTests/KeychainTokenStoreTests/testOneSessionPerHost \
+            -skip-testing:AppTests/KeychainTokenStoreTests/testStoringATokenWritesNothingToTheAppGroupDefaults \
+            -skip-testing:AppTests/InstallSessionTests/testHandoffOnAnotherHostIsRefused \
+            -skip-testing:AppTests/InstallSessionTests/testRevokedBearerFallsBackToSignInAndIsRemoved \
+            -skip-testing:AppTests/InstallSessionTests/testSignOutDeletesTheDeviceThenTheSessionAndForgetsTheBearer \
+            -skip-testing:AppTests/InstallSessionTests/testSignOutForgetsTheBearerEvenWhenTheServerFails \
+            -skip-testing:AppTests/InstallSessionTests/testStoredBearerLoadsTheHandoffWithoutTheAuthSession \
+            -skip-testing:AppTests/PushRelayTests/testNativeSignOutForgetsThePushKey \
+            -skip-testing:AppTests/PushRelayTests/testOneKeyPerHostInTheSharedKeychainAndSignOutDeletesIt \
+            2>&1 | tee "$OUT/app-tests.log" | grep -E '^(Test Suite|Test Case .*(failed|skipped)|.*error:|\*\* )|Assertion|Fatal'
+
+      - name: Summaries
+        if: always()
+        run: |
+          for r in "$OUT"/*.xcresult; do
+            [ -d "$r" ] || continue
+            echo "== $r"
+            xcrun xcresulttool get test-results summary --path "$r" | tee "${r%.xcresult}-summary.json" || true
+            xcrun xcresulttool get test-results tests --path "$r" > "${r%.xcresult}-tests.json" || true
+            mkdir -p "${r%.xcresult}-attachments"
+            xcrun xcresulttool export attachments --path "$r" --output-path "${r%.xcresult}-attachments" || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-${{ matrix.device }}-${{ github.sha }}
+          path: ios-out
+          if-no-files-found: warn

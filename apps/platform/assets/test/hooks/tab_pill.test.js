@@ -271,3 +271,46 @@ describe("taps", () => {
     expect(tabs[2].classList.contains(PRESS_CLASS)).toBe(false)
   })
 })
+
+// Inside the iOS app with the native tab bar, #bottom-nav is display:none
+// (task 01a1557b stage 3), so every tab reports zero geometry. The pill must
+// stay hidden and nothing may throw or animate, on mount, on a resumed tap
+// and on a sync.
+describe("hidden nav (native tab bar)", () => {
+  function zeroRects(tabs) {
+    for (const t of tabs) {
+      t.offsetLeft = 0
+      t.offsetWidth = 0
+    }
+  }
+
+  it("zero rects: no throw, no animation, pill hidden", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000)
+    const win = fakeWin()
+    win.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ from: 0, to: 2, at: 9_900 }))
+
+    const tabs = [0, 1, 2, 3].map((i) => fakeTab(i, { active: i === 2, href: i < 3 }))
+    zeroRects(tabs)
+    const pill = fakePill()
+    const el = {
+      querySelector: (sel) => (sel === "[data-tab-pill]" ? pill : null),
+      querySelectorAll: () => tabs,
+      contains: () => true,
+      addEventListener: () => {},
+    }
+    const hook = Object.create(TabPill)
+    hook.el = el
+    hook.win = win
+
+    expect(() => hook.mounted()).not.toThrow()
+    expect(pill.animate).not.toHaveBeenCalled()
+    expect(pill.style.opacity).toBe("0")
+
+    tabs[2].classList.remove("bottom-nav-tab--active")
+    tabs[0].classList.add("bottom-nav-tab--active")
+    expect(() => hook.updated()).not.toThrow()
+    expect(pill.animate).not.toHaveBeenCalled()
+    expect(pill.style.opacity).toBe("0")
+  })
+})

@@ -149,6 +149,13 @@ defmodule Platform.ProductNameGuardTest do
     {"#{@ios}/App/App/Plugins/BurrowNativePlugin.swift", ~s(jsName = "SuiteNative"),
      @plugin_wire},
     {"#{@ios}/App/App/Plugins/BurrowNativePlugin.swift", "`SuiteNative`", @plugin_wire},
+    # Task 01a1557b stage 2: the native tab bar's doc comments name the wire method.
+    {"#{@ios}/App/App/BurrowBridgeViewController.swift", "`SuiteNative.tabBarState`",
+     @plugin_wire},
+    {"#{@ios}/App/App/NativeTabBar.swift", "`SuiteNative.tabBarState`", @plugin_wire},
+    # Task 01a1557b stage 4: the contract scan asserts the hook's plugin lookup.
+    {"#{@ios}/App/AppTests/NativeTabBarContractTests.swift", "cap.Plugins?.SuiteNative",
+     @plugin_wire},
     {"#{@ios}/App/App/Plugins/BurrowMeetingsPlugin.swift", ~s(jsName = "SuiteMeetings"),
      @plugin_wire},
     {"#{@ios}/App/App/Plugins/BurrowMeetingsPlugin.swift", "`SuiteMeetings`", @plugin_wire},

@@ -271,6 +271,11 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       '[data-preset="high-contrast"] .chat-dock--glass > [data-role="typing-indicator"]',
       "#chat-drop-zone:has(> .chat-dock--glass) #message-list",
       ":root:has([data-bottom-rail])",
+      // Task 01a1557b stage 3: inside the iOS app the clearance tracks the
+      // native tab bar, and the hide rules restate the drop to 0. Still the
+      // bottom nav's clearance, still no `.chat-jump` selector.
+      ":root[data-native-tab-bar]:has([data-bottom-rail])",
+      ':root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call])',
       ".compose-input-area",
       ".sheet-panel .compose-input-area",
       ".clears-tab-bar",

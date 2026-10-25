@@ -1,0 +1,104 @@
+defmodule PlatformWeb.NativeTabBridgeTest do
+  @moduledoc """
+  The `#native-tab-bridge` span inside `bottom_rail/1` (task 01a1557b stage 3):
+  the NativeTabBar hook reads it to drive the iOS app's native tab bar. These
+  check that the shell renders it with the attributes the bar itself shows.
+  """
+  use PlatformWeb.ConnCase, async: false
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+
+  alias Platform.Accounts.User
+  alias Platform.Inbox
+  alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
+  alias PlatformWeb.Components.IconRail
+
+  @bridge "#bottom-nav #native-tab-bridge[phx-hook='NativeTabBar'][hidden]"
+  @more ~s([data-bottom-rail] button[data-destination="more"])
+
+  defp authenticated_conn(conn) do
+    user =
+      Repo.insert!(%User{
+        email: "native_tab_#{System.unique_integer([:positive])}@example.com",
+        name: "Native Tab Test User",
+        oidc_sub: "oidc-native-tab-#{System.unique_integer([:positive])}"
+      })
+
+    acme = Tenancy.get_org_by_slug!("acme")
+    Repo.insert!(%OrgMembership{user_id: user.id, org_id: acme.id, role: "admin"})
+    init_test_session(conn, current_user_id: user.id)
+  end
+
+  defp items_attr(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("#native-tab-bridge")
+    |> LazyHTML.attribute("data-items")
+  end
+
+  defp inbox_attrs(user_id) do
+    %{
+      user_id: user_id,
+      kind: "chat_mention",
+      source_type: "chat_message",
+      source_id: Ecto.UUID.generate(),
+      title: "You were mentioned",
+      body: "…",
+      url: "/chat/x"
+    }
+  end
+
+  test "data-items is mobile_tab_keys/0 then more, in order" do
+    assigns = %{}
+
+    html =
+      rendered_to_string(~H"""
+      <IconRail.bottom_rail current_path="/chat" />
+      """)
+
+    expected = Enum.map_join(IconRail.mobile_tab_keys(), ",", &to_string/1) <> ",more"
+    assert items_attr(html) == [expected]
+    assert expected == "chat,voice,tasks,meetings,more"
+  end
+
+  test "/chat selects chat, More closed, no unread", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/chat")
+
+    assert has_element?(view, @bridge)
+    assert has_element?(view, "#native-tab-bridge[data-items='chat,voice,tasks,meetings,more']")
+    assert has_element?(view, "#native-tab-bridge[data-active-key='chat']")
+    assert has_element?(view, "#native-tab-bridge[data-more-open='false']")
+    assert has_element?(view, "#native-tab-bridge[data-more-unread='false']")
+  end
+
+  test "/tasks selects tasks", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
+    assert has_element?(view, "#native-tab-bridge[data-active-key='tasks']")
+  end
+
+  test "More open selects more and sets data-more-open, and closing restores", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
+
+    view |> element(@more) |> render_click()
+    assert has_element?(view, "#native-tab-bridge[data-active-key='more'][data-more-open='true']")
+
+    view |> element(@more) |> render_click()
+
+    assert has_element?(
+             view,
+             "#native-tab-bridge[data-active-key='tasks'][data-more-open='false']"
+           )
+  end
+
+  test "inbox unread above 0 sets data-more-unread true", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    user_id = conn.private.plug_session["current_user_id"]
+    {:ok, _} = Inbox.emit(inbox_attrs(user_id))
+
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+    assert has_element?(view, "#native-tab-bridge[data-more-unread='true']")
+    refute has_element?(view, "#native-tab-bridge[data-more-unread='false']")
+  end
+end

@@ -213,6 +213,9 @@ const TabPill = {
     const start = geometryFor(tabsOf(this.el)[from])
     const end = geometryFor(tabsOf(this.el)[this.index])
     if (!start || !end || typeof pill.animate !== "function") return
+    // A hidden bar (display:none inside the iOS app's native tab bar, task
+    // 01a1557b stage 3) has zero geometry: nothing to slide.
+    if (start.w === 0 || end.w === 0) return
 
     const slides = [
       pill.animate(

@@ -153,6 +153,21 @@ defmodule PlatformWeb.Components.IconRail do
         <span class="bottom-nav-label">More</span>
         <span :if={@more_unread?} class="bottom-nav-dot" data-role="more-unread-dot"></span>
       </button>
+
+      <%!-- Bridge to the iOS app's native tab bar (task 01a1557b stage 3, the
+           NativeTabBar hook). Inert outside a native build that has the bar.
+           data-items is the bar's own tab keys in order, More last, so native
+           draws exactly what this bar draws. --%>
+      <span
+        id="native-tab-bridge"
+        phx-hook="NativeTabBar"
+        hidden
+        data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
+        data-active-key={@active_key}
+        data-more-unread={to_string(@more_unread?)}
+        data-more-open={to_string(@more_open)}
+      >
+      </span>
     </nav>
     """
   end

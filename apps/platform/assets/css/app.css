@@ -5031,6 +5031,35 @@ body, .font-suite {
   z-index: 110;
 }
 
+/* Inside the iOS app with the native tab bar (task 01a1557b stage 3). The
+   app's document-start script sets <html data-native-tab-bar> and
+   --native-tab-bar-height (the native bar's height above the safe area, the
+   same meaning --bottom-nav-height has here). The web bar never paints, and
+   every --bottom-nav-clearance consumer clears the native glass instead.
+   Self-contained: without the attribute none of this applies.
+
+   Specificity: the clearance rule is (0,3,0), so it beats the phone-width
+   :root:has([data-bottom-rail]) (0,2,0) wherever it sits. The three hide
+   rules above are (0,3,0) for the composer but only (0,2,0) for the viewer
+   and the in-call room, so they would LOSE to it; they are restated here at
+   (0,4,0) and (0,5,0) to drop the clearance to 0 again. */
+:root[data-native-tab-bar] .bottom-nav {
+  display: none;
+}
+
+@media (max-width: 1023.98px) {
+  :root[data-native-tab-bar]:has([data-bottom-rail]) {
+    --bottom-nav-height: var(--native-tab-bar-height, 0px);
+  }
+
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]) {
+    --bottom-nav-height: 0px;
+    --bottom-nav-gap: 0px;
+  }
+}
+
 /* The composer's ＋ sheet (redesign rung 11): base-200, the composer's and
    the tab bar's fill (direction canvas 01a16558 m1); its rows and tiles are
    base-100 on it. */

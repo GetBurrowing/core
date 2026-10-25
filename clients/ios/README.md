@@ -59,6 +59,130 @@ create or edit with `xcrun swift-format lint --strict <file>` from
 `clients/ios` (config: `.swift-format`, 4-space indent, 160 columns); do not
 reformat files you did not touch.
 
+## Native tab bar
+
+The app's bottom tabs (Chat, Voice, Tasks, Meetings, More) are the system's
+own `UITabBar` over the web view, so iOS 26+ draws real Liquid Glass (task
+01a1557b; design direction canvas 01a1724a). Code: `ios/App/App/NativeTabBar.swift`.
+The web drives it through `SuiteNative.tabBarState`, and taps come back as the
+window event `burrowNativeTab`.
+
+**Contract (stage 2).**
+
+- Web to native: `SuiteNative.tabBarState({items, selected, more_dot, visible})`.
+  `items` is the list of tab keys in the web bar's order. Native holds only
+  a key to {label, SF Symbol pair} map for `chat`, `voice`, `tasks`,
+  `meetings` and `more`. It draws exactly the keys sent, in order, drops
+  unknown or repeated keys, and keeps the first five (logging the cut), so
+  iOS never adds its own More. A missing or empty `items`, or one with no
+  known key, keeps the previous items. Native never invents a tab: with no
+  items yet, the bar stays hidden. `selected` is a key or `null`; `more_dot`
+  shows the system red dot (badge `""`) on More; `visible` slides the bar
+  out and back. A missing or wrong-typed field leaves that field as it was.
+  The method's existence is the web's feature test; old builds keep the web bar.
+- Native to web: window event `burrowNativeTab`, `detail: {key, reselect}`.
+  `reselect` is true when the tapped key is the selected one. A tap never
+  moves the selection; the web's next state does.
+- Document start: a main-frame `WKUserScript` per install host sets
+  `<html data-native-tab-bar>` and `--native-tab-bar-height` (the bar's
+  height above the bottom safe area, 49px on an iPhone 18 Pro on iOS 27:
+  the glass platter is 62pt but floats down into the safe area). The shell
+  updates the variable on layout and rotation. The same script pings native
+  (`burrowNativeDocument`) on every new document; a document that sends no
+  state within 2.5s of didFinish hides the bar.
+- Minimise on scroll is not wired: a standalone `UITabBar` has no
+  minimise behaviour (that API is on `UITabBarController`).
+
+**Web side (stage 3).** `apps/platform/assets/js/hooks/native_tab_bar.js`
+(the `NativeTabBar` hook) mounts on `#native-tab-bridge`, a hidden span in
+the web bar (`IconRail.bottom_rail/1`). The items are
+`IconRail.mobile_tab_keys/0 ++ [:more]` (`chat,voice,tasks,meetings,more`),
+sent from the span's `data-items`; `data-active-key` and
+`data-more-unread` give `selected` and `more_dot`. A tap clicks the
+matching `#bottom-nav [data-destination]` element, so it reuses the web
+bar's links and the More button. A reselect scrolls the page to the top,
+or at the top goes to the tab's root; More always toggles its sheet.
+In the app, `app.css` hides the web bar under `:root[data-native-tab-bar]`
+and pads the page with `--native-tab-bar-height`.
+
+- Hide predicate: `visible` is false wherever the web bar itself would be
+  hidden (a focused `ComposeInput`, a full-screen viewer, the in-call room),
+  at `(min-width: 1024px)` (Tailwind `lg`, where the web shows its desktop
+  rail instead: a 13-inch iPad in portrait, any iPad in landscape), and
+  while a sheet other than More is open (a native bar cannot be covered).
+  Leaving the page sends `visible: false` after a 300ms grace that a new
+  mount cancels, so switching tabs never blinks the bar.
+- Old builds: the hook is active only when `Capacitor.isNativePlatform()`,
+  the plugin has `tabBarState`, and `<html data-native-tab-bar>` is set.
+  A browser, a PWA and an app build from before the native bar fail that
+  test, so the hook does nothing and the web bar shows as before.
+- Contract tests, one per side, so a rename on either side fails CI:
+  `ios/App/AppTests/NativeTabBarContractTests.swift` reads the hook,
+  `app.css` and `icon_rail.ex` from the checkout;
+  `apps/platform/assets/test/hooks/native_tab_bar_contract.test.js` reads
+  `NativeTabBar.swift`, `BurrowBridgeViewController.swift` and
+  `Plugins/BurrowNativePlugin.swift`. The hook's behaviour is in
+  `apps/platform/assets/test/hooks/native_tab_bar.test.js`.
+
+**Fixture (Debug only).** `-BurrowTabBarFixture YES` loads the bundled
+`www/tabbar-fixture.html` in place of an install: a fake web side whose
+buttons send `tabBarState` and which lists every `burrowNativeTab` it gets.
+`-BurrowTabBarFixtureAppearance light|dark` pins the appearance. Release
+builds compile the seam out (the page itself is still bundled but nothing
+loads it). `TabBarUITests` (App scheme) drives it and writes PNGs to
+`TEST_RUNNER_EVIDENCE_DIR`.
+
+**Hosting: measured 2026-10-25, stage 1 spike.** The spike ran on the CI
+simulator, an iPhone 18 Pro on iOS 27.0 (Xcode 27.1), in light and dark. It
+compared a standalone `UITabBar` pinned to the bottom of the web view with a
+`UITabBarController` child (five empty clear pages in a touch-passthrough
+container). Both drew the same floating glass platter with nothing set:
+`_UITabBarItemPlatterView` 360x62 inset 21pt from each side, with a
+`_UILiquidLensView` under the selected tab. The standalone bar was kept
+because:
+
+- it stays a bottom bar at every width. On the image's iOS 27.1 foldable
+  (iPhone Duo, regular width) the controller became a trailing sidebar;
+- it can show no selection (`selected: null`), while the controller always
+  holds one;
+- it needs no child view controller, dummy pages or hit-test passthrough
+  over the web view.
+
+Neither hosting minimised on scroll. iOS can only minimise a bar that
+tracks a scroll view, and neither tracks the web view's. The behaviour is
+left at the system default and not asserted. On iOS 17 to 25,
+`NativeTabBarMaterial` gives both bar appearances the system default
+background (a bar with no tracked scroll view would otherwise use its
+transparent scroll-edge look). That is still the stock material.
+`NativeTabBarTests` covers both branches. No pre-26 runtime has been
+screenshotted.
+
+**CI.** `.github/workflows/ios.yml` runs on GitHub's `xcode-27` macOS image
+for pushes to `main` and `task/**` that touch `clients/ios/**`. It runs
+`npm ci`, `npx cap sync ios` and `xcodegen generate`, then runs `xcodebuild
+test -scheme App` (AppTests + TabBarUITests) twice, as a matrix: on an iPhone
+Pro and on a 13-inch iPad Pro simulator, each created on the newest iOS
+runtime that has one. On the iPad, `testViewportAgainstTheDesktopBreakpoint`
+asserts the web view is at least 1024px wide, so the web's desktop rail
+shows and the hook keeps the native bar hidden. The xcresult, the summaries, the
+PNGs and the generated `project.pbxproj` are uploaded as the run's artifact.
+It is unsigned (`CODE_SIGNING_ALLOWED=NO`, placeholder
+`AppIdentifierPrefix`), so these tests need a real Keychain access group or
+the team prefix and are skipped there. Run them on the mac host:
+
+- `KeychainTokenStoreTests`: `testAccessGroupIsTheTeamPrefixedSharedGroup`,
+  `testOneSessionPerHost`, `testStoringATokenWritesNothingToTheAppGroupDefaults`
+- `InstallSessionTests`: `testHandoffOnAnotherHostIsRefused`,
+  `testRevokedBearerFallsBackToSignInAndIsRemoved`,
+  `testSignOutDeletesTheDeviceThenTheSessionAndForgetsTheBearer`,
+  `testSignOutForgetsTheBearerEvenWhenTheServerFails`,
+  `testStoredBearerLoadsTheHandoffWithoutTheAuthSession`
+- `PushRelayTests`: `testNativeSignOutForgetsThePushKey`,
+  `testOneKeyPerHostInTheSharedKeychainAndSignOutDeletesIt`
+
+`project.yml` sets `settingPresets: none`, so CI's Homebrew xcodegen and the
+mac host's preset-less one generate the same project.
+
 ## TestFlight (mac-host only)
 
 ```bash
