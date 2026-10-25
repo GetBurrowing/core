@@ -40,7 +40,8 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
 
   ## Every input is READ OUT OF THE FILE THAT DECLARES IT
 
-    * `app.css` — the theme blocks, for every `--cc-*` and `--color-*` token,
+    * `app.css` — the theme blocks and `@theme inline`, for every `--color-*`,
+      `--edge` and `--subtle` token (rung 18 deleted the rail's `--cc-*` palette),
       and the rule bodies, for which property each selector actually uses.
     * `candidate_rail.ex` — the rail `<section>`'s own `class` attribute, for
       the ground's Tailwind alpha.
@@ -75,6 +76,7 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Design.CssRules
+  alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
   alias Platform.Meetings.MeetingCandidate
   alias PlatformWeb.Components.Meetings.CandidateRail
@@ -124,23 +126,27 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   #     decimal, so a small miss is the convention, not a bug. The converter
   #     soundness clause is the discriminator: if 21.0 / 1.0 / #FFFFFF are
   #     exact, the converter is sound and any residual gap is the convention.
+  #
+  # Rung 18 deleted the `--cc-*` palette these figures were recorded against,
+  # so the retired values are written here as the LITERALS they were
+  # (`--cc-bg-closed` #f4f5f7 light / #12151c dark, `--cc-title-dead`
+  # #767d8d, `--cc-spent-fg` the neutral-90%-white mix). The anchors still
+  # test the converter against figures this file did not write.
   @recorded_pure_hex [
-    {"--cc-title-dead on --cc-bg-closed, light", :light, "--cc-title-dead", "--cc-bg-closed",
-     3.78},
+    {"#767d8d (retired --cc-title-dead) on #f4f5f7 (retired --cc-bg-closed), light", :light,
+     "#767d8d", "#f4f5f7", 3.78},
     # Burrow (task 01a120c5): re-recorded in app.css's closed-row tables as
     # 7.0641 light (#8b3b04) and 8.7599 dark (#ff9b55). The pre-Burrow cyans
     # read 4.31 and 10.61.
-    {"--color-interactive on --cc-bg-closed, light", :light, "--color-interactive",
-     "--cc-bg-closed", 7.06},
-    {"--color-interactive on --cc-bg-closed, dark", :dark, "--color-interactive",
-     "--cc-bg-closed", 8.76}
+    {"--color-interactive on #f4f5f7, light", :light, "--color-interactive", "#f4f5f7", 7.06},
+    {"--color-interactive on #12151c, dark", :dark, "--color-interactive", "#12151c", 8.76}
   ]
 
   @recorded_conversion [
-    {"--color-neutral on --cc-bg-closed, light", :light, "--color-neutral", "--cc-bg-closed",
-     6.87},
-    {"--color-neutral on --cc-bg-closed, dark", :dark, "--color-neutral", "--cc-bg-closed", 1.99},
-    {"--cc-spent-fg on --cc-bg-closed, light", :light, "--cc-spent-fg", "--cc-bg-closed", 5.39}
+    {"--color-neutral on #f4f5f7, light", :light, "--color-neutral", "#f4f5f7", 6.87},
+    {"--color-neutral on #12151c, dark", :dark, "--color-neutral", "#12151c", 1.99},
+    {"the retired --cc-spent-fg mix on #f4f5f7, light", :light,
+     "color-mix(in oklch, var(--color-neutral) 90%, white)", "#f4f5f7", 5.39}
   ]
 
   # The three text slots on the closed disclosure, and which ground each is
@@ -295,10 +301,10 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
       # The positive half. Without this, "no opacity" is satisfied by deleting
       # the rule entirely, and the row would lose the background that is now
       # the ONLY thing making it recede.
-      assert rule =~ "var(--cc-bg-closed)",
+      assert rule =~ "background: var(--color-base-100)",
              "the closed row must keep its own background: #{inspect(rule)}"
 
-      assert rule =~ "var(--cc-border-closed)",
+      assert rule =~ "border-color: var(--edge)",
              "the closed row must keep its own border: #{inspect(rule)}"
     end
   end
@@ -357,68 +363,42 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     end
   end
 
-  # ── 5. the dark hairline must not reach for base-300 ──────────────────────
+  # ── 5. the hairline is --edge, never base-300 ─────────────────────────────
 
   describe "the outcome hairline" do
-    test "dark `--cc-outcome-bar` does not resolve to --color-base-300", ctx do
-      bar = resolve!(ctx.tokens.dark, "--cc-outcome-bar")
+    test "dark: `.candidate-drain--spent` paints --edge, which is not --color-base-300", ctx do
+      token = property_token!(ctx.css, ".candidate-drain--spent", "background")
+      assert token == "--edge"
+
+      bar = resolve!(ctx.tokens.dark, token)
       base_300 = resolve!(ctx.tokens.dark, "--color-base-300")
 
       refute W.to_hex(bar) == W.to_hex(base_300),
-             "dark --cc-outcome-bar resolves to #{W.to_hex(bar)}, the same as " <>
-               "--color-base-300. Dark base-300 is #{W.to_hex(base_300)} against a " <>
-               "#{W.to_hex(resolve!(ctx.tokens.dark, "--cc-bg-closed"))} row ground, which is " <>
-               "an INVISIBLE hairline rather than a quiet one. Dark uses --cc-border " <>
-               "instead. Do not 'fix' this by retuning --color-base-300: it does double " <>
-               "duty as a fill and lightening it to fix a line breaks the other pairing."
-
-      # The positive half: say what it IS, not only what it is not.
-      assert W.to_hex(bar) == W.to_hex(resolve!(ctx.tokens.dark, "--cc-border"))
+             "dark --edge resolves to #{W.to_hex(bar)}, the same as --color-base-300, which " <>
+               "is an INVISIBLE hairline on a base-100 card rather than a quiet one."
     end
 
-    test "the same clause is SILENT about light, where base-300 is correct", ctx do
-      # The negative control. Light --cc-outcome-bar IS --color-base-300 and
-      # that is deliberate: the bar is `aria-hidden`, carries no information,
-      # and app.css records 1.32:1 as the intended weight for it. If the clause
-      # above were written as a blanket "never base-300" it would fire here,
-      # and this test is what proves it does not.
-      bar = resolve!(ctx.tokens.light, "--cc-outcome-bar")
-      base_300 = resolve!(ctx.tokens.light, "--color-base-300")
+    test "light: the same rule reads the same token, one hairline in both themes", ctx do
+      # The negative control for the dark clause: the token is the theme's
+      # own edge, so light and dark differ in value and agree in name.
+      token = property_token!(ctx.css, ".candidate-drain--spent", "background")
+      assert token == "--edge"
 
-      assert W.to_hex(bar) == W.to_hex(base_300),
-             "light --cc-outcome-bar is expected to BE --color-base-300; if that changed, " <>
-               "this negative control no longer proves the dark clause is discriminating."
+      refute W.to_hex(resolve!(ctx.tokens.light, token)) ==
+               W.to_hex(resolve!(ctx.tokens.dark, token))
     end
   end
 
-  # ── 6. the two dark declarations must not drift apart ─────────────────────
+  # ── 6. one theme layer, no rail copies to drift ───────────────────────────
 
-  describe "the dark theme is declared twice and the copies must agree" do
-    test "[data-theme=dark] and the prefers-color-scheme block declare the same --cc-* values",
-         %{css: css} do
-      explicit = cc_block!(css, ~r/^\[data-theme="dark"\]\s*\{/m)
-      media = cc_block!(css, ~r/^\s*:root:not\(\[data-theme="light"\]\)\s*\{/m)
+  describe "the rail reads the theme layer" do
+    test "app.css declares no --cc-* token, so no dark copy can drift from another", %{css: css} do
+      stripped = Regex.replace(~r{/\*.*?\*/}s, css, "")
 
-      shared =
-        explicit
-        |> Map.keys()
-        |> Enum.filter(&String.starts_with?(&1, "--cc-"))
-        |> Enum.filter(&Map.has_key?(media, &1))
-
-      assert shared != [], "no shared --cc-* tokens found; the block extraction is wrong"
-
-      drifted =
-        Enum.reject(shared, fn token ->
-          Map.fetch!(explicit, token) == Map.fetch!(media, token)
-        end)
-
-      assert drifted == [],
-             "these --cc-* tokens differ between the two dark declarations: " <>
-               Enum.map_join(drifted, ", ", fn t ->
-                 "#{t} = #{inspect(Map.fetch!(explicit, t))} vs #{inspect(Map.fetch!(media, t))}"
-               end) <>
-               ". A reader who only edits one gets a theme that changes depending on the OS " <>
-               "setting rather than the app setting."
+      refute stripped =~ ~r/--cc-[a-z]/,
+             "a --cc-* token is back in app.css. Rung 18 moved the rail onto the theme " <>
+               "slots, which every preset already declares per light/dark; a rail-local " <>
+               "palette outside the theme blocks would give the ten variants one pair."
     end
   end
 
@@ -429,7 +409,8 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     ground = Map.fetch!(ctx.ground, theme)
     tokens = Map.fetch!(ctx.tokens, theme)
 
-    row_bg = painted(W.composite(resolve!(tokens, "--cc-bg-closed"), card_alpha, ground))
+    bg_token = property_token!(ctx.css, ".candidate-card--closed", "background")
+    row_bg = painted(W.composite(resolve!(tokens, bg_token), card_alpha, ground))
 
     for {selector, property, description} <- @card_slots do
       token = property_token!(ctx.css, selector, property)
@@ -440,12 +421,11 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
       # does. `min` rather than a product: the lower of the two is the bound
       # this file measures against, and a fade on BOTH already reds twice.
       alpha = composite_alpha(ctx.closed_rule, ctx.rules, Map.fetch!(ctx.slots, selector))
-      painted = painted(W.composite(resolve!(tokens, token), alpha, ground))
-      got = W.contrast_painted(painted, row_bg)
+      {painted, got} = slot_contrast(tokens, token, alpha, ground, row_bg)
 
       assert got >= @aa_text,
              "#{theme}: #{description} via #{selector} -> #{token} measures #{fmt(got)} " <>
-               "against a #{@aa_text} floor. Painted #{W.to_hex(painted)} on " <>
+               "against a #{@aa_text} floor. Painted #{if painted, do: W.to_hex(painted), else: "the painted envelope"} on " <>
                "#{W.to_hex(row_bg)}, composited at alpha #{alpha} (card #{card_alpha}) " <>
                "over a ground of #{W.to_hex(ground)}. If alpha is not 1.0, an `opacity` " <>
                "has come back onto `.candidate-card--closed` or onto a rule matching " <>
@@ -476,13 +456,58 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     tokens = Map.fetch!(ctx.tokens, theme)
 
     token = property_token!(ctx.css, ".candidate-closed__summary", "color")
-    got = W.contrast_painted(painted(resolve!(tokens, token)), ground)
+    {_painted, got} = slot_contrast(tokens, token, 1.0, ground, ground)
 
     assert got >= @aa_text,
-           "#{theme}: the `N CLOSED` disclosure label via --cc-stage -> #{token} measures " <>
+           "#{theme}: the `N CLOSED` disclosure label via #{token} measures " <>
              "#{fmt(got)} against a #{@aa_text} floor on the rail ground " <>
              "#{W.to_hex(ground)}. This label sits OUTSIDE the card, so it is not affected " <>
              "by any opacity on `.candidate-card--closed` — do not go looking for a fade."
+  end
+
+  # A slot's ink on the row: an opaque token is composited through `alpha`
+  # and measured painted; a reduced-strength token (`--subtle` is
+  # `color-mix(in oklab, base-content 55%, transparent)`) is measured as
+  # the WORST pixel every measured browser formula allows over the row's
+  # ground (`PaintedComposite.contrast_min/3`). Under a fade the two
+  # strengths would multiply, which no browser has been painted at, so a
+  # reduced-strength slot under `alpha < 1` raises rather than guesses.
+  defp slot_contrast(tokens, token, alpha, ground, row_bg) do
+    case reduced_strength(tokens, token) do
+      {ink, p} ->
+        if alpha < 1.0,
+          do: flunk("#{token} is a #{p}% ink under a #{alpha} fade; measure it painted")
+
+        {ratio, _formulas} = PaintedComposite.contrast_min(ink, row_bg, p)
+        {nil, ratio}
+
+      nil ->
+        painted = painted(W.composite(resolve!(tokens, token), alpha, ground))
+        {painted, W.contrast_painted(painted, row_bg)}
+    end
+  end
+
+  # `{ink, p}` when `token`'s chain ends in `color-mix(in oklab, ink p%, transparent)`.
+  defp reduced_strength(tokens, "--" <> _ = token) do
+    value = Map.fetch!(tokens, token) |> String.trim()
+
+    case Regex.run(~r/^var\(\s*(--[a-z0-9-]+)\s*\)$/, value, capture: :all_but_first) do
+      [next] ->
+        reduced_strength(tokens, next)
+
+      nil ->
+        case Regex.run(
+               ~r/^color-mix\(\s*in\s+(oklab)\s*,\s*(.+?)\s+(\d+)%\s*,\s*(transparent)\s*\)$/,
+               value,
+               capture: :all_but_first
+             ) do
+          ["oklab", ink, pct, "transparent"] ->
+            {resolve_value!(tokens, ink, [token]), String.to_integer(pct)}
+
+          _ ->
+            nil
+        end
+    end
   end
 
   defp contrast(ctx, theme, fg_token, bg_token) do
@@ -557,8 +582,10 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     Enum.reduce(dark_blocks(css), theme_tokens(css, :light), &Map.merge(&2, declarations(&1)))
   end
 
+  # `@theme inline` mints `--color-subtle: var(--subtle)` and its siblings.
   defp light_blocks(css) do
-    [daisyui_theme!(css, "light") | all_blocks(css, ~r/^:root\s*\{/m)]
+    [daisyui_theme!(css, "light") | all_blocks(css, ~r/^:root\s*\{/m)] ++
+      all_blocks(css, ~r/^@theme inline\s*\{/m)
   end
 
   defp dark_blocks(css) do
@@ -657,6 +684,9 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
     end
   end
 
+  # A literal (the retired `--cc-*` values the anchors were recorded against).
+  defp resolve!(tokens, value, seen), do: resolve_value!(tokens, value, seen)
+
   defp resolve_value!(tokens, value, seen) do
     value = String.trim(value)
 
@@ -747,22 +777,6 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   # pure-hex pair the two conventions are bit-identical (3.7833 either way),
   # which is what proves the gap is the convention and not the converter.
   defp painted(color), do: color |> W.to_hex() |> W.hex()
-
-  # The block matching `opener` that actually declares the rail's tokens. Both
-  # `[data-theme="dark"]` and the prefers-color-scheme block appear more than
-  # once in this stylesheet, and the FIRST of each declares `--color-interactive`
-  # and no `--cc-*` at all -- taking it silently compared an empty set and the
-  # clause passed by measuring nothing.
-  defp cc_block!(css, opener) do
-    css
-    |> all_blocks(opener)
-    |> Enum.map(&declarations/1)
-    |> Enum.find(fn decls -> Enum.any?(Map.keys(decls), &String.starts_with?(&1, "--cc-")) end)
-    |> case do
-      nil -> flunk("no block matching #{inspect(opener)} declares any --cc-* token")
-      decls -> decls
-    end
-  end
 
   # ── small shared helpers ──────────────────────────────────────────────────
 

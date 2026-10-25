@@ -264,7 +264,10 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadgeTest do
         |> List.first()
 
       assert delayed =~ "Delayed"
-      assert word_class =~ "text-info", "the word must stay on the working family's slot"
+      # Rung 18: the word is base-content (a status hue never sits on text);
+      # the hue split now reads on the ring alone.
+      assert word_class =~ "text-base-content", "the word is base-content text"
+      refute word_class =~ "text-info"
       refute ring_class =~ "border-info", "the ring is the liveness channel and must drain"
       assert ring_class =~ "border-base-content/25"
     end

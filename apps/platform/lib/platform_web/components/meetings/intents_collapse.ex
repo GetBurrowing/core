@@ -375,7 +375,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           aria-expanded={to_string(@open)}
           aria-controls="intents-collapse-body"
           title={if @open, do: "Collapse intents", else: "Expand intents"}
-          class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left hover:bg-base-300/40 focus-visible-ring"
+          class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left lg:hover:bg-base-300/40 focus-visible-ring"
           data-role="intents-collapse-toggle"
         >
           <span class="hero-bolt size-4 flex-shrink-0 text-primary" aria-hidden="true"></span>
@@ -448,13 +448,13 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           class={[
             "btn btn-ghost btn-square min-h-11 min-w-11",
             if(@muted,
-              do: "text-warning bg-warning/10 hover:bg-warning/20",
-              else: "text-subtle hover:text-base-content"
+              do: "text-base-content bg-warning/10 lg:hover:bg-warning/20",
+              else: "text-subtle lg:hover:text-base-content"
             )
           ]}
         >
           <span
-            class={["size-4", if(@muted, do: "hero-eye-slash", else: "hero-eye")]}
+            class={["size-4", if(@muted, do: "hero-eye-slash text-warning", else: "hero-eye")]}
             aria-hidden="true"
           >
           </span>
@@ -466,7 +466,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
           aria-label="Open the full intent table"
           aria-expanded={to_string(@expanded)}
           title="Full intent table"
-          class="btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-base-content"
+          class="btn btn-ghost btn-square min-h-11 min-w-11 text-subtle lg:hover:text-base-content"
           data-role="intents-expand-toggle"
         >
           <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
@@ -481,7 +481,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
       >
         <p
           :if={@error}
-          class="border-b border-edge bg-error/10 px-3 py-2 text-xs text-error"
+          class="border-b border-edge bg-error/10 px-3 py-2 text-xs text-base-content"
           data-role="intents-error"
         >
           {@error}
@@ -625,7 +625,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             aria-label={"Remove intent #{@intent.classified_intent}"}
             title="Remove"
             class={[
-              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-error",
+              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle lg:hover:bg-error/10",
               @pending_cancel && "btn-disabled opacity-40"
             ]}
             data-role="intent-remove"
@@ -644,7 +644,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
             aria-label={"Correct intent #{@intent.classified_intent}"}
             title="Correct"
             class={[
-              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle hover:text-primary",
+              "btn btn-ghost btn-square min-h-11 min-w-11 text-subtle lg:hover:bg-primary/10",
               @pending_cancel && "btn-disabled opacity-40"
             ]}
             data-role="intent-edit"
@@ -685,7 +685,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
                 "This intent is with an agent right now. Cancel the running work?"
             }
             role="menuitem"
-            class="flex min-h-11 w-full items-center rounded-lg px-2 text-left text-xs hover:bg-base-300/50 focus-visible-ring"
+            class="flex min-h-11 w-full items-center rounded-lg px-2 text-left text-xs lg:hover:bg-base-300/50 focus-visible-ring"
             data-role="intent-reason-option"
             data-reason={reason}
           >
@@ -710,7 +710,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   defp intent_expanded_table(assigns) do
     ~H"""
     <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
       data-role="intents-expanded"
     >
       <div class="flex max-h-[80vh] w-full max-w-5xl flex-col rounded-box border border-edge bg-base-100 shadow-xl">
@@ -808,7 +808,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   defp intent_edit_modal(assigns) do
     ~H"""
     <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
       data-role="intent-edit-modal"
       data-intent-id={@row.id}
     >
@@ -999,7 +999,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
   @spec confidence_tone_classes(number() | nil | any()) :: String.t()
   def confidence_tone_classes(confidence) do
     if low_confidence?(confidence) do
-      "font-semibold text-warning"
+      "font-semibold text-base-content"
     else
       "text-subtle"
     end

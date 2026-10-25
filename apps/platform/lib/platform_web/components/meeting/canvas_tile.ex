@@ -73,8 +73,8 @@ defmodule PlatformWeb.Components.Meeting.CanvasTile do
 
     * A soft `base-300` fade at the BOTTOM edge signals the document continues
       past the frame.
-    * Name plate: title `text-xs` in `--color-neutral` with `min-w-0 truncate`;
-      relative timestamp `text-xs` in `--color-neutral` with
+    * Name plate: title `text-xs` in `--subtle` (rung 18; was `--color-neutral`) with `min-w-0 truncate`;
+      relative timestamp `text-xs` in `--subtle` with
       `shrink-0 whitespace-nowrap`. A marker must never win space from the name
       it annotates.
     * The just-changed highlight uses `--color-primary`, applied once and then
@@ -193,12 +193,12 @@ defmodule PlatformWeb.Components.Meeting.CanvasTile do
 
       <%!-- Name plate. The title yields space; the timestamp never does. --%>
       <div class="flex shrink-0 items-center gap-1.5 border-t border-edge px-2 py-1">
-        <span data-role="canvas-tile-title" class="min-w-0 truncate text-xs text-neutral">
+        <span data-role="canvas-tile-title" class="min-w-0 truncate text-xs text-subtle">
           {@title}
         </span>
         <span
           data-role="canvas-tile-timestamp"
-          class="ml-auto shrink-0 whitespace-nowrap text-xs text-neutral"
+          class="ml-auto shrink-0 whitespace-nowrap text-xs text-subtle"
         >
           {relative_time(@canvas.updated_at)}
         </span>

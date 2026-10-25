@@ -328,15 +328,16 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapseTest do
     end
 
     test "all THREE parts land together, and only below the threshold" do
-      # Tone, the `~` prefix, and the spoken label. Colour alone would
+      # Tone (semibold base-content against subtle; rung 18 took the
+      # warning hue off text), the `~` prefix, and the spoken label. Colour alone would
       # break the rule every status chip in this bar already keeps.
       assert Bar.confidence_readout(0.55) == "~0.55"
-      assert Bar.confidence_tone_classes(0.55) =~ "text-warning"
+      assert Bar.confidence_tone_classes(0.55) == "font-semibold text-base-content"
       assert Bar.confidence_aria_label(0.55) =~ "low confidence"
       assert Bar.confidence_aria_label(0.55) =~ "0.55"
 
       assert Bar.confidence_readout(0.96) == "0.96"
-      refute Bar.confidence_tone_classes(0.96) =~ "text-warning"
+      refute Bar.confidence_tone_classes(0.96) =~ "font-semibold"
       refute Bar.confidence_aria_label(0.96) =~ "low confidence"
     end
 

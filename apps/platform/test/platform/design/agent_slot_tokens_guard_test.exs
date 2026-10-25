@@ -623,64 +623,54 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # ── meeting surfaces (stage 3) ───────────────────────────────────────────
 
-  # The Ask row is a FIXED-DARK port (meeting_ask.css PART 1 declares its own
-  # hex grounds), so its slots are a block of their own, measured against
-  # those grounds rather than any theme's base-100.
-  @ask_grounds ["--s", "--s2"]
+  # The Ask row follows the PAGE theme (rung 18): meeting_ask.css declares no
+  # slot and no ground of its own, so each block's own slots are measured on
+  # the grounds the Ask row paints. The name and initials (--ag-<id>-text)
+  # sit only on base-100, the section ground: the base-300 confirm row covers
+  # the row it confirms, and the popover header is base-content. The rail
+  # (--ag-<id>) is measured on base-100 and base-300. Measured, not assumed:
+  # --ag-<id>-text on base-300 is under 4.5:1 in every light block (4.01 to
+  # 4.44), which is why no rule may paint the name on base-300.
+  @ask_text_grounds ["--color-base-100"]
+  @ask_grounds ["--color-base-100", "--color-base-300"]
 
-  test "ask surface: the block declares all 20 slot tokens, read from meeting_ask.css" do
-    b = ask_block()
+  test "ask surface: meeting_ask.css declares no slot, no palette and paints base-100" do
+    css = T.strip_comments(File.read!(Path.join(@css_dir, "meeting_ask.css")))
+    refute css =~ ~r/--ag-[a-z]+(?:-text)?\s*:/
+    refute css =~ ~r/--(?:bg|s|s2|b|t|m|a|ai|live|ok|bad)\s*:/
 
-    for token <- slot_tokens() do
-      assert T.declaration(b.decls, token), "ask surface: #{token} not declared"
-    end
+    [root] =
+      for {".meeting-ask", body} <- innermost_rules(css), body =~ "background:", do: body
 
-    assert Enum.map(@ask_grounds, &String.downcase(hexs(b, &1))) == ["#161d24", "#1c252e"]
+    assert root =~ "background:var(--color-base-100)"
+    assert root =~ "color:var(--color-base-content)"
   end
 
-  test "ask surface: --ag-<id>-text clears 4.5:1 and --ag-<id> 3:1 on both Ask grounds" do
-    b = ask_block()
+  test "ask surface: --ag-<id>-text clears 4.5:1 (7:1 high contrast) on base-100 and --ag-<id> 3:1 on base-100 and base-300",
+       %{blocks: blocks} do
+    pairs =
+      for(id <- ColorPalette.ids(), g <- @ask_text_grounds, do: {"--ag-#{id}-text", g, :text}) ++
+        for id <- ColorPalette.ids(), g <- @ask_grounds, do: {"--ag-#{id}", g, :rail}
 
     failures =
-      for id <- ColorPalette.ids(),
-          ground <- @ask_grounds,
-          {token, floor} <- [{"--ag-#{id}-text", @aa}, {"--ag-#{id}", @non_text}],
+      for b <- blocks,
+          {token, ground, kind} <- pairs,
+          floor = if(kind == :text, do: target(b), else: @non_text),
           r = W.contrast(color(b, token), color(b, ground)),
           r < floor,
-          do: "ask surface #{token} on #{hexs(b, ground)}: #{fixed4(r)}:1 < #{floor}"
+          do: "ask surface #{b.id} #{b.mode} #{token} on #{ground}: #{fixed4(r)}:1 < #{floor}"
 
     assert failures == [], Enum.join(failures, "\n")
   end
 
-  test "ask surface: every rail and text value is within #{@max_hue_drift} degrees of Burrow dark's" do
-    b = ask_block()
-
-    failures =
-      for id <- ColorPalette.ids(),
-          token <- ["--ag-#{id}", "--ag-#{id}-text"],
-          d = hue_drift(b, id, token),
-          d > @max_hue_drift,
-          do: "ask surface #{token}: #{fixed2(d)} degrees"
-
-    assert failures == [], Enum.join(failures, "\n")
-  end
-
-  test "ask surface: no two rails are closer than delta E #{@min_delta_e} (OKLab x100)" do
-    b = ask_block()
-    [{d, x, y} | _] = pairs(b)
-    assert d >= @min_delta_e, "ask surface #{x}/#{y}: delta E #{fixed2(d)}"
-  end
-
-  # Tile chip: white 10px name text on `bg-black/60` (agent_tile.ex) over the
-  # tile's painted tint. 60% is a painted strength, so every pixel the
-  # measured formulas allow is checked. High contrast paints the band opaque
-  # black (app.css), because 60% over its white base-100 gives 5.74:1, under
-  # the 7:1 name-text floor there.
+  # Tile chip: on-viewer 10px name text on `bg-viewer/60` (agent_tile.ex) over
+  # the tile's painted tint. 60% is a painted strength, so every pixel the
+  # measured formulas allow is checked. High contrast paints the band as the
+  # opaque viewer ground (app.css), because 60% over its white base-100 gives
+  # 5.74:1, under the 7:1 name-text floor there.
   @chip_strength 60
-  @white W.hex("#ffffff")
-  @black W.hex("#000000")
 
-  test "tile chip: white name text clears 4.5:1 on black at 60% over every painted tint",
+  test "tile chip: on-viewer name text clears 4.5:1 on viewer at 60% over every painted tint",
        %{blocks: blocks} do
     failures =
       for b <- blocks,
@@ -693,22 +683,33 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
     assert failures == [], Enum.join(failures, "\n")
   end
 
-  test "tile chip: high contrast paints the band opaque black (21:1)", %{app_css: app_css} do
+  test "tile chip: high contrast paints the band as the opaque viewer ground (21:1)",
+       %{app_css: app_css, blocks: blocks} do
     [body] =
       for {sel, body} <- innermost_rules(app_css),
           sel == ~s([data-preset="high-contrast"] .agent-tile-chip),
           do: body
 
-    assert T.declaration(body, "background-color") == "#000"
-    assert W.contrast(@white, @black) >= @aaa
+    assert T.declaration(body, "background-color") == "var(--viewer)"
+
+    for b <- blocks, b.id == "high-contrast" do
+      assert W.contrast(color(b, "--on-viewer"), color(b, "--viewer")) >= @aaa
+    end
 
     tile = File.read!(Path.join(@lib_dir, "platform_web/components/meeting/agent_tile.ex"))
-    assert tile =~ ~s(class="agent-tile-chip absolute inset-x-0 bottom-0 bg-black/60 )
+    assert tile =~ ~s(class="agent-tile-chip absolute inset-x-0 bottom-0 bg-viewer/60 )
+    assert tile =~ "font-medium text-on-viewer"
     refute tile =~ "from-black"
+    refute tile =~ "bg-black"
   end
 
+  # The masters paint the tile waveform in --ag (burrow-meeting.js `.bm-wave`).
+  # At the bars' 60% that is under 3:1 on the tint (2.24:1, Burrow light
+  # indigo), so the bars stay base-content (rung 18, recorded deviation).
   test "tile waveform: base-content bars at 60% clear 3:1 on every painted tint",
-       %{blocks: blocks} do
+       %{blocks: blocks, app_css: app_css} do
+    refute app_css =~ "[data-voice-waveform] {\n  color: var(--ag)"
+
     failures =
       for b <- blocks,
           id <- ColorPalette.ids(),
@@ -732,60 +733,36 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
     assert T.declaration(ring, "box-shadow") == "0 0 0 2px var(--ag)"
   end
 
-  test "the stage 3 table: ask surface, tile chip and waveform minima", %{blocks: blocks} do
-    b = ask_block()
-    [{d, x, y} | _] = pairs(b)
-
-    ask =
-      for id <- ColorPalette.ids() do
-        "| ask surface | #{id} | #{hexs(b, "--ag-#{id}")} | " <>
-          Enum.map_join(@ask_grounds, " | ", fn g ->
-            fixed2(W.contrast(color(b, "--ag-#{id}-text"), color(b, g)))
-          end) <> " | #{fixed2(hue_drift(b, id, "--ag-#{id}"))} |"
-      end
-
+  test "the meeting table: ask surface, tile chip and waveform minima", %{blocks: blocks} do
     IO.puts(
-      "\nAsk surface slots (text on #161d24 | on #1c252e | hue drift from Burrow dark):\n" <>
-        Enum.join(ask, "\n") <>
-        "\nAsk surface closest pair: #{x}/#{y} delta E #{fixed2(d)}" <>
-        "\nTile chip (white on black 60% over the tint; HC is opaque black) and waveform " <>
-        "(base-content 60% on the tint), minimum over slots and painted pixels:\n" <>
+      "\nAsk surface (page slots), tile chip (on-viewer on viewer 60% over the tint; HC is " <>
+        "opaque viewer) and waveform (base-content 60% on the tint), minimum over slots and pixels:\n" <>
         Enum.map_join(blocks, "\n", fn blk ->
+          ask =
+            for id <- ColorPalette.ids(),
+                g <- @ask_text_grounds,
+                do: W.contrast(color(blk, "--ag-#{id}-text"), color(blk, g))
+
           chip =
             if blk.id == "high-contrast",
               do: "21.00 (opaque)",
               else: fixed4(Enum.min(for id <- ColorPalette.ids(), do: chip_min(blk, id)))
 
           wave = fixed4(Enum.min(for id <- ColorPalette.ids(), do: wave_min(blk, id)))
-          "| #{blk.id} #{blk.mode} | chip #{chip} | waveform #{wave} |"
+
+          "| #{blk.id} #{blk.mode} | ask text #{fixed4(Enum.min(ask))} | chip #{chip} | " <>
+            "waveform #{wave} |"
         end)
     )
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────
 
-  # meeting_ask.css's slot block and its two grounds as a ThemeBlocks-shaped
-  # block, so `color/2` and `hue_drift/3` measure it like any theme block.
-  # Its hue reference is Burrow dark's (the values it starts from).
-  defp ask_block do
-    css = T.strip_comments(File.read!(Path.join(@css_dir, "meeting_ask.css")))
-    rules = innermost_rules(css)
-    [palette] = for {".meeting-ask", body} <- rules, body =~ "--s:", do: body
-    [slots] = for {".meeting-ask", body} <- rules, body =~ "--ag-teal:", do: body
-
-    decls =
-      (palette <> ";" <> slots)
-      |> String.split(";", trim: true)
-      |> Enum.map_join("\n", &("  " <> String.trim(&1) <> ";"))
-
-    %{id: "burrow", mode: "ask-surface", raw: slots, decls: decls, own: decls}
-  end
-
   defp chip_min(b, id) do
     for px <- tint_pixels(b, id, pct(b)),
         f <- PaintedComposite.formulas(),
-        band = PaintedComposite.paint(f, {0, 0, 0}, px, @chip_strength) do
-      W.contrast(@white, PaintedMix.from_bytes(band))
+        band = PaintedComposite.paint(f, bytes(b, "--viewer"), px, @chip_strength) do
+      W.contrast(color(b, "--on-viewer"), PaintedMix.from_bytes(band))
     end
     |> Enum.min()
   end

@@ -219,8 +219,8 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
            The role shrinks 999x faster than the name, so it truncates first
            and the name last. `.agent-tile-chip` (app.css) paints the band
            the white text sits on; the measured ratios are recorded there. --%>
-      <div class="agent-tile-chip absolute inset-x-0 bottom-0 bg-black/60 px-1.5 pb-0.5 pt-2">
-        <div class="flex min-w-0 items-center gap-1 text-[10px] font-medium text-white">
+      <div class="agent-tile-chip absolute inset-x-0 bottom-0 bg-viewer/60 px-1.5 pb-0.5 pt-2">
+        <div class="flex min-w-0 items-center gap-1 text-[10px] font-medium text-on-viewer">
           <span class="hero-cpu-chip block size-3 shrink-0" aria-hidden="true" />
           <span data-name-chip class="min-w-0 shrink truncate">{@name}</span>
           <span class="min-w-0 shrink-[999] truncate">

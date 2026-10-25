@@ -122,7 +122,7 @@ const STALL_CONFIRM_MS = 5000
 // the tidy instinct and it is the wrong one here.
 //
 // It has already gone wrong exactly that way once. The host div in
-// `meeting_live.html.heex` carries `text-white`, but `_render` used to
+// `meeting_live.html.heex` carried `text-white`, but `_render` used to
 // write `text-base-content`, at full and at 90% strength, on the CHILD
 // spans, and a colour declared on a child always beats one inherited
 // from a parent — so the host's `text-white` was dead. In the light
@@ -131,25 +131,26 @@ const STALL_CONFIRM_MS = 5000
 // `bg-black/75` scrim. Not a contrast complaint — invisible.
 //
 //   SLOT                  VALUE                   WHERE
-//   caption scrim         oklch(0% 0 0 / 0.75)    `bg-black/75`, on the
+//   caption scrim         viewer at 75%           `bg-viewer/75`, on the
 //                                                 `#meeting-captions` host in
 //                                                 meeting_live.html.heex — the
 //                                                 bar's ground, not written here
-//   caption text          oklch(100% 0 0)         CAPTION_TEXT
-//   caption attribution   the SAME white, semibold  CAPTION_ATTRIBUTION —
+//   caption text          --on-viewer             CAPTION_TEXT
+//   caption attribution   the SAME on-viewer, semibold  CAPTION_ATTRIBUTION —
 //                                                 separated from the text by
 //                                                 WEIGHT, never by colour: on
 //                                                 this surface colour is spent
 //                                                 on state
-//   caption interim       white at 70%            CAPTION_TEXT composed with
+//   caption interim       on-viewer at 70%        CAPTION_TEXT composed with
 //                                                 CAPTION_INTERIM on the line
 //                                                 wrapper (+ italic)
 //
-// Tailwind built-ins only. `text-white` and `bg-black/75` are literal
-// sRGB and theme-invariant by construction, which is the exact property
-// being asked for. No raw hex, and nothing here reads a theme token.
-const CAPTION_TEXT = "text-white"
-const CAPTION_ATTRIBUTION = "font-semibold text-white"
+// Rung 18: the viewer tokens. `text-on-viewer` on `bg-viewer/75` (masters
+// burrow-meeting.js `.bm-caps .bm-bar`). --viewer / --on-viewer are black
+// and white in every theme block, so they are theme-invariant by
+// declaration, which is the exact property being asked for. No raw hex.
+const CAPTION_TEXT = "text-on-viewer"
+const CAPTION_ATTRIBUTION = "font-semibold text-on-viewer"
 const CAPTION_INTERIM = "opacity-70"
 
 // ── The stalled notice — state 3 ─────────────────────────────────────
@@ -163,8 +164,10 @@ const CAPTION_INTERIM = "opacity-70"
 // theme token, and that is deliberate rather than a leak of the
 // tidy-instinct the block above warns about — `--color-warning` is
 // declared with the SAME value in both the light and dark theme blocks
-// in app.css, so `text-warning` / `bg-warning` are already
-// theme-invariant and need no special handling. No raw hex.
+// in app.css, so `bg-warning` is already theme-invariant and needs no
+// special handling. Rung 18: the hue is on the dot only; the words are
+// `text-on-viewer`, as every caption line is, because a status hue never
+// sits on text (R3). No raw hex.
 //
 // Utility type at `text-[12.5px]`, matching the rail's transcript pane,
 // so the two caption surfaces speak in one voice. Semibold, preceded by
@@ -174,7 +177,7 @@ const CAPTION_INTERIM = "opacity-70"
 // than matching on the copy.
 const STALL_COPY = "Captions stopped. Nothing is being transcribed."
 const STALL_MARKUP =
-  '<div data-role="caption-stall" class="flex items-center gap-2 py-0.5 text-[12.5px] font-semibold text-warning">' +
+  '<div data-role="caption-stall" class="flex items-center gap-2 py-0.5 text-[12.5px] font-semibold text-on-viewer">' +
   '<span class="h-[7px] w-[7px] shrink-0 rounded-full bg-warning"></span>' +
   STALL_COPY +
   "</div>"

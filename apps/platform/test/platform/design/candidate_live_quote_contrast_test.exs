@@ -3,6 +3,18 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
   Contrast for the live candidate card's verbatim quote line, both card
   grounds, both themes — task `01a08da6-ea60` stage 2.
 
+  ## Rung 18 (task 01a1557a stage 2): the rail reads the theme layer
+
+  The `--cc-*` palette this file was written against is deleted. The quote is
+  `var(--color-base-content)` (rung 18 R3: no opacity or reduced-strength
+  ink on body text), the shaping and acting grounds are
+  `linear-gradient(color-mix(in oklab, var(--color-info|success) 8%,
+  var(--color-base-100)), var(--color-base-100))` read off the card rules
+  themselves, and the negative control is `--color-subtle`, painted through
+  `PaintedComposite`. Section 5's `--cc-*` sweep is replaced by its purpose:
+  every slot the card reads is declared per theme. The history below is kept
+  because it records why the two-stop and no-opacity clauses exist.
+
   ## Why this file exists
 
   `.candidate-card__quote` (`--cc-micro`) measured 3.66:1 in dark — under
@@ -107,6 +119,7 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Design.CssRules
+  alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
   alias Platform.Meetings.MeetingCandidate
   alias PlatformWeb.Components.Meetings.CandidateRail
@@ -127,9 +140,10 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
   # human label for failure messages. Order matches the CSS declaration
   # order, not measured severity — both stops of both are asserted, so
   # nothing here depends on which is "worse".
+  # Each ground is read from the `background:` of the card rule that paints it.
   @grounds [
-    {"--cc-bg-shaping", "shaping (thinking/taking-shape cards)"},
-    {"--cc-bg-acting", "acting (armed cards)"}
+    {".candidate-card--taking-shape", "shaping (thinking/taking-shape cards)"},
+    {".candidate-card--acting", "acting (armed cards)"}
   ]
 
   @now ~U[2026-09-18 12:00:00.000000Z]
@@ -177,15 +191,16 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
       refute Regex.match?(~r/(^|;)\s*opacity\s*:/, rule),
              "`.candidate-card__quote` declares an `opacity` property: #{inspect(rule)}. " <>
                "That composites the quote's colour against its backdrop AFTER the colour " <>
-               "resolves, so no token substitution (including the --cc-micro fix this file " <>
-               "guards) can restore contrast from inside."
+               "resolves, so no token substitution can restore contrast from inside."
     end
 
-    test "the quote still declares its colour from --cc-micro", %{quote_fg_token: token} do
+    test "the quote still declares its colour from --color-base-content", %{
+      quote_fg_token: token
+    } do
       # The positive half. Without it, "no opacity" is satisfiable by
       # deleting the colour declaration entirely.
-      assert token == "--cc-micro",
-             "expected `.candidate-card__quote`'s `color:` to read `var(--cc-micro)`, got " <>
+      assert token == "--color-base-content",
+             "expected `.candidate-card__quote`'s `color:` to read `var(--color-base-content)`, got " <>
                "#{inspect(token)}. This file measures the quote through whatever token the " <>
                "rule names; if that token changed, retarget the fix, not this assertion."
     end
@@ -219,248 +234,84 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
 
   # ── 4. negative control: a known-good token is NOT flagged ─────────────────
 
-  # `01a07a90`'s comment says these figures were "measured" alongside two
-  # other browser pixel-reads in the same sentence (`#7B8395 measured
-  # 3.5494:1 on the rail's own ground`), so they are PAINTED-PIXEL anchors,
-  # not declaration-derived ones — unlike `@recorded_pure_hex` /
-  # `@recorded_conversion` in candidate_closed_row_contrast_test.exs, whose
-  # tolerance of 0.005 is calibrated to a documented quantize-vs-float-through
-  # gap of about 0.01. A cross-instrument comparison against a browser
-  # reading is not held to that tolerance; the brief itself says "roughly".
-  # What actually discriminates a real detector from one that flags
-  # everything is the AA assertion below, not decimal-matching a number this
-  # file did not produce.
-  @negative_control_tolerance 0.05
+  # `--color-subtle` (base-content at 55%, `--subtle`) is the rail's muted
+  # ink after rung 18: the byline, the step line, the `N closed` label. It is
+  # measured through the same token maps against the rail's own ground, as
+  # the WORST pixel every measured browser formula allows
+  # (`PaintedComposite.contrast_min/3`), and must clear AA while measuring
+  # below base-content. A detector that flagged it would be flagging the
+  # theme's own secondary-text tier.
+  describe "negative control: --color-subtle is not flagged" do
+    for theme <- [:light, :dark] do
+      test "#{theme}: --color-subtle on the rail's own ground clears AA, below base-content",
+           ctx do
+        theme = unquote(theme)
+        tokens = Map.fetch!(ctx.tokens, theme)
+        ground = Map.fetch!(ctx.rail_ground, theme)
+        {ink, p} = reduced_strength!(tokens, "--color-subtle")
+        {got, _formulas} = PaintedComposite.contrast_min(ink, ground, p)
+        full = W.contrast(painted(resolve!(tokens, "--color-base-content")), ground)
 
-  describe "negative control: --cc-title-half is not flagged" do
-    test "light: --cc-title-half on the rail's own ground is roughly 5.00:1, clears AA", ctx do
-      fg = painted(resolve!(ctx.tokens.light, "--cc-title-half"))
-      got = W.contrast(fg, ctx.rail_ground.light)
+        assert got >= @aa_text,
+               "negative control failed: --color-subtle measures #{fmt(got)} on the rail " <>
+                 "ground #{W.to_hex(ground)}; this file's detector would flag a known-good token."
 
-      assert_in_delta got,
-                      5.0024,
-                      @negative_control_tolerance,
-                      "--cc-title-half on the rail's own ground (#{W.to_hex(ctx.rail_ground.light)}) " <>
-                        "measures #{fmt(got)}, expected roughly 5.00:1 — the figure task 01a07a90's " <>
-                        "own comment in app.css records (a browser pixel-read) for this token/ground " <>
-                        "pair. A miss bigger than this is worth reporting as a real drift, not widening " <>
-                        "further."
-
-      assert got >= @aa_text,
-             "negative control failed: --cc-title-half measures #{fmt(got)} against the AA " <>
-               "floor and should clear it comfortably. If it does not, this file's detector " <>
-               "flags a known-good token and is not trustworthy."
-    end
-
-    test "dark: --cc-title-half on the rail's own ground is roughly 6.23:1, clears AA", ctx do
-      fg = painted(resolve!(ctx.tokens.dark, "--cc-title-half"))
-      got = W.contrast(fg, ctx.rail_ground.dark)
-
-      # 6.2250 on the Burrow rail ground #141518 (task 01a120c5), recorded beside
-      # the pre-Burrow 6.7068 in app.css's --cc-stage comment.
-      assert_in_delta got,
-                      6.2250,
-                      @negative_control_tolerance,
-                      "--cc-title-half on the rail's own ground (#{W.to_hex(ctx.rail_ground.dark)}) " <>
-                        "measures #{fmt(got)}, expected roughly 6.23:1 — the Burrow re-measure of the figure task 01a07a90's " <>
-                        "own comment in app.css records (a browser pixel-read) for this token/ground " <>
-                        "pair. A miss bigger than this is worth reporting as a real drift, not widening " <>
-                        "further."
-
-      assert got >= @aa_text,
-             "negative control failed: --cc-title-half measures #{fmt(got)} against the AA " <>
-               "floor and should clear it comfortably. If it does not, this file's detector " <>
-               "flags a known-good token and is not trustworthy."
+        assert got < full,
+               "--color-subtle (#{fmt(got)}) is not below base-content (#{fmt(full)}): the " <>
+                 "reduced strength is not being painted"
+      end
     end
   end
 
-  # ── 5. every --cc-* token shared by both theme blocks is not an accident ──
+  # ── 5. every slot the card reads is declared per theme ────────────────────
 
-  # `--cc-micro` was not a one-off. Every sibling in its declaration group
-  # (`--cc-stage`, `--cc-byline`, `--cc-reason`) already carried a distinct
-  # value per theme; `--cc-micro` alone had been left at its light literal
-  # in all three blocks (task 01a08da6 stage 1). Clause B above watches the
-  # ONE token that already shipped broken. It cannot catch the next token
-  # that ships the same way — that needs a sweep over the whole namespace,
-  # not a bigger anchor list.
-  #
-  # This section reads `--cc-*` custom properties declared in BOTH the
-  # light `:root` block and `[data-theme="dark"]`, off the SAME
-  # `theme_tokens/2` maps Clause B already trusts, and asserts each one's
-  # DECLARED VALUE — the string after the colon, the same granularity
-  # `--cc-micro`'s own defect lived at (`#6b7385` typed twice, verbatim) —
-  # differs between the two blocks.
-  #
-  # String identity, not resolved colour: a token that reads
-  # `var(--cc-title-half)` in both blocks is NOT flagged by this sweep,
-  # because the split lives in the token it points at rather than in its
-  # own literal. That is a real, common, and correct pattern here — it is
-  # what stage 1 itself used to fix `--cc-micro` — so a sweep that could
-  # not tell it apart from the defect would either miss the next literal
-  # duplicate or flag every alias in the file. `@invariant_cc_tokens` below
-  # is the explicit list of tokens this sweep does not expect to differ,
-  # each with the one-line reason a reviewer would otherwise have to
-  # rediscover:
-  #
-  #   * SIX are pure indirection through a token that is ITSELF per-theme:
-  #     `--cc-micro`, `--cc-stage` (both -> `--cc-title-half`), `--cc-border`
-  #     (-> `--edge`), `--cc-correct-bg` (-> `--color-base-200`),
-  #     `--cc-correct-fg` (-> `--color-base-content`), and `--cc-correct-rule`
-  #     (-> `--cc-border`, so two hops deep). The declared STRING is
-  #     identical; the PAINTED colour is not.
-  #   * SIX are true literals, kept identical on purpose:
-  #     `--cc-go-bg` / `--cc-go-border` / `--cc-go-fg` are the filled "Go
-  #     ahead" button's own closed colour system (app.css :7352-7354) —
-  #     fill and text are always used as the SAME pair in both themes
-  #     (7.02:1, white on #2f57a0), so there is no separate light/dark
-  #     pairing to check. `--cc-ask-rule` is a decorative left-rule
-  #     (app.css :7337), not text, and measures 3.69:1 light / 3.85:1 dark
-  #     against `--cc-ask-bg`, which DOES move per theme. `--cc-live-dot`
-  #     is one semantic "live" status green in both themes, the same
-  #     posture the brand `--color-success`/`--color-warning`/
-  #     `--color-error` tokens take. `--cc-title-dead` is UNUSED — app.css
-  #     :7205 records it was measured under AA on the closed row and
-  #     superseded there by `--cc-title-half`; no `var(--cc-title-dead)`
-  #     consumer remains anywhere in this file, so an invariant value on it
-  #     cannot paint a regression nobody reads.
-  #
-  # This sweep does not resolve `var()` chains or recompute contrast for
-  # the allowlisted tokens — that would just be a second, weaker copy of
-  # Clause B. Its only claim is "shared on purpose, for a stated reason,"
-  # never "passes AA."
-  #
-  # OUT OF SCOPE, deliberately: `--color-*` brand tokens (a different
-  # ticket), and fixing anything this sweep finds. A token that is shared
-  # WITHOUT an honest reason is a finding for a follow-up, not something
-  # this stage retunes or launders into the allowlist to go green.
-  @invariant_cc_tokens %{
-    "--cc-ask-rule" =>
-      "decorative left-rule on the ask block, not text; 3.69:1 light / 3.85:1 dark " <>
-        "against --cc-ask-bg, which is itself per-theme",
-    "--cc-border" => "aliases --edge, which is per-theme (oklch(88% 0 0) light, #232A38 dark)",
-    "--cc-correct-bg" =>
-      "aliases --color-base-200, per-theme via the daisyui-theme plugin blocks",
-    "--cc-correct-fg" =>
-      "aliases --color-base-content, per-theme (oklch(0% 0 0) light, oklch(95% 0 0) dark)",
-    "--cc-correct-rule" => "aliases --cc-border, itself aliasing the per-theme --edge",
-    "--cc-go-bg" => "the filled Go-ahead button's own fill; always paired with --cc-go-fg",
-    "--cc-go-border" => "the same button's border, drawn against its own fixed fill",
-    "--cc-go-fg" =>
-      "white text on the fixed --cc-go-bg fill (7.02:1); the pair is theme-independent by " <>
-        "construction, not by oversight",
-    "--cc-live-dot" => "one semantic status green in both themes, the brand-colour posture",
-    "--cc-micro" =>
-      "aliases --cc-title-half (task 01a08da6 stage 1) — the fix this file guards; " <>
-        "per-theme via the alias, not via its own literal",
-    "--cc-stage" => "aliases --cc-title-half (task 01a07a90); documented at app.css :6605-6612",
-    "--cc-title-dead" =>
-      "UNUSED — no `var(--cc-title-dead)` consumer remains; app.css :7205 records why it " <>
-        "was superseded rather than retuned"
-  }
+  # Section 5 used to sweep the `--cc-*` namespace for a token that never
+  # got a dark value (`--cc-micro`'s defect: one light literal in every
+  # block). Rung 18 deleted that namespace; the card now reads DaisyUI slots,
+  # which the theme plugin declares per light/dark block. So the sweep's
+  # purpose becomes two checks: no `--cc-*` token comes back, and each slot
+  # the quote and its grounds read is declared in BOTH blocks with a
+  # different value.
+  @card_slots ["--color-base-content", "--color-base-100", "--color-info", "--color-success"]
 
-  # This sweep's own positive control: three siblings from `--cc-micro`'s
-  # own declaration group that are genuinely per-theme at
-  # `origin/main@2c09f728`. Asserted present AND differing, so a parser
-  # that silently matched nothing could not pass the rest of this section
-  # by accident.
-  @known_per_theme_members ["--cc-title-half", "--cc-byline", "--cc-reason"]
-
-  describe "every --cc-* token shared by both theme blocks is intentionally shared" do
-    test "the sweep finds a non-trivial, expected-size set of shared tokens", %{tokens: tokens} do
-      both = shared_cc_tokens(tokens)
-
-      assert both != [],
-             "no `--cc-*` token is declared in BOTH the light and dark theme blocks — the " <>
-               "block parser has drifted from app.css's actual shape and this sweep is not " <>
-               "looking at anything. An empty result here is a broken parser, not a clean " <>
-               "stylesheet: --cc-title-half alone is declared in both."
-
-      assert length(both) >= 40,
-             "expected roughly 46 shared `--cc-*` tokens (measured at task 01a08da6 stage 3), " <>
-               "got #{length(both)}: #{inspect(Enum.sort(both))}. A count this far off means " <>
-               "the block parser is reading the wrong `:root` or `[data-theme=\"dark\"]` " <>
-               "block — app.css declares more than one of each."
+  describe "the card reads per-theme slots, not a rail palette" do
+    test "app.css declares no --cc-* token", %{css: css} do
+      refute Regex.replace(~r{/\*.*?\*/}s, css, "") =~ ~r/--cc-[a-z]/,
+             "a --cc-* token is back in app.css; rung 18 moved the rail onto theme slots"
     end
 
-    test "the known per-theme members are present and actually differ", %{tokens: tokens} do
-      for token <- @known_per_theme_members do
-        light = Map.fetch!(tokens.light, token)
-        dark = Map.fetch!(tokens.dark, token)
-
-        refute light == dark,
-               "#{token} is expected to be per-theme (light #{inspect(light)}, dark " <>
-                 "#{inspect(dark)} at origin/main@2c09f728) and is this sweep's own positive " <>
-                 "control. If it ever reads the SAME in both blocks, either app.css " <>
-                 "regressed or this sweep is reading the wrong block."
-      end
-    end
-
-    test "every shared token differs between themes, or is named on the allowlist with a reason",
-         %{tokens: tokens} do
-      offenders =
-        tokens
-        |> shared_cc_tokens()
-        |> Enum.reject(&Map.has_key?(@invariant_cc_tokens, &1))
-        |> Enum.filter(fn token ->
-          Map.fetch!(tokens.light, token) == Map.fetch!(tokens.dark, token)
-        end)
-
-      assert offenders == [],
-             "these `--cc-*` tokens declare the IDENTICAL value in the light and dark theme " <>
-               "blocks and are not on @invariant_cc_tokens: " <>
-               Enum.map_join(offenders, "; ", fn token ->
-                 "#{token} = #{inspect(Map.fetch!(tokens.light, token))}"
-               end) <>
-               ". This is the exact shape of --cc-micro's own defect (task 01a08da6): a " <>
-               "token that never got a dark value, sharing the light one by omission rather " <>
-               "than by design. Give it a per-theme value, or — ONLY if the sharing is " <>
-               "genuinely deliberate — add it to @invariant_cc_tokens with a one-line reason. " <>
-               "Do not add it there just to make this assertion pass."
-    end
-
-    test "the allowlist stays honest: every entry names a real, currently-shared token", %{
-      tokens: tokens
+    test "every slot the quote and its grounds read differs between light and dark", %{
+      css: css
     } do
-      both = MapSet.new(shared_cc_tokens(tokens))
+      light = declarations(daisyui_theme!(css, "light"))
+      dark = declarations(daisyui_theme!(css, "dark"))
 
-      stale = Enum.reject(Map.keys(@invariant_cc_tokens), &MapSet.member?(both, &1))
+      for slot <- @card_slots do
+        assert Map.has_key?(light, slot) and Map.has_key?(dark, slot),
+               "#{slot} is not declared in both daisyui-theme blocks"
 
-      assert stale == [],
-             "these @invariant_cc_tokens entries do not name a `--cc-*` token declared in " <>
-               "BOTH theme blocks: #{Enum.join(stale, ", ")}. The token was renamed, removed, " <>
-               "or never shared in the first place — either way the entry is stale."
-
-      drifted =
-        @invariant_cc_tokens
-        |> Map.keys()
-        |> Enum.filter(&MapSet.member?(both, &1))
-        |> Enum.filter(fn token ->
-          Map.fetch!(tokens.light, token) != Map.fetch!(tokens.dark, token)
-        end)
-
-      assert drifted == [],
-             "these tokens are on @invariant_cc_tokens (claimed theme-invariant) but now " <>
-               "declare DIFFERENT values per theme: #{Enum.join(drifted, ", ")}. The value " <>
-               "moved apart, which is good, but the allowlist entry is stale and should be " <>
-               "removed rather than left claiming an invariance that no longer holds."
+        refute Map.fetch!(light, slot) == Map.fetch!(dark, slot),
+               "#{slot} declares #{inspect(Map.fetch!(light, slot))} in light AND dark: the " <>
+                 "exact shape of --cc-micro's old defect"
+      end
     end
   end
 
   # ── assertions ───────────────────────────────────────────────────────────
 
-  defp assert_gradient_stops(ctx, theme, ground_token, ground_label) do
+  defp assert_gradient_stops(ctx, theme, ground_selector, ground_label) do
     tokens = Map.fetch!(ctx.tokens, theme)
     fg = painted(resolve!(tokens, ctx.quote_fg_token))
-    {top_hex, bottom_hex} = gradient_stops!(tokens, ground_token)
+    {top, bottom} = gradient_stops!(tokens, rule_body!(ctx.css, ground_selector), ground_selector)
 
-    for {stop_label, stop_hex} <- [{"top (0%)", top_hex}, {"bottom (100%)", bottom_hex}] do
-      bg = painted(W.hex(stop_hex))
+    for {stop_label, stop} <- [{"top (0%)", top}, {"bottom (100%)", bottom}] do
+      bg = painted(stop)
       got = W.contrast(fg, bg)
 
       assert got >= @aa_text,
              "#{theme}: .candidate-card__quote via #{ctx.quote_fg_token} measures " <>
-               "#{fmt(got)} against the #{stop_label} stop of #{ground_token} " <>
-               "(#{ground_label}, #{stop_hex}), under the #{@aa_text} floor. Text " <>
+               "#{fmt(got)} against the #{stop_label} stop of #{ground_selector} " <>
+               "(#{ground_label}, #{W.to_hex(bg)}), under the #{@aa_text} floor. Text " <>
                "#{W.to_hex(fg)}."
     end
   end
@@ -482,19 +333,6 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
              ". `opacity` composites the colour AFTER it resolves, so Clause B (which " <>
              "recomputes from declared colours) is blind to it and no token choice can " <>
              "restore the quote's contrast from inside."
-  end
-
-  # Every `--cc-*` custom property declared in BOTH theme maps — the input
-  # to the section 5 sweep. Reuses the SAME `tokens.light` / `tokens.dark`
-  # maps Clause B already trusts (built by `theme_tokens/2` below), so this
-  # sweep cannot disagree with Clause B about how a theme resolves.
-  defp shared_cc_tokens(%{light: light, dark: dark}) do
-    cc_keys = fn map -> map |> Map.keys() |> Enum.filter(&String.starts_with?(&1, "--cc-")) end
-
-    cc_keys.(light)
-    |> MapSet.new()
-    |> MapSet.intersection(MapSet.new(cc_keys.(dark)))
-    |> Enum.to_list()
   end
 
   defp class_suffix(%{classes: classes}) do
@@ -633,8 +471,10 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
     Enum.reduce(dark_blocks(css), theme_tokens(css, :light), &Map.merge(&2, declarations(&1)))
   end
 
+  # `@theme inline` mints `--color-subtle: var(--subtle)` and its siblings.
   defp light_blocks(css) do
-    [daisyui_theme!(css, "light") | all_blocks(css, ~r/^:root\s*\{/m)]
+    [daisyui_theme!(css, "light") | all_blocks(css, ~r/^:root\s*\{/m)] ++
+      all_blocks(css, ~r/^@theme inline\s*\{/m)
   end
 
   defp dark_blocks(css) do
@@ -707,27 +547,48 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
     end
   end
 
-  # The two hex stops of a `linear-gradient(180deg, #rrggbb 0%, #rrggbb 100%)`
-  # custom property. Raises on any other shape rather than guessing, since a
-  # gradient rewritten as three stops or a different angle is exactly the
-  # kind of drift a silent partial match would hide.
-  defp gradient_stops!(tokens, token) do
-    value = tokens |> Map.fetch!(token) |> String.trim()
+  # The two stops of the card rule's `background: linear-gradient(top, bottom)`,
+  # each resolved through the token maps (`color-mix()` and `var()` alike).
+  # Raises on any other shape rather than guessing: a third stop or an angle
+  # is exactly the drift a silent partial match would hide.
+  defp gradient_stops!(tokens, body, selector) do
+    value =
+      capture!(body, ~r/(?:^|;)\s*background\s*:\s*([^;]+)/, "a `background:` in `#{selector}`")
 
     case Regex.run(
-           ~r/^linear-gradient\(\s*180deg\s*,\s*(#[0-9a-fA-F]{6})\s+0%\s*,\s*(#[0-9a-fA-F]{6})\s+100%\s*\)$/,
-           value,
+           ~r/^linear-gradient\(\s*(color-mix\(.+?\)\)|var\([^)]+\))\s*,\s*(var\([^)]+\))\s*\)$/,
+           String.trim(value),
            capture: :all_but_first
          ) do
       [top, bottom] ->
-        {top, bottom}
+        {resolve_value!(tokens, top, [selector]), resolve_value!(tokens, bottom, [selector])}
 
       nil ->
         flunk(
-          "#{token} is #{inspect(value)}, not the expected " <>
-            "`linear-gradient(180deg, #rrggbb 0%, #rrggbb 100%)` form this file parses. " <>
-            "Teach gradient_stops!/2 the new shape rather than hardcoding a stop here."
+          "#{selector}'s background is #{inspect(value)}, not the expected " <>
+            "`linear-gradient(<colour>, <colour>)` this file parses. Teach " <>
+            "gradient_stops!/3 the new shape rather than hardcoding a stop here."
         )
+    end
+  end
+
+  # `{ink, p}` for a token whose chain ends in `color-mix(in oklab, ink p%, transparent)`.
+  defp reduced_strength!(tokens, "--" <> _ = token) do
+    value = tokens |> Map.fetch!(token) |> String.trim()
+
+    case Regex.run(~r/^var\(\s*(--[a-z0-9-]+)\s*\)$/, value, capture: :all_but_first) do
+      [next] ->
+        reduced_strength!(tokens, next)
+
+      nil ->
+        case Regex.run(
+               ~r/^color-mix\(\s*in\s+oklab\s*,\s*(.+?)\s+(\d+)%\s*,\s*transparent\s*\)$/,
+               value,
+               capture: :all_but_first
+             ) do
+          [ink, pct] -> {resolve_value!(tokens, ink, [token]), String.to_integer(pct)}
+          nil -> flunk("#{token} is #{inspect(value)}, not a reduced-strength ink")
+        end
     end
   end
 

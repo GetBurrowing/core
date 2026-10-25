@@ -1982,7 +1982,7 @@ const MeetingClient = {
     el.autoplay = true
     el.playsInline = true
     el.muted = true
-    el.className = "h-full w-full object-contain bg-black"
+    el.className = "h-full w-full object-contain bg-viewer"
 
     // Clear any prior <video> children defensively (e.g. a hot-reload
     // landed mid-share and left a stale node).

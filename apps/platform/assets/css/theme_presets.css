@@ -80,6 +80,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-midnight dark. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(4, 8, 16, 0.65);
+  --shade: rgba(0, 0, 0, 0.5);
   --color-base-content: #e9eef8;
   --color-secondary: #9fb0cc;
   --color-secondary-content: #000000;
@@ -158,6 +163,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-midnight light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(30, 20, 10, 0.45);
+  --shade: rgba(0, 0, 0, 0.5);
   /* theme.js #15202f measures 3.5393:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.5367:1. */
   --color-base-content: #000006;
@@ -244,6 +254,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-sand dark. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(10, 8, 4, 0.6);
+  --shade: rgba(0, 0, 0, 0.5);
   --color-base-content: #f2ece2;
   --color-secondary: #b7ab98;
   --color-secondary-content: #000000;
@@ -322,6 +337,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-sand light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(30, 20, 10, 0.45);
+  --shade: rgba(0, 0, 0, 0.5);
   /* theme.js #2a2219 measures 3.2571:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.6194:1 at this block's --subtle strength (57%). */
   --color-base-content: #000000;
@@ -429,6 +449,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-forest dark. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(4, 10, 7, 0.65);
+  --shade: rgba(0, 0, 0, 0.5);
   --color-base-content: #eaf1ec;
   --color-secondary: #a3b5aa;
   --color-secondary-content: #000000;
@@ -511,6 +536,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js burrow-forest light, inherited from BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(30, 20, 10, 0.45);
+  --shade: rgba(0, 0, 0, 0.5);
   /* theme.js #1a241e measures 3.4620:1 at 55% alpha, min on base-100/200/300 (painted);
      this value measures 4.5290:1. */
   --color-base-content: #000000;
@@ -601,6 +631,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js high-contrast dark. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(0, 0, 0, 0.8);
+  --shade: rgba(0, 0, 0, 0.7);
   --color-base-content: #ffffff;
   --color-secondary: #d0d0d0;
   --color-secondary-content: #000000;
@@ -681,6 +716,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js high-contrast light. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shade: rgba(0, 0, 0, 0.7);
   --color-base-content: #000000;
   --color-secondary: #2a2a2a;
   --color-secondary-content: #ffffff;

@@ -1066,11 +1066,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            trip through the server cannot promise. `phx-update="ignore"`,
            same reasoning as the hold button itself.
 
-           The veil DIMS, it does not black out (`bg-[#171b25]/55` — the
-           dark `--color-base-100` value the canvas names, at partial
-           alpha, not the app's live theme token, because this is a scrim
-           over live video and has to read the same regardless of the
-           viewer's light/dark setting). `fixed inset-0`, so it covers
+           The veil DIMS, it does not black out (`bg-viewer/55` — the
+           viewer ground at partial alpha, masters burrow-meeting.js
+           `.bm-veil`, rung 18; the viewer token is the same in every
+           theme, because this is a scrim over live video and has to read
+           the same regardless of the viewer's light/dark setting). `fixed inset-0`, so it covers
            the room (rails AND the video stage) regardless of where in
            the DOM this happens to sit — `ParticipantRail` only owns the
            rail, never the stage, so nothing shy of `fixed` could reach
@@ -1082,7 +1082,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            The card surface is `bg-base-300`, one step up from the room
            so it reads as raised, per the canvas's palette. The label and
            (in stage 3) the coaching-adjacent copy are utility weight
-           (`text-xs` at `/60`); the meter is `bg-primary` — the ONE other
+           (`text-xs` at `/60`); the meter is `bg-primary` at opacity 80 (the
+           masters' 70 paints 2.75:1 on base-300 in the light blocks, under
+           3:1; rung 18 stage 3) — the ONE other
            place `--color-primary` appears in this state, alongside the
            held agent's own avatar ring above.
 
@@ -1115,7 +1117,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         id={"#{@id_prefix}-ask-veil"}
         phx-hook="MeetingAskFloorVeil"
         phx-update="ignore"
-        class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-[#171b25]/55 opacity-0 transition-opacity duration-150 data-[open=true]:opacity-100"
+        class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-viewer/55 opacity-0 transition-opacity duration-150 data-[open=true]:opacity-100"
         data-role="meeting-ask-veil"
         data-open="false"
         aria-hidden="true"
@@ -1134,7 +1136,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             <span
               :for={_bar <- 1..12}
               data-ptt-bar
-              class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
+              class="h-full w-1 origin-center rounded-full bg-primary opacity-80 transition-transform duration-75"
               style="transform: scaleY(0.08)"
             >
             </span>

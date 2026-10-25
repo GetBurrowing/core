@@ -33,45 +33,26 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
   (sand) and `#e94c51` (forest), all with black content. The preset lights
   (`#a3252a`) and high contrast (`#8f0000` / `#ff6b6b`) were untouched.
 
-  ## The Stop and Undo hover label (task 01a160c4 stage 2)
+  ## The Stop and Undo hover and focus border (rung 18 stage 2)
 
-  `--cc-stop-hover` is `color-mix(in oklch, var(--color-error) N%, black|white)`.
-  It is the `color:` (and `border-color:`) of the 11.5px words "Stop" and
-  "Undo" on the meeting candidate rail (`candidate_rail.ex`, the
-  `candidate-btn--stop` and `candidate-btn--undo` buttons; `app.css`
-  `.candidate-btn` sets `font-size: 11.5px` and `background: var(--cc-btn-bg)`),
-  and their `:hover, :focus-visible` rules change only color and
-  border-color. The fill never changes on hover. So the label is TEXT and the
-  floor is 4.5:1 on `--cc-btn-bg`. This corrects the 3:1 non-text floor
-  ("an icon on a fill") in the designer's direction canvas 01a1618e-3597.
+  The meeting candidate rail's "Stop" and "Undo" buttons (`candidate_rail.ex`,
+  `candidate-btn--stop` / `candidate-btn--undo`) sit on `.candidate-btn`'s
+  `background: var(--color-base-300)` with a `var(--color-base-content)`
+  label. Until rung 18 their hover and focus painted the LABEL in a darkened
+  error mix (`--cc-stop-hover`, measured here at 4.5:1 as text). Rung 18's R3
+  takes status hues off text, so hover (behind `@media (hover: hover) and
+  (min-width: 1024px)`) and `:focus-visible` now change only `border-color`,
+  to raw `var(--color-error)`, and the label stays base-content.
 
-  The border is not asserted separately. It is the same colour on the same
-  `--cc-btn-bg`, so the 4.5 label assertion already bounds it above 3:1
-  against that ground. Its contrast against the card ground outside the
-  button is outside this guard.
+  So two pairs are owed, read from the rules in `app.css` rather than assumed:
 
-  The mix percentage, the black/white endpoint and `--cc-btn-bg` are READ
-  from `app.css`: the light `:root` block, the `[data-theme="dark"]` block and
-  the `prefers-color-scheme: dark` copy. Exactly three `--cc-stop-hover`
-  declarations must exist, and `theme_presets.css` must declare no `--cc-`
-  token, so a per-preset override goes red here instead of being ignored.
-  Light variants (Burrow, the preset lights, high contrast light) use the light
-  block; dark variants use the dark block. The prefers-dark copy must equal the
-  dark block.
+    * the label, `--color-base-content` on `--color-base-300`: text, 4.5:1;
+    * the border, `--color-error` on `--color-base-300` (the button's own
+      fill) and on `--color-base-100` (the card around it): a state
+      indicator, the 3:1 non-text floor (WCAG 1.4.11).
 
-  ### Why `WcagContrast.mix_oklab/3` measures `color-mix(in oklch, ...)` here
-
-  The other endpoint is black or white, which is achromatic: chroma 0, so its
-  oklch hue is powerless and the mix takes the error colour's hue. L and C
-  then interpolate linearly at that fixed hue, and that is the same point as
-  linear a/b interpolation in oklab, because a and b are C times cos/sin of
-  that one hue. No new helper is needed unless a chromatic endpoint appears.
-  This rests on the browser treating the achromatic hue as powerless, as
-  CSS Color 4 specifies; the painted check is the task's review case.
-
-  Positive control: from the PRE-retune Burrow error `oklch(63% 0.22 25)` the
-  reader reproduces the figures the old comments were written from, light
-  5.21 and dark 5.36.
+  `theme_presets.css` must declare no `--cc-` token, and `app.css` none at all:
+  the rail palette is gone, so a per-preset override would be a shim.
 
   ## Anti-vacuity and the positive control
 
@@ -89,6 +70,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
   """
   use ExUnit.Case, async: true
 
+  alias Platform.Design.CssRules
   alias Platform.Design.ThemeBlocks, as: Blocks
   alias Platform.Design.WcagContrast, as: W
 
@@ -97,10 +79,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
 
   @aa_text 4.5
 
-  # The figures the pre-retune stop-hover comments carried (light, dark).
-  @stop_hover_pre_retune %{"light" => 5.21, "dark" => 5.36}
-
-  @stop_hover_form ~r/^color-mix\(in oklch, var\(--color-error\) (\d+)%, (black|white)\)$/
+  @aa_non_text 3.0
 
   @variants [
     {"burrow", "light"},
@@ -261,137 +240,104 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
     end
   end
 
-  # ── --cc-stop-hover (stage 2) ──────────────────────────────────────────
+  # ── the Stop and Undo hover and focus border (rung 18 stage 2) ─────────
 
-  # The three rail token blocks that declare --cc-stop-hover, comments stripped.
-  defp rail_blocks(app_css) do
-    pick = fn open ->
-      app_css
-      |> Blocks.blocks_after(open)
-      |> Enum.map(&Blocks.strip_comments/1)
-      |> Enum.filter(&Blocks.declaration(&1, "--cc-stop-hover"))
-    end
+  @hover_media "@media (hover: hover) and (min-width: 1024px)"
 
-    %{
-      "light" => pick.("\n:root {"),
-      "dark" => pick.(~s(\n[data-theme="dark"] {)),
-      "prefers-dark" => pick.(~s|\n  :root:not([data-theme="light"]) {|)
-    }
-  end
-
-  defp one_rail_block!(app_css, scope) do
-    case Map.fetch!(rail_blocks(app_css), scope) do
-      [block] ->
-        block
-
-      other ->
-        flunk("#{scope}: expected one block declaring --cc-stop-hover, found #{length(other)}")
+  defp rule!(rules, selector, at) do
+    case Enum.filter(rules, &(&1.selector == selector and &1.at == at)) do
+      [r] -> r
+      other -> flunk("expected one #{selector} rule at #{inspect(at)}, found #{length(other)}")
     end
   end
 
-  # {pct, endpoint colour, raw text, btn-bg colour} for a rail scope.
-  defp stop_hover_recipe(app_css, scope) do
-    block = one_rail_block!(app_css, scope)
-    raw = Blocks.declaration(block, "--cc-stop-hover")
-
-    {pct, endpoint} =
-      case Regex.run(@stop_hover_form, raw) do
-        [_, pct, "black"] -> {String.to_integer(pct), W.hex("#000000")}
-        [_, pct, "white"] -> {String.to_integer(pct), W.hex("#FFFFFF")}
-        nil -> flunk("#{scope}: --cc-stop-hover is #{inspect(raw)}; teach the guard to mix it")
-      end
-
-    btn_bg =
-      W.parse!(Blocks.declaration(block, "--cc-btn-bg") || flunk("#{scope}: no --cc-btn-bg"))
-
-    {pct, endpoint, raw, btn_bg}
-  end
-
-  defp stop_hover_rows(blocks, app_css) do
-    for b <- blocks do
-      {pct, endpoint, _raw, btn_bg} = stop_hover_recipe(app_css, b.mode)
-      error = opaque(b, "--color-error")
-      label = W.mix_oklab(error, pct, endpoint)
-
-      %{
-        variant: "#{b.id} #{b.mode}",
-        label_hex: W.to_hex(label),
-        ratio: W.contrast(label, btn_bg),
-        painted: W.contrast_painted(label, btn_bg),
-        raw_error: W.contrast(error, btn_bg)
-      }
+  defp decl(body, prop) do
+    case Regex.run(~r/(?<![-\w])#{prop}\s*:\s*([^;]+);/, body) do
+      [_, v] -> String.trim(v)
+      nil -> nil
     end
   end
 
   defp f4(x), do: :erlang.float_to_binary(x, decimals: 4)
 
-  test "exactly three --cc-stop-hover declarations, and no --cc- token in the presets",
+  test "Stop and Undo: hover and focus change only the border, to --color-error",
        %{app_css: app_css, presets: presets} do
-    declared = Regex.scan(~r/^\s*--cc-stop-hover\s*:/m, Blocks.strip_comments(app_css))
-    assert length(declared) == 3, "found #{length(declared)} --cc-stop-hover declarations"
+    rules = CssRules.rules(app_css)
+    btn = rule!(rules, ".candidate-btn", [])
+    assert decl(btn.body, "background") == "var(--color-base-300)"
+    assert decl(btn.body, "color") == "var(--color-base-content)"
 
-    for {scope, found} <- rail_blocks(app_css) do
-      assert length(found) == 1, "#{scope}: #{length(found)} blocks declare --cc-stop-hover"
+    for sel <- [".candidate-btn--stop", ".candidate-btn--undo"],
+        {selector, at} <- [{"#{sel}:hover", [@hover_media]}, {"#{sel}:focus-visible", []}] do
+      r = rule!(rules, selector, at)
+      assert decl(r.body, "border-color") == "var(--color-error)", selector
+      assert decl(r.body, "color") == nil, "#{selector} paints its label: R3 keeps hue off text"
     end
 
-    refute Blocks.strip_comments(presets) =~ ~r/--cc-[a-z]/,
-           "theme_presets.css declares a --cc- token; teach this guard the per-preset rail value"
+    # No ungated hover: a phone never sees a sticky red edge.
+    refute Enum.any?(
+             rules,
+             &(&1.selector =~ ~r/^\.candidate-btn--(stop|undo):hover$/ and &1.at == [])
+           )
 
-    # The prefers-dark copy is the dark block's measurement, not a third one.
-    assert stop_hover_recipe(app_css, "prefers-dark") == stop_hover_recipe(app_css, "dark")
+    refute Blocks.strip_comments(app_css) =~ ~r/--cc-[a-z]/,
+           "app.css declares or reads a --cc- token; the rail palette was deleted in rung 18"
+
+    refute Blocks.strip_comments(presets) =~ ~r/--cc-[a-z]/,
+           "theme_presets.css declares a --cc- token"
   end
 
-  test "the Stop and Undo hover label clears #{@aa_text}:1 on --cc-btn-bg in all ten variants (table prints first)",
-       %{blocks: blocks, app_css: app_css} do
-    rows = stop_hover_rows(blocks, app_css)
+  test "Stop and Undo: label clears #{@aa_text}:1 and the error border #{@aa_non_text}:1 in all ten variants (table prints first)",
+       %{blocks: blocks} do
+    rows =
+      for b <- blocks do
+        error = opaque(b, "--color-error")
+        btn = opaque(b, "--color-base-300")
+        card = opaque(b, "--color-base-100")
+
+        %{
+          variant: "#{b.id} #{b.mode}",
+          label: W.contrast(opaque(b, "--color-base-content"), btn),
+          border_btn: W.contrast(error, btn),
+          border_card: W.contrast(error, card)
+        }
+      end
 
     IO.puts(
-      "\n[stop-hover label on --cc-btn-bg]\n" <>
+      "\n[stop/undo: label on base-300, error border on base-300 / base-100]\n" <>
         String.pad_trailing("variant", 22) <>
         String.pad_trailing("label", 9) <>
-        String.pad_trailing("ratio", 9) <>
-        String.pad_trailing("painted", 9) <>
-        String.pad_trailing("floor", 7) <>
-        "raw-error\n" <>
+        String.pad_trailing("border/300", 12) <>
+        "border/100\n" <>
         Enum.map_join(rows, "\n", fn r ->
           String.pad_trailing(r.variant, 22) <>
-            String.pad_trailing(r.label_hex, 9) <>
-            String.pad_trailing(f4(r.ratio), 9) <>
-            String.pad_trailing(f4(r.painted), 9) <>
-            String.pad_trailing("#{@aa_text}", 7) <> f4(r.raw_error)
+            String.pad_trailing(f4(r.label), 9) <>
+            String.pad_trailing(f4(r.border_btn), 12) <> f4(r.border_card)
         end)
     )
 
     assert length(rows) == 10
 
     failures =
-      rows
-      |> Enum.filter(&(&1.ratio < @aa_text))
-      |> Enum.map(&"#{&1.variant}: stop-hover label #{&1.label_hex} #{f4(&1.ratio)}:1")
+      for r <- rows,
+          {what, ratio, floor} <- [
+            {"label", r.label, @aa_text},
+            {"border on base-300", r.border_btn, @aa_non_text},
+            {"border on base-100", r.border_card, @aa_non_text}
+          ],
+          ratio < floor,
+          do: "#{r.variant}: #{what} #{f4(ratio)}:1 < #{floor}"
 
-    assert failures == [],
-           "Stop/Undo hover labels under the #{@aa_text}:1 text floor:\n  " <>
-             Enum.join(failures, "\n  ")
+    assert failures == [], Enum.join(failures, "\n  ")
   end
 
-  test "positive control: the pre-retune error reproduces the old stop-hover figures",
-       %{app_css: app_css} do
-    old = W.parse!("oklch(63% 0.22 25)")
-
-    for {mode, want} <- @stop_hover_pre_retune do
-      {pct, endpoint, _raw, btn_bg} = stop_hover_recipe(app_css, mode)
-      label = W.mix_oklab(old, pct, endpoint)
-      got = W.contrast(label, btn_bg)
-
-      IO.puts(
-        "[stop-hover positive control] #{mode}: pre-retune label #{W.to_hex(label)} " <>
-          "#{f4(got)}:1 (painted #{f4(W.contrast_painted(label, btn_bg))}), " <>
-          "raw error #{f4(W.contrast(old, btn_bg))}:1"
-      )
-
-      assert Float.round(got, 2) == want,
-             "#{mode}: the pre-retune stop-hover measures #{f4(got)}, the old comment said " <>
-               "#{want}; the reader does not reproduce the arithmetic the comments came from."
+  test "anti-vacuity: a base-200 border would fail the non-text floor", %{blocks: blocks} do
+    # The floor can fire on these grounds: base-200 against base-300 is a
+    # near-invisible edge in every variant.
+    for b <- blocks do
+      assert W.contrast(opaque(b, "--color-base-200"), opaque(b, "--color-base-300")) <
+               @aa_non_text,
+             "#{b.id} #{b.mode}"
     end
   end
 end

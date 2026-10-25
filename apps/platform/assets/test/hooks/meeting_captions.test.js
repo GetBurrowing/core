@@ -252,16 +252,17 @@ describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)"
   // app.css and sets `--color-base-content: oklch(0% 0 0)`, so a
   // light-theme viewer got BLACK caption text on the `bg-black/75`
   // scrim. Not low contrast: invisible, and invisible to `mix test`.
-  it("emits the white slots for the speaker and the text", () => {
+  it("emits the on-viewer slots for the speaker and the text", () => {
     caption(hook, { id: "a", text: "hello there", final: true })
 
     const html = hook.el.innerHTML
 
-    // Attribution: white, separated from the text by WEIGHT only.
-    expect(html).toContain('<span class="font-semibold text-white">Ada</span>')
+    // Attribution: on-viewer (white in every theme), separated from the
+    // text by WEIGHT only. Rung 18: the viewer token replaced `text-white`.
+    expect(html).toContain('<span class="font-semibold text-on-viewer">Ada</span>')
     // The spoken line: the same white, at full strength (the old
     // `/90` is gone — the canvas's slot is `oklch(100% 0 0)`).
-    expect(html).toContain('<span class="text-white">hello there</span>')
+    expect(html).toContain('<span class="text-on-viewer">hello there</span>')
   })
 
   // Asserting the ABSENCE is the load-bearing half. This is a
@@ -291,7 +292,7 @@ describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)"
     // colour slot of its own.
     expect(hook.el.innerHTML).toContain("opacity-70")
     expect(hook.el.innerHTML).toContain("italic")
-    expect(hook.el.innerHTML).toContain('<span class="text-white">half a sent</span>')
+    expect(hook.el.innerHTML).toContain('<span class="text-on-viewer">half a sent</span>')
 
     // …and a final line does NOT get the interim treatment.
     caption(hook, { id: "f", text: "half a sentence", final: true })
@@ -369,8 +370,11 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     expect(hook.el.classList.has("opacity-0")).toBe(false)
     expect(hook.el.classList.has("pointer-events-none")).toBe(false)
 
-    // Warning, not error, and no raw hex.
-    expect(hook.el.innerHTML).toContain("text-warning")
+    // Warning, not error, and no raw hex. Rung 18: the hue is on the dot
+    // (`bg-warning`), never on the words, which stay `text-on-viewer`.
+    expect(hook.el.innerHTML).toContain("bg-warning")
+    expect(hook.el.innerHTML).toContain("font-semibold text-on-viewer")
+    expect(hook.el.innerHTML).not.toContain("text-warning")
     expect(hook.el.innerHTML).not.toContain("text-error")
     expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
 

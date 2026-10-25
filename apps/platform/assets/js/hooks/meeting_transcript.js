@@ -106,6 +106,30 @@ const GUEST_IDENTITY_PREFIX = "guest:"
 // it; the string must match that rule.
 const HAS_LINES_CLASS = "transcript-has-lines"
 
+// The agent's rung-3 colour slot, from `data-agent-slots` on `#meeting-room`
+// (`MeetingLive.agent_slots_json/2`), or null when the room has none for this
+// identity. Read at render time: the map follows the roster on every patch.
+export function agentSlot(identity, root = document) {
+  const raw = root?.getElementById?.("meeting-room")?.dataset?.agentSlots
+  if (!raw || !identity) return null
+  try {
+    const slot = JSON.parse(raw)[identity]
+    return typeof slot === "string" && /^[a-z]+$/.test(slot) ? slot : null
+  } catch (_e) {
+    return null
+  }
+}
+
+// The AGENT chip. With a slot it wears `data-agent-slot`, so app.css's slot
+// pointer rules give it the agent's own `--ag` border and `--ag-text` label
+// (the pair its tile rail and Ask-row name use). Without one it keeps the
+// neutral `text-subtle` outline. Same element either way.
+export function agentChip(slot) {
+  return slot
+    ? `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide transcript-agent-chip" data-agent-slot="${slot}" data-role="transcript-agent-chip">agent</span>`
+    : `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide text-subtle" data-role="transcript-agent-chip">agent</span>`
+}
+
 const MeetingTranscript = {
   mounted() {
     /** @type {{ id: string, speaker: string, identity: string, text: string, final: boolean, at: number }[]} */
@@ -344,9 +368,7 @@ const MeetingTranscript = {
       // has none: there is no change above it to mark.
       const rule = index === 0 ? "" : " border-t border-edge"
       const agent = group.identity && group.identity.startsWith(AGENT_IDENTITY_PREFIX)
-      const chip = agent
-        ? `<span class="badge badge-outline badge-xs text-[9px] font-bold uppercase tracking-wide text-subtle" data-role="transcript-agent-chip">agent</span>`
-        : ""
+      const chip = agent ? agentChip(agentSlot(group.identity)) : ""
 
       const rows = group.lines
         .map((line) => {

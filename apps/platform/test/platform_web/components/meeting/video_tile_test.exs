@@ -263,13 +263,15 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
       refute well_on == well_off, "both mic states draw the same well: #{well_on}"
       refute tone_on == tone_off, "both mic states draw the same tone: #{tone_on}"
 
-      # OFF is the loud one: an --color-error glyph in an --color-error well.
-      assert well_off =~ "bg-error/15"
-      assert tone_off =~ "text-error"
+      # OFF is the loud one: an --color-error-content glyph in a solid
+      # --color-error well (rung 18 stage 3: error on error/15 failed 3:1 over
+      # the band on a white frame).
+      assert well_off =~ ~r/(?<![\w-])bg-error(?![\w\/-])/
+      assert tone_off =~ ~r/(?<![\w-])text-error-content(?![\w-])/
 
-      # ON is deliberately weak: no well at all, white at low alpha.
+      # ON is deliberately weak: no well at all, on-viewer at low alpha.
       refute well_on =~ "bg-"
-      assert tone_on =~ "text-white/45"
+      assert tone_on =~ "text-on-viewer/45"
 
       # NOT --color-warning (warning means a human is being asked for
       # something, and a muted person asks nothing of anyone) and NOT
@@ -280,7 +282,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
       refute well_off =~ "success"
     end
 
-    test "the name is white, not base-content, because the scrim is black in both themes" do
+    test "the name is on-viewer, not base-content, because the scrim is the viewer ground in both themes" do
       # `--color-base-content` is `oklch(0% 0 0)` in light theme — black
       # text on a black scrim.
       assigns = %{p: participant()}
@@ -293,7 +295,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
       [name_class] =
         html |> doc() |> Floki.find(~s([data-role="tile-name"])) |> Floki.attribute("class")
 
-      assert name_class =~ "text-white"
+      assert name_class =~ "text-on-viewer"
       refute name_class =~ "text-base-content"
     end
   end

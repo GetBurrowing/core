@@ -812,7 +812,7 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     # The #883 honesty rule, re-tokened: an invite whose join reached no
     # subscriber is re-offered AND labelled — in `info`, because warning on
     # this rail means a human is being asked for something.
-    test "a pending row keeps the button, says Waiting in the info token, never warning" do
+    test "a pending row keeps the button, says Waiting in subtle text, never a status hue" do
       html = invite_rail(four_rows())
 
       pending = invite_row_html(html, "a-pend")
@@ -827,7 +827,9 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
         |> LazyHTML.query(~s([data-role="meeting-agent-invite-pending"]))
 
       assert [class] = LazyHTML.attribute(label, "class")
-      assert class =~ "text-info"
+      # Rung 18: no status hue on text; the pending word is subtle.
+      assert class =~ "text-subtle"
+      refute class =~ "text-info"
       assert squish(LazyHTML.text(label)) == "Waiting"
 
       fresh = invite_row_html(html, "a-free")

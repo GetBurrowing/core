@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
-import MeetingTranscript, { MAX_LINES, PIN_SLACK_PX, HAS_LINES_CLASS } from "../../js/hooks/meeting_transcript.js"
+import MeetingTranscript, { MAX_LINES, PIN_SLACK_PX, HAS_LINES_CLASS, agentSlot, agentChip } from "../../js/hooks/meeting_transcript.js"
 
 /**
  * Tests for the Transcript-tab hook (task 01a05b14 stage 5).
@@ -474,5 +474,55 @@ describe("MeetingTranscript", () => {
     expect(final).not.toContain("text-subtle")
     expect(final).not.toContain("italic")
     expect(interimCount(hook)).toBe(0)
+  })
+})
+
+// Rung 18 stage 3: the AGENT chip takes the agent's own slot from
+// `data-agent-slots` on #meeting-room, and keeps the neutral outline when the
+// room has no slot for that identity.
+describe("AGENT chip slot (rung 18 stage 3)", () => {
+  const root = (json) => ({
+    getElementById: (id) => (id === "meeting-room" ? { dataset: { agentSlots: json } } : null),
+  })
+
+  it("reads the agent's slot for its identity", () => {
+    const r = root(JSON.stringify({ "agent:a1": "teal", "agent:a2": "orange" }))
+    expect(agentSlot("agent:a1", r)).toBe("teal")
+    expect(agentSlot("agent:a2", r)).toBe("orange")
+  })
+
+  it("paints a known slot with data-agent-slot and drops text-subtle", () => {
+    const html = agentChip("teal")
+    expect(html).toContain('data-agent-slot="teal"')
+    expect(html).toContain("transcript-agent-chip")
+    expect(html).not.toContain("text-subtle")
+    expect(html).toContain('data-role="transcript-agent-chip"')
+  })
+
+  it("falls back to the neutral text-subtle outline when the slot is unknown", () => {
+    const r = root(JSON.stringify({ "agent:a1": "teal" }))
+    for (const slot of [agentSlot("agent:zz", r), agentSlot("agent:a1", root("not json")), agentSlot("agent:a1", root(undefined)), agentSlot("agent:a1", {})]) {
+      expect(slot).toBeNull()
+      const html = agentChip(slot)
+      expect(html).toContain("text-subtle")
+      expect(html).not.toContain("data-agent-slot")
+    }
+    // A slot value that is not a bare id is refused, never interpolated.
+    expect(agentSlot("agent:x", root(JSON.stringify({ "agent:x": '"><b>' })))).toBeNull()
+  })
+
+  it("renders the chip with the slot when #meeting-room carries one", () => {
+    const listeners = installDocumentStub()
+    document.getElementById = (id) =>
+      id === "meeting-room" ? { dataset: { agentSlots: JSON.stringify({ "agent:saru": "orange" }) } } : null
+    const hook = Object.create(MeetingTranscript)
+    hook.el = fakeHostEl()
+    hook.mounted()
+    listeners["meeting:caption"]({ detail: { id: "a", speaker: "Saru", identity: "agent:saru", text: "hi", final: true } })
+    expect(hook.el.innerHTML).toContain('data-agent-slot="orange"')
+    listeners["meeting:caption"]({ detail: { id: "b", speaker: "Mo", identity: "agent:mo", text: "yo", final: true } })
+    const chips = hook.el.innerHTML.match(/data-role="transcript-agent-chip"/g) || []
+    expect(chips).toHaveLength(2)
+    expect(hook.el.innerHTML).toMatch(/text-subtle" data-role="transcript-agent-chip"/)
   })
 })

@@ -507,7 +507,10 @@ defmodule PlatformWeb.Components.Meetings.InviteControlTest do
       class = class_of(add)
       assert class =~ "min-h-11"
       assert class =~ "border-dashed"
-      assert class =~ "text-primary"
+      # Rung 18: the label is base-content; the primary hue is on the icon.
+      assert class =~ "text-base-content"
+      refute class =~ "text-primary"
+      assert count(html, "[data-role=meeting-invite-add-people] span.hero-plus.text-primary") == 1
     end
 
     test "draft mode has no Add people row — the search box is already open above" do

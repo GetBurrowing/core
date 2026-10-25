@@ -1752,8 +1752,8 @@ defmodule PlatformWeb.MeetingLive do
     row = calendar_hour_row_rem(view)
 
     "background-image: repeating-linear-gradient(to bottom, transparent 0, " <>
-      "transparent calc(#{row}rem - 1px), var(--color-base-300) calc(#{row}rem - 1px), " <>
-      "var(--color-base-300) #{row}rem)"
+      "transparent calc(#{row}rem - 1px), color-mix(in oklab, var(--edge) 60%, transparent) calc(#{row}rem - 1px), " <>
+      "color-mix(in oklab, var(--edge) 60%, transparent) #{row}rem)"
   end
 
   @doc """
@@ -1933,8 +1933,10 @@ defmodule PlatformWeb.MeetingLive do
   neither is something the reader can still join.
   """
   @spec calendar_card_status_class(String.t()) :: String.t()
-  def calendar_card_status_class("live"), do: "border-success/40 bg-success/15 text-success"
-  def calendar_card_status_class("scheduled"), do: "border-primary/40 bg-primary/15 text-primary"
+  def calendar_card_status_class("live"), do: "border-success/40 bg-success/15 text-base-content"
+
+  def calendar_card_status_class("scheduled"),
+    do: "border-primary/40 bg-primary/12 text-base-content"
 
   def calendar_card_status_class(_other),
     do: "border-edge bg-base-200 text-subtle"
@@ -2488,9 +2490,9 @@ defmodule PlatformWeb.MeetingLive do
 
   # Colour is TYPE, expressed in semantic token slots. The mock's hex values
   # are scaffolding — a canvas chip is "the accent thing", not "#8b5cf6".
-  defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-secondary"
-  defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-primary"
-  defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-warning"
+  defp archive_chip_class(:canvas), do: "border-secondary/40 bg-secondary/10 text-base-content"
+  defp archive_chip_class(:summary), do: "border-primary/30 bg-primary/10 text-base-content"
+  defp archive_chip_class(:action_items), do: "border-warning/30 bg-warning/10 text-base-content"
   defp archive_chip_class(:transcript), do: "border-edge bg-base-200 text-subtle"
 
   # Mobile shortens the chips that CARRY a short form — `artifacts_for/2`
@@ -8918,6 +8920,29 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def participant_names_json(_), do: "{}"
+
+  @doc """
+  JSON object from an agent's LiveKit identity to its rung-3 colour slot,
+  rendered as `data-agent-slots` on `#meeting-room` (rung 18 stage 3), so
+  the transcript pane's AGENT chip (`meeting_transcript.js`) paints the
+  same `--ag` / `--ag-text` pair as that agent's tile and Ask row. Keyed by
+  `agent_gallery_identity/1`, the spelling the gallery promotes on; an
+  agent with no resolved slot is left out and its chip keeps the neutral
+  look.
+  """
+  def agent_slots_json(participants, slots) when is_list(participants) and is_map(slots) do
+    participants
+    |> Enum.flat_map(fn participant ->
+      case agent_participant?(participant) && Map.get(slots, Map.get(participant, :id)) do
+        slot when is_binary(slot) -> [{agent_gallery_identity(participant), slot}]
+        _ -> []
+      end
+    end)
+    |> Map.new()
+    |> Jason.encode!()
+  end
+
+  def agent_slots_json(_, _), do: "{}"
 
   @doc """
   The canvas the meeting's canvas TILE displays, or `nil` when the

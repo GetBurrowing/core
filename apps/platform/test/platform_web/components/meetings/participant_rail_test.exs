@@ -1564,18 +1564,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.attribute(button, "title") == ["Remove Burrow from this call"]
       assert Floki.attribute(button, "disabled") == []
 
-      # The mockup's `.kick`: always visible, neutral at rest (`--m`), the
-      # `--bad` tint only on hover — both from the stylesheet, so the
-      # markup carries no colour or visibility utility at all.
+      # The mockup's `.kick`: always visible, neutral at rest (`--subtle`),
+      # the error tint only on a desktop hover — both from the stylesheet
+      # (rung 18: theme tokens), so the markup carries no colour or
+      # visibility utility at all.
       assert Floki.attribute(button, "class") == ["kick"]
       assert Floki.text(button) |> String.trim() == "✕"
 
       css = ask_css()
 
       assert css =~
-               ".meeting-ask .kick{width:32px;height:32px;border-radius:8px;border:1px solid var(--b);background:transparent;color:var(--m);"
+               ".meeting-ask .kick{width:32px;height:32px;border-radius:8px;border:1px solid var(--edge);background:transparent;color:var(--subtle);"
 
-      assert css =~ ".meeting-ask .kick:hover{color:var(--bad);"
+      assert css =~
+               "@media (hover:hover) and (min-width:1024px){.meeting-ask .kick:hover{color:var(--color-error);"
     end
 
     test "the confirm opens for the matching row, with Cancel and Remove wired to the existing handlers" do
@@ -1868,10 +1870,13 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [glyph] = Floki.find(button, ".hero-microphone-slash")
       [class] = Floki.attribute(glyph, "class")
       # "No colour: muted is a setting, not an error" (canvas states table).
-      # The pressed colour is the mockup's `--t`, from the stylesheet.
+      # The pressed colour is base-content (the mockup's `--t`, rung 18),
+      # from the stylesheet.
       refute class =~ "error"
       refute class =~ "text-"
-      assert ask_css() =~ ~s|.meeting-ask .kick[aria-pressed="true"]{color:var(--t)}|
+
+      assert ask_css() =~
+               ~s|.meeting-ask .kick[aria-pressed="true"]{color:var(--color-base-content)}|
     end
 
     test "a row in mute_errors shows the shared feedback line and reverts the button to unmuted" do
@@ -2088,28 +2093,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   # written out here on purpose: if one changes in the stylesheet, the
   # change has to be made here too, against the mockup, by someone looking
   # at it.
-  @mockup_root_props [
-    "--bg:#0f1419",
-    "--s:#161d24",
-    "--s2:#1c252e",
-    "--b:#2a3540",
-    "--t:#e6edf3",
-    "--m:#8b98a5",
-    "--a:#22c3dc",
-    "--ai:#062a31",
-    "--live:#f59e0b",
-    "--ok:#34d399",
-    "--bad:#f87171"
-  ]
+  #
+  # Rung 18 (task 01a1557a stage 1) re-skinned the section to the page
+  # theme: the mockup's :root palette is gone and its colours are theme
+  # tokens on the masters' mapping (burrow-meeting.js). The geometry,
+  # shadow offsets and keyframes below are still the mockup's.
+  @mockup_palette ~w(--bg --s --s2 --b --t --m --a --ai --live --ok --bad)
 
   @mockup_values [
     # row grid and Ask key size
     "grid-template-columns:36px 1fr auto",
     "width:96px;height:40px",
-    "box-shadow:0 3px 0 #0e7f90,0 4px 12px rgba(34,195,220,.15)",
+    "box-shadow:0 3px 0 color-mix(in oklab,var(--color-info) 55%,var(--viewer)),0 4px 12px color-mix(in oklab,var(--color-info) 15%,transparent)",
     # the held "sink": the key drops 3px and shrinks
     ~s|.meeting-ask .ask[data-held="true"]{transform:translateY(3px) scale(.97);| <>
-      "box-shadow:0 0 0 #0e7f90,0 0 0 4px rgba(34,195,220,.28),inset 0 2px 6px rgba(0,0,0,.28)}",
+      "box-shadow:0 0 0 color-mix(in oklab,var(--color-info) 55%,var(--viewer)),0 0 0 4px color-mix(in oklab,var(--color-info) 28%,transparent),inset 0 2px 6px color-mix(in oklab,var(--viewer) 28%,transparent)}",
     # level bars: 3px wide, 4px -> 16px
     ".meeting-ask .bars i{width:3px;height:4px;background:currentColor;border-radius:2px}",
     "@keyframes bar{from{height:4px}to{height:16px}}",
@@ -2122,15 +2120,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   ]
 
   describe "meeting_ask.css against the mockup's ported values" do
-    test "every :root custom property in the mockup is declared identically" do
-      [root] =
-        Regex.run(~r/\.meeting-ask\{(--[^}]*)\}/, ask_css(), capture: :all_but_first)
+    test "the mockup's fixed-dark :root palette is gone: no rule declares or reads it" do
+      css = Regex.replace(~r|/\*.*?\*/|s, ask_css(), "")
+      refute Regex.match?(~r/\.meeting-ask\{--/, css)
 
-      props = root |> String.split(";", trim: true) |> Enum.map(&String.trim/1)
+      for token <- @mockup_palette do
+        refute css =~ "#{token}:", "meeting_ask.css still declares #{token}"
+        refute css =~ "var(#{token})", "meeting_ask.css still reads #{token}"
+      end
 
-      # Exact, both ways: a changed, dropped or added token fails.
-      assert props == @mockup_root_props,
-             "meeting_ask.css's palette drifted from the mockup's :root"
+      assert css =~ ".meeting-ask{color:var(--color-base-content);"
+      assert css =~ "background:var(--color-base-100);padding:12px 0 18px}"
     end
 
     test "the key layout, shadow and keyframe values are copied verbatim" do
@@ -2420,23 +2420,22 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       |> Enum.map(fn [sel, body] -> {String.trim(sel), body} end)
     end
 
-    test "meeting_ask.css reads --ag only in the .row rail, the .nm colour and the .av initials colour" do
+    test "meeting_ask.css reads --ag only in the .row rail, the .nm colour, the .av initials colour and the voice square" do
       readers =
         for {sel, body} <- ask_rules(), body =~ ~r/var\(--ag[\),-]/, do: sel
 
-      # The slot block re-declares the ten slots and reads only its own.
-      [block] = for {".meeting-ask", body} <- ask_rules(), body =~ "--ag-teal:", do: body
+      # Rung 18: no slot block. The section follows the page theme, so the
+      # pointers resolve from the theme block; the voice square is the one
+      # further reader (the slot at 14% over base-300, masters
+      # burrow-meeting.js).
+      assert for({".meeting-ask", body} <- ask_rules(), body =~ "--ag-teal:", do: body) == []
 
-      assert readers -- [".meeting-ask"] == [
+      assert readers == [
                ".meeting-ask .row",
                ".meeting-ask .nm",
-               ".meeting-ask .av"
+               ".meeting-ask .av",
+               ~s(.meeting-ask .av[data-voice="true"] [data-voice-waveform])
              ]
-
-      assert Enum.count(readers, &(&1 == ".meeting-ask")) == 1
-
-      for [_, ref] <- Regex.scan(~r/var\((--[a-z-]+)\)/, block),
-          do: assert(ref =~ ~r/^--ag-[a-z]+$/, "slot block reads #{ref}")
 
       {_, row} =
         Enum.find(ask_rules(), &(elem(&1, 0) == ".meeting-ask .row" and elem(&1, 1) =~ "--ag"))
@@ -2456,7 +2455,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
     # Saru's ruling: in the Ask row the avatar border signals HELD, so no
     # `.av` rule may put the agent hue on a border.
-    test "no .av rule puts --ag on a border; the idle border stays the neutral --b edge" do
+    test "no .av rule puts --ag on a border; the idle border stays the neutral --edge" do
       offenders =
         for {sel, body} <- ask_rules(),
             sel =~ ".av",
@@ -2470,7 +2469,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
                Enum.find(
                  ask_rules(),
                  &(elem(&1, 0) == ".meeting-ask .av" and
-                     elem(&1, 1) =~ "border:2px solid var(--b)")
+                     elem(&1, 1) =~ "border:2px solid var(--edge)")
                )
 
       # The detector fires on the shape it exists for.
@@ -2478,17 +2477,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
              |> Enum.any?(fn [_, p, v] -> p =~ ~r/^border/ and v =~ "--ag" end)
     end
 
-    test "the held avatar keeps --a and out-ranks the idle .av rules" do
+    test "the held avatar keeps the Ask key's info and out-ranks the idle .av rules" do
       held = ~s(.meeting-ask .row[data-held="true"] .av)
       [{^held, body}] = for {^held, _} = r <- ask_rules(), do: r
-      assert body =~ "border-color:var(--a)"
+      assert body =~ "border-color:var(--color-info)"
       refute body =~ "--ag"
       # Four class-level parts against the idle rule's two.
       assert length(Regex.scan(~r/\.[a-z]|\[/, held)) >
                length(Regex.scan(~r/\.[a-z]|\[/, ".meeting-ask .av"))
 
-      # The voice glyph keeps the section's neutral --t.
-      assert {~s(.meeting-ask .av[data-voice="true"]), "color:var(--t)"} in ask_rules()
+      # The voice glyph keeps the section's neutral base-content.
+      assert {~s(.meeting-ask .av[data-voice="true"]), "color:var(--color-base-content)"} in ask_rules()
     end
 
     test "no Ask-button, held, popover, kick, confirm, danger or status-dot rule reads --ag" do

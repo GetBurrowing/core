@@ -185,7 +185,7 @@ defmodule PlatformWeb.Components.Meetings.MeetingDetail do
       <.link
         href={ics_path(@meeting)}
         data-role="meeting-detail-ics"
-        class="flex min-h-11 items-center gap-2 rounded-lg border border-edge px-3 text-sm hover:border-primary hover:text-primary"
+        class="flex min-h-11 items-center gap-2 rounded-lg border border-edge px-3 text-sm lg:hover:border-primary"
       >
         <span class="hero-calendar-days size-4 flex-shrink-0" aria-hidden="true"></span>
         <span class="flex-1 truncate">Add to calendar</span>

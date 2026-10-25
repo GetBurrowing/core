@@ -367,8 +367,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         phx-value-email={@email_option}
         phx-target={@target}
       >
-        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-warning/15 text-warning">
-          <span class="hero-link size-4" aria-hidden="true"></span>
+        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-warning/15">
+          <span class="hero-link size-4 text-warning" aria-hidden="true"></span>
         </span>
         <span class="min-w-0 flex-1">
           <span
@@ -404,8 +404,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         phx-value-email={@email_option}
         phx-target={@target}
       >
-        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-info/15 text-info">
-          <span class="hero-sparkles size-4" aria-hidden="true"></span>
+        <span class="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-info/15">
+          <span class="hero-sparkles size-4 text-info" aria-hidden="true"></span>
         </span>
         <span class="min-w-0 flex-1">
           <span
@@ -550,11 +550,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-clipboard-text={@copy_url}
         data-role="meeting-invite-copy"
         data-entry-id={@entry.id}
-        class="flex shrink-0 items-center justify-center gap-1 rounded-lg border border-warning/35 bg-warning/10 px-2 text-[11px] font-semibold text-warning min-h-11 min-w-11 hover:bg-warning/20"
+        class="flex shrink-0 items-center justify-center gap-1 rounded-lg border border-warning/35 bg-warning/10 px-2 text-[11px] font-semibold text-base-content min-h-11 min-w-11 lg:hover:bg-warning/20"
         aria-label={"Copy the personal link for #{@entry.name}"}
         title="Copy link"
       >
-        <span class="hero-link size-3.5" aria-hidden="true"></span>
+        <span class="hero-link size-3.5 text-warning" aria-hidden="true"></span>
         <span>Link</span>
       </button>
     </div>
@@ -604,11 +604,11 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         :if={@mode == :live}
         type="button"
         data-role="meeting-invite-add-people"
-        class="flex w-full items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-left text-sm font-medium text-primary min-h-11 hover:bg-primary/5"
+        class="flex w-full items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-left text-sm font-medium text-base-content min-h-11 lg:hover:bg-primary/5"
         phx-click={event(@mode, :add_people)}
         phx-target={@target}
       >
-        <span class="hero-plus size-4 shrink-0" aria-hidden="true"></span>
+        <span class="hero-plus size-4 shrink-0 text-primary" aria-hidden="true"></span>
         <span>Add people</span>
       </button>
     </div>

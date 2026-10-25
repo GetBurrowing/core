@@ -10773,9 +10773,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       low_readout = confidence_span(html, low.id)
       high_readout = confidence_span(html, high.id)
 
-      # 1. warning tone
-      assert low_readout =~ "text-warning"
-      refute high_readout =~ "text-warning"
+      # 1. emphasis tone: semibold base-content against subtle (rung 18
+      #    took the warning hue off text; the weight and ink carry it)
+      assert low_readout =~ "font-semibold text-base-content"
+      refute high_readout =~ "font-semibold"
 
       # 2. `~` prefix on the mono value — the non-colour half, so the
       #    signal survives a colourblind reader and a greyscale print.
@@ -10820,7 +10821,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       readout = confidence_span(html, none.id)
 
       assert readout =~ ~s(data-low-confidence="false")
-      refute readout =~ "text-warning"
+      refute readout =~ "font-semibold"
       refute readout =~ "low confidence"
     end
 
@@ -10829,7 +10830,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting
     } do
       # A producer opens the table BECAUSE a row looked wrong. Showing
-      # `0.55` plain there, two clicks after `~0.55` in warning tone,
+      # `0.55` plain there, two clicks after `~0.55` in the emphasis tone,
       # would read as two different numbers.
       {:ok, low} = enqueue_intent(meeting, %{classified_intent: "shaky_row", confidence: 0.55})
 
@@ -10846,7 +10847,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         )
 
       assert cell =~ ~s(data-low-confidence="true")
-      assert cell =~ "text-warning"
+      assert cell =~ "font-semibold text-base-content"
       assert cell =~ "~0.55"
       assert cell =~ "low confidence"
 
@@ -13811,11 +13812,12 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ "meeting live"
     end
 
-    test "a live room renders the pill, on the success slot, with the word as text", %{
-      conn: conn,
-      meeting: meeting,
-      space: space
-    } do
+    test "a live room renders the pill, hue on its border and fill, with the word as base-content text",
+         %{
+           conn: conn,
+           meeting: meeting,
+           space: space
+         } do
       seed_meeting_presence(space, "user", "Ada Human")
       assert %Meetings.Room{status: "active"} = Meetings.get_active_room(space.id)
 
@@ -13829,7 +13831,12 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> LazyHTML.query(~s([data-role="meeting-live-pill"]))
         |> LazyHTML.attribute("class")
 
-      assert pill_class =~ "text-success"
+      # Rung 18: the success hue is the pill's border and fill; the word is
+      # base-content (a status hue never sits on text).
+      assert pill_class =~ "border-success/40"
+      assert pill_class =~ "bg-success/15"
+      assert pill_class =~ "text-base-content"
+      refute pill_class =~ "text-success"
       assert pill_class =~ "rounded-full"
       assert pill_class =~ "text-[10px]"
 

@@ -418,6 +418,9 @@
         phx-hook="MeetingRoom"
         class="hidden"
         data-participant-names={participant_names_json(assigns[:participants] || [])}
+        data-agent-slots={
+          agent_slots_json(assigns[:participants] || [], assigns[:agent_slots] || %{})
+        }
       >
       </div>
       <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
@@ -545,7 +548,7 @@
          while `[data-role="meeting-controls"]` keeps `flex-shrink-0` and its
          44px touch targets. Acceptance bar: no horizontal PAGE scroll at
          390px, every control reachable, and no element at width 0. --%>
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3 lg:grid lg:grid-cols-[1fr_auto_1fr]">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3 lg:grid lg:grid-cols-[1fr_auto_1fr]">
         <%!-- `lg:grid lg:grid-cols-[1fr_auto_1fr]` (task 01a0cf5d stage 1,
            item 2) makes this bar centre the stage-mode switcher on ITSELF,
            not on whatever space its two neighbours happen to leave over —
@@ -846,7 +849,7 @@
              title; see the header's comment for the widths. --%>
             <span
               :if={@room_live?}
-              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-success"
+              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
               data-role="meeting-live-pill"
             >
               <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
@@ -1089,7 +1092,8 @@
         <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
            clicking one pushes `set_stage_mode` with the target mode and
            the LV swaps `@current_stage_mode`. The active button gets the
-           daisyui segmented-active treatment (`bg-base-200 text-primary`);
+           daisyui segmented-active ground (`bg-base-200`) with base-content
+           text and a primary icon (rung 18: hue off the text);
            switching is pure presentation — the other modes' underlying
            state is untouched.
 
@@ -1193,12 +1197,17 @@
             class={[
               "join-item btn btn-sm relative min-h-11 gap-1.5",
               if(@current_stage_mode == mode,
-                do: "bg-base-200 text-primary",
+                do: "bg-base-200 text-base-content",
                 else: "btn-ghost text-subtle"
               )
             ]}
           >
-            <span class={[stage_mode_icon(mode), "size-4"]}></span>
+            <span class={[
+              stage_mode_icon(mode),
+              "size-4",
+              @current_stage_mode == mode && "text-primary"
+            ]}>
+            </span>
             <%!-- `lg:hidden xl:inline` (task 01a0e091 stage 2, the canvas's
                step 4): icon-only from 1024 to 1279px, where the left track
                could not hold the pills and the right track could not hold
@@ -1985,7 +1994,7 @@
                   <p
                     hidden
                     data-screen-share-sharer-label
-                    class="pointer-events-none absolute left-3 top-3 z-[2] inline-flex max-w-[70%] items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs font-medium text-white"
+                    class="pointer-events-none absolute left-3 top-3 z-[2] inline-flex max-w-[70%] items-center gap-1.5 rounded-full bg-viewer/60 px-2.5 py-1 text-xs font-medium text-on-viewer"
                   >
                     <span class="hero-computer-desktop size-4 shrink-0" aria-hidden="true"></span>
                     <span class="truncate" data-screen-share-sharer-name></span>
@@ -2417,7 +2426,7 @@
                 class={[
                   "btn btn-sm btn-ghost btn-square min-h-11",
                   if(@captions_visible,
-                    do: "bg-base-300 text-base-content shadow-inner",
+                    do: "bg-base-300 text-base-content shadow-[inset_0_1px_3px_var(--shade)]",
                     else: "text-base-content"
                   )
                 ]}
@@ -3403,7 +3412,7 @@
         phx-update="ignore"
         data-role="meeting-captions"
         data-meeting-id={@meeting.id}
-        class="w-full py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
+        class="w-full py-3 rounded-xl bg-viewer/75 backdrop-blur-sm text-sm text-on-viewer shadow-lg transition-opacity duration-300"
         aria-live="polite"
         aria-label="Meeting captions"
       >
@@ -3469,7 +3478,7 @@
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"
     >
-      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-200/60 px-3 sm:gap-3">
+      <header class="flex h-12 flex-shrink-0 items-center gap-2 border-b border-edge bg-base-100/60 px-3 sm:gap-3">
         <div class="flex min-w-0 items-center gap-2">
           <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
           <h1 class="truncate text-sm font-semibold">Meetings</h1>
@@ -3490,7 +3499,7 @@
            own hero-icon and an aria-label naming it; `data-view` (the id) is
            the stable test contract. --%>
         <div
-          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-100 p-0.5"
+          class="flex flex-shrink-0 items-center gap-0.5 rounded-lg border border-edge bg-base-200 p-0.5"
           data-role="meetings-view-toggle"
           role="group"
           aria-label="Meetings view"
@@ -3504,8 +3513,8 @@
             class={[
               "flex min-h-11 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition sm:min-h-9",
               @meetings_view == entry.id &&
-                "bg-base-200 text-base-content shadow-sm",
-              @meetings_view != entry.id && "text-subtle hover:text-base-content"
+                "bg-base-100 text-base-content shadow-sm",
+              @meetings_view != entry.id && "text-subtle lg:hover:text-base-content"
             ]}
           >
             <span class={[entry.icon, "size-4 flex-shrink-0"]}></span>
@@ -3651,7 +3660,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 type in @archive_types && "border-primary bg-primary text-primary-content",
                 type not in @archive_types &&
-                  "border-edge bg-base-100 text-subtle hover:text-base-content"
+                  "border-edge bg-base-100 text-subtle lg:hover:text-base-content"
               ]}
             >
               <span class={[archive_type_icon(type), "size-3.5 flex-shrink-0"]}></span>
@@ -3674,7 +3683,7 @@
                 "inline-flex min-h-11 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition sm:min-h-9",
                 @archive_person_id && "border-primary bg-primary text-primary-content",
                 is_nil(@archive_person_id) &&
-                  "border-edge bg-base-100 text-subtle hover:text-base-content"
+                  "border-edge bg-base-100 text-subtle lg:hover:text-base-content"
               ]}
             >
               <span class="hero-user size-3.5 flex-shrink-0"></span>
@@ -3766,7 +3775,7 @@
               <.link
                 patch={archive_clear_path(assigns)}
                 data-action="archive-clear-filters"
-                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-edge bg-base-100 px-4 text-sm font-medium hover:border-primary hover:text-primary"
+                class="mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-edge bg-base-100 px-4 text-sm font-medium lg:hover:border-primary"
               >
                 <span class="hero-arrow-uturn-left size-4 flex-shrink-0"></span>
                 <span>Clear search and filters</span>
@@ -3795,7 +3804,9 @@
                         artifacts = archive_artifacts(@archive_artifacts, entry) do %>
                     <article
                       class={[
-                        "flex gap-3 rounded-lg border border-edge bg-base-100 p-2.5",
+                        "flex gap-3 rounded-lg border bg-base-100 p-2.5",
+                        entry.status == "cancelled" && "border-error/40",
+                        entry.status != "cancelled" && "border-edge",
                         section.dim? && "opacity-60"
                       ]}
                       data-role="archive-row"
@@ -3819,7 +3830,7 @@
                       <div class="flex min-w-0 flex-1 flex-col">
                         <.link
                           navigate={~p"/meetings/#{entry.slug}"}
-                          class="flex min-h-11 items-center text-sm font-semibold hover:text-primary sm:min-h-0"
+                          class="flex min-h-11 items-center text-sm font-semibold lg:hover:underline lg:hover:decoration-primary sm:min-h-0"
                           data-role="archive-row-title"
                         >
                           <span class="truncate">{entry.name}</span>
@@ -3828,7 +3839,7 @@
                         <span
                           class={[
                             "truncate text-xs sm:hidden",
-                            entry.status == "cancelled" && "text-error",
+                            entry.status == "cancelled" && "text-base-content",
                             entry.status != "cancelled" && "text-subtle"
                           ]}
                           data-role="archive-row-subtitle-mobile"
@@ -3838,7 +3849,7 @@
                         <span
                           class={[
                             "hidden truncate text-xs sm:block",
-                            entry.status == "cancelled" && "text-error",
+                            entry.status == "cancelled" && "text-base-content",
                             entry.status != "cancelled" && "text-subtle"
                           ]}
                           data-role="archive-row-subtitle"
@@ -4067,7 +4078,7 @@
              beside it. --%>
             <span
               :if={@calendar_zone_assumed?}
-              class="ml-1 whitespace-nowrap text-[10px] font-medium text-warning"
+              class="ml-1 whitespace-nowrap text-[10px] font-medium text-base-content"
               data-role="calendar-timezone-assumed-note"
             >
               assumed, not detected
@@ -4173,7 +4184,7 @@
 
             <div
               :for={day <- calendar_week_days(@calendar_anchor_date, @calendar_time_zone)}
-              class="relative border-l border-edge"
+              class={["relative border-l border-edge", day.today? && "bg-primary/4"]}
               style={calendar_hour_rules_style(:week)}
               data-role="calendar-day-column"
               data-date={Date.to_iso8601(day.date)}
@@ -4239,8 +4250,10 @@
                     # growing the box instead is what collided.
                     placement.compact? && "flex-row items-center gap-1.5",
                     !placement.compact? && "flex-col items-start",
-                    meeting.status == "live" && "border-success bg-success/15 hover:bg-success/25",
-                    meeting.status != "live" && "border-primary bg-primary/15 hover:bg-primary/25",
+                    meeting.status == "live" &&
+                      "border-success bg-success/15 lg:hover:bg-success/25",
+                    meeting.status != "live" &&
+                      "border-primary bg-primary/15 lg:hover:bg-primary/25",
                     @selected_meeting_id == meeting.id && "ring-2 ring-primary"
                   ]
                 }
@@ -4312,7 +4325,7 @@
               phx-click="select_calendar_day"
               phx-value-date={Date.to_iso8601(day.date)}
               aria-current={Date.compare(day.date, @calendar_selected_date) == :eq && "date"}
-              class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition hover:bg-base-300/60"
+              class="flex min-h-11 flex-col items-center justify-center gap-0.5 px-0 py-1.5 transition lg:hover:bg-base-300/60"
               data-role="calendar-strip-day"
               data-date={Date.to_iso8601(day.date)}
               data-selected={Date.compare(day.date, @calendar_selected_date) == :eq && "true"}
@@ -4327,7 +4340,8 @@
                keeps meaning exactly one thing: selection. --%>
               <span class={[
                 "text-[10px] font-semibold uppercase leading-none tracking-widest",
-                day.today? && "text-primary",
+                day.today? &&
+                  "text-base-content underline decoration-primary decoration-2 underline-offset-2",
                 !day.today? && "text-subtle"
               ]}>
                 {calendar_weekday_initial(day.date)}
@@ -4417,7 +4431,7 @@
             <.link
               :for={meeting <- day_cards}
               navigate={~p"/meetings/#{meeting.slug}"}
-              class="flex min-h-14 items-center gap-3 px-3 py-2.5 hover:bg-base-200/60 active:bg-base-200"
+              class="flex min-h-14 items-center gap-3 px-3 py-2.5 lg:hover:bg-base-200/60 active:bg-base-200"
               data-role="meeting-card"
               data-meeting-id={meeting.id}
               data-meeting-status={meeting.status}
@@ -4642,7 +4656,7 @@
       <%!-- ── Meeting detail sheet — below `lg` (mobile frame 2) ──────────
          The same selection, the same two shared components, a different
          presentation: a bottom sheet over the day view rather than a rail
-         beside it. Shape is the create sheet's — `bg-black/40` backdrop
+         beside it. Shape is the create sheet's — `bg-scrim` backdrop
          that click-dismisses, `items-end` so it rises from the bottom
          edge a thumb starts at — plus the frames' drag handle.
 
@@ -4663,7 +4677,7 @@
         aria-labelledby="meeting-detail-sheet-title"
       >
         <div
-          class="absolute inset-0 bg-black/40"
+          class="absolute inset-0 bg-scrim"
           phx-click="close_meeting_detail"
           aria-hidden="true"
           data-role="meeting-detail-sheet-backdrop"
@@ -4673,7 +4687,7 @@
         <div class="relative flex max-h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-base-100 pb-[env(safe-area-inset-bottom)] shadow-2xl">
           <div class="flex flex-none justify-center pt-2">
             <span
-              class="h-1 w-8 rounded-full bg-base-300"
+              class="h-1 w-8 rounded-full bg-subtle"
               data-role="meeting-detail-sheet-handle"
               aria-hidden="true"
             >
@@ -4791,7 +4805,7 @@
       <%!-- ── New-meeting create sheet ────────────────────────────────────
          Task 019fb955-1d7b stage 4. The sheet CHROME is unchanged from
          the stage-2 start-meeting sheet — full-bleed slide-up below
-         `sm`, centred card above, `bg-black/40` backdrop that
+         `sm`, centred card above, `bg-scrim` backdrop that
          click-dismisses — because that is already the geometry the
          canvas draws. What changed is what the panel holds: a
          schedulable time, a required project, and a staged invite list.
@@ -4813,7 +4827,7 @@
       >
         <%!-- Backdrop (click to dismiss) --%>
         <div
-          class="absolute inset-0 bg-black/40"
+          class="absolute inset-0 bg-scrim"
           phx-click="close_start_meeting_sheet"
           aria-hidden="true"
           data-role="start-meeting-sheet-backdrop"
@@ -4846,7 +4860,7 @@
               <button
                 type="submit"
                 form="start-meeting-form"
-                class="btn btn-ghost btn-sm px-3 font-semibold text-primary min-h-11 sm:hidden"
+                class="btn btn-ghost btn-sm px-3 font-semibold text-base-content min-h-11 sm:hidden"
                 data-role="meeting-create-submit-mobile"
               >
                 Create
@@ -4899,7 +4913,7 @@
               phx-click="meet_now"
               disabled={@meet_now_pending?}
               data-role="meeting-meet-now"
-              class="flex w-full min-h-11 items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-3 text-left transition-colors hover:bg-base-300 disabled:opacity-60"
+              class="flex w-full min-h-11 items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-3 text-left transition-colors lg:hover:bg-base-300 disabled:opacity-60"
             >
               <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
               <span class="min-w-0">
@@ -4942,7 +4956,7 @@
               <%!-- Inline error (server-side validation feedback) --%>
               <div
                 :if={@start_meeting_error}
-                class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
+                class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-base-content"
                 data-role="start-meeting-error"
               >
                 {@start_meeting_error}
@@ -4954,7 +4968,7 @@
                   for="start-meeting-name"
                   class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
-                  Name <span class="text-error">*</span>
+                  Name <span class="text-base-content">*</span>
                 </label>
                 <input
                   id="start-meeting-name"
@@ -5043,7 +5057,7 @@
                   for="start-meeting-project"
                   class="text-xs font-semibold uppercase tracking-wider text-base-content"
                 >
-                  Project <span class="text-error">*</span>
+                  Project <span class="text-base-content">*</span>
                 </label>
                 <select
                   id="start-meeting-project"

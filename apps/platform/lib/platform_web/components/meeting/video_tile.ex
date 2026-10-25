@@ -92,8 +92,9 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       Nine unmuted people is nine icons; at full strength the one muted
       person stops standing out and the feature inverts. The meaning lives
       in the CONTRAST between the two states, not in either alone.
-    * OFF gets the full treatment: `--color-error` glyph in an
-      `--color-error`-tinted well.
+    * OFF gets the full treatment: a `--color-error-content` glyph in a
+      solid `--color-error` well (rung 18 stage 3: the error glyph on an
+      error/15 tint fell under 3:1 over the band on a light frame).
     * Camera renders ONLY when off. A tile with no video already says so,
       and the avatar fallback is untouched, so a camera-off tile reads as a
       person with their camera down rather than as a failed feed.
@@ -103,7 +104,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   `--color-success`: reserved for SPEAKING, a later ticket that will want
   the tile border. That channel is left unspent.
 
-  ### Why `text-white` and not `--color-base-content`
+  ### Why `text-on-viewer` and not `--color-base-content`
 
   The design canvas assigns `--color-base-content` to the name and to the
   ON glyph. That is wrong on this surface: in light theme
@@ -111,8 +112,9 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   the scrim is black in BOTH themes, so the name would be black on black in
   light mode. The canvas got the reasoning right one row above, for the
   scrim itself, and did not carry it down to the content sitting on that
-  ground. The shipped name label already used `text-white` over
-  `from-black/60`, so this follows the existing precedent.
+  ground. The name and the ON glyph are `text-on-viewer` over a
+  `from-viewer/72` band (rung 18: the viewer tokens, white on black in
+  every theme).
   `--color-error` keeps its semantic token. Its value differs per theme
   (task 01a160c4 retuned it: `#da1729` light, `#f53c41` dark).
 
@@ -261,12 +263,12 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
            `title` tooltips and blind `elementFromPoint`. --%>
       <div
         data-tile-name-bar
-        class="absolute inset-x-0 bottom-0 flex h-[40%] min-h-7 items-end bg-gradient-to-t from-black/[0.72] to-transparent"
+        class="absolute inset-x-0 bottom-0 flex h-[40%] min-h-7 items-end bg-gradient-to-t from-viewer/72 to-transparent"
       >
         <div class="flex h-7 w-full items-center gap-1.5 px-2">
           <span
             data-role="tile-name"
-            class="min-w-0 flex-1 truncate text-[13px] font-medium leading-none text-white"
+            class="min-w-0 flex-1 truncate text-[13px] font-medium leading-none text-on-viewer"
           >
             {@name}
           </span>
@@ -332,10 +334,13 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   defp camera_state(true), do: :off
   defp camera_state(_off?), do: :on
 
-  # OFF gets a tinted well; ON gets NO well at all — not a neutral one.
+  # OFF gets a solid error well; ON gets NO well at all — not a neutral one.
   # `bg-base-300` over arbitrary video would be a small opaque box on a
   # moving image, which is the corner-badge failure mode again.
-  defp well_class(:off), do: "size-5 rounded-md bg-error/15"
+  # Rung 18 stage 3 fixup: a SOLID error well with an error-content glyph.
+  # The masters' error glyph on error/15 paints 1.0-2.7:1 over the band on a
+  # white frame (meeting_reskin_contrast_guard_test.exs), under 3:1.
+  defp well_class(:off), do: "size-5 rounded-md bg-error"
   defp well_class(_state), do: "size-4"
 
   # The glyph is bigger in the weak state than in the strong one: the ON
@@ -344,12 +349,12 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   defp glyph_size(:off), do: "size-3.5"
   defp glyph_size(_state), do: "size-4"
 
-  # `text-white`, not `text-base-content`: the scrim is black in both
-  # themes and `--color-base-content` is pure black in light theme. See
-  # the moduledoc. `--color-error` is the same in both themes and keeps
+  # `text-on-viewer`, not `text-base-content`: the scrim is the viewer
+  # ground in both themes and `--color-base-content` is near-black in light
+  # theme. See the moduledoc. `--color-error` is the same in both themes and keeps
   # its semantic token.
-  defp glyph_tone(:off), do: "text-error"
-  defp glyph_tone(_state), do: "text-white/45"
+  defp glyph_tone(:off), do: "text-error-content"
+  defp glyph_tone(_state), do: "text-on-viewer/45"
 
   # `hero-microphone-slash` resolves and paints as of FE-19 — see the
   # moduledoc. It is our vendored glyph, not an upstream Heroicon.

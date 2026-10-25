@@ -179,7 +179,7 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert rule =~ ~r/(?<!-webkit-)user-select:\s*none/
   end
 
-  test "its colour comes from the section's custom properties, not raw hex or palette utilities",
+  test "its colour comes from the theme's info slot, not raw hex or palette utilities",
        %{html: html} do
     markup = controls(html) |> LazyHTML.to_html()
 
@@ -196,10 +196,10 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert Regex.match?(@fixed_palette, ~s(<span class="bg-red-500">))
 
     # And it does have a colour, so "no hex in the markup" is not simply
-    # "no colour": the Ask mockup's fill and label are the section's
-    # `--a` / `--ai` custom properties, declared once in `meeting_ask.css`.
+    # "no colour": the Ask key's fill and label are the page theme's info
+    # slot and its content colour (rung 18), read in `meeting_ask.css`.
     css = File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
     [rule] = Regex.run(~r/\.meeting-ask \.ask\{[^}]*\}/, css)
-    assert rule =~ "background:var(--a);color:var(--ai);"
+    assert rule =~ "background:var(--color-info);color:var(--color-info-content);"
   end
 end

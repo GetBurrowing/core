@@ -266,10 +266,11 @@ defmodule PlatformWeb.Components.Meetings.CallRecap do
                 <p class="text-sm">{candidate.evidence_quote}</p>
                 <a
                   href={CandidateDisplay.outcome_path(candidate)}
-                  class="mt-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-primary"
+                  class="mt-1 inline-flex min-h-11 items-center gap-1.5 text-sm text-base-content"
                   data-role="call-recap-outcome-link"
                 >
-                  <span class="hero-arrow-top-right-on-square size-4" aria-hidden="true"></span>
+                  <span class="hero-arrow-top-right-on-square size-4 text-primary" aria-hidden="true">
+                  </span>
                   <span data-role="call-recap-outcome-label">
                     {CandidateDisplay.outcome_label(candidate)}
                   </span>

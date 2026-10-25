@@ -24,11 +24,10 @@ defmodule PlatformWeb.Components.Meeting.VoiceWaveform do
 
     * in a gallery tile the wrapper sets `text-base-content`, so the bars
       ARE `base-content /60` on `base-200` in both themes;
-    * in the participant rail the Agents section is the Ask mockup's
-      fixed-dark surface (`.meeting-ask`, `assets/css/meeting_ask.css`),
-      whose text colour is its own `--t`. `base-content` there would be the
-      LIGHT theme's near-black on that dark ground and the bars would
-      vanish, so the rail glyph inherits `--t` instead.
+    * in the participant rail the Agents section (`.meeting-ask`,
+      `assets/css/meeting_ask.css`) follows the page theme since rung 18,
+      so the rail glyph inherits base-content there too; that stylesheet
+      paints the square with the agent's slot at 14% over base-300.
 
   No new colour token, no raw hex, never `primary` (cyan stays the
   speaking ring and the Ask key).

@@ -93,7 +93,7 @@ defmodule PlatformWeb.MeetingBarLive do
       phx-hook="MeetingBar"
       data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
       class={[
-        "fixed bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px))] inset-x-0 z-40 h-12 bg-base-200 border-t border-edge shadow-lg flex items-center gap-3 px-4",
+        "fixed bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px))] inset-x-0 z-40 h-12 bg-base-100 border-t border-edge shadow-lg flex items-center gap-3 px-4",
         if(@sidebar_collapsed, do: "lg:left-14", else: "lg:left-56"),
         if(!@meeting_active || @on_meeting_page, do: "hidden")
       ]}
@@ -103,7 +103,7 @@ defmodule PlatformWeb.MeetingBarLive do
         <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
         <.link
           navigate={"/chat/#{@space_slug || @space_id}"}
-          class="truncate font-medium text-success hover:text-success/80 transition-colors text-sm"
+          class="truncate font-medium text-base-content lg:hover:text-subtle transition-colors text-sm"
         >
           {@space_name || "Meeting"}
         </.link>
@@ -133,14 +133,17 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@mic_on,
-            do: "text-base-content hover:bg-base-300",
-            else: "text-error bg-error/10 hover:bg-error/20"
+            do: "text-base-content lg:hover:bg-base-300",
+            else: "text-base-content bg-error/10 lg:hover:bg-error/20"
           ),
           @mic_pending && "ring-2 ring-warning"
         ]}
         title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
       >
-        <span class={["size-4", if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash")]} />
+        <span class={[
+          "size-4",
+          if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash text-error")
+        ]} />
       </button>
 
       <%!-- Camera toggle. Same JS-hook pathway as mic, see above. --%>
@@ -150,8 +153,8 @@ defmodule PlatformWeb.MeetingBarLive do
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@camera_on,
-            do: "text-base-content hover:bg-base-300",
-            else: "text-subtle hover:bg-base-300"
+            do: "text-base-content lg:hover:bg-base-300",
+            else: "text-subtle lg:hover:bg-base-300"
           )
         ]}
         title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}
@@ -167,7 +170,7 @@ defmodule PlatformWeb.MeetingBarLive do
            where the join broadcast fires before the Meeting row exists). --%>
       <.link
         navigate={return_to_call_path(@meeting_slug, @space_slug, @space_id)}
-        class="rounded-lg px-2.5 py-1 text-xs font-medium text-success hover:bg-success/10 transition-colors hidden sm:inline-flex"
+        class="rounded-lg px-2.5 py-1 text-xs font-medium text-base-content lg:hover:bg-success/10 transition-colors hidden sm:inline-flex"
       >
         Return to call
       </.link>
@@ -177,7 +180,7 @@ defmodule PlatformWeb.MeetingBarLive do
         phx-click="leave_meeting"
         phx-target={@myself}
         data-bar-leave
-        class="rounded-lg px-2.5 py-1 text-xs font-medium text-error hover:bg-error/10 transition-colors"
+        class="rounded-lg px-2.5 py-1 text-xs font-medium text-base-content bg-error/15 lg:hover:bg-error/25 transition-colors"
         title="Leave meeting"
       >
         Leave

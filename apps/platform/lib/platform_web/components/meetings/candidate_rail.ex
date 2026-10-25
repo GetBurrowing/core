@@ -320,7 +320,7 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
         </div>
       </details>
 
-      <p :if={@error} class="text-warning mt-2 text-xs" data-role="meeting-candidate-error">
+      <p :if={@error} class="text-base-content mt-2 text-xs" data-role="meeting-candidate-error">
         {@error}
       </p>
     </section>

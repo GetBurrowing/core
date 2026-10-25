@@ -1106,7 +1106,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
           >
             <span
               :if={row.state == :pending}
-              class="text-info"
+              class="text-subtle"
               data-role="meeting-agent-invite-pending"
             >
               Waiting
@@ -1313,7 +1313,10 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         class={mic_class(@native, @mic_on, @mic_pending)}
       >
         <span
-          class={["size-4", if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash")]}
+          class={[
+            "size-4",
+            if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash text-error")
+          ]}
           aria-hidden="true"
         >
         </span>
@@ -1332,10 +1335,13 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         aria-busy={if @native && @camera_pending, do: "true"}
         aria-pressed={to_string(!@camera_on)}
         aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
-        class={camera_class(@native, @camera_pending)}
+        class={camera_class(@native, @camera_on, @camera_pending)}
       >
         <span
-          class={["size-4", if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash")]}
+          class={[
+            "size-4",
+            if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash text-error")
+          ]}
           aria-hidden="true"
         >
         </span>
@@ -1367,9 +1373,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         phx-click={@leave_event}
         data-role={@leave_role}
         aria-label="Leave the call"
-        class="btn btn-sm rounded-field gap-2 border-error/40 bg-error/15 font-normal text-error hover:bg-error/25"
+        class="btn btn-sm rounded-field gap-2 border-error/40 bg-error/15 font-normal text-base-content lg:hover:bg-error/25"
       >
-        <span class="hero-arrow-right-start-on-rectangle size-4" aria-hidden="true"></span>
+        <span class="hero-arrow-right-start-on-rectangle size-4 text-error" aria-hidden="true"></span>
         <span class="call-control-label">Leave</span>
       </button>
 
@@ -1384,7 +1390,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         :if={@native && @media_error}
         role="alert"
         data-role="call-control-media-error"
-        class="min-w-0 basis-full text-center text-sm leading-snug break-words text-error"
+        class="min-w-0 basis-full text-center text-sm leading-snug break-words text-base-content"
       >
         {@media_error}
       </p>
@@ -1399,7 +1405,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   end
 
-  # Browser: byte-identical to before. Native: live keeps that ground,
+  # Browser: base-200 live, the pressed fill muted (rung 18). Native: live keeps that ground,
   # muted is the error fill, pending adds the warning ring.
   #
   # The ring is `ring-2!` (Tailwind v4 important), not `ring-2`: a pending
@@ -1410,25 +1416,33 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   # button inert to pointer AND keyboard while the native call answers.
   @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
 
+  # Rung 18: a muted mic is the masters' pressed control (burrow-meeting.js
+  # `.cb[aria-pressed="true"]`): an error/10 fill and an error icon, the
+  # label staying base-content.
+  @pressed_class "btn btn-sm rounded-field gap-2 border-edge bg-error/10 font-normal text-base-content"
+
+  defp mic_class(nil, false, _pending), do: @pressed_class
   defp mic_class(nil, _mic_on, _pending), do: @mic_class
 
   defp mic_class(_native, mic_on, pending) do
     [
       if(mic_on,
         do: @mic_class,
-        else: "btn btn-sm rounded-field gap-2 border-error/40 bg-error/15 font-normal text-error"
+        else:
+          "btn btn-sm rounded-field gap-2 border-error/40 bg-error/15 font-normal text-base-content"
       ),
       pending && "ring-2! ring-warning"
     ]
   end
 
-  # Browser and a camera at rest: byte-identical to before. Pending takes
+  # Browser: base-200 on, the pressed fill off (rung 18). Native pending takes
   # the mic's warning ring (`ring-2!`, for the same daisyUI reason).
   @camera_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content"
 
-  defp camera_class(nil, _pending), do: @camera_class
-  defp camera_class(_native, true), do: [@camera_class, "ring-2! ring-warning"]
-  defp camera_class(_native, _pending), do: @camera_class
+  defp camera_class(nil, false, _pending), do: @pressed_class
+  defp camera_class(nil, _camera_on, _pending), do: @camera_class
+  defp camera_class(_native, _camera_on, true), do: [@camera_class, "ring-2! ring-warning"]
+  defp camera_class(_native, _camera_on, _pending), do: @camera_class
 
   attr(:on, :boolean, required: true)
   attr(:when_on, :string, required: true)

@@ -286,7 +286,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:computing),
     do: %{
       ring: "border-info text-info",
-      text: "text-info",
+      text: "text-base-content",
       glyph: "◐",
       word: "Thinking",
       motion: :none,
@@ -296,7 +296,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:typing),
     do: %{
       ring: "border-info text-info",
-      text: "text-info",
+      text: "text-base-content",
       glyph: "✎",
       word: "Writing",
       motion: :pulse,
@@ -366,7 +366,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:heard),
     do: %{
       ring: "border-info text-info",
-      text: "text-info",
+      text: "text-base-content",
       glyph: "○",
       word: "Heard",
       motion: :pulse,
@@ -395,7 +395,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:speaking),
     do: %{
       ring: "border-success text-success",
-      text: "text-success",
+      text: "text-base-content",
       glyph: "●",
       word: "Speaking",
       motion: :amplitude,
@@ -434,7 +434,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:delayed),
     do: %{
       ring: "border-base-content/25 text-subtle",
-      text: "text-info",
+      text: "text-base-content",
       glyph: "‖",
       word: "Delayed",
       motion: :none,
@@ -444,7 +444,7 @@ defmodule PlatformWeb.Components.Meetings.AgentActivityBadge do
   defp meta(:failed),
     do: %{
       ring: "border-error text-error",
-      text: "text-error",
+      text: "text-base-content",
       glyph: "!",
       word: "Couldn't",
       motion: :none,

@@ -299,7 +299,7 @@ const MeetingScreenShare = {
     el.autoplay = true
     el.playsInline = true
     el.muted = true
-    el.className = "h-full w-full object-contain bg-black"
+    el.className = "h-full w-full object-contain bg-viewer"
 
     slot.appendChild(el)
     this._videoEl = el

@@ -82,6 +82,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js BURROW_LIGHT. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(30, 20, 10, 0.45);
+  --shade: rgba(0, 0, 0, 0.5);
   /* Focus-ring slot, theme-split (task 01a0833d). WCAG 2.2 SC 1.4.11 Non-text
      Contrast wants 3:1 minimum against every adjacent ground. The slot reads
      --color-interactive (#8b3b04), which measures 7.3919:1 on base-100
@@ -291,6 +296,11 @@
      every theme, and the chrome text on it. */
   --viewer: #000000;
   --on-viewer: #ffffff;
+  /* Scrim behind sheets and Shade under overlay chips (rung 18),
+     theme.js BURROW_DARK. Declared --scrim/--shade, never --color-*;
+     see the @theme inline block. */
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shade: rgba(0, 0, 0, 0.5);
   /* Focus-ring slot, theme-split (task 01a0833d). Dark rings with the
      primary and clears WCAG 2.2 SC 1.4.11 with room to spare: #f47721
      measures 6.1588:1 on base-100 (#191b20), 6.7002:1 on base-200 (#111214)
@@ -413,6 +423,9 @@
   /* Rung 13: bg-viewer / text-on-viewer for the in-app viewer. */
   --color-viewer: var(--viewer);
   --color-on-viewer: var(--on-viewer);
+  /* Rung 18: bg-scrim behind sheets, bg-shade under overlay chips. */
+  --color-scrim: var(--scrim);
+  --color-shade: var(--shade);
   /* Same arrangement for the focus ring (task 01a0833d): the theme blocks
      declare --focus-ring, and this mapping is the only thing that mints a
      ring-focus-ring utility for the WCAG 2.2 SC 1.4.11 focus indicator.
@@ -1461,6 +1474,14 @@ body, .font-suite {
   margin-left: 4px;
 }
 
+/* Transcript AGENT chip (rung 18 stage 3): the same pair as .msg-agent-badge,
+   border --ag and label --ag-text, set by `data-agent-slot` from
+   meeting_transcript.js. An agent with no slot keeps text-subtle. */
+.transcript-agent-chip[data-agent-slot] {
+  border-color: var(--ag);
+  color: var(--ag-text);
+}
+
 /* Meeting agent tile (task 01a1557a rung 3 stage 3): the same slot skin as
    .msg-agent, so the rail reads the same in chat and on the tile edge
    (Saru's canvas 01a15b1e-d673, "Signature element: the 3px rail").
@@ -1498,9 +1519,11 @@ body, .font-suite {
    1280; the solid band is measured on every painted tint by
    agent_slot_tokens_guard_test.exs ("tile chip"). High contrast needs 7:1
    for name text, which black at 60% over its white base-100 cannot give
-   (5.74:1), so there the band is opaque black (21:1). */
+   (5.74:1), so there the band is the opaque viewer ground, black in
+   every theme (21:1). Rung 18: the band is `bg-viewer/60` with
+   `text-on-viewer` (markup), and this opaque override reads var(--viewer). */
 [data-preset="high-contrast"] .agent-tile-chip {
-  background-color: #000;
+  background-color: var(--viewer);
 }
 
 .human-avatar {
@@ -3807,8 +3830,10 @@ body, .font-suite {
   left: 0;
   right: 0;
   padding: 0.25rem 0.5rem;
-  background: linear-gradient(transparent, oklch(0 0 0 / 0.5));
-  color: white;
+  /* Viewer at 72%, as VideoTile's `from-viewer/72` band (rung 18 stage 3
+     fixup): --shade (.5) put the white name at 4.0:1 over a white frame. */
+  background: linear-gradient(transparent, color-mix(in oklab, var(--viewer) 72%, transparent));
+  color: var(--on-viewer);
   font-size: 0.75rem;
   font-weight: 500;
   display: flex;
@@ -6133,7 +6158,7 @@ body, .font-suite {
   }
 
   .sheet-handle__numeral.candidate-count--warning {
-    color: var(--color-warning);
+    color: var(--color-base-content);
   }
 
   /* THE PEEK (FE-17 stage 3). `.sheet` is `visibility: hidden` when shut,
@@ -7864,423 +7889,33 @@ body, .font-suite {
   align-self: center;
 }
 
-/* ── Meeting task cards (task 01a03f4e-78b1) ─────────────────────────
-   The rail on `01a03f90` ("Meeting task card states") is drawn dark-only,
-   with literal hexes. The meeting shell inherits the app theme, so those
-   hexes are the DARK half of a pair here rather than the values themselves:
-   dropped in raw, a #161a23 card on a light meeting page is a black box.
-
-   The organising idea the palette encodes — "colour is earned, never
-   given" — is why the stage tints are three separate variables and not one
-   accent that changes hue. A grey card must read as *absence* of colour, so
-   `--cc-border` and `--cc-bg` are deliberately near-neutral against the
-   surface, while the shaping/acting pair carry real chroma. Flattening them
-   to a single token would delete the distinction the rail is built on.
-
-   Same dual-selector pattern as the shadow tokens above: an explicit
-   `data-theme` wins over the OS preference. */
-:root {
-  --cc-bg: #ffffff;
-  /* The neutral card edge is the app's own edge token (FE-1, task
-     01a0740b). The four EARNED borders below keep their literal values:
-     they carry the rail's "colour is earned, never given" ladder and are
-     not the same job. */
-  --cc-border: var(--edge);
-  --cc-border-thinking: #cfd4de;
-  --cc-border-shaping: #9db4dc;
-  --cc-bg-shaping: linear-gradient(180deg, #eef3fc 0%, #f8fafd 100%);
-  --cc-border-acting: #8dc0a2;
-  --cc-bg-acting: linear-gradient(180deg, #eaf6ee 0%, #f7fbf8 100%);
-  --cc-bg-closed: #f4f5f7;
-  --cc-border-closed: #e6e8ec;
-  --cc-title: #1f2430;
-  --cc-title-half: #626b7d;
-  --cc-title-dead: #767d8d;
-  --cc-byline: #6a7284;
-  /* The "N closed" disclosure label (task 01a07a90). `--cc-stage` has exactly
-     ONE consumer, `.candidate-closed__summary`, so this is a rail-local retune
-     and not a shared-token change. Its old value #7B8395 measured 3.5494:1 on
-     the rail's own ground and #5D6577 measured 3.3658:1 in dark: both under AA
-     for a 10px uppercase label, and neither caused by the `opacity` this task
-     removed — this label sits OUTSIDE the card. `--cc-title-half` measures
-     5.0024:1 light / 6.7068:1 dark on that ground. On the Burrow grounds
-     (task 01a120c5; rail ground #F8F6F4 light, #141518 dark) it is
-     4.9712:1 light / 6.2250:1 dark, computed from the tokens. */
-  --cc-stage: var(--cc-title-half);
-  --cc-reason: #6a7284;
-  --cc-micro: var(--cc-title-half);
-  --cc-chip-bg: #eef0f4;
-  --cc-chip-fg: #5f6779;
-  --cc-ask-fg: #2c4f8f;
-  --cc-ask-bg: #eaf1fd;
-  --cc-ask-rule: #4f7cc4;
-  --cc-btn-bg: #f4f5f8;
-  --cc-btn-border: #d5d9e2;
-  --cc-btn-fg: #3d4453;
-  --cc-go-bg: #2f57a0;
-
-  /* ── The closed row that leads somewhere (task 01a078d0 stage 2) ──
-     Saru's canvas names `--color-interactive` for the link and
-     `--color-neutral` for the kind label. Both were tuned against other
-     grounds — a WHITE card, and `--color-neutral-content` — and neither
-     of those is the ground here. MEASURED on the real rendered row in a
-     browser (painted pixels, not palette arithmetic) against
-     `--cc-bg-closed` (#F4F5F7):
-
-       --color-interactive  (pre-Burrow)  4.31:1   FAILS AA at 4.5
-       --color-neutral      #5A5355   6.87:1   passes
-       --cc-title-dead      #767D8D   3.78:1   FAILS AA at 4.5
-
-     (The Burrow interactive #8b3b04 is 7.0641:1 on #F4F5F7, task 01a120c5;
-     the row-scoped correction below is left as it was.)
-
-     So exactly ONE of the three is corrected, scoped to this row and
-     derived from the token rather than replacing it. `--color-neutral`
-     is used raw: it was 6.87:1 all along, and darkening it further
-     (7.82:1 measured) bought nothing and cost the label its muting.
-     The tokens themselves are NOT retuned — they do double duty as
-     fills elsewhere, and moving one to fix text here breaks the other
-     pairing. */
-  --cc-outcome-link: color-mix(in srgb, var(--color-interactive) 88%, black);
-  --cc-outcome-muted: var(--color-neutral);
-  /* The hairline is meant to be quiet — Saru's word — and base-300 on
-     this ground measures 1.32:1, which is the intended weight for a
-     decorative 2px rule that carries no information and is
-     `aria-hidden`. */
-  --cc-outcome-bar: var(--color-base-300);
-  --cc-go-border: #3a68bd;
-  --cc-go-fg: #ffffff;
-  /* ── The commit window (task 01a0740e stage 3) ──
-     MEASURED, not assumed, against this theme's card ground (--cc-bg,
-     #ffffff) and against the shaping/acting gradient bottoms an armed
-     card can also carry. The count is TEXT (WCAG AA, 4.5:1); the 2px
-     drain is a GRAPHICAL OBJECT carrying information (WCAG 1.4.11,
-     3:1). One value serves both, so they can never disagree.
-
-     `--color-warning` is oklch(76% 0.17 70) and lands at 2.21:1 on a
-     white card. That fails AA as text AND fails 1.4.11 as a graphic, so
-     "keep the token on the bar" was not available either. Darkened here
-     with color-mix rather than retyped as a hex, so a brand re-tune of
-     --color-warning still carries through. NO app-level token value is
-     changed by this block.
-
-       rest  --color-neutral            #5A5355  7.48:1  (worst 7.15:1)
-       warn  --color-warning @ 70%      #975E00  5.37:1  (worst 5.14:1) */
-  --cc-countdown-rest: var(--color-neutral);
-  --cc-countdown-warn: color-mix(in oklch, var(--color-warning) 70%, black);
-  /* Stop (and Undo) is red only on hover/focus. The red is the colour of
-     the 11.5px LABEL on --cc-btn-bg (#f4f5f8); the fill does not change,
-     so the floor is 4.5:1 text. Raw --color-error is 4.6578:1 there; the
-     85% mix toward black holds the label at 6.5841:1 (Burrow light), lowest
-     6.5841:1 across the light variants (error_token_contrast_guard_test.exs). */
-  --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, black);
-  /* ── The correction drawer (task 01a0740e stage 2) ──
-     The pencil in the countdown foot opens a panel INSIDE the armed
-     card, offering three corrections and a footnote saying the choice is
-     kept as an example. Four slots, and none of them is a new colour —
-     Saru's canvas 01a08322 names a SEMANTIC SLOT for each and this block
-     is that mapping, measured on this theme's grounds.
-
-     TWO SLOTS ARE DELIBERATELY UNSPENT, and the reason is that both are
-     already saying something else inside this same card:
-
-       --color-primary  is the ACTION slot on this screen. Three
-                        primary-filled buttons would read as "pick one of
-                        these three actions" when the message the panel
-                        exists to send is "any of these three is cheaper
-                        than stopping". The three are EQUALS; none is
-                        recommended and none is filled.
-       --color-warning  is the countdown's LAST FIVE SECONDS, eleven
-                        pixels above this panel (--cc-countdown-warn). A
-                        second amber inside one card would argue with the
-                        timer about which of them is the urgent thing.
-
-     TEXT CONTRAST HERE IS INDEPENDENT OF THE CARD, which is the one
-     property worth having: `--cc-correct-bg` is OPAQUE, so the two text
-     ratios below hold on a plain card and on the shaping and acting
-     GRADIENTS an armed card can also carry. Measured against the panel
-     ground, not against the card:
-
-       choices  --color-base-content  #000000  18.69:1  on #F2F2F2
-       note     --color-neutral       #5A5355   6.66:1  on #F2F2F2
-
-     Raw `--color-neutral` PASSES in light and is used untouched, the
-     same posture `--cc-countdown-rest` takes four lines above. The dark
-     block is where it needs the correction, and it is corrected there.
-
-     THE RULE IS LOAD-BEARING AND THE GROUND IS NOT, which is the reverse
-     of what a drawer usually wants. `--color-base-200` against this
-     theme's card grounds measures 1.12:1 on plain white, 1.08:1 on the
-     acting gradient's bottom stop and 1.07:1 on shaping's — a ground
-     change a reader cannot rely on. So the top edge is what separates
-     panel from card (1.29:1 to 1.44:1 against those same three), and it
-     is the ONLY rule: a box around the panel would make it a dialog
-     sitting on the card instead of a drawer belonging to it.
-
-     `--cc-border` and not `var(--color-base-300)` directly, although in
-     THIS theme they are the same colour: `--edge` is oklch(88% 0 0),
-     which is base-300's own value, so the light half IS the border slot
-     the canvas names. The dark half cannot be, for the reason
-     `--cc-outcome-bar` already records in the dark block below, and one
-     token that means "the card's edge" in both themes is better than two
-     that agree here and disagree there. */
-  --cc-correct-bg: var(--color-base-200);
-  --cc-correct-rule: var(--cc-border);
-  --cc-correct-fg: var(--color-base-content);
-  --cc-correct-note: var(--color-neutral);
-  /* ── The spent row (task 01a0740e stage 5) ──
-     A stop leaves a dimmed row in the slot its card held, carrying
-     `Stopped` and `Undo`. "Dimmed" is a CONTRAST REDUCTION and it is
-     measured here rather than assumed, against this theme's spent-row
-     ground (--cc-bg-closed, #f4f5f7) — the same discipline the commit
-     window above needed, and the same failure it found.
-
-     No `opacity` on the row. An opacity that looks right on one theme
-     compounds against the other's ground and lands under AA, which is
-     twice what has already gone wrong on this card; one token that has
-     been measured cannot drift that way.
-
-     No --color-success and no --color-warning anywhere on this row.
-     Success is SPEAKING's colour on this screen and warning means a
-     human is being asked for something; the spent row is telling them
-     something is already done. Neutral, plus the hover-only error on
-     the Undo control, and nothing else.
-
-       Stopped  --color-neutral @ 90%  #696364  5.39:1  (title is 14.23:1)
-       Undo     --cc-btn-fg           #3D4453  8.96:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #AF101F  6.6044:1  on --cc-btn-bg */
-  --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 90%, white);
-  --cc-skeleton-a: #eceef2;
-  --cc-skeleton-b: #dcdfe7;
-  --cc-log-dot: #b9bfcc;
-  --cc-log-fg: #5f6779;
-  --cc-live-dot: #22c55e;
-  --cc-ghost-bg: #f0f1f5;
-  --cc-ghost-fg: #8d94a3;
-  --cc-ghost-border: #cdd2dc;
-}
-
-/* The mockup's own values. */
-[data-theme="dark"] {
-  --cc-bg: #161a23;
-  --cc-border: var(--edge);
-  --cc-border-thinking: #2b3244;
-  --cc-border-shaping: #3a4a6b;
-  --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
-  --cc-border-acting: #3f6a4d;
-  --cc-bg-acting: linear-gradient(180deg, #152418 0%, #141a19 100%);
-  --cc-bg-closed: #12151c;
-  --cc-border-closed: #1b2029;
-  --cc-title: #dfe3ec;
-  --cc-title-half: #8f97a8;
-  --cc-title-dead: #767d8d;
-  --cc-byline: #7f8798;
-  --cc-stage: var(--cc-title-half);
-  --cc-reason: #5f6779;
-  --cc-micro: var(--cc-title-half);
-  --cc-chip-bg: #1b202c;
-  --cc-chip-fg: #7f8798;
-  --cc-ask-fg: #9fb4dd;
-  --cc-ask-bg: #16203a;
-  --cc-ask-rule: #4f7cc4;
-  --cc-btn-bg: #1a1f2b;
-  --cc-btn-border: #2c3448;
-  --cc-btn-fg: #aeb6c6;
-  --cc-go-bg: #2f57a0;
-
-  /* See the light block; the same measurement on this theme's ground
-     (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
-     places, which is why they are two token sets and not one:
-
-       --color-interactive  #ff9b55   8.7599:1 passes, used untouched (Burrow, task 01a120c5)
-       --color-neutral      #4D4647    1.99:1  FAILS, and badly
-       --color-base-300     #091821    1.01:1  invisible, not quiet
-
-     `--color-neutral` resolves DARKER here than in light (oklch 40%
-     against 45%) while the ground is darker still, so the raw token is
-     very nearly the ground itself — the failure the canvas warned
-     about, measured. It is lightened toward white by the same 60% the
-     spent row's `--cc-spent-fg` arrived at from the same starting
-     token; they stay two tokens because they are two claims, and a
-     re-tune of one must not silently move the other.
-
-     The BAR cannot be `--color-base-300`: dark base-300 is DARKER than
-     the closed ground and measures 1.01:1, which is not a quiet
-     hairline, it is an invisible one. `--cc-border` is the row's own
-     edge colour and lands at 1.27:1, the weight the light row gets. */
-  --cc-outcome-link: var(--color-interactive);
-  --cc-outcome-muted: color-mix(in oklch, var(--color-neutral) 60%, white);
-  --cc-outcome-bar: var(--cc-border);
-  --cc-go-border: #3a68bd;
-  --cc-go-fg: #ffffff;
-  /* Same measurement, opposite failure. Dark --color-neutral is
-     oklch(40% 0.01 0) and lands at 1.88:1 on a #161a23 card — the FE-1
-     hairline defect exactly, and the drain spends 25 of its 30 seconds
-     in this colour. Lightened with color-mix against the same token.
-     The amber needs no correction on this ground.
-
-       rest  --color-neutral @ 60%   #8F8B8C  5.16:1  (worst 5.11:1)
-       warn  --color-warning         #F49A00  7.86:1  (worst 7.78:1) */
-  --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
-  --cc-countdown-warn: var(--color-warning);
-  /* The Stop/Undo hover LABEL colour on --cc-btn-bg (#1a1f2b): 4.5:1
-     text, since the fill does not change. Raw --color-error is 4.3969:1
-     there; 5.5338:1 here (Burrow dark), lowest 5.5338:1 across the dark
-     variants (error_token_contrast_guard_test.exs). */
-  --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
-  /* ── The correction drawer (task 01a0740e stage 2) ──
-     See the light block for the slot map and for the two slots left
-     unspent. The same measurement on this theme puts the corrections in
-     DIFFERENT places, which is why this is a second token set:
-
-       choices  --color-base-content  #EEEEEE  17.88:1  passes, untouched
-       note     --color-neutral       #4D4647   2.23:1  FAILS, and badly
-       note     --color-neutral @ 60%  #908B8A   6.14:1  used
-       rule     --color-base-300      #091821   1.15:1  not quiet, invisible
-       rule     --cc-border (--edge)  #232A38   1.44:1  used
-
-     The note repeats the failure this file has now measured three times
-     — raw `--color-neutral` resolves DARKER here (oklch 40% against 45%)
-     while every ground it lands on is darker still, so the token is very
-     nearly the ground itself. Lightened toward white by the SAME 60%
-     `--cc-countdown-rest`, `--cc-spent-fg` and `--cc-outcome-muted`
-     arrived at from the same token. It stays a fourth token rather than
-     an alias of any of them because it is a fourth claim, and a re-tune
-     of the countdown's muted grey must not silently move a footnote.
-
-     THE GROUND RESOLVES DARKER THAN THE CARD HERE, and that is correct
-     rather than a slot picked upside down. This theme's elevation runs
-     DOWNWARD: `--color-base-100` is the chat pane (#191b20) and base-200
-     the sidebar (#111214), so the surface slot a drawer takes is darker
-     than the pane it sits in. (Written against the pre-Burrow tokens; under
-     Burrow, task 01a120c5, base-300 #25272b is raised, lighter than the
-     pane, so only the base-200 half of "downward" still holds.) At
-     1.19:1 against the card (1.17:1 on acting's bottom stop, 1.20:1 on
-     shaping's) it reads as an inset well in the card, which is what
-     "belongs to the card rather than floats over it" has to mean in a
-     theme with no lighter surface to move to. `--cc-bg-closed` is the
-     same move at half the depth.
-
-     The rule CANNOT be `--color-base-300`: it is darker than the card,
-     so it lands at 1.04:1 against it and vanishes exactly where the
-     boundary is. This is the ruling `--cc-outcome-bar` already records
-     eighty lines above, for the same slot on the same card. */
-  --cc-correct-bg: var(--color-base-200);
-  --cc-correct-rule: var(--cc-border);
-  --cc-correct-fg: var(--color-base-content);
-  --cc-correct-note: color-mix(in oklch, var(--color-neutral) 60%, white);
-  /* Same measurement on this theme's spent-row ground (#12151c), and
-     the mix is a DIFFERENT one because the ground is: raw
-     --color-neutral is oklch(40% 0.01 0) and lands at 1.99:1 here.
-     Lightened to the same PERCEIVED dimness the light theme gets, which
-     is what "dimmed survives both themes" has to mean.
-
-       Stopped  --color-neutral @ 60%  #8F8B8C  5.43:1  (title is 14.21:1)
-       Undo     --cc-btn-fg           #AEB6C6  8.08:1  on --cc-btn-bg
-       Undo hover --cc-stop-hover     #FB635F  5.5317:1  on --cc-btn-bg
-
-     The 60% here is the same figure --cc-countdown-rest arrived at from
-     the same starting token; they are kept as two tokens because they
-     are two claims and a re-tune of one must not silently move the
-     other. */
-  --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 60%, white);
-  --cc-skeleton-a: #1d2230;
-  --cc-skeleton-b: #2b3244;
-  --cc-log-dot: #39415a;
-  --cc-log-fg: #7a8296;
-  --cc-live-dot: #22c55e;
-  --cc-ghost-bg: #1e2432;
-  --cc-ghost-fg: #4b5365;
-  --cc-ghost-border: #333b4d;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --cc-bg: #161a23;
-    --cc-border: var(--edge);
-    --cc-border-thinking: #2b3244;
-    --cc-border-shaping: #3a4a6b;
-    --cc-bg-shaping: linear-gradient(180deg, #182033 0%, #161b26 100%);
-    --cc-border-acting: #3f6a4d;
-    --cc-bg-acting: linear-gradient(180deg, #152418 0%, #141a19 100%);
-    --cc-bg-closed: #12151c;
-    --cc-border-closed: #1b2029;
-    --cc-title: #dfe3ec;
-    --cc-title-half: #8f97a8;
-    --cc-title-dead: #767d8d;
-    --cc-byline: #7f8798;
-    --cc-stage: var(--cc-title-half);
-    --cc-reason: #5f6779;
-    --cc-micro: var(--cc-title-half);
-    --cc-chip-bg: #1b202c;
-    --cc-chip-fg: #7f8798;
-    --cc-ask-fg: #9fb4dd;
-    --cc-ask-bg: #16203a;
-    --cc-ask-rule: #4f7cc4;
-    --cc-btn-bg: #1a1f2b;
-    --cc-btn-border: #2c3448;
-    --cc-btn-fg: #aeb6c6;
-    --cc-go-bg: #2f57a0;
-
-    /* See the light block; the same measurement on this theme's ground
-       (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
-       places, which is why they are two token sets and not one:
-
-         --color-interactive  #ff9b55   8.7599:1 passes, used untouched (Burrow, task 01a120c5)
-         --color-neutral      #4D4647    1.99:1  FAILS, and badly
-         --color-base-300     #091821    1.01:1  invisible, not quiet
-
-       `--color-neutral` resolves DARKER here than in light (oklch 40%
-       against 45%) while the ground is darker still, so the raw token is
-       very nearly the ground itself — the failure the canvas warned
-       about, measured. It is lightened toward white by the same 60% the
-       spent row's `--cc-spent-fg` arrived at from the same starting
-       token; they stay two tokens because they are two claims, and a
-       re-tune of one must not silently move the other.
-
-       The BAR cannot be `--color-base-300`: dark base-300 is DARKER than
-       the closed ground and measures 1.01:1, which is not a quiet
-       hairline, it is an invisible one. `--cc-border` is the row's own
-       edge colour and lands at 1.27:1, the weight the light row gets. */
-    --cc-outcome-link: var(--color-interactive);
-    --cc-outcome-muted: color-mix(in oklch, var(--color-neutral) 60%, white);
-    --cc-outcome-bar: var(--cc-border);
-    --cc-go-border: #3a68bd;
-    --cc-go-fg: #ffffff;
-    --cc-countdown-rest: color-mix(in oklch, var(--color-neutral) 60%, white);
-    --cc-countdown-warn: var(--color-warning);
-    --cc-stop-hover: color-mix(in oklch, var(--color-error) 85%, white);
-    --cc-correct-bg: var(--color-base-200);
-    --cc-correct-rule: var(--cc-border);
-    --cc-correct-fg: var(--color-base-content);
-    --cc-correct-note: color-mix(in oklch, var(--color-neutral) 60%, white);
-    --cc-spent-fg: color-mix(in oklch, var(--color-neutral) 60%, white);
-    --cc-skeleton-a: #1d2230;
-    --cc-skeleton-b: #2b3244;
-    --cc-log-dot: #39415a;
-    --cc-log-fg: #7a8296;
-    --cc-live-dot: #22c55e;
-    --cc-ghost-bg: #1e2432;
-    --cc-ghost-fg: #4b5365;
-    --cc-ghost-border: #333b4d;
-  }
-}
+/* ── Meeting task cards (task 01a03f4e-78b1; theme tokens since rung 18) ──
+   The cards paint from the theme layer directly: base-100 card on --edge,
+   base-content / --subtle ink, base-300 chips and buttons, primary for the
+   Go-ahead fill and the countdown drain, and the earned shaping (info) and
+   acting (success) states as colour mixes of those slots. The old --cc-*
+   palette (a light/dark pair outside the per-preset theme blocks, so the
+   ten variants never got their own values) is deleted, not aliased.
+   Comments below that name a --cc-* token are history: they record why a
+   value was chosen; the declaration they describe now reads a slot.
+   Text never takes a status hue (rung 18 R3): the hue sits on the border,
+   fill, dot or aria-hidden glyph. */
 
 .candidate-rail-dot {
   display: inline-block;
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--cc-live-dot);
-  box-shadow: 0 0 0 3px rgb(34 197 94 / 0.16);
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-success) 16%, transparent);
 }
 
 .candidate-card {
   position: relative;
   border-radius: 12px;
   padding: 13px 14px;
-  border: 1px solid var(--cc-border);
-  background: var(--cc-bg);
+  border: 1px solid var(--edge);
+  background: var(--color-base-100);
   /* `.candidate-drain` is absolutely positioned to the card's own
      bottom edge with no inset, so the card has to clip it or the bar
      squares off the 12px corners. */
@@ -8334,17 +7969,17 @@ body, .font-suite {
    and differ only in border weight, which is the mockup's own one-step
    lift rather than a hue. */
 .candidate-card--thinking {
-  border-color: var(--cc-border-thinking);
+  border-color: var(--edge);
 }
 
 .candidate-card--taking-shape {
-  border-color: var(--cc-border-shaping);
-  background: var(--cc-bg-shaping);
+  border-color: color-mix(in oklab, var(--color-info) 55%, var(--edge));
+  background: linear-gradient(color-mix(in oklab, var(--color-info) 8%, var(--color-base-100)), var(--color-base-100));
 }
 
 .candidate-card--acting {
-  border-color: var(--cc-border-acting);
-  background: var(--cc-bg-acting);
+  border-color: color-mix(in oklab, var(--color-success) 55%, var(--edge));
+  background: linear-gradient(color-mix(in oklab, var(--color-success) 8%, var(--color-base-100)), var(--color-base-100));
 }
 
 /* ── The closed row (task 01a07a90) ──
@@ -8399,8 +8034,8 @@ body, .font-suite {
    Both currently pass and both would fail. `01a078d0` stage 2 fixed that link
    deliberately; a fade here undoes it silently. */
 .candidate-card--closed {
-  background: var(--cc-bg-closed);
-  border-color: var(--cc-border-closed);
+  background: var(--color-base-100);
+  border-color: var(--edge);
 }
 
 /* ── The spent row (task 01a0740e stage 5) ──
@@ -8422,8 +8057,8 @@ body, .font-suite {
   align-items: center;
   gap: 10px;
   padding: 9px 12px 9px 14px;
-  background: var(--cc-bg-closed);
-  border-color: var(--cc-border-closed);
+  background: var(--color-base-100);
+  border-color: var(--edge);
 }
 
 /* Hidden by the rail's one ticker when `data-expires-at` passes — see
@@ -8436,7 +8071,7 @@ body, .font-suite {
 
 .candidate-spent__label {
   font-size: 11.5px;
-  color: var(--cc-spent-fg);
+  color: var(--color-subtle);
 }
 
 /* Undo is a SAFE action — it REVERSES a stop and destroys nothing — so
@@ -8450,10 +8085,14 @@ body, .font-suite {
    Plain `:hover, :focus-visible` selectors and NOT Tailwind's `hover:`
    variant, which compiles to a `(hover: hover)` media query and does
    nothing at all on touch. */
-.candidate-btn--undo:hover,
 .candidate-btn--undo:focus-visible {
-  color: var(--cc-stop-hover);
-  border-color: var(--cc-stop-hover);
+  border-color: var(--color-error);
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .candidate-btn--undo:hover {
+    border-color: var(--color-error);
+  }
 }
 
 /* A card that is still being worked out is drawn DASHED — the same
@@ -8472,7 +8111,7 @@ body, .font-suite {
   align-items: center;
   gap: 6px;
   font-size: 10.5px;
-  color: var(--color-secondary);
+  color: var(--color-subtle);
   margin-bottom: 6px;
 }
 
@@ -8499,12 +8138,12 @@ body, .font-suite {
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1.35;
-  color: var(--cc-title);
+  color: var(--color-base-content);
   overflow-wrap: anywhere;
 }
 
 .candidate-card__title--half {
-  color: var(--cc-title-half);
+  color: var(--color-subtle);
   font-weight: 500;
 }
 
@@ -8525,14 +8164,14 @@ body, .font-suite {
    churn this task did not sign up for — but nothing reads them, so nothing is
    styled by them. Do not reach for either one on this row. */
 .candidate-card__title--dead {
-  color: var(--cc-title-half);
+  color: var(--color-subtle);
   font-weight: 500;
 }
 
 .candidate-card__byline {
   font-size: 9.5px;
   font-weight: 400;
-  color: var(--cc-byline);
+  color: var(--color-subtle);
 }
 
 /* Dash and byline travel TOGETHER. Wrapped as one flex item so a title
@@ -8550,7 +8189,7 @@ body, .font-suite {
    test that reads the byline gets `Sam · 2m ago`, not a dash. */
 .candidate-card__dash {
   font-size: 9.5px;
-  color: var(--cc-byline);
+  color: var(--color-subtle);
 }
 
 /* The assignment segment — the card's last written line, below the
@@ -8559,7 +8198,7 @@ body, .font-suite {
    arrow so it cannot be taken for the person who spoke. */
 .candidate-card__assignment {
   font-size: 9.5px;
-  color: var(--color-info);
+  color: var(--color-base-content);
   margin-top: 6px;
   display: flex;
   align-items: baseline;
@@ -8577,8 +8216,8 @@ body, .font-suite {
   font-size: 10.5px;
   font-style: italic;
   line-height: 1.4;
-  color: var(--cc-micro);
-  border-left: 2px solid var(--cc-log-dot);
+  color: var(--color-base-content);
+  border-left: 2px solid var(--edge);
   padding-left: 7px;
   overflow-wrap: anywhere;
 }
@@ -8601,7 +8240,7 @@ body, .font-suite {
    the floor in light, and that is what the previous pair spent going under. */
 .candidate-card__reason {
   font-size: 11px;
-  color: var(--cc-title-half);
+  color: var(--color-subtle);
   margin-top: 3px;
   line-height: 1.4;
 }
@@ -8613,11 +8252,11 @@ body, .font-suite {
 }
 
 .candidate-card__chip {
-  background: var(--cc-chip-bg);
+  background: var(--color-base-300);
   border-radius: 20px;
   padding: 3px 9px;
   font-size: 11px;
-  color: var(--cc-chip-fg);
+  color: var(--color-subtle);
 }
 
 /* `✓ Added to Tasks` — what the card actually produced.
@@ -8632,15 +8271,25 @@ body, .font-suite {
   gap: 5px;
   margin-top: 6px;
   font-size: 9.5px;
+  color: var(--color-base-content);
+}
+
+/* The ✓ and → glyphs are aria-hidden icons: the hue moved here from the
+   line's text (rung 18 R3), so the line reads base-content. */
+.candidate-card__outcome > [aria-hidden="true"] {
   color: var(--color-success);
+}
+
+.candidate-card__assignment > [aria-hidden="true"] {
+  color: var(--color-info);
 }
 
 .candidate-card__ask {
   margin-top: 11px;
   font-size: 11.5px;
-  color: var(--cc-ask-fg);
-  background: var(--cc-ask-bg);
-  border-left: 2px solid var(--cc-ask-rule);
+  color: var(--color-base-content);
+  background: color-mix(in oklab, var(--color-info) 12%, var(--color-base-100));
+  border-left: 2px solid var(--color-info);
   padding: 6px 9px;
   border-radius: 0 6px 6px 0;
 }
@@ -8649,15 +8298,15 @@ body, .font-suite {
   border-radius: 7px;
   padding: 6px 10px;
   font-size: 11.5px;
-  border: 1px solid var(--cc-btn-border);
-  background: var(--cc-btn-bg);
-  color: var(--cc-btn-fg);
+  border: 1px solid var(--edge);
+  background: var(--color-base-300);
+  color: var(--color-base-content);
 }
 
 .candidate-btn--go {
-  background: var(--cc-go-bg);
-  border-color: var(--cc-go-border);
-  color: var(--cc-go-fg);
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-content);
   font-weight: 600;
 }
 
@@ -8670,10 +8319,14 @@ body, .font-suite {
    variant, which compiles to a `(hover: hover)` media query and does
    nothing at all on touch. The focus half is the keyboard's, and it is
    why this is two selectors rather than one. */
-.candidate-btn--stop:hover,
 .candidate-btn--stop:focus-visible {
-  color: var(--cc-stop-hover);
-  border-color: var(--cc-stop-hover);
+  border-color: var(--color-error);
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .candidate-btn--stop:hover {
+    border-color: var(--color-error);
+  }
 }
 
 /* ── Skeleton ──
@@ -8687,9 +8340,9 @@ body, .font-suite {
   border-radius: 5px;
   background: linear-gradient(
     90deg,
-    var(--cc-skeleton-a) 25%,
-    var(--cc-skeleton-b) 50%,
-    var(--cc-skeleton-a) 75%
+    var(--color-base-200) 25%,
+    var(--color-base-300) 50%,
+    var(--color-base-200) 75%
   );
   background-size: 220% 100%;
   animation: candidate-shimmer 1.5s infinite;
@@ -8723,14 +8376,14 @@ body, .font-suite {
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  background: var(--cc-ghost-bg);
-  color: var(--cc-ghost-fg);
-  border: 1px dashed var(--cc-ghost-border);
+  background: var(--color-base-300);
+  color: var(--color-subtle);
+  border: 1px dashed var(--edge);
 }
 
 .candidate-avatar-fallback {
-  background: var(--cc-ghost-bg);
-  color: var(--cc-byline);
+  background: var(--color-base-300);
+  color: var(--color-subtle);
 }
 
 /* ── Activity log ── */
@@ -8745,7 +8398,7 @@ body, .font-suite {
   align-items: center;
   gap: 7px;
   font-size: 11.5px;
-  color: var(--cc-log-fg);
+  color: var(--color-subtle);
   padding: 2.5px 0;
 }
 
@@ -8754,7 +8407,7 @@ body, .font-suite {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--cc-log-dot);
+  background: var(--color-subtle);
 }
 
 /* ── Countdown foot ──
@@ -8784,7 +8437,7 @@ body, .font-suite {
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
-  color: var(--cc-countdown-rest);
+  color: var(--color-base-content);
 }
 
 /* THE OUTCOME SENTENCE (task 01a0740e stage 2). `Creating a task in 24`.
@@ -8823,11 +8476,11 @@ body, .font-suite {
   min-width: 0;
   font-size: 11px;
   line-height: 1.2;
-  color: var(--cc-countdown-rest);
+  color: var(--color-subtle);
 }
 
 .candidate-outcome-line__noun {
-  color: var(--cc-title);
+  color: var(--color-base-content);
 }
 
 /* THE STEP. No transition on `color` anywhere in this pair, and that is
@@ -8835,7 +8488,7 @@ body, .font-suite {
    leaves the threshold unfindable, whereas a step at T−5 is an EVENT,
    and an event is the only thing peripheral vision reliably catches. */
 .candidate-count--warning {
-  color: var(--cc-countdown-warn);
+  color: var(--color-base-content);
 }
 
 /* THE DRAIN. Absolutely positioned to the card's bottom edge, full
@@ -8851,7 +8504,7 @@ body, .font-suite {
   left: 0;
   bottom: 0;
   height: 2px;
-  background: var(--cc-countdown-rest);
+  background: var(--color-primary);
   /* WIDTH ONLY. The server sets the width on render and the
      `CandidateClock` hook sets it every second, both from the same
      `acts_at`; easing it over 0.9s makes the drain continuous instead
@@ -8876,7 +8529,7 @@ body, .font-suite {
    which the hue shift does. It costs no layout: the bar is out of flow on
    the card's bottom edge, so it grows UPWARD and reflows nothing. */
 .candidate-drain--warning {
-  background: var(--cc-countdown-warn);
+  background: color-mix(in oklch, var(--color-warning) 70%, var(--color-base-content));
   height: 3px;
 }
 
@@ -8955,18 +8608,25 @@ body, .font-suite {
   border-radius: 7px;
   border: 1px solid transparent;
   background: none;
-  color: var(--cc-countdown-rest);
+  color: var(--color-subtle);
 }
 
 /* Plain `:hover, :focus-visible` and NOT Tailwind's `hover:` variant,
    which compiles to a `(hover: hover)` media query and does nothing at
    all on touch. The focus half is the keyboard's, and it is why this is
    two selectors. Same posture as `.candidate-btn--stop` above. */
-.candidate-correct-btn:hover,
 .candidate-correct-btn:focus-visible {
-  color: var(--cc-correct-fg);
-  border-color: var(--cc-btn-border);
-  background: var(--cc-btn-bg);
+  color: var(--color-base-content);
+  border-color: var(--edge);
+  background: var(--color-base-300);
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .candidate-correct-btn:hover {
+    color: var(--color-base-content);
+    border-color: var(--edge);
+    background: var(--color-base-300);
+  }
 }
 
 /* THE PANEL. A sibling of the foot inside the card, so it pushes the
@@ -8995,8 +8655,8 @@ body, .font-suite {
 .candidate-correction {
   margin: 11px -14px -13px;
   padding: 10px 14px 13px;
-  border-top: 1px solid var(--cc-correct-rule);
-  background: var(--cc-correct-bg);
+  border-top: 1px solid var(--edge);
+  background: var(--color-base-200);
 }
 
 /* A STACKED LIST OF SENTENCES, not a row of iconned buttons. The canvas
@@ -9033,12 +8693,17 @@ body, .font-suite {
   background: none;
   font-size: 11.5px;
   line-height: 1.35;
-  color: var(--cc-correct-fg);
+  color: var(--color-base-content);
 }
 
-.candidate-correction__choice:hover,
 .candidate-correction__choice:focus-visible {
-  background: var(--cc-btn-bg);
+  background: var(--color-base-300);
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .candidate-correction__choice:hover {
+    background: var(--color-base-300);
+  }
 }
 
 /* THE FOOTNOTE. One size down and muted, under the choices, because it
@@ -9052,7 +8717,7 @@ body, .font-suite {
   margin-top: 7px;
   font-size: 10.5px;
   line-height: 1.35;
-  color: var(--cc-correct-note);
+  color: var(--color-subtle);
 }
 
 /* ── Closed disclosure ──
@@ -9062,7 +8727,7 @@ body, .font-suite {
 .candidate-closed {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid var(--cc-border);
+  border-top: 1px solid var(--edge);
 }
 
 .candidate-closed__summary {
@@ -9070,7 +8735,7 @@ body, .font-suite {
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--cc-stage);
+  color: var(--color-subtle);
 }
 
 /* ── The closed row that leads somewhere (task 01a078d0 stage 2) ──
@@ -9106,7 +8771,7 @@ body, .font-suite {
    the kind label always lands in the same place; the full quote is on
    the page it links to. */
 .candidate-closed__link {
-  color: var(--cc-outcome-link);
+  color: var(--color-base-content);
   font-weight: 500;
   min-width: 0;
   flex: 1 1 auto;
@@ -9116,9 +8781,14 @@ body, .font-suite {
   text-decoration: none;
 }
 
-.candidate-closed__link:hover,
 .candidate-closed__link:focus-visible {
   text-decoration: underline;
+}
+
+@media (hover: hover) and (min-width: 1024px) {
+  .candidate-closed__link:hover {
+    text-decoration: underline;
+  }
 }
 
 /* `TASK` / `CANVAS`. `shrink-0` so it never wins width from the
@@ -9138,7 +8808,7 @@ body, .font-suite {
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--cc-outcome-muted);
+  color: var(--color-subtle);
 }
 
 /* `Nothing was created`. No error colour and no retry: a red row in a
@@ -9149,7 +8819,7 @@ body, .font-suite {
   font-size: 11px;
   line-height: 1.4;
   margin-top: 3px;
-  color: var(--cc-outcome-muted);
+  color: var(--color-subtle);
 }
 
 /* The live card's drain, held still: same 2px, same full-bleed bottom
@@ -9160,7 +8830,7 @@ body, .font-suite {
    that is still running. */
 .candidate-drain--spent {
   width: 100%;
-  background: var(--cc-outcome-bar);
+  background: var(--edge);
   transition: none;
 }
 
@@ -9417,18 +9087,20 @@ body, .font-suite {
   min-height: 2.75rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgb(255 255 255 / 0.2);
+  border: 1px solid color-mix(in oklab, var(--on-viewer) 20%, transparent);
   border-radius: 0.75rem;
-  background: rgb(0 0 0 / 0.68);
-  color: white;
-  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.35);
+  background: color-mix(in oklab, var(--viewer) 68%, transparent);
+  color: var(--on-viewer);
+  box-shadow: 0 0.25rem 1rem color-mix(in oklab, var(--viewer) 35%, transparent);
   touch-action: manipulation;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
 
-.screen-share-fullscreen-button:hover {
-  background: rgb(0 0 0 / 0.82);
+@media (hover: hover) and (min-width: 1024px) {
+  .screen-share-fullscreen-button:hover {
+    background: color-mix(in oklab, var(--viewer) 82%, transparent);
+  }
 }
 
 .screen-share-viewer--fallback {
@@ -9448,7 +9120,7 @@ body, .font-suite {
   overflow: hidden !important;
   border: 0 !important;
   border-radius: 0 !important;
-  background: black !important;
+  background: var(--viewer) !important;
 }
 
 .screen-share-viewer--fallback [data-screen-share-slot],
@@ -9468,7 +9140,7 @@ body, .font-suite {
   width: 100% !important;
   height: 100% !important;
   object-fit: contain !important;
-  background: black;
+  background: var(--viewer);
 }
 
 .screen-share-viewer--fallback [data-quickmeet-screen-share-sharer] {
@@ -9477,7 +9149,7 @@ body, .font-suite {
   left: max(0.75rem, env(safe-area-inset-left, 0px));
   bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
   margin: 0;
-  color: rgb(255 255 255 / 0.78);
+  color: color-mix(in oklab, var(--on-viewer) 78%, transparent);
 }
 
 html.screen-share-fullscreen-active,
