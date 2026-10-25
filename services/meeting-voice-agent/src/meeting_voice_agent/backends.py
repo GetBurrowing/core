@@ -70,7 +70,10 @@ def build_stt(config: AgentConfig) -> stt_types.STT:
 
 
 def build_tts(config: AgentConfig) -> tts_types.TTS:
-    """TTS client against an OpenAI-compatible endpoint (the test host's speaches Kokoro by default)."""
+    """TTS client against an OpenAI-compatible endpoint.
+
+    Defaults to the test host's speaches Kokoro.
+    """
     return lk_openai.TTS(
         base_url=config.tts.base_url,
         model=config.tts.model,

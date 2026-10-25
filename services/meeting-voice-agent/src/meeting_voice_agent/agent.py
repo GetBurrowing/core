@@ -21,7 +21,7 @@ from livekit.agents.voice.room_io import RoomOptions
 from meeting_voice_agent import ask_floor_gate, mcp_tools, tool_telemetry
 from meeting_voice_agent.config import AgentConfig
 from meeting_voice_agent.persona import MeetingVoiceAgent, attach_voice_context_handler
-from meeting_voice_agent.session import build_agent_session
+from meeting_voice_agent.session import VOICE_1TO1_MODE, build_agent_session
 
 logger = logging.getLogger("meeting_voice_agent")
 
@@ -53,11 +53,6 @@ def parse_job_metadata(raw: str | None) -> dict:
         return {}
 
     return parsed
-
-
-#: The dispatch `mode` Core's `Platform.Meetings.VoiceSession` sets for a
-#: Voice-tab 1:1 session (task 01a1557a-eab7).
-VOICE_1TO1_MODE = "voice_1to1"
 
 
 def parse_voice_context(metadata: dict) -> dict | None:
@@ -135,7 +130,7 @@ def build_tool_surface(config: AgentConfig, room_name: str, *, space_id: str | N
     return [toolset, handoff]
 
 
-def build_room_options(human_identity: str | None) -> NotGivenOr[RoomOptions]:
+def build_room_options(human_identity: str | None, mode: str | None) -> NotGivenOr[RoomOptions]:
     """Pin the `AgentSession`'s linked participant to the human, when known.
 
     Task 01a0d4a0 stage 5 item 2: without `participant_identity` set,
@@ -151,7 +146,23 @@ def build_room_options(human_identity: str | None) -> NotGivenOr[RoomOptions]:
     first-participant behavior) when no human identity was resolvable —
     e.g. one agent inviting another with no single human to pin to, or a
     dispatch that predates this metadata key.
+
+    Task 01a174e2 stage 2: a Voice-tab 1:1 session (`mode == "voice_1to1"`)
+    also sets `close_on_disconnect=False`. The SDK default (True) makes
+    `RoomIO` close the whole `AgentSession` the moment the linked participant
+    disconnects with CLIENT_INITIATED; the Voice tab drops and rejoins the
+    room routinely (it reconnects, and Core hands back the cached session),
+    so the default killed the session the client was about to rejoin and
+    Burrow never replied. With it off, `RoomIO` unlinks and re-links the
+    returning participant; the job still ends when the room goes away.
+    These options are returned even without a human identity. Every other
+    mode gets exactly the options it got before.
     """
+    if mode == VOICE_1TO1_MODE:
+        if human_identity:
+            return RoomOptions(close_on_disconnect=False, participant_identity=human_identity)
+        return RoomOptions(close_on_disconnect=False)
+
     if not human_identity:
         return NOT_GIVEN
 
@@ -178,7 +189,7 @@ async def entrypoint(ctx: JobContext) -> None:
     mode = job_metadata.get("mode")
     voice_context = parse_voice_context(job_metadata)
 
-    session: AgentSession = build_agent_session(config)
+    session: AgentSession = build_agent_session(config, mode)
     tools = build_tool_surface(config, ctx.room.name, space_id=space_id)
     agent = MeetingVoiceAgent(
         config,
@@ -186,6 +197,7 @@ async def entrypoint(ctx: JobContext) -> None:
         space_id=space_id,
         agent_roster=agent_roster,
         voice_context=voice_context,
+        drop_empty_turns=mode == VOICE_1TO1_MODE,
     )
 
     if mode == VOICE_1TO1_MODE:
@@ -202,9 +214,22 @@ async def entrypoint(ctx: JobContext) -> None:
     # close on this exact room's data channel. Attached BEFORE
     # `session.start()` so input starts detached -- nothing is listened to
     # before the first real "open". See `ask_floor_gate.py`.
-    ask_floor_gate.attach_ask_floor_gate(session, ctx.room, config.ask_floor.grace_ms)
+    #
+    # Task 01a174e2: a Voice-tab 1:1 session is push-to-talk with manual
+    # turn detection, so its release commits the turn instead of waiting
+    # out the grace window. Meeting mode is unchanged.
+    if mode == VOICE_1TO1_MODE:
+        ask_floor_gate.attach_ask_floor_gate(
+            session,
+            ctx.room,
+            config.ask_floor.grace_ms,
+            commit_on_close=True,
+            commit_timeout_s=config.ask_floor.voice_commit_timeout_s,
+        )
+    else:
+        ask_floor_gate.attach_ask_floor_gate(session, ctx.room, config.ask_floor.grace_ms)
 
-    room_options = build_room_options(human_identity)
+    room_options = build_room_options(human_identity, mode)
     await session.start(agent=agent, room=ctx.room, room_options=room_options)
 
 

@@ -40,7 +40,7 @@ import asyncio
 import json
 import logging
 
-from livekit.agents import Agent, llm
+from livekit.agents import Agent, StopResponse, llm
 
 from meeting_voice_agent.config import AgentConfig
 
@@ -196,8 +196,10 @@ class MeetingVoiceAgent(Agent):
         space_id: str | None = None,
         agent_roster: list[dict] | None = None,
         voice_context: dict | None = None,
+        drop_empty_turns: bool = False,
     ) -> None:
         self._config = config
+        self._drop_empty_turns = drop_empty_turns
         self._space_id = space_id
         self._agent_roster = agent_roster
         self.voice_context = voice_context
@@ -205,6 +207,22 @@ class MeetingVoiceAgent(Agent):
             config, space_id=space_id, agent_roster=agent_roster, voice_context=voice_context
         )
         super().__init__(instructions=instructions, tools=tools or [])
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        """Drop an empty committed turn when `drop_empty_turns` is set.
+
+        Task 01a174e2: a Voice-tab 1:1 session runs with manual turn
+        detection, and when the release's `commit_user_turn` hits its bound
+        with no transcript, the SDK still commits the (empty) turn and, in
+        manual mode, would generate a reply to nothing. `StopResponse` is the
+        SDK's way to ignore a turn. Off by default: with automatic turn
+        detection (meeting mode) an empty transcript never ends a turn.
+        """
+        if self._drop_empty_turns and not (new_message.text_content or "").strip():
+            logger.info("voice turn: committed turn has no transcript, no reply")
+            raise StopResponse()
 
     def instructions_for_context(self, voice_context: dict | None) -> str:
         """The instructions this agent would have been built with under

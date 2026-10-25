@@ -6,6 +6,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.room_io import RoomOptions
 
@@ -211,16 +212,34 @@ def test_build_tool_surface_passes_through_explicit_space_id():
     assert mock_build_handoff.call_args.kwargs["space_id"] == "explicit-id"
 
 
-def test_build_room_options_pins_participant_identity_when_given():
-    options = agent_module.build_room_options("user:abc-123")
+@pytest.mark.parametrize("mode", [None, "meeting"])
+def test_build_room_options_pins_participant_identity_when_given(mode):
+    options = agent_module.build_room_options("user:abc-123", mode)
 
-    assert isinstance(options, RoomOptions)
-    assert options.participant_identity == "user:abc-123"
+    # Exactly the pre-01a174e2 object: identity pinned, SDK default
+    # close_on_disconnect (True) untouched.
+    assert options == RoomOptions(participant_identity="user:abc-123")
+    assert options.close_on_disconnect is True
 
 
-def test_build_room_options_falls_back_to_not_given_when_no_identity():
-    assert agent_module.build_room_options(None) is NOT_GIVEN
-    assert agent_module.build_room_options("") is NOT_GIVEN
+@pytest.mark.parametrize("mode", [None, "meeting"])
+def test_build_room_options_falls_back_to_not_given_when_no_identity(mode):
+    assert agent_module.build_room_options(None, mode) is NOT_GIVEN
+    assert agent_module.build_room_options("", mode) is NOT_GIVEN
+
+
+def test_build_room_options_voice_1to1_keeps_session_open_on_disconnect():
+    options = agent_module.build_room_options("user:abc-123", "voice_1to1")
+
+    assert options == RoomOptions(close_on_disconnect=False, participant_identity="user:abc-123")
+
+
+@pytest.mark.parametrize("identity", [None, ""])
+def test_build_room_options_voice_1to1_without_identity_still_returns_options(identity):
+    options = agent_module.build_room_options(identity, "voice_1to1")
+
+    assert options == RoomOptions(close_on_disconnect=False)
+    assert options.participant_identity is NOT_GIVEN
 
 
 def test_parse_job_metadata_returns_dict_for_valid_json():
@@ -382,3 +401,78 @@ def test_parse_voice_context_ignores_null_and_malformed_values():
     assert agent_module.parse_voice_context({"voice_context": "space"}) is None
     assert agent_module.parse_voice_context({}) is None
     assert agent_module.parse_voice_context({"voice_context": {"kind": "none"}}) == {"kind": "none"}
+
+
+# ── Task 01a174e2: voice_1to1 commits the push-to-talk turn on release ──────
+
+
+def _run_entrypoint_capturing_turn_wiring(metadata):
+    ctx = _ctx_with_job_metadata(metadata)
+    mock_session = MagicMock()
+    mock_session.start = AsyncMock()
+
+    with (
+        patch.object(agent_module, "build_agent_session", return_value=mock_session) as build,
+        patch.object(agent_module, "build_tool_surface", return_value=[]),
+        patch.object(agent_module, "MeetingVoiceAgent") as persona_cls,
+        patch.object(agent_module, "attach_voice_context_handler"),
+        patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry"),
+        patch.object(agent_module.ask_floor_gate, "attach_ask_floor_gate") as gate,
+    ):
+        asyncio.run(agent_module.entrypoint(ctx))
+
+    return ctx, mock_session, build, persona_cls, gate
+
+
+def test_entrypoint_voice_1to1_builds_manual_session_and_commit_on_close_gate():
+    ctx, session, build, persona_cls, gate = _run_entrypoint_capturing_turn_wiring(
+        {"space_id": "dm-1", "mode": "voice_1to1"}
+    )
+
+    assert build.call_args.args[1] == "voice_1to1"
+    assert persona_cls.call_args.kwargs["drop_empty_turns"] is True
+    gate.assert_called_once_with(
+        session, ctx.room, 1000, commit_on_close=True, commit_timeout_s=4.0
+    )
+
+
+def test_entrypoint_meeting_mode_gate_and_session_unchanged():
+    ctx, session, build, persona_cls, gate = _run_entrypoint_capturing_turn_wiring(
+        {"space_id": "meeting-space"}
+    )
+
+    assert build.call_args.args[1] is None
+    assert persona_cls.call_args.kwargs["drop_empty_turns"] is False
+    gate.assert_called_once_with(session, ctx.room, 1000)
+
+
+# ── Task 01a174e2 stage 2: voice_1to1 survives a client disconnect ──────────
+
+
+def test_entrypoint_voice_1to1_starts_session_with_close_on_disconnect_off():
+    _ctx, session, _build, _persona_cls, _gate = _run_entrypoint_capturing_turn_wiring(
+        {"space_id": "dm-1", "mode": "voice_1to1", "human_identity": "user:abc-123"}
+    )
+
+    room_options = session.start.await_args.kwargs["room_options"]
+    assert room_options == RoomOptions(
+        close_on_disconnect=False, participant_identity="user:abc-123"
+    )
+
+
+def test_entrypoint_voice_1to1_without_identity_still_disables_close_on_disconnect():
+    _ctx, session, _build, _persona_cls, _gate = _run_entrypoint_capturing_turn_wiring(
+        {"space_id": "dm-1", "mode": "voice_1to1"}
+    )
+
+    assert session.start.await_args.kwargs["room_options"] == RoomOptions(close_on_disconnect=False)
+
+
+def test_entrypoint_meeting_mode_room_options_unchanged():
+    _ctx, session, _build, _persona_cls, _gate = _run_entrypoint_capturing_turn_wiring(
+        {"space_id": "meeting-space", "human_identity": "user:abc-123"}
+    )
+
+    assert session.start.await_args.kwargs["room_options"] == RoomOptions(
+        participant_identity="user:abc-123"
+    )

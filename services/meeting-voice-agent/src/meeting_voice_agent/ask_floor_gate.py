@@ -47,6 +47,17 @@ during that grace window cancels the pending detach outright, so the input
 is never disabled during a genuinely continued hold -- it is not detached
 then immediately re-enabled, it is simply never detached.
 
+## Commit on release (Voice-tab 1:1, task 01a174e2)
+
+`attach_ask_floor_gate(..., commit_on_close=True)` is the push-to-talk
+shape for a session built with `turn_detection="manual"`. "open" calls
+`session.interrupt()` (manual mode has no VAD barge-in), then
+`session.clear_user_turn()` unless the previous release's commit is still
+waiting for its transcript, then attaches. "closed" detaches at once (no
+grace) and calls `session.commit_user_turn(...)`, bounded by
+`AskFloorConfig.voice_commit_timeout_s`, logging the outcome at INFO.
+Meeting mode never takes this path.
+
 ## Default state: closed
 
 Before the very first "open" this session ever receives, the gate starts
@@ -148,7 +159,20 @@ class AskFloorGate:
         return (now - self.closed_at) * 1000.0 < self.grace_ms
 
 
-def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) -> AskFloorGate:
+#: Silence the SDK pushes after a detached release so VAD closes the
+#: segment (`AgentSession.commit_user_turn(stt_flush_duration=...)`). Well
+#: above `VadConfig.min_silence_duration` (0.55 s).
+VOICE_COMMIT_STT_FLUSH_S = 2.0
+
+
+def attach_ask_floor_gate(
+    session: AgentSession,
+    room: rtc.Room,
+    grace_ms: int,
+    *,
+    commit_on_close: bool = False,
+    commit_timeout_s: float = 4.0,
+) -> AskFloorGate:
     """Wire `AskFloorGate` to `room`'s data channel and `session.input`.
 
     Call AFTER `AgentSession(...)` is constructed (so `session.input`
@@ -193,7 +217,15 @@ def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) 
     -- a running process with no such line predates this gate and will
     reproduce the reported symptom regardless of what this branch's source
     says.
+
+    ## `commit_on_close` (task 01a174e2)
+
+    Voice-tab 1:1 only; see the moduledoc and `AskFloorConfig`. When set,
+    `grace_ms` is unused and `_attach_commit_on_close` owns the handler.
     """
+    if commit_on_close:
+        return _attach_commit_on_close(session, room, commit_timeout_s)
+
     gate = AskFloorGate(grace_ms=grace_ms)
     session.input.set_audio_enabled(False)
     logger.info(
@@ -241,6 +273,105 @@ def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) 
                 nonlocal pending_close
                 pending_close = asyncio.ensure_future(_close_after_grace())
                 logger.info("ask-floor gate: closed, %dms grace before detach", grace_ms)
+
+    room.on("data_received", _on_data_received)
+    return gate
+
+
+def _attach_commit_on_close(
+    session: AgentSession, room: rtc.Room, commit_timeout_s: float
+) -> AskFloorGate:
+    """Push-to-talk gate: the release commits the user turn.
+
+    Never raises out of the data handler: an SDK `RuntimeError` (session not
+    running yet, or a speech that disallows interruption) is logged and the
+    rest of the event still runs.
+    """
+    gate = AskFloorGate(grace_ms=0)
+    session.input.set_audio_enabled(False)
+    logger.info(
+        "ask-floor gate: attached and enforcing -- input starts DETACHED, "
+        "commit on release, commit_timeout_s=%.1f (task 01a174e2)",
+        commit_timeout_s,
+    )
+
+    pending_commit: asyncio.Future[str] | None = None
+
+    def _commit_pending() -> bool:
+        return pending_commit is not None and not pending_commit.done()
+
+    def _consume(fut: asyncio.Future) -> None:
+        if not fut.cancelled():
+            fut.exception()
+
+    def _log_outcome(fut: asyncio.Future[str], started: float) -> None:
+        elapsed = time.monotonic() - started
+        if fut.cancelled():
+            logger.info("ask-floor gate: commit superseded after %.2fs", elapsed)
+            return
+        exc = fut.exception()
+        if exc is not None:
+            logger.warning("ask-floor gate: commit failed after %.2fs: %r", elapsed, exc)
+            return
+        transcript = fut.result()
+        if transcript:
+            logger.info(
+                "ask-floor gate: committed user turn, transcript %d chars after %.2fs",
+                len(transcript),
+                elapsed,
+            )
+        else:
+            logger.info(
+                "ask-floor gate: no transcript within %.1fs (committed empty after %.2fs)",
+                commit_timeout_s,
+                elapsed,
+            )
+
+    def _on_open() -> None:
+        gate.open()
+        try:
+            session.interrupt().add_done_callback(_consume)
+        except RuntimeError as exc:
+            logger.info("ask-floor gate: open, interrupt skipped: %s", exc)
+        if not _commit_pending():
+            try:
+                session.clear_user_turn()
+            except RuntimeError as exc:
+                logger.info("ask-floor gate: open, clear_user_turn skipped: %s", exc)
+        session.input.set_audio_enabled(True)
+        logger.info("ask-floor gate: open, input attached")
+
+    def _on_closed() -> None:
+        nonlocal pending_commit
+        gate.close(time.monotonic())
+        session.input.set_audio_enabled(False)
+        started = time.monotonic()
+        try:
+            fut = session.commit_user_turn(
+                transcript_timeout=commit_timeout_s,
+                stt_flush_duration=VOICE_COMMIT_STT_FLUSH_S,
+            )
+        except RuntimeError as exc:
+            logger.warning("ask-floor gate: closed, input detached, commit skipped: %s", exc)
+            return
+        pending_commit = fut
+        fut.add_done_callback(lambda f: _log_outcome(f, started))
+        logger.info(
+            "ask-floor gate: closed, input detached, committing turn (timeout %.1fs)",
+            commit_timeout_s,
+        )
+
+    def _on_data_received(packet: rtc.DataPacket) -> None:
+        event = parse_ask_floor_event(packet.topic, packet.data)
+        if event is None:
+            return
+        try:
+            if event == "open":
+                _on_open()
+            else:
+                _on_closed()
+        except Exception:
+            logger.exception("ask-floor gate: %s handler failed", event)
 
     room.on("data_received", _on_data_received)
     return gate

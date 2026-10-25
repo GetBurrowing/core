@@ -247,13 +247,43 @@ class AskFloorConfig:
     `EndpointingConfig.min_endpointing_delay` (0.95 s), and tests pin that
     relation, so raising either of those means raising this too. The cost:
     up to 1 s of speech after release can reach the reply (bleed-through).
+    The grace applies to meeting mode only: a Voice-tab 1:1 session commits
+    the turn on release instead (next section).
+
+    ## `voice_commit_timeout_s`: the Voice-tab release commits the turn (task 01a174e2)
+
+    In a Voice-tab 1:1 session (`mode == "voice_1to1"`) the session runs
+    with `turn_detection="manual"` and the release IS the end of the turn:
+    on "closed" the gate detaches input at once and calls
+    `AgentSession.commit_user_turn(transcript_timeout=voice_commit_timeout_s,
+    stt_flush_duration=2.0)`. The SDK pushes the flush silence itself, which
+    does the grace window's old job of ending the VAD segment, then waits up
+    to this bound for the final transcript before handing the turn to the
+    LLM. With auto turn detection the release was not an end-of-turn signal
+    at all: once input was detached no more VAD events arrived, and an
+    'unlikely' turn-detector verdict on the late transcript could wait the
+    full `max_endpointing_delay` (6 s), long enough to overlap the session
+    closing.
+
+    Why 4.0 s (env `MVA_VOICE_COMMIT_TIMEOUT_S`): in a production trace the
+    final transcript landed about 2.1 s after release (about 3.1 s of
+    audio). 4 s is about twice that, and still leaves most of the Voice
+    tab's 20 s answer timeout for the LLM and TTS. Raising the fixed grace
+    instead is ruled out: it races again on any slower STT, while a commit
+    waits for the transcript itself. When the bound passes with no
+    transcript, the turn commits empty, no reply is generated, and the gate
+    logs that at INFO.
     """
 
     grace_ms: int = 1000
+    voice_commit_timeout_s: float = 4.0
 
     @classmethod
     def from_env(cls) -> AskFloorConfig:
-        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 1000))
+        return cls(
+            grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 1000),
+            voice_commit_timeout_s=_env_float("MVA_VOICE_COMMIT_TIMEOUT_S", 4.0),
+        )
 
 
 @dataclass(frozen=True)

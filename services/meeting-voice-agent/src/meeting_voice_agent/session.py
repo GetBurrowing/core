@@ -14,10 +14,25 @@ from livekit.agents import AgentSession
 from meeting_voice_agent import backends
 from meeting_voice_agent.config import AgentConfig
 
+#: The dispatch `mode` Core's `Platform.Meetings.VoiceSession` sets for a
+#: Voice-tab 1:1 session (task 01a1557a-eab7). Lives here, not in `agent.py`,
+#: because the session shape depends on it and `agent.py` imports this module.
+VOICE_1TO1_MODE = "voice_1to1"
 
-def build_agent_session(config: AgentConfig) -> AgentSession:
+
+def build_agent_session(config: AgentConfig, mode: str | None = None) -> AgentSession:
+    """Build the session for one job.
+
+    A Voice-tab 1:1 session (`mode == VOICE_1TO1_MODE`) uses
+    `turn_detection="manual"`: push-to-talk, where the release commits the
+    turn (`ask_floor_gate.attach_ask_floor_gate(..., commit_on_close=True)`,
+    task 01a174e2). Every other mode keeps the turn-detector model.
+    """
     vad = backends.build_vad(config)
-    turn_detection = backends.build_turn_detector(config.turn_detector)
+    if mode == VOICE_1TO1_MODE:
+        turn_detection = "manual"
+    else:
+        turn_detection = backends.build_turn_detector(config.turn_detector)
     stt = backends.build_stt(config)
     tts = backends.build_tts(config)
     llm = backends.build_llm(config)
