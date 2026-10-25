@@ -48,8 +48,9 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.CssRules
-  # Rung 3's shared reader (test/support/theme_blocks.ex), as the preset guard uses.
+  # Rung 3's shared reader (lib/platform/design/theme_blocks.ex), as the preset guard uses.
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -132,7 +133,7 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp ratio(b, ink, ground), do: W.contrast(c(b, ink), c(b, ground))
 
   defp subtle_pct(b) do

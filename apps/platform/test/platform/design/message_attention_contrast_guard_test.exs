@@ -74,6 +74,7 @@ defmodule Platform.Design.MessageAttentionContrastGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.PaintedMix
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @root Path.expand("../../..", __DIR__)
@@ -383,7 +384,7 @@ defmodule Platform.Design.MessageAttentionContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   # `--color-edge` is mapped once, in app.css's @theme, to the per-block
   # `--edge` (pinned below); the blocks declare `--edge` only.
   defp tok("edge"), do: "--edge"

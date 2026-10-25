@@ -37,7 +37,9 @@ defmodule Platform.Design.InactiveTabContrastTest do
   alias Platform.Design.WcagContrast, as: W
 
   import Platform.Design.ThemeBlocks,
-    only: [preset_blocks: 1, burrow_block: 2, resolve!: 2, declaration: 2]
+    only: [preset_blocks: 1, burrow_block: 2, declaration: 2]
+
+  import Platform.Design.ThemeBlockAssertions, only: [resolve!: 2]
 
   @app Path.expand("../../..", __DIR__)
   @root Path.expand("../..", @app)

@@ -62,12 +62,15 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
 
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
+  alias Platform.Theming.ContrastPairs
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
   @plugin_open ~s(@plugin "../vendor/daisyui-theme" {)
 
-  @aa_text 4.5
-  @non_text 3.0
+  # Floors, pairs and grounds: Platform.Theming.ContrastPairs, the one list
+  # (task 01a1557a-fe9b stage 1). No literal copy lives in this file.
+  @aa_text ContrastPairs.aa_text()
+  @non_text ContrastPairs.non_text()
 
   @burrow %{
     "light" => %{
@@ -118,23 +121,9 @@ defmodule Platform.Design.BurrowPaletteGuardTest do
   @interactive %{"light" => "#8b3b04", "dark" => "#ff9b55"}
 
   # {text, ground} pairs that are text and owe 4.5:1.
-  @text_pairs [
-    {"--color-base-content", "--color-base-100"},
-    {"--color-base-content", "--color-base-200"},
-    {"--color-base-content", "--color-base-300"},
-    {"--color-primary-content", "--color-primary"},
-    {"--color-accent-content", "--color-accent"},
-    {"--color-secondary-content", "--color-secondary"},
-    {"--color-info-content", "--color-info"},
-    {"--color-success-content", "--color-success"},
-    {"--color-warning-content", "--color-warning"},
-    {"--color-error-content", "--color-error"},
-    {"--color-interactive", "--color-base-100"},
-    {"--color-interactive", "--color-base-200"},
-    {"--color-interactive", "--color-base-300"}
-  ]
+  @text_pairs ContrastPairs.text_pairs()
 
-  @grounds ["--color-base-100", "--color-base-200", "--color-base-300"]
+  @grounds ContrastPairs.grounds()
 
   # Burrow token schema (task 01a1557a): the names daisyUI has no slot for.
   # Each is declared bare in both theme blocks and mapped to a --color-* key in

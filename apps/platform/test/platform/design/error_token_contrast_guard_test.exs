@@ -57,7 +57,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
   ## Anti-vacuity and the positive control
 
     * Exactly ten blocks are read, a missing one flunks, and every pair is
-      resolved through `ThemeBlocks.resolve!/2`, which flunks on an undeclared
+      resolved through `ThemeBlockAssertions.resolve!/2`, which flunks on an undeclared
       token rather than measuring a default.
     * Positive control: the PRE-retune values (Burrow `oklch(63% 0.22 25)`,
       preset dark `#e5484d`) are parsed with `WcagContrast.parse!/1` and
@@ -72,6 +72,7 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
 
   alias Platform.Design.CssRules
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -131,8 +132,8 @@ defmodule Platform.Design.ErrorTokenContrastGuardTest do
   # (mirrors settings_contrast_guard_test.exs).
   defp opaque(b, "--color-" <> slot = token) do
     if Blocks.declaration(b.decls, token),
-      do: Blocks.resolve!(b, token),
-      else: Blocks.resolve!(b, "--#{slot}")
+      do: ThemeBlockAssertions.resolve!(b, token),
+      else: ThemeBlockAssertions.resolve!(b, "--#{slot}")
   end
 
   # The achromatic content a retune could flip to: white for black, black for white.

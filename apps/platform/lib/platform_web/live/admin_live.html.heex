@@ -1,272 +1,291 @@
+<%!-- Burrow redesign 24 stage 4: the masters' Settings › Admin panel anatomy
+     (master-desktop.html, sec==='admin'): an h3 title, a text-subtle
+     description, and an always-visible ghost "Open". Tokens only; hover only
+     through lg:hover:. Every entry, href and :if gate is unchanged. Held by
+     test/platform/design/admin_reskin_source_guard_test.exs. --%>
 <div class="flex h-full min-h-0 flex-col">
-  <%!-- Header --%>
-  <div class="flex items-center justify-between border-b border-edge px-4 py-3">
-    <div class="flex items-center gap-3">
-      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content">
-        Admin · Operations
-      </h1>
-    </div>
-  </div>
+  <div class="flex-1 min-h-0 overflow-y-auto p-4 lg:p-5 clears-tab-bar">
+    <div class="mx-auto max-w-3xl">
+      <h1 class="mb-3 text-xl font-bold text-base-content" data-role="admin-heading">Admin</h1>
 
-  <%!-- Section cards --%>
-  <div class="flex-1 min-h-0 overflow-y-auto p-4 clears-tab-bar">
-    <div class="mx-auto max-w-3xl space-y-3">
-      <.link
-        :if={Platform.Access.module_access?(@access_scope, :admin)}
-        navigate="/access"
-        class="block rounded-lg border border-edge p-4"
-        data-role="admin-access-link"
-      >
-        <h2 class="font-semibold">Access</h2>
-        <p>Inspect effective access and undo access changes.</p>
-      </.link>
-      <.link
-        navigate="/control"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-cog-6-tooth size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Agents</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Connect, manage, and federate agents across Burrow runtimes.
-            </p>
+      <div class="flex flex-col gap-2" data-role="admin-card-list">
+        <.link
+          :if={Platform.Access.module_access?(@access_scope, :admin)}
+          navigate="/access"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-access-link"
+          data-admin-card="access"
+        >
+          <h3 class="text-base font-semibold text-base-content">Access</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Inspect effective access and undo access changes.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/federation"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-link size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Agent Federation</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Federation health dashboard — runtime connections, dead-letter buffer, manual ping.
-            </p>
+        <.link
+          navigate="/control"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="agents"
+        >
+          <h3 class="text-base font-semibold text-base-content">Agents</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Connect, manage, and federate agents across Burrow runtimes.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/control/usage"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-chart-bar size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Usage / Cost Metering</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Per-task and per-agent usage events, latency, and cost rollups.
-            </p>
+        <.link
+          navigate="/admin/federation"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="federation"
+        >
+          <h3 class="text-base font-semibold text-base-content">Agent Federation</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Federation health dashboard — runtime connections, dead-letter buffer, manual ping.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/users"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-user-group size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">User Access</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Manage Burrow users — archive and unarchive root-org membership.
-            </p>
+        <.link
+          navigate="/control/usage"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="usage"
+        >
+          <h3 class="text-base font-semibold text-base-content">Usage / Cost Metering</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Per-task and per-agent usage events, latency, and cost rollups.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        :if={@sign_in_admin?}
-        navigate="/admin/sign-in-users"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-sign-in-users-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Users</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Invite people, send sign-in links, and disable or remove sign-in.
-            </p>
+        <.link
+          navigate="/admin/users"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="users"
+        >
+          <h3 class="text-base font-semibold text-base-content">User Access</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Manage Burrow users — archive and unarchive root-org membership.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/orgs"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-orgs-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-building-office-2 size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Orgs</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Onboard a tenant org without a migration. Scope colour and scope-rail visibility still need a follow-up code change.
-            </p>
+        <.link
+          :if={@sign_in_admin?}
+          navigate="/admin/sign-in-users"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-sign-in-users-link"
+          data-admin-card="sign-in-users"
+        >
+          <h3 class="text-base font-semibold text-base-content">Users</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Invite people, send sign-in links, and disable or remove sign-in.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/vault"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-vault-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Vault</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Paste a secret once and grant it to agents. They fetch it with vault_fetch; it never enters chat.
-            </p>
+        <.link
+          navigate="/admin/orgs"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-orgs-link"
+          data-admin-card="orgs"
+        >
+          <h3 class="text-base font-semibold text-base-content">Orgs</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Onboard a tenant org without a migration. Scope colour and scope-rail visibility still need a follow-up code change.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/branding"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-branding-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-swatch size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Branding</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              This install's app name, manifest colours, and home-screen icons — derived from one square upload.
-            </p>
+        <.link
+          navigate="/admin/vault"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-vault-link"
+          data-admin-card="vault"
+        >
+          <h3 class="text-base font-semibold text-base-content">Vault</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Paste a secret once and grant it to agents. They fetch it with vault_fetch; it never enters chat.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/prototypes"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-prototypes-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-cube-transparent size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Prototypes</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Turn prototype publishing on or off, choose who may publish, and set size, file and retention limits.
-            </p>
+        <.link
+          navigate="/admin/branding"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-branding-link"
+          data-admin-card="branding"
+        >
+          <h3 class="text-base font-semibold text-base-content">Branding</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            This install's app name, manifest colours, and home-screen icons — derived from one square upload.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/insights"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-insights-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-light-bulb size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Insights</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Choose whether dreaming insights are sent beyond the Org memory Insights tab, and which kinds.
-            </p>
+        <.link
+          navigate="/admin/themes"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring max-lg:hidden"
+          data-role="admin-themes-link"
+          data-admin-card="themes"
+        >
+          <h3 class="text-base font-semibold text-base-content">Themes</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Edit colour tokens, shape, density, font and glass, then make a theme available in Appearance.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/external-logins"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-        data-role="admin-external-logins-link"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-inbox-arrow-down size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">External Logins</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Recover external users awaiting setup — one-click grant of org, channels, and DM allowlist.
-            </p>
+        <.link
+          navigate="/admin/prototypes"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-prototypes-link"
+          data-admin-card="prototypes"
+        >
+          <h3 class="text-base font-semibold text-base-content">Prototypes</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Turn prototype publishing on or off, choose who may publish, and set size, file and retention limits.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
 
-      <.link
-        navigate="/admin/recovery"
-        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
-      >
-        <div class="flex items-start gap-3">
-          <span class="hero-archive-box size-6 mt-0.5 flex-shrink-0 text-subtle"></span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-base font-semibold text-base-content">Recovery</h2>
-              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                Open →
-              </span>
-            </div>
-            <p class="mt-1 text-sm text-subtle">
-              Restore archived orgs and projects, or cancel a scheduled deletion before the retention window closes.
-            </p>
+        <.link
+          navigate="/admin/insights"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-insights-link"
+          data-admin-card="insights"
+        >
+          <h3 class="text-base font-semibold text-base-content">Insights</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Choose whether dreaming insights are sent beyond the Org memory Insights tab, and which kinds.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
           </div>
-        </div>
-      </.link>
+        </.link>
+
+        <.link
+          navigate="/admin/external-logins"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-role="admin-external-logins-link"
+          data-admin-card="external-logins"
+        >
+          <h3 class="text-base font-semibold text-base-content">External Logins</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Recover external users awaiting setup — one-click grant of org, channels, and DM allowlist.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
+          </div>
+        </.link>
+
+        <.link
+          navigate="/admin/recovery"
+          class="block rounded-box border border-edge bg-base-200 p-4 transition-colors lg:hover:bg-base-300 focus-visible-ring"
+          data-admin-card="recovery"
+        >
+          <h3 class="text-base font-semibold text-base-content">Recovery</h3>
+          <p class="mt-2 text-sm leading-relaxed text-subtle">
+            Restore archived orgs and projects, or cancel a scheduled deletion before the retention window closes.
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <span
+              class="inline-flex h-[30px] items-center rounded-full border border-edge bg-base-200 px-3 text-sm text-base-content"
+              data-role="admin-card-open"
+            >
+              Open
+            </span>
+          </div>
+        </.link>
+      </div>
     </div>
   </div>
 </div>

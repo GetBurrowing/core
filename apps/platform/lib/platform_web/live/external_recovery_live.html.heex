@@ -134,9 +134,15 @@
             </select>
             <span
               :if={row.group_match == :ambiguous}
-              class="text-xs text-warning"
+              class="flex items-start gap-1.5 text-xs text-base-content"
               data-role="org-ambiguous"
             >
+              <span
+                class="mt-1 inline-block size-2 shrink-0 rounded-full bg-warning"
+                aria-hidden="true"
+                data-role="warning-indicator"
+              >
+              </span>
               This login matched more than one mapped group, so no org was pre-selected. Choose one.
             </span>
           </label>

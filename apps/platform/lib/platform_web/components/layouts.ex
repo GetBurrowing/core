@@ -454,6 +454,18 @@ defmodule PlatformWeb.Layouts do
   A signed-out request gets nil for all four. The registry fields always
   come from `Platform.Accounts.ThemePreference`, so the script carries no
   second list of ids.
+
+  Org themes (task 01a1557a-fe9b stage 3). For a signed-in viewer the
+  published themes they can see (`Platform.Theming.list_published_for_user/1`,
+  read once here) add their `"org-<id>"` ids to `presets`, so the boot script
+  accepts a stored org preset and the first paint is right, and
+  `org_theme_css` is `Platform.Theming.OrgThemeCss.render/1` of the same list
+  for `<style id="org-themes">`. A stored org preset that is no longer in
+  that list reads as the default. Signed out: no org ids and nil css.
+
+  This is read on the dead render only: LiveView live navigation does not
+  re-render the root layout, so a newly published theme reaches a member on
+  their next full page load, and an already-open tab keeps what it loaded.
   """
   @spec theme_boot(map()) :: map()
   def theme_boot(assigns) do
@@ -467,13 +479,19 @@ defmodule PlatformWeb.Layouts do
 
     case signed_in_user(assigns) do
       %Platform.Accounts.User{} = user ->
-        %{"preset" => preset, "mode" => mode} = Platform.Accounts.theme_preference(user)
+        themes = Platform.Theming.list_published_for_user(user)
+        visible = Platform.Theming.OrgThemeCss.preset_ids(themes)
+
+        %{"preset" => preset, "mode" => mode} =
+          Platform.Accounts.theme_preference(user, visible)
 
         Map.merge(registry, %{
+          presets: Enum.join(ThemePreference.preset_ids() ++ visible, " "),
           html_theme: if(mode in ["light", "dark"], do: mode),
           html_preset: if(preset != ThemePreference.base_preset(), do: preset),
           server_preset: preset,
-          server_mode: mode
+          server_mode: mode,
+          org_theme_css: Platform.Theming.OrgThemeCss.render(themes)
         })
 
       _ ->
@@ -481,7 +499,8 @@ defmodule PlatformWeb.Layouts do
           html_theme: nil,
           html_preset: nil,
           server_preset: nil,
-          server_mode: nil
+          server_mode: nil,
+          org_theme_css: nil
         })
     end
   end

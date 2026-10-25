@@ -91,6 +91,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   alias Platform.Design.CssRules
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -173,7 +174,7 @@ defmodule Platform.Design.DesktopShellContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp ratio(b, ink, ground), do: W.contrast(c(b, ink), c(b, ground))
 
   defp subtle_pct(b) do

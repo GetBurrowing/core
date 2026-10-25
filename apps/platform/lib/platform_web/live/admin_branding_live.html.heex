@@ -16,7 +16,7 @@
       <div class="mb-6">
         <.link
           navigate="/admin"
-          class="text-sm font-medium text-base-content hover:text-base-content"
+          class="text-sm font-medium text-base-content lg:hover:text-base-content"
         >
           ← Admin
         </.link>
@@ -89,17 +89,29 @@
             :for={
               err <- Enum.flat_map(@uploads.source.entries, &upload_errors(@uploads.source, &1))
             }
-            class="mt-3 text-sm text-error"
+            class="mt-3 flex items-start gap-1.5 text-sm text-base-content"
             data-role="branding-upload-error"
           >
+            <span
+              class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-error"
+              aria-hidden="true"
+              data-role="error-indicator"
+            >
+            </span>
             {error_message(err)}
           </p>
 
           <p
             :if={@upload_error}
-            class="mt-3 text-sm text-error"
+            class="mt-3 flex items-start gap-1.5 text-sm text-base-content"
             data-role="branding-upload-error"
           >
+            <span
+              class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-error"
+              aria-hidden="true"
+              data-role="error-indicator"
+            >
+            </span>
             {@upload_error}
           </p>
         </form>
@@ -302,9 +314,15 @@
                   <p
                     :if={@colors_errors[field(mode, slot)]}
                     role="alert"
-                    class="mt-1 text-xs text-error"
+                    class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
                     data-role="color-input-error"
                   >
+                    <span
+                      class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+                      aria-hidden="true"
+                      data-role="error-indicator"
+                    >
+                    </span>
                     {@colors_errors[field(mode, slot)]}
                   </p>
                 </div>
@@ -314,17 +332,29 @@
             <div class="mt-6 flex flex-col gap-3">
               <p
                 :for={reason <- @colors_blocks}
-                class="text-sm text-error"
+                class="flex items-start gap-1.5 text-sm text-base-content"
                 data-role="color-block-reason"
               >
+                <span
+                  class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-error"
+                  aria-hidden="true"
+                  data-role="error-indicator"
+                >
+                </span>
                 {reason}
               </p>
               <p
                 :for={msg <- @colors_save_errors}
                 role="alert"
-                class="text-sm text-error"
+                class="flex items-start gap-1.5 text-sm text-base-content"
                 data-role="color-save-error"
               >
+                <span
+                  class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-error"
+                  aria-hidden="true"
+                  data-role="error-indicator"
+                >
+                </span>
                 {msg}
               </p>
               <div class="flex flex-wrap items-center gap-2">
@@ -382,6 +412,11 @@
               </button>
             </div>
 
+            <%!-- reskin-guard:preview-begin. The App colours preview paints the
+                 DRAFT palette's own slots (primary-content on primary, accent,
+                 interactive) inside data-theme-preview, so it is the one
+                 region the admin re-skin source guard skips. Nothing outside
+                 these markers is exempt. --%>
             <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <div
                 :for={mode <- modes()}
@@ -441,6 +476,7 @@
                 </div>
               </div>
             </div>
+            <%!-- reskin-guard:preview-end --%>
 
             <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2" data-role="color-checks">
               <div

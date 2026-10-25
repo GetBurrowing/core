@@ -42,6 +42,7 @@ defmodule Platform.Design.GameCardContrastGuardTest do
   alias Platform.Design.CssRules
   alias Platform.Design.PaintedComposite
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -97,7 +98,7 @@ defmodule Platform.Design.GameCardContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   # The 8-bit pixel a colour paints as.
   defp px(color), do: W.hex(W.to_hex(color))

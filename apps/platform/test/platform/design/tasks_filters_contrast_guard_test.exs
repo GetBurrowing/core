@@ -65,6 +65,8 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.ThemeBlocks, as: Blocks
+
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -213,7 +215,7 @@ defmodule Platform.Design.TasksFiltersContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   defp subtle_pct(b) do
     value = Blocks.declaration(b.decls, "--subtle") || flunk("#{b.id} #{b.mode}: no --subtle")

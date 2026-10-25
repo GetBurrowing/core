@@ -52,6 +52,7 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
   alias Platform.Design.PaintedComposite, as: PC
   alias Platform.Design.PaintedMix
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @root Path.expand("../../..", __DIR__)
@@ -222,7 +223,7 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp bytes(color), do: PC.bytes(color)
   defp px(rgb), do: PC.from_bytes(rgb)
 

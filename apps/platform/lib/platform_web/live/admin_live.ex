@@ -23,4 +23,9 @@ defmodule PlatformWeb.AdminLive do
      |> assign(:page_title, "Admin")
      |> assign(:sign_in_admin?, Platform.SignInAdmin.Config.enabled?())}
   end
+
+  # Burrow redesign 24 stage 4: the index subscribes to nothing, but a stray
+  # message (a shell broadcast, a late reply) must not crash the page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

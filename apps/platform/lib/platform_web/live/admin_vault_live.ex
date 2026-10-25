@@ -315,9 +315,9 @@ defmodule PlatformWeb.AdminVaultLive do
         class="min-w-0 flex-1 rounded-lg border border-edge bg-base-200 px-3 py-2 font-mono text-sm text-base-content shadow-inner"
         data-role="vault-sealed-value"
       >
-        <span class="text-neutral">saved</span>
+        <span class="text-subtle">saved</span>
         <span class="ml-2" data-role="vault-fingerprint">{@secret.fingerprint}</span>
-        <span class="ml-2 text-neutral">{stamp(sealed_at(@secret))}</span>
+        <span class="ml-2 text-subtle">{stamp(sealed_at(@secret))}</span>
       </div>
       <button
         type="button"
@@ -328,7 +328,7 @@ defmodule PlatformWeb.AdminVaultLive do
         <span class="hero-arrow-path size-4"></span> Rotate
       </button>
     </div>
-    <p class="mt-1 text-xs text-neutral">
+    <p class="mt-1 text-xs text-subtle">
       This value will not be shown again. Agents report the same fingerprint from vault_fetch.
     </p>
     """
@@ -360,16 +360,16 @@ defmodule PlatformWeb.AdminVaultLive do
             type="button"
             phx-click={@event}
             phx-value-id={agent.id}
-            class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-base-200"
+            class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm lg:hover:bg-base-200"
             data-role="vault-agent-option"
             data-agent-id={agent.id}
           >
-            <span class="hero-plus size-4 text-neutral"></span>
+            <span class="hero-plus size-4 text-subtle"></span>
             <span class="truncate">{agent.name}</span>
-            <span class="ml-auto shrink-0 font-mono text-xs text-neutral">{agent.slug}</span>
+            <span class="ml-auto shrink-0 font-mono text-xs text-subtle">{agent.slug}</span>
           </button>
         </li>
-        <li :if={@agents == []} class="px-3 py-2 text-sm text-neutral">No matching agents.</li>
+        <li :if={@agents == []} class="px-3 py-2 text-sm text-subtle">No matching agents.</li>
       </ul>
     </div>
     """
@@ -498,4 +498,9 @@ defmodule PlatformWeb.AdminVaultLive do
     {init, [last]} = Enum.split(names, -1)
     Enum.join(init, ", ") <> " and " <> last
   end
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

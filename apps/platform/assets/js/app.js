@@ -32,6 +32,12 @@ import {createConnectionStatusView, fingerprint} from "./lib/connection_status_v
 import {installNavPending} from "./lib/nav_pending"
 import {installTopBar} from "./lib/top_bar"
 import {installPressHold} from "./hooks/button_loading"
+import {installThemePreviewReceiver} from "./hooks/theme_preview_receiver"
+
+// The theme editor's preview frames (task 01a1557a-fe9b stage 2): installs a
+// message listener only when this page is framed AND carries
+// theme_preview=1. See ./hooks/theme_preview_receiver.js.
+installThemePreviewReceiver(window)
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {

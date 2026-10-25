@@ -131,7 +131,7 @@
      base-content-at-55% utility to, so Burrow paints the same pixel it did.
      A token, not a utility opacity, so a preset whose grounds cannot carry 55%
      raises its own strength (Burrow sand light: 57%). Painted under every
-     measured browser formula (test/support/painted_composite.ex) it measures
+     measured browser formula (lib/platform/design/painted_composite.ex) it measures
      4.6867:1 on base-100, 4.6350:1 on base-200 and 4.5414:1 on base-300.
      Declared --subtle, never --color-subtle; see the @theme inline block. */
   --subtle: color-mix(in oklab, var(--color-base-content) 55%, transparent);

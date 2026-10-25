@@ -4,7 +4,9 @@ defmodule Platform.Design.PaintedComposite do
   as browsers actually rasterise it (task 01a1557a stage 5; generalised over
   the strength, and re-measured, in stage 5 round 2).
 
-  Test-support only. `Platform.Design.WcagContrast.composite/3` blends in float
+  Shared by the design guards and `Platform.Theming`'s contrast ledger (moved
+  out of test support by task 01a1557a-fe9b stage 1).
+  `Platform.Design.WcagContrast.composite/3` blends in float
   and is a fine model of the DECLARATION. It is not a model of the PIXEL. Two
   Chrome builds were measured, and Chrome 151 alone rasterises the same
   declaration through two different paths depending on the size of the box
@@ -46,7 +48,7 @@ defmodule Platform.Design.PaintedComposite do
   browser has been painted at: these formulas are measurements, and an
   unmeasured alpha is an extrapolation.
 
-  Painted by `/home/dev/sources/tmp/s5r2-01a1557a/paint_corpus_pct_01a1557a.mjs`
+  Painted by `paint_corpus_pct_01a1557a.mjs`
   (8x8) and `paint_paths_01a1557a.mjs` (10x20 and text); fitted by
   `an_subset_01a1557a.py` beside them. Inputs are `WcagContrast` colours
   (linear-light tuples), quantised to 8-bit sRGB first, because a ground on the
@@ -67,8 +69,8 @@ defmodule Platform.Design.PaintedComposite do
     :chrome_151_premultiplied
   ]
 
-  # --subtle paints at 55% (57% in Burrow sand light); text-base-content/60 and
-  # daisyUI's .label paint at 60%.
+  # --subtle paints at 55% (57% in Burrow sand light); daisyUI's .label paints
+  # base-content at 60%.
   @measured_strengths [55, 57, 60]
 
   @doc "The formulas whose union explains every painted channel measured."

@@ -113,7 +113,7 @@
       <button
         type="button"
         phx-click="clear_selection"
-        class="focus-visible-ring rounded px-1 text-sm font-medium text-base-content hover:text-base-content"
+        class="focus-visible-ring rounded px-1 text-sm font-medium text-base-content lg:hover:text-base-content"
       >
         Clear
       </button>
@@ -131,7 +131,7 @@
     class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-4 z-50 max-w-sm"
   >
     <div class="flex items-start gap-3 rounded-lg border border-success/25 bg-base-100 px-4 py-3 shadow-md">
-      <.icon name="hero-check-circle-solid" class="size-5 shrink-0 text-success" />
+      <.icon name="hero-check-circle-solid" class="size-5 shrink-0 bg-success" />
       <div class="min-w-0 flex-1">
         <p class="text-sm text-base-content">{@toast.message}</p>
         <div class="mt-2 flex items-center gap-4">
@@ -139,7 +139,7 @@
             :if={@toast.view_path}
             navigate={@toast.view_path}
             data-role="toast-view"
-            class="focus-visible-ring rounded text-xs font-medium text-primary hover:underline"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content underline underline-offset-2 lg:hover:decoration-2"
           >
             View →
           </.link>
@@ -147,7 +147,7 @@
             type="button"
             phx-click="undo_restore"
             data-role="toast-undo"
-            class="focus-visible-ring rounded text-xs font-medium text-base-content hover:text-base-content"
+            class="focus-visible-ring rounded text-xs font-medium text-base-content lg:hover:text-base-content"
           >
             Undo
           </button>
@@ -159,7 +159,7 @@
         aria-label="Dismiss"
         class="focus-visible-ring shrink-0 rounded"
       >
-        <.icon name="hero-x-mark" class="size-4 opacity-40 hover:opacity-70" />
+        <.icon name="hero-x-mark" class="size-4 text-subtle lg:hover:text-base-content" />
       </button>
     </div>
   </div>

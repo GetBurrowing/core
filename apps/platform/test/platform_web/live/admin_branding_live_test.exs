@@ -584,6 +584,26 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
                "Not a colour"
     end
 
+    # Task 01a1557a stage 5: the error's hue left the text (body colour now)
+    # for a non-text dot in --color-error beside it, so the dot IS the error
+    # indicator a sighted operator reads. Losing it leaves a body-coloured
+    # sentence that does not read as an error.
+    test "an inline colour error carries its error indicator", %{conn: conn} do
+      {:ok, view, _html} = conn |> admin_conn() |> live(~p"/admin/branding")
+
+      refute has_element?(view, ~s([data-role="error-indicator"]))
+
+      change_colour(view, "light_action", "#12")
+
+      error = ~s([data-role="color-light-action"] [data-role="color-input-error"])
+      assert has_element?(view, error <> ".text-base-content", "Not a colour")
+
+      assert has_element?(
+               view,
+               error <> ~s( [data-role="error-indicator"].bg-error[aria-hidden="true"])
+             )
+    end
+
     test "clearing a field leaves it empty, not the Suite default", %{conn: conn} do
       {:ok, view, _html} = conn |> admin_conn() |> live(~p"/admin/branding")
       change_colour(view, "light_action", "#abc")

@@ -53,7 +53,7 @@
  * value that differs from theme.js carries a comment with the master value and
  * both measured ratios (Platform.Design.WcagContrast; the 55% ink check uses the
  * painted 8-bit composite, held at its minimum over the browser formulas in
- * test/support/painted_composite.ex). Stage 5 moved four light grounds so the
+ * lib/platform/design/painted_composite.ex). Stage 5 moved four light grounds so the
  * 55% ink clears 4.5:1 under every formula; each carries its own comment. Method, as rung 1 (bc525bce5):
  *   - dark on-accent: black;
  *   - light ink: clears 4.5:1 at its --subtle strength on all three grounds;
@@ -156,7 +156,7 @@
   --color-base-200: #eef2f8;
   /* Stage 5: #e2e8f2 -> #e2ecf2. 55% ink on #e2e8f2 painted 4.4661:1 in
      Chrome 147 (4.5140:1 in 151); on #e2ecf2 it measures 4.5367:1, the
-     min over the measured browser formulas, test/support/painted_composite.ex.
+     min over the measured browser formulas, lib/platform/design/painted_composite.ex.
      base-200/base-300 separation 1.0957:1 -> 1.0672:1 (accepted). */
   --color-base-300: #e2ecf2;
   --edge: #c9d3e3;
@@ -330,7 +330,7 @@
   color-scheme: light;
   --color-base-100: #f8f1e6;
   /* Stage 5: #efe6d8 -> #efe9d8. 55% ink on #efe6d8 measured 4.4799:1; on
-     #efe9d8 it measures 4.5205:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     #efe9d8 it measures 4.5205:1, the min over the measured browser formulas, lib/platform/design/painted_composite.ex.
      base-200/base-300 separation 1.1266:1 -> 1.1490:1; base-100/base-200
      1.1022:1 -> 1.0808:1. */
   --color-base-200: #efe9d8;
@@ -363,7 +363,7 @@
      raised ground: black at 55% on #e5d9c6 paints 4.3460:1. At 57% black
      measures 4.9442:1 on base-100, 4.8154:1 on base-200 and 4.6194:1 on
      base-300, the worst pixel any measured browser paints
-     (test/support/painted_composite.ex). The grounds keep their elevation. */
+     (lib/platform/design/painted_composite.ex). The grounds keep their elevation. */
   --subtle: color-mix(in oklab, var(--color-base-content) 57%, transparent);
   --disabled: color-mix(in oklab, var(--color-base-content) 40%, transparent);
   --decorative: color-mix(in oklab, var(--color-base-content) 40%, transparent);
@@ -533,7 +533,7 @@
   --color-base-100: #f7faf7;
   --color-base-200: #eef3ef;
   /* Stage 5: #dfe8e1 -> #dfece1. 55% ink on #dfe8e1 painted 4.4572:1; on
-     #dfece1 it measures 4.5290:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     #dfece1 it measures 4.5290:1, the min over the measured browser formulas, lib/platform/design/painted_composite.ex.
      base-200/base-300 separation 1.1154:1 -> 1.0859:1 (accepted). */
   --color-base-300: #dfece1;
   --edge: #c3d2c7;
@@ -713,7 +713,7 @@
   --color-base-100: #ffffff;
   --color-base-200: #ffffff;
   /* Stage 5: #e6e6e6 -> #e9e9e9. 55% ink on #e6e6e6 painted 4.4647:1; on
-     #e9e9e9 it measures 4.5218:1, the min over the measured browser formulas, test/support/painted_composite.ex.
+     #e9e9e9 it measures 4.5218:1, the min over the measured browser formulas, lib/platform/design/painted_composite.ex.
      A neutral grey: #e7e7e7 (4.5062) and #e8e8e8 (4.4805) do not clear 4.52.
      base-200/base-300 separation 1.2481:1 -> 1.2141:1 (accepted; base-200 is
      already #ffffff). */

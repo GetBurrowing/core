@@ -32,6 +32,7 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.PaintedMix
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
   alias PlatformWeb.Components.LinkSiteGlyphs
 
@@ -84,7 +85,7 @@ defmodule Platform.Design.LinkCardContrastGuardTest do
      glyphs: File.read!(@glyphs_path)}
   end
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   defp subtle_pct(b) do
     value = Blocks.declaration(b.decls, "--subtle") || flunk("#{b.id} #{b.mode}: no --subtle")

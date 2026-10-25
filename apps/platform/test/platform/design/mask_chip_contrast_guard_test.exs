@@ -48,6 +48,7 @@ defmodule Platform.Design.MaskChipContrastGuardTest do
 
   alias Platform.Design.PaintedComposite
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -94,7 +95,7 @@ defmodule Platform.Design.MaskChipContrastGuardTest do
     {:ok, blocks: blocks, source: File.read!(@component_path), css: app_css}
   end
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp ratio(b, ink, ground), do: W.contrast(c(b, ink), c(b, ground))
 
   defp subtle_pct(b) do

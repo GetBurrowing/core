@@ -79,6 +79,7 @@ import TabPill from "./tab_pill"
 import VoiceContext from "./voice_context"
 import VoiceTab from "./voice_tab"
 import TasksStatusFilter from "./tasks_status_filter"
+import ThemeEditor from "./theme_editor"
 import ThemePicker from "./theme_picker"
 import ToastPause from "./toast_pause"
 import ViewportBreakpoint from "./viewport_breakpoint"
@@ -164,6 +165,7 @@ export default {
   VoiceContext,
   VoiceTab,
   TasksStatusFilter,
+  ThemeEditor,
   ThemePicker,
   ToastPause,
   ViewportBreakpoint,

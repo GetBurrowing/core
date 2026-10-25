@@ -55,6 +55,7 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
   alias Platform.Design.PaintedComposite, as: PC
   alias Platform.Design.PaintedGlass, as: G
   alias Platform.Design.ThemeBlocks, as: TB
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -241,8 +242,8 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
 
       {ratio, _} =
         PC.contrast_min(
-          TB.resolve!(b, "--color-base-content"),
-          TB.resolve!(b, "--color-base-200"),
+          ThemeBlockAssertions.resolve!(b, "--color-base-content"),
+          ThemeBlockAssertions.resolve!(b, "--color-base-200"),
           p
         )
 
@@ -284,8 +285,8 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
 
         ratio =
           W.contrast(
-            PC.from_bytes(PC.bytes(TB.resolve!(b, "--color-base-content"))),
-            PC.from_bytes(PC.bytes(TB.resolve!(b, "--color-base-300")))
+            PC.from_bytes(PC.bytes(ThemeBlockAssertions.resolve!(b, "--color-base-content"))),
+            PC.from_bytes(PC.bytes(ThemeBlockAssertions.resolve!(b, "--color-base-300")))
           )
 
         {v, ratio}
@@ -341,8 +342,8 @@ defmodule Platform.Design.UnderGlassContrastGuardTest do
     rows =
       for v <- @variants do
         b = Map.fetch!(blocks, v)
-        content = TB.resolve!(b, "--color-base-content")
-        base100 = TB.resolve!(b, "--color-base-100")
+        content = ThemeBlockAssertions.resolve!(b, "--color-base-content")
+        base100 = ThemeBlockAssertions.resolve!(b, "--color-base-100")
 
         name =
           W.contrast(PC.from_bytes(PC.bytes(content)), PC.from_bytes(PC.bytes(base100)))

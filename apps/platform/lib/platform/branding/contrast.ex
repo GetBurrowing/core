@@ -13,10 +13,11 @@ defmodule Platform.Branding.Contrast do
 
   ## Why this is not `Platform.Design.WcagContrast`
 
-  That module is test support (`test/support/wcag_contrast.ex`) and says so in
-  its moduledoc: nothing in `lib/` may use it, because it is compiled only under
-  `MIX_ENV=test`. It also parses the stylesheet's own colour syntax, which this
-  module has no need for. Its figures are the reference this module is held to:
+  That module was test support when this one was written, compiled only under
+  `MIX_ENV=test`; task 01a1557a-fe9b stage 1 moved it to
+  `lib/platform/design/wcag_contrast.ex` for the org theme ledger, and this
+  module was left as it is. It also parses the stylesheet's own colour syntax,
+  which this module has no need for. Its figures are the reference this module is held to:
   `contrast_test.exs` asserts both agree on a fixed set of hexes, including the
   1.7875 / 4.7007 / 9.6304 figures `app.css` records.
 

@@ -102,6 +102,7 @@
     user={assigns[:current_user_record]}
     org_name={sidebar_org_name(assigns)}
     theme_picker_open={assigns[:theme_picker_open] == true}
+    org_themes={assigns[:org_themes] || []}
     masked?={assigns[:mask_names?] == true}
     mask_until={Platform.Accounts.mask_names_until(assigns[:current_user_record])}
     mask_zone={assigns[:mask_zone]}
@@ -261,6 +262,7 @@
     <.theme_picker_sheet
       open={assigns[:theme_picker_open] == true}
       user={assigns[:current_user_record]}
+      org_themes={assigns[:org_themes] || []}
     />
 
     <%!-- "Names masked" confirm, below lg (task 01a1600d stage 2; direction

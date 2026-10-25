@@ -87,7 +87,8 @@ defmodule PlatformWeb.SettingsLive do
 
   # The Admin sheet's rows, alphabetical by label. Labels are the /admin hub's
   # tile titles in sentence case, so the hub and Settings agree. `:sign_in`
-  # marks the row that also needs the sign-in admin switch.
+  # marks the row that also needs the sign-in admin switch. `:desktop_only`
+  # marks a row hidden below lg (the theme editor is desktop only).
   @admin_rows [
     %{label: "Access", path: "/access", view: PlatformWeb.AccessLive},
     %{
@@ -107,6 +108,12 @@ defmodule PlatformWeb.SettingsLive do
     %{label: "Prompts", path: "/admin/prompts", view: PlatformWeb.AdminPromptsLive},
     %{label: "Prototypes", path: "/admin/prototypes", view: PlatformWeb.AdminPrototypesLive},
     %{label: "Recovery", path: "/admin/recovery", view: PlatformWeb.RecoveryLive},
+    %{
+      label: "Themes",
+      path: "/admin/themes",
+      view: PlatformWeb.AdminThemesLive,
+      desktop_only: true
+    },
     %{label: "User access", path: "/admin/users", view: PlatformWeb.UserAccessLive},
     %{
       label: "Users",
@@ -175,14 +182,30 @@ defmodule PlatformWeb.SettingsLive do
 
   @doc """
   The Theme row's value, '{preset name} · {mode}', for example
-  'Burrow sand · Light'.
+  'Burrow sand · Light'. An org preset (task 01a1557a-fe9b stage 3) shows
+  that theme's name from `org_themes`, the published themes the person can
+  see: 'Ocean · Dark'.
   """
-  @spec theme_value(map()) :: String.t()
-  def theme_value(%{"preset" => preset, "mode" => mode}) do
-    name =
-      Enum.find_value(ThemePreference.presets(), preset, fn p -> p.id == preset && p.name end)
+  @spec theme_value(map(), [Platform.Theming.OrgTheme.t()]) :: String.t()
+  def theme_value(%{"preset" => preset, "mode" => mode}, org_themes \\ []) do
+    rows =
+      ThemePreference.presets() ++
+        Enum.map(org_themes, &%{id: Platform.Theming.OrgTheme.preset_id(&1), name: &1.name})
+
+    name = Enum.find_value(rows, preset, fn p -> p.id == preset && p.name end)
 
     "#{name} · #{String.capitalize(mode)}"
+  end
+
+  # The stored preference read against the same visible set the picker
+  # shows (ShellLive's `:org_themes`), so the row and the picker agree.
+  defp theme_row_value(assigns) do
+    org_themes = assigns[:org_themes] || []
+    visible = Enum.map(org_themes, &Platform.Theming.OrgTheme.preset_id/1)
+
+    assigns[:current_user_record]
+    |> Accounts.theme_preference(visible)
+    |> theme_value(org_themes)
   end
 
   @doc """
@@ -250,10 +273,7 @@ defmodule PlatformWeb.SettingsLive do
       |> assign(:email, Map.get(record, :email))
       |> assign(:avatar_url, Map.get(record, :avatar_url))
       |> assign(:avatar_seed, Map.get(record, :id) || assigns[:current_user])
-      |> assign(
-        :theme_value,
-        theme_value(Accounts.theme_preference(assigns[:current_user_record]))
-      )
+      |> assign(:theme_value, theme_row_value(assigns))
       |> assign(:level, Accounts.notification_level(assigns[:current_user_record]))
       |> assign(:push_state, push_state(assigns))
       |> assign(
@@ -455,7 +475,8 @@ defmodule PlatformWeb.SettingsLive do
             :for={row <- @admin_rows}
             navigate={row.path}
             data-role="settings-admin-row"
-            class={sheet_row_class()}
+            data-path={row.path}
+            class={[sheet_row_class(), Map.get(row, :desktop_only, false) && "max-lg:hidden"]}
           >
             <span class="min-w-0 truncate">{row.label}</span>
             <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>

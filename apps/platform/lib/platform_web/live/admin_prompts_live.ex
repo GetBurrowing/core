@@ -625,4 +625,9 @@ defmodule PlatformWeb.AdminPromptsLive do
   defp find_missing_key(declared_missing, slug) do
     Enum.find(declared_missing, &(&1.slug == slug))
   end
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

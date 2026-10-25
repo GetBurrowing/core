@@ -39,4 +39,9 @@ defmodule PlatformWeb.AccessViewAsLive do
     <PlatformWeb.Components.AccessViewAs.preview result={@result} rail_keys={@rail_keys} />
     """
   end
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

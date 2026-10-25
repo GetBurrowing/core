@@ -91,7 +91,7 @@
                      than being folded into this one. --%>
                 <span
                   :if={is_nil(org.color_hue)}
-                  class="badge badge-warning badge-sm badge-outline"
+                  class="badge badge-ghost badge-sm border-warning"
                   data-role="scope-rail-no"
                   title="No hue set, so this org's rail chip renders unstyled. Set one and it is live on the next page load."
                 >
@@ -155,9 +155,15 @@
         />
         <p
           :for={msg <- Enum.map(@org_form[:name].errors, &translate_error/1)}
-          class="mt-1 text-xs text-error"
+          class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
           data-role="org-name-error"
         >
+          <span
+            class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+            aria-hidden="true"
+            data-role="error-indicator"
+          >
+          </span>
           {msg}
         </p>
       </div>
@@ -178,9 +184,15 @@
         />
         <p
           :for={msg <- Enum.map(@org_form[:slug].errors, &translate_error/1)}
-          class="mt-1 text-xs text-error"
+          class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
           data-role="org-slug-error"
         >
+          <span
+            class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+            aria-hidden="true"
+            data-role="error-indicator"
+          >
+          </span>
           {msg}
         </p>
         <p class="mt-1 text-xs text-subtle" data-role="org-slug-hint">
@@ -250,7 +262,7 @@
                 fill={@preview.ramp.fill}
                 stroke="currentColor"
                 stroke-width="2.5"
-                class="text-base-100"
+                class="stroke-base-100"
                 data-role="hue-handle"
                 data-hue={@picked_hue}
               />
@@ -285,9 +297,15 @@
 
             <p
               :for={msg <- Enum.map(@org_form[:color_hue].errors, &translate_error/1)}
-              class="text-xs text-error"
+              class="flex items-start gap-1.5 text-xs text-base-content"
               data-role="org-color-hue-error"
             >
+              <span
+                class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+                aria-hidden="true"
+                data-role="error-indicator"
+              >
+              </span>
               {msg}
             </p>
 
@@ -305,7 +323,8 @@
               data-role="hue-proximity-warning"
             >
               <p class="flex items-center gap-1.5 font-medium">
-                <span class="hero-exclamation-triangle size-4 text-warning"></span>
+                <span class="hero-exclamation-triangle size-4 bg-warning" aria-hidden="true">
+                </span>
                 Close to a colour already in use
               </p>
               <p :for={conflict <- @hue_conflicts} class="mt-1 text-base-content">
@@ -319,9 +338,9 @@
       </div>
 
       <%!-- PREVIEW. TWO grounds, and that is the whole point of it.
-           `--color-base-100` is `#fbfaf9` in light and `#191b20` in
-           dark (Burrow, task 01a120c5; the scope solver still measures the
-           pre-Burrow white and #171b25, 17.21:1), which are 16.53:1 apart,
+           `--color-base-100` is Burrow light's and Burrow dark's base-100
+           (task 01a120c5; the scope solver still measures the pre-Burrow
+           white and dark grounds, 17.21:1), which are 16.53:1 apart,
            while clearing AA (4.5:1) as text
            on BOTH would need the grounds to be at least 4.5² = 20.25 apart.
            16.53 < 20.25, so no single colour value can do it — the answer is
@@ -391,10 +410,10 @@
               <span data-role="preview-contrast" data-ground={ground.key}>
                 {format_contrast(ground.worst.contrast)}:1
               </span>
-              <span class="opacity-70">worst: {ground.worst.cell}</span>
+              <span>worst: {ground.worst.cell}</span>
             </p>
             <p class="font-mono text-[11px]" style={"color:#{ground.text_color}"}>
-              <span :if={ground.worst.contrast >= 4.5} class="opacity-70">
+              <span :if={ground.worst.contrast >= 4.5}>
                 {ground.name} · worst cell clears AA 4.5:1
               </span>
               <span

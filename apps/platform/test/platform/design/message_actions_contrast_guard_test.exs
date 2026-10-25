@@ -53,6 +53,8 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.ThemeBlocks, as: Blocks
+
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -222,7 +224,7 @@ defmodule Platform.Design.MessageActionsContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp tok(slot), do: "--color-#{slot}"
 
   defp subtle_pct(b) do

@@ -69,7 +69,7 @@
             </thead>
             <tbody class="divide-y divide-base-200">
               <%= for runtime <- @runtimes do %>
-                <tr id={"runtime-row-#{runtime.runtime_id}"} class="hover:bg-base-100">
+                <tr id={"runtime-row-#{runtime.runtime_id}"} class="lg:hover:bg-base-100">
                   <%!--
                     Public Sans 600 / 13px, and it never truncates: this is
                     the one string that says which process you are about to
@@ -85,11 +85,11 @@
                   --%>
                   <td class="px-4 py-3 align-top">
                     <%= if runtime.online do %>
-                      <span class="inline-flex items-center gap-1.5 text-success">
+                      <span class="inline-flex items-center gap-1.5 text-base-content">
                         <span class="size-2 rounded-full bg-success inline-block"></span> Online
                       </span>
                     <% else %>
-                      <span class="inline-flex items-center gap-1.5 text-error">
+                      <span class="inline-flex items-center gap-1.5 text-base-content">
                         <span class="size-2 rounded-full bg-error inline-block"></span> Offline
                       </span>
                     <% end %>
@@ -119,17 +119,21 @@
                       >
                         {build_sha(runtime)}
                       </span>
-                      <span class="text-neutral text-[11px]">·</span>
-                      <span data-build-age class="text-neutral text-[12px] whitespace-nowrap">
+                      <span class="text-subtle text-[12px]">·</span>
+                      <span data-build-age class="text-subtle text-[12px] whitespace-nowrap">
                         {build_age(runtime)}
                       </span>
                     </div>
                     <%= for stale <- predated_capabilities(runtime) do %>
                       <div
                         data-build-warning={stale.capability}
-                        class="mt-1 flex items-start gap-1 text-warning text-[12px]"
+                        class="mt-1 flex items-start gap-1 text-base-content text-[12px]"
                       >
-                        <span class="hero-exclamation-triangle size-3.5 shrink-0"></span>
+                        <span
+                          class="hero-exclamation-triangle size-3.5 shrink-0 bg-warning"
+                          aria-hidden="true"
+                        >
+                        </span>
                         <span>predates {stale.capability} ({stale.landed_label})</span>
                       </div>
                     <% end %>
@@ -170,7 +174,7 @@
                             which at 375px puts `never` past the fold — the
                             one word this column exists to deliver.
                           --%>
-                          <span data-proof-label class="text-neutral text-[12px]">
+                          <span data-proof-label class="text-subtle text-[12px]">
                             {proof.label}
                           </span>
                           <span data-proof-value class="text-[12px]">
@@ -181,17 +185,17 @@
                     </div>
                     <div data-proof-rule class="mt-2 border-t border-edge pt-2">
                       <%= if Enum.empty?(declared_chips(runtime)) do %>
-                        <span data-declared class="text-info text-[12px]">declared: none</span>
+                        <span data-declared class="text-subtle text-[12px]">declared: none</span>
                       <% else %>
                         <div
                           data-declared
-                          class="flex flex-wrap items-baseline gap-1 text-info text-[12px]"
+                          class="flex flex-wrap items-baseline gap-1 text-base-content text-[12px]"
                         >
                           <span>declared:</span>
                           <%= for feature <- declared_chips(runtime) do %>
                             <span
                               data-declared-chip
-                              class="rounded border border-info/40 px-1 max-w-[24ch] truncate"
+                              class="rounded border border-info px-1 max-w-[24ch] truncate"
                             >
                               {feature}
                             </span>
@@ -221,9 +225,21 @@
                       </button>
                       <%= case Map.get(@ping_results, runtime.runtime_id) do %>
                         <% :sent -> %>
-                          <span class="text-xs text-info ml-1">Sent ✓</span>
+                          <span class="ml-1 inline-flex items-center gap-1 text-xs text-base-content">
+                            <span
+                              class="inline-block size-2 shrink-0 rounded-full bg-info"
+                              aria-hidden="true"
+                              data-role="info-indicator"
+                            ></span>Sent ✓
+                          </span>
                         <% {:error, _} -> %>
-                          <span class="text-xs text-error ml-1">Failed</span>
+                          <span class="ml-1 inline-flex items-center gap-1 text-xs text-base-content">
+                            <span
+                              class="inline-block size-2 shrink-0 rounded-full bg-error"
+                              aria-hidden="true"
+                              data-role="error-indicator"
+                            ></span>Failed
+                          </span>
                         <% _ -> %>
                           <span></span>
                       <% end %>
@@ -252,9 +268,10 @@
           <button
             id="prune-dead-letters"
             phx-click="prune_dead_letters"
-            class="btn btn-xs btn-ghost text-error"
+            class="btn btn-xs btn-ghost text-base-content"
             title="Deletes settled rows only. Pending and replaying rows are the replay queue and cannot be pruned from here."
           >
+            <span class="hero-trash-mini size-3.5 bg-error" aria-hidden="true"></span>
             Prune settled
           </button>
         <% end %>
@@ -292,12 +309,16 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
-              Replayed
+            <div class="flex items-center gap-1.5 text-[0.65rem] uppercase tracking-wider text-subtle">
+              <span
+                class="inline-block size-2 shrink-0 rounded-full bg-success"
+                aria-hidden="true"
+                data-role="success-indicator"
+              ></span>Replayed
             </div>
             <div
               id="dead-letter-count-replayed"
-              class="text-lg font-semibold tabular-nums text-success"
+              class="text-lg font-semibold tabular-nums text-base-content"
             >
               {@loss_summary.replayed}
             </div>
@@ -336,23 +357,31 @@
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
-              Abandoned
+            <div class="flex items-center gap-1.5 text-[0.65rem] uppercase tracking-wider text-subtle">
+              <span
+                class="inline-block size-2 shrink-0 rounded-full bg-error"
+                aria-hidden="true"
+                data-role="error-indicator"
+              ></span>Abandoned
             </div>
             <div
               id="dead-letter-count-abandoned"
-              class="text-lg font-semibold tabular-nums text-error"
+              class="text-lg font-semibold tabular-nums text-base-content"
             >
               {@loss_summary.abandoned}
             </div>
           </div>
           <div class="rounded-md bg-base-200 px-3 py-2">
-            <div class="text-[0.65rem] uppercase tracking-wider text-subtle">
-              Awaiting replay
+            <div class="flex items-center gap-1.5 text-[0.65rem] uppercase tracking-wider text-subtle">
+              <span
+                class="inline-block size-2 shrink-0 rounded-full bg-warning"
+                aria-hidden="true"
+                data-role="warning-indicator"
+              ></span>Awaiting replay
             </div>
             <div
               id="dead-letter-count-pending"
-              class="text-lg font-semibold tabular-nums text-warning"
+              class="text-lg font-semibold tabular-nums text-base-content"
             >
               {@loss_summary.pending}
             </div>
@@ -423,7 +452,7 @@
             </thead>
             <tbody id="dead-letter-rows" class="divide-y divide-base-200">
               <%= for letter <- @dead_letters do %>
-                <tr id={"dead-letter-#{letter.id}"} class="hover:bg-base-100">
+                <tr id={"dead-letter-#{letter.id}"} class="lg:hover:bg-base-100">
                   <td class="px-3 py-2 text-xs text-subtle whitespace-nowrap">
                     {format_dt(letter.occurred_at)}
                   </td>

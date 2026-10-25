@@ -415,4 +415,16 @@ defmodule PlatformWeb.AccessLive do
       runtime -> " via " <> (runtime.display_name || runtime.runtime_id)
     end
   end
+
+  # The hue of a permission line's source rides on a dot, not on its text
+  # (task 01a1557a stage 5).
+  defp source_dot("grant"), do: "bg-info"
+  defp source_dot(source) when source in ["deny", "restricted", "Locked"], do: "bg-error"
+  defp source_dot("capped"), do: "bg-warning"
+  defp source_dot(_), do: nil
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

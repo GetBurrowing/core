@@ -27,6 +27,21 @@ defmodule PlatformWeb.Components.ThemePicker do
       blocks in `theme_presets.css` paint the chip with that preset's own
       surface, accent, font and radius. Only the chips paint other presets;
       the picker chrome follows the active theme.
+    * "Your themes" (task 01a1557a-fe9b stage 3): after the Theme group, a
+      `text-subtle` section label (the masters' Appearance label) and a
+      second `role="radiogroup"` with one row per published org theme the
+      person can see (`org_themes`, from `Platform.Theming.list_published_for_user/1`),
+      in the same row markup as a preset (`preset_row/1`): a chip carrying
+      `data-preset="org-<id>"` + `data-theme`, painted by the root layout's
+      `<style id="org-themes">`, then the name and the check. Nothing at all
+      renders when the list is empty. The rows use `data-theme-option="preset"`,
+      so the ThemePicker hook needs no change: it checks, paints and applies
+      them like any preset (the boot script accepts the id because the root
+      layout added it to `data-presets`), and its arrow keys move across both
+      preset groups as one list.
+    * Newly published themes reach the picker on the next full page load
+      (ShellLive reads them per mount; the root layout that paints their
+      chips is not re-rendered on live navigation).
     * A click applies at once. There is no Save button.
     * The canvas's footer link "More in Settings > Appearance" is NOT
       rendered: no settings route exists yet (rung 19 builds it), and a link
@@ -49,14 +64,19 @@ defmodule PlatformWeb.Components.ThemePicker do
 
   alias Platform.Accounts
   alias Platform.Accounts.ThemePreference
+  alias Platform.Theming.OrgTheme
 
   @mode_labels %{"light" => "Light", "dark" => "Dark", "system" => "System"}
 
   attr :open, :boolean, default: false
   attr :user, :any, default: nil, doc: "the signed-in `%User{}`, for the first-frame state"
 
+  attr :org_themes, :list,
+    default: [],
+    doc: "the published `OrgTheme`s the person can see, for \"Your themes\""
+
   def theme_picker(assigns) do
-    assigns = assign(assigns, :pref, Accounts.theme_preference(assigns.user))
+    assigns = assign_pref(assigns)
 
     ~H"""
     <div id="theme-picker" class="max-lg:hidden">
@@ -72,7 +92,7 @@ defmodule PlatformWeb.Components.ThemePicker do
         phx-window-keydown={@open && "close_theme_picker"}
         phx-key={@open && "Escape"}
       >
-        <.picker_body id="theme-picker-popover-body" pref={@pref} />
+        <.picker_body id="theme-picker-popover-body" pref={@pref} org_themes={@org_themes} />
       </div>
     </div>
     """
@@ -81,8 +101,12 @@ defmodule PlatformWeb.Components.ThemePicker do
   attr :open, :boolean, default: false
   attr :user, :any, default: nil, doc: "the signed-in `%User{}`, for the first-frame state"
 
+  attr :org_themes, :list,
+    default: [],
+    doc: "the published `OrgTheme`s the person can see, for \"Your themes\""
+
   def theme_picker_sheet(assigns) do
-    assigns = assign(assigns, :pref, Accounts.theme_preference(assigns.user))
+    assigns = assign_pref(assigns)
 
     ~H"""
     <.sheet
@@ -93,13 +117,19 @@ defmodule PlatformWeb.Components.ThemePicker do
       class="lg:hidden"
     >
       <:title>Theme</:title>
-      <.picker_body id="theme-picker-sheet-body" pref={@pref} />
+      <.picker_body id="theme-picker-sheet-body" pref={@pref} org_themes={@org_themes} />
     </.sheet>
     """
   end
 
+  defp assign_pref(assigns) do
+    visible = Enum.map(assigns.org_themes, &OrgTheme.preset_id/1)
+    assign(assigns, :pref, Accounts.theme_preference(assigns.user, visible))
+  end
+
   attr :id, :string, required: true
   attr :pref, :map, required: true
+  attr :org_themes, :list, default: []
 
   defp picker_body(assigns) do
     pref = assigns.pref
@@ -109,6 +139,10 @@ defmodule PlatformWeb.Components.ThemePicker do
     assigns =
       assigns
       |> assign(:presets, ThemePreference.presets())
+      |> assign(
+        :org_rows,
+        Enum.map(assigns.org_themes, &%{id: OrgTheme.preset_id(&1), name: &1.name})
+      )
       |> assign(:modes, ThemePreference.modes())
       |> assign(:mode_labels, @mode_labels)
       |> assign(:resolved, resolved)
@@ -146,40 +180,73 @@ defmodule PlatformWeb.Components.ThemePicker do
           data-theme-group="preset"
           class="flex flex-col gap-0.5"
         >
-          <button
-            :for={preset <- @presets}
-            type="button"
-            role="radio"
-            data-theme-option="preset"
-            data-value={preset.id}
-            aria-checked={to_string(preset.id == @pref["preset"])}
-            tabindex={if preset.id == @pref["preset"], do: "0", else: "-1"}
-            class="flex items-center gap-3 rounded-field px-2 py-1.5 text-left text-sm text-base-content hover:bg-base-200 aria-checked:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <span
-              class="theme-chip flex h-10 w-16 shrink-0 items-center gap-1.5 overflow-hidden rounded-box border border-edge bg-base-100 px-2"
-              data-theme-chip
-              data-preset={preset.id}
-              data-theme={@resolved}
-              aria-hidden="true"
-            >
-              <span class="size-3 shrink-0 rounded-full bg-primary"></span>
-              <span class="theme-chip-sample text-sm leading-none text-base-content">Aa</span>
-            </span>
-            <span class="flex-1">{preset.name}</span>
-            <span
-              data-theme-check
-              class={[
-                "hero-check size-4 shrink-0 text-primary",
-                preset.id != @pref["preset"] && "invisible"
-              ]}
-              aria-hidden="true"
-            >
-            </span>
-          </button>
+          <.preset_row :for={preset <- @presets} preset={preset} pref={@pref} resolved={@resolved} />
+        </div>
+      </div>
+
+      <div :if={@org_rows != []} class="flex flex-col gap-1.5" data-role="your-themes">
+        <p
+          id={"#{@id}-org-label"}
+          data-role="your-themes-label"
+          class="text-xs font-semibold uppercase tracking-[.08em] text-subtle"
+        >
+          Your themes
+        </p>
+        <div
+          role="radiogroup"
+          aria-labelledby={"#{@id}-org-label"}
+          data-theme-group="preset"
+          data-role="your-themes-rows"
+          class="flex flex-col gap-0.5"
+        >
+          <.preset_row :for={preset <- @org_rows} preset={preset} pref={@pref} resolved={@resolved} />
         </div>
       </div>
     </div>
+    """
+  end
+
+  # One preset row: a shipped preset or a published org theme, the same
+  # markup for both (task 01a1557a-fe9b stage 3 lifted it out of the loop).
+  # The chip carries the preset's `data-preset` and the resolved
+  # `data-theme`, so its own block (theme_presets.css, or the root layout's
+  # org-themes style) paints it.
+  attr :preset, :map, required: true
+  attr :pref, :map, required: true
+  attr :resolved, :string, required: true
+
+  defp preset_row(assigns) do
+    ~H"""
+    <button
+      type="button"
+      role="radio"
+      data-theme-option="preset"
+      data-value={@preset.id}
+      aria-checked={to_string(@preset.id == @pref["preset"])}
+      tabindex={if @preset.id == @pref["preset"], do: "0", else: "-1"}
+      class="flex items-center gap-3 rounded-field px-2 py-1.5 text-left text-sm text-base-content lg:hover:bg-base-200 aria-checked:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+    >
+      <span
+        class="theme-chip flex h-10 w-16 shrink-0 items-center gap-1.5 overflow-hidden rounded-box border border-edge bg-base-100 px-2"
+        data-theme-chip
+        data-preset={@preset.id}
+        data-theme={@resolved}
+        aria-hidden="true"
+      >
+        <span class="size-3 shrink-0 rounded-full bg-primary"></span>
+        <span class="theme-chip-sample text-sm leading-none text-base-content">Aa</span>
+      </span>
+      <span class="flex-1">{@preset.name}</span>
+      <span
+        data-theme-check
+        class={[
+          "hero-check size-4 shrink-0 text-primary",
+          @preset.id != @pref["preset"] && "invisible"
+        ]}
+        aria-hidden="true"
+      >
+      </span>
+    </button>
     """
   end
 end

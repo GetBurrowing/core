@@ -78,6 +78,7 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.PaintedMix
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -154,7 +155,7 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp ratio(b, ink, ground), do: W.contrast(c(b, ink), c(b, ground))
 
   defp pct(b, token, form) do

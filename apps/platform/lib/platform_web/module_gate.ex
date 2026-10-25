@@ -33,6 +33,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.AccessViewAsLive => {:admin, "access.manage"},
     PlatformWeb.AdminOrgsLive => {:admin, nil},
     PlatformWeb.AdminBrandingLive => {:admin, nil},
+    PlatformWeb.AdminThemesLive => {:admin, nil},
     PlatformWeb.AdminPrototypesLive => {:admin, nil},
     PlatformWeb.AdminInsightsLive => {:admin, nil},
     PlatformWeb.AdminVaultLive => {:admin, nil},

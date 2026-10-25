@@ -403,7 +403,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
         </p>
         <label
           :for={space <- @spaces}
-          class="flex min-h-11 cursor-pointer items-center gap-3 border-b border-base-200 px-3 py-2 last:border-b-0 hover:bg-base-200"
+          class="flex min-h-11 cursor-pointer items-center gap-3 border-b border-base-200 px-3 py-2 last:border-b-0 lg:hover:bg-base-200"
           data-role="channel-option"
           data-space-id={space.id}
           data-channel-name={String.downcase(space.name)}

@@ -70,6 +70,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.PaintedMix
   alias Platform.Design.ThemeBlocks, as: T
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @css_dir Path.expand("../../../assets/css", __DIR__)
@@ -826,7 +827,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   defp strengths(b), do: [{"tint", pct(b)}]
 
-  defp color(b, token), do: T.resolve!(b, token)
+  defp color(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp bytes(b, token), do: PaintedMix.bytes(color(b, token))
   defp hexs(b, token), do: "#" <> PaintedMix.hex(bytes(b, token))
 

@@ -7,6 +7,8 @@ defmodule Platform.Accounts.ThemePreferenceTest do
 
   use Platform.DataCase, async: true
 
+  import Ecto.Query
+
   alias Platform.Accounts
   alias Platform.Accounts.ThemePreference
   alias Platform.Accounts.User
@@ -171,6 +173,107 @@ defmodule Platform.Accounts.ThemePreferenceTest do
       assert prefs["notification_banner_dismissed"] == true
       assert prefs["theme"] == %{"preset" => "high-contrast", "mode" => "dark"}
       assert MapSet.member?(Accounts.get_hidden_channel_ids(user.id), space_id)
+    end
+  end
+
+  # Task 01a1557a-fe9b stage 3: a preset may be "org-<uuid>", a published org
+  # theme, accepted on write only when visible to the writer and sent back to
+  # the default on read once it is not. Mutation (c), keep an unpublished id
+  # in normalize, turns "a stored org id falls back ..." red.
+  describe "org presets" do
+    import Platform.OrgThemeFixtures
+
+    alias Platform.Theming
+    alias Platform.Theming.OrgTheme
+
+    setup do
+      org_theme_world!()
+    end
+
+    test "validate/3 accepts an org id only when it is in the visible set", ctx do
+      id = OrgTheme.preset_id(ctx.visible)
+      other = OrgTheme.preset_id(ctx.hidden)
+
+      assert ThemePreference.validate(%{"preset" => id}, nil, [id]) ==
+               {:ok, %{"preset" => id, "mode" => "dark"}}
+
+      assert ThemePreference.validate(%{"preset" => id}, nil, [other]) == {:error, :invalid}
+      assert ThemePreference.validate(%{"preset" => id}, nil) == {:error, :invalid}
+      assert ThemePreference.validate(%{"preset" => id}) == {:error, :invalid}
+      # A malformed org id is not an org preset, even when listed.
+      assert ThemePreference.validate(%{"preset" => "org-x"}, nil, ["org-x"]) ==
+               {:error, :invalid}
+    end
+
+    test "put_theme_preference/2 stores a visible org theme", ctx do
+      id = OrgTheme.preset_id(ctx.visible)
+
+      assert {:ok, _} = Accounts.put_theme_preference(ctx.member, %{"preset" => id})
+      assert stored_prefs(ctx.member.id)["theme"] == %{"preset" => id, "mode" => "dark"}
+      assert Accounts.theme_preference(ctx.member.id) == %{"preset" => id, "mode" => "dark"}
+    end
+
+    test "put_theme_preference/2 refuses an org theme the person cannot see and writes nothing",
+         ctx do
+      {:ok, _} =
+        Accounts.put_theme_preference(ctx.outsider, %{
+          "preset" => "burrow-sand",
+          "mode" => "light"
+        })
+
+      before = stored_prefs(ctx.outsider.id)
+
+      assert {:error, :invalid} =
+               Accounts.put_theme_preference(ctx.outsider, %{
+                 "preset" => OrgTheme.preset_id(ctx.visible)
+               })
+
+      assert stored_prefs(ctx.outsider.id) == before
+
+      # A draft in the person's own org is not visible either.
+      {:ok, draft} = Theming.create_draft(ctx.admin, ctx.root.id, %{name: "Draft s3"})
+
+      assert {:error, :invalid} =
+               Accounts.put_theme_preference(ctx.member, %{"preset" => OrgTheme.preset_id(draft)})
+    end
+
+    test "normalize/2 keeps a visible org id and sends any other back to the default", ctx do
+      id = OrgTheme.preset_id(ctx.visible)
+      stored = %{"preset" => id, "mode" => "light"}
+
+      assert ThemePreference.normalize(stored, [id]) == stored
+      assert ThemePreference.normalize(stored, []) == %{"preset" => "burrow", "mode" => "light"}
+      assert ThemePreference.normalize(stored) == %{"preset" => "burrow", "mode" => "light"}
+    end
+
+    test "a stored org id falls back to the default once unpublished, deleted or not visible",
+         ctx do
+      # Unpublished: a draft id written around the validator.
+      {:ok, draft} = Theming.create_draft(ctx.admin, ctx.root.id, %{name: "Never published"})
+      draft_pref = %{"preset" => OrgTheme.preset_id(draft), "mode" => "light"}
+      member = insert_user("org-draft", %{"theme" => draft_pref})
+      Platform.ExternalUserFixtures.plain_member!(member, ctx.root)
+
+      assert Accounts.theme_preference(member) == %{"preset" => "burrow", "mode" => "light"}
+      assert Accounts.theme_preference(member.id) == %{"preset" => "burrow", "mode" => "light"}
+
+      # Not visible: the outsider holding the root theme's id.
+      vis_pref = %{"preset" => OrgTheme.preset_id(ctx.visible), "mode" => "dark"}
+
+      {1, _} =
+        Repo.update_all(
+          from(u in User, where: u.id == ^ctx.outsider.id),
+          set: [preferences: %{"theme" => vis_pref}]
+        )
+
+      assert Accounts.theme_preference(ctx.outsider.id) == ThemePreference.default()
+
+      # Visible, then deleted.
+      {:ok, _} = Accounts.put_theme_preference(ctx.member, %{"preset" => vis_pref["preset"]})
+      assert Accounts.theme_preference(ctx.member.id)["preset"] == vis_pref["preset"]
+
+      {:ok, _} = Theming.delete(ctx.admin, ctx.visible)
+      assert Accounts.theme_preference(ctx.member.id) == ThemePreference.default()
     end
   end
 end

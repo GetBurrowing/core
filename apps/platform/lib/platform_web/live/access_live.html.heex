@@ -32,7 +32,7 @@
         /> View as this person
       </label>
       <section :if={@viewing && @view}>
-        <div class="rounded border border-info p-3 text-info">
+        <div class="rounded border border-info p-3 text-base-content">
           Viewing as {@subject.name} <button phx-click="view-as">Exit</button>
         </div>
         <div class="flex flex-wrap items-center gap-2 py-3" data-role="panel-rail-preview">
@@ -42,7 +42,7 @@
             data-active={to_string(chip.active)}
             class={[
               "rounded-lg border border-edge px-3 py-2 text-sm",
-              !chip.active && "opacity-35 line-through"
+              !chip.active && "text-subtle line-through"
             ]}
           >
             {chip.label}
@@ -75,7 +75,7 @@
             >
               <td :if={line.source == "Locked"} data-role="module-lock">
                 <span
-                  class="hero-lock-closed size-4 align-text-bottom text-error"
+                  class="hero-lock-closed size-4 align-text-bottom bg-error"
                   aria-hidden="true"
                 >
                 </span>
@@ -87,12 +87,16 @@
               <td>{line.where.name}</td>
               <td>
                 <span class={[
-                  "font-mono text-xs",
-                  line.source == "grant" && "text-info",
-                  line.source in ["deny", "restricted", "Locked"] && "text-error",
-                  line.source == "capped" && "text-warning",
+                  "inline-flex items-center gap-1 font-mono text-xs",
                   line.source in ["role", "inherited"] && "text-subtle"
                 ]}>
+                  <span
+                    :if={source_dot(line.source)}
+                    class={["inline-block size-2 shrink-0 rounded-full", source_dot(line.source)]}
+                    aria-hidden="true"
+                    data-role="source-indicator"
+                  >
+                  </span>
                   {line.source}
                 </span>
                 {line.note}
@@ -141,8 +145,8 @@
           label="In org"
           options={@lock_form.orgs}
         />
-        <button type="submit" class="btn btn-outline btn-error btn-sm min-h-11 sm:min-h-8">
-          <span class="hero-lock-closed size-4" aria-hidden="true"></span> Lock module
+        <button type="submit" class="btn btn-outline btn-sm min-h-11 sm:min-h-8 border-error">
+          <span class="hero-lock-closed size-4 bg-error" aria-hidden="true"></span> Lock module
         </button>
       </.form>
     </section>
@@ -184,7 +188,7 @@
       class="overflow-hidden rounded-xl border border-edge bg-base-100 p-4 space-y-3"
     >
       <h2 class="text-lg font-semibold">Last resort</h2>
-      <button phx-click="reset" class="btn btn-outline btn-error">
+      <button phx-click="reset" class="btn btn-outline border-error">
         Reset selected person to role defaults
       </button>
       <p class="text-sm text-subtle">

@@ -130,6 +130,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "guarded by `Platform.UUID.valid?/1` in stage 2 of task 019fa129; `Accounts.get_user/1` is total and returns nil for `\"system\"`, `\"system:auto\"` and agent slugs"},
     {"platform/accounts.ex", :get_by, "User", 1, :safe_internal,
      "keyed `oidc_sub:`, a plain string column holding the OIDC provider's subject; no UUID type on either side of the comparison"},
+    {"platform/accounts/theme_preference.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1557a-fe9b stage 3: `org_preset?/1` checks the uuid after the \"org-\" prefix of a stored or submitted theme preset; a predicate only, no lookup follows, and a malformed id is simply not an org preset"},
     # ── Agents ─────────────────────────────────────────────────────────
     {"platform/agents/agent_server.ex", :ecto_uuid_cast, "-", 1, :safe_internal,
      "`uuid_string?/1` carries the `String.length(value) == 36` prefix, so it is the strict form — the only correct copy of the predicate on main outside `Platform.UUID`"},
@@ -796,6 +798,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`get_org_by_slug!/1` keys on the same `orgs.slug` string column; the bang form can only raise `Ecto.NoResultsError`, never a cast error"},
     {"platform/tenancy/lifecycle.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "cascade_preview/1, cascade_hidden/1, purge_preview/1, project_writable?/1 and ensure_task_project_writable/1 all use Platform.UUID.cast/1. Each discards the cast output and pins the ORIGINAL value downstream, so the strict length check is what actually stops the raise"},
+    {"platform/theming.ex", :get, "OrgTheme", 1, :must_cast,
+     "task 01a1557a-fe9b stage 1: `fetch/1` behind every Theming read and write; `get_theme/2` takes an id a LiveView will read from params, so the lookup sits behind this file's Platform.UUID.valid?/1 guard and a malformed id returns {:error, :not_found}"},
+    {"platform/theming.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "the guard in `fetch/1` that keeps the OrgTheme lookup above from raising Ecto.Query.CastError"},
+    {"platform/theming/org_theme_css.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a1557a-fe9b stage 3: `preset_ids/1` and `blocks/1` re-check each OrgTheme primary key (selected by list_published_for_user/1) before it is written into a CSS selector or the boot script's preset list; no lookup follows"},
     # ── Types / UUID ───────────────────────────────────────────────────
     {"platform/types/uuid_v7.ex", :ecto_uuid_cast, "-", 1, :safe_internal,
      "reached only after the `<<_::288>>` binary pattern in `cast/1`'s own head, so the value is already length-constrained to 36 bytes"},

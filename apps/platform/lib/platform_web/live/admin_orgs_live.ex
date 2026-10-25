@@ -448,4 +448,9 @@ defmodule PlatformWeb.AdminOrgsLive do
   @doc false
   def root_org?(%{parent_org_id: nil}), do: true
   def root_org?(_), do: false
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

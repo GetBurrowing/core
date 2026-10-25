@@ -46,6 +46,7 @@ defmodule Platform.Design.GameViewContrastGuardTest do
 
   alias Platform.Design.CssRules
   alias Platform.Design.PaintedComposite, as: P
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.ThemeBlocks, as: Blocks
   alias Platform.Design.WcagContrast, as: W
 
@@ -114,7 +115,7 @@ defmodule Platform.Design.GameViewContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp bytes(color), do: P.bytes(color)
   defp color(bytes), do: P.from_bytes(bytes)
 

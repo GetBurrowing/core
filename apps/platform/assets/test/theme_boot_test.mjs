@@ -285,6 +285,27 @@ test("window.burrowTheme.apply paints, caches and dispatches burrow:theme", () =
   assert.deepEqual(plain(page.api.get()), { preset: "burrow-midnight", mode: "dark", resolved: "dark" });
 });
 
+// Task 01a1557a stage 5: an org theme published after the page loaded is
+// registered by the ThemePicker hook once its CSS has been injected.
+test("burrowTheme.register admits an org-<uuid> id only, after which apply accepts it", () => {
+  const page = boot();
+  const id = "org-01a173d4-9a48-7004-9a0e-e12d2a39a5fe";
+
+  assert.equal(page.api.has(id), false);
+  page.api.apply({ preset: id });
+  assert.equal(page.attrs.get("data-preset"), undefined, "an unregistered org id was applied");
+
+  for (const bad of ["burrow-x", "org-nope", `${id}"`, 42, null]) {
+    assert.equal(page.api.register(bad), false, `registered ${bad}`);
+  }
+
+  assert.equal(page.api.register(id), true);
+  assert.equal(page.api.has(id), true);
+  page.api.apply({ preset: id, mode: "dark" });
+  assert.equal(page.attrs.get("data-preset"), id);
+  assert.deepEqual(page.cached(), { preset: id, mode: "dark" });
+});
+
 test("a storage event on the cache key repaints (cross-tab sync); other keys do not", () => {
   const page = boot();
 

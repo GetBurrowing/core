@@ -21,7 +21,7 @@
           href={@pocket_id_admin_url}
           target="_blank"
           rel="noopener"
-          class="hidden sm:inline-flex items-center gap-1 text-sm text-interactive hover:underline"
+          class="hidden sm:inline-flex items-center gap-1 text-sm text-base-content underline underline-offset-2 lg:hover:decoration-2"
           data-role="pocket-id-admin-link"
         >
           Manage sign-in in pocket-id
@@ -46,7 +46,7 @@
       href={@pocket_id_admin_url}
       target="_blank"
       rel="noopener"
-      class="mt-2 inline-flex items-center gap-1 text-sm text-interactive hover:underline sm:hidden"
+      class="mt-2 inline-flex items-center gap-1 text-sm text-base-content underline underline-offset-2 lg:hover:decoration-2 sm:hidden"
       data-role="pocket-id-admin-link-mobile"
     >
       Manage sign-in in pocket-id
@@ -95,7 +95,7 @@
         No one matches '{@query}'.
         <button
           type="button"
-          class="text-interactive hover:underline"
+          class="text-base-content underline underline-offset-2 lg:hover:decoration-2"
           phx-click="clear_search"
           data-role="clear-search"
         >
@@ -300,9 +300,15 @@
         />
         <p
           :if={is_binary(@invite_email_error)}
-          class="mt-1 text-xs text-error"
+          class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
           data-role="invite-email-error"
         >
+          <span
+            class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+            aria-hidden="true"
+            data-role="error-indicator"
+          >
+          </span>
           {@invite_email_error}
         </p>
         <p
@@ -313,7 +319,7 @@
           {elem(@invite_email_error, 1)} already has access with this email.
           <button
             type="button"
-            class="text-interactive hover:underline"
+            class="text-base-content underline underline-offset-2 lg:hover:decoration-2"
             phx-click="show_in_list"
             phx-value-email={@invite_values["email"]}
           >
@@ -372,7 +378,7 @@
       class="overflow-hidden rounded-box border border-edge bg-base-100"
       data-role="credential-slip"
     >
-      <div class="bg-primary px-4 py-3 text-primary-content">
+      <div class="border-b border-primary bg-base-200 px-4 py-3 text-base-content">
         <p class="text-lg font-semibold">Sign-in link for {@slip.name}</p>
       </div>
 

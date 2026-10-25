@@ -165,6 +165,11 @@ defmodule PlatformWeb.ShellLive do
       # The theme picker's one open flag (task 01a1557a stage 4). Its checked
       # row and chips live in the browser, owned by the ThemePicker hook.
       |> assign(:theme_picker_open, false)
+      # The published org themes this person can see (task 01a1557a-fe9b
+      # stage 3), read once per mount for the picker's "Your themes" rows and
+      # Settings' Theme value. The root layout reads its own copy on the dead
+      # render, which is what paints them; see Platform.Theming.OrgThemeCss.
+      |> assign(:org_themes, Platform.Theming.list_published_for_user(user_record))
       # Screen-share name masking, seeded on EVERY shell page (task 01a1600d
       # stage 1) so the shell's "Names masked" chip can read the same
       # `:mask_names?` the page reads. ChatLive, `Tasks.MaskHooks` and
@@ -1051,23 +1056,54 @@ defmodule PlatformWeb.ShellLive do
 
   # `set_theme` from the ThemePicker hook (task 01a1557a stage 4). Only the
   # two registry fields are passed on, and `Accounts.put_theme_preference/2`
-  # validates them against `ThemePreference`; an invalid value or a shell with
+  # validates them against `ThemePreference` (an org preset only when it is
+  # in the person's visible published set, read at the write; task
+  # 01a1557a-fe9b stage 3); an invalid value or a shell with
   # no `%User{}` record (anonymous) leaves the socket and the row untouched.
   # `:current_user` on ShellLive is a display-name string, so the record is
   # the only handle on the user. Public only so the anonymous branch can be
   # tested without an anonymous ShellLive route.
+  #
+  # An org preset also pushes `burrow:org-theme` with that theme's CSS (task
+  # 01a1557a stage 5). The root layout's `<style id="org-themes">` is only
+  # rendered on a full page load, so a theme published after it loaded (the
+  # picker lists it, because a live navigation remounts the shell) has no
+  # CSS on the page and nothing repaints. The ThemePicker hook injects the
+  # block into #org-themes when its preset is not already registered there.
+  # The payload is built here, never from client input: the theme is re-read
+  # from the person's visible published set and rendered by OrgThemeCss,
+  # which re-sanitises every stored value through the Tokens allowlist.
   @doc false
   def put_theme(socket, params) when is_map(params) do
     with %Accounts.User{} = user <- socket.assigns[:current_user_record],
          {:ok, %Accounts.User{} = updated} <-
            Accounts.put_theme_preference(user, Map.take(params, ["preset", "mode"])) do
-      assign(socket, :current_user_record, updated)
+      socket
+      |> assign(:current_user_record, updated)
+      |> push_org_theme(updated)
     else
       _ -> socket
     end
   end
 
   def put_theme(socket, _params), do: socket
+
+  defp push_org_theme(socket, user) do
+    # The STORED preset (what put_theme_preference just accepted), looked up
+    # in the visible published set, which is the visibility check.
+    preset = get_in(user.preferences || %{}, ["theme", "preset"])
+
+    with "org-" <> _ <- preset,
+         %Platform.Theming.OrgTheme{} = theme <-
+           user
+           |> Platform.Theming.list_published_for_user()
+           |> Enum.find(&(Platform.Theming.OrgTheme.preset_id(&1) == preset)),
+         css when is_binary(css) <- Platform.Theming.OrgThemeCss.render([theme]) do
+      push_event(socket, "burrow:org-theme", %{preset: preset, css: css})
+    else
+      _ -> socket
+    end
+  end
 
   @doc false
   # Public for the guard test that compares this list with every module that

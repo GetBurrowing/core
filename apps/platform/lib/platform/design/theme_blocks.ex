@@ -10,11 +10,12 @@ defmodule Platform.Design.ThemeBlocks do
   resolves them: the daisyUI theme block, then the theme-scoped selectors,
   then `:root`. First declaration wins.
 
-  Test-support only. The `!` functions raise `ExUnit.AssertionError` (via
-  `flunk/1`) so a guard failure names the block and the token.
+  Moved out of test support by task 01a1557a-fe9b stage 1 so
+  `Platform.Theming.Presets` parses the shipped presets exactly as the guards
+  do. Nothing here asserts: `resolve/2` returns `{:error, reason}`, and the
+  guards' flunking `resolve!/2` lives in test support
+  (`Platform.Design.ThemeBlockAssertions`).
   """
-
-  import ExUnit.Assertions, only: [flunk: 1]
 
   alias Platform.Design.WcagContrast, as: W
 
@@ -58,16 +59,26 @@ defmodule Platform.Design.ThemeBlocks do
     %{id: "burrow", mode: mode, raw: theme, decls: decls}
   end
 
-  @doc "A token's value, following `var(--x)` chains, parsed as a colour."
-  def resolve!(b, var, depth \\ 0)
-  def resolve!(b, var, depth) when depth > 8, do: flunk("#{b.id} #{b.mode}: #{var} loops")
+  @doc """
+  A token's value, following `var(--x)` chains, parsed as a colour:
+  `{:ok, colour}`, or `{:error, reason}` naming the block and the token when
+  the token is undeclared or its chain loops.
+  """
+  @spec resolve(map(), String.t()) :: {:ok, W.color()} | {:error, String.t()}
+  def resolve(b, var), do: resolve(b, var, 0)
 
-  def resolve!(b, var, depth) do
-    value = declaration(b.decls, var) || flunk("#{b.id} #{b.mode}: no #{var} declared")
+  defp resolve(b, var, depth) when depth > 8, do: {:error, "#{b.id} #{b.mode}: #{var} loops"}
 
-    case Regex.run(~r/^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/, value) do
-      [_, next] -> resolve!(b, next, depth + 1)
-      nil -> W.parse!(value)
+  defp resolve(b, var, depth) do
+    case declaration(b.decls, var) do
+      nil ->
+        {:error, "#{b.id} #{b.mode}: no #{var} declared"}
+
+      value ->
+        case Regex.run(~r/^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/, value) do
+          [_, next] -> resolve(b, next, depth + 1)
+          nil -> {:ok, W.parse!(value)}
+        end
     end
   end
 
@@ -92,7 +103,7 @@ defmodule Platform.Design.ThemeBlocks do
 
       case Regex.run(~r/\n\s*\}/, rest, return: :index) do
         [{close, _}] -> binary_part(rest, 0, close)
-        nil -> flunk("a block opened by #{inspect(open)} is never closed")
+        nil -> raise ArgumentError, "a block opened by #{inspect(open)} is never closed"
       end
     end)
   end

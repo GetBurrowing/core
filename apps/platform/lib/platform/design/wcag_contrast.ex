@@ -4,9 +4,10 @@ defmodule Platform.Design.WcagContrast do
   actually declares: hex literals, `oklch()`, `color-mix(in oklab, ...)` and alpha
   compositing.
 
-  Test-support only. Nothing in `lib/` uses it; it exists so a contrast assertion can
-  be *computed from the stylesheet* rather than copied from a spreadsheet into an
-  `assert ratio == 4.5`.
+  It exists so a contrast figure is *computed from the stylesheet* rather than copied
+  from a spreadsheet into an `assert ratio == 4.5`. The design guards measure with it,
+  and so does `Platform.Theming`'s contrast ledger (task 01a1557a-fe9b stage 1 moved
+  it out of test support so the admin theme editor and the guards share one maths).
 
   ## Representation
 

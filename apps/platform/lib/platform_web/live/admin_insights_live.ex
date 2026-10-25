@@ -203,4 +203,9 @@ defmodule PlatformWeb.AdminInsightsLive do
     </div>
     """
   end
+
+  # Burrow redesign 24 stage 5: a stray message (a shell broadcast, a late
+  # reply) must not crash an admin page.
+  @impl true
+  def handle_info(_msg, socket), do: {:noreply, socket}
 end

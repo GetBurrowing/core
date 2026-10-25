@@ -66,26 +66,30 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   alias Platform.Design.PaintedComposite
   alias Platform.Design.PaintedGlass
   alias Platform.Design.WcagContrast, as: W
+  alias Platform.Theming.ContrastPairs
 
   import Platform.Design.ThemeBlocks,
     only: [
       preset_blocks: 1,
       burrow_block: 2,
-      resolve!: 2,
       declaration: 2,
       strip_comments: 1,
       rule_selectors: 1,
       blocks_after: 2
     ]
 
+  import Platform.Design.ThemeBlockAssertions, only: [resolve!: 2]
+
   @presets_path Path.expand("../../../assets/css/theme_presets.css", __DIR__)
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
+  @contrast_pairs_path Path.expand("../../../lib/platform/theming/contrast_pairs.ex", __DIR__)
   @plugin_open ~s(@plugin "../vendor/daisyui-theme" {)
 
   @modes ["dark", "light"]
-  @aa_text 4.5
-  @aaa_text 7.0
-  @non_text 3.0
+  # Floors, pairs and grounds: Platform.Theming.ContrastPairs, the one list
+  # (task 01a1557a-fe9b stage 1). No literal copy lives in this file.
+  @aa_text ContrastPairs.aa_text()
+  @non_text ContrastPairs.non_text()
 
   @canonical ~r/^\[data-preset="([a-z0-9-]+)"\]\[data-theme="(dark|light)"\]:not\(\[data-theme-preview\]\)$/
 
@@ -125,24 +129,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     "--glass-blur"
   ]
 
-  # Same list as burrow_palette_guard_test.exs.
-  @text_pairs [
-    {"--color-base-content", "--color-base-100"},
-    {"--color-base-content", "--color-base-200"},
-    {"--color-base-content", "--color-base-300"},
-    {"--color-primary-content", "--color-primary"},
-    {"--color-accent-content", "--color-accent"},
-    {"--color-secondary-content", "--color-secondary"},
-    {"--color-info-content", "--color-info"},
-    {"--color-success-content", "--color-success"},
-    {"--color-warning-content", "--color-warning"},
-    {"--color-error-content", "--color-error"},
-    {"--color-interactive", "--color-base-100"},
-    {"--color-interactive", "--color-base-200"},
-    {"--color-interactive", "--color-base-300"}
-  ]
-
-  @grounds ["--color-base-100", "--color-base-200", "--color-base-300"]
+  @grounds ContrastPairs.grounds()
 
   # --subtle's strength per block: base-content at 55%, the composite the
   # retired 55% utility painted, except where no ink clears 4.5:1 at 55%.
@@ -150,7 +137,7 @@ defmodule Platform.Design.ThemePresetsGuardTest do
   @subtle_form ~r/^color-mix\(in oklab, var\(--color-base-content\) (\d+)%, transparent\)$/
 
   # text-base-content/60 and daisyUI's .label paint base-content at 60%.
-  @sixty 60
+  @sixty ContrastPairs.sixty()
 
   # Every value that differs from the masters' theme.js, with the master value.
   @deviations %{
@@ -344,8 +331,11 @@ defmodule Platform.Design.ThemePresetsGuardTest do
     end
 
     guards =
-      for f <- ["theme_presets_guard_test.exs", "burrow_palette_guard_test.exs"],
-          do: {f, File.read!(Path.join(__DIR__, f))}
+      for(
+        f <- ["theme_presets_guard_test.exs", "burrow_palette_guard_test.exs"],
+        do: {f, File.read!(Path.join(__DIR__, f))}
+      ) ++
+        [{"contrast_pairs.ex", File.read!(@contrast_pairs_path)}]
 
     for {f, src} <- guards do
       # A per-pair floor is a map entry or attribute set to a ratio under 4.5.
@@ -485,12 +475,9 @@ defmodule Platform.Design.ThemePresetsGuardTest do
 
   # ── helpers ──────────────────────────────────────────────────────────────
 
-  defp text_pairs do
-    @text_pairs ++ for(g <- @grounds, do: {"--color-secondary", g})
-  end
+  defp text_pairs, do: ContrastPairs.preset_text_pairs()
 
-  defp target(%{id: "high-contrast"}), do: @aaa_text
-  defp target(_), do: @aa_text
+  defp target(b), do: ContrastPairs.text_floor(b.id)
 
   defp min_over(b, token), do: @grounds |> Enum.map(&ratio(b, token, &1)) |> Enum.min()
 

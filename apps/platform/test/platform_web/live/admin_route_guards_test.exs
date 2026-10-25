@@ -53,12 +53,13 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin")
 
-      assert html =~ "Admin · Operations"
+      # Burrow redesign 24 stage 4: the heading is the masters' plain "Admin".
+      assert html =~ ">Admin</h1>"
 
       refute html =~
                ~r/#{Platform.Regression.InstallIdentityScanner.published_org_token()} Operations/i
 
-      assert html =~ ">Agents</h2>"
+      assert html =~ ">Agents</h3>"
       assert html =~ "Agent Federation"
       assert html =~ "Usage / Cost Metering"
       assert html =~ "User Access"

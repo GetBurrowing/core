@@ -33,6 +33,7 @@ defmodule Platform.Design.AttachContrastGuardTest do
 
   alias Platform.Design.PaintedComposite
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @root Path.expand("../../..", __DIR__)
@@ -113,7 +114,7 @@ defmodule Platform.Design.AttachContrastGuardTest do
     end
   end
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   defp subtle_pct(b) do
     value = Blocks.declaration(b.decls, "--subtle") || flunk("#{b.id} #{b.mode}: no --subtle")

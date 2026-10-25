@@ -58,6 +58,8 @@ defmodule Platform.Design.MyTasksContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.ThemeBlocks, as: Blocks
+
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -147,7 +149,7 @@ defmodule Platform.Design.MyTasksContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   # A Tailwind colour slot as a token: `--color-<slot>`, which every theme
   # block declares for daisyUI slots, else the bare `--<slot>` the block

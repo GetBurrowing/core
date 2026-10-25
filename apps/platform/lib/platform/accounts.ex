@@ -817,26 +817,50 @@ defmodule Platform.Accounts do
   @doc """
   The person's theme choice as a full, valid `%{"preset", "mode"}` map.
 
-  Accepts a `%User{}` (read from the struct, no query) or a user id. Returns
+  Accepts a `%User{}` (read from the struct) or a user id. Returns
   `ThemePreference.default/0` for nil, an unknown id, a user with no stored
   choice, or a stored value that no longer names a registered preset or mode
-  (each field falls back independently; see `ThemePreference.normalize/1`).
+  (each field falls back independently; see `ThemePreference.normalize/2`).
+
+  A stored org preset (`"org-<uuid>"`, task 01a1557a-fe9b stage 3) is kept
+  only while that theme is published and visible to the person: `visible`
+  is their visible preset ids, and when it is not given and the stored value
+  IS an org preset, it is read from `Platform.Theming.visible_preset_ids/1`
+  (one query; none for a registry preset). An unpublished, deleted or no
+  longer visible theme reads as the default preset.
   """
-  @spec theme_preference(User.t() | binary() | nil) :: ThemePreference.t()
-  def theme_preference(%User{preferences: prefs}) when is_map(prefs) do
-    ThemePreference.normalize(Map.get(prefs, @theme_key))
+  @spec theme_preference(User.t() | binary() | nil, [String.t()] | nil) :: ThemePreference.t()
+  def theme_preference(user, visible \\ nil)
+
+  def theme_preference(%User{preferences: prefs} = user, visible) when is_map(prefs) do
+    normalize_theme(Map.get(prefs, @theme_key), user.id, visible)
   end
 
-  def theme_preference(%User{}), do: ThemePreference.default()
+  def theme_preference(%User{}, _visible), do: ThemePreference.default()
 
-  def theme_preference(user_id) when is_binary(user_id) do
+  def theme_preference(user_id, visible) when is_binary(user_id) do
     user_id
     |> get_user_preferences()
     |> Map.get(@theme_key)
-    |> ThemePreference.normalize()
+    |> normalize_theme(user_id, visible)
   end
 
-  def theme_preference(_), do: ThemePreference.default()
+  def theme_preference(_, _), do: ThemePreference.default()
+
+  defp normalize_theme(stored, user_id, nil) do
+    visible =
+      if ThemePreference.org_preset?(stored_preset(stored)),
+        do: Platform.Theming.visible_preset_ids(%{id: user_id}),
+        else: []
+
+    ThemePreference.normalize(stored, visible)
+  end
+
+  defp normalize_theme(stored, _user_id, visible) when is_list(visible),
+    do: ThemePreference.normalize(stored, visible)
+
+  defp stored_preset(%{} = stored), do: Map.get(stored, "preset", Map.get(stored, :preset))
+  defp stored_preset(_), do: nil
 
   @doc """
   Store the person's theme choice. `attrs` may carry `"preset"`, `"mode"` or
@@ -845,6 +869,11 @@ defmodule Platform.Accounts do
   Returns `{:ok, %User{}}`; `{:error, :invalid}` with nothing written when a
   preset or mode is not in `ThemePreference`'s registry (or `attrs` carries any
   other key); `{:error, :not_found}` when no user has that id.
+
+  An org preset is accepted only when it names a theme in the person's
+  visible published set, read here, at the write, from
+  `Platform.Theming.list_published_for_user/1` (via `visible_preset_ids/1`);
+  no caller's earlier list is trusted.
   """
   @spec put_theme_preference(User.t() | binary() | nil, map()) ::
           {:ok, User.t()} | {:error, :invalid | :not_found | Ecto.Changeset.t()}
@@ -854,8 +883,9 @@ defmodule Platform.Accounts do
     case get_user(user_id) do
       %User{} = user ->
         current = Map.get(user.preferences || %{}, @theme_key)
+        visible = Platform.Theming.visible_preset_ids(user)
 
-        with {:ok, next} <- ThemePreference.validate(attrs, current) do
+        with {:ok, next} <- ThemePreference.validate(attrs, current, visible) do
           user
           |> User.changeset(%{preferences: Map.put(user.preferences || %{}, @theme_key, next)})
           |> Repo.update()

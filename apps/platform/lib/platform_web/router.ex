@@ -1032,6 +1032,10 @@ defmodule PlatformWeb.Router do
       # `/admin/orgs` does, and `Platform.Branding` re-checks the actor on
       # both writes.
       live("/admin/branding", AdminBrandingLive, :index)
+      # Task 01a1557a-fe9b stage 2: the org theme editor. Full-bleed: the view
+      # mounts with the chrome-less `:holding` layout, overriding `:shell`.
+      # `Platform.Theming` re-checks root admin on every write.
+      live("/admin/themes", AdminThemesLive, :index)
       # Task 01a1316b-4e46 stage 2: prototype publishing switch and caps,
       # install-wide for the same reason as branding. `Settings.update/2`
       # re-checks root admin on the write.

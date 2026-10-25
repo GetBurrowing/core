@@ -96,6 +96,21 @@
     <style :if={install_theme_css} id="install-theme" data-role="install-theme">
       <%= Phoenix.HTML.raw(install_theme_css) %>
     </style>
+    <%!-- Published org themes (task 01a1557a-fe9b stage 3), signed-in only:
+         one (0,3,0) block per mode for each theme the viewer can see. After
+         #install-theme so source order never decides against it. Safe to
+         raw/1: Platform.Theming.OrgThemeCss re-sanitises every stored value
+         at render and drops what fails. A newly published theme shows on the
+         next FULL page load; live navigation does not re-render this layout.
+         Selecting one mid-session gets its block pushed in by ShellLive and
+         appended here by the ThemePicker hook (task 01a1557a stage 5). --%>
+    <style
+      :if={theme_boot.org_theme_css}
+      id="org-themes"
+      data-role="org-themes"
+    >
+      <%= Phoenix.HTML.raw(theme_boot.org_theme_css) %>
+    </style>
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
     <%!-- Theme boot (task 01a1557a stage 3). Applies the person's preset and
@@ -130,6 +145,7 @@
         const MODES = words(config.modes);
         const BASE = config.basePreset;
         const DEFAULT = {preset: config.defaultPreset, mode: config.defaultMode};
+        const ORG_ID = /^org-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
         const normalize = (value) => {
           const pref = value && typeof value === "object" ? value : {};
@@ -214,6 +230,15 @@
             writeCache(current);
             paint();
             return snapshot();
+          },
+          // An org theme published after this page loaded (task 01a1557a
+          // stage 5): the ThemePicker hook registers its id once the server
+          // has delivered its CSS into #org-themes. Only an org-<uuid> id.
+          has: (id) => PRESETS.includes(id),
+          register: (id) => {
+            if (typeof id !== "string" || !ORG_ID.test(id)) return false;
+            if (!PRESETS.includes(id)) PRESETS.push(id);
+            return true;
           }
         };
 

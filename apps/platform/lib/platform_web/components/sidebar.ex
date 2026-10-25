@@ -66,6 +66,11 @@ defmodule PlatformWeb.Components.Sidebar do
   attr :user, :any, default: nil, doc: "the viewer's `%User{}` (avatar, theme preference)"
   attr :org_name, :string, default: nil, doc: "the viewer's org; the user row's small line"
   attr :theme_picker_open, :boolean, default: false
+
+  attr :org_themes, :list,
+    default: [],
+    doc: "the published org themes the viewer can see, for the picker"
+
   attr :masked?, :boolean, default: false
   attr :mask_until, :any, default: nil
   attr :mask_zone, :string, default: nil
@@ -214,7 +219,7 @@ defmodule PlatformWeb.Components.Sidebar do
               {mode_label(@resolved_mode)}
             </span>
           </button>
-          <.theme_picker open={@theme_picker_open} user={@user} />
+          <.theme_picker open={@theme_picker_open} user={@user} org_themes={@org_themes} />
         </div>
 
         <div :if={@masked?} class="px-1 py-2.5">
@@ -331,7 +336,9 @@ defmodule PlatformWeb.Components.Sidebar do
   @doc "The mode the server paints first: \"light\" or \"dark\" (system paints dark)."
   @spec resolved_mode(term()) :: String.t()
   def resolved_mode(user) do
-    case Accounts.theme_preference(user) do
+    # Only the mode is read, and the mode never depends on which org presets
+    # are visible, so no visible set is fetched (an empty one is passed).
+    case Accounts.theme_preference(user, []) do
       %{"mode" => "light"} -> "light"
       _ -> "dark"
     end

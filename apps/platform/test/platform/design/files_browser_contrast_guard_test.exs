@@ -49,6 +49,7 @@ defmodule Platform.Design.FilesBrowserContrastGuardTest do
 
   alias Platform.Design.PaintedComposite
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -201,7 +202,7 @@ defmodule Platform.Design.FilesBrowserContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   # A slot name as a token: `subtle` is painted, `edge` reads `--edge`.
   defp tok("edge"), do: "--edge"

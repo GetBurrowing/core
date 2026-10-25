@@ -282,4 +282,152 @@ defmodule PlatformWeb.Components.ThemePickerTest do
              }
     end
   end
+
+  # Task 01a1557a-fe9b stage 3: "Your themes", one row per published org
+  # theme the person can see, in the preset row markup, and set_theme refusing
+  # an org id they cannot see.
+  describe "Your themes" do
+    import Platform.OrgThemeFixtures
+
+    alias Platform.Theming.OrgTheme
+
+    setup %{conn: conn} do
+      world = org_theme_world!(visible_name: "Ocean picker")
+      {:ok, view, html} = open_chat(conn, world.member)
+      Map.merge(world, %{view: view, html: html})
+    end
+
+    test "a member sees a 'Your themes' label and one row per visible theme", ctx do
+      doc = doc(ctx.html)
+      id = OrgTheme.preset_id(ctx.visible)
+
+      for body <- @bodies do
+        label = q(doc, ~s(#{body} [data-role="your-themes-label"]))
+        assert label |> LazyHTML.text() |> String.trim() == "Your themes"
+        [classes] = LazyHTML.attribute(label, "class")
+        assert "text-subtle" in String.split(classes)
+
+        groups = q(doc, "#{body} [role=radiogroup]")
+        assert LazyHTML.attribute(groups, "data-theme-group") == ["mode", "preset", "preset"]
+
+        rows = q(doc, ~s(#{body} [data-role="your-themes-rows"] [data-theme-option="preset"]))
+        assert LazyHTML.attribute(rows, "data-value") == [id]
+        assert LazyHTML.attribute(rows, "role") == ["radio"]
+        assert LazyHTML.attribute(rows, "aria-checked") == ["false"]
+        assert rows |> LazyHTML.text() |> String.contains?("Ocean picker")
+
+        chip = q(rows, "[data-theme-chip]")
+        assert LazyHTML.attribute(chip, "data-preset") == [id]
+        assert LazyHTML.attribute(chip, "data-theme") == ["dark"]
+        assert q(rows, "[data-theme-check].invisible") |> Enum.count() == 1
+
+        # The other org's theme is not offered.
+        refute ctx.html =~ OrgTheme.preset_id(ctx.hidden)
+      end
+    end
+
+    test "an org row uses the same markup as a preset row", ctx do
+      doc = doc(ctx.html)
+      body = hd(@bodies)
+
+      [preset_class] =
+        doc |> q(~s(#{body} [data-value="burrow-sand"])) |> LazyHTML.attribute("class")
+
+      [org_class] =
+        doc
+        |> q(~s(#{body} [data-value="#{OrgTheme.preset_id(ctx.visible)}"]))
+        |> LazyHTML.attribute("class")
+
+      assert org_class == preset_class
+    end
+
+    test "the stored org theme is the checked row", %{conn: conn} = ctx do
+      id = OrgTheme.preset_id(ctx.visible)
+      {:ok, _} = Accounts.put_theme_preference(ctx.member, %{"preset" => id})
+      {:ok, _view, html} = open_chat(conn, ctx.member)
+
+      for body <- @bodies do
+        row = html |> doc() |> q(~s(#{body} [data-value="#{id}"]))
+        assert LazyHTML.attribute(row, "aria-checked") == ["true"]
+        assert row |> q("[data-theme-check].invisible") |> Enum.count() == 0
+      end
+    end
+
+    test "nothing renders when the person can see no published theme" do
+      # A plain user in none of the world's orgs sees no published theme.
+      user = insert_user()
+      {:ok, _view, plain_html} = open_chat(build_conn(), user)
+      doc = doc(plain_html)
+
+      for body <- @bodies do
+        assert doc |> q(~s(#{body} [data-role="your-themes"])) |> Enum.count() == 0
+        assert doc |> q("#{body} [role=radiogroup]") |> Enum.count() == 2
+      end
+
+      refute plain_html =~ "Your themes"
+    end
+
+    test "set_theme stores a visible org theme", ctx do
+      id = OrgTheme.preset_id(ctx.visible)
+      render_hook(ctx.view, "set_theme", %{"preset" => id, "mode" => "light"})
+
+      assert Accounts.theme_preference(ctx.member.id) == %{"preset" => id, "mode" => "light"}
+    end
+
+    # Task 01a1557a stage 5: <style id="org-themes"> is rendered on a full
+    # page load only, so a theme published after it has no CSS on the page.
+    # Selecting it must deliver that theme's sanitised blocks to the client.
+    test "a theme published after mount, once selected, is pushed with its CSS", ctx do
+      late = published!(ctx.admin, ctx.root.id, "Late #{System.unique_integer([:positive])}")
+      id = OrgTheme.preset_id(late)
+
+      # The dead render carried no block for it.
+      refute ctx.html =~ ~s([data-preset="#{id}"])
+
+      render_hook(ctx.view, "set_theme", %{"preset" => id, "mode" => "dark"})
+
+      assert_push_event(ctx.view, "burrow:org-theme", %{preset: ^id, css: css})
+      assert css == Platform.Theming.OrgThemeCss.render([late])
+
+      for mode <- ["dark", "light"] do
+        assert css =~
+                 ~s<[data-preset="#{id}"][data-theme="#{mode}"]:not([data-theme-preview])>
+
+        declarations = Platform.Theming.Tokens.safe_declarations(late, mode)
+        assert declarations =~ "--color-base-100:"
+        assert css =~ declarations
+      end
+
+      refute css =~ OrgTheme.preset_id(ctx.visible)
+      assert Accounts.theme_preference(ctx.member.id) == %{"preset" => id, "mode" => "dark"}
+    end
+
+    test "a shipped preset, or a refused org id, pushes no theme CSS", ctx do
+      render_hook(ctx.view, "set_theme", %{"preset" => "burrow-sand", "mode" => "light"})
+      refute_push_event(ctx.view, "burrow:org-theme", %{})
+
+      render_hook(ctx.view, "set_theme", %{
+        "preset" => OrgTheme.preset_id(ctx.hidden),
+        "mode" => "dark"
+      })
+
+      refute_push_event(ctx.view, "burrow:org-theme", %{})
+    end
+
+    test "set_theme with an org id the person cannot see is refused; the preference is unchanged",
+         ctx do
+      render_hook(ctx.view, "set_theme", %{"preset" => "burrow-sand", "mode" => "light"})
+      before = Repo.get!(User, ctx.member.id).preferences["theme"]
+      assert before == %{"preset" => "burrow-sand", "mode" => "light"}
+
+      render_hook(ctx.view, "set_theme", %{
+        "preset" => OrgTheme.preset_id(ctx.hidden),
+        "mode" => "dark"
+      })
+
+      assert Repo.get!(User, ctx.member.id).preferences["theme"] == before
+      assert Accounts.theme_preference(ctx.member.id) == before
+      assert render(ctx.view) =~ "theme-picker-popover"
+    end
+  end
 end

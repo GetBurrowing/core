@@ -57,6 +57,20 @@ defmodule Platform.Design.SettingsContrastGuardTest do
   base-200 root; `text-error` names exactly one element, the subscribe-failed
   line.
 
+  ## The picker's "Your themes" (task 01a1557a-fe9b stage 3)
+
+  | pair                                                              | floor |
+  |-------------------------------------------------------------------|-------|
+  | "Your themes" label: --subtle on base-100 (popover), painted      | 4.5   |
+  | the same on the sheet ground (`.sheet-panel` in app.css), painted | 4.5   |
+  | theme row name: base-content on base-100, base-200 (checked), base-300 | 4.5 |
+  | check mark: its slot (primary) on base-100                        | 3     |
+
+  The label's and the check's slots, the popover ground and the checked fill
+  are READ from `theme_picker.ex`; the sheet ground is read from app.css.
+  Published org themes are runtime data: their own guard is `publish/2`
+  refusing while `Platform.Theming.ledger/2` has a failing row.
+
   Error-token contrast is held by `error_token_contrast_guard_test.exs` for
   all ten variants (task 01a160c4; lowest error on base-100 there is
   4.5981, forest dark); this guard keeps only the sentence-level pair.
@@ -64,12 +78,15 @@ defmodule Platform.Design.SettingsContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.ThemeBlocks, as: Blocks
+
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite, as: PC
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
   @presets_path Path.expand("../../../assets/css/theme_presets.css", __DIR__)
   @settings_path Path.expand("../../../lib/platform_web/live/settings_live.ex", __DIR__)
+  @picker_path Path.expand("../../../lib/platform_web/components/theme_picker.ex", __DIR__)
   @state_path Path.expand(
                 "../../../lib/platform_web/components/notification_state.ex",
                 __DIR__
@@ -111,7 +128,11 @@ defmodule Platform.Design.SettingsContrastGuardTest do
       end
 
     {:ok,
-     blocks: blocks, source: File.read!(@settings_path), state_source: File.read!(@state_path)}
+     blocks: blocks,
+     source: File.read!(@settings_path),
+     state_source: File.read!(@state_path),
+     picker_source: File.read!(@picker_path),
+     app_css: app_css}
   end
 
   # ── source reading ─────────────────────────────────────────────────────
@@ -179,7 +200,7 @@ defmodule Platform.Design.SettingsContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   defp subtle_pct(b) do
     value = Blocks.declaration(b.decls, "--subtle") || flunk("#{b.id} #{b.mode}: no --subtle")
@@ -406,5 +427,113 @@ defmodule Platform.Design.SettingsContrastGuardTest do
     assert length(chevrons) >= 4
 
     for [tag] <- chevrons, do: assert(tag =~ ~s(aria-hidden="true"), tag)
+  end
+
+  # ── the picker's "Your themes" (task 01a1557a-fe9b stage 3) ────────────
+
+  # The slots the picker source names: the label's text slot, the check's
+  # text slot, the popover's ground and the checked row's fill.
+  defp picker_slots(picker, app_css) do
+    label =
+      case Regex.run(~r/data-role="your-themes-label"\s+class="([^"]+)"/, picker) do
+        [_, classes] -> one_slot(classes, "text")
+        nil -> flunk("no your-themes-label <p> in theme_picker.ex")
+      end
+
+    check =
+      case Regex.run(~r/"hero-check ([^"]+)"/, picker) do
+        [_, classes] -> one_slot(classes, "text")
+        nil -> flunk("no hero-check class string in theme_picker.ex")
+      end
+
+    popover =
+      case Regex.run(~r/id="theme-picker-popover".*?class=\{\[\s*"([^"]+)"/s, picker) do
+        [_, classes] -> one_slot(classes, "bg")
+        nil -> flunk("no popover class list in theme_picker.ex")
+      end
+
+    checked =
+      case Regex.run(~r/defp preset_row.*?aria-checked:bg-([a-z0-9-]+)/s, picker) do
+        [_, slot] -> slot
+        nil -> flunk("no aria-checked fill on the preset row")
+      end
+
+    sheet =
+      case Regex.run(
+             ~r/^\s*\.sheet-panel \{\n\s*position: absolute;[^}]*?background: var\(--color-([a-z0-9-]+)\)/m,
+             app_css
+           ) do
+        [_, slot] -> slot
+        nil -> flunk("no .sheet-panel background in app.css")
+      end
+
+    %{label: label, check: check, popover: popover, checked: checked, sheet: sheet}
+  end
+
+  defp picker_pairs(b, p) do
+    [
+      {"your-themes label #{p.label} / #{p.popover} (popover)", @aa_text,
+       on(b, p.label, "--color-#{p.popover}")},
+      {"your-themes label #{p.label} / #{p.sheet} (sheet)", @aa_text,
+       on(b, p.label, "--color-#{p.sheet}")},
+      {"row base-content / base-100", @aa_text, on(b, "base-content", "--color-base-100")},
+      {"row base-content / #{p.checked} (checked)", @aa_text,
+       on(b, "base-content", "--color-#{p.checked}")},
+      {"row base-content / base-300", @aa_text, on(b, "base-content", "--color-base-300")},
+      {"check #{p.check} / #{p.popover}", @aa_ui, on(b, p.check, "--color-#{p.popover}")}
+    ]
+  end
+
+  test "the picker's 'Your themes' pairs clear their floors in all ten variants; the table prints",
+       %{blocks: blocks, picker_source: picker, app_css: app_css} do
+    assert length(blocks) == 10
+    p = picker_slots(picker, app_css)
+
+    # The slots the inventory names, read back from source.
+    assert p.label == "subtle"
+    assert p.check == "primary"
+    assert p.popover == "base-100"
+    # The base sheet panel (not a per-sheet override) and the preset row's
+    # checked fill, not the mode segment's.
+    assert p.sheet == "base-100"
+    assert p.checked == "base-200"
+
+    rows = for b <- blocks, do: {b, picker_pairs(b, p)}
+    labels = rows |> hd() |> elem(1) |> Enum.map(&elem(&1, 0))
+
+    IO.puts(
+      "\nTheme picker 'Your themes' AA table (--subtle painted on the worst pixel):\n" <>
+        "| Variant | " <>
+        Enum.join(labels, " | ") <>
+        " |\n|---|" <>
+        String.duplicate("---|", length(labels)) <>
+        "\n" <>
+        Enum.map_join(rows, "\n", fn {b, ps} ->
+          "| #{b.id} #{b.mode} | " <> Enum.map_join(ps, " | ", fn {_, _, r} -> f4(r) end) <> " |"
+        end)
+    )
+
+    failures =
+      for {b, ps} <- rows, {label, floor, r} <- ps, r < floor do
+        "#{b.id} #{b.mode}: #{label} #{f4(r)} < #{floor}"
+      end
+
+    assert failures == []
+  end
+
+  test "the picker's new section follows the text and hover rules", %{picker_source: picker} do
+    assert picker =~ ~s(data-role="your-themes-label")
+
+    text_classes =
+      for [_, c] <-
+            Regex.scan(~r/\btext-(base-content|subtle|primary|[a-z]+-[a-z0-9-]+)\b/, picker),
+          not String.match?(c, ~r/^(xs|sm|base|lg|left)$/),
+          uniq: true,
+          do: c
+
+    # Text colours: base-content and subtle; primary only for the check icon.
+    assert Enum.sort(text_classes) == ["base-content", "primary", "subtle"]
+    refute Regex.match?(~r/#[0-9a-fA-F]{3,8}\b/, picker)
+    refute Regex.match?(~r/(?<!lg:)hover:bg-/, picker)
   end
 end

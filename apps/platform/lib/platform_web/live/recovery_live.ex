@@ -486,7 +486,7 @@ defmodule PlatformWeb.RecoveryLive do
       data-id={@row.id}
       data-status={@row.status}
       class={[
-        "border-b border-edge/50 last:border-0 transition-colors hover:bg-base-200/40",
+        "border-b border-edge/50 last:border-0 transition-colors lg:hover:bg-base-200/40",
         @row.type == :org && "bg-base-200/40",
         @indent && "bg-base-200/20"
       ]}
@@ -528,7 +528,7 @@ defmodule PlatformWeb.RecoveryLive do
           phx-click="toggle_expand"
           phx-value-id={@row.id}
           data-role="expand-toggle"
-          class="focus-visible-ring mt-1.5 inline-flex items-center gap-1 rounded pl-[26px] text-xs text-subtle hover:text-base-content"
+          class="focus-visible-ring mt-1.5 inline-flex items-center gap-1 rounded pl-[26px] text-xs text-subtle lg:hover:text-base-content"
           aria-expanded={@expanded}
         >
           <.icon
@@ -554,7 +554,15 @@ defmodule PlatformWeb.RecoveryLive do
         <%= if @row.status == :scheduled do %>
           <% {tone, label} = runway(scheduled_at(@row), @retention_days) %>
           <div class="flex flex-col leading-tight">
-            <span class={["tabular-nums", deadline_class(tone)]}>
+            <span class={["inline-flex items-center gap-1.5 tabular-nums", deadline_class(tone)]}>
+              <span
+                :if={deadline_dot(tone)}
+                class={["inline-block size-2 shrink-0 rounded-full", deadline_dot(tone)]}
+                aria-hidden="true"
+                data-role="deadline-indicator"
+                data-tone={tone}
+              >
+              </span>
               {format_date(permanent_delete_at(scheduled_at(@row), @retention_days))}
             </span>
             <span class="text-xs text-subtle">{label}</span>
@@ -598,7 +606,7 @@ defmodule PlatformWeb.RecoveryLive do
         type="button"
         phx-click="sort"
         phx-value-key={@key}
-        class="focus-visible-ring group inline-flex items-center gap-1 rounded hover:text-base-content"
+        class="focus-visible-ring group inline-flex items-center gap-1 rounded lg:hover:text-base-content"
         aria-label={"Sort by #{@label}"}
       >
         {@label}
@@ -608,7 +616,7 @@ defmodule PlatformWeb.RecoveryLive do
             "size-3",
             if(@active?,
               do: "text-base-content",
-              else: "text-subtle group-hover:text-subtle"
+              else: "text-subtle"
             )
           ]}
         />
@@ -681,10 +689,15 @@ defmodule PlatformWeb.RecoveryLive do
   def format_date(nil), do: "—"
   def format_date(%DateTime{} = dt), do: Calendar.strftime(dt, "%b %d, %Y")
 
-  # Tint the permanent-delete date as the window closes (mirrors runway tone).
-  defp deadline_class("error"), do: "text-error font-medium"
-  defp deadline_class("warning"), do: "text-warning"
-  defp deadline_class(_neutral), do: "text-base-content"
+  # Mark the permanent-delete date as the window closes (mirrors runway tone).
+  # The text stays body; the tone rides on a dot beside it (task 01a1557a
+  # stage 5: hue that carries meaning moves off text onto a non-text mark).
+  defp deadline_class("error"), do: "text-base-content font-medium"
+  defp deadline_class(_tone), do: "text-base-content"
+
+  defp deadline_dot("error"), do: "bg-error"
+  defp deadline_dot("warning"), do: "bg-warning"
+  defp deadline_dot(_neutral), do: nil
 
   @doc """
   Retention runway for a scheduled row: `{tone, label}` where tone

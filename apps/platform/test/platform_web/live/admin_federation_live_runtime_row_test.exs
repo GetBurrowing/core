@@ -173,7 +173,7 @@ defmodule PlatformWeb.AdminFederationLiveRuntimeRowTest do
 
       assert has_element?(
                view,
-               ~s|#{row(runtime_id)} [data-proof-rule] [data-declared].text-info|
+               ~s|#{row(runtime_id)} [data-proof-rule] [data-declared] [data-declared-chip].border-info|
              ),
              "the declared claim is not rendered in info blue below the hairline"
 
@@ -265,7 +265,7 @@ defmodule PlatformWeb.AdminFederationLiveRuntimeRowTest do
 
       assert has_element?(
                view,
-               ~s|#{row(runtime_id)} [data-build-warning="meeting_transcript"].text-warning|,
+               ~s|#{row(runtime_id)} [data-build-warning="meeting_transcript"]:has(.bg-warning)|,
                "predates meeting_transcript"
              )
     end
@@ -307,10 +307,10 @@ defmodule PlatformWeb.AdminFederationLiveRuntimeRowTest do
 
       {:ok, view, _html} = live(admin_conn(conn), ~p"/admin/federation")
 
-      assert has_element?(view, ~s|#{row(runtime_id)} .text-success|),
+      assert has_element?(view, ~s|#{row(runtime_id)} .bg-success|),
              "the online runtime lost its success dot"
 
-      refute has_element?(view, ~s|#{row(runtime_id)} .text-error|),
+      refute has_element?(view, ~s|#{row(runtime_id)} .bg-error|),
              "an online but stale runtime rendered error colour"
     end
   end

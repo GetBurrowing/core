@@ -214,6 +214,31 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert SettingsLive.theme_value(%{"preset" => "burrow", "mode" => "system"}) ==
                "Burrow · System"
     end
+
+    # Task 01a1557a-fe9b stage 3.
+    test "theme_value/2 names a visible org theme" do
+      theme = %Platform.Theming.OrgTheme{id: Ecto.UUID.generate(), name: "Ocean"}
+      id = Platform.Theming.OrgTheme.preset_id(theme)
+
+      assert SettingsLive.theme_value(%{"preset" => id, "mode" => "dark"}, [theme]) ==
+               "Ocean · Dark"
+    end
+
+    test "the Theme row shows the stored org theme's name" do
+      %{member: member, visible: theme} =
+        Platform.OrgThemeFixtures.org_theme_world!(visible_name: "Ocean s3")
+
+      {:ok, _} =
+        Accounts.put_theme_preference(member, %{
+          "preset" => Platform.Theming.OrgTheme.preset_id(theme),
+          "mode" => "dark"
+        })
+
+      {:ok, view, _html} = live(authed(member), "/settings")
+
+      assert view |> element("[data-role=settings-theme-value]") |> render() =~
+               "Ocean s3 · Dark"
+    end
   end
 
   describe "mask names" do
@@ -385,6 +410,34 @@ defmodule PlatformWeb.SettingsLiveTest do
       member = member!()
       {:ok, mview, _} = live(authed(member), "/settings")
       refute has_element?(mview, "[data-role=settings-admin]")
+    end
+
+    test "Themes is a desktop-only admin row for a root admin and absent for a member" do
+      {:ok, view, _html} = live(authed(root!()), "/settings")
+      html = open_admin(view)
+      labels = admin_labels(html)
+
+      assert "Themes" in labels
+      assert labels == Enum.sort(labels)
+
+      assert [row] =
+               html
+               |> query(
+                 ~s(#settings-admin-sheet [data-role=settings-admin-row][href="/admin/themes"])
+               )
+               |> Enum.to_list()
+
+      assert row |> LazyHTML.attribute("class") |> hd() =~ "max-lg:hidden"
+
+      # Only the Themes row is desktop only.
+      assert html
+             |> query("#settings-admin-sheet [data-role=settings-admin-row].max-lg\\:hidden")
+             |> Enum.count() == 1
+
+      member = member!()
+      refute Enum.any?(SettingsLive.visible_admin_rows(scope(member)), &(&1.label == "Themes"))
+      {:ok, _mview, mhtml} = live(authed(member), "/settings")
+      refute mhtml =~ ~s(href="/admin/themes")
     end
 
     test "the Admin row is absent when no admin page mounts" do

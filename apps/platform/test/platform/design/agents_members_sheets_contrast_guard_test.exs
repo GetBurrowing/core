@@ -63,6 +63,7 @@ defmodule Platform.Design.AgentsMembersSheetsContrastGuardTest do
   alias Platform.Agents.ColorPalette
   alias Platform.Design.PaintedComposite
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.WcagContrast, as: W
 
   @app_css_path Path.expand("../../../assets/css/app.css", __DIR__)
@@ -221,8 +222,8 @@ defmodule Platform.Design.AgentsMembersSheetsContrastGuardTest do
 
   defp c(b, token) do
     if Blocks.declaration(b.decls, token) || b.fallback == b,
-      do: Blocks.resolve!(b, token),
-      else: Blocks.resolve!(b.fallback, token)
+      do: ThemeBlockAssertions.resolve!(b, token),
+      else: ThemeBlockAssertions.resolve!(b.fallback, token)
   end
 
   defp subtle_pct(b) do

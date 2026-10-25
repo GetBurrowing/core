@@ -28,6 +28,7 @@ defmodule Platform.Design.SheetCloseButtonContrastGuardTest do
 
   alias Platform.Design.CssRules
   alias Platform.Design.ThemeBlocks, as: Blocks
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -68,7 +69,7 @@ defmodule Platform.Design.SheetCloseButtonContrastGuardTest do
     {:ok, blocks: blocks, all_rules: CssRules.rules(app_css)}
   end
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
 
   defp subtle_pct(b) do
     value = Blocks.declaration(b.decls, "--subtle") || flunk("#{b.id} #{b.mode}: no --subtle")

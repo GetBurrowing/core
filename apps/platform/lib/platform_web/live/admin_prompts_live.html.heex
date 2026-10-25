@@ -44,7 +44,16 @@
       <% end %>
     </div>
     <div class="flex items-center gap-2">
-      <span :if={@save_status == :saved} class="text-xs text-success">Saved ✓</span>
+      <span
+        :if={@save_status == :saved}
+        class="inline-flex items-center gap-1 text-xs text-base-content"
+      >
+        <span
+          class="inline-block size-2 shrink-0 rounded-full bg-success"
+          aria-hidden="true"
+          data-role="success-indicator"
+        ></span>Saved ✓
+      </span>
     </div>
   </div>
 
@@ -86,9 +95,9 @@
                 :if={row.kind == :template}
                 phx-click="select_template"
                 phx-value-slug={row.slug}
-                class="cursor-pointer hover:bg-base-200 transition-colors"
+                class="cursor-pointer lg:hover:bg-base-200 transition-colors"
               >
-                <td class="font-mono text-xs text-primary">{row.template.slug}</td>
+                <td class="font-mono text-xs text-base-content">{row.template.slug}</td>
                 <td class="text-sm font-medium">{row.template.name}</td>
                 <td class="text-xs text-subtle hidden md:table-cell max-w-xs">
                   <span class="line-clamp-1">{row.template.description || "—"}</span>
@@ -106,15 +115,15 @@
                     dropped into it; the name is at the SAME size and weight a
                     real template's name gets, because visual weight tracks
                     consequence, not existence. The slug is mono like every
-                    other slug but NOT text-primary: primary is the action
-                    colour here and this row is a statement. --%>
+                    other slug, in body text (stage 5 of task 01a1557a moved
+                    every slug off the primary hue). --%>
               <tr
                 :if={row.kind == :missing}
                 data-role="declared-missing-row"
                 data-slug={row.slug}
                 phx-click="select_template"
                 phx-value-slug={row.slug}
-                class="cursor-pointer bg-base-200 hover:bg-base-300 transition-colors"
+                class="cursor-pointer bg-base-200 lg:hover:bg-base-300 transition-colors"
               >
                 <td class="font-mono text-xs text-base-content">{row.slug}</td>
                 <td class="text-sm font-medium">
@@ -122,7 +131,7 @@
                     <span>{row.slug}</span>
                     <span
                       data-role="declared-missing-marker"
-                      class="badge badge-sm bg-warning text-warning-content border-0 font-mono"
+                      class="badge badge-sm border border-warning bg-base-100 text-base-content font-mono"
                       title="Declared by a responsibility, with no prompt template"
                     >
                       !
@@ -267,7 +276,16 @@
               class="input input-bordered input-sm w-full"
               placeholder="Human-readable name"
             />
-            <div :if={@edit_form[:name].errors != []} class="text-xs text-error mt-1">
+            <div
+              :if={@edit_form[:name].errors != []}
+              class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
+            >
+              <span
+                class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+                aria-hidden="true"
+                data-role="error-indicator"
+              >
+              </span>
               {hd(@edit_form[:name].errors) |> elem(0)}
             </div>
           </div>
@@ -298,7 +316,16 @@
               placeholder="Prompt content with {{variable}} placeholders…"
               style="resize: vertical;"
             >{@edit_form[:content].value}</textarea>
-            <div :if={@edit_form[:content].errors != []} class="text-xs text-error mt-1">
+            <div
+              :if={@edit_form[:content].errors != []}
+              class="mt-1 flex items-start gap-1.5 text-xs text-base-content"
+            >
+              <span
+                class="mt-1 inline-block size-2 shrink-0 rounded-full bg-error"
+                aria-hidden="true"
+                data-role="error-indicator"
+              >
+              </span>
               {hd(@edit_form[:content].errors) |> elem(0)}
             </div>
           </div>
@@ -343,7 +370,7 @@
             :for={var <- @selected_template.variables}
             class="rounded border border-edge bg-base-200 p-2"
           >
-            <div class="font-mono text-xs text-primary">{"{{#{var}}}"}</div>
+            <div class="font-mono text-xs text-base-content">{"{{#{var}}}"}</div>
             <div class="mt-0.5 text-[11px] text-subtle">
               {Map.get(variable_descriptions(), var, "Variable")}
             </div>
@@ -370,7 +397,7 @@
       <div class="flex items-center gap-2">
         <span class="font-mono text-sm text-base-content">{@missing_key.slug}</span>
         <span
-          class="badge badge-sm bg-warning text-warning-content border-0 font-mono"
+          class="badge badge-sm border border-warning bg-base-100 text-base-content font-mono"
           title="Declared by a responsibility, with no prompt template"
         >
           !

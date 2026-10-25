@@ -52,9 +52,47 @@ export const currentTheme = () => {
   return {preset: root.getAttribute("data-preset") || "burrow", mode: resolved, resolved}
 }
 
+// An org preset published after this page loaded has no CSS in the root
+// layout's <style id="org-themes"> (it renders on a full load only) and is
+// not in the boot script's registry, so `apply` would refuse it (task
+// 01a1557a stage 5). ShellLive answers `set_theme` for an org preset with
+// `burrow:org-theme` {preset, css}: CSS rendered and re-sanitised server-side
+// by Platform.Theming.OrgThemeCss. This appends it to #org-themes as TEXT
+// (never markup), registers the id, and applies it. A preset that is already
+// registered already has its CSS on the page, so nothing is appended.
+// Returns true when it injected.
+export const ORG_PRESET = /^org-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+export const injectOrgTheme = (payload, doc = document, api = window.burrowTheme) => {
+  const preset = payload && payload.preset
+  const css = payload && payload.css
+  if (typeof preset !== "string" || !ORG_PRESET.test(preset)) return false
+  if (typeof css !== "string" || !css.includes(`[data-preset="${preset}"]`)) return false
+  if (!api || typeof api.has !== "function" || typeof api.register !== "function") return false
+  if (api.has(preset)) return false
+
+  let style = doc.getElementById("org-themes")
+  if (!style) {
+    style = doc.createElement("style")
+    style.setAttribute("id", "org-themes")
+    style.setAttribute("data-role", "org-themes")
+    doc.head.appendChild(style)
+  }
+  style.appendChild(doc.createTextNode(`\n${css}`))
+
+  if (!api.register(preset)) return false
+  const current = currentTheme()
+  if (typeof api.apply === "function") api.apply({preset, mode: current.mode})
+  return true
+}
+
 const ThemePicker = {
   mounted() {
     this.paint(currentTheme())
+
+    if (typeof this.handleEvent === "function") {
+      this.handleEvent("burrow:org-theme", (payload) => injectOrgTheme(payload))
+    }
 
     this.handleTheme = (event) => this.paint((event && event.detail) || currentTheme())
     window.addEventListener("burrow:theme", this.handleTheme)
@@ -101,6 +139,16 @@ const ThemePicker = {
     const next = {preset: current.preset, mode: current.mode, [group]: value}
 
     const api = window.burrowTheme
+
+    // A preset the page does not know yet (an org theme published after it
+    // loaded): applying it here would be refused, so ask the server, which
+    // stores it and sends its CSS back as `burrow:org-theme`.
+    if (group === "preset" && api && typeof api.has === "function" && !api.has(value)) {
+      this.focus(option)
+      this.pushEvent("set_theme", {preset: value, mode: current.mode})
+      return
+    }
+
     const applied = api && typeof api.apply === "function" ? api.apply(next) : null
     const theme = applied || {...next, resolved: next.mode === "system" ? current.resolved : next.mode}
 

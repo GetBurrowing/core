@@ -72,6 +72,8 @@ defmodule Platform.Design.InboxListContrastGuardTest do
   use ExUnit.Case, async: true
 
   alias Platform.Design.ThemeBlocks, as: Blocks
+
+  alias Platform.Design.ThemeBlockAssertions
   alias Platform.Design.PaintedComposite
   alias Platform.Design.WcagContrast, as: W
 
@@ -175,7 +177,7 @@ defmodule Platform.Design.InboxListContrastGuardTest do
 
   # ── measurement ────────────────────────────────────────────────────────
 
-  defp c(b, token), do: Blocks.resolve!(b, token)
+  defp c(b, token), do: ThemeBlockAssertions.resolve!(b, token)
   defp tok(slot), do: "--color-#{slot}"
   defp ratio(b, ink, ground), do: W.contrast(c(b, ink), c(b, ground))
 
