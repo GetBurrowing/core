@@ -375,6 +375,17 @@ defmodule Platform.Chat.AttentionRouter do
       ReplyFailure.notice?(message) ->
         return_empty()
 
+      # A meeting notice (task 01a174e2 stage 2) is a system row the meeting
+      # pipeline posts after a call: the summary, the action items, the
+      # summarizer-fallback notice, the transcript-unavailable notice. It is
+      # never a turn: in a DM every message is routed to the agent as
+      # `:directed`, so routing it would wake the DM's agent, which then
+      # answered with "couldn't reply". The Scribe follow-up is dispatched by
+      # `Platform.Meetings.complete_transcript/2`, not through here. See
+      # `meeting_notice?/1`.
+      meeting_notice?(message) ->
+        return_empty()
+
       true ->
         route_in_space(space, message, attention)
     end
@@ -654,6 +665,32 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   defp execution_assignee_agent_id(_space), do: nil
+
+  @meeting_notice_sources ~w(
+    meeting_summarizer
+    meeting_summarizer_fallback
+    meeting_transcription_failure
+    meeting_action_items
+  )
+
+  @doc """
+  True for a `content_type: "system"` message the meeting pipeline posted
+  into a space after a call (`Platform.Meetings.post_summary_to_space/3`,
+  `post_transcription_failure_to_space/2`, `post_action_items_to_space/3`,
+  `post_fallback_notice/3`): `metadata["source"]` is one of
+  `meeting_notice_sources/0`. Such a message never produces an agent routing
+  decision (task 01a174e2 stage 2).
+  """
+  @spec meeting_notice?(Message.t() | map()) :: boolean()
+  def meeting_notice?(%{content_type: "system", metadata: %{"source" => source}})
+      when source in @meeting_notice_sources,
+      do: true
+
+  def meeting_notice?(_), do: false
+
+  @doc "The `metadata[\"source\"]` values `meeting_notice?/1` recognises."
+  @spec meeting_notice_sources() :: [String.t()]
+  def meeting_notice_sources, do: @meeting_notice_sources
 
   @untrusted_inbound_sources ~w(email_inbound federation_inbound)
 

@@ -3232,6 +3232,106 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── Session mode ─────────────────────────────────────────────────────────
+  #
+  # Task 01a174e2. A user<->agent DM has ONE room, `"space-<dm id>"`, shared
+  # by the Voice tab's 1:1 session and by a DM call. LiveKit's `room_finished`
+  # cannot tell them apart, so the session that is using the room says so in
+  # `meeting_rooms.config` (jsonb, otherwise unused, so no migration):
+  #
+  #     %{"session_mode" => "voice_1to1", "session_mode_at" => "<ISO8601 utc>"}
+  #
+  # The writers are `VoiceSession.start/3` (stamps, unless the room is
+  # already "active", i.e. a call is live), `join_for_user/3` (always clears:
+  # the call wins) and the `room_finished` webhook (clears after handling).
+  # `voice_1to1_room?/1` is what the webhook reads to skip meeting
+  # finalization. Both writes are single atomic jsonb updates, so other config
+  # keys are preserved and a concurrent writer is never clobbered.
+
+  @session_mode_key "session_mode"
+  @session_mode_at_key "session_mode_at"
+  @session_modes ~w(voice_1to1)
+
+  @doc """
+  Stamp `room`'s session mode (`"voice_1to1"` is the only mode) into
+  `meeting_rooms.config`, with `"session_mode_at"` = now (ISO8601 UTC).
+  Merges into the stored config, preserving other keys. Returns the fresh row,
+  or `{:error, :not_found}` when the room is gone.
+  """
+  @spec set_session_mode(Room.t(), String.t()) :: {:ok, Room.t()} | {:error, :not_found}
+  def set_session_mode(%Room{id: id}, mode) when mode in @session_modes do
+    stamp = %{
+      @session_mode_key => mode,
+      @session_mode_at_key => DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    from(r in Room,
+      where: r.id == ^id,
+      select: r,
+      update: [
+        set: [
+          config: fragment("coalesce(?, '{}'::jsonb) || ?", r.config, type(^stamp, :map)),
+          updated_at: ^DateTime.utc_now()
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+    |> case do
+      {1, [room]} -> {:ok, room}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Remove `room`'s session mode (both keys) from `meeting_rooms.config`,
+  preserving other keys. A no-op write when no mode is stored. Returns the
+  room with the keys gone.
+  """
+  @spec clear_session_mode(Room.t()) :: {:ok, Room.t()}
+  def clear_session_mode(%Room{id: id} = room) do
+    from(r in Room,
+      where: r.id == ^id and fragment("(? -> ?) IS NOT NULL", r.config, ^@session_mode_key),
+      select: r,
+      update: [
+        set: [
+          config: fragment("? - ? - ?", r.config, ^@session_mode_key, ^@session_mode_at_key),
+          updated_at: ^DateTime.utc_now()
+        ]
+      ]
+    )
+    |> Repo.update_all([])
+    |> case do
+      {1, [cleared]} ->
+        {:ok, cleared}
+
+      _ ->
+        config = Map.drop(room.config || %{}, [@session_mode_key, @session_mode_at_key])
+        {:ok, %{room | config: config}}
+    end
+  end
+
+  @doc """
+  True when `room` is stamped as a Voice tab 1:1 session (see
+  `set_session_mode/2`). Reads the struct it is given; nil-safe.
+  """
+  @spec voice_1to1_room?(Room.t() | nil) :: boolean()
+  def voice_1to1_room?(%Room{config: %{@session_mode_key => "voice_1to1"}}), do: true
+  def voice_1to1_room?(_), do: false
+
+  @doc """
+  When `room`'s session mode was stamped, or nil (no mode, or an unreadable
+  stamp).
+  """
+  @spec session_mode_started_at(Room.t() | nil) :: DateTime.t() | nil
+  def session_mode_started_at(%Room{config: %{@session_mode_at_key => at}}) when is_binary(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  def session_mode_started_at(_), do: nil
+
   # ── Participants ─────────────────────────────────────────────────────────
 
   @doc """
@@ -3671,7 +3771,8 @@ defmodule Platform.Meetings do
     2. `Membership.ensure_chat_space_participant/3` — FIRST, before any room
        or token work (task 019e2d1a stage 4: gating on a pre-existing
        participant row silently no-op'd a fresh user's join);
-    3. `ensure_room/1`, then `activate_room_on_join/1`;
+    3. `ensure_room/1`, `clear_session_mode/1` (a call in a DM wins over a
+       Voice tab session sharing the room), then `activate_room_on_join/1`;
     4. `upsert_live_participant/2` with identity `user:<id>` (the v4 fix: the
        `participant_joined` webhook alone left the roster empty);
     5. `generate_token/2`.
@@ -3699,6 +3800,9 @@ defmodule Platform.Meetings do
          {:ok, participant} <-
            Membership.ensure_chat_space_participant(space_id, user_id, display_name),
          {:ok, room} <- ensure_room(space_id),
+         # A human call in this room wins over a Voice tab session sharing it
+         # (task 01a174e2): clear the mode so `room_finished` summarizes it.
+         {:ok, room} <- clear_session_mode(room),
          {:ok, room} <- activate_room_on_join(room),
          identity = "user:#{user_id}",
          # Prefer the caller's resolved name over a stale/blank participant

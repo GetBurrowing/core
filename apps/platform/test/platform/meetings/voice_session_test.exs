@@ -224,6 +224,34 @@ defmodule Platform.Meetings.VoiceSessionTest do
       assert drain_dispatches() == []
     end
 
+    # Task 01a174e2: the shared room is stamped so room_finished skips the
+    # meeting summary for a voice-only session.
+    test "stamps the room voice_1to1 when it is idle, and join_for_user/3 clears it" do
+      user = user!()
+      agent = voice_agent!()
+
+      assert {:ok, session} = VoiceSession.start(user, agent, nil)
+      room = Meetings.get_room_by_name(session.room_name)
+      assert room.status == "idle"
+      assert Meetings.voice_1to1_room?(room)
+      assert %DateTime{} = Meetings.session_mode_started_at(room)
+
+      assert {:ok, _join} = Meetings.join_for_user(session.space_id, user.id, user.name)
+      refute Meetings.voice_1to1_room?(Meetings.get_room_by_name(session.room_name))
+    end
+
+    test "does not stamp a room whose call is live (status active)" do
+      user = user!()
+      agent = voice_agent!()
+      {:ok, dm} = Chat.find_or_create_dm(user.id, "agent", agent.id)
+      assert {:ok, %{room: room}} = Meetings.join_for_user(dm.id, user.id, user.name)
+      assert room.status == "active"
+
+      assert {:ok, session} = VoiceSession.start(user, agent, nil)
+      assert session.room_name == room.livekit_room_name
+      refute Meetings.voice_1to1_room?(Meetings.get_room_by_name(session.room_name))
+    end
+
     test "returns :voice_runtime_offline for an agent with no voice runtime online" do
       user = user!()
       agent = offline_agent!()

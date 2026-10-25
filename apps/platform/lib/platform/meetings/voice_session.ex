@@ -19,6 +19,26 @@ defmodule Platform.Meetings.VoiceSession do
   `"space-<dm id>"`. A DM call with the agent and a Voice-tab session are the
   same 1:1 conversation, so there is deliberately no separate room key.
 
+  The room is not a meeting while only the Voice tab uses it, so LiveKit's
+  `room_finished` must not finalize it as one (task 01a174e2: no Meeting
+  Summary in the DM). The session therefore says so in the room's config
+  (`Meetings.set_session_mode/2`, `"voice_1to1"`), and the webhook skips the
+  summary path for a stamped room. The rule, because the room is shared:
+
+    * `start/3` stamps the mode right after `ensure_room/1` (before the token
+      and the dispatch, so it lands before LiveKit's `room_started`), UNLESS
+      the room's status is `"active"`. Only a human call join sets that
+      status, never a voice session, so a live call is never relabelled.
+    * `Meetings.join_for_user/3`, the one human call join path, always
+      clears the mode: the call wins and is summarized.
+    * `room_finished` clears the mode after handling.
+
+  So voice then call is summarized as a call, call then voice is summarized
+  as a call, and voice alone produces no summary. A stale stamp left by a
+  missed `room_finished` is cleared by the next call join. The transcriber is
+  still dispatched (it rides on room creation and a later call in the same
+  room needs it); the webhook discards what it recorded for the voice session.
+
   ## Context
 
   "No context" or ONE space the viewer participates in. Projects and tasks
@@ -102,6 +122,7 @@ defmodule Platform.Meetings.VoiceSession do
          {:ok, voice_context} <- normalize_context(user, context),
          {:ok, dm} <- Chat.find_or_create_dm(user_id, "agent", agent.id),
          {:ok, %Room{} = room} <- Meetings.ensure_room(dm.id),
+         {:ok, %Room{} = room} <- stamp_session_mode(room),
          {:ok, token} <-
            Meetings.generate_token(room, %{identity: identity(user), name: display_name(user)}),
          :ok <- ensure_agent_dispatched(room, agent, user, voice_context) do
@@ -191,6 +212,10 @@ defmodule Platform.Meetings.VoiceSession do
   # ── Private ─────────────────────────────────────────────────────────────
 
   defp visible_agents(user), do: Chat.dm_agent_candidates(user, "")
+
+  # A live call ("active") owns the room; see the moduledoc's shared-room rule.
+  defp stamp_session_mode(%Room{status: "active"} = room), do: {:ok, room}
+  defp stamp_session_mode(%Room{} = room), do: Meetings.set_session_mode(room, @mode)
 
   defp floor_key(space_id), do: "voice:" <> space_id
 

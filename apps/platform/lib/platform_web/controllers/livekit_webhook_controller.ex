@@ -108,14 +108,15 @@ defmodule PlatformWeb.LivekitWebhookController do
   # common case, but it's the safer default than silently dropping data.
   def handle(conn, %{"event" => "room_finished", "room" => room} = params) do
     room_id = room["name"] || room["sid"]
-    room_name = room["name"]
 
     # Deactivation symmetry for task 019e4b3e v4 stage 1: a real join flips
     # the room "active" (MeetingHooks.do_join → Meetings.activate_room).
     # LiveKit's `room_finished` is the canonical empty-room signal, so flip
     # the room back to "idle" + mark stragglers left here, otherwise rooms
     # would leak as "active" forever once the join-path activation lands.
-    case lookup_room(params) do
+    room_row = lookup_room(params)
+
+    case room_row do
       %Meetings.Room{status: "active"} = active_room -> Meetings.finish_room(active_room)
       _ -> :ok
     end
@@ -132,115 +133,18 @@ defmodule PlatformWeb.LivekitWebhookController do
       _ -> :ok
     end
 
-    if room_id do
-      # Room-wide selection, not "the newest recording row": the row that
-      # should be finalized and summarised is the one HOLDING THE CONTENT.
-      # A late rejoin can leave an empty row sitting beside the populated
-      # one, and summarising the empty one is what produced user-visible
-      # prose claiming no transcript arrived while a full transcript for
-      # the same room sat in the database.
-      case Meetings.get_summarizable_transcript_for_room(room_id) do
-        nil ->
-          Logger.debug("[LiveKit] No active transcript for room #{room_id} on room_finished")
+    cond do
+      # A Voice tab 1:1 session is not a meeting (task 01a174e2): no summary,
+      # no failure notice, no `:meeting_finished`. Checked BEFORE transcript
+      # selection so nothing below can pick the voice row up.
+      Meetings.voice_1to1_room?(room_row) ->
+        discard_voice_1to1_transcripts(conn, room_row, room_id)
 
-          conn
-          |> put_status(:ok)
-          |> json(%{status: "ignored", reason: "no active transcript"})
+      room_id ->
+        finalize_room_transcript(conn, room, room_id)
 
-        %{status: status} = transcript when status in ["processing", "complete"] ->
-          # Already finalized or summarised. `get_summarizable_transcript_for_room/1`
-          # deliberately returns rows in any status (the caller decides), so a
-          # re-delivered `room_finished` is absorbed here rather than pushing a
-          # completed row back into `processing` and dispatching a second
-          # summary. `failed` is NOT absorbed: re-running a failed row is
-          # recovery, which is the outcome this task wants.
-          Logger.debug(
-            "[LiveKit] Transcript #{transcript.id} for room #{room_id} already #{status}"
-          )
-
-          conn
-          |> put_status(:ok)
-          |> json(%{status: "ignored", reason: "transcript already finalized"})
-
-        transcript ->
-          cond do
-            # Whole-room emptiness, not this row's. Deleting an empty row
-            # while a populated sibling exists is fine; deleting on a
-            # per-row check when the ROOM does hold content is the same
-            # class of bug as summarising the empty row.
-            not Meetings.legit_room?(room) and not Meetings.room_has_segments?(room_id) ->
-              # Phantom room with no accumulated audio: drop the row entirely
-              # rather than finalize + dispatch a summary. This is the
-              # sweep half of stage 2's source-filter — anything that got
-              # in before stage 2's guards existed, or that races past
-              # them, gets cleaned up here.
-              Logger.info(
-                "[LiveKit] Deleting phantom transcript #{transcript.id} for unregistered room " <>
-                  "#{inspect(room_name)} (sid=#{inspect(room["sid"])}) with 0 segments"
-              )
-
-              case Meetings.delete_transcript(transcript) do
-                {:ok, deleted} ->
-                  conn
-                  |> put_status(:ok)
-                  |> json(%{
-                    status: "deleted",
-                    reason: "phantom_empty_transcript",
-                    transcript_id: deleted.id
-                  })
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[LiveKit] Failed to delete phantom transcript #{transcript.id}: #{inspect(reason)}"
-                  )
-
-                  conn
-                  |> put_status(:unprocessable_entity)
-                  |> json(%{status: "error", reason: inspect(reason)})
-              end
-
-            true ->
-              case Meetings.finalize_transcript(transcript.id) do
-                {:ok, finalized} ->
-                  Logger.info(
-                    "[LiveKit] Finalized transcript #{finalized.id} for room #{room_id}"
-                  )
-
-                  # Trigger async LLM summary generation
-                  maybe_trigger_summary(finalized)
-
-                  # Report the transcript's RESULTING status: the summary
-                  # path can mark a zero-segment transcript failed when a
-                  # transcriber was present, and a flat "finalized" here
-                  # would report that delivery failure as a clean run.
-                  transcript_status =
-                    case Meetings.get_transcript(finalized.id) do
-                      nil -> finalized.status
-                      current -> current.status
-                    end
-
-                  conn
-                  |> put_status(:ok)
-                  |> json(%{
-                    status: "finalized",
-                    transcript_status: transcript_status,
-                    transcript_id: finalized.id,
-                    segment_count: length(finalized.segments)
-                  })
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[LiveKit] Failed to finalize transcript #{transcript.id}: #{inspect(reason)}"
-                  )
-
-                  conn
-                  |> put_status(:unprocessable_entity)
-                  |> json(%{status: "error", reason: inspect(reason)})
-              end
-          end
-      end
-    else
-      conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no room identifier"})
+      true ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no room identifier"})
     end
   end
 
@@ -327,6 +231,177 @@ defmodule PlatformWeb.LivekitWebhookController do
 
   def handle(conn, _params) do
     conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no event field"})
+  end
+
+  # `room_finished` for a room stamped `"voice_1to1"` (task 01a174e2).
+  #
+  # The transcriber is still dispatched into a voice session's room (it rides
+  # on room creation and a later DM call needs it), so the room holds a
+  # `recording` row. Every such row is taken out of the summary path WITHOUT
+  # `complete_transcript/2`: that call is not silent (Scribe attention, the
+  # briefing refresh), and a `complete` row holding segments would be chosen
+  # by `get_summarizable_transcript_for_room/1` on the NEXT call's
+  # `room_finished`, which would then answer "already finalized" and never
+  # summarize that call.
+  #
+  #   * a row created during this session (inserted at or after the stamp) or
+  #     holding no segments is deleted;
+  #   * an older row that `ensure_transcript/1` re-opened goes back to
+  #     `failed` with reason `:voice_1to1_session`. `fail_transcript/3` posts
+  #     nothing to the space (telemetry + audit only).
+  #
+  # `maybe_trigger_summary/1` is skipped entirely, which also skips the
+  # `:meeting_finished` broadcast (the responsibility router's second summary
+  # path). Nothing is left in `processing`, so SummarizerSweeper has nothing
+  # to post a fallback for. The mode is cleared last.
+  defp discard_voice_1to1_transcripts(conn, room_row, room_id) do
+    since = Meetings.session_mode_started_at(room_row)
+
+    {deleted, failed} =
+      room_id
+      |> Meetings.list_transcripts_for_room()
+      |> Enum.filter(&(&1.status == "recording"))
+      |> Enum.reduce({0, 0}, fn transcript, {deleted, failed} ->
+        if voice_session_row?(transcript, since) do
+          _ = Meetings.delete_transcript(transcript)
+          {deleted + 1, failed}
+        else
+          _ = Meetings.fail_transcript(transcript.id, nil, :voice_1to1_session)
+          {deleted, failed + 1}
+        end
+      end)
+
+    {:ok, _} = Meetings.clear_session_mode(room_row)
+
+    Logger.info(
+      "[LiveKit] room_finished for voice_1to1 room #{inspect(room_id)}: no meeting " <>
+        "finalization (deleted=#{deleted} failed=#{failed})"
+    )
+
+    conn
+    |> put_status(:ok)
+    |> json(%{
+      status: "ignored",
+      reason: "voice_1to1_session",
+      deleted_transcripts: deleted,
+      failed_transcripts: failed
+    })
+  end
+
+  defp voice_session_row?(%{segments: segments}, _since) when segments in [nil, []], do: true
+
+  defp voice_session_row?(%{inserted_at: inserted_at}, %DateTime{} = since),
+    do: DateTime.compare(inserted_at, since) != :lt
+
+  defp voice_session_row?(_transcript, _since), do: false
+
+  defp finalize_room_transcript(conn, room, room_id) do
+    room_name = room["name"]
+
+    # Room-wide selection, not "the newest recording row": the row that
+    # should be finalized and summarised is the one HOLDING THE CONTENT.
+    # A late rejoin can leave an empty row sitting beside the populated
+    # one, and summarising the empty one is what produced user-visible
+    # prose claiming no transcript arrived while a full transcript for
+    # the same room sat in the database.
+    case Meetings.get_summarizable_transcript_for_room(room_id) do
+      nil ->
+        Logger.debug("[LiveKit] No active transcript for room #{room_id} on room_finished")
+
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "ignored", reason: "no active transcript"})
+
+      %{status: status} = transcript when status in ["processing", "complete"] ->
+        # Already finalized or summarised. `get_summarizable_transcript_for_room/1`
+        # deliberately returns rows in any status (the caller decides), so a
+        # re-delivered `room_finished` is absorbed here rather than pushing a
+        # completed row back into `processing` and dispatching a second
+        # summary. `failed` is NOT absorbed: re-running a failed row is
+        # recovery, which is the outcome this task wants.
+        Logger.debug(
+          "[LiveKit] Transcript #{transcript.id} for room #{room_id} already #{status}"
+        )
+
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "ignored", reason: "transcript already finalized"})
+
+      transcript ->
+        cond do
+          # Whole-room emptiness, not this row's. Deleting an empty row
+          # while a populated sibling exists is fine; deleting on a
+          # per-row check when the ROOM does hold content is the same
+          # class of bug as summarising the empty row.
+          not Meetings.legit_room?(room) and not Meetings.room_has_segments?(room_id) ->
+            # Phantom room with no accumulated audio: drop the row entirely
+            # rather than finalize + dispatch a summary. This is the
+            # sweep half of stage 2's source-filter — anything that got
+            # in before stage 2's guards existed, or that races past
+            # them, gets cleaned up here.
+            Logger.info(
+              "[LiveKit] Deleting phantom transcript #{transcript.id} for unregistered room " <>
+                "#{inspect(room_name)} (sid=#{inspect(room["sid"])}) with 0 segments"
+            )
+
+            case Meetings.delete_transcript(transcript) do
+              {:ok, deleted} ->
+                conn
+                |> put_status(:ok)
+                |> json(%{
+                  status: "deleted",
+                  reason: "phantom_empty_transcript",
+                  transcript_id: deleted.id
+                })
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[LiveKit] Failed to delete phantom transcript #{transcript.id}: #{inspect(reason)}"
+                )
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{status: "error", reason: inspect(reason)})
+            end
+
+          true ->
+            case Meetings.finalize_transcript(transcript.id) do
+              {:ok, finalized} ->
+                Logger.info("[LiveKit] Finalized transcript #{finalized.id} for room #{room_id}")
+
+                # Trigger async LLM summary generation
+                maybe_trigger_summary(finalized)
+
+                # Report the transcript's RESULTING status: the summary
+                # path can mark a zero-segment transcript failed when a
+                # transcriber was present, and a flat "finalized" here
+                # would report that delivery failure as a clean run.
+                transcript_status =
+                  case Meetings.get_transcript(finalized.id) do
+                    nil -> finalized.status
+                    current -> current.status
+                  end
+
+                conn
+                |> put_status(:ok)
+                |> json(%{
+                  status: "finalized",
+                  transcript_status: transcript_status,
+                  transcript_id: finalized.id,
+                  segment_count: length(finalized.segments)
+                })
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[LiveKit] Failed to finalize transcript #{transcript.id}: #{inspect(reason)}"
+                )
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{status: "error", reason: inspect(reason)})
+            end
+        end
+    end
   end
 
   # ── Private ──────────────────────────────────────────────────────────────
